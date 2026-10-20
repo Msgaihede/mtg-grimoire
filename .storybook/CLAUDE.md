@@ -65,6 +65,7 @@ The fake lives in `packages/fake/` (it was `.storybook/fake/` until 2026-10-08);
   - It reads the frame's mode and `previews` out of its `x-scanner-options` header: the fake `invoke` hands a handler its options **second**, and only when the caller passed some.
   - A story has no camera, so stories still write their tray through `set_scanner_tray` and refuse the camera themselves.
   - **A test that opens a camera overrides `scanner_frame`** with answers a few milliseconds apart: the script's 110 ms is a slow test. It is the fake's one slow handler, and what it exposed is fixed at the root — `invoke` re-points the fake at a call's world as it settles **only while that world is standing** (`scope.ts`' `standing`: mounted, or nothing is). A late answer from a finished test's world used to take the pointer with it.
+  - **A handler's events have the same rule** (issue #1191): `db.ts` says them through `event.ts`' `worldEmitter`, which captures the calling world before the first `await` and delivers to that world's listeners only, and only while it is standing. `emitFake` — every mounted world — is a `play`'s, which holds no world.
 - **Plugin handlers**:
   - `plugin:clipboard-manager|write_text` and `plugin:opener|open_url` are mocked in `pluginHandlers()` without backing stores.
   - Native file dialogs are handled by Rust commands: `export_save_file` writes to `D:\Storybook\`, while `import_pick_file` and `mirror_pick_root` simulate picker refusals.
