@@ -8819,6 +8819,47 @@ describe("collection_set_folder_many", () => {
   });
 
   /**
+   * `set_entries_folder`'s answer exactly (issue #1190): **one change per id sent**, a repeat
+   * answered like the first, and every quantity read **once the whole press is in** — the first
+   * row lands on the binder, the second folds into it, and both answer the survivor's final 5
+   * rather than the first answering the 2 it held when it moved.
+   */
+  it("answers every id sent, with the survivor's quantity after the whole press", () => {
+    const db = makeDb({
+      collectionFolders: [
+        ...FOLDERS,
+        {
+          id: 3,
+          parentId: null,
+          name: "Shelf",
+          kind: "user",
+          deckId: null,
+          sortOrder: 2,
+          locked: false,
+        },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 3, folderId: 3 }),
+        entry({ id: 4, cardId: BOLT_2X2.id, quantity: 4 }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_set_folder_many({ ids: [1, 4, 2, 1], folderId: 1 });
+
+    expect(out.changes).toEqual([
+      { id: 1, quantity: 5, removed: false },
+      { id: 4, quantity: 4, removed: false },
+      { id: 1, quantity: 5, removed: false },
+      { id: 1, quantity: 5, removed: false },
+    ]);
+    expect(db.collectionEntries.map((e) => [e.id, e.folderId, e.quantity])).toEqual([
+      [1, 1, 5],
+      [4, 1, 4],
+    ]);
+  });
+
+  /**
    * **Any refusal leaves nothing moved** — the first row here *was* filed before the second was
    * refused, and the press is rolled back rather than left half-applied, which is the bug a
    * per-id loop in the page could not avoid. Each refusal is the single command's own sentence:
