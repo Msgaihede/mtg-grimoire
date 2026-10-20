@@ -115,11 +115,18 @@ the same old key and the loser's new object stayed in R2 with nothing pointing a
 that finds the share withdrawn underneath it deletes what it wrote and answers 404.
 
 **Withdrawing deletes the snapshot.** `DELETE /g/{group}/share/{id}` flips the row to `revoked`
-and reads its `object_key` in **one** statement (`UPDATE … RETURNING`), then points the row at
-nothing and deletes the object. A snapshot is plaintext and `revoked` is terminal, so the object
-left behind until 2026-10-01 was a binder the reader had withdrawn sitting readable in R2 for ever.
-The single statement is the guard: an upload either committed before it — and its key is the one
-returned — or meets `revoked` in its own swap.
+and reads its `object_key` in **one** statement (`UPDATE … RETURNING`), then deletes the share's
+whole R2 folder (`shares/{id}/`) and only then points the row at nothing. A snapshot is plaintext
+and `revoked` is terminal, so the object left behind until 2026-10-01 was a binder the reader had
+withdrawn sitting readable in R2 for ever. The single statement is the guard: an upload either
+committed before it — and its key is the one returned — or meets `revoked` in its own swap.
+
+⚠️ **Delete first, clear the column second** (issue #1193). The other order turned a failed R2
+delete into a 500 whose retry read `object_key` as NULL, answered 204 and deleted nothing. Now the
+key stays in the row until the delete has succeeded, and a retry finishes the job. **The folder
+rather than the key** because an upload's delete of the object it superseded runs after its row
+has moved and can fail on its own; that failure is swallowed (the publish did succeed, and the
+leftover is never served — the public route compares against the row), and withdrawing reclaims it.
 
 The key is `shares/{id}/{hash}.json.gz`, where `hash` is the first 16 hex characters of the body's
 SHA-256. ⚠️ **That is why the `PUT` buffers rather than streaming straight into R2**: the digest

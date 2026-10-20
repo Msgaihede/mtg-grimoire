@@ -67,8 +67,13 @@ function shareEnv(tables: Partial<Tables> = {}): Env & { r2: Map<string, Uint8Ar
         return Promise.resolve({});
       },
       get: (k: string) => Promise.resolve(r2.has(k) ? { body: r2.get(k) } : null),
-      delete: (k: string) => {
-        r2.delete(k);
+      list: ({ prefix }: { prefix: string }) =>
+        Promise.resolve({
+          objects: [...r2.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })),
+          truncated: false,
+        }),
+      delete: (k: string | string[]) => {
+        for (const key of typeof k === "string" ? [k] : k) r2.delete(key);
         return Promise.resolve();
       },
     },

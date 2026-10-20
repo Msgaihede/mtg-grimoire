@@ -38,6 +38,8 @@ interface Fake {
     deletes: number;
     /** Set before a `PUT` to stage an R2 outage. */
     down: boolean;
+    /** Set to make every `delete` throw, for the one step whose failure is the subject. */
+    deletesDown: boolean;
   };
 }
 
@@ -57,7 +59,14 @@ function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
 }
 
 function shareEnv(tables: Partial<Tables> = {}): Fake {
-  const r2: Fake["r2"] = { store: new Map(), reads: 0, writes: 0, deletes: 0, down: false };
+  const r2: Fake["r2"] = {
+    store: new Map(),
+    reads: 0,
+    writes: 0,
+    deletes: 0,
+    down: false,
+    deletesDown: false,
+  };
   const all = {
     entitlements: [
       {
@@ -97,9 +106,15 @@ function shareEnv(tables: Partial<Tables> = {}): Fake {
           stored === undefined ? null : { body: streamOf(stored), size: stored.byteLength },
         );
       },
-      delete: (key: string) => {
+      list: ({ prefix }: { prefix: string }) =>
+        Promise.resolve({
+          objects: [...r2.store.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })),
+          truncated: false,
+        }),
+      delete: (keys: string | string[]) => {
+        if (r2.deletesDown) return Promise.reject(new Error("R2 is unreachable"));
         r2.deletes += 1;
-        r2.store.delete(key);
+        for (const key of typeof keys === "string" ? [keys] : keys) r2.store.delete(key);
         return Promise.resolve();
       },
     },
@@ -615,6 +630,50 @@ describe("GET /s/{id}/{hash}.json.gz", () => {
     const deletes = fake.r2.deletes;
     expect((await worker.fetch(revoke("g1", await token(), id), fake.env)).status).toBe(204);
     expect(fake.r2.deletes).toBe(deletes);
+  });
+
+  it("keeps the key in the row when the R2 delete fails, so a retry still deletes it", async () => {
+    // ⚠️ Issue #1193: the column used to be cleared *before* the delete, so a delete that threw
+    // was a 500 whose retry read `object_key` as NULL, answered 204 and deleted nothing — the
+    // withdrawn binder stayed readable in R2 with no row naming it.
+    const fake = shareEnv();
+    const id = await publish(fake);
+    const hash = await upload(fake, id, gz("snapshot one"));
+
+    fake.r2.deletesDown = true;
+    await expect(worker.fetch(revoke("g1", await token(), id), fake.env)).rejects.toThrow(
+      "R2 is unreachable",
+    );
+    expect(fake.tables.shares[0].state).toBe("revoked");
+    expect(fake.tables.shares[0].object_key).toBe(`shares/${id}/${hash}.json.gz`);
+    expect(fake.r2.store.size).toBe(1);
+
+    fake.r2.deletesDown = false;
+    expect((await worker.fetch(revoke("g1", await token(), id), fake.env)).status).toBe(204);
+    expect(fake.r2.store.size).toBe(0);
+    expect(fake.tables.shares[0].object_key).toBeNull();
+    expect(fake.tables.shares[0].bytes).toBeNull();
+  });
+
+  it("reclaims a superseded object an upload failed to delete, when the share is withdrawn", async () => {
+    // The superseded delete cannot move before the swap — the row would point at nothing — so a
+    // failure there leaves an object no row names. The publish itself succeeded, so it answers
+    // the hash; withdrawing empties the share's whole folder and takes the leftover with it.
+    const fake = shareEnv();
+    const id = await publish(fake);
+    const first = await upload(fake, id, gz("snapshot one"));
+
+    fake.r2.deletesDown = true;
+    const second = await upload(fake, id, gz("snapshot two"));
+    fake.r2.deletesDown = false;
+
+    expect(fake.tables.shares[0].object_key).toBe(`shares/${id}/${second}.json.gz`);
+    expect(fake.r2.store.has(`shares/${id}/${first}.json.gz`)).toBe(true);
+    // Left behind, but never served: the row decides which object may be.
+    expect((await worker.fetch(snapshot(id, first), fake.env)).status).toBe(404);
+
+    expect((await worker.fetch(revoke("g1", await token(), id), fake.env)).status).toBe(204);
+    expect(fake.r2.store.size).toBe(0);
   });
 
   it("answers 410 for a share that lapsed after the cache was warmed", async () => {
