@@ -221,8 +221,10 @@ export function runAs(name: string, deadlineMs: number, main: () => Promise<unkn
   run.deadlineMs = deadlineMs;
   stopOnEveryWayOut();
   let deadline: ReturnType<typeof setTimeout> | undefined;
+  let walks = 0;
   /** One attempt, under a deadline of its own. */
   const attempt = async () => {
+    walks += 1;
     clearTimeout(deadline);
     started = performance.now();
     deadline = setTimeout(async () => {
@@ -256,7 +258,8 @@ export function runAs(name: string, deadlineMs: number, main: () => Promise<unkn
   return attempts(times, attempt, faultBehind, again)
     .then(() => {
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
-      console.log(`${run.name}: passed in ${seconds} s`);
+      const again = walks > 1 ? `, on walk ${walks} — a browser fault stopped the one before` : "";
+      console.log(`${run.name}: passed in ${seconds} s${again}`);
     })
     .catch((error) => {
       // A fault is said even after a `fail` — which may have been the dying browser's doing.

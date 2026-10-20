@@ -352,6 +352,10 @@ async function main() {
   const relaunched = Date.now();
   await second.relaunch();
   const wished = first.wish(RELAUNCH_WISH).then(() => first.closeCard());
+  // Handled here as well as awaited below: a walk that stops in between — on a browser's fault,
+  // which is walked again — must not leave this to reject unheard, where the process's own
+  // handler would end the next walk with it.
+  wished.catch(() => undefined);
   // Asked over and over from the moment the new document is up, and each answer timed: the
   // engine has one thread, so how long a read waits is how long the ingest — or a trip — kept
   // it. `live` and the end of the ingest are each when a read first said so.
