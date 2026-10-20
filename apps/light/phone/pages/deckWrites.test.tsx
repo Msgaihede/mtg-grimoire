@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
 vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
@@ -31,6 +31,7 @@ import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 
 beforeAll(installLayout);
+afterEach(() => vi.restoreAllMocks());
 
 /** Long enough for a fake round trip and the reads that follow it. */
 const SETTLE = { timeout: 3000 };
@@ -124,6 +125,53 @@ describe("a deck row's action sheet", () => {
     await userEvent.click(await within(sheet).findByRole("button", { name: /^Undo — / }, SETTLE));
 
     await waitFor(async () => expect((await bolts())[0]?.labelId).toBeNull(), SETTLE);
+  });
+
+  /** Issue #1156: a refused Undo went exactly as a taken one did, and the reader believed it. */
+  it("holds the line while the undo is out, and says a refusal in its place", async () => {
+    renderPhone(<PhoneFace />, { path: `/decks/${MODERN}` });
+    const sheet = await act(/^Edit Lightning Bolt in Main deck$/);
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Label/ }));
+    await userEvent.click(
+      await within(within(sheet).getByRole("list", { name: "Labels" })).findByRole(
+        "button",
+        { name: "Cut candidate" },
+        SETTLE,
+      ),
+    );
+    const line = "Labelled Lightning Bolt Cut candidate.";
+    expect(await within(sheet).findByText(line, undefined, SETTLE)).toBeInTheDocument();
+
+    // The core's commonest refusal — another device's sync landed first — held until released.
+    let refuse: (why: string) => void = () => undefined;
+    vi.spyOn(ipc, "deckUndoApply").mockReturnValue(
+      new Promise<void>((_, reject) => {
+        refuse = reject;
+      }),
+    );
+    await userEvent.click(await within(sheet).findByRole("button", { name: /^Undo — / }, SETTLE));
+
+    // Out: the line stays, and its Undo cannot be pressed twice.
+    expect(within(sheet).getByText(line)).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: /^Undo — / })).toBeDisabled();
+
+    refuse(
+      "That is not the most recent change any more — the deck has been edited since. " +
+        "Open the history to see what happened.",
+    );
+
+    // Refused: the line says so in the command's words, and offers no Undo it could not honour.
+    expect(
+      await within(sheet).findByText(
+        /^Couldn't undo — That is not the most recent change any more — the deck has been edited since\./,
+        undefined,
+        SETTLE,
+      ),
+    ).toBeInTheDocument();
+    expect(within(sheet).queryByRole("button", { name: /^Undo/ })).toBeNull();
+    expect((await bolts())[0]?.labelName).toBe("Cut candidate");
+    // The receipt line never toasts itself (`apps/light/CLAUDE.md`, §2).
+    expect(said()).toEqual([]);
   });
 
   it("moves the card to another pile, and stays on the row it moved", async () => {
