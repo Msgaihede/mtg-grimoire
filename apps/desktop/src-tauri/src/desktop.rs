@@ -1304,7 +1304,7 @@ fn init_state(
 
     let portable = exe_dir.as_ref().map(|d| d.join("data"));
     let fallback = app_data.join("data");
-    let data_dir = paths::data_dir_for(exe_dir.as_deref(), &app_data);
+    let data_dir = paths::data_dir_for(exe_dir.as_deref(), &app_data)?;
 
     // **Before any connection the app keeps.** A folder holding a single pre-27 `mtg.db` is
     // taken apart here, and a `corpus.db` that will not open at all is deleted here — both
