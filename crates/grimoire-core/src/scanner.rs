@@ -1112,15 +1112,52 @@ pub fn tray_archive(
 
 /// `live-<epoch>.jpg` and its `.json`, the debug server's names and fields, so a frame captured
 /// here can be copied into `docs/scanner/scans/` unchanged.
+///
+/// **A capture never replaces one already in `scans/`** (issue #1131). Two presses inside one
+/// wall-clock second used to share a name, and the second frame and sidecar silently replaced
+/// the first — a lost labelled sample. The frame is now created exclusively
+/// ([`files::create_new`]), and a name that is taken moves on to `live-<epoch>-2.jpg`,
+/// `live-<epoch>-3.jpg` and so on; the sidecar follows whichever name the frame won.
 pub fn write_capture(scans: &Path, jpeg: &[u8], sidecar: &Sidecar) -> Result<Captured, String> {
+    let stamp = u64::try_from(crate::platform::clock::now_secs()).unwrap_or(0);
+    write_capture_at(scans, jpeg, sidecar, stamp)
+}
+
+/// How many names one second's captures may take before a capture gives up — far more presses
+/// than a second holds, so reaching it means something other than a reader is writing here.
+const CAPTURE_NAMES_PER_SECOND: u32 = 1000;
+
+/// [`write_capture`] at a given second, so a test can make two captures collide.
+fn write_capture_at(
+    scans: &Path,
+    jpeg: &[u8],
+    sidecar: &Sidecar,
+    stamp: u64,
+) -> Result<Captured, String> {
     if jpeg.is_empty() {
         return Err("empty frame".into());
     }
     files::create_dir_all(scans).map_err(|e| format!("{}: {e}", scans.display()))?;
-    let stamp = u64::try_from(crate::platform::clock::now_secs()).unwrap_or(0);
-    let name = format!("live-{stamp}.jpg");
-    let jpg = scans.join(&name);
-    files::write(&jpg, jpeg).map_err(|e| format!("{}: {e}", jpg.display()))?;
+    let (name, jpg) = (1..=CAPTURE_NAMES_PER_SECOND)
+        .find_map(|n| {
+            let name = if n == 1 {
+                format!("live-{stamp}.jpg")
+            } else {
+                format!("live-{stamp}-{n}.jpg")
+            };
+            let jpg = scans.join(&name);
+            match files::create_new(&jpg, jpeg) {
+                Ok(()) => Some(Ok((name, jpg))),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(e) => Some(Err(format!("{}: {e}", jpg.display()))),
+            }
+        })
+        .unwrap_or_else(|| {
+            Err(format!(
+                "{}: every capture name for second {stamp} is taken",
+                scans.display()
+            ))
+        })?;
     let json = serde_json::json!({
         "captured_at_epoch": stamp,
         "image": name,
@@ -2086,6 +2123,40 @@ mod tests {
         assert_eq!(v["votes"], "8.0");
         assert_eq!(v["image"], saved.saved);
         assert!(v["captured_at_epoch"].is_number());
+    }
+
+    #[test]
+    fn two_captures_in_one_second_keep_both_frames() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let scans = dir.path().join("scans");
+        let label = |expected: &str| Sidecar {
+            expected: expected.into(),
+            ..Default::default()
+        };
+        let first = write_capture_at(&scans, &[0xFF, 0xD8, 1], &label("Plains"), 1_757_300_000)
+            .expect("first");
+        let second = write_capture_at(&scans, &[0xFF, 0xD8, 2], &label("Island"), 1_757_300_000)
+            .expect("second");
+        let third = write_capture_at(&scans, &[0xFF, 0xD8, 3], &label("Swamp"), 1_757_300_000)
+            .expect("third");
+        assert_eq!(first.saved, "live-1757300000.jpg");
+        assert_eq!(second.saved, "live-1757300000-2.jpg");
+        assert_eq!(third.saved, "live-1757300000-3.jpg");
+        for (saved, byte, expected) in [
+            (&first, 1, "Plains"),
+            (&second, 2, "Island"),
+            (&third, 3, "Swamp"),
+        ] {
+            let jpg = scans.join(&saved.saved);
+            assert_eq!(std::fs::read(&jpg).expect("frame"), [0xFF, 0xD8, byte]);
+            let v: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(jpg.with_extension("json")).expect("sidecar"),
+            )
+            .expect("json");
+            assert_eq!(v["expected"], expected);
+            assert_eq!(v["image"], saved.saved);
+            assert_eq!(v["captured_at_epoch"], 1_757_300_000);
+        }
     }
 
     /// One command from `label` at `at` that settled in the same instant — admitted and released

@@ -2407,7 +2407,10 @@ header at each end, and the prose is what carries the rule to the next header so
 
 `scanner_capture` writes `live-<epoch>.jpg` and its `.json` sidecar into `data/scanner/scans/`,
 the same names and fields the debug server writes into `docs/scanner/scans/`, so a frame
-captured in the app can be copied into the repository's dataset unchanged.
+captured in the app can be copied into the repository's dataset unchanged. A capture never
+replaces one already there (issue #1131): the frame is created exclusively, and a second
+capture inside the same second takes `live-<epoch>-2.jpg`, then `-3`, and so on, its sidecar
+following the frame's name.
 
 ### One window scans at a time
 
