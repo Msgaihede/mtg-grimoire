@@ -63,6 +63,34 @@ function stored(entry: TokenEntryRef): TokenEntryKey | null {
 }
 
 /**
+ * The list as the stepper's press says it will be — rules 2 and 3 applied to the cache, for
+ * {@link useDeckTokens}' optimistic step.
+ *
+ * The entry is found the way Rust's `named_entry` finds it: an implicit one by its token alone
+ * (a list holds at most one, and only while it stores none of the token), a stored one by its
+ * grain. **0 takes a stored entry out unless it is the token's last one here**, which stays at 0
+ * — the row's fate as `set_quantity` decides it, so the wall does not draw a 0 for a round trip
+ * that the answer then removes. An entry the cache no longer holds leaves the list as it was:
+ * the write will say `ENTRY_GONE`, and the guess has nothing to guess about.
+ */
+function stepped(
+  rows: readonly DeckTokenRow[],
+  entry: TokenEntryRef,
+  quantity: number,
+): readonly DeckTokenRow[] {
+  const target = rows.findIndex(
+    (row) =>
+      row.oracleId === entry.oracleId &&
+      row.implicit === entry.implicit &&
+      (entry.implicit || (row.cardId === entry.cardId && row.finish === entry.finish)),
+  );
+  if (target === -1) return rows;
+  const others = rows.filter((row, at) => at !== target && row.oracleId === entry.oracleId);
+  if (quantity === 0 && others.length > 0) return rows.filter((_, at) => at !== target);
+  return rows.map((row, at) => (at === target ? { ...row, quantity } : row));
+}
+
+/**
  * The tokens and emblems one list of one deck needs, one view per entry.
  *
  * `deckId` is nullable for {@link useDeck}'s reason: a caller with no deck open mounts an idle
@@ -85,8 +113,9 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
   // The marketplace prices every row — see the file header for why it is in the key.
   const { marketplace } = useMarketplace();
 
+  const tokensKey = ["decks", "tokens", deckId, variant, marketplace.id] as const;
   const query = useQuery({
-    queryKey: ["decks", "tokens", deckId, variant, marketplace.id],
+    queryKey: tokensKey,
     queryFn: () => ipc.deckTokens(opened(deckId), variant, marketplace.id),
     enabled: deckId !== null,
   });
@@ -119,19 +148,58 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
    *
    * **On success only.** Each command is one transaction, so a refusal leaves the tables exactly
    * as this cache already describes them — there is nothing to re-read, and the sentence
-   * {@link writeFailure} draws is what says the press did not land.
+   * {@link writeFailure} draws is what says the press did not land. **The stepper is the one
+   * exception**: its guess has already moved the cache, so a refusal rolls it back and re-reads.
    */
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
   };
 
-  /** The stepper's write — rules 2 and 3: an implicit entry is materialised, and a step to 0
-   *  deletes the entry unless it is the token's last one in this list. */
+  /**
+   * The stepper's write — rules 2 and 3: an implicit entry is materialised, and a step to 0
+   * deletes the entry unless it is the token's last one in this list.
+   *
+   * **Optimistic on the entry's own number and nothing else** — the fourth copy of the fix
+   * `useDeckCore`'s `setQuantity` describes (issue #1160), for its reason: the stepper's `value` is
+   * this cache, and the write is absolute, so two presses on a Treasure ×2 inside one round trip
+   * both read 2 and both send 3. Cancel first, or an in-flight read of the old list lands on top
+   * of the guess; patch only the key the stepper is reading (the other marketplaces' answers are
+   * the root's to refresh); roll back on a refusal, because 0 *removes* an entry that is not the
+   * token's last here, and a refused removal that stayed removed would be a printing silently gone.
+   *
+   * **The patch keeps `implicit` as it was.** An implicit entry stepped to 3 is stored once the
+   * write lands, but the next press still sending `null` is right: Rust's `named_entry` reads
+   * `null` as the default printing's entry whether or not it has been materialised yet.
+   *
+   * **Only the last press to settle re-reads.** A refetch fired by the first answer while the
+   * second write is still in flight can read the list between the two and paint the first press's
+   * number over the second's guess — and a third press made in that window is the bug again. So a
+   * settle with another step still pending leaves the cache to that step, and the rollback waits
+   * for it too: a refusal's snapshot is older than every press made after it.
+   */
+  const quantityKey = ["decks", "tokens", "quantity", deckId, variant] as const;
   const quantityWrite = useMutation({
+    mutationKey: quantityKey,
     mutationFn: ({ entry, quantity }: { entry: TokenEntryRef; quantity: number }) =>
       ipc.deckTokenSetQuantity(opened(deckId), variant, entry.oracleId, stored(entry), quantity),
-    onSuccess: invalidate,
+    onMutate: async ({ entry, quantity }) => {
+      await queryClient.cancelQueries({ queryKey: tokensKey, exact: true });
+      const saved = queryClient.getQueryData<DeckTokenRow[]>(tokensKey);
+      if (saved !== undefined) {
+        queryClient.setQueryData(tokensKey, stepped(saved, entry, quantity));
+      }
+      return { saved };
+    },
+    onError: (_error, _press, context) => {
+      if (queryClient.isMutating({ mutationKey: quantityKey }) > 1) return;
+      if (context?.saved !== undefined) queryClient.setQueryData(tokensKey, context.saved);
+      invalidate();
+    },
+    onSuccess: () => {
+      if (queryClient.isMutating({ mutationKey: quantityKey }) > 1) return;
+      invalidate();
+    },
   });
 
   /** The art picker's write on one entry — rule 4, folding onto an entry the list already holds. */

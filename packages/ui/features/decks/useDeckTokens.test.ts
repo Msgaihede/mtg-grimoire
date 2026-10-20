@@ -178,7 +178,9 @@ describe("useDeckTokens", () => {
 
     act(() => void result.current.remove(entryRef(result.current.tokens[0])));
     await waitFor(() =>
-      expect(result.current.failure).toBe("That printing of the token is not in this list any more."),
+      expect(result.current.failure).toBe(
+        "That printing of the token is not in this list any more.",
+      ),
     );
   });
 
@@ -204,6 +206,84 @@ describe("useDeckTokens", () => {
     // triggers watch the two token tables — so a token step re-settles it like a card step does,
     // and `useDeck`'s own reason for firing `["wishlist"]` after every deck write is this one's too.
     expect(keys).toContainEqual(["wishlist"]);
+  });
+
+  /**
+   * **Two presses inside one round trip are two steps** (issue #1160). The stepper's `value` is
+   * this cache and the write is absolute, so before the optimistic patch both presses on a
+   * Treasure ×2 read 2 and sent 3. The second press must read the first one's guess — and an
+   * implicit entry must still travel as `null`, which Rust reads as the default printing's entry
+   * whether or not the first write has materialised it yet.
+   */
+  it("steps on the guess, so quick presses are not lost", async () => {
+    deckTokens.mockResolvedValue([row({ quantity: 2 })]);
+    const { result } = mount();
+    await waitFor(() => expect(result.current.tokens[0]?.quantity).toBe(2));
+
+    const answers: Array<() => void> = [];
+    deckTokenSetQuantity.mockImplementation(
+      () => new Promise<void>((resolve) => answers.push(resolve)),
+    );
+    const spy = vi.spyOn(client, "invalidateQueries");
+
+    const press = () => {
+      const [view] = result.current.tokens;
+      act(() => result.current.setQuantity(entryRef(view), view.quantity + 1));
+    };
+    press();
+    await waitFor(() => expect(result.current.tokens[0].quantity).toBe(3));
+    press();
+    await waitFor(() => expect(result.current.tokens[0].quantity).toBe(4));
+    await waitFor(() => expect(deckTokenSetQuantity).toHaveBeenCalledTimes(2));
+    expect(deckTokenSetQuantity.mock.calls.map((call) => call.slice(3))).toEqual([
+      [null, 3],
+      [null, 4],
+    ]);
+
+    // **Only the last answer re-reads**: a refetch fired by the first while the second is still
+    // in flight could paint 3 over the guess of 4.
+    deckTokens.mockResolvedValue([row({ quantity: 4, implicit: false })]);
+    await act(async () => answers[0]());
+    expect(spy).not.toHaveBeenCalled();
+    expect(result.current.tokens[0].quantity).toBe(4);
+    await act(async () => answers[1]());
+    await waitFor(() =>
+      expect(spy.mock.calls.map(([filters]) => filters?.queryKey)).toContainEqual(["decks"]),
+    );
+  });
+
+  /**
+   * **A refused step is rolled back**, and 0 takes a stored entry out at the press unless it is
+   * the token's last one in this list (rule 3) — which is why the rollback matters: a refused
+   * removal that stayed removed would be a printing silently gone.
+   */
+  it("takes a zeroed entry out at the press, keeps a last one at 0, and rolls a refusal back", async () => {
+    const plain = row({ implicit: false, cardId: "c-a", quantity: 2 });
+    const foil = row({ implicit: false, cardId: "c-a", finish: "foil", quantity: 1 });
+    deckTokens.mockResolvedValue([plain, foil]);
+    const { result } = mount();
+    await waitFor(() => expect(result.current.tokens).toHaveLength(2));
+
+    let refuse: (reason: string) => void = () => undefined;
+    deckTokenSetQuantity.mockImplementation(
+      () => new Promise<void>((_, reject) => (refuse = reject)),
+    );
+    const [, foilView] = result.current.tokens;
+    act(() => result.current.setQuantity(entryRef(foilView), 0));
+    await waitFor(() => expect(result.current.tokens).toHaveLength(1));
+    expect(result.current.tokens[0].finish).toBe("nonfoil");
+
+    await act(async () => refuse("The deck is busy."));
+    await waitFor(() => expect(result.current.tokens).toHaveLength(2));
+    expect(result.current.failure).toBe("The deck is busy.");
+
+    // The token's last entry here stays on the wall at 0.
+    deckTokens.mockResolvedValue([plain]);
+    await act(() => client.refetchQueries({ queryKey: ["decks", "tokens"] }));
+    await waitFor(() => expect(result.current.tokens).toHaveLength(1));
+    deckTokenSetQuantity.mockImplementation(() => new Promise<void>(() => undefined));
+    act(() => result.current.setQuantity(entryRef(result.current.tokens[0]), 0));
+    await waitFor(() => expect(result.current.tokens[0]?.quantity).toBe(0));
   });
 
   /** The setters are stable while nothing they read changes — the editor hands `setQuantity` to
