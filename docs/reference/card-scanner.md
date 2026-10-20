@@ -1538,6 +1538,15 @@ spread across its own reprints and no one printing reached the threshold. The re
 denied an answer by the card being *too well known*. Each observation carries a **key** to
 accumulate on and a **member** it names.
 
+**A frame is one vote per card, however many of its printings it lists** (#1133). The top-K is
+not deduplicated by card, and art-identical reprints tie, so pooling *within* a frame summed one
+card's reprints into several votes: five tied printings reached the bar of 8 on the second frame
+with no rival, and four printings of Y a bit behind a single-printing X took ~2.87 votes a frame
+to X's 1.0 and decided Y although X was top-1 on every frame. So within a frame each (card, kind)
+keeps its best contribution — kinds still add, a read and a look being different evidence — the
+printing folds the same way per member, and `seen` counts the card once. Pooling is across
+frames.
+
 **The printing accumulates too, with the same decay and hysteresis.** It used to be the single
 best frame each member had ever had, in a map that never decayed and never reverted, so one
 lucky frame captured the slot permanently: `Gandalf, Spark Starter` came up correctly as HOB
@@ -1751,6 +1760,7 @@ sees it laid down (§10 *A card laid on the last*). The replay gained Abandoned 
 | --- | --- |
 | Relative falloff | Took Reaper, top on every frame at 21.5%, held **30%** of the evidence against a 45% bar |
 | Group by oracle id | Esquire of the King led every frame and never committed — its reprints split its own vote |
+| One vote per card per frame | five tied reprints decided on their second frame; four reprints just behind out-voted the top-1 card (#1133) |
 | `commit_seen` counts frames | Oliphaunt, correct at **24.6%**, barred by an absolute evidence threshold it could never reach |
 | Printing decays and is sticky | `Gandalf, Spark Starter` latched to HOB 97 after one lucky frame, correct answer HOB 203 |
 | Per-kind ranking, and tier weights | a foil committing to **`Suplex`** while OCR read the title right on all 400 runs |

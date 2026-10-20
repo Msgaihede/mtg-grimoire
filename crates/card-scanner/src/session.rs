@@ -3632,13 +3632,20 @@ mod tests {
 
     #[test]
     fn the_card_the_hash_preferred_does_not_lift_a_resolved_decision() {
-        // **The case Exact exists for.** The hash leads with the other card — its two printings
-        // pool their votes — and the resolve decides card three. On every frame after, the hash
-        // goes on naming the other card: that is this card as the hash sees it, so the decision
-        // holds. It used to count ten of them as a card swapped in and lift the decision with the
-        // card still in the lens — Abandoned Air Temple on the replay, decided at frame 9 and
-        // lost at 18.
+        // **The case Exact exists for.** The hash leads with the other card and the resolve
+        // decides card three. On every frame after, the hash goes on naming the other card: that
+        // is this card as the hash sees it, so the decision holds. It used to count ten of them
+        // as a card swapped in and lift the decision with the card still in the lens — Abandoned
+        // Air Temple on the replay, decided at frame 9 and lost at 18.
+        //
+        // The hash leading with the other card used to come for free: its two printings summed
+        // their votes inside each frame, out-voting card three on card three's own frames. That
+        // was #1133, and with it fixed card three leads its own frames — so the override is put
+        // on the tracker the way a title read naming card three leaves it.
         let mut s = resolved_on_card_three();
+        s.tracker.reset();
+        s.tracker.observe(&[Observation::appearance(id(10), id(1), 0.0)]);
+        s.tracker.commit_to(id(20), id(3));
         for f in 0..40 {
             let v = locked_frame(&mut s, &card_image(1));
             assert!(v.decision.is_some(), "lost the decision on frame {f}");
