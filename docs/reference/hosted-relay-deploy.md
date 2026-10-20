@@ -1158,14 +1158,16 @@ SQLite behind the stand-in state `ticket.test.ts` already used, and `pnpm web:sy
   the request, the group's socket and the isolate's other groups — is not known. The quota
   (128 MiB of sealed text a group) bounds the log, not what reading it costs.
 - **A claim founds a group of one**, so a device that has claimed can no longer *join* another
-  group — `pairing::complete` refuses a differing group id. **Connect on the device you will pair
+  group — `pairing::accept` refuses an invite into a differing group id, before its answer
+  reaches the relay (until issue #1118 only `complete` did, after the initiator had already filed
+  the joiner as a ghost device). **Connect on the device you will pair
   *from*, or pair first.** The panel says so; this is the note for when somebody asks why.
   **Pairing in the other order stopped being a dead end on 2026-08-30** — a device that pairs
   first and never connects is now entitled through its group — and this bullet also said "there
   is no Leave or Disconnect in the UI", which **Leave group** ended the same day. It is no longer
   a *dead end*: a device that claimed into a group of one can leave it and then join the group it
   meant to. It is still a trap worth naming, because leaving is a press a reader has to know to
-  look for and `complete`'s refusal does not name it.
+  look for and `accept`'s refusal does not name it.
 - **The sealed pairing blob is unversioned and its layout changed twice.** Builds from either side
   of a layout change are mutually unreadable, in both directions, and both report "That pairing
   key is unreadable". **The window narrowed on 2026-08-30**: the current three-field layout is

@@ -158,6 +158,11 @@ const ALREADY_USED: &str = "That pairing code has already been used.";
 const NOT_A_RESPONSE: &str = "That response is not a pairing response.";
 const NOT_A_KEY: &str = "That pairing key is unreadable.";
 
+/// What a device already in one group says to an invite into another — at [`accept`], before
+/// anything reaches the relay, and again at [`complete`] as the backstop.
+const IN_ANOTHER_GROUP: &str =
+    "This device is already in a different pairing group. Leave that one first.";
+
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -215,6 +220,14 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
 /// **Posts before it keeps anything**, the same shape [`confirm`] uses one step further on: if
 /// the post fails — the code was answered already, or the relay could not be reached — nothing
 /// local exists to half-undo, and a reader whose paste failed can simply try again.
+///
+/// **A device already in a different group is refused here, before the post**, and not only at
+/// [`complete`]. Once the join blob is on the relay the initiator's [`confirm`] files this device
+/// on its roster and publishes it in the manifest; a refusal at `complete` then comes too late
+/// and leaves the initiator a ghost device that holds a roster slot and is sealed a key on every
+/// rotation (issue #1118). The invite carries the group the initiator will seal — its own, or
+/// the one it will found under that very id — so the comparison is exact. A device that
+/// connected Patreon first holds a group of one (`ensure_group`) and is refused the same way.
 pub async fn accept(
     db: &impl Store,
     pending: &mut Option<Pending>,
@@ -222,6 +235,11 @@ pub async fn accept(
 ) -> Result<Handshake, String> {
     let me = db.with(|conn| identity::ensure(conn).map_err(err))?;
     let inv = Invite::decode(code).map_err(err)?;
+    if let Some(current) = db.with(|conn| identity::group(conn).map_err(err))? {
+        if from_hex16(&current.group_id) != Some(inv.group_id) {
+            return Err(IN_ANOTHER_GROUP.to_owned());
+        }
+    }
     let pair_key = crypto::pair_key(
         &me.keypair.secret,
         &inv.public_key,
@@ -377,6 +395,7 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     };
     let rv = p.rv.clone();
     let peer_name = p.peer_name.clone();
+    let invited_into = p.group_id;
     // `p`'s borrow ends here — everything above is copied or cloned out of it, and everything
     // below reaches `pending` fresh, which is what lets the final line take it mutably again.
 
@@ -411,6 +430,9 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     // for `identity::group` to read, so the values `identity::create_group` would mint are
     // reproduced here instead of minted by calling it, because that call also *writes* them, and
     // a write ahead of the post is exactly the ordering step 2's doc above exists to rule out.
+    // **The id is the one [`begin`] minted and the invite carried**, never a fresh one: it is what
+    // the joiner's [`accept`] compared its own group against, so the invite has to name the group
+    // this founds.
     //
     // **Read before the request and written back behind it**, which is safe for one reason:
     // only a sync operation moves a group, and this one holds the lane from here to the commit.
@@ -419,7 +441,7 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     let group = match existing {
         Some(g) => g,
         None => identity::Group {
-            group_id: hex16(&crypto::random_bytes::<16>()),
+            group_id: hex16(&invited_into),
             epoch: 0,
             group_key: crypto::random_bytes::<32>(),
         },
@@ -540,12 +562,11 @@ pub fn complete(
     // **A device already in a group may only rejoin the one it is in.** Joining a second group
     // overwrites the key this device is already syncing under, and nothing here can get it
     // back — a re-pair after a revocation carries the same group id and is what this allows.
+    // [`accept`] refuses the same case before the initiator commits anything; this is what
+    // still catches a device that entered a group between its `accept` and this call.
     if let Some(current) = identity::group(conn).map_err(err)? {
         if current.group_id != group_id {
-            return Err(
-                "This device is already in a different pairing group. Leave that one first."
-                    .to_owned(),
-            );
+            return Err(IN_ANOTHER_GROUP.to_owned());
         }
     }
 
@@ -1891,8 +1912,14 @@ mod tests {
     /// point: joining group two overwrites the key this device is syncing group one under, and
     /// nothing here can get that key back. A re-pair after a revocation carries the *same*
     /// group id and is allowed by the same check.
+    /// **A device already in a group is refused at `accept`, before its answer reaches the
+    /// relay** — issue #1118. Refusing only at `complete` came after the initiator's `confirm`
+    /// had already filed the joiner on its roster: a ghost device holding a slot.
+    ///
+    /// **What makes it red**: dropping the group check from `accept`. The join slot then fills,
+    /// C's `confirm` succeeds and C's roster names B.
     #[tokio::test]
-    async fn joining_a_second_group_is_refused_and_the_first_key_survives() {
+    async fn joining_a_second_group_is_refused_at_accept_and_leaves_no_ghost() {
         let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
@@ -1911,22 +1938,114 @@ mod tests {
         poll(&b, &mut pb, crate::platform::clock::now_ms())
             .await
             .unwrap();
-        let joined = crate::sync_pair::identity::group(&b).unwrap().unwrap();
+        let joined = identity::group(&b).unwrap().unwrap();
 
-        // C runs a perfectly good pairing at B, into a group of its own.
+        // C offers B a group of its own.
         let c_offer = begin(&c, &mut pc).unwrap();
-        accept(&b, &mut pb, &c_offer.code).await.unwrap();
-        poll(&c, &mut pc, crate::platform::clock::now_ms())
+        let c_inv = Invite::decode(&c_offer.code).unwrap();
+        assert_eq!(
+            accept(&b, &mut pb, &c_offer.code).await.unwrap_err(),
+            IN_ANOTHER_GROUP
+        );
+        assert!(
+            relay
+                .blob(&crypto::rendezvous_id(&c_inv.token), "join")
+                .is_none(),
+            "nothing was posted for C to read"
+        );
+
+        // C never hears an answer, so it has nothing to confirm and nobody to file.
+        let progress = poll(&c, &mut pc, crate::platform::clock::now_ms())
             .await
             .unwrap();
-        let sealed_c = confirm(&c, &mut pc).await.unwrap();
+        assert_eq!(progress.stage, STAGE_WAITING);
+        assert!(confirm(&c, &mut pc).await.is_err());
+        assert!(identity::group(&c).unwrap().is_none());
+        assert!(identity::roster(&c).unwrap().is_empty());
+        assert_eq!(identity::group(&b).unwrap().unwrap(), joined);
+    }
 
-        assert!(complete(&b, &mut pb, &sealed_c.sealed_key).is_err());
+    /// **The issue's own case**: a phone that connected Patreon first holds a group of one
+    /// (`ensure_group`), and the desktop's invite — into a group the desktop founds at `confirm` —
+    /// is refused at `accept`.
+    #[tokio::test]
+    async fn a_device_that_connected_first_is_refused_at_accept() {
+        let relay = FakeRelay::start().await;
+        let (desktop, phone) = (db(), db());
+        relay.point(&desktop);
+        relay.point(&phone);
+        commands::ensure_group(&phone).unwrap();
+        let (mut pd, mut pp) = (None, None);
+
+        let offer = begin(&desktop, &mut pd).unwrap();
         assert_eq!(
-            crate::sync_pair::identity::group(&b).unwrap().unwrap(),
-            joined,
-            "B kept the key it was already syncing under"
+            accept(&phone, &mut pp, &offer.code).await.unwrap_err(),
+            IN_ANOTHER_GROUP
         );
+        assert!(pp.is_none(), "a refused accept keeps nothing");
+    }
+
+    /// **A re-pair into the group this device is already in is still accepted** — the check
+    /// compares ids, not the mere presence of a group.
+    #[tokio::test]
+    async fn a_device_may_accept_an_invite_into_its_own_group() {
+        let relay = FakeRelay::start().await;
+        let (a, b) = (db(), db());
+        let (mut pa, mut pb) = (None, None);
+        pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
+        poll(&b, &mut pb, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
+
+        let again = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &again.code).await.unwrap();
+    }
+
+    /// **A founding `confirm` founds the group the invite named**, which is what makes the
+    /// comparison in `accept` exact.
+    #[tokio::test]
+    async fn a_founding_confirm_writes_the_group_the_invite_named() {
+        let relay = FakeRelay::start().await;
+        let (a, b) = (db(), db());
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
+        let offer = begin(&a, &mut pa).unwrap();
+        let inv = Invite::decode(&offer.code).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
+        confirm(&a, &mut pa).await.unwrap();
+
+        let group = identity::group(&a).unwrap().unwrap();
+        assert_eq!(from_hex16(&group.group_id), Some(inv.group_id));
+    }
+
+    /// **`complete` is still the backstop**: a device that entered a group *after* its `accept`
+    /// is refused there, and keeps the key it holds.
+    #[tokio::test]
+    async fn completing_into_a_second_group_is_refused_and_the_first_key_survives() {
+        let relay = FakeRelay::start().await;
+        let (a, b) = (db(), db());
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
+
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        in_a_group_with_key(&b, [7u8; 32]);
+        let held = identity::group(&b).unwrap().unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
+        let sealed = confirm(&a, &mut pa).await.unwrap();
+
+        assert_eq!(
+            complete(&b, &mut pb, &sealed.sealed_key).unwrap_err(),
+            IN_ANOTHER_GROUP
+        );
+        assert_eq!(identity::group(&b).unwrap().unwrap(), held);
     }
 
     /// A device already in a group invites into *that* group, rather than minting a second one

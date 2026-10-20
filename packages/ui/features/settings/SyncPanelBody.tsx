@@ -675,7 +675,8 @@ const LAPSE_REASSURANCE =
  * The one dead end this press can still walk a reader into, and the reassurance beside it.
  *
  * **Connecting founds a group of one when this device is in none** (§6.3, `ensure_group`), and
- * `pairing::complete` refuses a `group_id` that differs from the one this device already holds. So
+ * `pairing::accept` refuses an invite into a `group_id` that differs from the one this device
+ * already holds — before its answer reaches the other device, so nothing is left there. So
  * a device that has connected can still *invite* others into its group, but can never *join* a
  * group that already exists — and there is no Leave and no Disconnect in this panel to undo it.
  * A reader who connects on their phone and then tries to join their desktop's group meets
