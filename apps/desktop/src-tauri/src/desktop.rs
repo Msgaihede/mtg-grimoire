@@ -71,13 +71,14 @@ async fn sync_status(state: tauri::State<'_, Arc<AppState>>) -> Result<sync::Syn
 }
 
 /// What the app knows about a newer release, read from `app_meta` and the process's own
-/// state. No network — the ribbon polls this.
+/// state. No network — the ribbon polls this, so it is answered on the blocking pool: a poll
+/// that waited on `db_read` behind a long search would park a tokio worker (issue #1150).
 #[tauri::command]
 async fn update_status(
     state: tauri::State<'_, Arc<AppState>>,
     updater: tauri::State<'_, Arc<update::Updater>>,
 ) -> Result<update::UpdateStatus, String> {
-    Ok(update::status(state.inner(), updater.inner()))
+    update::status_async(state.inner(), updater.inner()).await
 }
 
 /// Every release the last check saw, newest first. No network — this reads the page that
@@ -176,7 +177,8 @@ async fn update_open_release_page(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    let url = update::status(state.inner(), updater.inner())
+    let url = update::status_async(state.inner(), updater.inner())
+        .await?
         .available
         .map(|r| r.html_url)
         .filter(|u| u.starts_with("https://github.com/"))
