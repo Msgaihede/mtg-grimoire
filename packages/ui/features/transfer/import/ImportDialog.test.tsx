@@ -1024,6 +1024,45 @@ describe("the import dialog", () => {
     expect(screen.queryByText(LEGACY_ENCODING_NOTICE)).not.toBeInTheDocument();
   });
 
+  /**
+   * **The preview is of the list the press read** (issue #1172). Every planner matches the
+   * resolver's rows to lines by index, so a list that changed while "Reading…" — here a file
+   * picked before the press that lands after it — would hand each line its neighbour's card.
+   * The box and the file button are shut while the press reads, and a change that lands anyway
+   * is in the box for Back, not under the rows.
+   */
+  it("previews the list it pressed on, whatever lands in the box while it reads", async () => {
+    let landFile!: (file: { text: string; encoding: "utf-8" }) => void;
+    importPickFile.mockReturnValue(new Promise((resolve) => (landFile = resolve)));
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    const resolveNow = importResolve.getMockImplementation()!;
+    importResolve.mockImplementation(async (lines: ImportResolveLine[]) => {
+      await answered;
+      return resolveNow(lines);
+    });
+    wrap(<Harness />);
+    const box = await screen.findByLabelText("Card list");
+    await userEvent.click(box);
+    await userEvent.paste("4 Lightning Bolt\n2 Sol Ring");
+    await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
+    await userEvent.click(screen.getByRole("button", { name: "Preview" }));
+
+    await waitFor(() => expect(box).toHaveAttribute("readonly"));
+    expect(screen.getByRole("button", { name: "Choose file…" })).toBeDisabled();
+
+    landFile({ text: "1 Duress", encoding: "utf-8" });
+    await waitFor(() => expect(box).toHaveValue("1 Duress"));
+    answer();
+
+    expect(await screen.findByText("6 cards")).toBeInTheDocument();
+    expect(screen.getByText("Instant")).toBeInTheDocument();
+    expect(screen.queryByText("Sorcery")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByLabelText("Card list")).toHaveValue("1 Duress");
+  });
+
   /** A cancelled picker is not a failure — it is the most ordinary way to use a file dialog
    *  after changing your mind — so nothing is said and the box is left as it was. */
   it("says nothing when the picker is cancelled", async () => {

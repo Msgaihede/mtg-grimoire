@@ -16,11 +16,22 @@ import { useMemo, useState } from "react";
 import type { ImportFile, ImportResolveLine } from "@/lib/ipc";
 import { languageCode } from "@/lib/languages";
 import { parseDecklist, type ParsedList } from "./parse";
-import { useImport } from "./useImport";
+import { useImport, type ResolvedList } from "./useImport";
 
 /** Which half of the import is up. Two steps in one panel rather than two dialogs: the second
  *  is entirely about the first, and Back has to keep what was pasted. */
 export type ImportStep = "source" | "preview";
+
+/**
+ * What the preview step draws: the list **as it was at the press** and the resolver's answer to
+ * it, kept together. The answer's rows are addressed by index into `list.lines`, so pairing them
+ * with the box's text as it is when the answer lands — an edit or another file read while
+ * "Reading…" — would hand every line from the edit on its neighbour's card (issue #1172).
+ */
+export interface Previewed {
+  list: ParsedList;
+  resolved: ResolvedList;
+}
 
 /**
  * Every parsed line as the resolver takes it.
@@ -41,7 +52,8 @@ export function resolveLinesOf(parsed: ParsedList): ImportResolveLine[] {
 
 export function useImportSource() {
   const [text, setText] = useState("");
-  const [step, setStep] = useState<ImportStep>("source");
+  /** The preview's list and answer, or `null` while the box is up — which step is up, too. */
+  const [previewed, setPreviewed] = useState<Previewed | null>(null);
   /**
    * How the text in the box was read, while it is still the text a file read put there — `null`
    * from the first keystroke or paste on, because from then on it is the reader's text and a
@@ -50,6 +62,8 @@ export function useImportSource() {
    * read leaves the old file's text in the box, so its reading still describes what is there.
    */
   const [readAs, setReadAs] = useState<ImportFile["encoding"] | null>(null);
+
+  const step: ImportStep = previewed === null ? "source" : "preview";
 
   const { resolve } = useImport();
   const parsed = useMemo(() => parseDecklist(text), [text]);
@@ -72,13 +86,17 @@ export function useImportSource() {
    *  `Preview` unmounts — which is why nothing here has to reset it. */
   const toSource = () => {
     resolve.reset();
-    setStep("source");
+    setPreviewed(null);
   };
 
-  /** Resolve every line and, only once both reads have answered, cross to the preview. */
+  /** Resolve every line and, only once both reads have answered, cross to the preview — with
+   *  the list this press resolved, never the one in the box when the answer lands. */
   const preview = () => {
-    if (parsed.lines.length === 0) return;
-    resolve.mutate(resolveLinesOf(parsed), { onSuccess: () => setStep("preview") });
+    const list = parsed;
+    if (list.lines.length === 0) return;
+    resolve.mutate(resolveLinesOf(list), {
+      onSuccess: (resolved) => setPreviewed({ list, resolved }),
+    });
   };
 
   return {
@@ -89,8 +107,8 @@ export function useImportSource() {
     parsed,
     step,
     resolve,
-    /** The resolver's answer, or `null` before it has one. */
-    resolved: resolve.data ?? null,
+    /** The list the press resolved and the resolver's answer, or `null` before there is one. */
+    previewed,
     preview,
     toSource,
   };

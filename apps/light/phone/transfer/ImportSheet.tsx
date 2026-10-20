@@ -97,7 +97,7 @@ function Body({
 }) {
   const id = useId();
   const source = useImportSource();
-  const { text, readAs, parsed, step, resolve, resolved } = source;
+  const { text, readAs, parsed, resolve, previewed } = source;
   const fileRef = useRef<HTMLInputElement>(null);
   const [reading, setReading] = useState(false);
   /** Why the last file could not be read, already framed — or `null`. */
@@ -123,14 +123,14 @@ function Body({
       });
   };
 
-  if (step === "preview" && resolved !== null) {
+  if (previewed !== null) {
     return (
       <>
         {/* What reading a spreadsheet cost, above the destination — the desktop shell's strip,
             for its reason: a fact about the list, said once. Capped so it cannot take the
             destination's footer off a short window. */}
         <div className="relative max-h-24 shrink-0 overflow-y-auto border-b border-border px-4 py-2.5 empty:hidden">
-          <CsvNotes list={parsed} />
+          <CsvNotes list={previewed.list} />
         </div>
         <div
           className={cn(
@@ -139,9 +139,9 @@ function Body({
           )}
         >
           <destination.Preview
-            list={parsed}
-            resolved={resolved.rows}
-            tags={resolved.tags}
+            list={previewed.list}
+            resolved={previewed.resolved.rows}
+            tags={previewed.resolved.tags}
             onDone={onDone}
             report={notify}
             onBack={source.toSource}
@@ -169,6 +169,8 @@ function Body({
           id={`${id}-list`}
           value={text}
           onChange={(e) => source.type(e.target.value)}
+          // The desktop's rule: the text on screen while "Reading…" is the text it previews.
+          readOnly={resolve.isPending}
           rows={10}
           spellCheck={false}
           autoCapitalize="off"
@@ -211,8 +213,11 @@ function Body({
         />
         <button
           type="button"
-          onClick={() => fileRef.current?.click()}
-          aria-disabled={reading || undefined}
+          onClick={() => {
+            // Nothing new into the box while the press reads it (issue #1172).
+            if (!resolve.isPending) fileRef.current?.click();
+          }}
+          aria-disabled={reading || resolve.isPending || undefined}
           className={cn(
             "flex h-11 w-full items-center justify-center gap-2 rounded-md border border-border",
             "text-sm text-dim aria-disabled:opacity-50",
