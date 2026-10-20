@@ -216,7 +216,7 @@ const SECRET_BYTES = 32;
  * while D1's own limits page is reported to list 50 queries per invocation on the free plan;
  * neither page could be read from where this was written. So the pass is shaped to fit the
  * smaller: one `SELECT`, one stamp, and at most two `UPDATE`s a row is 42 queries at this budget,
- * and 43 with the rendezvous sweep `index.ts` runs after it.
+ * and 45 with the rendezvous and claim sweeps `index.ts` runs after it.
  *
  * **Every row counts, token or not.** A row with no `patreon_refresh` asks Patreon nothing, but it
  * is not free — a closed grace window still costs `revoke`'s `UPDATE` and a Durable Object drop —
@@ -1062,12 +1062,7 @@ async function refreshDoor(env: Env, refresh: string, device: string): Promise<R
  * **The answer omits `refresh` and nothing here has one to omit.** `grantFor` is not given the
  * secret, so the omission is structural rather than a deletion somebody could forget.
  */
-async function groupDoor(
-  env: Env,
-  group: string,
-  auth: string,
-  device: string,
-): Promise<Response> {
+async function groupDoor(env: Env, group: string, auth: string, device: string): Promise<Response> {
   // A stale auth lands here after a rotation this device has not caught up with, which is not a
   // lapse — spec §2.5 has the app re-check `/keys` once before concluding anything from a 401 on
   // this door. The relay cannot tell the two apart and does not try: it answers the same bare
@@ -1342,6 +1337,44 @@ async function reconcileOne(env: Env, row: EntitlementRow): Promise<void> {
     .run();
 
   if (decision.status === "dead") await revoke(env, row.subject, row.group_id);
+}
+
+/**
+ * How long a `dead` row keeps its Patreon refresh token before the sweep forgets it: thirty days
+ * since anything last decided about the row (`checked_at`).
+ *
+ * **Nothing reads a dead row's token, but a dead row can come back.** `reconcile` skips dead rows
+ * and the callback overwrites the column, so the token is only ever read again after a webhook
+ * revives the row — a reader who cancels and pledges again. Kept, that row reconciles as before;
+ * forgotten, it is token-less and the cron can only settle its windows until the reader connects
+ * again and the callback stores a new one. A month covers the cancel-and-come-back the webhook
+ * sees; past it the token is a live credential to somebody's Patreon account held for nobody.
+ *
+ * `checked_at` and not a death stamp, because the schema has none and this is not worth a
+ * migration: a dead device still asking `/token` keeps re-revoking and so re-stamping the row,
+ * which only delays the forgetting while somebody is plainly still there.
+ */
+export const DEAD_REFRESH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Swept by the hourly cron, after `reconcile` — so a `reconcile` that throws skips it.
+ *
+ * **Expired claim codes are deleted here because nothing else ever would.** `handleClaim`'s
+ * `DELETE … AND expires_at > ?` removes only the code it redeems, so every code shown and never
+ * typed — and the subject it names — stayed in `claim_codes` for good. The `<=` is that read's
+ * exact complement: a code is either still claimable or gone.
+ *
+ * Then a dead row's Patreon refresh token, once it has been dead past `DEAD_REFRESH_RETENTION_MS`.
+ * Two statements a pass, so the cron's D1 count is 45 at `RECONCILE_BUDGET`.
+ */
+export async function sweepClaims(env: Env, now: number): Promise<void> {
+  await env.DB.prepare(`DELETE FROM claim_codes WHERE expires_at <= ?`).bind(now).run();
+  await env.DB.prepare(
+    `UPDATE entitlements SET patreon_refresh = NULL
+      WHERE status = 'dead' AND patreon_refresh IS NOT NULL AND checked_at < ?`,
+  )
+    .bind(now - DEAD_REFRESH_RETENTION_MS)
+    .run();
 }
 
 // ---------------------------------------------------------------------------------------
