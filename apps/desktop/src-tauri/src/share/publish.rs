@@ -2212,8 +2212,12 @@ mod tests {
             let head = take_request(&mut stream);
             assert!(head.starts_with(&asked), "{head}");
             let edit = crate::sync::with_write(&state, |conn| {
-                conn.execute("UPDATE collection_folders SET name = 'Binder, edited'", [])
-                    .map_err(|e| e.to_string())
+                conn.execute(
+                    "UPDATE collection_folders SET name = 'Binder, edited'
+                      WHERE sync_uid = 'uid-Binder'",
+                    [],
+                )
+                .map_err(|e| e.to_string())
             });
             assert_eq!(
                 edit,
