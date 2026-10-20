@@ -38,7 +38,10 @@ format drops a row, and `tcgplayer` is the one flat format that keeps a switched
 the cart is usually exactly what the reader still has to buy. `archidekt` is the only writer whose
 headings are the reader's own words rather than a fixed vocabulary, and the only one that can say
 `{noDeck}` — the flag that is what makes an Archidekt export and a re-import agree about a
-maybeboard.
+maybeboard. **Those headings are the `Category` field's, like the bracket** (issue #1178): with
+Category unticked the file is flat. `parse.ts` takes a file's first line as a heading only when a
+bracket follows it, so a commander-less deck written with headings and no brackets opened on its
+first pile's name and read back as a card called `Creatures` (or a real `Fog`).
 
 **Every sentence in that paragraph is about the _writer_, and since issue #390 the writer is no
 longer handed the whole deck.** `Include inactive categories` narrows the list in the export

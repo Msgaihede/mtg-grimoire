@@ -318,7 +318,9 @@ function sectioned(
  * among the chosen fields, so a Main deck row and a Sideboard row of the same printing must
  * never fold together on the strength of `category` being off. Archidekt keys on the category
  * name **and** the active flag together, because it writes `{noDeck}` from the second and would
- * otherwise fold a switched-off copy into a switched-on one and silently drop the flag. `plain`,
+ * otherwise fold a switched-off copy into a switched-on one and silently drop the flag — **while
+ * `category` is chosen**, since its piles are that field's alone and `formatExport` sets the entry
+ * aside when it is off (issue #1178). `plain`,
  * `tcgplayer` and `csv` key `null` — they are flat and branch on nothing structural, so two rows
  * that agree on the chosen fields really are indistinguishable in that file.
  *
@@ -369,10 +371,15 @@ export function formatExport(
   fields: readonly TransferFieldId[],
 ): string {
   const set = new Set(fields);
+  // Archidekt's piles are the `category` field's and nothing else's (issue #1178): with it off
+  // the file is flat — no bracket and no heading — so there is nothing structural left to keep
+  // two rows apart by, and folding them is the fold doing its job.
+  const piles = format === "archidekt" && set.has("category");
   // `?? undefined`: the table is total and says `null` for a flat format, but `foldForFields`'s
   // parameter is optional rather than nullable — the two spellings of "nothing structural to
   // key on" meeting at this one call site.
-  const rows = foldForFields(written(cards, format), fields, DISCRIMINATOR[format] ?? undefined);
+  const keyed = format === "archidekt" && !piles ? undefined : (DISCRIMINATOR[format] ?? undefined);
+  const rows = foldForFields(written(cards, format), fields, keyed);
   if (rows.length === 0) return "";
   const spec = LINE_SPEC[format];
   const line = (card: TransferCard) => writeLine(card, set, spec);
@@ -407,9 +414,16 @@ export function formatExport(
       // deck's array order is its category order, and imposing one here would re-file somebody's
       // deck on the way out. The heading is the name as `writtenCategory` writes it, so it says
       // exactly what every bracket under it says.
+      //
+      // **Only while `category` is chosen, because the heading needs its bracket** (issue #1178).
+      // `parse.ts` takes a first line as a heading only when a bracket follows it — that is what
+      // leaves a hand-written list's first card alone — so a deck with no commander, written
+      // with Category off, opened on `Creatures` and read back as one copy of a card by that name,
+      // its cards in no pile. Category off says nothing about piles, heading included.
       text = sectioned(
         rows,
-        (card) => (card.categoryName === null ? null : writtenCategory(card.categoryName)),
+        (card) =>
+          !piles || card.categoryName === null ? null : writtenCategory(card.categoryName),
         line,
       );
       break;

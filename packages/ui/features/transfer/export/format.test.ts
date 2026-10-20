@@ -333,14 +333,15 @@ describe("what a reader could not get back before issue #555", () => {
     ]);
   });
 
-  it("sanitises the heading even when Category is off and no bracket is written", () => {
+  it("writes no heading at all when Category is off and no bracket is written", () => {
+    // Issue #1178: a heading is only a heading to `parse.ts` with its bracket under it.
     expect(
       formatExport(
         [card({ name: "Sol Ring", categoryName: "Ramp, Fixing" })],
         "archidekt",
         ARCHIDEKT.filter((id) => id !== "category"),
       ),
-    ).toBe("Ramp; Fixing\n1x Sol Ring (ltc) 285\n");
+    ).toBe("1x Sol Ring (ltc) 285\n");
   });
 
   it("gives two piles that sanitise alike one heading, in first-appearance order", () => {
@@ -351,9 +352,12 @@ describe("what a reader could not get back before issue #555", () => {
         card({ name: "Arcane Signet", categoryName: "Ramp; Fixing" }),
       ],
       "archidekt",
-      ["quantity", "name"],
+      ["quantity", "name", "category"],
     );
-    expect(text).toBe("Ramp; Fixing\n1x Sol Ring\n1x Arcane Signet\n\nBurn\n1x Lightning Bolt\n");
+    expect(text).toBe(
+      "Ramp; Fixing\n1x Sol Ring [Ramp; Fixing]\n1x Arcane Signet [Ramp; Fixing]\n\n" +
+        "Burn\n1x Lightning Bolt [Burn]\n",
+    );
   });
 
   /**
@@ -405,22 +409,31 @@ describe("what a reader could not get back before issue #555", () => {
   });
 
   /**
-   * And the heading's half on its own: with `Category` off there is no bracket to override it, so
-   * the pile the card lands in is whatever the parser made of the heading line. It is the stricter
-   * of the two tests — a bracket would have hidden a heading read wrong.
+   * And with `Category` off, issue #1178: no bracket and so no heading either, because the
+   * parser takes a first line as a heading only when a bracket follows it. A deck with no
+   * commander used to open on its first pile's name — `Creatures` read back as a card of that
+   * name, `Fog` as the real one — and its cards lost their pile. Now the file is flat and reads
+   * back as exactly its cards, every one in the deck.
    */
-  it.each(HOSTILE_PILES)("files a card under the heading %j wrote as %j", (pile, written) => {
-    const noBracket = ARCHIDEKT.filter((id) => id !== "category");
-    const text = formatExport(afterCommander(pile), "archidekt", noBracket);
-    expect(text).toContain(`\n\n${written}\n1x Sol Ring (ltc) 285\n`);
+  it.each([...HOSTILE_PILES.map(([pile]) => pile), "Creatures", "Fog"])(
+    "round-trips a deck with no commander whose first pile is %j, Category off",
+    (pile) => {
+      const noBracket = ARCHIDEKT.filter((id) => id !== "category");
+      const cards = [
+        card({ name: "Llanowar Elves", categoryName: pile }),
+        card({ name: "Sol Ring", categoryName: "Ramp" }),
+      ];
+      const text = formatExport(cards, "archidekt", noBracket);
+      expect(text).toBe("1x Llanowar Elves (ltc) 285\n1x Sol Ring (ltc) 285\n");
 
-    const back = parseDecklist(text);
-    expect(back.issues).toEqual([]);
-    expect(back.lines.map((l) => [l.name, l.section, l.categoryName])).toEqual([
-      ["Bruna, Light of Alabaster", "commander", null],
-      ["Sol Ring", "deck", written],
-    ]);
-  });
+      const back = parseDecklist(text);
+      expect(back.issues).toEqual([]);
+      expect(back.lines.map((l) => [l.name, l.quantity, l.section, l.categoryName])).toEqual([
+        ["Llanowar Elves", 1, "deck", null],
+        ["Sol Ring", 1, "deck", null],
+      ]);
+    },
+  );
 
   it("leaves a pile name holding none of the five characters exactly as it was", () => {
     const pile = "(New) Maybeboard — Æther; 2nd pass";
@@ -652,10 +665,10 @@ describe("field selection", () => {
     expect(formatExport([card()], "moxfield", ["quantity", "name"])).toBe("Deck\n1 Sol Ring\n");
   });
 
-  it("drops the bracket from an Archidekt line when the category is switched off", () => {
+  it("drops the bracket and the heading from an Archidekt export when the category is switched off", () => {
     expect(
       formatExport([card()], "archidekt", ["quantity", "name", "setCode", "collectorNumber"]),
-    ).toBe("Main deck\n1x Sol Ring (ltc) 285\n");
+    ).toBe("1x Sol Ring (ltc) 285\n");
   });
 
   it("writes the finish mark only when the finish is on", () => {
@@ -705,7 +718,7 @@ describe("field selection", () => {
   it("writes the name alone when the label has no colour", () => {
     const keeper = card({ labelName: "Keeper", labelColor: null });
     expect(formatExport([keeper], "archidekt", ["quantity", "name", "label"])).toBe(
-      "Main deck\n1x Sol Ring ^Keeper^\n",
+      "1x Sol Ring ^Keeper^\n",
     );
   });
 
@@ -760,10 +773,10 @@ describe("field selection", () => {
     const keeper = card({ name: "Bolt", quantity: 2, labelName: "Keeper", labelColor: "#4aab08" });
     const cut = card({ name: "Bolt", quantity: 1, labelName: "Cut", labelColor: "#d3202a" });
     expect(formatExport([keeper, cut], "archidekt", ["quantity", "name", "label"])).toBe(
-      "Main deck\n2x Bolt ^Keeper,#4aab08^\n1x Bolt ^Cut,#d3202a^\n",
+      "2x Bolt ^Keeper,#4aab08^\n1x Bolt ^Cut,#d3202a^\n",
     );
     expect(formatExport([keeper, cut], "archidekt", ["quantity", "name"])).toBe(
-      "Main deck\n3x Bolt\n",
+      "3x Bolt\n",
     );
   });
 });
