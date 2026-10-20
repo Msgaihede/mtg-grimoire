@@ -2311,9 +2311,9 @@ export interface FakeDb {
   /**
    * `app_meta.price_watch` — the printings this device's snapshots remember a price for whether
    * or not they are owned: the cards the page's Price movers widgets name (issue #906), written by
-   * {@link writeHandlers.set_price_watch}. **No snapshot runs in this workbench**, so nothing here
-   * reads it — a story stands in a watched card's history by seeding
-   * {@link FakeDb.priceHistory} for it, as the crate's snapshot would have.
+   * {@link writeHandlers.set_price_watch}, which records today's snapshot when the list changes
+   * ({@link snapshotToday}, issue #1080). Only today's row is written — a story that wants a
+   * watched card's past seeds {@link FakeDb.priceHistory} for it, as earlier snapshots would have.
    */
   priceWatch: string[];
   /**
@@ -3878,7 +3878,7 @@ function priceDrift(cardId: string, finish: string, mp: string): number {
 /**
  * `price_history` for a world with a collection: one snapshot per {@link HISTORY_DAYS} day for
  * every held printing's finish the corpus knows, at every marketplace this app can quote — today's
- * price is {@link finishPriceAt}, the collection's own, and each older one walks back along
+ * price is {@link heldPriceAt}, the collection's own, and each older one walks back along
  * {@link priceDrift} in proportion to its age, rounded to the cent.
  *
  * So a printing up 30 % over ninety days is up about 2 % over the week, and a cheap card can round
@@ -3916,7 +3916,7 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
     for (const e of owned.values()) {
       const card = byId.get(e.cardId);
       if (card === undefined) continue;
-      const now = finishPriceAt(db, card, e.finish, mp);
+      const now = heldPriceAt(db, card, e.finish, mp);
       const drift = priceDrift(e.cardId, e.finish, mp);
       for (const days of HISTORY_DAYS) {
         out.push({
@@ -3931,6 +3931,63 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
     }
   }
   return out;
+}
+
+/**
+ * `price_history::snapshot` — rewrite today's rows ({@link CLOCK_BASE}'s day) of every priced
+ * marketplace with what the reader holds **or watches** now. What
+ * {@link writeHandlers.set_price_watch} runs when the list changed (issue #1080), so a card chosen
+ * now has today's price recorded now.
+ *
+ * `held_cte`'s holding: an **owned** printing and finish is a row, priced or not, at
+ * {@link heldPriceAt} and carrying its copies; a **wanted** one — a wish's printing in its
+ * preferred finish (every finish when it names none) and each watched card in every finish — is a
+ * row only when {@link finishPriceAt} prices it, at `copies = 0`. A printing both owned and wanted
+ * is one row, the owned one. **The one gate**: a marketplace that prices nothing held keeps no
+ * rows for the day at all. Today's other rows go — the day holds its last snapshot's holding.
+ *
+ * The crate's prune on a day's first snapshot is not mirrored: the fake's clock never moves, so
+ * there is no older day for it to thin.
+ */
+function snapshotToday(db: FakeDb): void {
+  const today = Math.floor(CLOCK_BASE / 86_400);
+  const owned = new Map<string, { cardId: string; finish: Finish; copies: number }>();
+  for (const e of db.collectionEntries) {
+    if (e.quantity <= 0) continue;
+    const key = `${e.cardId}:${e.finish}`;
+    const held = owned.get(key);
+    if (held) held.copies += e.quantity;
+    else owned.set(key, { cardId: e.cardId, finish: e.finish, copies: e.quantity });
+  }
+  const wanted = [
+    ...db.wishlistEntries.flatMap((w) =>
+      w.cardId === null
+        ? []
+        : (w.preferredFinish === null ? EVERY_FINISH : [w.preferredFinish]).map((finish) => ({
+            cardId: w.cardId as string,
+            finish,
+          })),
+    ),
+    ...db.priceWatch.flatMap((cardId) => EVERY_FINISH.map((finish) => ({ cardId, finish }))),
+  ];
+  for (const { id: mp } of Object.values(MARKETPLACES).filter((m) => m.priced)) {
+    const rows = new Map<string, FakePriceSnapshot>();
+    for (const [key, e] of owned) {
+      const price = heldPriceAt(db, cardById(db, e.cardId), e.finish, mp);
+      rows.set(key, { marketplace: mp, ...e, price, takenAt: CLOCK_BASE });
+    }
+    for (const w of wanted) {
+      const key = `${w.cardId}:${w.finish}`;
+      if (rows.has(key)) continue;
+      const price = finishPriceAt(db, cardById(db, w.cardId), w.finish, mp);
+      if (price === null) continue;
+      rows.set(key, { marketplace: mp, ...w, price, takenAt: CLOCK_BASE, copies: 0 });
+    }
+    db.priceHistory = db.priceHistory.filter(
+      (s) => s.marketplace !== mp || Math.floor(s.takenAt / 86_400) !== today,
+    );
+    if ([...rows.values()].some((r) => r.price !== null)) db.priceHistory.push(...rows.values());
+  }
 }
 
 /**
@@ -4118,25 +4175,53 @@ function finishPricesAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): F
 }
 
 /**
- * `printing_price_by_finish_expr(marketplace)` — a deck card's, a category total's and a theory
- * row's figure.
+ * `printing_price_by_finish_expr(marketplace)` — what a printing costs when nothing says which
+ * finish: the `nonfoil → foil → etched` chain, {@link heldPriceAt}'s first arm.
  *
- * A deck names a printing and not a finish, so there is no finish to price at and the row is
- * quoted in whichever one the marketplace sells it in. **It used to read `$.usd`/`$.eur` flat, on
- * the reasoning that "no finish" means nonfoil — and 13 515 foil-only printings have no nonfoil
- * price at any marketplace**, so every one of them drew an em dash in a deck while the search
- * wall beside it quoted the same printing.
+ * **It used to read `$.usd`/`$.eur` flat, on the reasoning that "no finish" means nonfoil — and
+ * 13 515 foil-only printings have no nonfoil price at any marketplace**, so every one of them drew
+ * an em dash in a deck while the search wall beside it quoted the same printing.
  *
  * {@link finishPriceAt} once per finish rather than {@link priceColumnAt}'s column, which is the
  * composition `sorting.rs` uses: each marketplace's own holes then travel with it, so Cardmarket
  * keeps the `eur_etched` one it has always had and an etched-only printing stays unpriced there.
  */
-function deckPriceAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): number | null {
+function chainPriceAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): number | null {
   return (
     finishPriceAt(db, card, "nonfoil", mp) ??
     finishPriceAt(db, card, "foil", mp) ??
     finishPriceAt(db, card, "etched", mp)
   );
+}
+
+/**
+ * `held_price_expr(marketplace, finish)` — what one **held copy** costs: a deck row
+ * (`deck_card_price_expr` is this over `dc.finish`), a collection entry and an open trade line.
+ *
+ * * **No finish** (a deck row that has not said) is {@link chainPriceAt}.
+ * * **`nonfoil` on a printing whose `finishes` lists no `nonfoil`** is the chain too (issue #983):
+ *   `nonfoil` is the finish a row gets when nobody chose one — an import line naming no finish, an
+ *   add that kept the default — and on a foil- or etched-only printing it names an object no
+ *   marketplace quotes. The test is the crate's `instr(c.finishes, '"nonfoil"') = 0`, so a
+ *   printing with no `finishes` at all (or no card) is no evidence and stays strict.
+ * * **Any other named finish** is {@link finishPriceAt} at that finish and no other. A `foil` row
+ *   is quoted at the foil rate and never falls back: a stored `foil` or `etched` is a statement
+ *   somebody made, and a printing not sold in it stays an em dash.
+ *
+ * **Not a wish's figure**: `row_price_expr` prices a preferred finish across other printings too
+ * ({@link wishPriceAt}), where a printing not sold in it must stay unpriced.
+ */
+function heldPriceAt(
+  db: FakeDb,
+  card: FakeCard | null,
+  finish: string | null,
+  mp: MarketplaceId,
+): number | null {
+  const unsold =
+    finish === "nonfoil" && card?.finishes != null && !card.finishes.includes('"nonfoil"');
+  return finish === null || unsold
+    ? chainPriceAt(db, card, mp)
+    : finishPriceAt(db, card, finish, mp);
 }
 
 /**
@@ -6498,7 +6583,7 @@ function toDeckTokenRow(
     finishes: drawn?.finishes ?? null,
     // **At the entry's own finish, with no fallback** — `deck_tokens::printing_price`, which is
     // `price_expr(market, finish)`: a foil Treasure quoted at the nonfoil rate is a price nobody
-    // published. It was {@link deckPriceAt}'s `nonfoil → foil → etched` chain until v52, while a
+    // published. It was {@link chainPriceAt}'s `nonfoil → foil → etched` chain until v52, while a
     // token stored no finish; an implicit entry of a foil-only printing is `foil` by its default
     // finish, so the case that chain existed for still reads its foil price. `null` is the em
     // dash and never `0`.
@@ -7515,7 +7600,7 @@ function toCollectionRow(
     condition: e.condition,
     quantity: e.quantity,
     tradelistQuantity: e.tradelistQuantity,
-    unitPrice: finishPriceAt(db, card, e.finish, mp),
+    unitPrice: heldPriceAt(db, card, e.finish, mp),
     purchasePrice: e.purchasePrice,
     purchaseCurrency: e.purchaseCurrency,
     acquiredAt: e.acquiredAt,
@@ -8369,7 +8454,7 @@ function toDeckCategory(
   const totalPrice = ((): number | null => {
     const priced = rows
       .map((dc) => {
-        const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
+        const unit = heldPriceAt(db, cardById(db, dc.cardId), dc.finish, mp);
         return unit === null ? null : unit * dc.quantity;
       })
       .filter((n): n is number => n !== null);
@@ -8946,11 +9031,12 @@ function toDeckCard(
     // recomputation answers `false` and a legal commander renders ineligible. `false` for an
     // orphan, because nothing is known about a card that is not there.
     everUncommon: card?.everUncommon ?? false,
-    // What this printing costs at the marketplace this read named, in whichever finish it is
-    // sold in: a deck names a printing and not a finish, so a foil-only one is quoted at its
-    // foil rate rather than reading as unpriced. Never the `price_usd` column, which is that
-    // chain precomputed for the search's sort and is the one a total must not sum.
-    unitPrice: deckPriceAt(db, card, mp),
+    // What this row costs at the marketplace this read named — `deck_card_price_expr`: at the
+    // finish it names and no other, and in whichever finish the printing is sold in when it
+    // names none, so a foil-only one is quoted at its foil rate rather than reading as unpriced.
+    // Never the `price_usd` column, which is that chain precomputed for the search's sort and is
+    // the one a total must not sum.
+    unitPrice: heldPriceAt(db, card, dc.finish, mp),
     ownedQuantity,
   };
 }
@@ -9031,10 +9117,10 @@ function collectionOrder(
   /** `coalesce(c.name, e.card_id)`: an orphan sorts under its card id rather than at the top
    *  under an empty string. */
   const name = (e: FakeEntry) => cards.get(e.id)?.name ?? e.cardId;
-  /** `price_expr(marketplace)` at this row's finish — the same number the Value cell prints,
+  /** `held_price_expr(marketplace)` at this row's finish — the same number the Value cell prints,
    *  which is what stops a column being ordered in one marketplace's money while showing
    *  another's. */
-  const unitPrice = (e: FakeEntry) => finishPriceAt(db, cards.get(e.id) ?? null, e.finish, mp);
+  const unitPrice = (e: FakeEntry) => heldPriceAt(db, cards.get(e.id) ?? null, e.finish, mp);
   /** `COLLECTION_DEFAULT_ORDER`, written out rather than composed from the `name` and `set`
    *  columns below: it stops at the natural collector number and never reaches the raw string
    *  those three terms end with. */
@@ -10513,7 +10599,7 @@ export function readHandlers(db: FakeDb) {
       const rows = collectionScope(db, args.query);
       const priced = rows.map((e) => ({
         e,
-        unit: finishPriceAt(db, cardById(db, e.cardId), e.finish, mp),
+        unit: heldPriceAt(db, cardById(db, e.cardId), e.finish, mp),
       }));
       const sum = (f: (r: (typeof priced)[number]) => number) =>
         priced.reduce((n, r) => n + f(r), 0);
@@ -10536,7 +10622,7 @@ export function readHandlers(db: FakeDb) {
     /**
      * `collection::shelf_counts` — one row per non-empty shelf over {@link collectionScope}, search
      * and filters included. A tile is a printing and a finish **on one shelf** (spec decision 11),
-     * priced by {@link finishPriceAt} like the list's own `unitPrice`; `unpriced` counts **copies**,
+     * priced by {@link heldPriceAt} like the list's own `unitPrice`; `unpriced` counts **copies**,
      * {@link readHandlers.collection_summary}'s unit.
      */
     collection_shelf_counts: (args: { query: CollectionQuery }): ShelfCount[] => {
@@ -10546,7 +10632,7 @@ export function readHandlers(db: FakeDb) {
           shelf: e.folderId ?? 0,
           tile: `${e.cardId}/${e.finish}`,
           copies: e.quantity,
-          unit: finishPriceAt(db, cardById(db, e.cardId), e.finish, mp),
+          unit: heldPriceAt(db, cardById(db, e.cardId), e.finish, mp),
           unpricedBy: e.quantity,
         })),
         // The peek reads every entry, not the scope: a filter narrows the figures and never the
@@ -10568,9 +10654,9 @@ export function readHandlers(db: FakeDb) {
      * list is showing, so there is no {@link CollectionQuery} to narrow it and the only
      * exclusion is the quantity one below.
      *
-     * **It prices through {@link finishPriceAt}, which is the very function
+     * **It prices through {@link heldPriceAt}, which is the very function
      * {@link readHandlers.collection_summary} sums** — the crate's own arrangement, where both
-     * statements interpolate one `sorting::price_expr` fragment — so a bar can never disagree
+     * statements interpolate one `sorting::held_price_expr` fragment — so a bar can never disagree
      * with the total printed above it. Two implementations of one figure disagree the first
      * time either changes.
      *
@@ -10627,7 +10713,7 @@ export function readHandlers(db: FakeDb) {
         if (e.quantity <= 0) continue;
         const card = cardById(db, e.cardId);
         const [key, name] = bucketOf(e, card);
-        rows.push({ key, name, copies: e.quantity, unit: finishPriceAt(db, card, e.finish, mp) });
+        rows.push({ key, name, copies: e.quantity, unit: heldPriceAt(db, card, e.finish, mp) });
       }
       return foldBuckets(rows).sort((a, b) => cmp(a.key, b.key));
     },
@@ -10852,7 +10938,7 @@ export function readHandlers(db: FakeDb) {
         if (e.folderId === null) continue;
         const row = byFolder.get(e.folderId) ?? { folderId: e.folderId, cards: 0, value: null };
         row.cards += e.quantity;
-        const unit = finishPriceAt(db, cardById(db, e.cardId), e.finish, mp);
+        const unit = heldPriceAt(db, cardById(db, e.cardId), e.finish, mp);
         if (unit !== null) row.value = (row.value ?? 0) + e.quantity * unit;
         byFolder.set(e.folderId, row);
       }
@@ -10861,8 +10947,8 @@ export function readHandlers(db: FakeDb) {
 
     /**
      * `folder_rules::collection_conflicts` (issue #980) — which owned rows break their folder's
-     * effective rules (spec §1–§2), priced at `marketplace` off {@link finishPriceAt}, the
-     * folder summary's own figure. An orphan breaks nothing, and an unpriced row passes a price
+     * effective rules (spec §1–§2), priced at `marketplace` off {@link finishPriceAt} — the
+     * crate's `price_expr` at the row's finish, strict where the summary is held. An orphan breaks nothing, and an unpriced row passes a price
      * rule: a rule only breaks on a fact the app knows. **A row breaks when not every effective
      * rule passes** ({@link rulesAllPass}) — a group (issue #1053) answering as its `and`/`or`
      * over its members, each read on the row's printing and the row's own facts at once.
@@ -11149,9 +11235,9 @@ export function readHandlers(db: FakeDb) {
      * is an em dash, and a deck of *tokens* really is worth nothing. `unpriced` is copies rather
      * than rows, because the total it qualifies is copies too.
      *
-     * The price is {@link deckPriceAt}, which is what a deck card's own `unitPrice` is quoted
-     * at — a deck names a printing and not a finish — so a tile and the deck it opens can never
-     * quote one pile at two prices.
+     * The price is {@link heldPriceAt} at the row's own finish, which is what a deck card's own
+     * `unitPrice` is quoted at, so a tile and the deck it opens can never quote one pile at two
+     * prices.
      */
     deck_values: (args: { marketplace?: MarketplaceId }): DeckValue[] => {
       const mp = marketplaceOf(args.marketplace);
@@ -11164,7 +11250,7 @@ export function readHandlers(db: FakeDb) {
             const category = categoryById(db, dc.categoryId);
             if (category === undefined || !category.isActive) continue;
             if (!SIZE_KINDS.includes(category.kind)) continue;
-            const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
+            const unit = heldPriceAt(db, cardById(db, dc.cardId), dc.finish, mp);
             if (unit === null) row.unpriced += dc.quantity;
             else row.value = (row.value ?? 0) + dc.quantity * unit;
           }
@@ -12746,8 +12832,9 @@ export function readHandlers(db: FakeDb) {
      * `missingCost` is `deckStats`' `missingPrice` exactly — `null` while nothing counted is priced
      * at this marketplace, else the priced rows' `unit × short` summed (so a complete, priced deck
      * answers `0`, and so does one whose only missing copies are unpriced). `unpricedMissing` is
-     * missing **copies** with no price. The unit is {@link deckPriceAt}, which is what this fake's
-     * deck rows quote — so a story's widget and the editor it opens can never disagree.
+     * missing **copies** with no price. The unit is {@link heldPriceAt} at the row's finish, which
+     * is what this fake's deck rows quote — so a story's widget and the editor it opens can never
+     * disagree.
      */
     deck_completion: (args: {
       marketplace?: MarketplaceId | null;
@@ -12796,7 +12883,7 @@ export function readHandlers(db: FakeDb) {
             row.wanted += dc.quantity;
             row.owned += have;
             row.missing += short;
-            const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
+            const unit = heldPriceAt(db, cardById(db, dc.cardId), dc.finish, mp);
             if (unit === null) row.unpricedMissing += short;
             else row.missingCost = (row.missingCost ?? 0) + unit * short;
           }
@@ -12908,8 +12995,8 @@ export function readHandlers(db: FakeDb) {
      * widget tell *no history yet* from *nothing moved*, so both are answered even when the list
      * is empty.
      *
-     * Today's price is {@link finishPriceAt}, the collection's own, so a mover can never disagree
-     * with the row it names. **A printing that did not move is not a mover**, and neither is one
+     * Today's price is {@link finishPriceAt}, the crate's `price_expr` at the row's finish, so a
+     * mover can never disagree with the row it names. **A printing that did not move is not a mover**, and neither is one
      * with no price today or none in the baseline. `limit` is clamped to `1..=100`; a window or a
      * direction this command does not know is refused in words.
      *
@@ -12999,8 +13086,8 @@ export function readHandlers(db: FakeDb) {
      * crate's `INSERT OR REPLACE`, where a second snapshot on one afternoon replaces the first.
      * `day` is that day's UTC midnight. **Today is {@link CLOCK_BASE}**, the fake's own, exactly
      * as {@link readHandlers.price_movers} measures from it, and today's snapshot is left out
-     * because today's figure is `now`: {@link finishPriceAt}, the collection's own and the number
-     * a mover's `now` is, so the popup's last point can never disagree with the row it opened
+     * because today's figure is `now`: {@link heldPriceAt}, the collection's own and the number
+     * a mover's `now` is wherever the row names a finish its printing is sold in, so the popup's last point can never disagree with the row it opened
      * from. `null` for a finish this marketplace does not quote and for a card the corpus does not
      * know, which is an answer rather than a refusal — the popup is opened from a row that exists.
      *
@@ -13032,7 +13119,7 @@ export function readHandlers(db: FakeDb) {
       const points: PricePoint[] = [...latest]
         .sort(([a], [b]) => a - b)
         .flatMap(([day, s]) => (s.price === null ? [] : [{ day, price: s.price }]));
-      const now = finishPriceAt(db, cardById(db, args.cardId), finish, mp);
+      const now = heldPriceAt(db, cardById(db, args.cardId), finish, mp);
       return { points, now, today };
     },
 
@@ -13053,7 +13140,7 @@ export function readHandlers(db: FakeDb) {
      * **Only rows with a `copies` count are read** ({@link FakePriceSnapshot.copies}): a row from
      * before the upgrade has a price and no holding, and a line drawn from it would be a guess.
      *
-     * **Today is a live point, never a snapshot**, and it is priced by {@link finishPriceAt} over
+     * **Today is a live point, never a snapshot**, and it is priced by {@link heldPriceAt} over
      * the entries in the order {@link readHandlers.collection_summary} sums them — so the graph's
      * last point is the Collection value widget's figure to the cent, which is the one thing the
      * two widgets on one page must never disagree about. Today's own snapshot is left out for
@@ -13167,7 +13254,7 @@ export function readHandlers(db: FakeDb) {
       };
       for (const e of held) {
         const card = cardById(db, e.cardId);
-        const unit = finishPriceAt(db, card, e.finish, mp);
+        const unit = heldPriceAt(db, card, e.finish, mp);
         add(live, card, e.quantity * (unit ?? 0));
         live.present.set(`${e.cardId}:${e.finish}`, unit ?? 0);
       }
@@ -17199,7 +17286,7 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           // Filled below, once both sides are summed.
           quantity: 0,
           // The same price the deck read uses, at the same marketplace.
-          unitPrice: deckPriceAt(db, card, mp),
+          unitPrice: heldPriceAt(db, card, dc.finish, mp),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
           // The finish played rather than stored — the half of the key the line reports, and
@@ -23888,7 +23975,9 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `price_history::set_watched` — replace the device's price watch list (issue #906). Blank ids
      * dropped, each kept once at its first place, more than {@link MAX_PRICE_WATCH} refused in the
-     * crate's words rather than cut.
+     * crate's words rather than cut. **A list that changed takes today's snapshot at once**
+     * (`price_history::watch`, issue #1080) — {@link snapshotToday} — so a card chosen now has its
+     * first price recorded now; an unchanged list writes nothing.
      */
     set_price_watch: (args: { cardIds: string[] }): void => {
       refuseIfBusy(db);
@@ -23897,7 +23986,11 @@ export function writeHandlers(db: FakeDb) {
         if (id !== "" && !list.includes(id)) list.push(id);
       }
       if (list.length > MAX_PRICE_WATCH) throw refuse(TOO_MANY_WATCHED);
+      if (list.length === db.priceWatch.length && list.every((id, i) => db.priceWatch[i] === id)) {
+        return;
+      }
       db.priceWatch = list;
+      snapshotToday(db);
     },
 
     record_recent_card: (args: { cardId: string }): void => {
@@ -25990,14 +26083,14 @@ function tradeStamp(db: FakeDb): number {
  * marketplace.
  *
  * **Live while the trade is open and the figure it closed with once it is not** — the one branch
- * the whole feature's price rule is. {@link finishPriceAt} is the collection's figure for a
- * printing in a finish (`price_expr`, on both sides of the wire), so a card picked from the
+ * the whole feature's price rule is. {@link heldPriceAt} is the collection's figure for a
+ * printing in a finish (`held_price_expr`, on both sides of the wire), so a card picked from the
  * collection is quoted on the trade at exactly what the collection row beside it said. A printing
  * that has left the corpus has no live price, which is what it freezes as too.
  */
 function tradeLinePrice(db: FakeDb, trade: FakeTrade, line: FakeTradeLine): number | null {
   if (trade.status !== "open") return line.unitPrice;
-  return finishPriceAt(db, cardById(db, line.cardId), line.finish, trade.marketplace);
+  return heldPriceAt(db, cardById(db, line.cardId), line.finish, trade.marketplace);
 }
 
 /** `trade::freeze_prices` and the close — copy every line's live price into the line and file
