@@ -23,11 +23,11 @@ import type { Env } from "./index";
  *
  * The dialect it covers is exactly the one the relay writes and no more: five statement shapes
  * (a `DELETE` or an `UPDATE` may end in `RETURNING`),
- * `AND`/`OR` and parenthesised groups, `IS [NOT] NULL`, arithmetic, `coalesce`, quoted strings, an
- * `IN` list of values, a `max()` or `count(*)` subquery, and on a `SELECT` an `ORDER BY` of one
- * or more keys (NULL sorting first, as SQLite sorts it) and a `LIMIT` that may be bound. Anything
- * else throws by name, so a later statement that this harness cannot honour fails loudly here
- * rather than quietly passing.
+ * `AND`/`OR` and parenthesised groups, `IS [NOT] NULL`, arithmetic, `coalesce`, quoted strings,
+ * `[NOT] IN` over a list of values or a one-column subquery, a `max()` or `count(*)` subquery,
+ * and on a `SELECT` an `ORDER BY` of one or more keys (NULL sorting first, as SQLite sorts it)
+ * and a `LIMIT` that may be bound. Anything else throws by name, so a later statement that this
+ * harness cannot honour fails loudly here rather than quietly passing.
  *
  * `@cloudflare/vitest-pool-workers` would run real D1 and is ruled out for the tree's reason
  * (`infrastructure/relay/README.md`): it drags wrangler and workerd into the tree and peers on an older vitest.
@@ -260,6 +260,45 @@ function sum(r: Reader): Value {
   }
 }
 
+/** The values of an `IN (?, ?, …)` list, with the opening paren already taken. */
+function valueList(r: Reader): Value[] {
+  const values: Value[] = [];
+  for (;;) {
+    values.push(sum(r));
+    if (peek(r) !== ",") return values;
+    r.at += 1;
+  }
+}
+
+/**
+ * `SELECT col FROM table WHERE …`, the one-column subquery an `IN` reads, with the opening paren
+ * already taken and the closing one left for the caller. Uncorrelated: a bare column inside it is
+ * the inner table's, as it is in every statement this harness runs.
+ *
+ * Read with `subselect`'s rule of at least one pass over the condition, for `subselect`'s reason.
+ */
+function subqueryColumn(r: Reader): Value[] {
+  want(r, "select");
+  const name = take(r);
+  want(r, "from");
+  const table = take(r);
+  want(r, "where");
+
+  const rows = r.tables[table] ?? [];
+  const outerRow = r.row;
+  const start = r.at;
+  const startBound = r.bound;
+  const values: Value[] = [];
+  for (const row of rows.length > 0 ? rows : [{}]) {
+    r.at = start;
+    r.bound = startBound;
+    r.row = row;
+    if (condition(r) && rows.length > 0) values.push(row[name] ?? null);
+  }
+  r.row = outerRow;
+  return values;
+}
+
 const COMPARISONS = new Set(["=", ">", ">=", "<", "<=", "<>"]);
 
 function compare(r: Reader): boolean {
@@ -277,22 +316,29 @@ function compare(r: Reader): boolean {
     want(r, "null");
     return negated ? left !== null : left === null;
   }
-  // `x IN (?, ?, …)` — a list of values, never a subquery. `reconcile` stamps the rows it is about
-  // to attempt in one statement this way. Every element is read whatever an earlier one matched,
-  // for `conjunction`'s reason: an unread `?` would shift every parameter after it. A NULL on
-  // either side matches nothing, as SQLite's `IN` never answers true for one.
+  // `x [NOT] IN (?, ?, …)` — a list of values — or `x [NOT] IN (SELECT col FROM t WHERE …)`.
+  // `reconcile` stamps the rows it is about to attempt in one statement with the first; the share
+  // Worker's lapse pass moves every group's shares in two statements with the second. Every
+  // element is read whatever an earlier one matched, for `conjunction`'s reason: an unread `?`
+  // would shift every parameter after it.
+  //
+  // ⚠️ **NULL is SQLite's three-valued NULL on both sides, and `NOT IN` is where that bites.** A
+  // NULL on the left matches nothing either way. A NULL in the list makes `IN` NULL rather than
+  // false when nothing else matched — and makes `NOT IN` NULL, never true, for *every* row. A fake
+  // that answered `NOT IN` by negating `IN` would pass a subquery that can yield a NULL, which
+  // against real D1 is a statement that silently moves nothing.
+  const negated = peek(r) === "not" && (r.tokens[r.at + 1] ?? "").toLowerCase() === "in";
+  if (negated) r.at += 1;
   if (peek(r) === "in") {
     r.at += 1;
     want(r, "(");
-    let found = false;
-    for (;;) {
-      const candidate = sum(r);
-      if (left !== null && candidate !== null && order(left, candidate) === 0) found = true;
-      if (peek(r) !== ",") break;
-      r.at += 1;
-    }
+    const candidates = peek(r) === "select" ? subqueryColumn(r) : valueList(r);
     want(r, ")");
-    return found;
+    if (left === null) return false;
+    if (candidates.some((candidate) => candidate !== null && order(left, candidate) === 0)) {
+      return !negated;
+    }
+    return negated && !candidates.includes(null);
   }
   const op = take(r);
   if (!COMPARISONS.has(op)) throw new Error(`fake sql: ${op} is not a comparison`);
@@ -824,4 +870,3 @@ export function fakeEnvOver(tables: Tables, options: FakeOptions = {}): Env {
 export function fakeD1(): D1Database {
   return fakeDatabase({}) as unknown as D1Database;
 }
-

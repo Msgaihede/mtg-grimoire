@@ -112,11 +112,10 @@ describe("the lapse sweep", () => {
   /**
    * The reader's own press is terminal and the cron must never undo it.
    *
-   * ⚠️ **This is the assertion the `AND state = ?` guard exists for, and it only bites because
-   * the group is a candidate at all**: `g1` is serving, so the re-lighting statement runs against
-   * it, and the guard is the only thing standing between a withdrawn binder and a link that works
-   * again. Delete the clause and this test goes red — which is why the candidate query is
-   * deliberately not filtered to the rows that could move.
+   * ⚠️ **This is the assertion the `AND state = ?` guard exists for**: `g1` is serving, so its row
+   * is inside the re-lighting statement's `group_id IN (…)`, and the guard is the only thing
+   * standing between a withdrawn binder and a link that works again. Delete the clause and this
+   * test goes red.
    */
   it("never resurrects a revoked share", async () => {
     const tables: Tables = {
@@ -226,25 +225,63 @@ describe("the lapse sweep", () => {
   });
 
   /**
-   * **A relay with no shares on it costs one read and no write.** D1 refuses an empty `batch`,
-   * and the account this Worker shares with the relay is on the free tier — so the pass has to
-   * stop before the round trip rather than send a statement list nobody put anything in.
+   * ⚠️ **An unbound entitlement must not freeze the pass.** A subject who has connected Patreon
+   * and claimed no group has a NULL `group_id`, and a NULL in a `NOT IN` list makes the darkening
+   * statement's condition NULL for every row — so without `group_id IS NOT NULL` in the serving
+   * subquery, one such subject would leave every dead group's links serving for ever. The fake
+   * answers `NOT IN` with SQLite's NULL rule, so deleting that clause is a red test here.
    */
-  it("makes no round trip when nothing has ever been shared", async () => {
-    const tables: Tables = { entitlements: [ent("s1", "g1", "active")], shares: [] };
+  it("still darkens while an active subject has claimed no group", async () => {
+    const tables: Tables = {
+      entitlements: [ent("s1", "g1", "dead"), ent("s2", null, "active")],
+      shares: [share("a", "g1", "live")],
+    };
+    await sweepLapsed(lapseEnv(tables));
+    expect(stateOf(tables, "a")).toBe("lapsed");
+  });
+
+  /**
+   * **Two statements, however many groups have ever shared** — issue #1194. Revoked rows are
+   * tombstones that stay, so the set of groups with a row only grows; a pass that sent a statement
+   * per group would have crossed the free plan's fifty queries an invocation and thrown every day
+   * after. Sixty groups is past that line, and every one of them still moves.
+   */
+  it("sends a fixed number of statements however many groups have shared", async () => {
+    const groups = Array.from({ length: 60 }, (_, index) => `g${index}`);
+    const tables: Tables = {
+      entitlements: groups.map((group, index) =>
+        ent(`s${index}`, group, index % 2 === 0 ? "dead" : "active"),
+      ),
+      shares: groups.map((group, index) =>
+        share(`share${index}`, group, index % 2 === 0 ? "live" : "lapsed"),
+      ),
+    };
     const inner = fakeEnvOver(tables).DB;
+    let statements = 0;
     let batches = 0;
     const env = {
       DB: {
         prepare: (sql: string) => inner.prepare(sql),
-        batch: (statements: D1PreparedStatement[]) => {
+        batch: (sent: D1PreparedStatement[]) => {
           batches += 1;
-          return inner.batch(statements);
+          statements += sent.length;
+          return inner.batch(sent);
         },
       },
     } as unknown as Env;
     await sweepLapsed(env);
-    expect(batches).toBe(0);
+    expect(batches).toBe(1);
+    expect(statements).toBe(2);
+    groups.forEach((_, index) => {
+      expect(stateOf(tables, `share${index}`)).toBe(index % 2 === 0 ? "lapsed" : "live");
+    });
+  });
+
+  /** A relay with no shares on it is every relay until the first one is published. */
+  it("runs cleanly when nothing has ever been shared", async () => {
+    const tables: Tables = { entitlements: [ent("s1", "g1", "active")], shares: [] };
+    await sweepLapsed(lapseEnv(tables));
+    expect(tables.shares).toEqual([]);
   });
 });
 
