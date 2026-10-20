@@ -108,14 +108,16 @@ pub async fn sync_now(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Option<RelayOutcome>, String> {
     let state = state.inner().clone();
+    let worker = state.clone();
     let outcome = sync::on_a_worker(move || async move {
-        let lane = state.lane_for_press().await?;
+        let lane = worker.lane_for_press().await?;
         client::run_once(&lane).await
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    if let Some(o) = outcome {
+    if let Some(o) = &outcome {
+        o.settle_owned(&state);
         if o.changed || o.pushed > 0 {
             let _ = app.emit("sync:applied", o);
         }

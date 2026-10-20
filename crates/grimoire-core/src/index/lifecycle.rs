@@ -389,6 +389,41 @@ mod tests {
         );
     }
 
+    /// **A sync trip that wrote here re-reads `owned`; one that only pushed does not** (issue
+    /// #1146). A pull applies a peer's collection rows under the lane, never through
+    /// `collection_source::with_write_owned`, so the trip's caller settles the refresh — and
+    /// until it did, a peer's add left the Owned facet answering for the collection as it was.
+    #[test]
+    fn a_sync_trip_that_changed_rows_refreshes_owned() {
+        use crate::sync_engine::client::RelayOutcome;
+        let state = state_with_seeded_cards("trip-owned");
+        build_now(&state).unwrap();
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            own(&conn, "1", 1);
+        }
+
+        let pushed_only = RelayOutcome {
+            pushed: 1,
+            ..RelayOutcome::default()
+        };
+        pushed_only.settle_owned(&state);
+        assert_eq!(
+            current(&state).unwrap().owned.count(),
+            0,
+            "a trip that only pushed wrote nothing here, and owes no re-read"
+        );
+
+        let pulled = RelayOutcome {
+            pulled: 1,
+            applied: 1,
+            changed: true,
+            ..RelayOutcome::default()
+        };
+        pulled.settle_owned(&state);
+        assert_eq!(current(&state).unwrap().owned.count(), 1);
+    }
+
     /// A collection write must not go cold, and must not build. Going cold would blank every
     /// facet count on a quick-add; building would spend ~767 ms on a button press. So the one
     /// state where `invalidate_owned` does nothing at all is the state where there is nothing

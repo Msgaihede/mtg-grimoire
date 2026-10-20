@@ -1082,9 +1082,10 @@ commands! {
             let lane = state.lane_for_press().await?;
             crate::sync_engine::client::run_once(&lane).await?
         };
-        if let Some(o) = outcome {
+        if let Some(o) = &outcome {
+            o.settle_owned(&state);
             if o.changed || o.pushed > 0 {
-                crate::events::emit(&*state.events, "sync:applied", &o);
+                crate::events::emit(&*state.events, "sync:applied", o);
             }
         }
         Ok(outcome)
@@ -1141,9 +1142,16 @@ commands! {
     write sync_device_rename in sync_pair::identity(device_id: String, name: String) = |conn| {
         rename_device(conn, &device_id, &name).map_err(|e| e.to_string())
     };
+    // The removal opens with a round trip whose pull can move the collection, and answers no
+    // outcome to settle — so the `owned` refresh is made whatever the answer, with the lane let
+    // go (`RelayOutcome::settle_owned`, issue #1146).
     task sync_device_revoke in sync_pair::pairing(device_id: String) = |state| async move {
-        let lane = state.lane_for_press().await?;
-        remove_device(&lane, &device_id).await
+        let removed = {
+            let lane = state.lane_for_press().await?;
+            remove_device(&lane, &device_id).await
+        };
+        crate::index::lifecycle::invalidate_owned(&state);
+        removed
     };
     // The desktop's wrapper then marks `sync_devices`, `sync_group` and `sync_state` in
     // `AppState.changes`, whatever the answer, for its other windows.

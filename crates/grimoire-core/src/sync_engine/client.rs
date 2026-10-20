@@ -393,6 +393,28 @@ pub struct RelayOutcome {
 }
 
 impl RelayOutcome {
+    /// Refresh the facet index's `owned` dimension when this trip wrote here — **the refresh a
+    /// pull owes and cannot make itself** (issue #1146).
+    ///
+    /// A pull writes `collection_entries` through [`apply`] under the lane, never through
+    /// [`crate::collection_source::with_write_owned`], so nothing re-read the `owned` bitset
+    /// behind it: a peer's add or removal left the Owned and Missing facets answering for the
+    /// collection as it was before the trip until the next local collection write or a restart.
+    /// Every caller of a trip that pulls calls this once the trip has answered.
+    ///
+    /// **On [`Self::changed`]**, which is wider than "the collection moved" — a trip that only
+    /// touched decks costs one 10–23 ms re-read it did not need, which is cheaper than teaching
+    /// [`ApplyReport`] which tables it wrote. A trip that only pushed wrote nothing here, and a
+    /// cold index stays cold ([`crate::index::lifecycle::invalidate_owned`]).
+    ///
+    /// **Call it with the lane let go**: on a one-connection host the re-read reads through the
+    /// state's one connection, and it writes a failure to `error_log` on the write connection.
+    pub fn settle_owned(&self, state: &crate::state::State) {
+        if self.changed {
+            crate::index::lifecycle::invalidate_owned(state);
+        }
+    }
+
     fn absorb(&mut self, report: ApplyReport) {
         self.applied += report.applied;
         self.resurrected += report.resurrected;
