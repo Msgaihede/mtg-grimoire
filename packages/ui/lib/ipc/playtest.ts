@@ -422,9 +422,12 @@ export const playtestCommands = {
    * duel, three for a four-player game), each played by the AI at `difficulty` — or, with **no
    * opponents, against the goldfish** (`difficulty` unused; the reader plays first). Answers at
    * the reader's opening hand (or the first thing the reader decides). `seed` is the shuffle and
-   * the coin flip.
+   * the coin flip. `game` is the page's name for this game, fresh per deal, which every later call
+   * for it carries: the host acts on and ends only the game named, so a board that has gone never
+   * touches the one that replaced it (issue #1141).
    */
   playtestStart: (
+    game: number,
     deckId: number,
     variant: string,
     opponents: PlaytestOpponent[],
@@ -432,6 +435,7 @@ export const playtestCommands = {
     seed: number,
   ) =>
     invoke<PlaytestStep>("playtest_start", {
+      game,
       deckId,
       variant,
       opponents,
@@ -439,12 +443,14 @@ export const playtestCommands = {
       seed,
     }),
   /**
-   * One action, and everything the opponent does after it until the reader next decides.
-   * Rejects with one sentence and leaves the game as it was.
+   * One action on `game`, and everything the opponent does after it until the reader next decides.
+   * Rejects with one sentence and leaves the game as it was — and refuses a game since replaced.
    */
-  playtestAct: (action: PlaytestAction) => invoke<PlaytestStep>("playtest_act", { action }),
-  /** Put the game away. Never rejects in a way worth showing. */
-  playtestEnd: () => invoke<void>("playtest_end"),
+  playtestAct: (game: number, action: PlaytestAction) =>
+    invoke<PlaytestStep>("playtest_act", { game, action }),
+  /** Put `game` away, even mid-action; a newer game is left be. Never rejects in a way worth
+   *  showing. */
+  playtestEnd: (game: number) => invoke<void>("playtest_end", { game }),
   /**
    * What the rules engine plays of `deckId` as it stands in `variant` (issue #1078). Each card is
    * parsed once per window, so asking about every deck costs each shared card once.
