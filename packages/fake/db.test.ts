@@ -12587,7 +12587,8 @@ describe("the busy fault", () => {
       // afterwards, best effort, to note a failure in `error_log` — a note that answers BUSY is
       // a lost log row, never the reader's refusal. It used to fetch inside the lock, and a
       // host trickling one byte a minute held the only write connection for as long as it
-      // liked. Its four `share_*` neighbours still go through `on_the_write_connection`.
+      // liked. Its four `share_*` neighbours take the sync lane through `on_the_lane`, so a
+      // running sync still refuses them.
       "share_open",
     ];
     const args: Record<string, unknown> = {
@@ -13167,6 +13168,8 @@ describe("the busy fault", () => {
     // than an inference: all five `share_*` commands go through
     // `share::commands::on_the_write_connection`, which is `sync::with_write` on a blocking
     // worker, so every one of them really does answer BUSY while a sync holds the connection.
+    // (Since issue #1145 that helper is `on_the_lane`: the refusal is the sync lane's, and the
+    // same BUSY.)
     // Which table a handler sits in here is a fact about the **lock** and never about whether
     // the command sounds like a read — `share_open` fetches somebody else's document over the
     // network and still takes the write connection, because `publish::open` records a failure in

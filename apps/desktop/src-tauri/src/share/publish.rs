@@ -329,6 +329,16 @@ fn note(conn: &Connection, operation: &str, kind: Kind, message: &str, url: Opti
     errors::record(conn, Source::Relay, operation, kind, message, url);
 }
 
+/// [`note`] in a stretch of its own, for a failure met between two — a request that did not
+/// answer, or answered something that is not an answer. Like the row itself it can never fail the
+/// thing it describes.
+fn note_in(db: &impl Store, operation: &str, kind: Kind, message: &str, url: Option<&str>) {
+    let _ = db.with(|conn| {
+        note(conn, operation, kind, message, url);
+        Ok(())
+    });
+}
+
 /// The clock, read from SQLite so every row this file writes agrees with `unixepoch()` in the
 /// rest of the crate rather than with this process's own idea of the time.
 fn now(conn: &Connection) -> Result<i64, String> {
@@ -343,25 +353,25 @@ fn now(conn: &Connection) -> Result<i64, String> {
 /// it is where every installation that has connected nothing stands. It becomes one here,
 /// because a publish that was asked for cannot silently not happen.
 ///
-/// **`tokens` is the store the token is asked through, and it is not `conn`'s type by accident.**
-/// A token is the sync client's to mint and it mints under the lane; this module still holds the
-/// connection for a whole publish, so its caller takes the lane first and hands the connection it
-/// holds back in as a store (`Lane::in_hand`).
-async fn credentials(conn: &Connection, tokens: &impl Store) -> Result<(String, Group), String> {
-    let Some(token) = entitlement::access_token(tokens).await? else {
+/// **`db` is the lane, and the token is minted through it** — a token is the sync client's to
+/// mint, and it writes the grant a trip or a claim in flight is writing too.
+async fn credentials(db: &impl Store) -> Result<(String, Group), String> {
+    let Some(token) = entitlement::access_token(db).await? else {
         return Err(NOT_CONNECTED.to_owned());
     };
     // The gate compares the token's `grp` claim against the path, so a token with no group to
     // put in the path is a request that could only ever be refused.
-    let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
+    let Some(group) = db.with(|conn| identity::group(conn).map_err(|e| e.to_string()))? else {
         return Err(NOT_CONNECTED.to_owned());
     };
     Ok((token, group))
 }
 
 /// The status and body of one gated request, or an `Err` that has already been recorded.
+///
+/// **Made with nothing held** — the connection is taken only to write the row a failure owes.
 async fn send(
-    conn: &Connection,
+    db: &impl Store,
     operation: &str,
     url: &str,
     request: reqwest::RequestBuilder,
@@ -369,7 +379,7 @@ async fn send(
     let response = match request.send().await {
         Ok(r) => r,
         Err(e) => {
-            note(conn, operation, kind_of(&e), &e.to_string(), Some(url));
+            note_in(db, operation, kind_of(&e), &e.to_string(), Some(url));
             return Err(e.to_string());
         }
     };
@@ -377,7 +387,7 @@ async fn send(
     match response.text().await {
         Ok(body) => Ok((status, body)),
         Err(e) => {
-            note(conn, operation, kind_of(&e), &e.to_string(), Some(url));
+            note_in(db, operation, kind_of(&e), &e.to_string(), Some(url));
             Err(e.to_string())
         }
     }
@@ -454,14 +464,15 @@ impl From<Listed> for ShareRow {
 
 /// Step 1: the metadata, and the id and link that come back.
 async fn post_meta(
-    conn: &Connection,
+    db: &impl Store,
+    base: &str,
     token: &str,
     group: &Group,
     body: String,
 ) -> Result<Created, String> {
-    let url = format!("{}/g/{}/share", endpoint(conn)?, group.group_id);
+    let url = format!("{base}/g/{}/share", group.group_id);
     let (status, text) = send(
-        conn,
+        db,
         "share_create",
         &url,
         http()
@@ -473,32 +484,27 @@ async fn post_meta(
     .await?;
     if !(200..300).contains(&status) {
         let message = refusal(status, &text, "a publish");
-        note(conn, "share_create", Kind::Http, &message, Some(&url));
+        note_in(db, "share_create", Kind::Http, &message, Some(&url));
         return Err(message);
     }
     serde_json::from_str(&text).map_err(|e| {
-        note(
-            conn,
-            "share_create",
-            Kind::Parse,
-            &e.to_string(),
-            Some(&url),
-        );
+        note_in(db, "share_create", Kind::Parse, &e.to_string(), Some(&url));
         e.to_string()
     })
 }
 
 /// Step 3: the gzip.
 async fn put_blob(
-    conn: &Connection,
+    db: &impl Store,
+    base: &str,
     token: &str,
     group: &Group,
     id: &str,
     bytes: Vec<u8>,
 ) -> Result<Uploaded, String> {
-    let url = format!("{}/g/{}/share/{id}", endpoint(conn)?, group.group_id);
+    let url = format!("{base}/g/{}/share/{id}", group.group_id);
     let (status, text) = send(
-        conn,
+        db,
         "share_upload",
         &url,
         http()
@@ -513,30 +519,25 @@ async fn put_blob(
     .await?;
     if !(200..300).contains(&status) {
         let message = refusal(status, &text, "an upload");
-        note(conn, "share_upload", Kind::Http, &message, Some(&url));
+        note_in(db, "share_upload", Kind::Http, &message, Some(&url));
         return Err(message);
     }
     serde_json::from_str(&text).map_err(|e| {
-        note(
-            conn,
-            "share_upload",
-            Kind::Parse,
-            &e.to_string(),
-            Some(&url),
-        );
+        note_in(db, "share_upload", Kind::Parse, &e.to_string(), Some(&url));
         e.to_string()
     })
 }
 
 /// `GET /g/{group}/shares` — the roster, as [`ShareRow`]s ready for [`cache::reconcile`].
 async fn get_shares(
-    conn: &Connection,
+    db: &impl Store,
+    base: &str,
     token: &str,
     group: &Group,
 ) -> Result<Vec<ShareRow>, String> {
-    let url = format!("{}/g/{}/shares", endpoint(conn)?, group.group_id);
+    let url = format!("{base}/g/{}/shares", group.group_id);
     let (status, text) = send(
-        conn,
+        db,
         "share_list",
         &url,
         http()
@@ -546,11 +547,11 @@ async fn get_shares(
     .await?;
     if !(200..300).contains(&status) {
         let message = refusal(status, &text, "a share list");
-        note(conn, "share_list", Kind::Http, &message, Some(&url));
+        note_in(db, "share_list", Kind::Http, &message, Some(&url));
         return Err(message);
     }
     let listing: Listing = serde_json::from_str(&text).map_err(|e| {
-        note(conn, "share_list", Kind::Parse, &e.to_string(), Some(&url));
+        note_in(db, "share_list", Kind::Parse, &e.to_string(), Some(&url));
         e.to_string()
     })?;
     Ok(listing.shares.into_iter().map(ShareRow::from).collect())
@@ -562,14 +563,15 @@ async fn get_shares(
 /// does not have, which is the state the press asked for. Refusing would leave a row in this
 /// cache that no relay will ever confirm and no press can ever remove.
 async fn delete_share(
-    conn: &Connection,
+    db: &impl Store,
+    base: &str,
     token: &str,
     group: &Group,
     id: &str,
 ) -> Result<(), String> {
-    let url = format!("{}/g/{}/share/{id}", endpoint(conn)?, group.group_id);
+    let url = format!("{base}/g/{}/share/{id}", group.group_id);
     let (status, text) = send(
-        conn,
+        db,
         "share_revoke",
         &url,
         http()
@@ -581,7 +583,7 @@ async fn delete_share(
         return Ok(());
     }
     let message = refusal(status, &text, "a withdrawal");
-    note(conn, "share_revoke", Kind::Http, &message, Some(&url));
+    note_in(db, "share_revoke", Kind::Http, &message, Some(&url));
     Err(message)
 }
 
@@ -657,9 +659,19 @@ pub fn commit_publish(
 /// snapshot is read **before** the first request: the refusals a locked or missing folder earns
 /// are [`super::snapshot`]'s, and a folder about to be refused must never have left a row on the
 /// relay. Any kind of folder may be named since issue #941, and a wishlist key too.
+///
+/// ⚠️ **`db` is the sync lane, and the connection is held for two stretches and never across a
+/// request** (issue #1145): the read, and the commit. A publish is three round trips — the token,
+/// the metadata and up to [`MAX_BLOB_BYTES`] of gzip — and until 2026-10-20 it ran with the write
+/// connection in hand for all three, so a slow uplink was every edit in the app waiting out
+/// [`crate::db::WRITE_LOCK_WAIT`] and answering [`crate::db::BUSY`] — on a timer, through
+/// [`super::commands::share_auto_update`], exactly while the reader was editing the folder.
+///
+/// **What can land between the two stretches is a reader's own write**, and it is harmless: the
+/// upload is the read's document, and so is the digest the commit stores, so a folder edited
+/// mid-upload reads as changed on the next [`changed`] pass and goes up again.
 pub async fn publish(
-    conn: &Connection,
-    tokens: &impl Store,
+    db: &impl Store,
     folder_uid: Option<&str>,
     owner_name: &str,
     fields: ShareFields,
@@ -668,23 +680,25 @@ pub async fn publish(
     if owner_name.is_empty() {
         return Err(OWNER_NAME_REQUIRED.to_owned());
     }
-    let at = now(conn)?;
-    let marketplace = crate::sorting::Marketplace::from_id(&crate::marketplace::stored(conn));
-    // The id is stamped in once the relay has minted it — see the module header for why the
-    // read cannot wait for it.
-    let mut snap = snapshot(conn, "", owner_name, folder_uid, fields, marketplace, at)?;
+    let (at, mut snap, base) = db.with(|conn| {
+        let at = now(conn)?;
+        let marketplace = crate::sorting::Marketplace::from_id(&crate::marketplace::stored(conn));
+        // The id is stamped in once the relay has minted it — see the module header for why the
+        // read cannot wait for it.
+        let snap = snapshot(conn, "", owner_name, folder_uid, fields, marketplace, at)?;
+        // **Below the read and above the token, and both halves of that placement are
+        // decisions.** Below, because a refusal about *this folder* — locked or missing — is the
+        // more actionable of the two, and the read that produces it is local and free. Above,
+        // because `credentials` posts to the relay's `/token`, and minting a grant for a press
+        // that has nowhere to send it is a round trip spent on nothing.
+        let base = endpoint(conn)?;
+        Ok((at, snap, base))
+    })?;
 
-    // **Below the read and above the token, and both halves of that placement are decisions.**
-    // Below, because a refusal about *this folder* — locked or missing — is
-    // the
-    // more actionable of the two, and the read that produces it is local and free. Above,
-    // because
-    // `credentials` posts to the relay's `/token`, and minting a grant for a press that has
-    // nowhere to send it is a round trip spent on nothing.
-    endpoint(conn)?;
-    let (token, group) = credentials(conn, tokens).await?;
+    let (token, group) = credentials(db).await?;
     let created = post_meta(
-        conn,
+        db,
+        &base,
         &token,
         &group,
         meta_body(folder_uid, owner_name, &snap)?,
@@ -694,33 +708,32 @@ pub async fn publish(
     let digest = digest(&snap)?;
     snap.id = created.id.clone();
     let json = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
-    let uploaded = put_blob(conn, &token, &group, &created.id, gzip(&json)?)
+    let uploaded = put_blob(db, &base, &token, &group, &created.id, gzip(&json)?)
         .await
         .map(|_| ());
 
-    let row = commit_publish(
-        conn,
-        &ShareRow {
-            id: created.id,
-            folder_uid: folder_uid.map(str::to_owned),
-            title: snap.title,
-            owner_name: owner_name.to_owned(),
-            url: created.url,
-            fields: snap.fields.iter().map(|f| (*f).to_owned()).collect(),
-            // **`live` and never anything else from here.** A membership that has lapsed is the
-            // daily pass's judgement (spec §6) and arrives on the next list; a publish that the
-            // gate let through has no business writing that state itself.
-            state: "live".to_owned(),
-            published: Some(at),
-            updated_at: at,
-        },
-        uploaded,
-    )?;
-    // **Best effort, and after the commit.** A digest that did not stick costs the next
-    // [`changed`] pass one republish of a document that had not moved, which is the cheap
-    // direction to be wrong in; failing a publish that landed over it would be the dear one.
-    let _ = crate::app_meta::set_app_meta(conn, &digest_key(&row.id), &digest);
-    Ok(row)
+    let row = ShareRow {
+        id: created.id,
+        folder_uid: folder_uid.map(str::to_owned),
+        title: snap.title,
+        owner_name: owner_name.to_owned(),
+        url: created.url,
+        fields: snap.fields.iter().map(|f| (*f).to_owned()).collect(),
+        // **`live` and never anything else from here.** A membership that has lapsed is the
+        // daily pass's judgement (spec §6) and arrives on the next list; a publish that the
+        // gate let through has no business writing that state itself.
+        state: "live".to_owned(),
+        published: Some(at),
+        updated_at: at,
+    };
+    db.with(|conn| {
+        let row = commit_publish(conn, &row, uploaded)?;
+        // **Best effort, and after the commit.** A digest that did not stick costs the next
+        // [`changed`] pass one republish of a document that had not moved, which is the cheap
+        // direction to be wrong in; failing a publish that landed over it would be the dear one.
+        let _ = crate::app_meta::set_app_meta(conn, &digest_key(&row.id), &digest);
+        Ok(row)
+    })
 }
 
 /// The inverse of `ShareFields::names()`, which is private to [`super::snapshot`] and writes the
@@ -740,19 +753,12 @@ fn fields_from_names(names: &[String]) -> ShareFields {
 }
 
 /// Republish one share this device already knows about, under the name and fields it carries.
-pub async fn refresh(conn: &Connection, tokens: &impl Store, id: &str) -> Result<ShareRow, String> {
-    let Some(known) = cache::get(conn, id)? else {
+pub async fn refresh(db: &impl Store, id: &str) -> Result<ShareRow, String> {
+    let Some(known) = db.with(|conn| cache::get(conn, id))? else {
         return Err(UNKNOWN_SHARE.to_owned());
     };
     let fields = fields_from_names(&known.fields);
-    publish(
-        conn,
-        tokens,
-        known.folder_uid.as_deref(),
-        &known.owner_name,
-        fields,
-    )
-    .await
+    publish(db, known.folder_uid.as_deref(), &known.owner_name, fields).await
 }
 
 // ---------------------------------------------------------------------------------------
@@ -852,19 +858,22 @@ pub fn changed(conn: &Connection) -> Result<Vec<String>, String> {
 /// **The local row moves only after the relay has taken it**, which is [`commit_publish`]'s rule
 /// applied to the other direction: a withdrawal this device believes in and the relay does not
 /// is a link the reader thinks is dead.
-pub async fn revoke(conn: &Connection, tokens: &impl Store, id: &str) -> Result<(), String> {
-    endpoint(conn)?;
-    let (token, group) = credentials(conn, tokens).await?;
-    delete_share(conn, &token, &group, id).await?;
-    // Nothing will ever compare against it again: a withdrawn share is never republished, and a
-    // folder shared afresh is minted a new id. A failed delete is one orphaned row of text.
-    let _ = conn.execute(
-        "DELETE FROM app_meta WHERE key = ?1",
-        rusqlite::params![digest_key(id)],
-    );
-    // The row survives its own revocation until the next reconcile drops it, so the page can
-    // say *withdrawn* rather than having the folder's badge vanish with no explanation.
-    cache::mark_state(conn, id, "revoked", now(conn)?)
+pub async fn revoke(db: &impl Store, id: &str) -> Result<(), String> {
+    let base = db.with(endpoint)?;
+    let (token, group) = credentials(db).await?;
+    delete_share(db, &base, &token, &group, id).await?;
+    db.with(|conn| {
+        // Nothing will ever compare against it again: a withdrawn share is never republished,
+        // and a folder shared afresh is minted a new id. A failed delete is one orphaned row of
+        // text.
+        let _ = conn.execute(
+            "DELETE FROM app_meta WHERE key = ?1",
+            rusqlite::params![digest_key(id)],
+        );
+        // The row survives its own revocation until the next reconcile drops it, so the page
+        // can say *withdrawn* rather than having the folder's badge vanish with no explanation.
+        cache::mark_state(conn, id, "revoked", now(conn)?)
+    })
 }
 
 /// Every share the group has published, with the cache brought into line first.
@@ -878,28 +887,31 @@ pub async fn revoke(conn: &Connection, tokens: &impl Store, id: &str) -> Result<
 /// **Best effort, and the cache is the answer either way.** A device with no membership makes no
 /// request at all; a device whose request fails answers what it last heard, which is the whole
 /// point of the table being a cache. Only the *reconcile* is optional — the list never is.
-pub async fn list(conn: &Connection, tokens: &impl Store) -> Result<Vec<ShareRow>, String> {
+pub async fn list(db: &impl Store) -> Result<Vec<ShareRow>, String> {
     // **Asked before the token and never as a refusal.** `endpoint` is the only thing here that
     // can say "there is nowhere to ask", and on a build with no host that has to stop the
     // `/token` round trip `access_token` would otherwise make on every press of this list.
-    if endpoint(conn).is_ok() {
+    if let Ok(base) = db.with(endpoint) {
         // Not [`credentials`], because an unconnected device must not read this as a refusal: it
         // has a perfectly good empty list, and `NOT_CONNECTED` belongs on a press to publish.
-        let token = entitlement::access_token(tokens).await.ok().flatten();
-        let group = identity::group(conn).ok().flatten();
+        let token = entitlement::access_token(db).await.ok().flatten();
+        let group = db
+            .with(|conn| identity::group(conn).map_err(|e| e.to_string()))
+            .ok()
+            .flatten();
         if let (Some(token), Some(group)) = (token, group) {
-            if let Ok(remote) = get_shares(conn, &token, &group).await {
+            if let Ok(remote) = get_shares(db, &base, &token, &group).await {
                 // ⚠️ **A reconcile that will not commit falls through to the cache like a
-                // request that did not answer.** Returning its `Err` here would make one busy
-                // database a *failed share list* on a device that is holding a perfectly good
-                // one, which is the opposite of what the paragraph above promises.
-                if let Ok(rows) = cache::reconcile(conn, &remote) {
+                // request that did not answer.** Returning its `Err` here would make one failed
+                // write a *failed share list* on a device that is holding a perfectly good one,
+                // which is the opposite of what the paragraph above promises.
+                if let Ok(rows) = db.with(|conn| cache::reconcile(conn, &remote)) {
                     return Ok(rows);
                 }
             }
         }
     }
-    cache::list(conn)
+    db.with(cache::list)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2043,7 +2055,7 @@ mod tests {
     async fn a_locked_folder_is_refused_before_anything_reaches_the_network() {
         let conn = open_db();
         let uid = folder(&conn, "Vault", true);
-        let err = publish(&conn, &conn, Some(&uid), "Giradeli", ShareFields::default())
+        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
             .await
             .unwrap_err();
         assert_eq!(err, super::super::FOLDER_IS_LOCKED);
@@ -2060,7 +2072,7 @@ mod tests {
         let conn = open_db();
         client::set_state(&conn, SHARE_URL, "share.example").unwrap();
         let uid = folder(&conn, "Binder", false);
-        let err = publish(&conn, &conn, Some(&uid), "Giradeli", ShareFields::default())
+        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
             .await
             .unwrap_err();
         assert_eq!(err, NOT_DEPLOYED);
@@ -2077,7 +2089,7 @@ mod tests {
         let conn = open_db();
         client::set_state(&conn, SHARE_URL, "http://127.0.0.1:1").unwrap();
         let uid = folder(&conn, "Binder", false);
-        let err = publish(&conn, &conn, Some(&uid), "Giradeli", ShareFields::default())
+        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
             .await
             .unwrap_err();
         assert_eq!(err, NOT_CONNECTED);
@@ -2089,7 +2101,7 @@ mod tests {
     async fn a_blank_owner_name_is_refused_before_the_folder_is_even_read() {
         let conn = open_db();
         let uid = folder(&conn, "Vault", true);
-        let err = publish(&conn, &conn, Some(&uid), "   ", ShareFields::default())
+        let err = publish(&conn, Some(&uid), "   ", ShareFields::default())
             .await
             .unwrap_err();
         assert_eq!(err, OWNER_NAME_REQUIRED);
@@ -2107,13 +2119,125 @@ mod tests {
                 client::set_state(&conn, SHARE_URL, base).unwrap();
             }
             cache::store(&conn, &row("kQ2p7fMx9Lb0RtVw")).unwrap();
-            let rows = list(&conn, &conn).await.unwrap();
+            let rows = list(&conn).await.unwrap();
             assert_eq!(rows.len(), 1, "{override_base:?}");
             let logged: i64 = conn
                 .query_row("SELECT count(*) FROM error_log", [], |r| r.get(0))
                 .unwrap();
             assert_eq!(logged, 0, "nothing went wrong, so nothing is a failure");
         }
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The writer, while a request is in flight (issue #1145)
+    // -----------------------------------------------------------------------------------
+
+    /// One request off a socket the test holds, read to the end of its body, and its head.
+    fn take_request(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            let n = stream.read(&mut chunk).unwrap();
+            assert!(n > 0, "the publisher hung up mid-request");
+            bytes.extend_from_slice(&chunk[..n]);
+            let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&bytes[..end]).into_owned();
+            let length = head
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if bytes.len() >= end + 4 + length {
+                return head;
+            }
+        }
+    }
+
+    /// **The bug, as the reader met it**: a publish's requests are unanswered, and an ordinary
+    /// write — the edit to the folder that is going up — is made in the meantime. Until
+    /// 2026-10-20 the publisher held the write connection across both requests, and that write
+    /// waited out [`crate::db::WRITE_LOCK_WAIT`] and answered [`crate::db::BUSY`].
+    ///
+    /// **No timing in it**: the test is the share Worker, on a socket it accepts by hand, so
+    /// each write is made while the request it stands beside is provably still in flight.
+    #[test]
+    fn a_publish_leaves_the_writer_free_while_its_requests_are_in_flight() {
+        let (state, _dir) =
+            grimoire_core::state::fixtures::on_files("share-writer-free", "http://127.0.0.1:1");
+        let worker = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let uid = {
+            let conn = state.lock_db();
+            let base = format!("http://{}", worker.local_addr().unwrap());
+            client::set_state(&conn, SHARE_URL, &base).unwrap();
+            // A token with life left in it, so the press asks the relay for nothing.
+            client::set_state(&conn, entitlement::ACCESS_TOKEN, "bearer").unwrap();
+            client::set_state(&conn, entitlement::ACCESS_EXPIRES, &i64::MAX.to_string()).unwrap();
+            conn.execute(
+                "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+                 VALUES (1, 'g1', 0, zeroblob(32), 0)",
+                [],
+            )
+            .unwrap();
+            folder(&conn, "Binder", false)
+        };
+
+        let publisher = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                runtime.block_on(async {
+                    let lane = state.lane_for_press().await?;
+                    publish(&lane, Some(&uid), "Giradeli", ShareFields::default()).await
+                })
+            })
+        };
+
+        let id = "kQ2p7fMx9Lb0RtVw";
+        let created = format!(r#"{{"id":"{id}","url":"https://share.example/s/{id}"}}"#);
+        for (asked, answer) in [
+            ("POST /g/g1/share ".to_owned(), created),
+            (
+                format!("PUT /g/g1/share/{id} "),
+                r#"{"hash":"h"}"#.to_owned(),
+            ),
+        ] {
+            let (mut stream, _) = worker.accept().unwrap();
+            let head = take_request(&mut stream);
+            assert!(head.starts_with(&asked), "{head}");
+            let edit = crate::sync::with_write(&state, |conn| {
+                conn.execute("UPDATE collection_folders SET name = 'Binder, edited'", [])
+                    .map_err(|e| e.to_string())
+            });
+            assert_eq!(
+                edit,
+                Ok(1),
+                "an edit during {asked}must not be told the app is busy"
+            );
+            use std::io::Write;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\
+                 connection: close\r\n\r\n{answer}",
+                answer.len()
+            )
+            .unwrap();
+        }
+
+        let row = publisher.join().unwrap().unwrap();
+        assert_eq!(row.id, id);
+        // The upload is the read's document, so the title is the folder's name before the edit
+        // — and the commit landed, so the next `changed` pass sees the edit and publishes it.
+        assert_eq!(row.title, "Binder");
+        let conn = state.lock_db_read();
+        assert_eq!(cache::get(&conn, id).unwrap(), Some(row));
+        assert_eq!(changed(&conn).unwrap(), vec![id.to_owned()]);
     }
 
     // -----------------------------------------------------------------------------------
