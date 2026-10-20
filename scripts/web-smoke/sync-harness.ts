@@ -132,6 +132,12 @@ function wranglerScript() {
   );
 }
 
+/** The last lines the running relay printed, kept by {@link startRelay}. */
+let relayTail: string[] = [];
+/** What the relay last said, for a sentence about a wait that never ended. */
+const quoteRelay = () =>
+  relayTail.length === 0 ? "" : ` The relay's last lines: ${relayTail.join(" | ")}.`;
+
 /** A port nobody is listening on, as of now. */
 function freePort() {
   return new Promise<number>((found, lost) => {
@@ -304,6 +310,9 @@ export async function startRelay(pageOrigin: string) {
   const log: RelayLog[] = [];
   /** Whatever it said that was not a request line or its banner — an exception, a warning. */
   const said: string[] = [];
+  /** Its last lines, whatever they were, for a wait that never ended to quote ({@link quoteRelay}). */
+  const tail: string[] = [];
+  relayTail = tail;
   let ready!: () => void;
   let failed!: (error: Error) => void;
   const listening = new Promise<void>((found, lost) => ((ready = found), (failed = lost)));
@@ -313,6 +322,8 @@ export async function startRelay(pageOrigin: string) {
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() ?? "";
     for (const line of lines) {
+      if (line.trim() !== "") tail.push(`${new Date().toISOString().slice(11, 23)} ${line.trim()}`);
+      if (tail.length > 12) tail.shift();
       const request = /\[wrangler:info\] ([A-Z]+) (\S+) (\d{3}) (?:.*\((\d+)ms\))?/.exec(line);
       if (request) {
         log.push({
@@ -489,6 +500,7 @@ export async function device(
       ` Requests that failed: ${failed.join("; ") || "none"}. Logged: ${logged.join("; ") || "nothing"}.` +
       ` Unanswered: ${hanging.join("; ") || "none"}.` +
       ` Sockets: ${sockets.join("; ") || "none"}.` +
+      quoteRelay() +
       (alert ? ` The page's alert: ${alert}` : "")
     );
   };
