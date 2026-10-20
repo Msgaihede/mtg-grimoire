@@ -353,6 +353,11 @@ impl Quad {
 
     /// The same quad, scaled about its centre. `f < 1` crops inward.
     pub fn scaled(&self, f: f32) -> Quad {
+        // Exactly itself at 1, which the arithmetic below is only to within a rounding — so a
+        // quad warped as found is recognised as the same quad scaled by an inset of 1.
+        if f == 1.0 {
+            return *self;
+        }
         let cx = self.corners.iter().map(|c| c.0).sum::<f32>() / 4.0;
         let cy = self.corners.iter().map(|c| c.1).sum::<f32>() / 4.0;
         Quad { corners: self.corners.map(|(x, y)| (cx + (x - cx) * f, cy + (y - cy) * f)) }
@@ -575,7 +580,7 @@ pub fn detect(
         t.timings.total_ms += rectify_ms;
         t
     });
-    let Some(Views { rectified, rectified_180, margin, alternates }) = views else {
+    let Some(Views { rectified, rectified_180, margin, alternates, .. }) = views else {
         return (Err(DetectError::Degenerate), trace);
     };
     (
@@ -1585,13 +1590,47 @@ pub struct Views {
     pub rectified_180: RgbImage,
     pub margin: crate::trim::Margin,
     pub alternates: Vec<(RgbImage, RgbImage)>,
+    /// Descriptors of these views already computed, one slot per framing — the primary's,
+    /// when it is exactly a [`Warped`] the caller handed over and no trim changed it. Empty
+    /// otherwise. See [`rectify_views_from`].
+    pub descriptors: crate::reference::ViewDescriptors,
+}
+
+/// A quad already warped into the canonical card both ways up, untrimmed, and the descriptors
+/// a match computed of it — what [`crate::reframe::choose_keeping`] makes of the quad as found.
+#[derive(Debug, Clone)]
+pub struct Warped {
+    pub quad: Quad,
+    pub upright: RgbImage,
+    pub flipped: RgbImage,
+    pub descriptors: crate::reference::ViewDescriptors,
 }
 
 /// Warp `source_quad` — in **source** coordinates — into the canonical card, both ways up,
 /// at every framing `opts.query_insets` asks for.
 pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -> Option<Views> {
+    rectify_views_from(rgb, source_quad, opts, None)
+}
+
+/// [`rectify_views`], starting from `warped_already` when it is the primary framing's warp
+/// exactly.
+///
+/// **The reframing has already warped and hashed the quad as found** (#1135), and on a frame
+/// that keeps it, that is the primary framing at an inset of 1. Its warps are used rather than
+/// made again, and its descriptors are carried in [`Views::descriptors`] when the trim then
+/// cut nothing — a trimmed card is other pixels, and is hashed afresh.
+pub fn rectify_views_from(
+    rgb: &RgbImage,
+    source_quad: &Quad,
+    opts: &DetectOptions,
+    warped_already: Option<Warped>,
+) -> Option<Views> {
     let warped = source_quad.scaled(opts.inset);
-    let (rectified, rectified_180) = (rectify(rgb, &warped)?, rectify(rgb, &warped.flipped())?);
+    let reused = warped_already.filter(|w| w.quad == warped);
+    let (rectified, rectified_180, mut known) = match reused {
+        Some(w) => (w.upright, w.flipped, Some(w.descriptors)),
+        None => (rectify(rgb, &warped)?, rectify(rgb, &warped.flipped())?, None),
+    };
 
     // Measured once, on the upright image, and applied to both — see `Margin::rotated_180`.
     let margin = if opts.trim_margin {
@@ -1599,9 +1638,13 @@ pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -
     } else {
         crate::trim::Margin::default()
     };
-    let rectified_180 =
-        crate::trim::apply(&rectified_180, margin.rotated_180()).unwrap_or(rectified_180);
-    let rectified = crate::trim::apply(&rectified, margin).unwrap_or(rectified);
+    let trimmed_180 = crate::trim::apply(&rectified_180, margin.rotated_180());
+    let trimmed = crate::trim::apply(&rectified, margin);
+    if trimmed.is_some() || trimmed_180.is_some() {
+        known = None;
+    }
+    let rectified_180 = trimmed_180.unwrap_or(rectified_180);
+    let rectified = trimmed.unwrap_or(rectified);
 
     // The other framings. Each is a fresh warp from the source rather than a crop of the one
     // above: a crop would resample an already-resampled image, and going *outward* from it is
@@ -1610,7 +1653,7 @@ pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -
     // The trim is applied at the same measured margin rather than re-measured per framing.
     // Re-measuring would let each view cut a different amount, and the matcher would then be
     // choosing between framings that differ by two things at once.
-    let alternates = opts
+    let alternates: Vec<(RgbImage, RgbImage)> = opts
         .query_insets
         .iter()
         .filter_map(|f| {
@@ -1623,7 +1666,8 @@ pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -
         })
         .collect();
 
-    Some(Views { rectified, rectified_180, margin, alternates })
+    let descriptors = known.map(|k| k.with_views(1 + alternates.len())).unwrap_or_default();
+    Some(Views { rectified, rectified_180, margin, alternates, descriptors })
 }
 
 pub fn rectify_to(source: &RgbImage, quad: &Quad, w: u32, h: u32) -> Option<RgbImage> {
@@ -1880,6 +1924,43 @@ mod tests {
         // whole set, or the framing search silently drops to one view on exactly the frames
         // that needed it most.
         assert_eq!(good.alternates.len(), opts.query_insets.len());
+    }
+
+    #[test]
+    fn a_quad_already_warped_is_not_warped_again() {
+        // #1135: the reframing warps and hashes the quad as found, and a frame that keeps it
+        // starts from that rather than repeating both.
+        use crate::hash::{hash_rgb, HashKind};
+        use crate::index::{BundleBuilder, Mask, Section};
+        let img = synth(800, 600, 300.0, 0.0).to_rgb8();
+        let quad = Quad { corners: [(250.0, 100.0), (550.0, 100.0), (550.0, 520.0), (250.0, 520.0)] };
+        let a = rectify(&img, &quad).expect("warps");
+        let b = rectify(&img, &quad.flipped()).expect("warps");
+        let mut bundle = BundleBuilder::new(HashKind::DHash, 256);
+        bundle.push(Section::Card, [1; 16], &hash_rgb(&a, HashKind::DHash, 256));
+        let r = crate::reference::Reference::new(bundle.finish(0));
+        let descriptors = r.match_views(&[(&a, &b)], 1, &Mask::all()).descriptors;
+        let warped = || Warped {
+            quad,
+            upright: a.clone(),
+            flipped: b.clone(),
+            descriptors: descriptors.clone(),
+        };
+
+        let opts = DetectOptions { trim_margin: false, ..Default::default() };
+        let alternates = opts.query_insets.len();
+        WARPS.with(|w| w.set(0));
+        let views = rectify_views_from(&img, &quad, &opts, Some(warped())).expect("warps");
+        assert_eq!(WARPS.with(|w| w.get()), 2 * alternates, "the primary was warped again");
+        assert_eq!(views.rectified, a);
+        assert_eq!(views.descriptors.views(), 1 + alternates);
+        assert_eq!(views.descriptors.count(), 2, "the primary's descriptors were not carried");
+
+        // Another quad: the warp is not the primary framing's, and nothing is reused.
+        WARPS.with(|w| w.set(0));
+        let views = rectify_views_from(&img, &quad.scaled(0.9), &opts, Some(warped())).expect("warps");
+        assert_eq!(WARPS.with(|w| w.get()), 2 * (1 + alternates));
+        assert_eq!(views.descriptors.count(), 0);
     }
 
     #[test]

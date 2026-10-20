@@ -22,9 +22,9 @@
 //! borderless printings put the boxes elsewhere; a hypothesis that does not fit simply loses
 //! the match to one that does.
 
-use crate::detect::{rectify, Quad};
+use crate::detect::{rectify, Quad, Warped};
 use crate::index::Mask;
-use crate::reference::Reference;
+use crate::reference::{MatchReport, Reference};
 use image::RgbImage;
 use imageproc::geometric_transformations::Projection;
 
@@ -186,7 +186,10 @@ pub struct Match {
 
 fn best_match(rgb: &RgbImage, quad: &Quad, r: &Reference, mask: &Mask) -> Option<Match> {
     let (a, b) = (rectify(rgb, quad)?, rectify(rgb, &quad.flipped())?);
-    let report = r.match_views(&[(&a, &b)], 10, mask);
+    match_of(&r.match_views(&[(&a, &b)], 10, mask), r)
+}
+
+fn match_of(report: &MatchReport, r: &Reference) -> Option<Match> {
     let oracle = |id: &str| crate::index::parse_uuid(id).map(|id| r.oracle_for(&id));
     let top = report.candidates.first()?;
     let rival = report
@@ -226,7 +229,44 @@ pub fn choose(
     opts: &Options,
     held: Option<Reading>,
 ) -> Option<Reframed> {
-    let card = best_match(rgb, quad, r, mask)?;
+    choose_keeping(rgb, quad, r, mask, opts, held).0
+}
+
+/// [`choose`], and the quad as found warped both ways up with the descriptors its match computed.
+///
+/// **What a frame that keeps the quad would otherwise make again** (#1135): reading the quad as
+/// the card warps and hashes exactly what [`crate::detect::rectify_views_from`] would then warp,
+/// and the frame's match hash. Handed on, the frame reuses both — the warps whenever the
+/// rectification starts from this quad, the descriptors whenever no trim then changed them.
+/// `None` when the quad admits no homography.
+pub fn choose_keeping(
+    rgb: &RgbImage,
+    quad: &Quad,
+    r: &Reference,
+    mask: &Mask,
+    opts: &Options,
+    held: Option<Reading>,
+) -> (Option<Reframed>, Option<Warped>) {
+    let Some((a, b)) = rectify(rgb, quad).zip(rectify(rgb, &quad.flipped())) else {
+        return (None, None);
+    };
+    let report = r.match_views(&[(&a, &b)], 10, mask);
+    let card = match_of(&report, r);
+    let found = Warped { quad: *quad, upright: a, flipped: b, descriptors: report.descriptors };
+    let Some(card) = card else { return (None, Some(found)) };
+    (reframe(rgb, quad, r, mask, opts, held, card), Some(found))
+}
+
+/// The rest of [`choose`], once the quad read as the card has matched as `card`.
+fn reframe(
+    rgb: &RgbImage,
+    quad: &Quad,
+    r: &Reference,
+    mask: &Mask,
+    opts: &Options,
+    held: Option<Reading>,
+    card: Match,
+) -> Option<Reframed> {
     let as_card = card.distance;
     let all = hypotheses(quad);
     let fits = |h: &Hypothesis| mostly_in_frame(&h.card, rgb.width(), rgb.height());

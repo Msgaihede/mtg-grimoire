@@ -30,7 +30,7 @@
 
 use crate::cardness::Cardness;
 use crate::detect::{
-    locate, locate_near, rectify_views, rgb_of, DetectError, DetectOptions, DetectTimings,
+    locate, locate_near, rectify_views, rectify_views_from, rgb_of, DetectError, DetectOptions, DetectTimings,
     DetectTrace, EdgeMethod, Located, QuadScore,
 };
 use crate::filters::ScanFilters;
@@ -38,7 +38,7 @@ use crate::hash::{hash, HashKind};
 use crate::host::{self, Stopwatch};
 use crate::index::{format_uuid, parse_uuid, Mask};
 use crate::lock::{LockState, QuadLock};
-use crate::reference::{Label, MatchReport, Reference};
+use crate::reference::{Label, MatchReport, Reference, ViewDescriptors};
 use crate::resolve::{BurstView, NoReaders};
 pub use crate::resolve::{ChoiceView, Outcome, ResolutionView, TierView};
 use crate::track::{CommitRule, Observation, Standing, Tracked, Tracker, TrackerOptions};
@@ -755,6 +755,8 @@ struct StoredView {
     cardness: f32,
     /// Which way up this frame's hash match won — the orientation the readers try first.
     rotated: bool,
+    /// What this frame's hash match computed, so the resolve does not hash it again (#1135).
+    descriptors: ViewDescriptors,
     /// The frame the readers warp this view's bands from — kept only while a resolve may still
     /// read it. See [`CardPixels`].
     pixels: Option<CardPixels>,
@@ -771,6 +773,7 @@ impl StoredView {
             cardness: self.cardness,
             rotated: self.rotated,
             pixels: self.pixels.as_ref(),
+            descriptors: Some(&self.descriptors),
         }
     }
 }
@@ -1730,6 +1733,9 @@ impl Session {
         // plainly, or once the card is decided, nothing is asked: a held reading is applied as
         // geometry alone, so the quad the lock follows does not jump back to the inner box.
         let plain = std::mem::take(&mut self.reframe_plain) || settled;
+        // The quad as found, warped and hashed by the reframing — reused by the rectification
+        // and the match below when the frame keeps that quad (#1135).
+        let mut as_found: Option<crate::detect::Warped> = None;
         if let (Some(ro), Some(r), Some((_, d, _))) =
             (self.reframe, self.reference.as_deref(), best.as_mut())
         {
@@ -1754,7 +1760,16 @@ impl Session {
                 // sleeved and filtered to its own set, Hypnotic Specter LEB 113 was reframed off
                 // the card and named wrong. The survey the rules were set by searched them all;
                 // the frame's own match, below, still keeps to the mask.
-                crate::reframe::choose(&rgb, &d.quad, r, &Mask::all(), &ro, self.reframe_held)
+                let (found, kept) = crate::reframe::choose_keeping(
+                    &rgb,
+                    &d.quad,
+                    r,
+                    &Mask::all(),
+                    &ro,
+                    self.reframe_held,
+                );
+                as_found = kept.filter(|_| found.is_none());
+                found
             };
             self.reframe_held = found.map(|f| f.reading);
             if let Some(found) = found {
@@ -1822,7 +1837,7 @@ impl Session {
             };
             match relocked {
                 Some(views) => Some((views, true)),
-                None => rectify_views(&rgb, &d.quad, &o).map(|views| (views, false)),
+                None => rectify_views_from(&rgb, &d.quad, &o, as_found).map(|views| (views, false)),
             }
         });
         let rectify_ms = rectify_started.ms();
@@ -1918,6 +1933,7 @@ impl Session {
                         d.cardness.score,
                         settled,
                         Some(&pixels),
+                        Some(&views.descriptors),
                     );
                     v.detail = pixels.used.get();
                 } else if matcher {
@@ -2005,6 +2021,7 @@ impl Session {
         cardness: f32,
         mut settled: bool,
         pixels: Option<&FramePixels<'_>>,
+        known: Option<&ViewDescriptors>,
     ) -> Option<Tracked> {
         // A clone of the handle rather than a borrow of the field, so starting a resolve below —
         // or forgetting a card that changed, just below — can take `&mut self` while this frame
@@ -2031,7 +2048,7 @@ impl Session {
         views.extend(alternates.iter().map(|(a, b)| (a, b)));
         let gate = self.tracker.options().max_normalized;
         let (report, hold) =
-            r.match_views_held(&views, self.top, &self.mask, self.held_rotated, gate);
+            r.match_views_held(&views, known, self.top, &self.mask, self.held_rotated, gate);
         self.held_rotated = hold;
         // The next frame's reframing asks nothing if this one matched plainly. See `reframe_plain`.
         self.reframe_plain = self.reframe.is_some_and(|ro| {
@@ -2111,8 +2128,11 @@ impl Session {
                             .filter(|p| self.mask.permits(p))
                             .collect();
                         let only = Mask::allow_only(only);
+                        // The frame's own match hashed these views moments ago (#1135); only
+                        // the half a held orientation skipped is hashed here.
+                        let known = r.describe_views(&views, Some(&report.descriptors));
                         self.title_pick = r
-                            .match_views(&views, 1, &only)
+                            .match_descriptors(&known, 1, &only)
                             .candidates
                             .first()
                             .and_then(|c| parse_uuid(&c.id));
@@ -2150,6 +2170,7 @@ impl Session {
                     alternates: alternates.to_vec(),
                     cardness,
                     rotated: report.rotated,
+                    descriptors: report.descriptors.clone(),
                     pixels: pixels.filter(|_| readable).and_then(|p| p.get().cloned()),
                     detail: readable && pixels.is_some_and(|p| p.used.get().is_some()),
                 });
@@ -3107,6 +3128,7 @@ mod tests {
             alternates: Vec::new(),
             cardness: 0.5,
             rotated: false,
+            descriptors: ViewDescriptors::default(),
             pixels: None,
             detail: false,
         });
@@ -3146,6 +3168,7 @@ mod tests {
             alternates: Vec::new(),
             cardness: 0.5,
             rotated: false,
+            descriptors: ViewDescriptors::default(),
             pixels: None,
             detail: false,
         });
@@ -3604,7 +3627,7 @@ mod tests {
         let mut v =
             Verdict::failed(String::new(), FrameSize { w: 0, h: 0 }, 0.0, true, s.mode, s.decision_seq);
         s.poll_resolve(&mut v);
-        let t = s.match_locked(&mut v, card, card, &[], 0.5, settled, None);
+        let t = s.match_locked(&mut v, card, card, &[], 0.5, settled, None, None);
         s.conclude(&mut v, t.as_ref());
         v
     }
@@ -4715,7 +4738,7 @@ mod tests {
                 s.mode,
                 s.decision_seq,
             );
-            let t = s.match_locked(&mut v, upright, rotated, &[], 0.5, settled, None);
+            let t = s.match_locked(&mut v, upright, rotated, &[], 0.5, settled, None, None);
             s.conclude(&mut v, t.as_ref());
             v.r#match.expect("a locked frame with a reference matches").hashes
         };
