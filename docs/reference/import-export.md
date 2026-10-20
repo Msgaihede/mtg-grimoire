@@ -41,7 +41,11 @@ format drops a row, and `tcgplayer` is the one flat format that keeps a switched
 the cart is usually exactly what the reader still has to buy. `archidekt` is the only writer whose
 headings are the reader's own words rather than a fixed vocabulary, and the only one that can say
 `{noDeck}` — the flag that is what makes an Archidekt export and a re-import agree about a
-maybeboard. **The CSV says the same thing in a column of its own** (issue #1174): `Category
+maybeboard. **Those headings are the `Category` field's, like the bracket** (issue #1178): with
+Category unticked the file is flat. `parse.ts` takes a file's first line as a heading only when a
+bracket follows it, so a commander-less deck written with headings and no brackets opened on its
+first pile's name and read back as a card called `Creatures` (or a real `Fog`). **The CSV says the
+`{noDeck}` flag in a column of its own** (issue #1174): `Category
 active`, `yes` / `no` beside the pile's name, on by default on a deck and offered by no other
 format. Before it the CSV was the one format that kept a switched-off pile's name and dropped
 the flag, so a file written with the box below ticked — or by the mirror, which writes every pile

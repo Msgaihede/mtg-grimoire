@@ -59,7 +59,7 @@ Exporting transforms card lists into canonical formats via `format.ts`: `(cards,
 - **Seven canonical formats**: `plain`, `mtgo`, `arena`, `moxfield`, `archidekt`, `tcgplayer`, and `csv`.
   - Canonical output: Uses LF and trailing newlines. An empty card list outputs an empty string `""`.
   - `tcgplayer`: Mass-entry cart format (flat list, exact printing `[SET] NUM`, no finish markers, retains inactive categories).
-  - `archidekt`: Writes `{noDeck}` flags for inactive categories and sanitizes delimiters in pile names (replaces commas and brackets).
+  - `archidekt`: Writes `{noDeck}` flags for inactive categories and sanitizes delimiters in pile names (replaces commas and brackets). Pile headings and brackets are both the `category` field's: with it off the file is flat (issue #1178), because a first-line heading reads back as a heading only with a bracket under it.
   - `csv`: Says the same flag in its `Category active` column (`categoryActive`, yes/no, deck-only, on by default, CSV-only — issue #1174); `parse.ts` reads `no` into `excluded` only beside a `Category` cell.
   - `arena` / `mtgo`: Omit inactive categories (maybeboards are invalid imports in Arena).
 - **Two row filters**:

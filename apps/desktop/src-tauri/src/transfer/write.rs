@@ -356,8 +356,9 @@ type Discriminator = Box<dyn Fn(&Card) -> String>;
 /// among the chosen fields, so a Main deck row and a Sideboard row of the same printing must
 /// never fold together on the strength of `Category` being off. Archidekt keys on the category
 /// name **and** the active flag together, because it writes `{noDeck}` from the second and
-/// would otherwise fold a switched-off copy into a switched-on one and silently drop the flag.
-/// `Plain`, `Tcgplayer` and `Csv` key on nothing — they are flat and branch on nothing
+/// would otherwise fold a switched-off copy into a switched-on one and silently drop the flag —
+/// **while `Category` is chosen**, since its piles are that field's alone and [`format_export`]
+/// sets the arm aside when it is off (issue #1178). `Plain`, `Tcgplayer` and `Csv` key on nothing — they are flat and branch on nothing
 /// structural, so two rows that agree on the chosen fields really are indistinguishable in that
 /// file.
 ///
@@ -411,7 +412,15 @@ fn discriminator(format: Format) -> Option<Discriminator> {
 /// malformed decklist; the same two rows in different sections must not, because the merged row
 /// would silently move one of them to the other's zone.
 pub fn format_export(cards: &[Card], format: Format, fields: &[FieldId]) -> String {
-    let keyed = discriminator(format);
+    // Archidekt's piles are the `Category` field's and nothing else's (issue #1178): with it off
+    // the file is flat — no bracket and no heading — so there is nothing structural left to keep
+    // two rows apart by, and folding them is the fold doing its job.
+    let piles = format == Format::Archidekt && fields.contains(&FieldId::Category);
+    let keyed = if format == Format::Archidekt && !piles {
+        None
+    } else {
+        discriminator(format)
+    };
     let rows = fold_for_fields(&written(cards, format), fields, keyed.as_deref());
     if rows.is_empty() {
         return String::new();
@@ -451,9 +460,19 @@ pub fn format_export(cards: &[Card], format: Format, fields: &[FieldId]) -> Stri
         // a deck's array order is its category order, and imposing one here would re-file
         // somebody's deck on the way out. The heading is the name as `written_category` writes
         // it, so it says exactly what every bracket under it says.
+        //
+        // **Only while `Category` is chosen, because the heading needs its bracket** (issue
+        // #1178). `parse.ts` takes a first line as a heading only when a bracket follows it, so
+        // a deck with no commander, written with Category off, opened on `Creatures` and read
+        // back as one copy of a card by that name. Category off says nothing about piles.
         Format::Archidekt => sectioned(
             &rows,
-            &|card| card.category_name.as_deref().map(written_category),
+            &|card| {
+                card.category_name
+                    .as_deref()
+                    .filter(|_| piles)
+                    .map(written_category)
+            },
             &line,
             None,
         ),
@@ -616,7 +635,7 @@ mod tests {
     }
 
     /// A deck card filed under one pile — the smallest thing an Archidekt export writes a
-    /// heading over, and a bracket too wherever the test turns `Category` on.
+    /// heading and a bracket over, wherever the test turns `Category` on.
     fn filed(name: &str, pile: &str, active: bool) -> Card {
         Card {
             name: name.into(),
@@ -648,7 +667,7 @@ mod tests {
     }
 
     /// `{noDeck}` goes on after the name is sanitised, so it is the only thing in braces — and
-    /// the heading is sanitised whether or not `Category` writes a bracket under it.
+    /// with `Category` off neither the bracket nor the heading is written (issue #1178).
     #[test]
     fn the_no_deck_flag_is_the_only_brace_left_in_a_sanitised_bracket() {
         let fields = [FieldId::Quantity, FieldId::Name, FieldId::Category];
@@ -666,8 +685,8 @@ mod tests {
                 Format::Archidekt,
                 &[FieldId::Quantity, FieldId::Name]
             ),
-            "Cuts <maybe>\n1x Mana Crypt\n",
-            "the heading is sanitised whether or not the bracket is written"
+            "1x Mana Crypt\n",
+            "no heading is written without the bracket it needs under it"
         );
     }
 
@@ -682,11 +701,12 @@ mod tests {
                 filed("Arcane Signet", "Ramp; Fixing", true),
             ],
             Format::Archidekt,
-            &[FieldId::Quantity, FieldId::Name],
+            &[FieldId::Quantity, FieldId::Name, FieldId::Category],
         );
         assert_eq!(
             text,
-            "Ramp; Fixing\n1x Sol Ring\n1x Arcane Signet\n\nBurn\n1x Lightning Bolt\n"
+            "Ramp; Fixing\n1x Sol Ring [Ramp; Fixing]\n1x Arcane Signet [Ramp; Fixing]\n\n\
+             Burn\n1x Lightning Bolt [Burn]\n"
         );
     }
 
@@ -909,9 +929,9 @@ mod tests {
             "Cuts\n1x Lightning Bolt [Cuts]\n1x Lightning Bolt [Cuts{noDeck}]\n"
         );
 
-        // And the other half, or the assertion above is only a claim about these two fixtures:
-        // with `Category` switched **off** the two rows agree on every chosen field, so the
-        // discriminator is the only thing keeping them apart.
+        // And the other half (issue #1178): with `Category` switched **off** the file writes no
+        // pile at all — no bracket, no heading, no `{noDeck}` — so the two rows agree on every
+        // chosen field and on everything the file can say, and they fold.
         let on = Card {
             category_name: Some("Cuts".into()),
             category_kind: Some("main".into()),
@@ -927,7 +947,38 @@ mod tests {
             Format::Archidekt,
             &[FieldId::Quantity, FieldId::Name],
         );
-        assert_eq!(text, "Cuts\n1x Lightning Bolt\n1x Lightning Bolt\n");
+        assert_eq!(text, "2x Lightning Bolt\n");
+    }
+
+    /// Issue #1178: a deck with no commander, written with `Category` off, used to open on its
+    /// first pile's heading — a line `parse.ts` takes as a heading only when a bracket follows
+    /// it, so it read back as one copy of a card called `Creatures`. The piles are `Category`'s
+    /// alone: off, the file is flat, and in the caller's order.
+    #[test]
+    fn an_archidekt_export_without_category_writes_no_heading() {
+        let cards = [
+            filed("Llanowar Elves", "Creatures", true),
+            filed("Fog", "Fog", true),
+            filed("Sol Ring", "Ramp", false),
+        ];
+        assert_eq!(
+            format_export(
+                &cards,
+                Format::Archidekt,
+                &[FieldId::Quantity, FieldId::Name]
+            ),
+            "1x Llanowar Elves\n1x Fog\n1x Sol Ring\n"
+        );
+        assert_eq!(
+            format_export(
+                &cards,
+                Format::Archidekt,
+                &[FieldId::Quantity, FieldId::Name, FieldId::Category]
+            ),
+            "Creatures\n1x Llanowar Elves [Creatures]\n\nFog\n1x Fog [Fog]\n\n\
+             Ramp\n1x Sol Ring [Ramp{noDeck}]\n",
+            "with Category on, every heading has its bracket under it"
+        );
     }
 
     /// TCGplayer is a cart rather than a decklist: the pile a reader switched off is usually
