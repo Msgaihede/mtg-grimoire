@@ -576,6 +576,22 @@ export function SearchPage() {
  * list empty" — and the one that matters most (an empty database still syncing, which is not
  * a search that missed) is the one a second copy would be likeliest to get wrong.
  */
+/**
+ * The sentence a failed search owes the reader, or `null` — `ipcError`'s over the search's own
+ * refusal, or the hold a refused tag lookup puts it under (issue #1165).
+ *
+ * The second arm is not a refusal of this query at all: the query was never run, and query-core
+ * reports a disabled query as *pending*, so left alone `summaryOf` would say "Searching…" under a
+ * search that is never going to go out. The reason itself is `TagQueryRow`'s to say, beside its
+ * Try again; this line says only what it did to the wall.
+ */
+export function failureOf(search: CardSearch): string | null {
+  if (search.query.isError) return ipcError(search.query.error);
+  return search.tagLookupFailure === null
+    ? null
+    : "Search on hold — the tags in the search box could not be looked up.";
+}
+
 export function summaryOf(search: CardSearch, failure: string | null): string {
   const { query, rows, total, totalIsCapped, unfiltered } = search;
 
@@ -677,7 +693,7 @@ function Results({ search }: { search: CardSearch }) {
   // did load still in hand. Reading it as "show the error instead" would throw away 400
   // rows because page 9 hit the ingest's database lock, or because a window-focus refetch
   // failed on results the reader was part way through.
-  const failure = query.isError ? ipcError(query.error) : null;
+  const failure = failureOf(search);
   const empty = rows.length === 0;
 
   return (
