@@ -320,7 +320,11 @@ pub async fn archive_import(
         // only after a successful restore, so an old handshake cannot reconnect this data.
         let mut pending = state.pairing.lock().await;
         let _lane = state.lane_for_press().await?;
-        crate::sync::with_write(&state, |conn| {
+        // `with_write_owned` and not bare `with_write` (issue #1146): a restore replaces
+        // `collection_entries` whole, and the facet index's `owned` bitset is built from it — a
+        // skipped rebuild left the Owned and Missing facets answering for the old collection
+        // until the next collection write or a restart. `collection_clear`'s reasoning.
+        crate::collection_source::with_write_owned(&state, |conn| {
             automatic_backup(conn, &state.data_dir, "before-restore")?;
             grimoire_core::archive::restore(conn, &data)
         })?;

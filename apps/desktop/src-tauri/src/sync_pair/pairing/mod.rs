@@ -159,12 +159,18 @@ pub async fn sync_device_revoke(
     device_id: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    sync::on_a_worker(move || async move {
-        let lane = state.lane_for_press().await?;
+    let worker = state.clone();
+    let removed = sync::on_a_worker(move || async move {
+        let lane = worker.lane_for_press().await?;
         remove_device(&lane, &device_id).await
     })
     .await
-    .map_err(|e| format!("could not remove that device: {e}"))?
+    .map_err(|e| format!("could not remove that device: {e}"))?;
+    // The removal opens with a round trip whose pull can move the collection and answers no
+    // outcome to settle, so the facet index's `owned` set is re-read whatever the answer, with the
+    // lane let go (`RelayOutcome::settle_owned`, issue #1146).
+    crate::index::lifecycle::invalidate_owned(&state);
+    removed
 }
 
 /// Leave the group. See [`leave_group_now`] for the order and why the last step is unconditional.
