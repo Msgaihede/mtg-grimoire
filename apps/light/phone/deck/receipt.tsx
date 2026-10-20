@@ -37,7 +37,10 @@ export const RECEIPT_MS = 8000;
  * `Undo` reverses the deck's newest step, which is what the desktop's button does too. Another
  * window writing to the same deck in the same second is the one way that can differ from this
  * press, and the button's name — read off the step, not off the press — is what says which change
- * it will reverse.
+ * it will reverse. **The line stays up until the undo answers**, and goes only once the step is
+ * taken back: a refusal — the commonest is "the deck has been edited since", another device's
+ * sync or another window's write — takes the line's place in the command's own words, because the
+ * desktop says it in `DeckEditor`'s banner and the phone has no banner (issue #1156).
  *
  * Only the undo half: the phone draws no Redo, so the session's redo stack is cleared after every
  * write as the hook's contract asks and never pressed.
@@ -84,20 +87,22 @@ interface Tracked {
   done: boolean;
   said: string | null;
   error: string | null;
+  /** This line's `Undo` is out — the line holds still, its timer too, until it answers. */
+  undoing: boolean;
 }
 
 export function useReceipt(deckId: number): Receipt {
   const undo = useDeckUndo(deckId);
   const [tracked, setTracked] = useState<Tracked | null>(null);
   const newest = undo.undo;
-  const { clearRedo, runUndo } = undo;
+  const { clearRedo, runUndoAsync } = undo;
 
   const track = useCallback(
     <T,>(write: Promise<T>, said?: (result: T) => string | null) => {
       const before = newest?.id ?? null;
       presses += 1;
       const press = presses;
-      setTracked({ press, before, done: false, said: null, error: null });
+      setTracked({ press, before, done: false, said: null, error: null, undoing: false });
       const land = (patch: Partial<Tracked>) =>
         setTracked((now) => (now !== null && now.press === press ? { ...now, ...patch } : now));
       write.then(
@@ -123,13 +128,16 @@ export function useReceipt(deckId: number): Receipt {
   const text =
     tracked?.error ?? tracked?.said ?? (entry !== null ? auditSentence(entry).text : null);
 
+  const undoing = tracked?.undoing === true;
+
   // The receipt goes by itself. A timer's callback, not a write during the effect — the effect
-  // only arms it, and re-arms it for each new thing there is to say.
+  // only arms it, and re-arms it for each new thing there is to say. Never while its undo is out:
+  // a line that went then would take the answer with it.
   useEffect(() => {
-    if (text === null) return;
+    if (text === null || undoing) return;
     const timer = setTimeout(() => setTracked(null), RECEIPT_MS);
     return () => clearTimeout(timer);
-  }, [text, entry?.id]);
+  }, [text, entry?.id, undoing]);
 
   return {
     track,
@@ -137,10 +145,24 @@ export function useReceipt(deckId: number): Receipt {
     refused,
     entry,
     undoName: entry !== null ? auditSentence(entry).text : null,
-    busy: undo.busy,
+    busy: undo.busy || undoing,
     undo: () => {
-      runUndo();
-      setTracked(null);
+      const now = tracked;
+      if (now === null || now.undoing) return;
+      const press = now.press;
+      setTracked({ ...now, undoing: true });
+      runUndoAsync().then(
+        // Taken back: the line has nothing left to say.
+        () => setTracked((at) => (at !== null && at.press === press ? null : at)),
+        // Refused: nothing was taken back, and the line says so rather than going as if it had.
+        // No `Undo` is drawn beside it — the error is what the line is now.
+        (error: unknown) =>
+          setTracked((at) =>
+            at !== null && at.press === press
+              ? { ...at, undoing: false, error: `Couldn't undo — ${ipcError(error)}` }
+              : at,
+          ),
+      );
     },
     dismiss: () => setTracked(null),
   };

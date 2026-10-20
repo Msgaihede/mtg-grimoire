@@ -2096,6 +2096,15 @@ gap), so over the fake only the label, the bracket and the notes show `Undo`. Ov
 every one of them files a step. The phone draws no Redo; the hook's redo stack is cleared after each
 write, as its contract asks.
 
+**A pressed `Undo` holds the line until it answers** (issue #1156). It goes through the hook's
+`runUndoAsync`, the toolbar's own write with its settling handed back: taken back, the line goes;
+refused, the line stays and says so in the command's words (`Couldn't undo — That is not the most
+recent change any more — the deck has been edited since. …`, another device's sync or another
+window's write having filed a step first), in the destructive colour, with no `Undo` beside it. The
+desktop draws the same refusal in `DeckEditor`'s banner; the phone has no banner, and a line that
+went as it does on success let the reader believe the cards were back. The timer does not run while
+the undo is out. `lists/receipt.ts` already held its line this way, and now holds its timer too.
+
 **`Add cards`** is the page's foot, with `Deck settings` beside it — a bar rather than a floating
 button, because a button floating over the right edge would sit on the rows' own `⋯`. It opens the
 card database as a full-height sheet (`deck/AddCards.tsx`) through the Search page's own line and

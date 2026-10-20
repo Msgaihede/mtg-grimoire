@@ -31,6 +31,13 @@ export interface DeckUndo {
   /** Press them. Both are no-ops when there is nothing at that end. */
   runUndo: () => void;
   runRedo: () => void;
+  /**
+   * {@link runUndo} for a caller that has to know how the press went: resolves once the step is
+   * taken back, rejects with the command's refusal. Either way the hook has already done what it
+   * does on a press — `error`, the re-read. Resolves at once when there is nothing to do. The
+   * phone's receipt line, which shows no banner, holds itself up on this and says the refusal.
+   */
+  runUndoAsync: () => Promise<void>;
   /** True while either write is in flight — the buttons grey rather than queue. */
   busy: boolean;
   /** The last refusal, or `null`. `DeckEditor` draws this in its own banner. */
@@ -129,6 +136,11 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
     if (undo !== null && !busy) undoWrite.mutate(undo.id);
   }, [undo, busy, undoWrite]);
 
+  const runUndoAsync = useCallback(
+    () => (undo !== null && !busy ? undoWrite.mutateAsync(undo.id) : Promise.resolve()),
+    [undo, busy, undoWrite],
+  );
+
   const runRedo = useCallback(() => {
     if (redo !== null && !busy) redoWrite.mutate(redo.id);
   }, [redo, busy, redoWrite]);
@@ -142,7 +154,18 @@ export function useDeckUndo(deckId: number | null): DeckUndo {
   const undoLabel = useMemo(() => label(VERBS.undo, undo), [undo]);
   const redoLabel = useMemo(() => label(VERBS.redo, redo), [redo]);
 
-  return { undo, redo, undoLabel, redoLabel, runUndo, runRedo, busy, error, clearRedo };
+  return {
+    undo,
+    redo,
+    undoLabel,
+    redoLabel,
+    runUndo,
+    runRedo,
+    runUndoAsync,
+    busy,
+    error,
+    clearRedo,
+  };
 }
 
 /**
