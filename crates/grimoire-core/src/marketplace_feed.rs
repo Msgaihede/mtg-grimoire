@@ -61,11 +61,10 @@ use crate::platform::files::aio;
 use crate::platform::http;
 use crate::state::State;
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::de::{DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
-use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -259,6 +258,7 @@ pub trait FeedProvider: Send + Sync {
     /// which Mana Pool column is Near Mint, are each written down once.
     ///
     /// A row that will not deserialise is `skipped`, not fatal — [`crate::ingest`]'s rule.
+    /// `parse` reaches the same rule by handing each element's text here (`read_document`).
     ///
     /// **The default counts every row skipped**, so a provider with no push entrance, driven
     /// through one, yields a feed with no prices — which [`store`] refuses as
@@ -385,10 +385,9 @@ impl FeedProvider for CardKingdom {
 
     fn parse(&self, body: &mut dyn Read, feed: &mut Feed) -> Result<(), FeedError> {
         let mut ordinal: i64 = 0;
-        let built_at = read_document::<CkRow>(body, &mut |row| {
-            let position = ordinal;
+        let built_at = read_document(body, &mut |json| {
+            self.fold_element(json, ordinal, feed);
             ordinal += 1;
-            ck_fold(row, position, feed);
         })?;
         feed.feed_built_at = built_at;
         Ok(())
@@ -525,10 +524,9 @@ impl FeedProvider for ManaPool {
 
     fn parse(&self, body: &mut dyn Read, feed: &mut Feed) -> Result<(), FeedError> {
         let mut ordinal: i64 = 0;
-        read_document::<MpRow>(body, &mut |row| {
-            let position = ordinal;
+        read_document(body, &mut |json| {
+            self.fold_element(json, ordinal, feed);
             ordinal += 1;
-            mp_fold(row, position, feed);
         })?;
         // No `meta.created_at`, and none is invented: `feed_built_at` stays NULL.
         Ok(())
@@ -746,30 +744,31 @@ impl StreamRead {
 /// returning `meta.created_at` if the document carries one.
 ///
 /// Both feeds are the same document shape, so this is written once. What makes it *streaming*
-/// is [`Rows`] below: `next_element` decodes one row, `sink` consumes it, and the row is
-/// dropped before the next is read. Nothing but the deduplicated map is alive at the end.
+/// is [`Rows`] below: `next_element` reads one row's JSON text, `sink` consumes it, and the
+/// row is dropped before the next is read. Nothing but the deduplicated map is alive at the end.
+///
+/// **Each element arrives as its raw text, not as a row struct.** Decoding straight into the
+/// row type would make a row with a wrongly typed field (`"id": "123"`) a `serde_json::Error`
+/// that ends the whole document, where [`StreamRead`] skips the same row. Handing the text to
+/// [`FeedProvider::fold_element`] — the push entrance's own function — gives both entrances
+/// one skip rule. Text that is not JSON at all still fails the document, as it should.
 ///
 /// Keys are walked in whatever order the document uses — Card Kingdom puts `meta` first today,
 /// and nothing here depends on it — and unknown keys are skipped with `IgnoredAny`, which
 /// still *parses* their values but builds nothing from them.
-fn read_document<R: DeserializeOwned>(
+fn read_document(
     body: &mut dyn Read,
-    sink: &mut dyn FnMut(R),
+    sink: &mut dyn FnMut(&[u8]),
 ) -> Result<Option<String>, FeedError> {
     let mut de = serde_json::Deserializer::from_reader(std::io::BufReader::new(body));
-    Ok(Document {
-        sink,
-        _row: PhantomData::<R>,
-    }
-    .deserialize(&mut de)?)
+    Ok(Document { sink }.deserialize(&mut de)?)
 }
 
-struct Document<'a, R> {
-    sink: &'a mut dyn FnMut(R),
-    _row: PhantomData<R>,
+struct Document<'a> {
+    sink: &'a mut dyn FnMut(&[u8]),
 }
 
-impl<'de, R: DeserializeOwned> DeserializeSeed<'de> for Document<'_, R> {
+impl<'de> DeserializeSeed<'de> for Document<'_> {
     /// `meta.created_at`, where the feed publishes one.
     type Value = Option<String>;
 
@@ -781,7 +780,7 @@ impl<'de, R: DeserializeOwned> DeserializeSeed<'de> for Document<'_, R> {
     }
 }
 
-impl<'de, R: DeserializeOwned> Visitor<'de> for Document<'_, R> {
+impl<'de> Visitor<'de> for Document<'_> {
     type Value = Option<String>;
 
     fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -804,7 +803,6 @@ impl<'de, R: DeserializeOwned> Visitor<'de> for Document<'_, R> {
                 // Reborrowed, not moved: this loop may see more keys after `data`.
                 "data" => map.next_value_seed(Rows {
                     sink: &mut *self.sink,
-                    _row: PhantomData::<R>,
                 })?,
                 _ => {
                     map.next_value::<IgnoredAny>()?;
@@ -816,12 +814,11 @@ impl<'de, R: DeserializeOwned> Visitor<'de> for Document<'_, R> {
 }
 
 /// The array, one element at a time.
-struct Rows<'a, R> {
-    sink: &'a mut dyn FnMut(R),
-    _row: PhantomData<R>,
+struct Rows<'a> {
+    sink: &'a mut dyn FnMut(&[u8]),
 }
 
-impl<'de, R: DeserializeOwned> DeserializeSeed<'de> for Rows<'_, R> {
+impl<'de> DeserializeSeed<'de> for Rows<'_> {
     type Value = ();
 
     fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
@@ -829,7 +826,7 @@ impl<'de, R: DeserializeOwned> DeserializeSeed<'de> for Rows<'_, R> {
     }
 }
 
-impl<'de, R: DeserializeOwned> Visitor<'de> for Rows<'_, R> {
+impl<'de> Visitor<'de> for Rows<'_> {
     type Value = ();
 
     fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -837,8 +834,8 @@ impl<'de, R: DeserializeOwned> Visitor<'de> for Rows<'_, R> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
-        while let Some(row) = seq.next_element::<R>()? {
-            (self.sink)(row);
+        while let Some(row) = seq.next_element::<Box<serde_json::value::RawValue>>()? {
+            (self.sink)(row.get().as_bytes());
         }
         Ok(())
     }
@@ -2781,8 +2778,8 @@ mod tests {
     }
 
     /// A row serde cannot read is counted and stepped over, never fatal — [`crate::ingest`]'s
-    /// rule. **The push entrance has to decide this for itself**, because the pull parser's
-    /// `next_element` would abort the whole document on the same row.
+    /// rule, and the same on both entrances: the pull parser hands each element's text to
+    /// `fold_element` too (issue #1130).
     #[test]
     fn an_unreadable_row_is_skipped_rather_than_ending_the_feed() {
         let body = r#"{"data": [
@@ -2790,15 +2787,48 @@ mod tests {
             {"id": "not an integer", "scryfall_id": "b", "price_retail": "1.00"},
             {"id": 3, "scryfall_id": "c", "is_foil": "false", "price_retail": "0.75"}
         ]}"#;
-        let feed = stream(&CardKingdom, body, 11).unwrap();
+        let pushed = stream(&CardKingdom, body, 11).unwrap();
+        let pulled = collect(&CardKingdom, body).unwrap();
 
-        assert_eq!(
-            priced(&feed),
-            vec![("a".into(), "nonfoil", 0.35), ("c".into(), "nonfoil", 0.75)],
-            "the good rows on either side of the bad one both survive"
-        );
-        assert_eq!(feed.rows_seen, 3);
-        assert_eq!(feed.skipped, 1);
+        for feed in [&pushed, &pulled] {
+            assert_eq!(
+                priced(feed),
+                vec![("a".into(), "nonfoil", 0.35), ("c".into(), "nonfoil", 0.75)],
+                "the good rows on either side of the bad one both survive"
+            );
+            assert_eq!(feed.rows_seen, 3);
+            assert_eq!(feed.skipped, 1);
+        }
+    }
+
+    /// Mana Pool's half of the same rule: fractional cents are a row to skip on the pull
+    /// entrance too, not a parse error that rests the feed for a day.
+    #[test]
+    fn a_mana_pool_row_with_fractional_cents_is_skipped_by_both_entrances() {
+        let body = r#"{"data": [
+            {"scryfall_id": "a", "price_cents_nm": 218},
+            {"scryfall_id": "b", "price_cents_nm": 12.5},
+            {"scryfall_id": "c", "price_cents_nm": 75}
+        ]}"#;
+        let pushed = stream(&ManaPool, body, 13).unwrap();
+        let pulled = collect(&ManaPool, body).unwrap();
+
+        for feed in [&pushed, &pulled] {
+            assert_eq!(
+                priced(feed),
+                vec![("a".into(), "nonfoil", 2.18), ("c".into(), "nonfoil", 0.75)]
+            );
+            assert_eq!(feed.rows_seen, 3);
+            assert_eq!(feed.skipped, 1);
+        }
+    }
+
+    /// Skipping is for a row that is JSON of the wrong shape. A body that is not JSON at all
+    /// still fails the document on the pull entrance.
+    #[test]
+    fn a_body_that_is_not_json_still_fails_the_pull_entrance() {
+        let body = r#"{"data": [{"scryfall_id": "a", "price_cents_nm": 218}, {"scryfall_id": ]}"#;
+        assert!(matches!(collect(&ManaPool, body), Err(FeedError::Parse(_))));
     }
 
     /// The framer must drain, and a row count cannot see that it is not.
