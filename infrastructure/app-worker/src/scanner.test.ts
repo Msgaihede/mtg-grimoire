@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import headersText from "../_headers?raw";
 import scannerTs from "../../../packages/ui/lib/core/web/scanner.ts?raw";
 import {
+  NEURAL_FILES,
+  NEURAL_PREFIX,
+  neuralPath,
   SCANNER_ASSETS_PREFIX,
   SCANNER_GLUE_FILE,
   SCANNER_MANIFEST,
@@ -82,5 +85,26 @@ describe("the scanner's three files", () => {
 
   it("is fetched from this origin, which the policy's `connect-src` already allows", () => {
     expect(policy(FILES[0])).toBe(policy("/"));
+  });
+});
+
+describe("the Neural scanner's four files", () => {
+  const NEURAL = NEURAL_FILES.map((name) => neuralPath("3c0ffee5d00dfeed", name));
+
+  it.each(NEURAL)("is content-addressed and kept for a year: %s", (path) => {
+    // Exactly: a value joined onto the default's would read `no-cache, public, …`.
+    expect(cache(path)).toBe(YEAR);
+  });
+
+  it("has a rule of its own, which detaches the default before it sets the year", () => {
+    const own = rules.find((rule) => rule.path === `${NEURAL_PREFIX}*`);
+    expect(own?.unset).toEqual(["cache-control"]);
+    expect(own?.set).toEqual([["cache-control", YEAR]]);
+    // The three files' stable names are still revalidated beside it.
+    expect(cache(FILES[0])).toBe("no-cache");
+  });
+
+  it("is fetched from this origin under the one policy", () => {
+    expect(policy(NEURAL[0])).toBe(policy("/"));
   });
 });

@@ -27,6 +27,8 @@ import lightToml from "../apps/light/src-tauri/Cargo.toml?raw";
 import webToml from "../crates/grimoire-web/Cargo.toml?raw";
 import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
 import playToml from "../crates/grimoire-play/Cargo.toml?raw";
+import neuralToml from "../crates/card-neural/Cargo.toml?raw";
+import scannerLock from "../crates/card-scanner/Cargo.lock?raw";
 import desktopConf from "../apps/desktop/src-tauri/tauri.conf.json?raw";
 import lightConf from "../apps/light/src-tauri/tauri.conf.json?raw";
 import appGradle from "../apps/light/src-tauri/gen/android/app/build.gradle.kts?raw";
@@ -67,6 +69,9 @@ const CRATES = [
   { name: "grimoire-scan", dir: "crates/grimoire-scan", toml: scanToml, conf: null },
   // The game board's rules engine (goldfish and playtest), linked by the desktop alone.
   { name: "grimoire-play", dir: "crates/grimoire-play", toml: playToml, conf: null },
+  // The Scanner's Neural mode: its recogniser and model files, linked by the core and both
+  // native hosts, and into the browser's scanner module.
+  { name: "card-neural", dir: "crates/card-neural", toml: neuralToml, conf: null },
 ];
 
 /** A file with its `#` comment lines removed — these files explain themselves in prose. */
@@ -85,9 +90,9 @@ function packageOf(toml: string) {
   };
 }
 
-/** Every version the root `Cargo.lock` records for a package name. */
-const lockedVersions = (name: string) =>
-  [...cargoLock.matchAll(/^\[\[package\]\]\r?\nname = "([^"]+)"\r?\nversion = "([^"]+)"/gm)]
+/** Every version a `Cargo.lock` records for a package name — the root's unless told another. */
+const lockedVersions = (name: string, lock: string = cargoLock) =>
+  [...lock.matchAll(/^\[\[package\]\]\r?\nname = "([^"]+)"\r?\nversion = "([^"]+)"/gm)]
     .filter((m) => m[1] === name)
     .map((m) => m[2]);
 
@@ -110,7 +115,7 @@ describe("one version in the tree", () => {
   });
 
   it("knows every member of the cargo workspace", () => {
-    // A sixth member owes a row above, and with it a lockfile selector in the config (its
+    // A new member owes a row above, and with it a lockfile selector in the config (its
     // manifest inherits the workspace's version): one the config does not name is not bumped
     // in the lockfile, and ships a version behind the app.
     const members = /^members = \[([^\]]*)\]$/m.exec(workspaceToml)?.[1];
@@ -175,10 +180,25 @@ describe("one version in the tree", () => {
     },
   );
 
+  // **`card-scanner` keeps a lockfile of its own** (it is not a member) and links `card-neural`,
+  // a member that wears the app's version — so that lockfile records the app's version too, and
+  // a release that left it behind would fail its `--locked` suite in CI on the next run.
+  it("card-scanner's own lockfile records card-neural at it, and release-please bumps it", () => {
+    expect(lockedVersions("card-neural", scannerLock)).toEqual([version]);
+    expect(
+      names({
+        type: "toml",
+        path: "crates/card-scanner/Cargo.lock",
+        jsonpath: "$.package[?(@.name.value=='card-neural')].version",
+      }),
+    ).toBe(true);
+  });
+
   it("names nothing else, so this file is the whole list", () => {
     const tauriHosts = CRATES.filter((crate) => crate.conf !== null).length;
-    // The workspace's one manifest, each member's lockfile entry, each Tauri host's config.
-    expect(extra).toHaveLength(1 + CRATES.length + tauriHosts);
+    // The workspace's one manifest, each member's lockfile entry, each Tauri host's config, and
+    // card-neural's entry in card-scanner's own lockfile.
+    expect(extra).toHaveLength(1 + CRATES.length + tauriHosts + 1);
   });
 });
 

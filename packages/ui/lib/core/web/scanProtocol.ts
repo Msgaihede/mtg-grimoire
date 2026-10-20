@@ -7,8 +7,9 @@
  * lib, the Worker's (`./scanWorker.ts`, `./scanSession.ts`) under `WebWorker`
  * (`packages/ui/tsconfig.web-worker.json`). So nothing here may name a global only one of the two has.
  *
- * The far end is `crates/grimoire-scan`: six synchronous exports over one session, every string
- * of which is `{"ok": …}` or `{"err": "<sentence>"}` (`grimoire_scan.d.ts`).
+ * The far end is `crates/grimoire-scan`: seven synchronous exports over one session, every string
+ * of which is `{"ok": …}` or `{"err": "<sentence>"}` (`grimoire_scan.d.ts`) — but `load_neural`'s,
+ * a refusal or nothing, which the Worker turns into the same two (`scanSession.ts`).
  */
 
 /** What the module's `load` says it found — `Loaded` in `crates/grimoire-scan/src/scanner.rs`. */
@@ -38,6 +39,19 @@ export type ToScanner =
       labels: Uint8Array | null;
       detection: Uint8Array | null;
       recognition: Uint8Array | null;
+    }
+  /**
+   * The Neural mode's four files, into the session the `load` built — posted once per Worker,
+   * before its first Neural frame (`scanner.ts`). Answered `ok` with `null`, or `err` with the
+   * crate's sentence for files that would not load.
+   */
+  | {
+      kind: "neural";
+      id: number;
+      detector: Uint8Array;
+      embedder: Uint8Array;
+      gallery: Uint8Array;
+      meta: Uint8Array;
     }
   /** One frame: a JPEG, the same frame at the camera's resolution or `null`, the options' JSON. */
   | { kind: "frame"; id: number; jpeg: Uint8Array; detail: Uint8Array | null; options: string }
@@ -104,6 +118,39 @@ export function loadMessage(
     message: { kind: "load", id, filters, ...files },
     transfer: buffersOf([files.bundle, files.labels, files.detection, files.recognition]),
   };
+}
+
+/**
+ * The message that hands the Worker the Neural mode's four files. **Every array is handed over**:
+ * twenty-seven megabytes, which the page fetched for this post and keeps none of.
+ */
+export function neuralMessage(
+  id: number,
+  files: { detector: Uint8Array; embedder: Uint8Array; gallery: Uint8Array; meta: Uint8Array },
+): ScanOutgoing {
+  return {
+    message: { kind: "neural", id, ...files },
+    transfer: buffersOf([files.detector, files.embedder, files.gallery, files.meta]),
+  };
+}
+
+/**
+ * Whether a frame's options ask for the Neural mode — `FrameOptions::mode`, `"neural"` as serde
+ * writes `ScanMode::Neural`. Options that are not JSON, or not an object, are the defaults to the
+ * module, and the default mode is Fast: no.
+ */
+export function isNeuralFrame(options: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(options);
+  } catch {
+    return false;
+  }
+  return (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    (parsed as { mode?: unknown }).mode === "neural"
+  );
 }
 
 /** The header a frame's options ride in — `scanner::OPTIONS_HEADER`. */

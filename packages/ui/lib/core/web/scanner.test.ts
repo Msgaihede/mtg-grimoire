@@ -3,8 +3,9 @@ import scannerAssetsRs from "../../../../../crates/grimoire-core/src/scanner_ass
 import type { ScannerAssetsOwed, ScannerAssetsProgress, ScannerStatus } from "@/lib/ipc";
 import { HOST_SCANNER_UNAVAILABLE, SCANNER_NEEDS_SIMD, SCANNER_NOT_SHIPPED } from "../hostScanner";
 import type { Core } from "../types";
-import { SCANNER_ASSETS_PREFIX, SCANNER_CACHE } from "./assets";
+import { NEURAL_FILES, NEURAL_PREFIX, neuralPath, SCANNER_ASSETS_PREFIX, SCANNER_CACHE } from "./assets";
 import { LABELS_COMMAND } from "./protocol";
+import { NEURAL_OTHER_SET, NEURAL_UNREACHABLE } from "./scanNeural";
 import type { FromScanner, LoadFacts, ToScanner } from "./scanProtocol";
 import {
   answeringScanner,
@@ -15,6 +16,8 @@ import {
   IDLE_MS,
   LOAD_DEADLINE_MS,
   MEMORY_COMMAND,
+  NEURAL_COULD_NOT_START,
+  NEURAL_REFUSED,
   NO_LABELS,
   NOT_DOWNLOADED,
   OTHER_FORMAT,
@@ -28,7 +31,15 @@ import {
   type ScanPort,
 } from "./scanner";
 import { ALREADY_FETCHING, UNREACHABLE } from "./scanStore";
-import { answered, fakeBrowser, FILES, MANIFEST, settle } from "./scanTesting";
+import {
+  answered,
+  fakeBrowser,
+  FILES,
+  MANIFEST,
+  NEURAL_SOURCE,
+  NEURAL_TEST_FILES,
+  settle,
+} from "./scanTesting";
 
 const FACTS: LoadFacts = {
   bundle: { loaded: true, entries: 2, error: null },
@@ -115,6 +126,7 @@ function harness(
       detectionModel: MANIFEST.files[1].sha256,
       recognitionModel: MANIFEST.files[2].sha256,
     },
+    neural: NEURAL_SOURCE,
     ...own,
   };
   const core = answeringScanner(inner, env);
@@ -141,6 +153,7 @@ describe("a browser with none of the scanner's files", () => {
       bundle: { path: "/scanner-assets/card-hashes.bin", present: false, loaded: false, error: null, source: "store" },
       detection_model: { path: "/scanner-assets/text-detection.rten", present: false, loaded: false, error: null, source: "store" },
       recognition_model: { path: "/scanner-assets/text-recognition.rten", present: false, loaded: false, error: null, source: "store" },
+      neural: { path: "/scanner-neural/", present: false, loaded: false, error: null, source: "store" },
       labels: 0,
       scans_dir: "",
       unapplied_filters: null,
@@ -720,6 +733,304 @@ describe("the Worker's life", () => {
     const whole = await built();
     expect(ports[1].last("load").recognition).toEqual(FILES["text-recognition.rten"]);
     expect(whole.recognition_model).toMatchObject({ present: true, loaded: true });
+  });
+});
+
+describe("the Neural mode's files", () => {
+  const NEURAL_OPTIONS = { "x-scanner-options": '{"mode":"neural","previews":false}' };
+  const PATHS = NEURAL_FILES.map((name) => neuralPath(NEURAL_SOURCE.set, name));
+  const kinds = (port: FakePort): string[] => port.posted.map(({ message }) => message.kind);
+  const lastKind = (port: FakePort): string | undefined => port.posted[port.posted.length - 1]?.message.kind;
+  /** Let the page work until `check` holds — a fetch of four files is many turns deep. */
+  const until = async (check: () => boolean): Promise<void> => {
+    for (let turn = 0; turn < 5_000 && !check(); turn += 1) await Promise.resolve();
+    if (!check()) throw new Error("it never happened");
+  };
+
+  /** A session built from the store, and a way to send it a Neural frame. */
+  async function scanning(over: Parameters<typeof harness>[0] = {}) {
+    const h = harness(over);
+    await h.download();
+    await h.built();
+    const neuralFrame = (): Promise<unknown> =>
+      h.core.call("scanner_frame", new Uint8Array([1, 2]), { headers: NEURAL_OPTIONS });
+    /** A Neural frame that is refused: what it was refused with, a heartbeat late. */
+    const refusedFrame = async (): Promise<unknown> => {
+      let said: unknown = "it was not refused";
+      neuralFrame().catch((sentence: unknown) => (said = sentence));
+      await settle(600);
+      h.browser.advance(REFUSAL_PACE_MS);
+      await settle(50);
+      return said;
+    };
+    const fetched = (): string[] => h.browser.asked.filter((path) => path.startsWith(NEURAL_PREFIX));
+    return { ...h, neuralFrame, refusedFrame, fetched };
+  }
+
+  /** The first Neural frame on `port`, the hand-over answered `ok` and the frame answered. */
+  async function firstNeuralFrame(s: Awaited<ReturnType<typeof scanning>>, port: FakePort): Promise<void> {
+    const verdict = s.neuralFrame();
+    await until(() => kinds(port).includes("neural"));
+    port.answer(null);
+    await until(() => lastKind(port) === "frame");
+    port.answer({ ok: true, mode: "neural" });
+    expect(await verdict).toEqual({ ok: true, mode: "neural" });
+  }
+
+  it("are never asked for by a Fast or an Exact frame, and the status says none are here", async () => {
+    const { core, ports, browser, fetched } = await scanning();
+    for (const options of ['{"mode":"fast"}', '{"mode":"exact"}', "{}", undefined]) {
+      const headers = options === undefined ? undefined : { "x-scanner-options": options };
+      const verdict = core.call("scanner_frame", new Uint8Array([1]), { headers });
+      await settle();
+      ports[0].answer({ ok: true });
+      await verdict;
+    }
+    expect(kinds(ports[0])).toEqual(["load", "frame", "frame", "frame", "frame"]);
+    expect(fetched()).toEqual([]);
+    // What was fetched was the Download's, and nothing since.
+    expect(browser.asked.every((path) => path.startsWith(SCANNER_ASSETS_PREFIX))).toBe(true);
+    expect((await core.call<ScannerStatus>("scanner_status")).neural).toEqual({
+      path: "/scanner-neural/",
+      present: false,
+      loaded: false,
+      error: null,
+      source: "store",
+    });
+  });
+
+  it("are fetched by the first Neural frame, handed over whole, and only then is the frame sent", async () => {
+    const s = await scanning();
+    const { core, ports, browser, fetched } = s;
+    const verdict = s.neuralFrame();
+    await until(() => kinds(ports[0]).includes("neural"));
+    // One after another, in `load_neural`'s order, past nothing but the HTTP cache.
+    expect(fetched()).toEqual(PATHS);
+    const asked = browser.asked.map((path, at) => [path, browser.modes[at]]);
+    expect(asked.filter(([path]) => path.startsWith(NEURAL_PREFIX)).map(([, mode]) => mode)).toEqual(
+      NEURAL_FILES.map(() => "default"),
+    );
+    const { message, transfer } = ports[0].posted[1];
+    if (message.kind !== "neural") throw new Error("not the Neural files");
+    expect(message.detector).toEqual(NEURAL_TEST_FILES["detector.onnx"]);
+    expect(message.embedder).toEqual(NEURAL_TEST_FILES["embedder.onnx"]);
+    expect(message.gallery).toEqual(NEURAL_TEST_FILES["gallery.bin"]);
+    expect(message.meta).toEqual(NEURAL_TEST_FILES["neural.json"]);
+    // Every buffer handed over: the page keeps none of the four.
+    expect(transfer).toEqual([message.detector.buffer, message.embedder.buffer, message.gallery.buffer, message.meta.buffer]);
+    // The frame waits for the hand-over's answer.
+    await settle();
+    expect(kinds(ports[0])).toEqual(["load", "neural"]);
+    ports[0].answer(null);
+    await until(() => kinds(ports[0]).length === 3);
+    expect(ports[0].last("frame").options).toBe(NEURAL_OPTIONS["x-scanner-options"]);
+    ports[0].answer({ ok: true, decision_seq: 1 });
+    expect(await verdict).toEqual({ ok: true, decision_seq: 1 });
+
+    // Once a Worker: the next Neural frame is sent as it comes.
+    const next = s.neuralFrame();
+    await settle();
+    expect(kinds(ports[0])).toEqual(["load", "neural", "frame", "frame"]);
+    ports[0].answer({ ok: true });
+    await next;
+    expect(fetched()).toEqual(PATHS);
+    expect((await core.call<ScannerStatus>("scanner_status")).neural).toEqual({
+      path: "/scanner-neural/",
+      present: true,
+      loaded: true,
+      error: null,
+      source: "store",
+    });
+  });
+
+  it("are fetched once for frames that arrive while they are on their way", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((done) => (release = done));
+    const slow = { [PATHS[2]]: () => held.then(() => answered(NEURAL_TEST_FILES["gallery.bin"])) };
+    const s = await scanning(slow);
+    const one = s.neuralFrame();
+    const two = s.neuralFrame();
+    await settle(200);
+    release();
+    await until(() => kinds(s.ports[0]).includes("neural"));
+    s.ports[0].answer(null);
+    await until(() => kinds(s.ports[0]).length === 4);
+    expect(kinds(s.ports[0])).toEqual(["load", "neural", "frame", "frame"]);
+    s.ports[0].say({ kind: "ok", id: s.ports[0].posted[2].message.id, result: { ok: true } });
+    s.ports[0].say({ kind: "ok", id: s.ports[0].posted[3].message.id, result: { ok: true } });
+    await Promise.all([one, two]);
+    expect(s.fetched()).toEqual(PATHS);
+  });
+
+  it("are posted again to a Worker made again, on its first Neural frame", async () => {
+    const s = await scanning();
+    await firstNeuralFrame(s, s.ports[0]);
+    // The reader left: the Worker, and the files in it, are gone.
+    s.browser.advance(IDLE_MS + 1_000);
+    expect(s.ports[0].terminated).toBe(true);
+    // The next Neural frame builds a Worker, and hands it the files again before it is sent.
+    const verdict = s.neuralFrame();
+    await until(() => s.ports.length === 2);
+    s.ports[1].answer(FACTS);
+    await until(() => kinds(s.ports[1]).includes("neural"));
+    s.ports[1].answer(null);
+    await until(() => lastKind(s.ports[1]) === "frame");
+    s.ports[1].answer({ ok: true });
+    expect(await verdict).toEqual({ ok: true });
+    expect(kinds(s.ports[1])).toEqual(["load", "neural", "frame"]);
+    expect(s.fetched()).toEqual([...PATHS, ...PATHS]);
+  });
+
+  it("are not posted to a Worker that was ended while they were on their way", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((done) => (release = done));
+    const slow = { [PATHS[0]]: () => held.then(() => answered(NEURAL_TEST_FILES["detector.onnx"])) };
+    const s = await scanning(slow);
+    let said: unknown;
+    s.neuralFrame().catch((sentence: unknown) => (said = sentence));
+    await settle(100);
+    s.browser.advance(IDLE_MS + 1_000);
+    expect(s.ports[0].terminated).toBe(true);
+    release();
+    await settle(600);
+    s.browser.advance(REFUSAL_PACE_MS);
+    await settle(50);
+    expect(said).toBe(STOPPED);
+    expect(kinds(s.ports[0])).toEqual(["load"]);
+    // The Worker's ending is no failure of the files: the next frame's Worker is handed them.
+    const status = s.core.call<ScannerStatus>("scanner_status");
+    await until(() => s.ports.length === 2);
+    s.ports[1].answer(FACTS);
+    expect((await status).neural.error).toBeNull();
+    await firstNeuralFrame(s, s.ports[1]);
+  });
+
+  it("that cannot be fetched are the frame's refusal, waited out, and asked for again after", async () => {
+    let down = true;
+    const flaky = {
+      [PATHS[1]]: () => (down ? answered("no", { status: 503 }) : answered(NEURAL_TEST_FILES["embedder.onnx"])),
+    };
+    const s = await scanning(flaky);
+    const sentence = "The Neural scanner's files could not be downloaded: the server answered 503.";
+    expect(await s.refusedFrame()).toBe(sentence);
+    expect(kinds(s.ports[0])).toEqual(["load"]);
+    expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({
+      present: false,
+      loaded: false,
+      error: sentence,
+    });
+    // Waited out: the same sentence, and nothing asked of the origin.
+    const asked = s.fetched().length;
+    expect(await s.refusedFrame()).toBe(sentence);
+    expect(s.fetched()).toHaveLength(asked);
+    // A Fast frame meanwhile is a Fast frame.
+    const fast = s.core.call("scanner_frame", new Uint8Array([1]), { headers: { "x-scanner-options": '{"mode":"fast"}' } });
+    await settle();
+    s.ports[0].answer({ ok: true });
+    expect(await fast).toEqual({ ok: true });
+
+    down = false;
+    s.browser.advance(RETRY_AFTER_MS);
+    await firstNeuralFrame(s, s.ports[0]);
+    expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({ loaded: true, error: null });
+  });
+
+  it("refuses an origin that is gone, a set the server no longer has, a page and a file of another length", async () => {
+    const gone = await scanning({ [PATHS[0]]: () => Promise.reject(new TypeError("Failed to fetch")) });
+    expect(await gone.refusedFrame()).toBe(NEURAL_UNREACHABLE);
+    const redeployed = await scanning({ [PATHS[3]]: () => answered("Not found", { status: 404 }) });
+    expect(await redeployed.refusedFrame()).toBe(NEURAL_OTHER_SET);
+    const page = await scanning({ [PATHS[2]]: () => answered("<!doctype html>", { type: "text/html" }) });
+    expect(await page.refusedFrame()).toBe(
+      "The Neural scanner's files could not be downloaded: the server answered a page, not the file.",
+    );
+    const longer = new Uint8Array(NEURAL_TEST_FILES["embedder.onnx"].byteLength + 1);
+    const long = await scanning({ [PATHS[1]]: () => answered(longer) });
+    expect(await long.refusedFrame()).toBe(
+      "The Neural scanner's files could not be downloaded: embedder.onnx is longer than the 600 bytes this version expects.",
+    );
+    const short = await scanning({ [PATHS[2]]: () => answered(NEURAL_TEST_FILES["gallery.bin"].slice(1)) });
+    expect(await short.refusedFrame()).toBe(
+      "The Neural scanner's files could not be downloaded: gallery.bin arrived as 899 bytes where 900 were expected.",
+    );
+    for (const s of [gone, redeployed, page, long, short]) expect(kinds(s.ports[0])).toEqual(["load"]);
+  });
+
+  it("that the module refuses are the frame's refusal in its words, and the status's error", async () => {
+    const s = await scanning();
+    let said: unknown;
+    s.neuralFrame().catch((sentence: unknown) => (said = sentence));
+    await until(() => kinds(s.ports[0]).includes("neural"));
+    s.ports[0].say({ kind: "err", id: s.ports[0].last("neural").id, message: "gallery: bad magic" });
+    await settle(50);
+    s.browser.advance(REFUSAL_PACE_MS);
+    await settle(50);
+    expect(said).toBe(`${NEURAL_REFUSED} gallery: bad magic`);
+    expect(s.ports[0].terminated).toBe(false);
+    expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({
+      present: true,
+      loaded: false,
+      error: `${NEURAL_REFUSED} gallery: bad magic`,
+    });
+  });
+
+  it("whose hand-over traps end the Worker, and are waited out before the next Worker is handed them", async () => {
+    const s = await scanning();
+    let said: unknown;
+    s.neuralFrame().catch((sentence: unknown) => (said = sentence));
+    await until(() => kinds(s.ports[0]).includes("neural"));
+    s.ports[0].say({ kind: "trapped", id: s.ports[0].last("neural").id, message: "RuntimeError: unreachable" });
+    await settle(50);
+    s.browser.advance(REFUSAL_PACE_MS);
+    await settle(50);
+    expect(said).toBe(STOPPED);
+    expect(s.ports[0].terminated).toBe(true);
+    // The next Neural frame builds a Worker — a Fast reader needs one — and does not hand it the
+    // files a phone's memory would not take a moment ago.
+    let next: unknown;
+    s.neuralFrame().catch((sentence: unknown) => (next = sentence));
+    await until(() => s.ports.length === 2);
+    s.ports[1].answer(FACTS);
+    await settle(100);
+    s.browser.advance(REFUSAL_PACE_MS);
+    await settle(50);
+    expect(next).toBe(NEURAL_COULD_NOT_START);
+    expect(kinds(s.ports[1])).toEqual(["load"]);
+    expect(s.fetched()).toEqual(PATHS);
+    expect((await s.core.call<ScannerStatus>("scanner_status")).neural.error).toBe(NEURAL_COULD_NOT_START);
+  });
+
+  it("whose hand-over passes its deadline end the Worker, and are waited out too", async () => {
+    const s = await scanning();
+    let said: unknown;
+    s.neuralFrame().catch((sentence: unknown) => (said = sentence));
+    await until(() => kinds(s.ports[0]).includes("neural"));
+    // A load's deadline, not a frame's: two networks are parsed and a gallery taken.
+    s.browser.advance(FRAME_DEADLINE_MS + 1_000);
+    expect(s.ports[0].terminated).toBe(false);
+    s.browser.advance(LOAD_DEADLINE_MS);
+    expect(s.ports[0].terminated).toBe(true);
+    await settle(50);
+    s.browser.advance(REFUSAL_PACE_MS);
+    await settle(50);
+    expect(said).toBe(STOPPED);
+    const status = s.core.call<ScannerStatus>("scanner_status");
+    await until(() => s.ports.length === 2);
+    s.ports[1].answer(FACTS);
+    expect((await status).neural).toMatchObject({ loaded: false, error: NEURAL_COULD_NOT_START });
+  });
+
+  it("kept by the service worker on an earlier visit are present before any Neural frame", async () => {
+    const { download, built, browser } = harness();
+    await download();
+    const cache = await browser.caches.open(SCANNER_CACHE);
+    for (const path of PATHS.slice(0, 3)) await cache.put(path, new Response("kept"));
+    const three = await built();
+    expect(three.neural).toMatchObject({ present: false, loaded: false });
+    await cache.put(PATHS[3], new Response("kept"));
+    const later = harness({}, { caches: browser.caches });
+    const four = await later.built();
+    expect(four.neural).toMatchObject({ present: true, loaded: false, error: null });
   });
 });
 

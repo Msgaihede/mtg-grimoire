@@ -4,7 +4,7 @@
 
 import type { Results, Run, Score } from "./results.ts";
 
-export const PASSES = ["As scanned", "Fast", "Exact"] as const;
+export const PASSES = ["As scanned", "Fast", "Exact", "Neural"] as const;
 
 export type Tally = {
   n: number;

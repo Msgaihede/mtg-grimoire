@@ -89,6 +89,12 @@ tempfile = "3"
 # the same way; this line stays because the commands still name the crate's types (a frame's
 # options, its verdict, the filters).
 card-scanner = { path = "../../../crates/card-scanner", features = ["corpus", "ocr"] }
+# The Neural scanner's four files, compiled in (`bundled`, ~27 MB): `scanner::compiled` hands
+# `card_neural::bundled()` to the core on every build, because they are in git — unlike the three
+# `scanner-assets/` files, which only a release build carries. A direct dependency for that one
+# function; the recogniser itself reaches this host through `card-scanner`'s `neural` feature,
+# which the core turns on.
+card-neural = { path = "../../../crates/card-neural", features = ["bundled"] }
 # The engine with no window: what this host, the Android shell and the WASM build all link.
 # A workspace member, unlike the scanner. Modules arrive there a step at a time and `lib.rs`
 # re-exports each at the path it had here.

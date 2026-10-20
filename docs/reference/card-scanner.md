@@ -2,7 +2,7 @@
 
 Identify a physical Magic card from a camera frame or a photograph, locally. This is the
 record of the scanner as it stands in this repository — the standalone crate and its tools, the
-app's Scanner view with its two modes and its review tray, the bundle a release build carries
+app's Scanner view with its three modes (Neural, §10, since 2026-10-20) and its review tray, the bundle a release build carries
 inside it, and every measurement behind the numbers baked into them. §1–§8 were first written on
 the `card-scanner-first-pass` branch, whose worktree has since been lost with the photographs it
 held (§8). The designs it was built against are
@@ -2760,7 +2760,7 @@ Landed 2026-09-15, against
 which answers the four items the in-app spec's §13 deferred less the wasm one. Before it, a release
 build could scan nothing — the view voted on a card, wrote nothing, and asked the reader to drop a
 bundle and two model files into `data/scanner/` by hand. After it, a release build carries all three,
-the reader picks **Fast** or **Exact**, narrows by set and release date, and watches cards collect in
+the reader picks **Fast** or **Exact** — or, since 2026-10-20, **Neural** (below) — narrows by set and release date, and watches cards collect in
 a review tray that commits to the collection in one press. §9's panels are one switch away.
 
 ### The bundle ships inside the release build
@@ -3443,6 +3443,50 @@ stored filters every time the Scanner mounts, and the loop waits for that; a res
 decided card still on the mat before the first frame, the card decided again, and — past
 `useScanLoop`'s baseline guard, which the moved `decision_seq` defeated — was added a second time.
 Mocked IPC never resets, which is why no page test saw it.
+
+### Neural
+
+**Added 2026-10-20, for readers to try before it replaces Fast and Exact.** None of the two modes'
+machinery runs: no edge detector, hash, quad lock or reader. A Neural frame is decoded and handed
+to [`crates/card-neural`](../../crates/card-neural/CLAUDE.md) — a corner detector and an embedder,
+two small CNNs on `rten` (2.4 MB and 10.6 MB), and a gallery of 70 402 **looks** (printings that
+photograph alike), 14.0 MB of int8 rows — which finds every card in the frame, fingerprints each
+and searches the looks the filters admit. The frame votes for **the card under its middle**,
+recognised or not (`"ranking": "aimed"`); two accepted frames of one card decide it, or three
+when some are only supported, or one sure frame alone. The session's own clock ages the votes
+(`host::Stopwatch`; the replay installs label time). `src/neural_mode.rs` is the session's side;
+the plan with the contract is
+[2026-10-20-neural-scan-mode](../superpowers/plans/2026-10-20-neural-scan-mode.md).
+
+**What a Neural decision says.** The decided look's pictured printing — or its first printing the
+filters admit — with labels, oracle id and finishes from the `Reference`, as Fast's are. A look
+that stands for more than one admitted printing is `ambiguous`, its printings the `choices`, so
+the tray asks for a pick; the picture alone cannot tell them apart. No band is read, so there is
+no collector line and no finish mark: under *Detect* a printing that exists in two finishes lands
+Unknown. Five frames running with no card forget the decision — the same card shown again adds
+again, and a switch from Fast or Exact on the card in hand replaces its row.
+
+**On the 124 readers' scans** (card-scanner's replay, 2026-10-20, the shipped files and
+thresholds, judged on the decision held after the last frame):
+
+| pass | printing ✓ | card ✓ | wrong | undecided |
+| --- | ---: | ---: | ---: | ---: |
+| Fast | 33.9 % | 42.7 % | 13 | 46.8 % |
+| Exact | 52.4 % | 56.5 % | 9 | 36.3 % |
+| **Neural** | **90.3 %** | **96.0 %** | **0** | **4.0 %** |
+
+The median Neural decision is on frame 1; 42 decisions were ambiguous, and in 118 runs the
+reader's printing was the decided one or among the choices. **The thresholds were chosen by
+cross-validation on these same scans** (95.2 % card ✓ held out; 96.0 % is the in-sample choice),
+so newer scans are the honest test. The five undecided are cards the embedder does not recognise:
+a foil, a card under binder glare, a Japanese printing, a dark card in a dim deck box, one plain
+miss. How the networks were found, trained and compared with quickdraw.cards' is the scanner
+lab's record (`E:\mtg-scanner`); `crates/card-neural/models/README.md` is the files' provenance.
+
+**Where the files come from.** They are in git (`crates/card-neural/models/`). The desktop and
+Android builds compile them in (`card_neural::bundled()`, carried in `Embedded::neural`); the web
+fetches them from the app origin the first time a Neural frame is due. `ScannerStatus.neural` says
+which. The mode still needs the hash bundle and labels for names and filters, as the others do.
 
 ### A card laid on the last
 
@@ -4563,7 +4607,11 @@ process. Two callers install one: `grimoire-core`'s `ScannerState::new` hands ov
 `platform::clock::monotonic_ms` — a `Tick`, so `Instant` natively, exactly as before, and
 `performance.now()` in a Worker — and the bench's module hands over `performance.now()` itself.
 A host that installs nothing still scans, with every `_ms` at zero, because **no reading in the
-crate paces, bounds or orders anything**: all fourteen end in a field of the verdict.
+crate paces, bounds or orders anything** — all fourteen end in a field of the verdict — **except
+the Neural mode's agreement** (2026-10-20), whose votes age by it: two frames of one card agree
+only within 850 ms of each other, and a vote older than 1.8 s is dropped. With no clock every
+Neural frame is at zero, so votes never age; a frame with no vote still resets the count, so it
+still decides, only more leniently. The replay installs label time for its Neural pass.
 
 **Two timings mean something slightly different on one thread, and neither is wrong.**
 `DetectTimings::mask_ms` is the masks' share of the wall clock — the slowest mask's when they

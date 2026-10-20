@@ -2,18 +2,22 @@
 //! compiled and tested on a desktop. `glue.rs` is the browser: the exports, a `thread_local`,
 //! a clock and a console. Everything those exports *answer* is built here.
 //!
-//! [`Scanner`] is one session and what a reload owes it. Its four calls answer the JSON text
+//! [`Scanner`] is one session and what a reload owes it. Four of its calls answer the JSON text
 //! an export hands back, each `{"ok": …}` or `{"err": "<sentence>"}` ([`ok`], [`err`]) — the
 //! web host's envelope (`grimoire_web::wire::answer`), written here rather than shared because
-//! this crate links none of the engine.
+//! this crate links none of the engine. The fifth, [`Scanner::load_neural`], answers the
+//! crate's refusal or nothing.
 //!
 //! **A verdict is serialised straight from the crate's type**, never through a
 //! `serde_json::Value`: a `Value` sorts an object's keys and widens every `f32` to an `f64`
 //! (`0.3` comes out as `0.30000001192092896`), and what a page reads here is meant to be what
 //! the desktop's `scanner_frame` hands its own page, byte for byte.
 
+use std::borrow::Cow;
+
 use card_scanner::filters::ScanFilters;
 use card_scanner::index::Bundle;
+use card_scanner::neural::Files;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
 use card_scanner::session::{FrameOptions, Session};
@@ -152,6 +156,12 @@ impl Scanner {
     /// it will not take them its sentence is `unapplied_filters`, and they stay owed. The
     /// evidence for the card in front of the lens goes, and `decision_seq` starts again from
     /// zero.
+    ///
+    /// **The Neural mode's files go with the session they were loaded into**
+    /// ([`Scanner::load_neural`]): they are the replaced session's, and carrying them across
+    /// would need them twice in a memory that never shrinks. The page never asks for this —
+    /// it loads each Worker once, and loads the Neural files after that load — so a Worker that
+    /// was asked to load again would be asked for the Neural files again too.
     pub fn load(
         &mut self,
         bundle: Option<Vec<u8>>,
@@ -234,6 +244,39 @@ impl Scanner {
         recognition: Option<Vec<u8>>,
     ) -> String {
         ok(self.load(bundle, labels, detection, recognition))
+    }
+
+    /// Give the session the Neural mode's four files — `card-neural`'s detector, embedder,
+    /// gallery and `neural.json`, as the page fetched them — and answer `None`, or the crate's
+    /// sentence when they would not load. A refusal leaves the mode as it was: a Neural frame
+    /// then says its models are not loaded (`card_scanner::session::NEURAL_UNAVAILABLE_ERROR`).
+    ///
+    /// **Each buffer is handed over, never copied again.** The glue has already copied all
+    /// four into this module's memory — some twenty-seven megabytes — and they pass to the
+    /// recogniser as owned `Cow`s: the gallery is searched where it lies, and the networks are
+    /// `rten`'s from those buffers. What a Neural session costs is therefore about what was
+    /// handed in, and is given back only by ending the Worker.
+    ///
+    /// Into the session there is, which [`Scanner::load`] replaces — see there.
+    pub fn load_neural(
+        &mut self,
+        detector: Vec<u8>,
+        embedder: Vec<u8>,
+        gallery: Vec<u8>,
+        meta: Vec<u8>,
+    ) -> Option<String> {
+        let files = Files {
+            detector: Cow::Owned(detector),
+            embedder: Cow::Owned(embedder),
+            gallery: Cow::Owned(gallery),
+            meta: Cow::Owned(meta),
+        };
+        self.session.load_neural(files).err()
+    }
+
+    /// Whether a Neural frame can be read: the session there is has its files.
+    pub fn has_neural(&self) -> bool {
+        self.session.has_neural()
     }
 
     /// One frame through the session: `{"ok": <Verdict>}`, the verdict serialised as the
@@ -842,5 +885,146 @@ mod tests {
         let facts = scanner.load(Some(bundle()), Some(labels()), None, None);
         assert_eq!(facts.unapplied_filters, None);
         assert!(scanner.filters().is_empty(), "a settled debt came back");
+    }
+
+    // ---- The Neural mode's files --------------------------------------------------------------
+
+    /// `card-neural`'s four files, the ones in git that the web build serves, as a page hands
+    /// them over: owned, in `load_neural`'s order.
+    fn neural_files() -> [Vec<u8>; 4] {
+        [
+            include_bytes!("../../card-neural/models/detector.onnx").to_vec(),
+            include_bytes!("../../card-neural/models/embedder.onnx").to_vec(),
+            include_bytes!("../../card-neural/models/gallery.bin").to_vec(),
+            include_bytes!("../../card-neural/models/neural.json").to_vec(),
+        ]
+    }
+
+    fn load_neural(scanner: &mut Scanner, [d, e, g, m]: [Vec<u8>; 4]) -> Option<String> {
+        scanner.load_neural(d, e, g, m)
+    }
+
+    const NEURAL: &str = r#"{"mode":"neural"}"#;
+
+    #[test]
+    fn the_neural_files_in_git_load_into_the_session_a_neural_frame_reads() {
+        let _one_thread = card_scanner::host::inline();
+        let mut scanner = loaded();
+        assert!(!scanner.has_neural());
+        // Unloaded, a Neural frame is a verdict that says so — never an `err`, never a trap.
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, NEURAL));
+        assert_eq!(verdict["mode"], "neural");
+        assert_eq!(verdict["ok"], false);
+        assert_eq!(
+            verdict["error"],
+            card_scanner::session::NEURAL_UNAVAILABLE_ERROR
+        );
+
+        assert_eq!(load_neural(&mut scanner, neural_files()), None);
+        assert!(scanner.has_neural());
+        // The bundle's session is the one that took them: its names and filters stand.
+        assert_eq!(scanner.set_filters(LTR), r#"{"ok":null}"#);
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, NEURAL));
+        assert_eq!(verdict["mode"], "neural");
+        // Read by the networks this time: the drawn card is no card they know — a frame with no
+        // card in it, as the mode says one — and not a mode without its files.
+        assert_ne!(
+            verdict["error"],
+            card_scanner::session::NEURAL_UNAVAILABLE_ERROR,
+            "{verdict}"
+        );
+        assert!(verdict["tracked"].is_object(), "{verdict}");
+        // And the other two modes still read as they did beside it.
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, "{}"));
+        assert_eq!(
+            (&verdict["ok"], &verdict["mode"]),
+            (&json!(true), &json!("fast"))
+        );
+    }
+
+    #[test]
+    fn neural_files_that_are_not_them_are_the_crates_sentence_and_the_mode_stays_unloaded() {
+        let _one_thread = card_scanner::host::inline();
+        let noise = |n: usize| -> Vec<u8> {
+            (0..n as u32)
+                .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+                .collect()
+        };
+        let real = neural_files();
+        let half = |bytes: &Vec<u8>| bytes[..bytes.len() / 2].to_vec();
+        let cases: Vec<(&str, [Vec<u8>; 4])> = vec![
+            ("nothing", [vec![], vec![], vec![], vec![]]),
+            ("noise", [noise(4096), noise(4096), noise(4096), noise(64)]),
+            (
+                "a web page for each",
+                [
+                    b"<!doctype html>".to_vec(),
+                    b"<!doctype html>".to_vec(),
+                    b"<!doctype html>".to_vec(),
+                    b"<!doctype html>".to_vec(),
+                ],
+            ),
+            (
+                "a detector that is not one",
+                [
+                    noise(4096),
+                    real[1].clone(),
+                    real[2].clone(),
+                    real[3].clone(),
+                ],
+            ),
+            (
+                "an embedder cut in half",
+                [
+                    real[0].clone(),
+                    half(&real[1]),
+                    real[2].clone(),
+                    real[3].clone(),
+                ],
+            ),
+            (
+                "a gallery cut short",
+                [
+                    real[0].clone(),
+                    real[1].clone(),
+                    half(&real[2]),
+                    real[3].clone(),
+                ],
+            ),
+            (
+                "the files in the wrong order",
+                [
+                    real[2].clone(),
+                    real[0].clone(),
+                    real[1].clone(),
+                    real[3].clone(),
+                ],
+            ),
+        ];
+        for (what, files) in cases {
+            let mut scanner = loaded();
+            let refusal = load_neural(&mut scanner, files);
+            let sentence = refusal.unwrap_or_else(|| panic!("{what} loaded"));
+            assert!(!sentence.is_empty(), "{what}");
+            assert!(!scanner.has_neural(), "{what}");
+            let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, NEURAL));
+            assert_eq!(
+                verdict["error"],
+                card_scanner::session::NEURAL_UNAVAILABLE_ERROR,
+                "{what}: {sentence}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reload_lets_the_neural_files_go_with_the_session_they_were_loaded_into() {
+        let mut scanner = loaded();
+        assert_eq!(load_neural(&mut scanner, neural_files()), None);
+        // The page never does this — one load a Worker — and if it did, it would owe the files
+        // again: they are not kept anywhere but the session.
+        scanner.load(Some(bundle()), Some(labels()), None, None);
+        assert!(!scanner.has_neural());
+        assert_eq!(load_neural(&mut scanner, neural_files()), None);
+        assert!(scanner.has_neural());
     }
 }

@@ -2,7 +2,7 @@
 // these facts; every count and comparison drawn from them is `summary.ts`'s.
 
 export type Score = "printing" | "card" | "wrong" | "undecided" | "error";
-export type Mode = "fast" | "exact";
+export type Mode = "fast" | "exact" | "neural";
 export type Card = { id: string; set: string; number: string; lang: string; name: string };
 export type Got = { id: string; name: string | null; set: string | null; number: string | null };
 export type FrameNow = {

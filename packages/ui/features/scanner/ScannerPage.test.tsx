@@ -1310,6 +1310,35 @@ describe("ScannerPage", () => {
       restore();
     }
   });
+
+  it("sends mode: neural on the next frame once Neural is pressed, and stores the choice", async () => {
+    const restore = shimVideo();
+    opens();
+    let answer!: (v: ScannerVerdict) => void;
+    vi.mocked(ipc.scannerFrame)
+      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
+      .mockImplementation(() => new Promise(() => {}));
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1].mode).toBe("fast");
+
+      const neural = screen.getByRole("button", { name: "Neural" });
+      await user.click(neural);
+      await waitFor(() => expect(neural).toHaveAttribute("aria-pressed", "true"));
+      await waitFor(() =>
+        expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith(
+          expect.objectContaining({ mode: "neural" }),
+        ),
+      );
+      answer(VERDICTS.voting);
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
+      expect(vi.mocked(ipc.scannerFrame).mock.calls[1]?.[1].mode).toBe("neural");
+    } finally {
+      restore();
+    }
+  });
 });
 
 /**

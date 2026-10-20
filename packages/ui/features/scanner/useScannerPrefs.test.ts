@@ -121,6 +121,24 @@ describe("useScannerPrefs", () => {
     expect(setScannerPrefs).toHaveBeenCalledWith({ ...DEFAULT_SCANNER_PREFS, mode: "exact" });
   });
 
+  /** The third mode is a stored word like the other two — read back as it was written. */
+  it("keeps Neural as the stored mode, both ways", async () => {
+    scannerPrefs.mockResolvedValue({ ...DEFAULT_SCANNER_PREFS, mode: "neural" });
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.prefs.mode).toBe("neural");
+
+    act(() => result.current.update({ mode: "fast" }));
+    await waitFor(() => expect(result.current.prefs.mode).toBe("fast"));
+    act(() => result.current.update({ mode: "neural" }));
+    await waitFor(() =>
+      expect(setScannerPrefs).toHaveBeenLastCalledWith({
+        ...DEFAULT_SCANNER_PREFS,
+        mode: "neural",
+      }),
+    );
+  });
+
   it("sends changed filters to the session and persists them once the session accepts", async () => {
     const { result } = mount();
     await waitFor(() => expect(result.current.loaded).toBe(true));

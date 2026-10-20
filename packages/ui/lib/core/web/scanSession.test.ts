@@ -13,6 +13,7 @@ function harness() {
   const posted: FromScanner[] = [];
   const glue = {
     load: vi.fn<ScanGlue["load"]>(() => JSON.stringify({ ok: FACTS })),
+    load_neural: vi.fn<ScanGlue["load_neural"]>(() => undefined),
     frame: vi.fn<ScanGlue["frame"]>(() => '{"ok":{"ok":true,"decision_seq":0}}'),
     reset: vi.fn<ScanGlue["reset"]>(() => '{"ok":null}'),
     set_filters: vi.fn<ScanGlue["set_filters"]>(() => '{"ok":null}'),
@@ -77,6 +78,34 @@ describe("the scanner Worker's session", () => {
       { kind: "ok", id: 4, result: { ok: true, decision_seq: 0 } },
       { kind: "err", id: 5, message: "these filters match no printing" },
     ]);
+  });
+
+  it("hands the Neural files to the module, and puts its refusal or its nothing in the envelope", async () => {
+    const { session, glue, posted } = harness();
+    const files = { detector: bytes(1), embedder: bytes(2), gallery: bytes(3), meta: bytes(4) };
+    await session.handle({ kind: "neural", id: 6, ...files });
+    expect(glue.load_neural).toHaveBeenCalledWith(bytes(1), bytes(2), bytes(3), bytes(4));
+    glue.load_neural.mockReturnValue("gallery: not a CNGALLR1 file (bad magic)");
+    await session.handle({ kind: "neural", id: 7, ...files });
+    expect(posted).toEqual([
+      { kind: "ok", id: 6, result: null },
+      { kind: "err", id: 7, message: "gallery: not a CNGALLR1 file (bad magic)" },
+    ]);
+  });
+
+  it("answers a hand-over of the Neural files that throws as a trap, like any export", async () => {
+    const { session, glue, posted } = harness();
+    glue.load_neural.mockImplementation(() => {
+      throw Object.assign(new Error("unreachable"), { name: "RuntimeError" });
+    });
+    const files = { detector: bytes(1), embedder: bytes(2), gallery: bytes(3), meta: bytes(4) };
+    await session.handle({ kind: "neural", id: 1, ...files });
+    await session.handle({ kind: "frame", id: 2, jpeg: bytes(1), detail: null, options: '{"mode":"neural"}' });
+    expect(posted).toEqual([
+      { kind: "trapped", id: 1, message: "RuntimeError: unreachable" },
+      { kind: "trapped", id: 2, message: AFTER_A_TRAP },
+    ]);
+    expect(glue.frame).not.toHaveBeenCalled();
   });
 
   it("says a module this browser will not compile is unsupported, and never loads again", async () => {

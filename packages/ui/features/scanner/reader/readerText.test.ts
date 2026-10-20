@@ -260,6 +260,94 @@ describe("matchStrip", () => {
   });
 });
 
+/**
+ * Neural is Fast's case on every rung Fast's committed words apply to — it is settled by its
+ * tracker, not by a resolve — and it reads no text, so it never says *Reading*. What it adds is
+ * a choice of printings carried on the decision itself, since it runs no resolve to latch.
+ */
+describe("matchStrip in Neural", () => {
+  it("says matched on a committed Neural frame, naming the decision", () => {
+    expect(matchStrip(VERDICTS.neuralDecided, "neural", null, true, null)).toEqual({
+      word: "Matched",
+      tone: "done",
+      name: "Black Lotus",
+      printing: "LEA 232",
+      sentence: "Hold steady",
+      fill: 1,
+      committed: true,
+      threshold: "end",
+    });
+  });
+
+  it("names the printing the tray filed once it has taken the card", () => {
+    expect(matchStrip(VERDICTS.neuralDecided, "neural", forest, true, null)).toMatchObject({
+      word: "Matched",
+      name: "Forest",
+      printing: "HOB 193",
+      sentence: "Added · swap in the next card",
+    });
+  });
+
+  it("says matched on the tracker's leader on a commit with no decision yet, as Fast does", () => {
+    const committing: ScannerVerdict = { ...VERDICTS.decided, mode: "neural", decision: null };
+    expect(matchStrip(committing, "neural", forest, true, null)).toMatchObject({
+      word: "Matched",
+      name: "Storm of Saruman",
+      sentence: "Hold steady",
+    });
+  });
+
+  it("never says it is reading, even over a locked card it is still weighing", () => {
+    const locked: ScannerVerdict = {
+      ...weighing,
+      mode: "neural",
+      decision: null,
+      resolution: null,
+    };
+    expect(locked.lock?.phase).toBe("locked");
+    expect(matchStrip(locked, "neural", null, true, null)).toMatchObject({
+      word: "Matching",
+      tone: "progress",
+      name: "Plains",
+      sentence: "Hold steady",
+      fill: 0.625,
+    });
+  });
+
+  it("asks for a pick when the picture stands for several printings, over the card added", () => {
+    expect(VERDICTS.neuralAmbiguous.resolution).toBeNull();
+    expect(matchStrip(VERDICTS.neuralAmbiguous, "neural", forest, true, null)).toEqual({
+      word: "3 printings",
+      tone: "attention",
+      name: "Lightning Bolt",
+      printing: null,
+      sentence: "Pick a printing in the tray",
+      fill: 1,
+      committed: true,
+      threshold: "end",
+    });
+  });
+
+  it("does not ask for a pick before the tracker has settled", () => {
+    const weighingBolt: ScannerVerdict = {
+      ...VERDICTS.neuralAmbiguous,
+      tracked: { ...(VERDICTS.voting.tracked as ScannerTracked), committed: false },
+    };
+    expect(matchStrip(weighingBolt, "neural", forest, true, null)).toMatchObject({
+      word: "Matching",
+      tone: "progress",
+    });
+  });
+
+  /** The decision's choices are Neural's question only — Exact asks through its resolve. */
+  it("reads choices off the decision in Neural alone", () => {
+    expect(matchStrip(VERDICTS.neuralAmbiguous, "exact", forest, true, null)).toMatchObject({
+      word: "Matched",
+      sentence: "Added · swap in the next card",
+    });
+  });
+});
+
 describe("filterSummary", () => {
   it("says any set for no filters", () => {
     expect(filterSummary({ sets: [], released_from: null, released_to: null })).toBe("Any set");

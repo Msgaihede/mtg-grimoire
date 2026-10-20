@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { VERDICTS } from "@grimoire/ui/features/scanner/fixtures";
@@ -65,6 +65,9 @@ describe("the phone's status line", () => {
       [VERDICTS.decided, { lastAdded: { ...SARUMAN, replaced: true } }],
       [VERDICTS.exactAmbiguous, { mode: "exact", lastResolution: VERDICTS.exactAmbiguous.resolution }],
       [VERDICTS.exactNotFound, { mode: "exact", lastResolution: VERDICTS.exactNotFound.resolution }],
+      [{ ...VERDICTS.voting, mode: "neural" }, { mode: "neural" }],
+      [VERDICTS.neuralDecided, { mode: "neural" }],
+      [VERDICTS.neuralAmbiguous, { mode: "neural", lastAdded: SARUMAN }],
       [VERDICTS.voting, { hasBundle: false }],
     ];
     for (const [verdict, over] of states) {
@@ -178,7 +181,7 @@ describe("the bar over the camera", () => {
     expect(starting.onScanning).toHaveBeenCalledWith(true);
   });
 
-  it("switches mode as a pair of toggles, and writes nothing for the mode already on", async () => {
+  it("switches mode as a row of toggles, and writes nothing for the mode already on", async () => {
     const props = bar({ mode: "fast" });
     const group = screen.getByRole("group", { name: "Scan mode" });
     expect(group).toBeInTheDocument();
@@ -190,6 +193,56 @@ describe("the bar over the camera", () => {
     expect(props.onMode).not.toHaveBeenCalled();
     await userEvent.click(exact);
     expect(props.onMode).toHaveBeenCalledWith("exact");
+  });
+
+  it("draws the three modes, Neural last, and hands Neural up when it is pressed", async () => {
+    const props = bar({ mode: "exact" });
+    const group = screen.getByRole("group", { name: "Scan mode" });
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Fast", "Exact", "Neural"]);
+    await userEvent.click(within(group).getByRole("button", { name: "Neural" }));
+    expect(props.onMode).toHaveBeenCalledWith("neural");
+  });
+
+  /** The outer corners rounded and every inner edge shared, whatever the count of modes. */
+  it("rounds the switch's two outer corners and shares every edge between", () => {
+    bar({ mode: "neural" });
+    const [fast, exact, neural] = within(
+      screen.getByRole("group", { name: "Scan mode" }),
+    ).getAllByRole("button");
+    expect(fast).toHaveClass("rounded-l-md");
+    expect(fast).not.toHaveClass("-ml-px");
+    expect(exact).toHaveClass("-ml-px");
+    expect(exact).not.toHaveClass("rounded-l-md");
+    expect(exact).not.toHaveClass("rounded-r-md");
+    expect(neural).toHaveClass("-ml-px", "rounded-r-md");
+    expect(neural).toHaveAttribute("aria-pressed", "true");
+    // Each box keeps its label inside it, and none is under the 44px floor's height.
+    for (const box of [fast, exact, neural]) expect(box).toHaveClass("h-11", "min-w-fit");
+  });
+
+  /**
+   * Three modes do not fit beside Stop at 360px (368px wanted, 328px there): the switch and the
+   * Options press wrap onto a line of their own **together**, so the press is never alone on a
+   * second line and nothing is read in another order than it is drawn.
+   */
+  it("keeps the switch and the Options press in one unit that wraps whole", () => {
+    bar();
+    const options = screen.getByRole("button", { name: "Scanner options" });
+    const group = screen.getByRole("group", { name: "Scan mode" });
+    const unit = group.parentElement;
+    expect(unit).toHaveAttribute("data-scan-modes-row");
+    expect(options.parentElement).toBe(unit);
+    expect(group.nextElementSibling).toBe(options);
+    // The bar wraps, and the unit grows from a basis wide enough for the switch and the press.
+    expect(unit?.parentElement).toHaveClass("flex-wrap");
+    expect(unit).toHaveClass("grow", "basis-[13.75rem]");
+    expect(unit?.previousElementSibling).toBe(
+      screen.getByRole("button", { name: "Stop scanning" }),
+    );
   });
 
   it("opens everything else from one press", async () => {

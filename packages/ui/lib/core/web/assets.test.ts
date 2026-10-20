@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
+import cardNeuralRs from "../../../../../crates/card-neural/src/lib.rs?raw";
+import neuralReadme from "../../../../../crates/card-neural/models/README.md?raw";
 import { WEB_IMAGE_PREFIX } from "../../images";
 import {
   buildIdOf,
+  HOST_FILE_LIMIT,
   isNavigation,
+  isNeuralFile,
+  isScannerFile,
+  NEURAL_FILES,
+  NEURAL_PREFIX,
+  neuralBytesOf,
+  neuralContentType,
+  neuralFault,
+  neuralFileOf,
+  neuralPath,
+  neuralTable,
   NOT_A_PLACE,
+  SCANNER_ASSETS_PREFIX,
   wasmContentType,
   wasmFileOf,
   wasmPath,
@@ -145,5 +159,117 @@ describe("a page navigation", () => {
    *  from, so the two cannot come to name different trees. */
   it("reserves the tree card pictures are asked under", () => {
     expect(NOT_A_PLACE).toContain(WEB_IMAGE_PREFIX + "/");
+  });
+});
+
+describe("where the Neural scanner's four files are served from", () => {
+  it("names them as `card-neural` does, in the order `load_neural` takes them", () => {
+    const declared = (constant: string): string | undefined =>
+      new RegExp(`pub const ${constant}: &str = "([^"]+)";`).exec(cardNeuralRs)?.[1];
+    expect(NEURAL_FILES).toEqual(
+      ["DETECTOR_FILE", "EMBEDDER_FILE", "GALLERY_FILE", "META_FILE"].map(declared),
+    );
+  });
+
+  it("puts the set in the path, so a new gallery is a new address", () => {
+    expect(neuralPath("0123abcd", "gallery.bin")).toBe("/scanner-neural/0123abcd/gallery.bin");
+    expect(neuralPath("one", "gallery.bin")).not.toBe(neuralPath("two", "gallery.bin"));
+    expect(neuralPath("dev", "neural.json").startsWith(NEURAL_PREFIX)).toBe(true);
+  });
+
+  it("knows a Neural file at any set's address, and reads back only the four by name", () => {
+    expect(isNeuralFile("/scanner-neural/0123abcd/detector.onnx")).toBe(true);
+    expect(isNeuralFile("/scanner-neural/detector.onnx")).toBe(false);
+    expect(isNeuralFile("/scanner-neural/a/b/detector.onnx")).toBe(false);
+    expect(isNeuralFile("/scanner-assets/card-hashes.bin")).toBe(false);
+    for (const name of NEURAL_FILES) expect(neuralFileOf(neuralPath("dev", name))).toBe(name);
+    for (const path of [
+      "/scanner-neural/dev/README.md",
+      "/scanner-neural/dev/../detector.onnx",
+      "/scanner-neural/dev/",
+      "/scanner-neural/detector.onnx",
+      "/wasm/dev/detector.onnx",
+    ]) {
+      expect(neuralFileOf(path), path).toBeNull();
+    }
+  });
+
+  it("is in no precache, and nowhere a page", () => {
+    for (const name of NEURAL_FILES)
+      expect(isScannerFile(neuralPath("ab12", name).slice(1)), name).toBe(true);
+    expect(NOT_A_PLACE).toContain(NEURAL_PREFIX);
+    expect(isNavigation("GET", "text/html", "/scanner-neural/ab12/gallery")).toBe(false);
+    // Its own tree, not the three files' — those are revalidated, these are kept a year.
+    expect(NEURAL_PREFIX.startsWith(SCANNER_ASSETS_PREFIX)).toBe(false);
+  });
+
+  it("serves the constants as JSON and the rest as bytes", () => {
+    expect(neuralContentType("neural.json")).toBe("application/json");
+    for (const name of ["detector.onnx", "embedder.onnx", "gallery.bin"]) {
+      expect(neuralContentType(name)).toBe("application/octet-stream");
+    }
+  });
+});
+
+describe("what a web build holds the Neural files to", () => {
+  const table = neuralTable(neuralReadme);
+  const sha = (head: string, tail: string): string => head + "0".repeat(48) + tail;
+  const asTabled = NEURAL_FILES.map((name) => {
+    const row = table.get(name)!;
+    return { name, bytes: row.bytes, sha256: sha(row.head, row.tail) };
+  });
+
+  it("reads models/README.md's table: a length and the two ends of a digest for each of the four", () => {
+    expect([...table.keys()].sort()).toEqual([...NEURAL_FILES].sort());
+    for (const [name, row] of table) {
+      expect(row.bytes, name).toBeGreaterThan(0);
+      expect(row.head, name).toMatch(/^[0-9a-f]{8}$/);
+      expect(row.tail, name).toMatch(/^[0-9a-f]{8}$/);
+    }
+    // The figures the table is written with — a space between thousands.
+    expect(table.get("embedder.onnx")?.bytes).toBe(10_602_685);
+  });
+
+  it("ships what the table describes, each under the host's 25 MiB", () => {
+    expect(neuralFault(asTabled, table)).toBeNull();
+    for (const row of table.values()) expect(row.bytes).toBeLessThan(HOST_FILE_LIMIT);
+  });
+
+  it("refuses a set that is not the one the table describes, saying which file and why", () => {
+    const changed = (name: string, edit: Partial<{ bytes: number; sha256: string }>) =>
+      asTabled.map((file) => (file.name === name ? { ...file, ...edit } : file));
+    expect(neuralFault(changed("gallery.bin", { bytes: 1 }), table)).toMatch(
+      /^gallery\.bin is 1 bytes/,
+    );
+    expect(neuralFault(changed("embedder.onnx", { sha256: "f".repeat(64) }), table)).toMatch(
+      /^embedder\.onnx is 10602685 bytes with SHA-256 f{64}, and .*README\.md says 10602685 bytes and dd17c180…b189ad1d\.$/,
+    );
+    expect(neuralFault(asTabled.slice(1), table)).toBe(
+      "crates/card-neural/models/ has no detector.onnx.",
+    );
+    expect(neuralFault(changed("detector.onnx", { bytes: HOST_FILE_LIMIT + 1 }), table)).toMatch(
+      /over the host's 26214400 a file/,
+    );
+    expect(neuralFault(asTabled, new Map())).toBe(
+      "crates/card-neural/models/README.md has no row for detector.onnx.",
+    );
+  });
+
+  it("hands the page the four lengths, and nothing it cannot read", () => {
+    expect(neuralBytesOf('{"detector.onnx":3,"gallery.bin":7,"README.md":9}')).toEqual({
+      "detector.onnx": 3,
+      "gallery.bin": 7,
+    });
+    for (const text of [
+      undefined,
+      "",
+      "{not json",
+      "null",
+      "[3]",
+      '{"detector.onnx":"3"}',
+      '{"detector.onnx":-1}',
+    ]) {
+      expect(neuralBytesOf(text), String(text)).toEqual({});
+    }
   });
 });

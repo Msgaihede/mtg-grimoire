@@ -3,3 +3,8 @@
 # A real ManaBox export (issue #873), kept byte for byte: ManaBox writes CRLF, and a fixture
 # normalised to LF would test a file nobody exports.
 packages/ui/features/transfer/import/__fixtures__/*.csv -text
+
+# The Neural scanner's model files (`crates/card-neural/models/`), in git as the owner chose
+# (2026-10-20): binary, never diffed or normalised. `neural.json` beside them is text.
+crates/card-neural/models/*.onnx binary
+crates/card-neural/models/*.bin binary

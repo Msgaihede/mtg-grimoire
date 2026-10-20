@@ -512,6 +512,45 @@ describe("the phone's Scanner page", () => {
     await waitFor(() => expect(last(cards.sent)?.mode).toBe("exact"), SETTLE);
   });
 
+  it("stores Neural from the bar and sends the next frame in it", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    const { seen } = mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(0), SETTLE);
+
+    await userEvent.click(screen.getByRole("button", { name: "Neural" }));
+    expect(screen.getByRole("button", { name: "Neural" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Fast" })).toHaveAttribute("aria-pressed", "false");
+    await waitFor(() => expect(last(seen.prefs)?.mode).toBe("neural"), SETTLE);
+    await waitFor(() => expect(last(cards.sent)?.mode).toBe("neural"), SETTLE);
+  });
+
+  /** Neural runs no resolve: the printings its picture stands for ride the decision. */
+  it("lands a card Neural's picture cannot pin as a question, as Exact's", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    mount({
+      prefs: { mode: "neural" },
+      over: () => ({
+        scanner_frame: frames(
+          { ...VERDICTS.voting, mode: "neural" },
+          { ...VERDICTS.neuralAmbiguous, decision_seq: 1 },
+        ),
+      }),
+    });
+    const question = await screen.findByRole(
+      "group",
+      { name: "Printings of Lightning Bolt" },
+      SETTLE,
+    );
+    expect(within(question).getAllByRole("button")).toHaveLength(3);
+    await waitFor(
+      () => expect(statusLine()).toHaveTextContent("3 printings Lightning Bolt"),
+      SETTLE,
+    );
+  });
+
   it("lands a card Exact cannot pin as a question, and a press on a candidate answers it", async () => {
     camera();
     restoreVideo = shimVideo();

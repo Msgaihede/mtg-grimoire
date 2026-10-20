@@ -212,9 +212,14 @@ static CLOCK: OnceLock<fn() -> f64> = OnceLock::new();
 /// Hand the crate a clock: `now_ms` answers milliseconds, monotonic, from whatever origin the
 /// host likes — `performance.now()` is one. Once per process; a second word is ignored.
 ///
-/// **Only ever for telemetry.** Every reading ends in an `_ms` field of a verdict, and nothing
-/// in the crate paces, bounds or orders anything by one — which is why a host that installs
-/// none still scans, with its timings at zero.
+/// **Telemetry, with one exception.** Every reading ends in an `_ms` field of a verdict, and
+/// nothing in Fast or Exact paces, bounds or orders anything by one — which is why a host that
+/// installs none still scans, with its timings at zero. **The exception is the Neural mode's
+/// agreement** (`src/neural_mode.rs`), whose votes age by a [`Stopwatch`] started when its
+/// models load: two accepted frames further apart than its gap do not agree. On a host with no
+/// clock every frame is at zero, so no vote ages and no gap is too long — a frame with no card
+/// still resets the count, which is most of what the ages are for. The replay installs the
+/// label's own frame times through this, so its Neural votes age as the reader's frames did.
 pub fn set_clock(now_ms: fn() -> f64) {
     let _ = CLOCK.set(now_ms);
 }

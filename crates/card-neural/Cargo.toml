@@ -1,0 +1,49 @@
+[package]
+name = "card-neural"
+# The app's version, inherited from `[workspace.package]` as every member's is.
+version.workspace = true
+description = "MTG Grimoire: the Neural scanner's recogniser — a corner detector, an embedder and a gallery of looks, on rten"
+authors = ["Markus Seerup"]
+license.workspace = true
+edition.workspace = true
+publish = false
+
+# **A workspace member**, formatted and linted with the rest, unlike `crates/card-scanner` (which
+# links it under its `neural` feature). Its model files are in `models/`, in git — see
+# `models/README.md` for where each came from — and `bundled` compiles them in.
+#
+# **Nothing here may read a clock, start a thread or touch a file** outside `cli`: the web host
+# runs it inside the scanner's Worker on one thread, where `std::time::Instant` panics.
+
+[lib]
+name = "card_neural"
+path = "src/lib.rs"
+
+[features]
+default = []
+# `card_neural::bundled()`: the four files in `models/`, `include_bytes!`ed (~27 MB). The
+# desktop and Android hosts take it; the web fetches the files instead.
+bundled = []
+# The command-line tools: `build-gallery` and `probe`.
+cli = ["dep:clap", "dep:image"]
+
+[dependencies]
+# The runtime `card-scanner` already takes for OCR, with its default features, which read ONNX.
+rten = "0.26"
+rten-tensor = "0.26"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+clap = { version = "4", features = ["derive"], optional = true }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"], optional = true }
+
+[[bin]]
+name = "build-gallery"
+path = "src/bin/build_gallery.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+required-features = ["cli"]

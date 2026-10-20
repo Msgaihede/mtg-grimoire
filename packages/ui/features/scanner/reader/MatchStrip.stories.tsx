@@ -163,6 +163,49 @@ export const PickAPrinting: Story = {
   },
 };
 
+/** Neural decided and filed: Fast's words — it reads no text, so it is never *Reading*. */
+export const NeuralMatched: Story = {
+  args: {
+    verdict: VERDICTS.neuralDecided,
+    mode: "neural",
+    lastAdded: {
+      name: "Black Lotus",
+      setCode: "lea",
+      collectorNumber: "232",
+      bumpedTo: null,
+      replaced: false,
+    },
+  },
+  play: async ({ canvasElement }) => {
+    await expect(status(canvasElement)).toHaveTextContent(
+      "Matched Black Lotus LEA 232 Added · swap in the next card",
+    );
+  },
+};
+
+/**
+ * Neural's picture stands for three printings: the same question as Exact's, asked off the
+ * decision itself — Neural runs no resolve, so there is none to latch.
+ */
+export const NeuralPickAPrinting: Story = {
+  args: {
+    verdict: VERDICTS.neuralAmbiguous,
+    mode: "neural",
+    lastAdded: {
+      name: "Lightning Bolt",
+      setCode: "2x2",
+      collectorNumber: "117",
+      bumpedTo: null,
+      replaced: false,
+    },
+  },
+  play: async ({ canvasElement }) => {
+    await expect(status(canvasElement)).toHaveTextContent(
+      "3 printings Lightning Bolt Pick a printing in the tray",
+    );
+  },
+};
+
 /** An Exact resolve found nothing inside the gate. */
 export const NoMatch: Story = {
   args: {

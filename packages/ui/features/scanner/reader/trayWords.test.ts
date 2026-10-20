@@ -74,13 +74,23 @@ describe("the Add button's words", () => {
   });
 });
 
-describe("the two modes", () => {
-  it("are Fast and then Exact, each with a sentence for the reader", () => {
+describe("the three modes", () => {
+  it("are Fast, Exact and then Neural, each with a sentence for the reader", () => {
     expect(SCAN_MODES.map((mode) => [mode.id, mode.label])).toEqual([
       ["fast", "Fast"],
       ["exact", "Exact"],
+      ["neural", "Neural"],
     ]);
     for (const mode of SCAN_MODES) expect(mode.hint.length).toBeGreaterThan(20);
+  });
+
+  it("say Neural is new and worth trying, in the reader's words and not the developer's", () => {
+    const neural = SCAN_MODES.find((mode) => mode.id === "neural");
+    expect(neural?.hint).toMatch(/^New\b/);
+    expect(neural?.hint).toMatch(/try/i);
+    // What it does for the reader — the card and its printing — and never how it does it.
+    expect(neural?.hint).toMatch(/printing/);
+    expect(neural?.hint).not.toMatch(/network|neural|hash|tier|embed|model/i);
   });
 
   it("clear to the unrestricted filter", () => {
@@ -107,6 +117,14 @@ describe("the options a frame is sent under", () => {
     expect(frameOptions(sliders, "fast", false)).toEqual({
       ...sliders,
       mode: "fast",
+      previews: false,
+    });
+  });
+
+  it("send Neural by its own word", () => {
+    expect(frameOptions(DEFAULT_SCANNER_OPTIONS, "neural", false)).toEqual({
+      ...DEFAULT_SCANNER_OPTIONS,
+      mode: "neural",
       previews: false,
     });
   });

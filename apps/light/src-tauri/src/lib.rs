@@ -12,10 +12,11 @@
 //!   This host needs nothing of its own for it — the page's camera is the WebView's, granted
 //!   through the manifest's `CAMERA` permission by wry's own `onPermissionRequest`, as the
 //!   pairing scanner's already is; the video is a `srcObject` and the frame a canvas `toBlob`
-//!   read as bytes, so the CSP is asked for neither `media-src` nor `blob:`. **It embeds no
-//!   scanner asset and downloads none**: the session loads from `<data>/scanner/`
-//!   (`card-hashes.bin`, `models/text-detection.rten`, `models/text-recognition.rten`), and
-//!   until those are there a frame is detected and names nothing;
+//!   read as bytes, so the CSP is asked for neither `media-src` nor `blob:`. **It embeds the
+//!   Neural scanner's files and nothing else** ([`carried`]): the session loads the other three
+//!   from `<data>/scanner/` (`card-hashes.bin`, `models/text-detection.rten`,
+//!   `models/text-recognition.rten`) once the core has downloaded them on a reader's press, and
+//!   until those are there a Fast or Exact frame is detected and names nothing;
 //! - **the startup gate** the page waits on before it mounts ([`startup`]), answered inside
 //!   `core_call` because the core has no window to start;
 //! - **the `mtgimg` protocol**, answered by the core's [`grimoire_core::images::answer`] — the
@@ -271,6 +272,9 @@ fn start(app: &tauri::AppHandle) {
             return;
         }
     };
+    // What the binary carries of the scanner's files, said once and above the `manage`, so no
+    // command can reach the state before it is said — the desktop's order.
+    state.scanner.carry(carried());
     app.manage(Arc::clone(&state));
 
     // The facet index: a full scan on a thread of its own, so the first searches answer before it.
@@ -358,6 +362,18 @@ pub(crate) fn spawn_downloads(state: &Arc<State>) {
     });
     if !first_run {
         spawn_optional_feeds(state);
+    }
+}
+
+/// What this host's binary carries of the scanner's files, for the core's
+/// `ScannerState::carry`: **the Neural scanner's four, and nothing else.** They are in git
+/// (`crates/card-neural/models/`) and compiled in by `card_neural::bundled()`, as the desktop's
+/// are. The other three — the bundle and the two OCR models — are not carried, so they stay
+/// owed and are downloaded on a reader's press (`scanner_assets`), as before.
+fn carried() -> grimoire_core::scanner::Embedded {
+    grimoire_core::scanner::Embedded {
+        neural: Some(card_neural::bundled()),
+        ..grimoire_core::scanner::Embedded::none()
     }
 }
 
@@ -478,12 +494,20 @@ mod tests {
     /// **What this install owes of the scanner's files, as the page asks it** — through the one
     /// command this host registers, forwarded to the core's table, which is the whole of what a
     /// phone needs for the offer: nothing here is the host's own. An Android build embeds none
-    /// of the three, so a fresh install owes all of them, at the core's sizes. The fetch itself
-    /// is the core's to test (`scanner_assets::tests`): a call from here would ask GitHub.
+    /// of the three — only the Neural scanner's files ([`carried`]), which are never owed — so a
+    /// fresh install owes all three, at the core's sizes, with the Neural scanner loaded beside
+    /// them. The fetch itself is the core's to test (`scanner_assets::tests`): a call from here
+    /// would ask GitHub.
     #[test]
     fn a_fresh_install_owes_the_scanners_three_files() {
         let (state, _dir) =
             grimoire_core::state::fixtures::on_files("light-scanner-assets", "http://127.0.0.1:9");
+        state.scanner.carry(carried());
+        let status = tauri::async_runtime::block_on(forward(&state, "scanner_status", None, None))
+            .expect("the status");
+        assert_eq!(status["neural"]["source"], "embedded", "{status}");
+        assert_eq!(status["neural"]["loaded"], true, "{status}");
+        assert_eq!(status["bundle"]["source"], "absent", "{status}");
         let owed = tauri::async_runtime::block_on(forward(&state, "scanner_assets", None, None))
             .expect("what is owed");
         let keys: Vec<_> = owed["owed"]

@@ -164,6 +164,46 @@ describe("MatchStrip", () => {
     expect(bar()).toHaveAttribute("aria-valuenow", "100");
   });
 
+  /** Neural reads no text, so a card it is still weighing is matching, never reading. */
+  it("says Neural is matching a locked card it has not settled, never reading it", () => {
+    render(
+      <MatchStrip
+        {...props({ verdict: { ...VERDICTS.voting, mode: "neural" }, mode: "neural" })}
+      />,
+    );
+    expect(region()).toHaveTextContent(/^Matching Plains 2XM 373 Hold steady$/);
+  });
+
+  it("announces a card Neural has matched, as it does Fast's", () => {
+    render(
+      <MatchStrip
+        {...props({
+          verdict: VERDICTS.neuralDecided,
+          mode: "neural",
+          lastAdded: { ...saruman, name: "Black Lotus", setCode: "lea", collectorNumber: "232" },
+        })}
+      />,
+    );
+    const text = "Matched Black Lotus LEA 232 Added · swap in the next card";
+    expect(region()).toHaveTextContent(new RegExp(`^${text}$`));
+    expect(announced(region())).toBe(text);
+    expect(bar()).toHaveAttribute("aria-valuenow", "100");
+  });
+
+  /** Neural runs no resolve: the printings to pick between ride its decision. */
+  it("counts the printings a Neural picture stands for, with no resolve behind it", () => {
+    render(
+      <MatchStrip
+        {...props({
+          verdict: VERDICTS.neuralAmbiguous,
+          mode: "neural",
+          lastAdded: { ...saruman, name: "Lightning Bolt", setCode: "2x2", collectorNumber: "117" },
+        })}
+      />,
+    );
+    expect(region()).toHaveTextContent(/^3 printings Lightning Bolt Pick a printing in the tray$/);
+  });
+
   it("says a resolve found nothing, with the sentence where the name would be", () => {
     render(
       <MatchStrip

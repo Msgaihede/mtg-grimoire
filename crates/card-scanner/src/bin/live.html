@@ -346,11 +346,13 @@
     <div class="card">
       <h2 tabindex="0" role="button" aria-expanded="true">Controls</h2>
       <!-- Fast votes on the hash and reads the title only after a leaderless stretch; Exact
-           waits for a steady lock and resolves a three-frame burst through every tier. Rides
-           the frame query, so the two can be A/B'd on one held card. -->
+           waits for a steady lock and resolves a three-frame burst through every tier; Neural
+           is card-neural's two CNNs and gallery, agreed over two frames, with no lock or
+           reader. Rides the frame query, so the three can be A/B'd on one held card. -->
       <div class="seg" id="mode">
         <button data-v="fast" aria-pressed="true">fast</button>
         <button data-v="exact" aria-pressed="false">exact</button>
+        <button data-v="neural" aria-pressed="false">neural</button>
       </div>
       <!-- Sets and a release-date range, held by the session until the next apply. Filters
            need corpus labels; without them the apply answers with the session's sentence. -->
@@ -891,7 +893,8 @@ function draw() {
       if (!j.score) { /* quad from the lock's memory, not this frame's detection */ }
       // Amber and dashed while a quad is still proving itself, solid green once it has held
       // still long enough to trust. A box that never turns green never convinced anything.
-      const locked = j.lock?.phase === 'locked';
+      // Neural has no lock: its quad is a card the detector is sure of, every frame.
+      const locked = j.lock ? j.lock.phase === 'locked' : j.mode === 'neural';
       ctx.lineWidth = Math.max(2, overlay.width / 300);
       // The raw per-frame detection, faint and thin, behind the smoothed box. The gap between
       // the two is the jitter the lock is absorbing, and seeing it is the only way to tell a

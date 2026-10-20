@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isScannerFile,
   isScannerModule,
+  neuralPath,
   NOT_A_PLACE,
   SCANNER_ASSETS_PREFIX,
   SCANNER_CACHE,
@@ -81,6 +82,10 @@ describe("what a build precaches, with a scanner in it", () => {
       "scanner-assets/text-detection.rten",
       "scanner-assets/text-recognition.rten",
       "scanner-assets/manifest.json",
+      "scanner-neural/ab12/detector.onnx",
+      "scanner-neural/ab12/embedder.onnx",
+      "scanner-neural/ab12/gallery.bin",
+      "scanner-neural/ab12/neural.json",
     ]);
     expect(list).toEqual([
       "/",
@@ -107,6 +112,13 @@ describe("which request is the scanner's", () => {
       kind: "shell",
       key: "/wasm/9f/grimoire_web.js",
     });
+  });
+
+  it("keeps the Neural scanner's four, as it keeps the module", () => {
+    const gallery = neuralPath("ab12", "gallery.bin");
+    expect(routeFor(ask(gallery), ORIGIN, none)).toEqual({ kind: "kept", key: gallery });
+    // Opened as a page it is the file, never the app — and never a place the app draws.
+    expect(routeFor(ask(gallery, "navigate"), ORIGIN, none)).toEqual({ kind: "kept", key: gallery });
   });
 });
 
@@ -193,5 +205,52 @@ describe("answering the scanner's module", () => {
     const { get, offline } = harness({});
     offline();
     await expect(get(WASM)).rejects.toThrow("Failed to fetch");
+  });
+});
+
+describe("answering the Neural scanner's files", () => {
+  const bytes = (body: string) => () =>
+    new Response(body, { headers: { "Content-Type": "application/octet-stream" } });
+  const GALLERY = neuralPath("ab12", "gallery.bin");
+
+  it("fetches each the first time, keeps it, and answers it with no network from then on", async () => {
+    const { caches, asked, get, offline } = harness({ [GALLERY]: bytes("the gallery") });
+    expect(await (await get(GALLERY)).text()).toBe("the gallery");
+    expect([...(await caches.open(SCANNER_CACHE)).entries.keys()]).toEqual([GALLERY]);
+    offline();
+    expect(await (await get(GALLERY)).text()).toBe("the gallery");
+    expect(asked).toEqual([GALLERY]);
+  });
+
+  it("lets another set go when this set's is kept — and only another set, never the module", async () => {
+    const older = neuralPath("0ld", "gallery.bin");
+    const olderMeta = neuralPath("0ld", "neural.json");
+    const { caches, get } = harness({
+      [GALLERY]: bytes("new"),
+      [older]: bytes("old"),
+      [olderMeta]: bytes("{}"),
+      [WASM]: wasm("the module"),
+    });
+    await get(older);
+    await get(olderMeta);
+    await get(WASM);
+    const cache = await caches.open(SCANNER_CACHE);
+    await cache.put(`${SCANNER_ASSETS_PREFIX}card-hashes.bin`, new Response("hashes"));
+    await get(GALLERY);
+    expect([...cache.entries.keys()].sort()).toEqual([`${SCANNER_ASSETS_PREFIX}card-hashes.bin`, GALLERY, WASM].sort());
+    // And the module kept again lets no Neural file go.
+    const newer = wasmPath("n3w", SCANNER_WASM_FILE);
+    const second = harness({ [newer]: wasm("newer"), [GALLERY]: bytes("new") });
+    await second.get(GALLERY);
+    await second.get(newer);
+    expect([...(await second.caches.open(SCANNER_CACHE)).entries.keys()].sort()).toEqual([GALLERY, newer].sort());
+  });
+
+  it("keeps neither a miss nor a page handed over where a file should be", async () => {
+    const html = () => new Response("<!doctype html>", { headers: { "Content-Type": "text/html" } });
+    const { caches, get } = harness({ [GALLERY]: html });
+    expect((await get(neuralPath("ab12", "detector.onnx"))).status).toBe(404);
+    expect(await (await get(GALLERY)).text()).toBe("<!doctype html>");
+    expect((await caches.open(SCANNER_CACHE)).entries.size).toBe(0);
   });
 });

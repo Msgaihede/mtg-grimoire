@@ -77,6 +77,7 @@ describe("a host that keeps the scanner's files in a store of its own", () => {
     bundle: stored({}),
     detection_model: stored({}),
     recognition_model: stored({}),
+    neural: stored({}),
     labels: 0,
     scans_dir: "",
     unapplied_filters: null,

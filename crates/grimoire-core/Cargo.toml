@@ -59,8 +59,11 @@ testing = []
 # through a session in a Worker, readers and all (`docs/reference/card-scanner.md` §11).
 # **Nothing in this crate's command table calls its session there yet**, a panic in one is a
 # trap that ends the instance, and a read costs fifteen to thirty times a desktop's as this
-# module is built today: that section has all three.
-card-scanner = { path = "../card-scanner", features = ["corpus", "ocr"] }
+# module is built today: that section has all three. `neural` is the Neural mode's recogniser
+# (`crates/card-neural`), loaded from the files a host carries (`scanner::Embedded::neural`);
+# like the readers it is reached only through the session, which `not_in_a_browser_yet` keeps
+# out of the web module, so the engine's WASM does not grow by it.
+card-scanner = { path = "../card-scanner", features = ["corpus", "ocr", "neural"] }
 # What makes two label names the same name. `deck_labels` is one global list since schema v21
 # and its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode
 # lowercase, then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining
@@ -216,3 +219,7 @@ httpmock = "0.8"
 # `#[tokio::test]`, for the tests of what is async here. `net` is the listener
 # `platform::socket`'s and `sync_engine::live`'s tests stand in for the relay with.
 tokio = { version = "1", features = ["macros", "net", "rt", "sync", "test-util"] }
+# The Neural scanner's files as the desktop and Android carry them (`bundled`), for `scanner`'s
+# tests of a load with them built in. A test dependency only: this crate carries no file of its
+# own — a host says what its binary carries (`ScannerState::carry`).
+card-neural = { path = "../card-neural", features = ["bundled"] }

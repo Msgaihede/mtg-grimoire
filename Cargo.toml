@@ -63,7 +63,7 @@ resolver = "2"
 # `phase-engine`, from its git repository, behind a crate only the desktop links. That git
 # dependency is why `rust-toolchain.toml` is a dated nightly — its repository's root manifest has a
 # nightly-only `cargo-features` line — and `docs/reference/goldfish.md` has the rest.
-members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan", "crates/grimoire-play"]
+members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan", "crates/grimoire-play", "crates/card-neural"]
 exclude = ["crates/card-scanner"]
 
 # One version, edition and license for the six members, which inherit each with
@@ -131,6 +131,10 @@ opt-level = 3
 [profile.dev.package.zune-core]
 opt-level = 3
 [profile.dev.package.card-scanner]
+opt-level = 3
+# The Neural scanner's own loops — the perspective sampler and the gallery's 9 M multiply-adds a
+# card — run at release speed in a debug build for the reason `card-scanner`'s do.
+[profile.dev.package.card-neural]
 opt-level = 3
 [profile.dev.package.ocrs]
 opt-level = 3

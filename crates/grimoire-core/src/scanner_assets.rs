@@ -352,7 +352,7 @@ fn pieces_owed(state: &State, source: &Source) -> Result<Vec<Piece>, String> {
                 .is_some_and(|pinned| is_the_pinned_file(&dir.join(piece.place()), pinned))
         })
     };
-    Ok(lacking(&status, carried, sound))
+    Ok(lacking(&status, &carried, sound))
 }
 
 /// Whether `path` is a file of exactly the pinned length **and** the pinned digest. The length
@@ -398,7 +398,10 @@ fn sha256_hex(bytes: &[u8]) -> String {
 ///   changes nothing, so the offer would never clear; the status's own sentence says why the
 ///   pair did not load. (It is also a file placed by hand after the session loaded, which a
 ///   restart reads and a download would only repeat.)
-fn lacking(status: &ScannerStatus, carried: Embedded, sound: [bool; 2]) -> Vec<Piece> {
+/// * **The Neural scanner's files are never owed**, and [`ScannerStatus::neural`] is not read
+///   here: they are built in or absent (`scanner::Embedded::neural`), and no release carries
+///   them to fetch.
+fn lacking(status: &ScannerStatus, carried: &Embedded, sound: [bool; 2]) -> Vec<Piece> {
     let mut owed = Vec::new();
     if carried.bundle.is_none() && !status.bundle.loaded {
         owed.push(Piece::Bundle);
@@ -1911,7 +1914,8 @@ mod tests {
         assert!(logged(&state).is_empty());
     }
 
-    /// A status with the three assets as given: `(present, loaded)` each.
+    /// A status with the three assets as given: `(present, loaded)` each. The Neural asset is
+    /// absent — what a status says of it is no part of what a download owes.
     fn status(
         bundle: (bool, bool),
         detection: (bool, bool),
@@ -1932,6 +1936,7 @@ mod tests {
             bundle: asset(bundle),
             detection_model: asset(detection),
             recognition_model: asset(recognition),
+            neural: asset((false, false)),
             labels: 0,
             scans_dir: "somewhere/scans".to_owned(),
             unapplied_filters: None,
@@ -1948,35 +1953,56 @@ mod tests {
 
         // Nothing anywhere: all three.
         let nothing = status(gone, gone, gone);
-        assert_eq!(lacking(&nothing, none, [false, false]), [B, D, R]);
+        assert_eq!(lacking(&nothing, &none, [false, false]), [B, D, R]);
         // Everything loaded: nothing.
         let all = status(there, there, there);
-        assert_eq!(lacking(&all, none, [true, true]), []);
+        assert_eq!(lacking(&all, &none, [true, true]), []);
         // A bundle that is there and did not load — another format version's — is owed.
         let old = status(broken, there, there);
-        assert_eq!(lacking(&old, none, [true, true]), [B]);
+        assert_eq!(lacking(&old, &none, [true, true]), [B]);
         // The pair did not load: each model that is not the pinned file, and only those.
         let pair = status(there, broken, broken);
-        assert_eq!(lacking(&pair, none, [true, false]), [R]);
-        assert_eq!(lacking(&pair, none, [false, true]), [D]);
-        assert_eq!(lacking(&pair, none, [false, false]), [D, R]);
+        assert_eq!(lacking(&pair, &none, [true, false]), [R]);
+        assert_eq!(lacking(&pair, &none, [false, true]), [D]);
+        assert_eq!(lacking(&pair, &none, [false, false]), [D, R]);
         // Both the pinned files and the pair still did not load: fetching the same bytes again
         // changes nothing, so nothing is owed and no offer is made that could never clear.
-        assert_eq!(lacking(&pair, none, [true, true]), []);
+        assert_eq!(lacking(&pair, &none, [true, true]), []);
 
         // What the binary carries is never owed, whatever a file placed over it did.
         let embedded = Embedded {
             bundle: Some(&b"carried"[..]),
             models: Some((&b"d"[..], &b"r"[..])),
+            neural: None,
         };
-        assert_eq!(lacking(&nothing, embedded, [false, false]), []);
-        assert_eq!(lacking(&old, embedded, [false, false]), []);
+        assert_eq!(lacking(&nothing, &embedded, [false, false]), []);
+        assert_eq!(lacking(&old, &embedded, [false, false]), []);
         // And each half on its own.
         let bundle_only = Embedded {
             bundle: embedded.bundle,
             models: None,
+            neural: None,
         };
-        assert_eq!(lacking(&nothing, bundle_only, [false, false]), [D, R]);
+        assert_eq!(lacking(&nothing, &bundle_only, [false, false]), [D, R]);
+
+        // **The Neural scanner's files are never owed**: carried (desktop, Android) or not, loaded
+        // or not, a download brings only the three — they are built in, and nothing fetches them.
+        let neural_only = Embedded {
+            neural: Some(card_neural::bundled()),
+            ..Embedded::none()
+        };
+        assert_eq!(lacking(&nothing, &neural_only, [false, false]), [B, D, R]);
+        assert_eq!(lacking(&all, &neural_only, [true, true]), []);
+        let mut unloaded = status(there, there, there);
+        unloaded.neural = crate::scanner::Asset {
+            source: AssetSource::Embedded,
+            present: true,
+            loaded: false,
+            error: Some("gallery: not a gallery".to_owned()),
+            ..unloaded.neural
+        };
+        assert_eq!(lacking(&unloaded, &neural_only, [true, true]), []);
+        assert_eq!(lacking(&unloaded, &none, [true, true]), []);
     }
 
     /// **A file is the pinned one by its length and its digest, and by nothing less**: absent, a

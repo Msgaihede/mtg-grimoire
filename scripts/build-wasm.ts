@@ -131,7 +131,7 @@ const MODULES: Record<
     package: "grimoire-scan",
     module: "grimoire_scan",
     out: join(OUT, "scanner"),
-    exports: ["start", "load", "frame", "reset", "set_filters", "memory_bytes"],
+    exports: ["start", "load", "load_neural", "frame", "reset", "set_filters", "memory_bytes"],
     glue: "crates/grimoire-scan/src/glue.rs",
     tree: "scanner-simd128",
     features: [SIMD],
