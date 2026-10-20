@@ -441,8 +441,24 @@ export async function device(
       (error) => [`(could not be read: ${error.message})`],
     );
     const alert = await page.evaluate<string | null>(`${ALERT} ?? null`).catch(() => null);
+    // Each socket this device made, and what it heard: whether a frame the relay sent arrived.
+    const sockets = policy.sockets.map((made) => {
+      const mine = <M extends EventName>(method: M) =>
+        events(method).filter(
+          (event) =>
+            event.sessionId === made.sessionId &&
+            (event.params as { requestId?: string }).requestId === made.requestId,
+        );
+      const heard = mine("Network.webSocketFrameReceived").map(
+        (frame) =>
+          `${frame.params.response.payloadData.slice(0, 40)} at ${frame.params.timestamp.toFixed(1)}`,
+      );
+      const closed = mine("Network.webSocketClosed").length > 0 ? "closed" : "open";
+      return `${shape(new URL(made.url).pathname)} ${closed}, heard [${heard.join(", ")}]`;
+    });
     return (
       ` Requests that failed: ${failed.join("; ") || "none"}. Logged: ${logged.join("; ") || "nothing"}.` +
+      ` Sockets: ${sockets.join("; ") || "none"}.` +
       (alert ? ` The page's alert: ${alert}` : "")
     );
   };

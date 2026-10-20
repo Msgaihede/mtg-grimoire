@@ -424,7 +424,8 @@ async function main() {
       }; ` +
       `${reader.name} reads ${await reader.engine("sync_live_state")}, was told ` +
       `${JSON.stringify((await reader.told()).applied.slice(mark))}, and its engine's wishlist holds ` +
-      `${JSON.stringify(await reader.engine("wishlist_summary", { marketplace: "tcgplayer" }))}.`;
+      `${JSON.stringify(await reader.engine("wishlist_summary", { marketplace: "tcgplayer" }))}.` +
+      `${reader.name}:${await reader.trouble()}`;
     const drawn = await seen(
       reader,
       `its wishlist drew ${card}, written on ${writer.name}`,
