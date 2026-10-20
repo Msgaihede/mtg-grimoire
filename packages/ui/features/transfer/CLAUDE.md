@@ -38,6 +38,7 @@ Importing maps raw text or CSV to database entries across two UI steps: text ent
 - **Heading lookahead (`namesASection`)**: The only lookahead in the parser. Distinguishes category headings from card names by requiring candidate lines to have no quantity, set hint, or brackets, followed by a counted line.
 - **Label parsing**: Caret groups (`^Label,#color^`) split colors at the last comma. Labels are deduplicated by `labelNameKey`, matched against existing user labels, and presented in the preview step.
 - **CSV format detection (`csv.ts`)**: File-level judgement made on the header row (requires ≥2 recognized headers including Name, plus matching column counts). Delimiter auto-detected (`,`, `;`, `\t`). Escaped formulas unescaped; physical line indices tracked for multiline cells.
+- **MTGO `.dek` XML (`parseDek`, issue #1175)**: The second file-level judgement — text opening on `<?xml` or `<Deck` is read by its `<Cards>` elements (`Name`, `Quantity`, `Sideboard`; a sideboard entry annotated `16777728` is the commander), never line by line. Other XML (Cockatrice `.cod`) is one issue, not one per line. Both pickers offer `.dek` (`DECKLIST_EXTENSIONS`, `DECKLIST_ACCEPT`).
 - **Category and section resolution**:
   - Precedence order: `forcedCategoryName > SECTION_CATEGORY[kind] > line.categoryName > autoCategoryFor(...)`.
   - Command zone always outranks pile categorization.

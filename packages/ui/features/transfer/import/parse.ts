@@ -6,12 +6,13 @@
  * wrong: it would have to choose a reader before it had read anything, and it would be wrong
  * about exactly the lists that have been edited by hand. Every rule here is a **per-line**
  * rule for that reason, so an unfamiliar mixture is read line by line rather than refused
- * whole, and no line's reading depends on a verdict about the file — **with one exception.** A
- * CSV header is the single file-level judgement this parser makes ({@link csvHeaderOf}), and it
- * is made on the header row alone, checked against the row after it for shape
- * ({@link csvShapeAgrees}) before anything is trusted. Every other file is still read line by
- * line exactly as before, and a first row that turns out not to be a header — by content or by
- * shape — changes nothing about how the rest of the file is read.
+ * whole, and no line's reading depends on a verdict about the file — **with two exceptions.** A
+ * CSV header is one file-level judgement this parser makes ({@link csvHeaderOf}), and it is made
+ * on the header row alone, checked against the row after it for shape ({@link csvShapeAgrees})
+ * before anything is trusted. The other is MTGO's `.dek` XML ({@link parseDek}), recognised by
+ * its first character — a decklist line never opens on `<`. Every other file is still read line
+ * by line exactly as before, and a first row that turns out not to be a header — by content or
+ * by shape — changes nothing about how the rest of the file is read.
  *
  * It knows nothing about cards. A name is a string, and whether any card bears it is
  * `import_resolve`'s question — which is what keeps this file pure TypeScript with no
@@ -1041,12 +1042,146 @@ function binderOf(
 }
 
 /**
+ * MTGO's `.dek` — an XML document, `<Deck>` around one `<Cards … />` per card — read by its
+ * elements rather than its lines (issue #1175). Both file pickers have offered `.dek` since the
+ * import dialog shipped, and until this the per-line reader turned such a file into one 1-copy
+ * "card" per XML line, every one unresolvable.
+ *
+ * MTGO writes each card as
+ * `<Cards CatID="57934" Quantity="4" Sideboard="false" Name="Shock" Annotation="0" />` —
+ * `Quantity`, `Sideboard` and `Name` are what this reads. `CatID` is MTGO's own catalogue number
+ * and names no printing this app can look up, so a `.dek` line carries no set hint, as an MTGO
+ * text export does not. **A commander is a sideboard entry whose `Annotation` is `16777728`**
+ * (`docs/superpowers/research/2026-08-04-mtg-domain-rules.md`), and it is read as the command zone.
+ *
+ * `null` when the text is not XML at all, which is every decklist and every CSV — the second
+ * file-level judgement this parser makes, and as cheap as the first: a decklist never opens on
+ * `<`. An XML document with no `<Deck>` in it (Cockatrice's `.cod`) is one sentence saying so,
+ * rather than a line of nonsense per element.
+ */
+function parseDek(text: string): ParsedList | null {
+  // The BOM is MTGO's own: it writes one.
+  const source = text.replace(/^\uFEFF/, "");
+  if (!/^\s*</.test(source)) return null;
+  // Blanked rather than cut, so every offset after a comment is still the offset in the file
+  // and a line number counted off it is still the one the reader's editor shows.
+  const body = source.replace(/<!--[\s\S]*?-->/g, (comment) => comment.replace(/[^\r\n]/g, " "));
+  if (!/^\s*(?:<\?xml\b|<Deck\b)/.test(body)) return null;
+  if (!/<Deck\b/.test(body)) {
+    return {
+      lines: [],
+      issues: [
+        {
+          lineNumber: 1,
+          raw: source.split(LINE_BREAK, 1)[0],
+          reason: "this is an XML file, but not an MTGO .dek deck",
+        },
+      ],
+      totalCards: 0,
+      suggestedName: null,
+    };
+  }
+
+  const lines: ParsedLine[] = [];
+  const issues: ParseIssue[] = [];
+  // Line numbers are counted forward from the last element rather than from the top each time,
+  // so a 100-card deck is one pass over the text and not a hundred.
+  let lineNumber = 1;
+  let counted = 0;
+  for (const element of body.matchAll(/<Cards\b[^>]*>/g)) {
+    lineNumber += body.slice(counted, element.index).split(LINE_BREAK).length - 1;
+    counted = element.index;
+    const raw = element[0];
+    const attrs = dekAttributes(raw);
+
+    const name = (attrs.get("name") ?? "").trim();
+    if (name === "") {
+      issues.push({ lineNumber, raw, reason: "No card name on this line." });
+      continue;
+    }
+    const quantity = csvQuantity((attrs.get("quantity") ?? "").trim());
+    if (typeof quantity === "string") {
+      issues.push({ lineNumber, raw, reason: quantity });
+      continue;
+    }
+    const sideboard = (attrs.get("sideboard") ?? "").trim().toLowerCase() === "true";
+    const commander = sideboard && (attrs.get("annotation") ?? "").trim() === DEK_COMMANDER;
+
+    lines.push({
+      lineNumber,
+      raw,
+      quantity,
+      name,
+      setCode: null,
+      collectorNumber: null,
+      section: commander ? "commander" : sideboard ? "sideboard" : "deck",
+      categoryName: null,
+      finish: null,
+      excluded: false,
+      labelName: null,
+      labelColor: null,
+      extra: {},
+    });
+  }
+
+  return {
+    lines,
+    issues,
+    totalCards: lines.reduce((sum, line) => sum + line.quantity, 0),
+    suggestedName: null,
+  };
+}
+
+/** The `Annotation` MTGO writes on a commander, which it files in the sideboard. */
+const DEK_COMMANDER = "16777728";
+
+/**
+ * An element's attributes, keyed by their names lowercased — MTGO writes `Name`, and a file a
+ * script wrote with `name` is the same file — with the five named entities and numeric character
+ * references decoded, because `Name="Jace, the Mind Sculptor"` is plain but an `&apos;` in a name
+ * is how an XML writer is entitled to spell `'`.
+ */
+function dekAttributes(element: string): Map<string, string> {
+  const attrs = new Map<string, string>();
+  for (const [, key, double, single] of element.matchAll(
+    /([A-Za-z_][\w.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g,
+  )) {
+    attrs.set(key.toLowerCase(), decodeXmlEntities(double ?? single));
+  }
+  return attrs;
+}
+
+const XML_ENTITIES = new Map([
+  ["amp", "&"],
+  ["lt", "<"],
+  ["gt", ">"],
+  ["quot", '"'],
+  ["apos", "'"],
+]);
+
+/** An entity this does not know is left as written, so nothing in a name is ever lost. */
+function decodeXmlEntities(value: string): string {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, ref: string) => {
+    if (ref.startsWith("#")) {
+      const code =
+        ref[1] === "x" || ref[1] === "X" ? parseInt(ref.slice(2), 16) : Number(ref.slice(1));
+      return code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+    }
+    return XML_ENTITIES.get(ref.toLowerCase()) ?? entity;
+  });
+}
+
+/**
  * Read a pasted decklist.
  *
  * Never throws and never returns partial nonsense: every line ends up in `lines`, in
  * `issues`, or was blank or a comment.
  */
 export function parseDecklist(text: string): ParsedList {
+  // An MTGO `.dek` is XML, which no line of a decklist is — see {@link parseDek}.
+  const dek = parseDek(text);
+  if (dek !== null) return dek;
+
   // The one file-level judgement this parser makes, and it is made on the header alone: a CSV
   // is detected before any per-line rule runs, and every line after that header is still read
   // by column rather than by the per-line grammar below. Content is not the whole test —

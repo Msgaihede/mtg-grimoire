@@ -8,6 +8,7 @@ import {
   ARENA_LIST,
   EMPTY_HINT_LIST,
   MOXFIELD_LIST,
+  MTGO_DEK,
   MTGO_LIST,
   REFERENCE_LIST,
 } from "./fixtures";
@@ -101,6 +102,78 @@ describe("parseDecklist", () => {
       "Path to Exile",
     ]);
     expect(out.lines.filter((l) => l.section === "deck")).toHaveLength(2);
+  });
+
+  describe("an MTGO .dek (issue #1175)", () => {
+    it("reads one line per <Cards> element, by its attributes", () => {
+      const out = parseDecklist(MTGO_DEK);
+      expect(out.issues).toEqual([]);
+      expect(out.lines.map((l) => [l.lineNumber, l.quantity, l.name, l.section])).toEqual([
+        [5, 4, "Lightning Bolt", "deck"],
+        [6, 2, "Sol Ring", "deck"],
+        [7, 1, "Jace's Erasure", "deck"],
+        [8, 2, "Duress", "sideboard"],
+        [9, 1, "Atraxa, Praetors' Voice", "commander"],
+      ]);
+      expect(out.totalCards).toBe(10);
+      expect(out.suggestedName).toBeNull();
+      expect(out.lines[0]).toMatchObject({
+        raw: '<Cards CatID="57934" Quantity="4" Sideboard="false" Name="Lightning Bolt" Annotation="0" />',
+        setCode: null,
+        collectorNumber: null,
+        categoryName: null,
+        finish: null,
+      });
+    });
+
+    it("reads a bare <Deck> with no prolog, and attributes in any order or quote", () => {
+      const out = parseDecklist(
+        '<Deck>\n<!-- <Cards Quantity="9" Name="Ghost" /> -->\n' +
+          "<Cards name='Fire &amp; Ice' sideboard='TRUE' quantity='3'/>\n" +
+          '<Cards\n  Quantity="1"\n  Name="&#x4A;ace"\n/>\n</Deck>',
+      );
+      expect(out.issues).toEqual([]);
+      expect(out.lines.map((l) => [l.lineNumber, l.quantity, l.name, l.section])).toEqual([
+        [3, 3, "Fire & Ice", "sideboard"],
+        [4, 1, "Jace", "deck"],
+      ]);
+    });
+
+    it("quotes back an element it cannot read rather than dropping it", () => {
+      const out = parseDecklist(
+        '<?xml version="1.0"?>\n<Deck>\n<Cards Quantity="2" />\n' +
+          '<Cards Quantity="0" Name="Shock" />\n<Cards Quantity="two" Name="Shock" />\n</Deck>',
+      );
+      expect(out.lines).toEqual([]);
+      expect(out.issues.map((i) => [i.lineNumber, i.reason])).toEqual([
+        [3, "No card name on this line."],
+        [4, "Quantity can't be zero."],
+        [5, "`two` is not a whole number of copies"],
+      ]);
+    });
+
+    it("refuses other XML in one sentence", () => {
+      const out = parseDecklist(
+        '<?xml version="1.0"?>\n<cockatrice_deck version="1">\n</cockatrice_deck>',
+      );
+      expect(out.lines).toEqual([]);
+      expect(out.issues).toEqual([
+        {
+          lineNumber: 1,
+          raw: '<?xml version="1.0"?>',
+          reason: "this is an XML file, but not an MTGO .dek deck",
+        },
+      ]);
+    });
+
+    it("leaves a list that merely opens on `<` to the line reader", () => {
+      const out = parseDecklist("<Decks I like>\n\n4 Lightning Bolt\n<Shock>");
+      expect(out.lines.map((l) => [l.quantity, l.name])).toEqual([
+        [1, "<Decks I like>"],
+        [4, "Lightning Bolt"],
+        [1, "<Shock>"],
+      ]);
+    });
   });
 
   it("does not end a section on a blank line", () => {

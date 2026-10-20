@@ -48,6 +48,23 @@ the file a reader gets by pressing Copy. Which piles reach the writer is
 [the inactive-category filter](#the-inactive-category-filter--the-dialogs-second-row-filter)'s
 subject, one section down from the Arena one it is modelled on.
 
+## MTGO's `.dek`, read only — issue #1175, 2026-10-20
+
+Both pickers offered `.dek` from the start (`import.rs`'s `DECKLIST_EXTENSIONS`, `browserFiles.ts`'s
+`DECKLIST_ACCEPT`), and until issue #1175 nothing read it: the file is MTGO's XML, and the per-line
+reader made one 1-copy "card" of every XML line — `<?xml …?>`, `<Cards CatID=… Name="Shock" />` —
+none of which resolved. `parse.ts`'s `parseDek` is now the parser's second file-level judgement,
+beside the CSV header: text whose first non-blank character opens `<?xml` or `<Deck` is read by its
+`<Cards>` elements.
+
+- **Read:** `Name` (XML entities decoded), `Quantity` (the CSV reader's strict count, its sentences
+  included), `Sideboard="true"` as the sideboard, and a sideboard entry with `Annotation="16777728"`
+  as the command zone (`docs/superpowers/research/2026-08-04-mtg-domain-rules.md`).
+- **Not read:** `CatID`, MTGO's catalogue number, which names no printing this app can look up — so a
+  `.dek` line carries no set hint, as an MTGO text export does not.
+- **Other XML** (Cockatrice's `.cod`) is one issue saying so, not a line of nonsense per element.
+- **Never written.** The export dialog's `mtgo` format is still MTGO's text shape.
+
 ## The deck label, both directions
 
 `^Keeper,#4aab08^` — a `deck_labels` row on a deck card. Read on import since 2026-08-24
