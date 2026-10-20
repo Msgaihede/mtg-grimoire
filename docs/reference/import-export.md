@@ -877,7 +877,12 @@ copies filed there would sit in a deck that does not play them — and the press
 **What that costs is a press that can stop part-way, and it stops loudly**: the first refusal
 ends it, and the sentence names the binder it stopped at and every binder that had already landed.
 A deck whose *copies* were refused stays — its list landed and is the deck that was asked for —
-and says so. **No undo is offered**: each group's commit carries its own ticket, and offering the
+and says so. **Pressing Import again finishes the file rather than starting it over** (issue
+#1173): the step keeps a `BinderImportProgress` ledger across its presses, keyed on each group's
+kind and exact name (`binderGroupKey`), so a retry skips every group that landed, files a stopped
+deck's copies into the deck it already made rather than making a second, and counts the whole
+file, every press together, in its toast. Before it, a retry `add`ed the landed groups a second
+time and made a second deck of every `deck` binder. **No undo is offered**: each group's commit carries its own ticket, and offering the
 last would take back one folder while saying it took back the file. A single command doing the
 whole file in one transaction is the stronger shape and is not what shipped; the per-group
 commands each carry fences (the folder kinds, the deck rollback, the eleven-term merge) that a new

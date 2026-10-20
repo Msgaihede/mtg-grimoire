@@ -94,6 +94,15 @@ export function hasBinders(list: ParsedList): boolean {
   return list.lines.some((line) => (line.binder ?? null) !== null);
 }
 
+/**
+ * A group's identity in {@link planBinderImport}'s split — **kind and exact name**, and `""` for
+ * the rows that name no binder. `importBinderGroups`' retry ledger is keyed on it too, so a group
+ * that landed is the same group on the second press however the plan was recomputed in between.
+ */
+export function binderGroupKey(name: string | null, target: BinderTarget): string {
+  return name === null ? "" : `${target}\u0000${name}`;
+}
+
 /** What a line's binder becomes. */
 function targetOf(line: ParsedLine): BinderTarget {
   return line.binder?.type === DECK_BINDER ? "deck" : "folder";
@@ -123,7 +132,7 @@ export function planBinderImport(
   const indices = new Map<string, number[]>();
   list.lines.forEach((line, index) => {
     const name = line.binder?.name ?? null;
-    const key = name === null ? "" : `${targetOf(line)}\u0000${name}`;
+    const key = binderGroupKey(name, targetOf(line));
     const held = indices.get(key);
     if (held === undefined) {
       order.push(key);

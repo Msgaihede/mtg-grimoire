@@ -100,7 +100,7 @@ function fold(cards: readonly ShareCard[], index: OwnedIndex): Want[] {
     // The map **is** the fold — a second row of the same printing and finish overwrites an
     // identical entry, so there is nothing to guard against and a `has` check here would be a
     // line no test could fail.
-    wants.set(`${card.id}|${finish ?? ""}`, {
+    wants.set(wantKey({ card, finish }), {
       card,
       finish,
       already: crossReference(card, index).want,
@@ -108,6 +108,14 @@ function fold(cards: readonly ShareCard[], index: OwnedIndex): Want[] {
   }
   return [...wants.values()];
 }
+
+/** A want's identity — the {@link fold}'s key, the list's row key and the retry ledger's. */
+function wantKey(want: Pick<Want, "card" | "finish">): string {
+  return `${want.card.id}|${want.finish ?? ""}`;
+}
+
+/** No wants have landed yet. */
+const NONE_LANDED: ReadonlySet<string> = new Set();
 
 /** `2 cards` / `1 card`. Written once, because the count appears four times in this dialog. */
 function cards(n: number): string {
@@ -173,8 +181,29 @@ export function AddToWishlist({
   const client = useQueryClient();
 
   const wants = useMemo(() => fold(picked, index), [picked, index]);
-  /** Cards the reader wants **somewhere**, which is what each row's own figure says. */
-  const already = wants.filter((w) => w.already > 0).length;
+
+  /**
+   * The wants an earlier press of this selection already added (issue #1173). A press refused part
+   * way keeps the dialog open with Add live, and the next press adds **only the rest** — before
+   * this, it re-added the ones that landed and raised each of those wishes to 2.
+   *
+   * Tied to the selection by its keys rather than to the `wants` array, which is rebuilt every time
+   * the wishlist is re-read (the partial add itself invalidates it). A different selection is a
+   * different press and starts from nothing; closing and reopening over the same one does not,
+   * because the cards that landed are on the list either way.
+   */
+  const selection = useMemo(() => wants.map(wantKey).join("\n"), [wants]);
+  const [ledger, setLedger] = useState<{ selection: string; keys: ReadonlySet<string> }>({
+    selection: "",
+    keys: NONE_LANDED,
+  });
+  const landed = ledger.selection === selection ? ledger.keys : NONE_LANDED;
+  /** What the next press writes: every want, less those an earlier press landed. */
+  const pending = wants.filter((w) => !landed.has(wantKey(w)));
+
+  /** Cards the reader wants **somewhere**, which is what each row's own figure says — of the ones
+   *  this press will add, since a landed one is wanted *because* of the earlier press. */
+  const already = pending.filter((w) => w.already > 0).length;
 
   /** The cabinet top to bottom, which is the order the tree is drawn in — never the flat rows'
    *  own order, which says nothing about depth. No members are passed: this list is a set of
@@ -201,7 +230,7 @@ export function AddToWishlist({
    * `Ordered` and make two new lines at the root, and a number that did not move when the reader
    * changed their mind would be the wrong answer written confidently.
    */
-  const folds = wants.filter(
+  const folds = pending.filter(
     (w) => (index.wishes.get(wishGrainKey(w.card.id, w.finish, folderId)) ?? 0) > 0,
   ).length;
   const lines = alreadyLines(folds, already, named);
@@ -209,6 +238,8 @@ export function AddToWishlist({
   const submit = async () => {
     setAdding(true);
     setRefusal(null);
+    /** Wants landed by this press — kept in the ledger if it stops part way. */
+    const now = new Set<string>();
     let added = 0;
     try {
       // **One at a time, and the count is kept as it goes.** `wishlist_add` takes the write
@@ -216,7 +247,7 @@ export function AddToWishlist({
       // way through is a real state (a busy database, a folder another surface deleted) that
       // the reader has to be told the shape of. A `Promise.all` would report the first failure
       // and know nothing about how many of the others had landed.
-      for (const want of wants) {
+      for (const want of pending) {
         await ipc.wishlistAdd({
           cardId: want.card.id,
           quantity: 1,
@@ -226,18 +257,22 @@ export function AddToWishlist({
           // the same field.
           ...(want.finish !== null && { preferredFinish: want.finish }),
         });
+        now.add(wantKey(want));
         added += 1;
       }
     } catch (e) {
-      // Names what got through, because the reader's list really did move that far and the
-      // press is not repeatable without double-adding the half that landed.
-      setRefusal(`Added ${added} of ${cards(wants.length)}. ${ipcError(e)}`);
+      // Names what got through, because the reader's list really did move that far — every
+      // press of this selection together, which is how much of it is on the list now. The next
+      // press adds only the rest (see `landed`).
+      const total = landed.size + added;
+      if (added > 0) setLedger({ selection, keys: new Set([...landed, ...now]) });
+      setRefusal(`Added ${total} of ${cards(wants.length)}. ${ipcError(e)}`);
       // **And a notice, even though the dialog stays open with that line in it** — the owner's
       // rule (2026-10-12) is that every add of cards to a wishlist answers in the inbox as well as
       // where it was pressed, and a partial add is cards written. One notice for the press: a
       // warning with the count where some landed, an error where none did.
-      if (added > 0) {
-        notify.warning(`Added ${added} of ${cards(wants.length)} to ${where}`, {
+      if (total > 0) {
+        notify.warning(`Added ${total} of ${cards(wants.length)} to ${where}`, {
           body: ipcError(e),
         });
       } else {
@@ -258,7 +293,10 @@ export function AddToWishlist({
     // **The receipt is a toast**, because the dialog closes on it and the wall behind draws no
     // wishlist — until 2026-10-12 it was a status line the shared page kept under its bar, a
     // hand-rolled toast that stood until the next add.
-    notify.success(`Added ${cards(added)} to ${where}`);
+    notify.success(`Added ${cards(landed.size + added)} to ${where}`);
+    // The selection is all on the list now, so the ledger has done its job: a press after this is
+    // the deliberate second add the per-row figures exist to warn about, not a retry.
+    setLedger({ selection: "", keys: NONE_LANDED });
     onAdded();
     onClose();
   };
@@ -280,7 +318,7 @@ export function AddToWishlist({
       >
         {wants.map((want) => (
           <li
-            key={`${want.card.id}|${want.finish ?? ""}`}
+            key={wantKey(want)}
             // The row's own name, so the figure beside a card can be asked for by that card.
             aria-label={`${want.card.n}${want.finish === null ? "" : `, ${want.finish}`}`}
             className="flex items-baseline gap-3 py-2"
@@ -357,18 +395,22 @@ export function AddToWishlist({
           <button
             type="button"
             // `aria-disabled`, never the attribute: a `disabled` button leaves the tab order.
-            aria-disabled={adding || wants.length === 0}
+            aria-disabled={adding || pending.length === 0}
             onClick={() => {
-              if (adding || wants.length === 0) return;
+              if (adding || pending.length === 0) return;
               void submit();
             }}
             className={cn(
               BUTTON,
               "border-accent/50 text-accent",
-              (adding || wants.length === 0) && "opacity-50",
+              (adding || pending.length === 0) && "opacity-50",
             )}
           >
-            {adding ? "Adding…" : `Add ${cards(wants.length)}`}
+            {adding
+              ? "Adding…"
+              : landed.size === 0
+                ? `Add ${cards(wants.length)}`
+                : `Add the remaining ${cards(pending.length)}`}
           </button>
         </div>
       </div>

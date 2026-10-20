@@ -34,7 +34,7 @@ import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { DEFAULT_VARIANT } from "@/features/decks/deckQuery";
 import { UNSPECIFIED_FORMAT } from "@/features/decks/FormatSelect";
 import { chooseDecklist } from "../files";
-import type { BinderGroup } from "./destinations/binders";
+import { binderGroupKey, type BinderGroup } from "./destinations/binders";
 
 /**
  * The reader saying they have physically built this deck — the same lines a second time, at the
@@ -401,7 +401,7 @@ export function useImport() {
    * still changed whatever landed before it stopped.
    */
   const importBinders = useMutation({
-    mutationFn: (groups: readonly BinderGroup[]) => importBinderGroups(groups),
+    mutationFn: ({ groups, progress }: BinderImportPress) => importBinderGroups(groups, progress),
     onSettled: () => {
       for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
     },
@@ -496,6 +496,51 @@ async function folderFor(
   return { id: made.id, created: true };
 }
 
+/** One press of a sorted import: the plan's groups, and the step's {@link BinderImportProgress}. */
+export interface BinderImportPress {
+  groups: readonly BinderGroup[];
+  progress: BinderImportProgress;
+}
+
+/**
+ * What the presses of one sorted import have written so far (issue #1173) — held by the step
+ * across presses, so that pressing Import again after a refusal **finishes the file rather than
+ * starting it over**. Without it a retry `add`ed every group that had already landed a second
+ * time, doubling those copies, and made a second deck out of every `deck` binder.
+ *
+ * Keyed on {@link binderGroupKey}, never on the group objects: the plan is memoised on the step's
+ * defaults and is rebuilt whenever one changes, and a group that landed has landed whatever its
+ * rows say now. The single-folder press guards its retry the same way (`CollectionPreviewBody`'s
+ * `made` ref), for the one folder it can make.
+ */
+export interface BinderImportProgress {
+  /** Groups whose every write landed — skipped by a later press. */
+  landed: Set<string>;
+  /**
+   * Decks made for a group whose *copies* were then refused. The deck stands (see
+   * {@link importBinderGroups}), so a later press files the copies into it rather than making a
+   * second one beside it.
+   */
+  decks: Map<string, DeckRow>;
+  /**
+   * The folder each folder group was filed into, and whether the press made it — so a folder
+   * made by a press whose commit was refused is still counted as new when a later one lands it.
+   */
+  folders: Map<string, { id: number; created: boolean }>;
+  /** Every press's writes added together: what the closing sentence and the toast count. */
+  result: BinderImportResult;
+}
+
+/** A ledger with nothing written — one per sorted import, kept by the step across its presses. */
+export function binderImportProgress(): BinderImportProgress {
+  return {
+    landed: new Set(),
+    decks: new Map(),
+    folders: new Map(),
+    result: { folders: 0, foldersCreated: 0, decks: [], copies: 0 },
+  };
+}
+
 /**
  * Every group of a {@link planBinderImport} plan, written in the file's order: a folder group's
  * copies into its folder (or the root), a deck group as a new {@link UNSPECIFIED_FORMAT} deck with
@@ -515,58 +560,78 @@ async function folderFor(
  * no deck behind ({@link createDeckFromList}); a deck whose *copies* were refused stays, because
  * the list landed and is the deck they asked for, and the sentence says so.
  *
+ * **And pressing again picks up where it stopped** (issue #1173): every write is recorded in
+ * `progress` as it lands, so a later press with the same ledger skips the groups that landed and
+ * files a stopped deck's copies into the deck it already made. The counts it returns and throws
+ * are the whole import's, every press together.
+ *
  * Always `add`, never `set`: a `set` is collection-wide — it counts every folder's copies toward
  * the file's number — so run once per binder it would have each group rewrite the others'.
  */
 export async function importBinderGroups(
   groups: readonly BinderGroup[],
+  progress: BinderImportProgress = binderImportProgress(),
 ): Promise<BinderImportResult> {
-  const result: BinderImportResult = { folders: 0, foldersCreated: 0, decks: [], copies: 0 };
-  const landed: string[] = [];
-  // One read for the whole press, extended by {@link folderFor} as it makes folders.
-  const folders = groups.some((g) => g.target === "folder" && g.name !== null)
+  const { result } = progress;
+  const labelOf = (group: BinderGroup) =>
+    group.name === null ? "cards with no binder" : `“${group.name}”`;
+  const keyOf = (group: BinderGroup) => binderGroupKey(group.name, group.target);
+  const pending = groups.filter((group) => !progress.landed.has(keyOf(group)));
+  // One read for the whole press, extended by {@link folderFor} as it makes folders — and only
+  // when a folder group is still to be filed, so a retry of a deck alone reads nothing.
+  const folders = pending.some(
+    (g) => g.target === "folder" && g.name !== null && !progress.folders.has(keyOf(g)),
+  )
     ? await ipc.collectionFolderList()
     : [];
-  for (const group of groups) {
-    const label = group.name === null ? "cards with no binder" : `“${group.name}”`;
+  for (const group of pending) {
+    const key = keyOf(group);
     try {
       if (group.target === "deck") {
-        const name = group.name ?? "";
-        const { deck } = await createDeckFromList({
-          name,
-          formatKey: UNSPECIFIED_FORMAT,
-          items: group.deckItems,
-        });
-        result.decks.push(deck);
+        let deck = progress.decks.get(key);
+        if (deck === undefined) {
+          ({ deck } = await createDeckFromList({
+            name: group.name ?? "",
+            formatKey: UNSPECIFIED_FORMAT,
+            items: group.deckItems,
+          }));
+          progress.decks.set(key, deck);
+        }
         try {
           const folderId = await deckGroupId(deck.id);
           await ipc.collectionImportCommit(group.collectionItems, "add", folderId);
         } catch (refusal) {
           throw new Error(
-            `the deck ${label} was made, but its cards couldn't be added to your collection — ` +
-              ipcError(refusal),
+            `the deck ${labelOf(group)} was made, but its cards couldn't be added to your ` +
+              `collection — ${ipcError(refusal)}`,
             { cause: refusal },
           );
         }
+        result.decks.push(deck);
       } else if (group.name === null) {
         await ipc.collectionImportCommit(group.collectionItems, "add", null);
       } else {
-        const folder = await folderFor(group.name, folders);
+        let folder = progress.folders.get(key);
+        if (folder === undefined) {
+          folder = await folderFor(group.name, folders);
+          progress.folders.set(key, folder);
+        }
         await ipc.collectionImportCommit(group.collectionItems, "add", folder.id);
         result.folders += 1;
         if (folder.created) result.foldersCreated += 1;
       }
     } catch (refusal) {
+      const landed = groups.filter((g) => progress.landed.has(keyOf(g))).map(labelOf);
       const already = landed.length === 0 ? "" : ` Already imported: ${landed.join(", ")}.`;
       throw new BinderImportStopped(
-        `Stopped at ${label}: ${ipcError(refusal)}.${already}`,
+        `Stopped at ${labelOf(group)}: ${ipcError(refusal)}.${already}`,
         result.copies,
         groups.reduce((sum, g) => sum + g.totalCards, 0),
         refusal,
       );
     }
     result.copies += group.totalCards;
-    landed.push(label);
+    progress.landed.add(key);
   }
   return result;
 }

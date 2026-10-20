@@ -38,7 +38,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import type { BinderGroup } from "./destinations/binders";
-import { BinderImportStopped, NO_DECK_GROUP, importBinderGroups, useImport } from "./useImport";
+import {
+  BinderImportStopped,
+  NO_DECK_GROUP,
+  binderImportProgress,
+  importBinderGroups,
+  useImport,
+} from "./useImport";
 
 /**
  * The cabinet as `collection_folder_list` answers it: unfiltered by kind, so a **deck** group
@@ -147,7 +153,9 @@ beforeEach(() => {
   importPickFile.mockReset().mockResolvedValue(null);
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   collectionImportCommit.mockReset().mockResolvedValue(OWNED);
-  collectionFolderList.mockReset().mockResolvedValue(FOLDERS);
+  // A copy per read, as the backend answers: `importBinderGroups` extends its census with the
+  // folders it makes, and a shared array would carry one test's folders into the next.
+  collectionFolderList.mockReset().mockImplementation(() => Promise.resolve([...FOLDERS]));
   collectionFolderCreate
     .mockReset()
     .mockImplementation((parentId: number | null, name: string) =>
@@ -841,11 +849,84 @@ describe("importBinderGroups", () => {
     expect(deckDelete).not.toHaveBeenCalled();
   });
 
+  /**
+   * Issue #1173: a press that stopped part-way leaves Import live, and a second press over the
+   * same ledger used to start the file again — `add`ing every landed group a second time.
+   */
+  it("skips the groups that landed when pressed again with the same ledger", async () => {
+    collectionImportCommit
+      .mockResolvedValueOnce(OWNED)
+      .mockRejectedValueOnce("database is locked")
+      .mockResolvedValue(OWNED);
+    const groups = [folder("Binder"), folder("Bulk", "p2"), folder("Rares", "p3")];
+    const progress = binderImportProgress();
+    await expect(importBinderGroups(groups, progress)).rejects.toThrow("Stopped at “Bulk”");
+
+    const result = await importBinderGroups(groups, progress);
+    expect(collectionImportCommit.mock.calls.map((call) => call[0][0].cardId)).toEqual([
+      "p1",
+      "p2",
+      "p2",
+      "p3",
+    ]);
+    // The whole file's counts, both presses together — and `Bulk` made once.
+    expect(collectionFolderCreate).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ folders: 3, foldersCreated: 2, copies: 3 });
+  });
+
+  it("names every earlier press's groups when a retry stops too", async () => {
+    collectionImportCommit
+      .mockResolvedValueOnce(OWNED)
+      .mockRejectedValueOnce("database is locked")
+      .mockResolvedValueOnce(OWNED)
+      .mockRejectedValueOnce("database is locked");
+    const groups = [folder("Binder"), folder("Bulk", "p2"), folder("Rares", "p3")];
+    const progress = binderImportProgress();
+    await importBinderGroups(groups, progress).catch(() => null);
+
+    const stopped = await importBinderGroups(groups, progress)
+      .then(() => null)
+      .catch((e: unknown) => e);
+    expect(stopped).toMatchObject({
+      message: "Stopped at “Rares”: database is locked. Already imported: “Binder”, “Bulk”.",
+      copies: 2,
+      total: 3,
+    });
+  });
+
+  it("files a stopped deck's copies into the deck it already made, rather than a second deck", async () => {
+    collectionImportCommit.mockRejectedValueOnce("database is locked").mockResolvedValue(OWNED);
+    const progress = binderImportProgress();
+    await expect(importBinderGroups([deck("Selvala")], progress)).rejects.toThrow();
+
+    const result = await importBinderGroups([deck("Selvala")], progress);
+    expect(deckCreate).toHaveBeenCalledTimes(1);
+    expect(deckImportCommit).toHaveBeenCalledTimes(1);
+    expect(collectionImportCommit.mock.calls.map((call) => call[2])).toEqual([78, 78]);
+    expect(result.decks).toEqual([MADE]);
+  });
+
+  it("still counts a folder the refused press made as new when the retry lands it", async () => {
+    collectionImportCommit.mockRejectedValueOnce("database is locked").mockResolvedValue(OWNED);
+    const progress = binderImportProgress();
+    await expect(importBinderGroups([folder("Box 3")], progress)).rejects.toThrow();
+
+    const result = await importBinderGroups([folder("Box 3")], progress);
+    expect(collectionFolderCreate).toHaveBeenCalledTimes(1);
+    expect(collectionImportCommit.mock.calls.map((call) => call[2])).toEqual([100, 100]);
+    expect(result).toMatchObject({ folders: 1, foldersCreated: 1, copies: 1 });
+  });
+
   it("marks every owned root stale, landed or not", async () => {
     seedOwned(client);
     collectionImportCommit.mockRejectedValueOnce("database is locked");
     const { result } = renderHook(() => useImport(), { wrapper });
-    await expect(result.current.importBinders.mutateAsync([folder("Binder")])).rejects.toThrow();
+    await expect(
+      result.current.importBinders.mutateAsync({
+        groups: [folder("Binder")],
+        progress: binderImportProgress(),
+      }),
+    ).rejects.toThrow();
     await waitFor(() =>
       expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
     );
