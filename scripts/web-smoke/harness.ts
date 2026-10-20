@@ -27,6 +27,7 @@ import { gzipSync } from "node:zlib";
 // reader of `_headers`, and the rule its script and both local servers tell a place by.
 import { headersFor, parseHeaders } from "../../infrastructure/app-worker/src/headers.ts";
 import { isNavigation } from "../../packages/ui/lib/core/web/assets.ts";
+import { BrowserFault, WHY, attempts, faultIn } from "./fault.ts";
 
 import type { AddressInfo } from "node:net";
 import type {
@@ -75,7 +76,14 @@ export const FIXTURES = dirname(fileURLToPath(import.meta.url));
  * {@link runAs} sets both. CI's step has a longer bound of its own behind the second.
  */
 const run = { name: "smoke", deadlineMs: 180_000 };
-const started = performance.now();
+/** When this attempt at the run began ({@link runAs} runs one again after a browser fault). */
+let started = performance.now();
+/**
+ * What any browser of this attempt said that is the browser's fault and not the app's
+ * (`fault.ts`) — its network service dying under it, above all. Every wait stops on one
+ * ({@link intercept}'s `check`), and {@link runAs} reads it after a failure.
+ */
+const faults: string[] = [];
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -199,27 +207,60 @@ function stopOnEveryWayOut() {
  * Run `main` as the run called `name`, bounded by `deadlineMs`, and stop everything it started
  * however it ends ({@link stopOnEveryWayOut}).
  *
- * **The timer is the one bound on the whole run.** `until` polls against the deadline too, but a
- * protocol call that never answers — a navigation, an OPFS walk that never settles — polls
- * nothing, so this is a timer and not a check. Unreferenced, so it never keeps a finished run
- * alive.
+ * **The timer is the one bound on the whole run** — on each attempt at it. `until` polls against
+ * the deadline too, but a protocol call that never answers — a navigation, an OPFS walk that never
+ * settles — polls nothing, so this is a timer and not a check. Unreferenced, so it never keeps a
+ * finished run alive.
+ *
+ * `times` is how many attempts a run may make in all, **and only a browser fault earns another**
+ * (`fault.ts`): one whose browser's network service died has said nothing about the app, and is
+ * stopped and started again from nothing. Any other failure is the run's verdict at once.
  */
-export function runAs(name: string, deadlineMs: number, main: () => Promise<unknown>) {
+export function runAs(name: string, deadlineMs: number, main: () => Promise<unknown>, times = 1) {
   run.name = name;
   run.deadlineMs = deadlineMs;
   stopOnEveryWayOut();
-  setTimeout(async () => {
-    console.error(`${run.name}: FAILED — still running after ${run.deadlineMs / 1000} s`);
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  /** One attempt, under a deadline of its own. */
+  const attempt = async () => {
+    clearTimeout(deadline);
+    started = performance.now();
+    deadline = setTimeout(async () => {
+      console.error(`${run.name}: FAILED — still running after ${run.deadlineMs / 1000} s`);
+      await stopEverything();
+      process.exit(1);
+    }, run.deadlineMs);
+    deadline.unref();
+    await main();
+  };
+  /**
+   * The browser's word on a failed attempt. **Read after a moment and not at once**: a request
+   * the dying network service took with it can reach the walk — as a refusal it checks for at
+   * once, a departure's log row — before the browser's own line has been read off its stderr.
+   */
+  const faultBehind = async (error: unknown) => {
+    if (error instanceof BrowserFault) return faults[0] ?? error.message;
+    await pause(1_000);
+    return faults[0] ?? null;
+  };
+  /** Everything stopped and forgotten, so the next attempt starts from nothing. */
+  const again = async (said: string, left: number) => {
+    console.error(
+      `${run.name}: ${WHY} (Chrome said: ${said}). That is no verdict on the app, so the ` +
+        `walk runs again from the start — ${left} more time${left === 1 ? "" : "s"} at most`,
+    );
     await stopEverything();
-    process.exit(1);
-  }, run.deadlineMs).unref();
-  return main()
+    faults.length = 0;
+    process.exitCode = undefined;
+  };
+  return attempts(times, attempt, faultBehind, again)
     .then(() => {
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
       console.log(`${run.name}: passed in ${seconds} s`);
     })
     .catch((error) => {
-      if (process.exitCode !== 1) {
+      // A fault is said even after a `fail` — which may have been the dying browser's doing.
+      if (process.exitCode !== 1 || error instanceof BrowserFault) {
         console.error(`${run.name}: FAILED — ${error.message}`);
         process.exitCode = 1;
       }
@@ -610,6 +651,16 @@ async function launch(profile: string, extra: string[] = []) {
   // page this browser ever loads is the one this script serves.
   if (process.env.CI) args.push("--no-sandbox");
   const child = spawn(browserPath(), args, { stdio: ["ignore", "ignore", "pipe"] });
+  // Each whole line it writes, read for a fault of its own (`fault.ts`) for as long as it runs.
+  let partial = "";
+  child.stderr.on("data", (chunk) => {
+    const lines = (partial + chunk).split(/\r?\n/);
+    partial = lines.pop() ?? "";
+    for (const line of lines) {
+      const said = faultIn(line);
+      if (said !== null) faults.push(said);
+    }
+  });
   // Registered before anything can fail, so a browser that never listens is still stopped.
   const kill = () => child.kill();
   undo.push(kill);
@@ -782,8 +833,9 @@ async function intercept(
     offline(gone: boolean) {
       offline = gone;
     },
-    /** Fail the run on anything written down so far. */
+    /** Fail the run on anything written down so far — and stop it on a browser's fault. */
     check() {
+      if (faults.length > 0) throw new BrowserFault(`${WHY}. Chrome said: ${faults[0]}`);
       // Each once: an issue is reported again to a session that starts listening after it.
       if (problems.length > 0) fail([...new Set(problems)].join("\n"));
     },
