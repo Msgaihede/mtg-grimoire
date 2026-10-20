@@ -462,6 +462,23 @@ describe("a taxonomy this machine has never downloaded", () => {
     expect(await railRow("Landscape")).toBeInTheDocument();
   });
 
+  // Issue #1183: an `atag:` typed before the ingest finished resolved to `null`; it must be
+  // asked again, while the other taxonomy's card reads are left alone.
+  it("re-resolves typed tags when the art ingest finishes", async () => {
+    artTagsStatus.mockResolvedValue(NEVER);
+    renderPage();
+    await screen.findByText(/art tags are still downloading/i);
+    client.setQueryData(["tags", "resolve", "atag:dog"], [null]);
+    client.setQueryData(["tags", "oracle", "card", "bolt"], []);
+
+    act(() => artProgress?.({ phase: "done", done: 1, total: 1 }));
+
+    await waitFor(() =>
+      expect(client.getQueryState(["tags", "resolve", "atag:dog"])?.isInvalidated).toBe(true),
+    );
+    expect(client.getQueryState(["tags", "oracle", "card", "bolt"])?.isInvalidated).toBe(false);
+  });
+
   it("says nothing at all when both taxonomies are in", async () => {
     renderPage();
     await railRow("Landscape");

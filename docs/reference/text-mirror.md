@@ -492,6 +492,14 @@ feel. `rebuild_now`'s is the worse of the two, because the reader who pressed th
 in front of the window watching it; if the connection cannot be opened it falls back to the shared
 one rather than refusing.
 
+**And they never run at once.** Each reads `.mirror-manifest` at its start and writes it at its end,
+so two interleaved passes let the last manifest written win: a rebuild prunes a deck, the thread's
+pass (planned before the rename) re-puts it, and the rebuild's manifest then names it nowhere —
+orphaned for good (issue #1149). `AppState.mirror_pass` is one mutex both hold from the root's read to
+the record of what they did; a press mid-pass waits the second or two the thread's pass takes, then
+reads the rows afresh. It is taken before `rebuild_now`'s fallback locks `db_read`, never after, so
+the wait queues no search.
+
 ## What it costs — measured 2026-08-25, **debug** build
 
 Driven in the real shipped window over CDP against a copy of the live database: **4 decks / 611 deck

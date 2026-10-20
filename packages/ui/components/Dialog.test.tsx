@@ -1,6 +1,7 @@
-import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useIsPresent } from "motion/react";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { DialogHostContext, type DialogHost } from "@/lib/dialogHost";
 import { LAYER } from "@/lib/layers";
@@ -801,6 +802,53 @@ describe("a dialog under a host that lends a finger's gestures", () => {
       </DialogHostContext.Provider>,
     );
     expect(release).toHaveBeenCalledOnce();
+    expect(claimBack).toHaveBeenCalledOnce();
+  });
+
+  it("claims again when it refuses a Back, since that Back spent the entry", () => {
+    const backs: (() => void)[] = [];
+    const claimBack = vi.fn((onBack: () => void) => {
+      backs.push(onBack);
+      return () => {};
+    });
+    // `onDismiss` is a bare spy: the dialog stays open, as a trade scan mid-Add keeps it.
+    const { onDismiss } = hosted({ claimBack, swipeToClose: false });
+    expect(claimBack).toHaveBeenCalledOnce();
+    act(() => backs[0]());
+    expect(onDismiss).toHaveBeenCalledOnce();
+    expect(claimBack).toHaveBeenCalledTimes(2);
+
+    // The fresh claim is a working Back step of its own.
+    act(() => backs[1]());
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    expect(claimBack).toHaveBeenCalledTimes(3);
+  });
+
+  it("claims nothing more when the Back it was handed closes it", () => {
+    let back: (() => void) | undefined;
+    const claimBack = vi.fn((onBack: () => void) => {
+      back = onBack;
+      return () => {};
+    });
+    function Closing() {
+      const [open, setOpen] = useState(true);
+      return (
+        <DialogHostContext.Provider value={{ claimBack, swipeToClose: false }}>
+          <Dialog
+            open={open}
+            title="Filters"
+            closeLabel="Close filters"
+            size="w-[26rem]"
+            onDismiss={() => setOpen(false)}
+            onClose={() => setOpen(false)}
+          >
+            <p>Body</p>
+          </Dialog>
+        </DialogHostContext.Provider>
+      );
+    }
+    render(<Closing />);
+    act(() => back?.());
     expect(claimBack).toHaveBeenCalledOnce();
   });
 

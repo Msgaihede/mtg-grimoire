@@ -571,6 +571,9 @@ export const TableView = memo(function TableView({
         rows={rows}
         columns={columns}
         label="This deck"
+        // The line, so a quantity box being typed in never outlives the card it was typed
+        // against — a zero takes the card out and the next one moves up (issue #1111).
+        rowKey={(row) => row.key}
         total={rows.length}
         // The deck is bounded and the page is the scroller — see this file's own header. This
         // is the one caller of `VirtualTable` that passes it.

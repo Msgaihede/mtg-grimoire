@@ -84,6 +84,22 @@ describe("TagQueryRow", () => {
     expect(group).toHaveTextContent("Ramp");
   });
 
+  /** Issue #1165: a refused lookup holds the wall empty, so the row says why and offers the
+   *  lookup again — the one thing the reader can do about it. */
+  it("says the tag lookup was refused and offers it again", async () => {
+    const retryTagLookup = vi.fn();
+    render(
+      <TagQueryRow search={search({ tagLookupFailure: "database is locked", retryTagLookup })} />,
+      { wrapper },
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /Couldn't look up the tags in the search box — database is locked/,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retryTagLookup).toHaveBeenCalledOnce();
+  });
+
   /**
    * The row must not carry the Tags page's invitation. "Pick one from the list to narrow the
    * cards" names a rail this surface does not have, and it would sit under a search box that

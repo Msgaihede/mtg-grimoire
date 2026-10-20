@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -2611,6 +2612,19 @@ function Tile<T extends GridCard>({
   const face = useShownFace(turnable ? card.id : null);
   const controls = column?.(card);
   /**
+   * The key everything the caller hangs on this tile is drawn under — the card's, where the tile
+   * itself is keyed by its slot (see the wall's own note on why).
+   *
+   * **A slot outlives the card in it, and a caller's control must not** (issue #1111). A
+   * `QuantityStepper` in `column` keeps a half-typed draft and the caret; an `action`'s quick-add
+   * keeps its popup open. Type "0" over a copy's "10" and the save removes it, the next card
+   * moves up into this slot, and a box keyed by the slot is still focused, still showing "0" —
+   * the next digit is a write to a card the reader never touched. Keyed by the card, each slot's
+   * contents are new the moment the card is, and the tile's own frame and focus stay where they
+   * are. One child per box, so the key is never a duplicate among siblings either.
+   */
+  const own = tileKey(card);
+  /**
    * What the chin says about the printing — **branched here rather than passed as four loose
    * props**, because `CardChin`'s own prop is a union with exactly two arms and that is the point
    * of it: either the caller wrote the line, or the chin builds `SET · number` from the two halves
@@ -2950,7 +2964,7 @@ function Tile<T extends GridCard>({
               ],
             )}
           >
-            {mark}
+            <Fragment key={own}>{mark}</Fragment>
           </span>
         )}
         {corner && (
@@ -2983,7 +2997,7 @@ function Tile<T extends GridCard>({
               "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
             )}
           >
-            {corner}
+            <Fragment key={own}>{corner}</Fragment>
           </span>
         )}
         {footMark && (
@@ -3009,7 +3023,7 @@ function Tile<T extends GridCard>({
               "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
             )}
           >
-            {footMark}
+            <Fragment key={own}>{footMark}</Fragment>
           </span>
         )}
         {action && (
@@ -3063,7 +3077,7 @@ function Tile<T extends GridCard>({
               REVEAL_ON_HOVER,
             )}
           >
-            {action(card)}
+            <Fragment key={own}>{action(card)}</Fragment>
           </span>
         )}
         {(controls != null || turnable) && (
@@ -3130,7 +3144,7 @@ function Tile<T extends GridCard>({
               REVEAL_ON_HOVER,
             )}
           >
-            {controls}
+            <Fragment key={own}>{controls}</Fragment>
             {turnable && <FlipFaceButton cardId={card.id} name={card.name} />}
           </span>
         )}

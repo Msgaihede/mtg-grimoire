@@ -63,7 +63,9 @@ const OPERATION: &str = "live";
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum LiveState {
-    /// No entitlement and no pairing — the state every installation is in today.
+    /// No entitlement and no pairing — the state every installation is in today. **Also a group
+    /// nobody has connected yet** ([`run`]'s quiet wait, issue #1120): paired, and nothing the
+    /// relay will open a socket for — no more `offline` than a device in no group is.
     Off = 0,
     Connecting = 1,
     Live = 2,
@@ -152,6 +154,21 @@ impl crate::hooks::WriteObserver for WriteWake {
 /// connection reads go through ([`State::lock_db_read`]).
 const IDLE_POLL: Duration = Duration::from_secs(5);
 
+/// How long a group the relay has never heard of is left before it is asked about again.
+///
+/// **A paired group with no membership is a supported state** — *pair first, connect later* —
+/// and the relay answers its every key check 401 until somebody presses Connect (issue #1120).
+/// Asked on the reconnect ladder, that was a `/keys` and a `/token` every one or two minutes for
+/// ever, two `error_log` rows each time and the word `offline`. Now it is one `/keys` per this
+/// long, and no row.
+///
+/// **Only the one thing this device cannot see locally waits this long**: a sibling pressing
+/// Connect for the group. A Connect pressed here, a pairing into another group, a *Leave group*
+/// — each is a write on this device, and [`wait_while_unclaimed`] looks for them every
+/// [`IDLE_POLL`]. A launch asks at once as well, so a phone opened after the desktop connected
+/// syncs straight away.
+const UNCLAIMED_POLL: Duration = Duration::from_secs(10 * 60);
+
 /// How often the loop asks the scheduler whether anything has come due.
 ///
 /// The scheduler's own debounces are one second and three ([`super::schedule`]), so a
@@ -177,6 +194,9 @@ pub async fn run(state: Arc<State>, writes: Arc<Bell>) {
     let mut sched = Scheduler::new();
     let mut signal = Signal::new();
     let mut attempt: u32 = 0;
+    // Whether the last trip found a group nobody has connected — so the next one, asked from the
+    // quiet wait, is not announced as `connecting` to anything.
+    let mut quiet = false;
     sched.wake(Wake::Launch, now_ms(), 0);
 
     loop {
@@ -184,12 +204,15 @@ pub async fn run(state: Arc<State>, writes: Arc<Bell>) {
         // An installation that has connected nothing opens no socket, which is every
         // installation today.
         if !in_a_group(&state).await {
+            quiet = false;
             signal.set(&*state.events, LiveState::Off);
             timer::sleep(IDLE_POLL).await;
             continue;
         }
 
-        signal.set(&*state.events, LiveState::Connecting);
+        if !quiet {
+            signal.set(&*state.events, LiveState::Connecting);
+        }
 
         // **Spec §6.4: "the connection manager's first act is a full round trip, then the
         // socket."** This arm is that act, and it is here rather than only in
@@ -206,9 +229,22 @@ pub async fn run(state: Arc<State>, writes: Arc<Bell>) {
         // pull and the socket starting to listen, which is the only gap a frame could fall
         // into. Two trips per connection is what §6.4 asks for in as many words, and a
         // connection is a rare event — twelve hours of [`SOCKET_MAX_AGE`], or a reconnect.
+        //
+        // **And it is where a group nobody has connected is found** (issue #1120): the trip's
+        // key check is refused, the device has never been entitled, and there is nothing to dial
+        // a socket with. That is not a failure — no backoff, no row, not `offline` — but a wait,
+        // [`wait_while_unclaimed`], for the press that changes it.
         if sched.take_due(now_ms()) {
-            trip(&state, &mut sched).await;
+            if let Some(group) = trip(&state, &mut sched).await {
+                quiet = true;
+                signal.set(&*state.events, LiveState::Off);
+                wait_while_unclaimed(&state, &group).await;
+                sched.wake(Wake::Reconnect, now_ms(), 0);
+                continue;
+            }
         }
+        quiet = false;
+        signal.set(&*state.events, LiveState::Connecting);
 
         let ended = connect_once(&state, &writes, &mut sched, &mut signal).await;
 
@@ -587,6 +623,52 @@ fn lapsed(conn: &rusqlite::Connection) -> bool {
     !commands::entitled(conn) && entitlement::membership_ended(conn)
 }
 
+/// **The group this device is in, when the relay has never heard of it** — a trip that failed on
+/// `error`, asked of the database behind it; `None` for every other failure.
+///
+/// Two noes (issue #1120): the relay refused the group's key check
+/// ([`client::UNRECOGNISED_GROUP`], compared and never matched), and this device has never been
+/// entitled ([`entitlement::never_entitled`]). Either alone is something else — a device that was
+/// told of a membership and is then refused is behind a rotation, or a group claimed before the
+/// relay stored keys, and both are still recorded. Together they are *pair first, connect
+/// later*: a supported state, and no failure.
+fn unclaimed(conn: &rusqlite::Connection, error: &str) -> Option<String> {
+    if error != client::UNRECOGNISED_GROUP || !entitlement::never_entitled(conn) {
+        return None;
+    }
+    group_of(conn).flatten()
+}
+
+/// Wait out a group nobody has connected: until [`UNCLAIMED_POLL`] has passed, or sooner when
+/// something on this device changes the answer — a refresh secret or a status written (Connect,
+/// or a press of *Sync now* the group door answered), or the device no longer in `group`.
+///
+/// One local `SELECT` per [`IDLE_POLL`], on the read connection, as [`in_a_group`] asks: the
+/// cost of the idle state, and nothing on the network.
+async fn wait_while_unclaimed(state: &Arc<State>, group: &str) {
+    let since = Tick::now();
+    while since.elapsed() < UNCLAIMED_POLL {
+        timer::sleep(IDLE_POLL).await;
+        if !still_unclaimed(state, group).await {
+            return;
+        }
+    }
+}
+
+/// Whether this device is still in `group` and still never entitled — [`wait_while_unclaimed`]'s
+/// look. `false` on any error, which asks the relay again: the worst that costs is one key check.
+async fn still_unclaimed(state: &Arc<State>, group: &str) -> bool {
+    let owned = state.clone();
+    let group = group.to_owned();
+    spawn::blocking(move || {
+        let conn = owned.lock_db_read();
+        entitlement::never_entitled(&conn)
+            && group_of(&conn).flatten().is_some_and(|now| now == group)
+    })
+    .await
+    .unwrap_or(false)
+}
+
 /// Write a background failure to `error_log`, best effort — and **never a lapse**.
 ///
 /// ⚠️ **The exclusion is the rule rather than a nicety.** `entitlement.rs`'s module doc and spec
@@ -855,36 +937,47 @@ fn jitter() -> f64 {
 /// **The failure is recorded behind the trip, in a stretch of its own on the same lane** — so a
 /// press that follows reads the row, and nothing else can have revoked or restored the grant
 /// between the trip's answer and the question that row turns on. The lapse exclusion is
-/// [`note`]'s, for [`note`]'s reasons.
-async fn trip(state: &Arc<State>, sched: &mut Scheduler) {
+/// [`note`]'s, for [`note`]'s reasons — and **a group nobody has connected is excluded beside
+/// it** ([`unclaimed`]), and answered: `Some` of that group, for [`run`] to wait out. `None` for
+/// every other outcome, a success included.
+async fn trip(state: &Arc<State>, sched: &mut Scheduler) -> Option<String> {
     sched.started();
     let owned = state.clone();
     let outcome = spawn::on_a_worker(move || async move {
         let lane = owned.lane().await;
         let outcome = client::run_once(&lane).await;
+        let mut waiting = None;
         if let Err(e) = &outcome {
-            let _ = lane.with(|conn| {
-                if !lapsed(conn) {
-                    crate::errors::record(conn, Source::Relay, OPERATION, Kind::Other, e, None);
-                }
-                Ok(())
-            });
+            waiting = lane
+                .with(|conn| {
+                    let waiting = unclaimed(conn, e);
+                    if waiting.is_none() && !lapsed(conn) {
+                        crate::errors::record(conn, Source::Relay, OPERATION, Kind::Other, e, None);
+                    }
+                    Ok(waiting)
+                })
+                .ok()
+                .flatten();
         }
-        outcome
+        (outcome, waiting)
     })
     .await;
     sched.finished();
+    let Ok((outcome, waiting)) = outcome else {
+        return None;
+    };
 
     // **`sync:applied` is emitted only when something changed**, so a frontend listener that
     // invalidates every user-data root does not do so on every heartbeat. `changed` and not
     // `pulled`: a pull can delete rows here through the moot arm, and the conversions behind it
     // write rows, with nothing applied (`RelayOutcome::changed`).
-    if let Ok(Ok(Some(o))) = outcome {
+    if let Ok(Some(o)) = outcome {
         o.settle_owned(state);
         if o.changed || o.pushed > 0 {
             crate::events::emit(&*state.events, "sync:applied", &o);
         }
     }
+    waiting
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1663,6 +1756,161 @@ mod tests {
                 "{door:?}: nor does the socket that fell behind it"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------------------
+    // A group nobody has connected — pair first, connect later (issue #1120)
+    // -----------------------------------------------------------------------------------
+
+    /// A device in a group of its own that has never been entitled — paired, nobody pressed
+    /// Connect — whose relay is `relay`. Answers the state and the group's id.
+    fn unclaimed_group(name: &str, relay: &str) -> (Arc<State>, String) {
+        let (state, _dir) = crate::state::fixtures::on_files(name, "http://127.0.0.1:1");
+        let group = {
+            let conn = state.lock_db();
+            client::set_state(&conn, client::RELAY_URL, relay).unwrap();
+            let me = identity::ensure(&conn).unwrap();
+            let group = identity::create_group(&conn, &me).unwrap();
+            assert!(entitlement::never_entitled(&conn));
+            assert!(!lapsed(&conn));
+            group.group_id
+        };
+        (state, group)
+    }
+
+    /// Every `error_log` row, whatever wrote it — the key check's own (`keys`) as well as the
+    /// loop's (`live`).
+    fn every_row(state: &State) -> Vec<(String, String)> {
+        let conn = state.lock_db();
+        let mut stmt = conn
+            .prepare("SELECT operation, message FROM error_log ORDER BY id")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        rows
+    }
+
+    /// **A group the relay has never heard of, on a device never entitled, is a wait and not a
+    /// failure** (issue #1120). The relay refuses its key check as it refuses every unclaimed
+    /// group's; the trip answers the group for the loop to wait out, and no row is written —
+    /// neither the key check's nor the loop's. Before, both were written on every rung of the
+    /// reconnect ladder, for as long as nobody pressed Connect.
+    ///
+    /// **What makes it red**: `trip` recording the refusal, `fetch_key_page` saying it, or
+    /// `unclaimed` answering `None` — which hands the loop back to `connect_once`, a `/token`, a
+    /// third row and `offline`.
+    #[tokio::test]
+    async fn a_group_nobody_has_connected_is_waited_out_and_never_recorded() {
+        let server = httpmock::MockServer::start();
+        let (state, group) = unclaimed_group("live-unclaimed", &server.base_url());
+        let keys = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path(format!("/g/{group}/keys"));
+            then.status(401).body("");
+        });
+
+        assert_eq!(
+            trip(&state, &mut Scheduler::new()).await,
+            Some(group.clone())
+        );
+        keys.assert();
+        assert_eq!(every_row(&state), Vec::<(String, String)>::new());
+        assert!(still_unclaimed(&state, &group).await);
+    }
+
+    /// **The same refusal on a device that has been told of a membership is still a row** — the
+    /// key check's and the loop's. A device with a refresh secret is the one the sentence tells
+    /// to reconnect Patreon (a group claimed before the relay stored keys), and one with a
+    /// status is behind more rotations than the relay keeps; neither is a group nobody
+    /// connected, and the trip answers nothing to wait out.
+    #[tokio::test]
+    async fn the_same_refusal_on_a_device_that_was_entitled_is_still_recorded() {
+        for door in [Door::Claimed, Door::PairedOnly] {
+            let server = httpmock::MockServer::start();
+            let (state, group, _epoch) = entitled_through(
+                &format!("live-unrecognised-{door:?}"),
+                door,
+                &server.base_url(),
+            );
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path(format!("/g/{group}/keys"));
+                then.status(401).body("");
+            });
+
+            assert_eq!(trip(&state, &mut Scheduler::new()).await, None, "{door:?}");
+            let rows = every_row(&state);
+            assert_eq!(
+                rows,
+                vec![
+                    ("keys".to_owned(), client::UNRECOGNISED_GROUP.to_owned()),
+                    ("live".to_owned(), client::UNRECOGNISED_GROUP.to_owned()),
+                ],
+                "{door:?}"
+            );
+        }
+    }
+
+    /// **A device never entitled that fails some other way is recorded as it always was**: the
+    /// wait is for the relay's refusal of the group, and a relay that cannot be reached is not
+    /// that.
+    #[tokio::test]
+    async fn an_unclaimed_device_whose_relay_is_down_is_still_recorded() {
+        let server = httpmock::MockServer::start();
+        server.mock(|when, then| {
+            when.any_request();
+            then.status(500).body("down");
+        });
+        let (state, _group) = unclaimed_group("live-unclaimed-down", &server.base_url());
+
+        assert_eq!(trip(&state, &mut Scheduler::new()).await, None);
+        assert_eq!(noted(&state), 1, "{:?}", live_rows(&state));
+    }
+
+    /// **The wait ends on this device's own press**, without the relay: a status the group door
+    /// wrote (a *Sync now* it answered), a refresh secret (Connect), or the group left.
+    #[tokio::test]
+    async fn the_wait_ends_when_this_device_is_entitled_or_leaves() {
+        let (state, group) = unclaimed_group("live-unclaimed-ends", "http://127.0.0.1:1");
+        assert!(still_unclaimed(&state, &group).await);
+        assert!(
+            !still_unclaimed(&state, "another-group").await,
+            "a device in another group is asked about that one"
+        );
+
+        let now = crate::platform::clock::now_secs();
+        {
+            let conn = state.lock_db();
+            entitlement::store_status(&conn, "active", Some(now)).unwrap();
+        }
+        assert!(
+            !still_unclaimed(&state, &group).await,
+            "a status was written"
+        );
+
+        {
+            let conn = state.lock_db();
+            entitlement::clear(&conn).unwrap();
+            entitlement::store_grant(&conn, "tok", "refresh", now + 86_400).unwrap();
+        }
+        assert!(
+            !still_unclaimed(&state, &group).await,
+            "Connect was pressed"
+        );
+
+        {
+            let conn = state.lock_db();
+            entitlement::clear(&conn).unwrap();
+        }
+        assert!(still_unclaimed(&state, &group).await);
+        {
+            let conn = state.lock_db();
+            identity::leave_group(&conn).unwrap();
+        }
+        assert!(!still_unclaimed(&state, &group).await, "the group was left");
     }
 
     // -----------------------------------------------------------------------------------

@@ -142,7 +142,9 @@ A few details of the bridge:
 - **A Scryfall type line is split into MTGJSON's three lists** (`Legendary Creature — Elf Druid` →
   `Legendary` / `Creature` / `Elf Druid`), because the parser reads the split.
 - **A card of several faces is known by its front face**, the name phase keys it by. Each face is
-  its own export entry with its `face_index`.
+  its own export entry with its `face_index`. phase joins a card's faces by their oracle id: a
+  face without one is a card of its own, with no back face to play or transform into (issue #1144's
+  tests found it).
 - **`CardDatabase::get_by_name` answers nothing for a database loaded from an export.** `cards` is
   empty there, and only `face_index` is filled. Use `get_face_by_name`. Found the first time a test
   ran.

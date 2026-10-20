@@ -10,10 +10,14 @@
 import { describe, expect, it } from "vitest";
 import golden from "../../../apps/desktop/src-tauri/src/share/__golden__/snapshot.json?raw";
 import deckGolden from "../../../apps/desktop/src-tauri/src/share/__golden__/deck.json?raw";
+import imageUriRs from "../../../crates/grimoire-core/src/image_uri.rs?raw";
+import sharesTs from "../../../infrastructure/share-worker/src/shares.ts?raw";
 import {
   parseSnapshot,
   parseSnapshotValue,
+  SHARE_IMAGE_ORIGIN,
   shareDeckOf,
+  shareImage,
   SNAPSHOT_NOT_A_SNAPSHOT,
   SNAPSHOT_TOO_NEW,
   SNAPSHOT_VERSION,
@@ -266,5 +270,52 @@ describe("a shared deck", () => {
     });
     expect(deck?.format).toBe("");
     expect(deck?.piles.map((p) => p.uid)).toEqual(s.deck?.piles.map((p) => p.uid));
+  });
+});
+
+/**
+ * Issue #1153: a snapshot is its publisher's document and nothing upstream reads its `img`s, so
+ * the viewer draws a picture only from the host the writer takes every one of them from.
+ */
+describe("shareImage", () => {
+  it("passes every picture the golden carries", () => {
+    for (const text of [golden, deckGolden]) {
+      for (const card of parseSnapshot(text).cards) {
+        expect(card.img).toBeDefined();
+        expect(shareImage(card)).toBe(card.img);
+      }
+    }
+  });
+
+  it("is no picture for a card with none", () => {
+    expect(shareImage({})).toBeNull();
+    expect(shareImage({ img: null as never })).toBeNull();
+    expect(shareImage({ img: 7 as never })).toBeNull();
+  });
+
+  it("is no picture for any host but Scryfall's", () => {
+    for (const img of [
+      "https://tracker.example/?c=1",
+      // The trailing slash is the check: the byte after the host must end it.
+      "https://cards.scryfall.io.evil.test/x.webp",
+      "https://cards.scryfall.io@evil.test/x.webp",
+      "http://cards.scryfall.io/x.webp",
+      "//cards.scryfall.io/x.webp",
+      "/s/AAAAAAAAAAAAAAAA",
+      "data:image/svg+xml,<svg/>",
+      "",
+    ]) {
+      expect(shareImage({ img }), img).toBeNull();
+    }
+  });
+
+  /**
+   * One host, written three times: the writer's, the share Worker's (`og:image`, and the
+   * shell's `img-src` built from it) and this viewer's. Read as text, as `ipc.test.ts` reads
+   * Rust: neither of the other two can be imported into a webview package.
+   */
+  it("is the host the writer and the share Worker name", () => {
+    expect(imageUriRs).toContain(`pub const IMAGE_HOST: &str = "${SHARE_IMAGE_ORIGIN}";`);
+    expect(sharesTs).toContain(`export const PREVIEW_IMAGE_ORIGIN = "${SHARE_IMAGE_ORIGIN}";`);
   });
 });

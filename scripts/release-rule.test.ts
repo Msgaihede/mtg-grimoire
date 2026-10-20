@@ -40,6 +40,7 @@ import releaseYml from "../.github/workflows/release.yml?raw";
 import ciYml from "../.github/workflows/ci.yml?raw";
 import syncSmoke from "./web-sync-smoke.ts?raw";
 import smokeHarness from "./web-smoke/harness.ts?raw";
+import smokeFault from "./web-smoke/fault.ts?raw";
 import syncHarness from "./web-smoke/sync-harness.ts?raw";
 import syncPull from "./web-sync-pull.ts?raw";
 import signProof from "./android-release/proof.sh?raw";
@@ -1682,12 +1683,18 @@ describe("deploys, across every workflow", () => {
     expect(imports(smokeHarness)).toEqual([
       "../../infrastructure/app-worker/src/headers.ts",
       "../../packages/ui/lib/core/web/assets.ts",
+      "./fault.ts",
     ]);
+    // What a walk does when its browser breaks (issue #1296): it reads the browser's output and
+    // runs the walk again, and starts nothing itself.
+    expect(imports(smokeFault)).toEqual([]);
+    expect(processes(smokeFault)).toEqual([]);
     for (const [name, source] of Object.entries({
       syncSmoke,
       syncHarness,
       syncPull,
       smokeHarness,
+      smokeFault,
     })) {
       // No import that is computed, which the list above could not see.
       expect(source.replace(/`[^`]*`/gs, ""), name).not.toMatch(/\bimport\(/);
@@ -1700,6 +1707,7 @@ describe("deploys, across every workflow", () => {
       syncHarness,
       syncPull,
       smokeHarness,
+      smokeFault,
     })) {
       expect(source, name).not.toMatch(reaching);
     }

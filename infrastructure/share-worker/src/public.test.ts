@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeEnvOver, type Row, type Tables } from "@grimoire/relay/src/fakeD1";
 import { mint } from "@grimoire/relay/src/token";
 import worker, { type Env } from "./index";
+import { CONTENT_SECURITY_POLICY } from "./page";
+import { PREVIEW_IMAGE_ORIGIN } from "./shares";
 
 /**
  * The blob store, the two public routes, and the shell page — driven through `worker.fetch` for
@@ -510,6 +512,8 @@ describe("GET /s/{id}/{hash}.json.gz", () => {
     expect(res.headers.get("content-type")).toBe("application/json");
     expect(res.headers.get("content-encoding")).toBe("gzip");
     expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    // A publisher's bytes, labelled JSON and never sniffed into anything else (issue #1153).
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(body);
   });
 
@@ -739,6 +743,44 @@ describe("GET /s/{id}", () => {
     );
     expect(html).toContain('<div id="root"></div>');
     expect(html).toContain('<script type="module" src="/assets/share.js"></script>');
+  });
+
+  /**
+   * Issue #1153. A snapshot is its publisher's document and nothing here reads its `img`s, so the
+   * page's own policy is what keeps a stranger's browser off a host the publisher chose — and the
+   * 404 and 410 pages, which share the template, carry it too.
+   */
+  it("sends every page under a policy that pins pictures to Scryfall and frames to nobody", async () => {
+    const fake = shareEnv({ shares: [shareRow()] });
+    const id = await publish(fake);
+    await upload(fake, id, gz("snapshot one"));
+    const pending = await publish(fake);
+
+    for (const res of [
+      await worker.fetch(shell(id), fake.env),
+      await worker.fetch(shell(pending), fake.env),
+      await worker.fetch(shell("LAPSEDLAPSEDLAPS"), fake.env),
+      await worker.fetch(shell("AAAAAAAAAAAAAAAA"), fake.env),
+      await worker.fetch(shell("tooshort"), fake.env),
+    ]) {
+      expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+      expect(res.headers.get("content-security-policy")).toBe(CONTENT_SECURITY_POLICY);
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(res.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    }
+
+    const directives = new Map(
+      CONTENT_SECURITY_POLICY.split("; ").map((d) => {
+        const [name, ...sources] = d.split(" ");
+        return [name, sources] as const;
+      }),
+    );
+    expect(directives.get("default-src")).toEqual(["'none'"]);
+    expect(directives.get("script-src")).toEqual(["'self'"]);
+    expect(directives.get("connect-src")).toEqual(["'self'"]);
+    expect(directives.get("img-src")).toEqual(["https://cards.scryfall.io", "data:"]);
+    expect(PREVIEW_IMAGE_ORIGIN).toBe("https://cards.scryfall.io/");
+    expect(directives.get("frame-ancestors")).toEqual(["'none'"]);
   });
 
   it("escapes a title and an owner's name that contain markup", async () => {

@@ -5,7 +5,7 @@ import { CONDITION_LABEL, type Condition } from "@grimoire/ui/lib/conditions";
 import { isFinish, type Finish } from "@grimoire/ui/lib/finish";
 import type { Currency } from "@grimoire/ui/lib/marketplace";
 import { formatPrice } from "@grimoire/ui/lib/prices";
-import type { ShareCard } from "@grimoire/ui/lib/shareSnapshot";
+import { shareImage, type ShareCard } from "@grimoire/ui/lib/shareSnapshot";
 
 /**
  * The absence, drawn.
@@ -40,13 +40,22 @@ export function wireFinish(f: string): Finish | null {
  *   this page has no Tauri behind it and so no `mtgimg://` protocol to ask, and `CardArt`'s
  *   `remoteSrc` is the one door for a picture from anywhere else — `CardTile` is what passes
  *   it to `CardArt`, and this tile is the only surface that supplies one. ⚠️ **Always
- *   `card.img ?? null`, never bare `card.img`**: an absent `remoteSrc` means *the cache*, and a
+ *   `shareImage(card)`, never bare `card.img`**: an absent `remoteSrc` means *the cache*, and a
  *   present `null` means *no picture*. A card the publisher's corpus had forgotten carries no
- *   `img`, which `CardArt` draws as a named frame rather than a broken image. The null id is
+ *   `img`, which `CardArt` draws as a named frame rather than a broken image — and so does a
+ *   card whose `img` names any host but Scryfall's, because the snapshot is the publisher's
+ *   document and nothing else checked it (issue #1153, `shareImage`'s doc). The null id is
  *   kept as defence in depth: it means this bundle can never *ask* for the `mtgimg://` protocol
  *   a browser has never heard of.
  * * **`rarity={null}` on the chin.** Rarity is not on the wire (spec §3's absences), so the gem
  *   says *unknown* rather than being derived from a corpus this page does not have.
+ *
+ * **`loading="lazy"`, always** (issue #1154). Both walls this tile is drawn on — the binder and
+ * the deck's Grid — mount every row they are handed, with no virtualiser to bound them, and a
+ * binder runs to thousands of distinct rows. `CardArt`'s rule for exactly that wall is the
+ * browser's own gate: without it a phone opening a chat link asks for every picture at once,
+ * over mobile data. The frame keeps the card's aspect ratio before its picture arrives, so the
+ * gate measures real tiles rather than a column of zero-height images that all look on screen.
  */
 export function ShareTile({
   card,
@@ -86,11 +95,12 @@ export function ShareTile({
       <CardTile
         cardId={null}
         name={card.n}
-        remoteSrc={card.img ?? null}
+        remoteSrc={shareImage(card)}
         finish={marked}
         rarity={null}
         chin={{ setCode: card.s, collectorNumber: card.cn }}
         zoom={DEFAULT_ZOOM}
+        loading="lazy"
         // `undefined` rather than `null`: the chin draws no money slot for the first and an em
         // dash for the second, which is precisely the difference between "nobody asked" and
         // "nobody quoted". Both are live states on this page.

@@ -541,6 +541,21 @@ pub fn membership_ended(conn: &Connection) -> bool {
     refresh_secret(conn).is_none() && client::get_state(conn, SUPPORTER_STATUS).is_some()
 }
 
+/// **A device the relay has never minted for** — no refresh secret, and no status either door
+/// ever wrote: [`membership_ended`]'s other half, and the state *pair first, connect later*
+/// leaves every device of a group in until somebody presses Connect (issue #1120).
+///
+/// Unlike [`membership_ended`] this one can be asked first and alone: both doors write a status
+/// with every token they mint, so a device entitled through either holds one, and a lapsed
+/// device holds `dead`. What it does over-claim is a device [`clear`]ed while it stayed in its
+/// group — *Disconnect* — which is a device whose group may still have a membership; the callers
+/// pair it with the relay's own refusal of the group, `client::UNRECOGNISED_GROUP`, so the
+/// question they ask is "has the relay heard of this group, and has this device ever been told
+/// it had": two noes are a group nobody has connected, which is not a failure.
+pub fn never_entitled(conn: &Connection) -> bool {
+    refresh_secret(conn).is_none() && client::get_state(conn, SUPPORTER_STATUS).is_none()
+}
+
 /// The relay refused the refresh secret: forget the tokens, **remember that there was a
 /// membership**.
 ///

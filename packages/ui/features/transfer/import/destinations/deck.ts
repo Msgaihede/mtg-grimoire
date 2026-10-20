@@ -553,6 +553,13 @@ export function tallyOf(items: readonly ImportItem[]): CategoryTally[] {
  *
  * Deduplicated by printing, so a list that names one legendary creature twice is one candidate
  * and stays `automatic`. An `ask` between a card and itself is not a question.
+ *
+ * **Under Oathbreaker this picks the oathbreaker alone**, which is why it is
+ * `commanderIneligibility` and not the zone-wide `commandZoneIneligibility` the editor's **Set as
+ * commander** row asks (issue #1161). The signature spell is the zone's too, but every instant and
+ * sorcery in the list could be it, so offering them here would turn the one planeswalker a list
+ * names — today's `automatic` — into an `ask` among dozens of spells. The spell stays where the
+ * list filed it and is set from the editor, whose row now offers it.
  */
 function commanderChoice(cards: readonly PlannedCard[], spec: FormatSpec | null): CommanderChoice {
   const rule = spec?.commanderRule ?? null;
