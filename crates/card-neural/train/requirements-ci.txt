@@ -1,0 +1,5 @@
+# What the two Neural workflows install on a GitHub runner: Modal's client, to deploy the app
+# (`neural-train.yml`) and to read and write the `card-neural` Volume (`neural-deliver.yml`).
+# Pinned, as every action is; the training's own packages are `requirements.txt`, installed in
+# Modal's image and never on a runner. 1.6.2 was Modal's newest release on 2026-10-20.
+modal==1.6.2

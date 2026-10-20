@@ -2,10 +2,12 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-- Four workflows — the third, **`scanner-bundle.yml`** (2026-09-15), builds and publishes the
+- Six workflows — the third, **`scanner-bundle.yml`** (2026-09-15), builds and publishes the
   card scanner's embedded assets and is recorded in [card-scanner.md](card-scanner.md) §10; the
   fourth, **`android-emulator.yml`** (2026-10-03), measures the light app's first run and has one
-  bullet below, beside the `android` job; this page covers the other two.
+  bullet below, beside the `android` job; the fifth and sixth, **`neural-train.yml`** and
+  **`neural-deliver.yml`** (2026-10-20), retrain the Neural scanner's models and are the last
+  section of this page; this page covers the other two.
   **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
   matrix (below — one leg for `pnpm build` and `lint`, four for `test:run --shard`), a
@@ -1640,3 +1642,43 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   installer, which is why the compiled app goes to Releases instead. **"Code signing" there means
   Authenticode, and it is still not done** — and neither, since 2026-09-29, is update signing,
   which was a different thing with a different reader (the app's own updater, never Windows).
+
+## The Neural training: `neural-train.yml` and `neural-deliver.yml` (2026-10-20)
+
+- **What they are for**: the Neural scanner's two networks (`crates/card-neural/models/`) retrained
+  once a month on Scryfall's current images, on a Modal GPU, and delivered back as a pull request —
+  the owner's decisions of 2026-10-20: the code in this repository (`crates/card-neural/train/`), a
+  pull request rather than a push, both networks monthly, **$10 a run at most**. The plan, with the
+  Volume's layout that is the contract between the Modal side and the delivery, is
+  `docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`; the owner's setup is
+  `crates/card-neural/train/README.md`, *Running it from GitHub*.
+- **`neural-train.yml`** — `cron: "41 3 1 * *"` and `workflow_dispatch` (`detector`, `cpu`,
+  `memory_gib`, `budget_usd`, `smoke`). It checks its arguments in a shell step that reads them
+  from `env:` (a budget over $10, cores outside 1–64 or memory outside 4–256 GiB are refused with
+  nothing deployed), installs the pinned Modal client (`requirements-ci.txt`), runs `modal deploy
+  --tag <sha>` and `launch.py`, and is done in about a minute; the run goes on on Modal. A re-run
+  of the monthly job has the same run name, and the pipeline resumes it.
+- **`neural-deliver.yml`** — `cron: "23 */6 * * *"` and `workflow_dispatch` (`run`). Four jobs, after
+  `release.yml`'s rule that secrets live in jobs that build nothing: `find` (Modal token), `build`
+  (no secret; the only job that runs cargo — `build-gallery` in release, then `cargo test --release
+  -p card-neural --features cli` on the files), `publish` (the pull request token; git and `gh`
+  only, git hooks off, `main` only) and `mark` (Modal token). The run's files and the delivery pass
+  between them as artifacts (`neural-run`, `neural-delivery`, kept seven days). One run a workflow
+  run, the oldest first; a failed run is reported once (`DELIVERED.json` with no pull request) and
+  turns that workflow run red through a `failed` job; a smoke run is built in a scratch copy and
+  marked, never published.
+- **Why a personal token**: a pull request a workflow opens with `GITHUB_TOKEN` starts no
+  workflow, so `ci.yml` would never run on it and `ci-ok` would stay pending. `NEURAL_PR_TOKEN`
+  (fine-grained, *Contents* and *Pull requests* read/write) opens it as a person would; without it
+  the job falls back to `GITHUB_TOKEN`, which also needs the repository to allow Actions to create
+  pull requests, and says so in the summary.
+- **The README's table is rewritten, not edited**: `apps/light/vite.config.ts` fails a web build
+  whose model file differs from its row (length and `head8…tail8` sha256, read by `neuralTable`),
+  so `update_readme.py` reads every row's numbers from the files on disk and lays the table out as
+  Prettier would. `models/training.json` keeps the current files' training metrics, which the next
+  pull request is compared against. `cargo test -p card-neural` holds a gallery to at least
+  70 000 looks rather than to the first pair's 70 402.
+- **Proved before the first real run** (2026-10-20, locally): a dry run of `deliver.py` over a
+  folder laid out as the Volume, built from the scanner lab's export of the shipped embedder
+  (`qd-e`), rebuilt `gallery.bin` byte for byte (`40278b05…95a617d4`), so the rewritten table kept
+  all four rows' numbers. Neither workflow had run on GitHub yet.

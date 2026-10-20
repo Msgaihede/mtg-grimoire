@@ -106,10 +106,13 @@ mod tests {
     #[test]
     fn the_shipped_files_load_and_an_empty_frame_holds_no_card() {
         let mut r = Recognizer::load(shipped()).unwrap();
-        assert_eq!(
-            r.gallery().len(),
-            70_402,
-            "the gallery models/README.md describes"
+        // Not one count: `neural-deliver.yml` delivers a new gallery every month, and Scryfall
+        // only grows, give or take a withdrawn printing. The first pair had 70 402 looks; a
+        // gallery well short of that is an export cut short, whichever run made it.
+        assert!(
+            r.gallery().len() >= 70_000,
+            "{} looks: a gallery cut short",
+            r.gallery().len()
         );
         assert_eq!(r.gallery().dim(), r.meta().embedder.dim);
         let grey = Frame::new(320, 192, vec![128; 320 * 192 * 3]).unwrap();
@@ -126,9 +129,11 @@ mod tests {
     fn the_shipped_gallery_searches_each_look_back_to_itself() {
         let r = Recognizer::load(shipped()).unwrap();
         let g = r.gallery();
-        // A handful of looks across the file: a look's own int8 row, used as the query, comes
-        // back first — the rows and their scales line up with the index.
-        for e in [0u32, 1, 12_345, 35_000, 70_401] {
+        // A handful of looks across the file, the last whatever the count: a look's own int8
+        // row, used as the query, comes back first — the rows and their scales line up with the
+        // index.
+        let last = u32::try_from(g.len() - 1).unwrap();
+        for e in [0u32, 1, 12_345, 35_000, last] {
             let q: Vec<f32> = (0..g.dim())
                 .map(|j| {
                     let mut one = vec![0.0; g.dim()];

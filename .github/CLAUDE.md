@@ -1,7 +1,8 @@
 # .github — CI and releases
 
-Four workflows manage CI and distribution: `ci.yml`, `release.yml`, `scanner-bundle.yml`, and
-`android-emulator.yml`. Every rule below is enforced by tests or measured in production.
+Six workflows: `ci.yml`, `release.yml`, `scanner-bundle.yml` and `android-emulator.yml` manage CI
+and distribution, and `neural-train.yml` and `neural-deliver.yml` retrain the Neural scanner's
+models. Every rule below is enforced by tests or measured in production.
 Full historical records and measurements: [`docs/reference/ci-and-releases.md`](../docs/reference/ci-and-releases.md);
 scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/card-scanner.md) §10.
 
@@ -20,6 +21,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - `crates/grimoire-web/**` and `crates/grimoire-scan/**` (the web host's two modules) route to `frontend`, `rust`, and `web`; `crates/grimoire-play/**` (desktop-only) to `frontend` and `rust`. All must sit above `crates/grimoire-core/*` and `crates/*`.
   - `crates/grimoire-core/**` routes to `frontend`, `rust`, `core`, and `web` (must stay above `crates/*`).
   - `crates/*` routes to `frontend`, `rust`, `core`, and `web` (covers `crates/card-scanner`).
+  - `crates/card-neural/models/*` (the model files, and the README whose table pins them) routes to the same four, above the prose arm; `crates/card-neural/train/*` (the training's Python, which no job here runs) to none, above `crates/*`.
   - `apps/light/src-tauri/**` (the phone's host) routes to `frontend`, `rust`, and `android`; `apps/light/vite.config.ts` to `frontend`, `rust`, `android`, and `web`; `apps/light/vite.sw.ts` to `frontend` and `web`. All three must sit above `apps/light/*`, which routes the rest of the light app to `frontend`, `storybook`, and `web`.
   - `apps/desktop/index.html` routes to `frontend` and `storybook` (above `apps/desktop/*`, which with `packages/ui/*` routes to `frontend`, `storybook`, and `web`); `packages/fake/*` to `frontend` and `storybook` (`packages/fake/aliases.ts` to `web` as well, above it).
   - Root `vite.base.ts`, `vite.watch.ts`, `vitest.config.ts`, `tsconfig*.json` and `infrastructure/*/tsconfig.json` route to `frontend`, `storybook`, and `web`.
@@ -73,7 +75,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - All third-party GitHub actions must use full 40-character commit SHAs with trailing version tags (`@<sha> # vX.Y.Z`).
   - Dependabot updates action SHAs weekly via grouped pull requests over `/` and `/.github/actions/*`.
   - `persist-credentials: false` is required on all checkouts to prevent leaking tokens.
-  - Workflows must declare a top-level `permissions:` that grants no write (`{}` in `release.yml` and `scanner-bundle.yml`, `contents: read` in `ci.yml` and `android-emulator.yml`) and grant anything more per job.
+  - Workflows must declare a top-level `permissions:` that grants no write (`{}` in `release.yml`, `scanner-bundle.yml` and both `neural-*.yml`, `contents: read` in `ci.yml` and `android-emulator.yml`) and grant anything more per job.
   - **Fence**: `scripts/actions-pinned.test.ts` enforces action SHA pinning and permissions.
 - **Scripts a workflow runs must exist**: `scripts/workflow-scripts.test.ts` fails if a workflow, composite action, Tauri hook or package script calls a `pnpm <name>` that `package.json` lacks. It reads only `pnpm <name>`, `pnpm run <name>` and the `-w` forms, refuses a `--` on a pnpm line, and refuses any npm, npx, pnpx or corepack line but the deploy tool's `npm ci --ignore-scripts`.
 
@@ -137,6 +139,16 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Non-gating performance diagnostic workflow. Builds and boots the Android APK on an x86_64 emulator under KVM.
   - Times cold launch, measures first-run corpus sync, checks for process crashes (`destroyed mutex`, `Fatal signal`), and captures screenshots.
   - Triggered via `workflow_dispatch` or changes to Android host files, `crates/grimoire-core/**`, or `scripts/android-first-run.sh`.
+
+## `neural-train.yml` & `neural-deliver.yml` — the Neural scanner's training
+
+Retrains `crates/card-neural`'s two networks on a Modal GPU and delivers them as a pull request (2026-10-20; the plan is `docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`, the code and the owner's setup `crates/card-neural/train/`). Neither gates anything.
+
+- **`neural-train.yml`**: 03:41 UTC on the 1st (run `YYYY-MM`) and dispatch (`detector`, `cpu`, `memory_gib`, `budget_usd`, `smoke`; run `YYYY-MM-DD-HHMM`, `-smoke` after). One job: `modal deploy crates/card-neural/train/modal_app.py` from the triggering commit, then `launch.py` spawns the run on Modal and returns; the summary names the run and how it will be delivered.
+- **The cost cap — $10 a run, the owner's limit**: a dispatch asking more is refused before anything is deployed, `budget.py` holds the run to its budget on Modal (each stage's container time charged as it runs, a stage stopped at its share), and the Modal workspace's own budget is the backstop.
+- **`neural-deliver.yml`**: every six hours and dispatch (`run`). `crates/card-neural/train/deliver.py` in four jobs, so no token shares a job with a build: `find` (Modal token: lists the runs, marks a failed one, downloads the oldest `ok` run with no `DELIVERED.json`), `build` (no secret: `build-gallery`, the README's four rows and `training.json` by `update_readme.py`, `cargo test -p card-neural`), `publish` (`main` only, the PR token: branch `neural-models/<run>`, pull request into `main`; git hooks off, no build, no install) and `mark` (Modal token: `DELIVERED.json`). A failed run is reported, marked, and turns one workflow run red (`failed`); a smoke run is built in a scratch copy and never published.
+- **Secrets**, repository secrets the owner sets: `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` (each workflow asks `true`/`false` first: neither → nothing done, said in the summary, green; one without the other → red), and `NEURAL_PR_TOKEN` (fine-grained, *Contents* and *Pull requests* read/write). A pull request opened with `GITHUB_TOKEN` starts no workflow, so without the PAT `publish` falls back to it, CI does not run on the pull request, and the summary says so.
+- Every input reaches a shell through `env:`; run names are held to `launch.py`'s pattern before one reaches a path, a branch or a command. `contents: write` and `pull-requests: write` are `publish`'s alone.
 
 ## Reference & Troubleshooting
 

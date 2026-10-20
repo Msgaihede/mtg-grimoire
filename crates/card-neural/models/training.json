@@ -1,0 +1,28 @@
+{
+  "about": "What the files in this folder scored when they were trained, by network. neural-deliver.yml compares a new run against it in the pull request and rewrites it with the run it delivers (crates/card-neural/train/update_readme.py). Not read by the app.",
+  "embedder": {
+    "run": "qd-mnv4-e",
+    "where": "scanner lab",
+    "finished_at": null,
+    "git_sha": null,
+    "looks": 70402,
+    "metrics": {
+      "retrieval_top1": 0.9997,
+      "epochs": 30
+    }
+  },
+  "detector": {
+    "run": "det-a",
+    "where": "scanner lab",
+    "finished_at": null,
+    "git_sha": null,
+    "metrics": {
+      "found": 0.993,
+      "corner_err": 0.0277,
+      "corner_err_p90": 0.0483,
+      "wrong_way": 0.0033,
+      "steps": 30000
+    }
+  },
+  "last_run": null
+}

@@ -179,6 +179,9 @@ describe("the arms", () => {
     // A measurement on an emulator, outside the gate (step 4.5): its pins and its toolchain are
     // `frontend`'s to check, and its script sits in `scripts/` like the router itself.
     [".github/workflows/android-emulator.yml", T, F, F, F, F, F, F],
+    // The Neural training's two workflows: Modal and a pull request, nothing this gate builds.
+    [".github/workflows/neural-train.yml", T, F, F, F, F, F, F],
+    [".github/workflows/neural-deliver.yml", T, F, F, F, F, F, F],
     ["scripts/android-first-run.sh", T, F, F, F, F, F, F],
     [".github/dependabot.yml", T, F, F, F, F, F, F],
     [".nvmrc", T, F, F, F, T, F, T],
@@ -293,6 +296,13 @@ describe("the arms", () => {
     ["crates/card-neural/models/gallery.bin", T, T, T, F, F, F, T],
     ["crates/card-neural/models/README.md", T, T, T, F, F, F, T],
     ["crates/card-neural/CLAUDE.md", F, F, F, F, F, F, F],
+    // Its training pipeline: Python no job in this gate runs, above `crates/*` so no Rust build
+    // runs for it either. The models it delivers are the arm above's.
+    ["crates/card-neural/train/deliver.py", F, F, F, F, F, F, F],
+    ["crates/card-neural/train/modal_app.py", F, F, F, F, F, F, F],
+    ["crates/card-neural/train/requirements-ci.txt", F, F, F, F, F, F, F],
+    ["crates/card-neural/train/tests/test_deliver.py", F, F, F, F, F, F, F],
+    ["crates/card-neural/models/training.json", T, T, T, F, F, F, T],
     ["infrastructure/share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
     // The sync relay: tested by `frontend`, read as text by Rust tests, and **run** by `web`,
     // whose sync smoke starts it under workerd. Out of the fail-safe: not `core`, not `storybook`.
