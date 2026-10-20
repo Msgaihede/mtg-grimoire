@@ -610,6 +610,7 @@ fn nothing_is_held_across_a_request(lane: &Lane<'_>, rotation: &identity::Rotati
     sendable(check_keys(lane));
     sendable(publish_join(lane));
     sendable(post_rotation(lane, rotation));
+    sendable(drops_only(lane, rotation, Dropping::Nobody));
     sendable(post_rendezvous(lane, "", "", ""));
     sendable(get_rendezvous(lane, "", ""));
 }
@@ -910,9 +911,9 @@ fn keys_url(base: &str, device: &str, group: &Group, at: Option<i64>) -> String 
 /// answer means.
 ///
 /// **Three callers with three different questions, and one request shape between them.**
-/// [`check_keys`] asks *what epoch is the group on and am I still in it*; [`relay_manifest`] asks
-/// only *who does the relay currently think is in this group*, which [`publish_join`] needs
-/// before it may speak for the group at all; [`pull`] asks only *has the relay reached this
+/// [`check_keys`] asks *what epoch is the group on and am I still in it*; [`drops_only`] asks
+/// only *who does the relay currently think is in this group*, which a join, a removal and a
+/// departure each need before this device may speak for the group at all; [`pull`] asks only *has the relay reached this
 /// epoch*, for an envelope ahead of this device. Factoring the request out is what stops the
 /// others growing a second, subtly different spelling of the 401 sentence below.
 ///
@@ -1018,17 +1019,66 @@ async fn fetch_key_page_at(
     }
 }
 
-/// Who the relay currently believes is in this group — the manifest's key set at the epoch it
-/// holds, and nothing else off the page.
+/// Who a rotation this device is about to publish may leave off the relay's manifest — the one
+/// question [`drops_only`] is asked differently by each of its three callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dropping<'a> {
+    /// A join ([`publish_join`]): everybody the relay knows stays.
+    Nobody,
+    /// A removal (`pairing::remove_device`): the device being removed, and nobody else.
+    Peer(&'a str),
+    /// A departure (`pairing::leave_group_now`): this device, and nobody else.
+    ThisDevice,
+}
+
+/// **Whether publishing `plan` drops nobody the relay knows of but `dropping`** — the manifest
+/// `/keys` answers at the epoch the relay holds, compared against the devices `plan` seals a key
+/// to. `Err` when the relay could not be asked, which every caller reads as "may not publish".
+///
+/// ⚠️ **This is the guard against a partial roster speaking for the group** (issues #1115 and
+/// [`publish_join`]'s own note). A manifest's key set *is* the roster on every device that adopts
+/// it, and `identity::adopt_epoch` prunes and never inserts, so a device that learned of a join
+/// only by adopting an epoch holds no row — and no public key — for the device that joined. Any
+/// rotation it plans leaves that device off, and the device reads the omission as its own
+/// removal. A join, a removal and a departure all build their manifest from the same local
+/// roster (`identity::plan_excluding`), so all three ask this before [`post_rotation`].
+///
+/// **The comparison is against `plan.keys` and not against `roster()` itself**, because
+/// `plan_excluding` drops any row an older build stamped `revoked_at` — so the plan is what would
+/// actually be published, and it is the only set whose superset-ness proves nobody is evicted.
+/// An empty manifest (a group that has claimed and never rotated answers `devices: []`) is a
+/// subset of everything, which is what keeps the common case publishing.
 ///
 /// **It is not an epoch check and must never grow into one.** [`check_keys`] is the only thing
-/// entitled to conclude anything from an epoch, and it already runs on every sync; this answers
-/// the one narrower question [`publish_join`] has to ask before it publishes a roster.
-async fn relay_manifest(db: &impl Store) -> Result<Vec<String>, String> {
+/// entitled to conclude anything from an epoch, and it already runs on every sync. A manifest
+/// newer than the epoch the plan was made at is compared all the same: the auth [`post_rotation`]
+/// presents is then stale and the relay refuses it anyway, so the answer cannot let anything
+/// through that the relay would take.
+pub async fn drops_only(
+    db: &impl Store,
+    plan: &identity::Rotation,
+    dropping: Dropping<'_>,
+) -> Result<bool, String> {
     let Some((device, group, base)) = db.with(whereabouts)? else {
         return Err("this device is in no group".to_owned());
     };
-    Ok(fetch_key_page(db, &base, &device, &group).await?.devices)
+    let known = fetch_key_page(db, &base, &device, &group).await?.devices;
+    let dropping = match dropping {
+        Dropping::Nobody => None,
+        Dropping::Peer(id) => Some(id),
+        Dropping::ThisDevice => Some(device.as_str()),
+    };
+    Ok(names_all_but(&known, plan, dropping))
+}
+
+/// [`drops_only`]'s comparison, with no request: every id in `known` is either `dropping` or a
+/// device `plan` seals a key to.
+fn names_all_but(known: &[String], plan: &identity::Rotation, dropping: Option<&str>) -> bool {
+    let mine: std::collections::HashSet<&str> =
+        plan.keys.iter().map(|(id, _)| id.as_str()).collect();
+    known
+        .iter()
+        .all(|id| Some(id.as_str()) == dropping || mine.contains(id.as_str()))
 }
 
 /// Ask the relay what epoch the group is on, and act on the answer.
@@ -1453,8 +1503,9 @@ pub async fn get_rendezvous(
 /// 401. That is not an error the reader can act on — nothing is syncing yet, so there is no
 /// divergence to carry — so the debt is marked and paid on the first sync that has a membership.
 ///
-/// ⚠️ **This device may only publish a roster it can see the whole of, and the superset check
-/// below is what enforces that.** A manifest's key set *is* the roster on every device that
+/// ⚠️ **This device may only publish a roster it can see the whole of, and [`drops_only`] is
+/// what enforces that** — for a removal and a departure too since issue #1115, which had no such
+/// check and evicted exactly the device described below. A manifest's key set *is* the roster on every device that
 /// adopts it, so a manifest built from a partial view does not merely fail to add anybody — it
 /// **evicts** whoever it leaves out. That is not hypothetical: `identity::adopt_epoch` prunes and
 /// **never inserts** (there is no public key anywhere in a manifest to insert *with* —
@@ -1506,19 +1557,11 @@ pub async fn publish_join(db: &impl Store) -> Result<(), String> {
     // needing its own read anyway, so there would be two shapes and two behaviours to keep in
     // step. The cost is one GET per pairing, plus one per sync only while the debt is
     // outstanding — `round_trip` does not call this otherwise.
-    let Ok(known) = relay_manifest(db).await else {
-        // Unreachable, refused, or a group with no membership at all — the common first
-        // pairing. Nothing can be concluded about the group's roster, so nothing is published.
-        return db.with(owing);
-    };
-    let mine: std::collections::HashSet<&str> =
-        plan.keys.iter().map(|(id, _)| id.as_str()).collect();
-    // The comparison is against `plan.keys` and not against `roster()` itself, because
-    // `plan_excluding` drops any row an older build stamped `revoked_at` — so the plan is what
-    // would actually be published, and it is the only set whose superset-ness proves nobody is
-    // evicted. An empty `known` (a group that has claimed and never rotated answers
-    // `devices: []`) is a subset of everything, which is what keeps the common case publishing.
-    if !known.iter().all(|id| mine.contains(id.as_str())) {
+    //
+    // `Err` is unreachable, refused, or a group with no membership at all — the common first
+    // pairing: nothing can be concluded about the group's roster. `Ok(false)` is this device
+    // holding the partial view. Either way nothing is published and the debt is recorded.
+    if drops_only(db, &plan, Dropping::Nobody).await != Ok(true) {
         return db.with(owing);
     }
     if post_rotation(db, &plan).await.is_err() {

@@ -69,8 +69,9 @@ export const REMOVAL_WARNING =
   "synced, and it can't be wiped remotely.";
 
 export const LEAVE_WARNING =
-  "Your collection stays on this device. If the relay can't be reached, other devices may " +
-  "still list this one until they remove it.";
+  "Your collection stays on this device. If the relay can't be reached, or this device hasn't " +
+  "heard of every device in the group, other devices may still list this one until they " +
+  "remove it.";
 
 /**
  * What the host has to say to a paired device about its storage — the light-app spec §7:

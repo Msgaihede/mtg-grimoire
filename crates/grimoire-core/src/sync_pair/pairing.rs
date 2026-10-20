@@ -794,6 +794,24 @@ const COULD_NOT_COLLECT: &str =
 const JOIN_NOT_PUBLISHED: &str = "Your other devices have not heard about a device paired here \
      yet, so nothing was removed. Sync, then try again.";
 
+/// What `sync_device_revoke` says when the relay's manifest names a device this one has never
+/// been told about (issue #1115).
+///
+/// **This device's roster is partial**: it learned of a join only by adopting an epoch, and
+/// `identity::adopt_epoch` never inserts the row — so it holds no key to seal the new group key
+/// to, and a manifest from here would leave that device off. Off the manifest is removed, so
+/// pressing Remove here would remove two devices, one of them a device nobody chose. The device
+/// that paired the others knows every one of them.
+const ROSTER_NOT_WHOLE: &str = "This device has not been told about every device in your group, \
+     so removing one from here would drop a device it has never heard of too. Nothing was \
+     removed. Remove it from the device you paired the others on.";
+
+/// What `sync_device_revoke` says when the relay could not be asked which devices are in the
+/// group — [`ROSTER_NOT_WHOLE`]'s question, unanswered. The transport's sentence is appended, as
+/// it is to [`COULD_NOT_COLLECT`].
+const COULD_NOT_CHECK: &str =
+    "Could not ask the relay which devices are in your group, so nothing was removed.";
+
 /// Remove a device, in the four steps whose **order is the whole of the fix**.
 ///
 /// 1. **Refuse a group with no membership.** Spec §2.4's fourth refusal, and it comes before
@@ -811,7 +829,11 @@ const JOIN_NOT_PUBLISHED: &str = "Your other devices have not heard about a devi
 /// 3. **Plan the rotation, which writes nothing** ([`identity::plan_rotation_by`]), and publish it
 ///    ([`client::post_rotation`]). It steps the epoch by [`client::removal_step`] — two once the
 ///    relay has advertised it, which is the authenticated removal marker every adopting device
-///    reads (`identity::REMOVAL_STEP`), and one against a relay that has not.
+///    reads (`identity::REMOVAL_STEP`), and one against a relay that has not. **Between the two,
+///    the relay's manifest is asked whether the plan names everybody it knows but the device
+///    being removed** ([`client::drops_only`]), and a plan that does not is refused
+///    ([`ROSTER_NOT_WHOLE`], issue #1115): this device's roster is partial, and the manifest it
+///    would publish removes a device nobody chose as well.
 /// 4. **Commit only on a 2xx** ([`identity::commit_rotation`]).
 ///
 /// **`identity::revoke_device` is gone and steps 3 and 4 are what replaced it.** It rotated
@@ -841,6 +863,13 @@ pub async fn remove_device(db: &impl Store, device_id: &str) -> Result<(), Strin
         // the `+1` its `/rotate` accepts, and once it has, it cannot talk this device back down.
         identity::plan_rotation_by(conn, device_id, client::removal_step(conn))
     })?;
+    // **Nobody off the manifest but the device being removed** — issue #1115. Refused rather
+    // than mended: the relay's ids carry no public key, so there is nothing to seal a blob to.
+    match client::drops_only(db, &plan, client::Dropping::Peer(device_id)).await {
+        Ok(true) => {}
+        Ok(false) => return Err(ROSTER_NOT_WHOLE.to_owned()),
+        Err(e) => return Err(format!("{COULD_NOT_CHECK} {e}")),
+    }
     client::post_rotation(db, &plan).await?;
     // **Planned before the request and committed behind it, against the same roster**: a device
     // joins or leaves only under the lane this removal holds.
@@ -853,7 +882,11 @@ pub async fn remove_device(db: &impl Store, device_id: &str) -> Result<(), Strin
 /// 1. [`identity::plan_departure_by`], which writes nothing, names everyone *but* this device, and
 ///    steps the epoch as a removal does ([`client::removal_step`]).
 /// 2. [`client::post_rotation`], **best effort**. A 500, a timeout, a plane — none of them is a
-///    reason a reader cannot leave.
+///    reason a reader cannot leave. **And only when the plan names everybody the relay knows but
+///    this device** ([`client::drops_only`], asked first): a device holding a partial roster —
+///    one that learned of a join only by adopting an epoch — would otherwise publish a manifest
+///    that leaves the joined device off, and evict it on its way out (issue #1115). Not asked, or
+///    not answered, is not published.
 /// 3. [`identity::leave_group`] **and** [`entitlement::clear`], unconditionally.
 ///
 /// **Step 3 running whatever step 2 answered is the whole of "leaving is always possible"**, and
@@ -903,8 +936,15 @@ async fn leave_group_now(db: &impl Store) -> Result<(), String> {
         }
         Ok(identity::plan_departure_by(conn, client::removal_step(conn)).ok())
     })?;
+    // **Published only when it leaves nobody off but this device** — issue #1115. A device that
+    // learned of a join only by adopting an epoch holds no row for the joined device, so its plan
+    // omits it, and a departure published from here would take that device out with this one.
+    // What declining costs is the courtesy again, never the departure: the others go on listing
+    // this device until somebody removes it from a device that knows the whole group.
     if let Some(plan) = plan {
-        let _ = client::post_rotation(db, &plan).await;
+        if client::drops_only(db, &plan, client::Dropping::ThisDevice).await == Ok(true) {
+            let _ = client::post_rotation(db, &plan).await;
+        }
     }
 
     // **One stretch: the group and the grant go together**, so nothing reads a device that has
@@ -1921,6 +1961,17 @@ mod tests {
         });
     }
 
+    /// A `/keys` naming `devices` at the device's own epoch and nothing else — what a departure,
+    /// which makes no round trip, reads before it may publish ([`client::drops_only`]).
+    fn relay_names(server: &httpmock::MockServer, group: &str, devices: &[&str]) {
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(200).json_body(serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": devices,
+            }));
+        });
+    }
+
     /// ⚠ **A removal waits while a join paired here is still unpublished.** The other devices do
     /// not know that device yet, so a manifest dropping it drops nobody *they* know — and each
     /// would keep the superseded keys the removed device holds. The round trip in front of the
@@ -2113,6 +2164,128 @@ mod tests {
         assert!(!keys.contains_key("deadbeef"));
     }
 
+    /// The round trip's three mocks with a `/keys` that names `devices` at the device's own
+    /// epoch — so the trip itself sees nothing to adopt and the manifest is read by the
+    /// superset check alone.
+    fn round_trip_naming(server: &httpmock::MockServer, group: &str, devices: &[&str]) {
+        round_trip_answering(
+            server,
+            group,
+            serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": devices, "removalStep": 2,
+            }),
+        );
+    }
+
+    /// ⚠ **Issue #1115: a removal from a partial roster is refused, and nothing moves.**
+    ///
+    /// The desktop paired the phone and then the laptop; the phone adopted the join's epoch, and
+    /// `adopt_epoch` never inserts, so its roster is {desktop, phone} while the relay's manifest
+    /// names the laptop too. A removal of the desktop planned here seals a key to the phone alone
+    /// — and the laptop, off that manifest, reads itself removed on its next `check_keys`.
+    ///
+    /// **What makes it red**: `remove_device` publishing without asking the relay's manifest,
+    /// which is how it shipped.
+    #[tokio::test]
+    async fn a_removal_from_a_partial_roster_is_refused() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        round_trip_naming(&server, &group, &[&me.device_id, "deadbeef", "laptop"]);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 2 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let refused = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("a removal published a manifest without a device the relay names");
+
+        assert_eq!(refused, ROSTER_NOT_WHOLE);
+        rotate.assert_calls(0);
+        assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+        assert_eq!(identity::roster(&conn).unwrap().len(), 2);
+    }
+
+    /// ...and one whose plan names everybody the relay knows **but the device being removed**
+    /// goes out — the removed device on the relay's manifest is the ordinary case, not a partial
+    /// roster. Red if the check compares the manifest whole, which would refuse every removal.
+    #[tokio::test]
+    async fn a_removal_may_drop_the_device_it_removes_and_nobody_else() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        round_trip_naming(&server, &group, &[&me.device_id, "deadbeef"]);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 2 }));
+        });
+
+        remove_device(&conn, "deadbeef").await.expect("removed");
+
+        rotate.assert();
+        assert_eq!(
+            identity::roster(&conn)
+                .unwrap()
+                .into_iter()
+                .map(|d| d.device_id)
+                .collect::<Vec<_>>(),
+            vec![me.device_id]
+        );
+    }
+
+    /// **A removal the relay's manifest cannot be read for is refused**, in its own sentence: the
+    /// question that decides whether it would evict somebody else went unanswered. The trip in
+    /// front of it is answered its `/keys` once, and every later `/keys` fails — a relay that
+    /// went away between the trip and the check.
+    #[tokio::test]
+    async fn a_removal_is_refused_when_the_manifest_cannot_be_read() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        let answered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let once = answered.clone();
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys")).is_true(
+                move |_: &httpmock::prelude::HttpMockRequest| {
+                    !once.swap(true, std::sync::atomic::Ordering::SeqCst)
+                },
+            );
+            then.status(200).json_body(serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": [],
+            }));
+        });
+        let keys = server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(500).body("nope");
+        });
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/pull"));
+            then.status(200)
+                .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+        });
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/ack"));
+            then.status(204);
+        });
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let refused = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("a removal went out without its manifest check");
+
+        assert!(refused.starts_with(COULD_NOT_CHECK), "{refused}");
+        assert!(answered.load(std::sync::atomic::Ordering::SeqCst));
+        keys.assert_calls(1);
+        rotate.assert_calls(0);
+        assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+    }
+
     /// **A group with no membership is refused before anything moves** — spec §2.4's fourth
     /// refusal, and *before* the round trip rather than after it.
     ///
@@ -2156,7 +2329,8 @@ mod tests {
     #[tokio::test]
     async fn leaving_clears_the_group_even_when_the_relay_refuses() {
         let server = MockServer::start_async().await;
-        let (conn, _me, group) = removable(&server, true);
+        let (conn, me, group) = removable(&server, true);
+        relay_names(&server, &group, &[&me.device_id, "deadbeef"]);
         let rotate = server.mock(|when, then| {
             when.method(POST).path(format!("/g/{group}/rotate"));
             then.status(500).body("nope");
@@ -2247,6 +2421,7 @@ mod tests {
     async fn leaving_clears_the_group_when_the_relay_accepts() {
         let server = MockServer::start_async().await;
         let (conn, me, group) = removable(&server, true);
+        relay_names(&server, &group, &[&me.device_id, "deadbeef"]);
         let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
         let recorder = seen.clone();
         let rotate = server.mock(|when, then| {
@@ -2278,6 +2453,58 @@ mod tests {
         );
         assert!(identity::group(&conn).unwrap().is_none());
         assert_eq!(identity::roster(&conn).unwrap().len(), 0);
+    }
+
+    /// ⚠ **Issue #1115: a departure from a partial roster publishes nothing, and still leaves.**
+    ///
+    /// The phone adopted the join that brought the laptop in, so its roster is {desktop, phone}
+    /// while the relay names all three. Its departure plan seals a key to the desktop alone; a
+    /// manifest of {desktop} would take the laptop out with the phone, and the laptop's next
+    /// `check_keys` would read `blob: null` and leave a group nobody removed it from.
+    ///
+    /// **What makes it red**: `leave_group_now` publishing without asking the relay's manifest,
+    /// which is how it shipped — or putting the local clear behind that answer.
+    #[tokio::test]
+    async fn leaving_from_a_partial_roster_publishes_nothing_and_still_leaves() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        relay_names(&server, &group, &[&me.device_id, "deadbeef", "laptop"]);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+
+        leave_group_now(&conn)
+            .await
+            .expect("a partial roster is not a reason a reader cannot leave");
+
+        rotate.assert_calls(0);
+        assert!(identity::group(&conn).unwrap().is_none());
+        assert_eq!(identity::roster(&conn).unwrap().len(), 0);
+        assert!(!entitlement::membership_ended(&conn));
+    }
+
+    /// ...and one whose relay cannot be asked publishes nothing either: not answered is not
+    /// published, and the departure stands.
+    #[tokio::test]
+    async fn leaving_publishes_nothing_when_the_manifest_cannot_be_read() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(500).body("nope");
+        });
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+
+        leave_group_now(&conn).await.expect("left");
+
+        rotate.assert_calls(0);
+        assert!(identity::group(&conn).unwrap().is_none());
     }
 
     /// **A departure steps like a removal once the relay has advertised it** — to every device
@@ -2776,6 +3003,7 @@ mod tests {
     async fn leaving_waits_out_an_operation_in_flight_where_a_press_is_told_busy() {
         let server = MockServer::start_async().await;
         let (state, group) = in_a_group_on_the_lane("leaving-waits-for-the-lane", &server);
+        relay_names(&server, &group, &["deadbeef"]);
         let rotate = server.mock(|when, then| {
             when.method(POST).path(format!("/g/{group}/rotate"));
             then.status(200).body("{}");
