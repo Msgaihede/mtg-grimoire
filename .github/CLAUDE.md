@@ -28,9 +28,10 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - `package.json`, `pnpm-lock.yaml` and `pnpm-workspace.yaml` route to the page-side jobs; `infrastructure/app-worker/**` and `infrastructure/wrangler/**` (the deploy tool's manifest and lockfile) route to `frontend` and `web`; `infrastructure/scan-worker/**` (the scan inbox, which no build uses; `release.yml`'s `scan-deploy` deploys it) to `frontend` alone.
   - `scripts/android-release/*` routes to `frontend`, `rust`, and `android` (must sit above `scripts/*`); `.release-please-manifest.json` routes to `frontend`.
   - `changelog/*` routes to `frontend` (must sit above the prose arm's `*.md`): `scripts/changelog/files.test.ts` reads every release's notes.
+  - `CLAUDE.md`/`*/CLAUDE.md` and `infrastructure/{app,scan}-worker/*.md` route to `frontend` (above the prose arm, issue #1196): `scripts/claude-md.test.ts` requires the CLAUDE.md files it names, and `hosting.test.ts`/`wrangler.test.ts` sweep their Worker's README for account ids.
   - `*.ps1`/`*.psm1`/`*.psd1` routes to `powershell` (must sit above `apps/desktop/src-tauri/*` and `scripts/*`).
   - Unrecognised paths fall through to a fail-safe that runs all build jobs (`frontend`, `rust`, `core`, `storybook`, `web`).
-  - **Fence test**: `scripts/ci-route.test.ts` verifies that every file read across jobs is properly routed.
+  - **Fence test**: `scripts/ci-route.test.ts` verifies that every file read across jobs is properly routed. Its census follows `?raw` imports, `import.meta.glob` patterns (expanded over `git ls-files`) and `findClaudeFiles`; a `node:fs` read by a computed path is the one kind it cannot see.
 - **Three routing traps to prevent**:
   1. Never use workflow-level `paths:` filters; they skip the entire workflow and leave required status checks pending indefinitely.
   2. Always pass `--no-renames` to git diff; default rename detection only reports destination paths, which would wrongly skip jobs when files move.

@@ -188,7 +188,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   them: **`scripts/ci-route.test.ts` derives the census from the sources on every run** and
   fails when a file is read by a job the router does not send it to, or crosses the boundary and
   is not routed to both `frontend` and `rust`. Reverting either half of the fix was run as a
-  mutation and the derived census went red both times, not only the hand-written table. Cost
+  mutation and the derived census went red both times, not only the hand-written table.
+  **Since issue #1196 (2026-10-20) it follows `import.meta.glob` too** — each collected test's
+  patterns, expanded over `git ls-files` — and `claude-md.test.ts`'s own finder. The `?raw`-only
+  census had missed that `hosting.test.ts` and `wrangler.test.ts` sweep their Worker's README
+  for an account id, so the prose arm's `*.md` sent a README that leaked one to no job at all. Cost
   measured on the runs before the change: `frontend` takes 8–12 min and `rust` 4–9, so a
   Rust-only PR now waits on `frontend`'s clock instead of `rust`'s — which is half of why
   `frontend` was split into parallel legs the next day (below).

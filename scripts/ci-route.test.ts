@@ -1,11 +1,18 @@
 // The router against the files the two suites actually read. **The census is derived from the
-// sources on every run** — the `?raw` imports of every test file vitest collects, and the
+// sources on every run** — the `?raw` imports and `import.meta.glob` patterns of every test file
+// vitest collects, the CLAUDE.md files `claude-md.test.ts` finds, and the
 // `include_str!`/`include_bytes!`/`CARGO_MANIFEST_DIR` reads of every Rust source — so a new
 // crossing is checked the day it lands, with nobody remembering to add it to a list. The
 // sentence this replaced ("the two build jobs share no inputs") was false for as long as
 // `ipc.test.ts` had existed, and nothing could notice.
+//
+// **What it still cannot see is a read through `node:fs` with a computed path** — a walk, a
+// `readFileSync` of a template string. `claude-md.test.ts` is the one such reader of files no
+// other arm sends to `frontend`, and it is in the census by its own finder rather than by parsing.
+import { execFileSync } from "node:child_process";
 import { posix } from "node:path";
 import { describe, expect, it } from "vitest";
+import { findClaudeFiles } from "./check-claude-md.ts";
 import { ARMS, JOBS, armFor, route } from "./ci-route.ts";
 import ciYml from "../.github/workflows/ci.yml?raw";
 
@@ -100,10 +107,65 @@ function rustReads() {
   return out;
 }
 
+/** Every file git tracks: the only paths a diff can name, and so the only ones a glob's reads can be. */
+const TRACKED = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8", maxBuffer: 1 << 26 })
+  .split("\0")
+  .filter(Boolean);
+
+/**
+ * Every pattern an `import.meta.glob(…)` call names — its first argument, one string or an array
+ * of them. An array's `//` comments go first: one says "the light app's root", and its apostrophe
+ * is not a quote. A first argument that is not a literal is not a pattern Vite accepts.
+ */
+function globPatterns(src: string) {
+  const out: string[] = [];
+  for (const call of src.matchAll(/import\.meta\.glob\s*(?:<[^(]*>)?\s*\(\s*/g)) {
+    const rest = src.slice(call.index + call[0].length);
+    const arg = rest.startsWith("[")
+      ? rest.slice(0, rest.indexOf("]") + 1).replace(/(^|\s)\/\/[^\n]*/g, "$1")
+      : (/^(["'`])[^"'`\n]*\1/.exec(rest)?.[0] ?? "");
+    for (const [, , pattern] of arg.matchAll(/(["'`])([^"'`\n]*)\1/g)) out.push(pattern);
+  }
+  return out;
+}
+
+/**
+ * Every tracked file a collected test globs, by the test's own patterns: `/` is the repository,
+ * `.` the test's folder, `@/` the shared UI, and a negation takes files back out. **A glob reads
+ * a whole folder**, so the file nobody thought of as an input — a Worker's README, swept for an
+ * account id — is one.
+ * Node's matcher leaves dotfiles out where Vite's `exhaustive` keeps them; the dotfiles a sweep
+ * exists for (`.dev.vars`) are ones git never tracks, so the census loses nothing it could hold.
+ */
+function globReads() {
+  const out: { reader: string; path: string; home?: string }[] = [];
+  for (const [file, src] of Object.entries(TS_TESTS)) {
+    const include: string[] = [];
+    const exclude: string[] = [];
+    for (const raw of globPatterns(src)) {
+      const negated = raw.startsWith("!");
+      const pattern = negated ? raw.slice(1) : raw;
+      const abs = pattern.startsWith("@/")
+        ? `/packages/ui/${pattern.slice(2)}`
+        : pattern.startsWith(".")
+          ? posix.join(posix.dirname(file), pattern)
+          : pattern;
+      (negated ? exclude : include).push(rel(abs));
+    }
+    const matches = (path: string, patterns: string[]) =>
+      patterns.some((pattern) => posix.matchesGlob(path, pattern));
+    for (const path of TRACKED) {
+      if (matches(path, include) && !matches(path, exclude)) out.push({ reader: rel(file), path });
+    }
+  }
+  return out;
+}
+
 const RUST_OWNED = /^(apps\/desktop\/src-tauri|crates|apps\/light\/src-tauri)\//;
 
 describe("the census", () => {
-  const ts = tsReads();
+  const globbed = globReads();
+  const ts = [...tsReads(), ...globbed];
   const rust = rustReads();
 
   // Guards the regexes above: a census that matched nothing would pass every assertion below.
@@ -123,6 +185,16 @@ describe("the census", () => {
     expect(rustPaths).toContain("packages/ui/features/transfer/__golden__/corpus.json");
     expect(rustPaths).toContain("infrastructure/share-worker/wrangler.jsonc");
     expect(rustPaths).toContain("release-please-config.json");
+    // What a glob sweeps: the two Workers' READMEs, which `hosting.test.ts` and
+    // `wrangler.test.ts` hold to having no account id in them (issue #1196), a release note,
+    // and a file read relative to the test's own folder.
+    const globPaths = globbed.map((r) => r.path);
+    expect(globPaths).toContain("infrastructure/app-worker/README.md");
+    expect(globPaths).toContain("infrastructure/scan-worker/README.md");
+    expect(globPaths.some((path) => /^changelog\/\d+\.\d+\.\d+\.md$/.test(path))).toBe(true);
+    expect(globPaths).toContain("packages/ui/lib/ipc/decks.ts");
+    // And a negation honoured: `hosting.test.ts` leaves out the Worker's own `node_modules/`.
+    expect(globbed.filter((r) => r.path.includes("/node_modules/"))).toEqual([]);
   });
 
   // The engine's sources are in the census by the same glob as `card-scanner`'s, so a file one
@@ -139,6 +211,14 @@ describe("the census", () => {
   it("routes every file a frontend test reads to `frontend`", () => {
     const missed = ts.filter((r) => !route([asChangedFile(r.path)]).frontend);
     expect(missed).toEqual([]);
+  });
+
+  // `claude-md.test.ts` holds every CLAUDE.md to a line budget and requires the ones it names.
+  // It finds them with a walk, which no pattern above can parse, so its own finder is the census.
+  it("routes every CLAUDE.md `claude-md.test.ts` reads to `frontend`", () => {
+    const files = findClaudeFiles(".").map((file) => file.replaceAll("\\", "/"));
+    expect(files).toContain("CLAUDE.md");
+    expect(files.filter((file) => !route([file]).frontend)).toEqual([]);
   });
 
   it("routes every file a Rust source reads to `rust`", () => {
@@ -188,10 +268,12 @@ describe("the arms", () => {
     ["packages/ui/lib/core/index.ts", T, F, F, F, T, F, T],
     ["docs/reference/ci-and-releases.md", F, F, F, F, F, F, F],
     ["README.md", F, F, F, F, F, F, F],
-    ["packages/ui/features/decks/CLAUDE.md", F, F, F, F, F, F, F],
-    [".storybook/CLAUDE.md", F, F, F, F, F, F, F],
-    // Prose wins over the web host's arm too: it sits above it, and `*` crosses `/`.
-    ["crates/grimoire-web/CLAUDE.md", F, F, F, F, F, F, F],
+    // Every CLAUDE.md is `claude-md.test.ts`'s to hold to its budget (issue #1196) — at the
+    // root, under a tree, and under the web host's crate, whose arm is below this one.
+    ["CLAUDE.md", T, F, F, F, F, F, F],
+    ["packages/ui/features/decks/CLAUDE.md", T, F, F, F, F, F, F],
+    [".storybook/CLAUDE.md", T, F, F, F, F, F, F],
+    ["crates/grimoire-web/CLAUDE.md", T, F, F, F, F, F, F],
     [".vscode/settings.json", F, F, F, F, F, F, F],
     [".gitignore", F, F, F, F, F, F, F],
     // Read by `release-rule.test.ts` since step 6.6: the deploy guard finds the last tag in it.
@@ -291,17 +373,20 @@ describe("the arms", () => {
     ["crates/card-scanner/Cargo.lock", T, T, T, F, F, F, T],
     ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F, F, T],
     // The Neural mode's crate, by `crates/*`; its model files by their own arm, the README with
-    // them — the web build's pin table, not prose — and the crate's CLAUDE.md as prose.
+    // them — the web build's pin table, not prose — and the crate's CLAUDE.md by the budget's arm.
     ["crates/card-neural/src/gallery.rs", T, T, T, F, F, F, T],
     ["crates/card-neural/models/gallery.bin", T, T, T, F, F, F, T],
     ["crates/card-neural/models/README.md", T, T, T, F, F, F, T],
-    ["crates/card-neural/CLAUDE.md", F, F, F, F, F, F, F],
+    ["crates/card-neural/CLAUDE.md", T, F, F, F, F, F, F],
     // Its training pipeline: Python no job in this gate runs, above `crates/*` so no Rust build
     // runs for it either. The models it delivers are the arm above's.
     ["crates/card-neural/train/deliver.py", F, F, F, F, F, F, F],
     ["crates/card-neural/train/modal_app.py", F, F, F, F, F, F, F],
     ["crates/card-neural/train/requirements-ci.txt", F, F, F, F, F, F, F],
     ["crates/card-neural/train/tests/test_deliver.py", F, F, F, F, F, F, F],
+    ["crates/card-neural/train/README.md", F, F, F, F, F, F, F],
+    // A CLAUDE.md there would still be the budget's: its arm is above the pipeline's.
+    ["crates/card-neural/train/CLAUDE.md", T, F, F, F, F, F, F],
     ["crates/card-neural/models/training.json", T, T, T, F, F, F, T],
     ["infrastructure/share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
     // The sync relay: tested by `frontend`, read as text by Rust tests, and **run** by `web`,
@@ -313,7 +398,9 @@ describe("the arms", () => {
     // A tracked migration: the sync smoke applies it (`web`), and `d1-migrations.test.ts`
     // replays it (`frontend`).
     ["infrastructure/relay/migrations/0001_add-a-column.sql", T, T, F, F, F, F, T],
+    // No test sweeps the relay's folder or the share Worker's, so their prose is still prose.
     ["infrastructure/relay/README.md", F, F, F, F, F, F, F],
+    ["infrastructure/share-worker/README.md", F, F, F, F, F, F, F],
     // The web app's hosting: checked and tested by `frontend`, copied into `apps/light/dist-web/` by `web`.
     // Out of the fail-safe the share Worker still falls to — no Rust source reads it.
     ["infrastructure/app-worker/wrangler.jsonc", T, F, F, F, F, F, T],
@@ -326,8 +413,10 @@ describe("the arms", () => {
     ["infrastructure/app-worker/package.json", T, F, F, F, F, F, T],
     ["infrastructure/wrangler/package.json", T, F, F, F, F, F, T],
     ["infrastructure/wrangler/package-lock.json", T, F, F, F, F, F, T],
-    // Its runbook is prose, by the arm above every tree's; its `tsc` program is the glob's.
-    ["infrastructure/app-worker/README.md", F, F, F, F, F, F, F],
+    // Its runbook is swept for an account id by `hosting.test.ts` (issue #1196), so `frontend`
+    // runs for it and nothing builds it; its `tsc` program is the glob's.
+    ["infrastructure/app-worker/README.md", T, F, F, F, F, F, F],
+    ["infrastructure/app-worker/docs/deploy.md", T, F, F, F, F, F, F],
     ["infrastructure/app-worker/tsconfig.json", T, F, F, F, T, F, T],
     // The scan inbox: checked, linted and tested by `frontend` and used by no build. No Rust
     // source reads a file of it — its own tests read the engine's, which is the engine's arm.
@@ -335,7 +424,8 @@ describe("the arms", () => {
     ["infrastructure/scan-worker/src/index.ts", T, F, F, F, F, F, F],
     ["infrastructure/scan-worker/src/label.test.ts", T, F, F, F, F, F, F],
     ["infrastructure/scan-worker/package.json", T, F, F, F, F, F, F],
-    ["infrastructure/scan-worker/README.md", F, F, F, F, F, F, F],
+    // Swept the same way by `wrangler.test.ts`.
+    ["infrastructure/scan-worker/README.md", T, F, F, F, F, F, F],
     ["infrastructure/scan-worker/tsconfig.json", T, F, F, F, T, F, T],
     ["some/new/thing.txt", T, T, T, F, T, F, T],
     // The light app: its host, built into an APK, and its pages, which no Rust job reads — and
@@ -463,13 +553,12 @@ describe("the arms", () => {
   // Worker's own arm is `infrastructure/<name>/*` (the app's, the relay's and the scan inbox's;
   // the share Worker has none and falls to the fail-safe): below those arms a Worker's tsconfig would route to
   // what the Worker's files do and not to what a program does, silently fewer jobs. The table
-  // above holds each tsconfig's jobs; this holds the order that makes them so.
+  // above holds each tsconfig's jobs; this holds the order that makes them so. (A narrower arm
+  // inside a Worker — its prose, `infrastructure/app-worker/*.md` — cannot take a tsconfig.)
   it("puts the Workers' tsconfig arm above every Worker's own arm", () => {
     const at = (pattern: string) => ARMS.findIndex((arm) => arm.match.includes(pattern));
     const workers = ARMS.flatMap((arm, index) =>
-      arm.match.some((pattern) => /^infrastructure\/[^*/]+\/(?!tsconfig\.json$)/.test(pattern))
-        ? [index]
-        : [],
+      arm.match.some((pattern) => /^infrastructure\/[^*/]+\/\*$/.test(pattern)) ? [index] : [],
     );
     expect(at("infrastructure/*/tsconfig.json")).toBeGreaterThan(-1);
     expect(workers.length).toBeGreaterThanOrEqual(2);
