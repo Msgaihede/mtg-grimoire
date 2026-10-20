@@ -1717,9 +1717,10 @@ describe("VirtualTable's roving tab stop", () => {
 /**
  * Issue #1111 — a row is keyed by its position, and what its cells hold must not be.
  *
- * A quantity typed to zero removes its entry on that keystroke, and the next entry moves up into
- * the same position. Without `rowKey` the box would still be focused and still read "0", and the
- * next digit would be a write to an entry the reader never touched.
+ * A quantity typed to zero and entered removes its entry, and the next entry moves up into the
+ * same position. Without `rowKey` the box would still be focused and still read "0", and the next
+ * number typed and entered would be a write to an entry the reader never touched. (A typed number
+ * is sent on Enter or blur since issue #1110, not on each keystroke.)
  */
 describe("VirtualTable's rowKey", () => {
   it("draws a new cell for the entry that moved up, not the old entry's draft", async () => {
@@ -1755,7 +1756,7 @@ describe("VirtualTable's rowKey", () => {
 
     const lotusBox = screen.getByRole("spinbutton", { name: "Quantity of Black Lotus" });
     await user.tripleClick(lotusBox);
-    await user.keyboard("0");
+    await user.keyboard("0{Enter}");
     expect(onSetQuantity).toHaveBeenLastCalledWith("a", 0);
 
     // The zero removed the entry; the dragon now sits in the lotus's position.
@@ -1765,7 +1766,7 @@ describe("VirtualTable's rowKey", () => {
     expect(dragonBox).not.toHaveFocus();
 
     onSetQuantity.mockClear();
-    await user.keyboard("5");
+    await user.keyboard("5{Enter}");
     expect(onSetQuantity).not.toHaveBeenCalled();
   });
 });

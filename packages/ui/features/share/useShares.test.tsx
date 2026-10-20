@@ -52,13 +52,13 @@ describe("the published shares", () => {
   });
 
   /**
-   * ⚠️ **The command behind this holds the write connection across a relay round trip**, so who
-   * asks and how often is not a question about what the control draws.
+   * ⚠️ **The command behind this holds the sync lane across a relay round trip**, so who asks and
+   * how often is not a question about what the control draws.
    *
-   * `share::commands::share_list` runs inside `on_the_write_connection` → `sync::with_write`,
-   * which takes the exclusive write lock; every other user write then answers `BUSY` after
-   * `WRITE_LOCK_WAIT` (5 s), against a share client whose read timeout is 60. That is `sync_now`'s
-   * shape and `sync_now` is a **press** — this is a query mounted with the whole Collection page.
+   * `share::commands::share_list` runs inside `on_the_lane`, which takes the sync lane as a press
+   * does; a sync press made meanwhile answers `BUSY` after `WRITE_LOCK_WAIT` (5 s), against a share
+   * client whose read timeout is 60. (It held the write connection too until issue #1145.) This is
+   * a query mounted with the whole Collection page.
    */
   it("asks nothing at all on a device that has connected nothing", async () => {
     shareList.mockResolvedValue([row]);

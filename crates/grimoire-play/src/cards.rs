@@ -255,6 +255,16 @@ pub fn engine_name(card: &CardFacts) -> String {
     }
 }
 
+/// Every name the engine may know `card` by while it plays: each face of a card of several faces
+/// (a back face played or transformed into is an object of that name), its one name otherwise.
+pub fn face_names(card: &CardFacts) -> Vec<String> {
+    if is_multi(card) {
+        card.faces.iter().map(|f| f.name.clone()).collect()
+    } else {
+        vec![card.name.clone()]
+    }
+}
+
 /// The deck's own card database: every face of every card in it, and the extra cards a game
 /// needs beside them (`extra`, already in the export's shape — the goldfish's library).
 pub fn database(cards: &[CardFacts], extra: &[(String, Value)]) -> Result<CardDatabase, String> {

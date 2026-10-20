@@ -22,7 +22,7 @@ Detailed subsystem specifications are maintained in reference documentation:
 ## 1. Architecture & Core Re-Exports
 
 - **Engine separation**: Most modules have moved to `crates/grimoire-core`. Desktop modules under `apps/desktop/src-tauri/src/<module>/mod.rs` re-export core logic via `pub use grimoire_core::<module>::*;` and append desktop `#[tauri::command]` wrappers.
-- **`AppState` structure**: `AppState` wraps `State` (`Arc<State>`) via `Deref`. Holds desktop-specific fields: `mirror` (filesystem mirror), `mirror_status`, and `changes` (multi-window synchronization).
+- **`AppState` structure**: `AppState` wraps `State` (`Arc<State>`) via `Deref`. Holds desktop-specific fields: `mirror` (filesystem mirror), `mirror_status`, `mirror_pass` (one mirror pass at a time — the thread's and `Rebuild now`'s), and `changes` (multi-window synchronization).
 - **Command implementation rules**:
   - Functions in `grimoire-core` take `&Connection` (or `&State`) and return plain DTOs or `Result`.
   - Desktop wrappers in `src-tauri` unpack Tauri arguments and handle window/state routing.

@@ -29,15 +29,16 @@ export const SHARE_LIST_KEY: QueryKey = ["share", "list"];
 /**
  * Every share the group has published, newest answer the relay gave or the local cache.
  *
- * ⚠️ **`enabled` is required rather than defaulted, and it is about the _write connection_
- * rather than about what the control draws.**
+ * ⚠️ **`enabled` is required rather than defaulted, and it is about the _sync lane_ rather than
+ * about what the control draws.**
  *
  * `share_list` is the only one of these commands that reconciles, and `share::commands` runs it
- * inside `on_the_write_connection` → `sync::with_write` — so it holds the exclusive write lock
- * across a relay round trip, and every other user write in the app answers `BUSY` after
- * `WRITE_LOCK_WAIT` (5 s) while it does. That was `sync_now`'s shape until a sync trip stopped
- * holding the connection across its requests, and `sync_now` was a **press**: this is a query mounted with `CollectionPage`, and TanStack refetches on window
- * focus by default. So an unconnected device asks nothing at all — it has no membership, the
+ * inside `on_the_lane` — so it holds the sync lane across a relay round trip (a token and the
+ * list), and a sync press made meanwhile answers `BUSY` after `WRITE_LOCK_WAIT` (5 s). Until
+ * issue #1145 it held the exclusive **write connection** across that trip, so every user write in
+ * the app answered `BUSY`; it takes the connection only for the reconcile now. Either way it is a
+ * network trip, and this is a query mounted with `CollectionPage`, which TanStack refetches on
+ * window focus by default. So an unconnected device asks nothing at all — it has no membership, the
  * Share control is hidden for it anyway, and the answer would be the local cache it already has —
  * and a connected one asks on a mount and on a write, never on a focus.
  *

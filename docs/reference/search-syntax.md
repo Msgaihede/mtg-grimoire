@@ -491,7 +491,7 @@ and the box reports those names as unknown instead of silently applying nothing.
 
 Everywhere in this file's neighbourhood the rule is to fail **open**: an unrecognised weight
 floor is no floor, an absent facet count leaves a chip live. `useCardSearch`'s `tagQueryBlocked`
-is the exception, **it gates on tags only**, and both of its arms are deliberate:
+is the exception, **it gates on tags only**, and all three of its arms are deliberate:
 
 - **Pending.** A search fired before its names have resolved goes out with **no tag filter at
   all** and caches the whole corpus under the key that afterwards means "filtered" — the wall
@@ -500,6 +500,14 @@ is the exception, **it gates on tags only**, and both of its arms are deliberate
 - **Unknown.** A name that resolves to nothing empties the wall. Answering it as though the term
   were not there would show the unfiltered corpus in reply to a narrowing the reader asked for,
   which is the one direction a search must never fail in.
+- **Refused** (issue #1165). `tag_resolve` itself failed — a SQL error, a host that would not
+  answer — and its retry with it. There is no answer to skip a token for, so before this arm
+  every typed tag dropped out of the payload with no chip and no note, and `otag:ramp bolt`
+  answered with every bolt. The search is held and `TagQueryRow` says why, with the backend's
+  sentence and a *Try again*; the summary line says the search is on hold (`failureOf`). Only
+  while nothing was ever answered: query-core keeps the last answer through a failed refetch,
+  and an answer in hand is still the right one to filter by. The deck editor's box
+  (`useDeckCardQuery`) fails the same way closed — an empty deck, as for an unknown name.
 
 `rows` and `total` are emptied **in the hook** rather than at each of the three call sites,
 because `placeholderData: keepPreviousData` is doing its job: a wall left to itself goes on
@@ -610,7 +618,7 @@ exactly one term.
 | `crates/grimoire-core/src/tags/query.rs` (command: `apps/desktop/src-tauri/src/tags/query/mod.rs`) | `run_tag_resolve` / `tag_resolve` — names to slugs, exact, through `slug_norm` |
 | `packages/ui/features/tags/tagFilters.ts` | `mergeTagTerms` — the caller's chips ANDed with the typed ones |
 | `packages/ui/features/search/useCardSearch.ts` | The wiring: parse, resolve, merge, gate, and the two chip rewrites |
-| `packages/ui/features/search/TagQueryRow.tsx` | The chip row and the unknown-tag note |
+| `packages/ui/features/search/TagQueryRow.tsx` | The chip row, the unknown-tag note and the refused-lookup note |
 | `packages/ui/components/QuerySyntaxHelp.tsx` | The F1 panel's Search syntax tab, drawn from `QUERY_KEYWORDS` |
 
 The tag merge is a union rather than one side winning: a Tags page reader who has chipped `dog`

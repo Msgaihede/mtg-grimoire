@@ -316,8 +316,7 @@ pub fn with_write<T>(
 /// batch of an ingest. **What makes it safe to *call*** is [`with_write`]'s reentrancy rule,
 /// which is sharper here: that one spends five seconds and answers BUSY against its own thread,
 /// where a same-thread call to this one **deadlocks** (std's `Mutex` may also panic on it).
-/// Nothing may call it holding a guard on `state.db` — a caller that already holds the
-/// connection hands it to [`Lane::in_hand`] instead.
+/// Nothing may call it holding a guard on `state.db`.
 ///
 /// **Everything else is [`with_write`]'s, because it is [`with_write`]'s body** — the managed
 /// wishlists armed and settled, the token reconcile, and the cross-file fence — and the lock is
@@ -435,30 +434,11 @@ impl<'a> Lane<'a> {
     pub fn state(&self) -> &'a State {
         self.state
     }
-
-    /// A connection the caller **already holds**, as a store.
-    ///
-    /// For an operation that still takes the connection for its whole length and asks a sync
-    /// function something on the way — the desktop's share publisher, which is not a sync
-    /// operation and mints its token through one. `with` there must not come back for the
-    /// connection: its caller has it. Built from the lane, so the lane is held.
-    pub fn in_hand<'c>(&self, conn: &'c Connection) -> InHand<'c> {
-        InHand(conn)
-    }
 }
 
 impl Store for Lane<'_> {
     fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
         with_write_waiting(self.state, f)
-    }
-}
-
-/// [`Lane::in_hand`]'s store: the connection its caller holds, used where it stands.
-pub struct InHand<'c>(&'c Connection);
-
-impl Store for InHand<'_> {
-    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
-        f(self.0)
     }
 }
 
@@ -791,26 +771,6 @@ mod tests {
             lane.with(|_| Err::<(), _>("no".to_owned())).unwrap_err(),
             "no"
         );
-    }
-
-    /// A caller that already holds the connection runs its stretches on it where it stands —
-    /// coming back for the connection through the lane would be this thread waiting for itself.
-    ///
-    /// Driven the way that caller drives it: a thread that holds the connection and blocks on
-    /// the future. An `async fn` holding the guard across an `.await` is the thing the lane
-    /// exists to end, and clippy's `await_holding_lock` refuses it in a test too.
-    #[test]
-    fn a_connection_in_hand_is_used_where_it_stands() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        let state = over_memory(Vec::new());
-        let lane = runtime.block_on(state.lane());
-        let conn = state.lock_db();
-        let names = runtime
-            .block_on(two_stretches(&lane.in_hand(&conn)))
-            .unwrap();
-        assert_eq!(names, ["before the request", "behind it"]);
     }
 
     /// A bare connection is a store too, in a test.
