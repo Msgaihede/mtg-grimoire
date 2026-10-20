@@ -75,6 +75,7 @@ import { departureFrom, useReturnToRemovedCard, type PaneDeparture } from "./car
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { useCopyFinish, useCopyPrinting } from "@/features/collection/useCopyWrites";
+import { sweep } from "@/features/transfer/export/scope";
 import { MENU_CONDITION } from "@/lib/conditions";
 import { parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -993,20 +994,29 @@ function Body({
    * `skipToken` is for an argument that does not exist, and `oracleId` exists on every wall. What
    * is missing on the search, tags and deck surfaces is a *reason* — `scope.quantity` says no
    * stepper is drawn there, so the rows would be fetched for nothing.
+   *
+   * **Swept to the end, not one page** (issue #1169). The read is at the oracle grain and the
+   * narrowing to this printing is {@link ownedRows}' below, so one capped page could stop short
+   * of the printing's rows: a basic-land collector with more than 200 Island entries opened a
+   * printing whose rows fell past the cap, the stepper read 0, and + added a new row instead of
+   * stepping the one they had. `sweep` stops on a short page, which for every card but a stack of
+   * basics is the first one.
    */
   const owned = useQuery({
     queryKey: ["collection", "card", oracleId],
     queryFn:
       oracleId === null
         ? skipToken
-        : () => ipc.collectionList({ oracleId, limit: 200, offset: 0 }),
+        : () => sweep((limit, offset) => ipc.collectionList({ oracleId, limit, offset })),
     enabled: scope.quantity === "owned",
   });
   /** The same, for the wishlist's own stepper — `wishlist_set_quantity` takes a row id too. */
   const wished = useQuery({
     queryKey: ["wishlist", "card", oracleId],
     queryFn:
-      oracleId === null ? skipToken : () => ipc.wishlistList({ oracleId, limit: 200, offset: 0 }),
+      oracleId === null
+        ? skipToken
+        : () => sweep((limit, offset) => ipc.wishlistList({ oracleId, limit, offset })),
     enabled: scope.quantity === "wished",
   });
 
@@ -1044,11 +1054,11 @@ function Body({
    *  printing can honestly address. Empty on every surface that draws no stepper, because the
    *  read behind each is `enabled` on exactly that — see {@link owned}. */
   const ownedRows = useMemo(
-    () => (owned.data?.items ?? []).filter((row) => row.cardId === cardId),
+    () => (owned.data ?? []).filter((row) => row.cardId === cardId),
     [owned.data, cardId],
   );
   const wishedRows = useMemo(
-    () => (wished.data?.items ?? []).filter((row) => row.cardId === cardId),
+    () => (wished.data ?? []).filter((row) => row.cardId === cardId),
     [wished.data, cardId],
   );
 
@@ -1073,7 +1083,7 @@ function Body({
   const copyRow = useMemo(() => {
     const id = scope.copy?.entryId;
     if (id === undefined) return null;
-    return (owned.data?.items ?? []).find((row) => row.id === id) ?? null;
+    return (owned.data ?? []).find((row) => row.id === id) ?? null;
   }, [owned.data, scope.copy]);
   /**
    * The copy as `CardModalArt` reads a row — which is what turns its `View as …` into `Set as …`.
