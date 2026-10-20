@@ -19,11 +19,11 @@ use super::{Card, Format, Surface};
 
 /// Every field, **in the order a CSV writes its columns**.
 ///
-/// `TRANSFER_FIELD_IDS`' order, variant for variant. The first six are today's deck CSV header
-/// spelled in today's order, which is what makes [`default_fields`] for `(Csv, Deck)` a
-/// byte-for-byte reproduction of what shipped — `Label` and `LabelColor` sit *after* them on
-/// purpose, because inserting into the six would change the column order of every CSV already
-/// written for a field that is switched off by default there.
+/// `TRANSFER_FIELD_IDS`' order, variant for variant. The first six are the deck CSV header as it
+/// first shipped, spelled in that order, and [`FieldId::CategoryActive`] is appended as the
+/// seventh (issue #1174) — `Label` and `LabelColor` sit *after* them on purpose, because
+/// inserting into the six would change the column order of every CSV already written for a field
+/// that is switched off by default there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FieldId {
     Quantity,
@@ -32,6 +32,15 @@ pub enum FieldId {
     CollectorNumber,
     Category,
     Finish,
+    /// Whether the pile counts toward the deck — `is_active`, Archidekt's `{noDeck}` the other
+    /// way round (issue #1174).
+    ///
+    /// **A column of its own because a CSV cell holds one value**, [`FieldId::LabelColor`]'s
+    /// reason: until it existed the CSV was the one format that kept a switched-off pile's name
+    /// and dropped the flag, and the mirror writes every pile, so its deck CSV imported a cut
+    /// pile back as one that counts. On by default and offered by the CSV alone — every other
+    /// format answers the question in its own grammar.
+    CategoryActive,
     /// The deck label — one row of `deck_labels`, by name.
     ///
     /// **This was `Tag` until the rename — one letter off the collection's `Tags`, further down
@@ -82,13 +91,14 @@ pub enum FieldId {
 
 /// Every field in registry order. The array **is** the column order: everything that produces a
 /// field list filters this rather than building one of its own.
-pub const FIELD_IDS: [FieldId; 27] = [
+pub const FIELD_IDS: [FieldId; 28] = [
     FieldId::Quantity,
     FieldId::Name,
     FieldId::SetCode,
     FieldId::CollectorNumber,
     FieldId::Category,
     FieldId::Finish,
+    FieldId::CategoryActive,
     FieldId::Label,
     FieldId::LabelColor,
     FieldId::Condition,
@@ -131,6 +141,7 @@ pub fn key(id: FieldId) -> &'static str {
         FieldId::CollectorNumber => "collectorNumber",
         FieldId::Category => "category",
         FieldId::Finish => "finish",
+        FieldId::CategoryActive => "categoryActive",
         FieldId::Label => "label",
         FieldId::LabelColor => "labelColor",
         FieldId::Condition => "condition",
@@ -167,6 +178,7 @@ pub fn csv_header(id: FieldId) -> &'static str {
         FieldId::CollectorNumber => "Collector number",
         FieldId::Category => "Category",
         FieldId::Finish => "Finish",
+        FieldId::CategoryActive => "Category active",
         FieldId::Label => "Label",
         FieldId::LabelColor => "Label colour",
         FieldId::Condition => "Condition",
@@ -269,6 +281,7 @@ pub fn read(id: FieldId, card: &Card) -> String {
         FieldId::CollectorNumber => text(&card.collector_number),
         FieldId::Category => text(&card.category_name),
         FieldId::Finish => text(&card.finish),
+        FieldId::CategoryActive => flag(card.category_active),
         FieldId::Label => text(&card.label_name),
         FieldId::LabelColor => text(&card.label_color),
         FieldId::Condition => text(&card.condition),
@@ -320,11 +333,12 @@ const ARCHIDEKT: [FieldId; 5] = [
 /// CSV's defaults are a deliberate core with everything else opt-in. `Condition` is among them so
 /// a collection CSV separates a NM copy from an LP one without the reader having to know that is
 /// what makes them two rows; on a deck it is not available and drops out.
-const CSV_DEFAULT_ON: [FieldId; 5] = [
+const CSV_DEFAULT_ON: [FieldId; 6] = [
     FieldId::SetCode,
     FieldId::CollectorNumber,
     FieldId::Category,
     FieldId::Finish,
+    FieldId::CategoryActive,
     FieldId::Condition,
 ];
 
@@ -374,6 +388,7 @@ pub fn surface_fields(surface: Surface) -> &'static [FieldId] {
             FieldId::CollectorNumber,
             FieldId::Category,
             FieldId::Finish,
+            FieldId::CategoryActive,
             FieldId::Label,
             FieldId::LabelColor,
             FieldId::Lang,
@@ -527,6 +542,7 @@ mod tests {
                 FieldId::CollectorNumber,
                 FieldId::Category,
                 FieldId::Finish,
+                FieldId::CategoryActive,
                 FieldId::Label,
                 FieldId::LabelColor,
                 FieldId::Lang,
@@ -566,10 +582,10 @@ mod tests {
         );
     }
 
-    /// Today's deck CSV header, spelled in today's order — the byte-for-byte claim the registry's
-    /// first six exist to keep.
+    /// The deck CSV header: the six it shipped with, in their order — the claim the registry's
+    /// first six exist to keep — and `Category active` appended after them (issue #1174).
     #[test]
-    fn the_deck_csv_defaults_are_todays_six_column_header() {
+    fn the_deck_csv_defaults_are_the_six_column_header_and_the_active_flag() {
         let header: Vec<&str> = default_fields(Format::Csv, Surface::Deck)
             .into_iter()
             .map(csv_header)
@@ -582,7 +598,8 @@ mod tests {
                 "Set",
                 "Collector number",
                 "Category",
-                "Finish"
+                "Finish",
+                "Category active"
             ]
         );
     }
@@ -613,6 +630,23 @@ mod tests {
         assert_eq!(read(FieldId::Altered, &card), "no");
         assert_eq!(read(FieldId::Proxy, &card), "");
         assert_eq!(read(FieldId::Notes, &card), "");
+    }
+
+    /// A switched-off pile writes `no` and a surface with no piles writes nothing — the column a
+    /// deck CSV round-trips its inactive piles through (issue #1174).
+    #[test]
+    fn the_active_flag_is_no_for_a_switched_off_pile_and_blank_without_piles() {
+        let off = Card {
+            category_active: Some(false),
+            ..sample()
+        };
+        let on = Card {
+            category_active: Some(true),
+            ..sample()
+        };
+        assert_eq!(read(FieldId::CategoryActive, &off), "no");
+        assert_eq!(read(FieldId::CategoryActive, &on), "yes");
+        assert_eq!(read(FieldId::CategoryActive, &sample()), "");
     }
 
     /// The general form of the rule above: a card with nothing to say writes an empty cell in

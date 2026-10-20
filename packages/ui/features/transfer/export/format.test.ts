@@ -57,7 +57,7 @@ describe("formatExport", () => {
 
   it("writes a CSV with a header row", () => {
     expect(formatExport([BOLT], "csv", defaultFields("csv", "deck"))).toBe(
-      "Quantity,Name,Set,Collector number,Category,Finish\n2,Lightning Bolt,lea,161,Main deck,\n",
+      "Quantity,Name,Set,Collector number,Category,Finish,Category active\n2,Lightning Bolt,lea,161,Main deck,,yes\n",
     );
   });
 
@@ -207,7 +207,9 @@ describe("formatExport", () => {
         "csv",
         defaultFields("csv", "deck"),
       ),
-    ).toBe("Quantity,Name,Set,Collector number,Category,Finish\n1,Sol Ring,LTC,285,Ramp,\n");
+    ).toBe(
+      "Quantity,Name,Set,Collector number,Category,Finish,Category active\n1,Sol Ring,LTC,285,Ramp,,yes\n",
+    );
   });
 
   it("round-trips through this app's own importer", () => {
@@ -440,7 +442,7 @@ describe("what a reader could not get back before issue #555", () => {
         defaultFields("csv", "deck"),
       ),
     ).toBe(
-      'Quantity,Name,Set,Collector number,Category,Finish\n1,Sol Ring,LTC,285,"Ramp, Fixing {x} [y]",\n',
+      'Quantity,Name,Set,Collector number,Category,Finish,Category active\n1,Sol Ring,LTC,285,"Ramp, Fixing {x} [y]",,yes\n',
     );
   });
 

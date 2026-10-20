@@ -361,15 +361,34 @@ describe("a real decklist round-trips through every format this app can read", (
     expect(Object.values(moxfield).reduce((total, copies) => total + copies, 0)).toBe(117);
   });
 
-  /** `{noDeck}` is the only thing any of these formats can say about a pile that counts toward
-   *  nothing, which is why Archidekt is the one format that writes an inactive pile *and* leaves
-   *  nothing out. */
-  it("keeps the switched-off piles through Archidekt's {noDeck}", () => {
+  /** `{noDeck}` and the CSV's `Category active` column are the only things any of these formats
+   *  can say about a pile that counts toward nothing, which is why Archidekt and the CSV are the
+   *  two formats that write an inactive pile *and* leave nothing out. The CSV's column is issue
+   *  #1174: before it, the pile's name came back and the flag did not. */
+  it.each(["archidekt", "csv"] as const)("keeps the switched-off piles through %s", (format) => {
     const back = parseDecklist(
-      formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), "archidekt", DECK_FIELDS("archidekt")),
+      formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), format, DECK_FIELDS(format)),
     );
 
     expect(back.lines.filter((line) => line.excluded)).toHaveLength(17);
+  });
+
+  /**
+   * **Every line's zone, pile and flag, not only its name and copies** (issue #1174). The checks
+   * above count names and copies, which is what let a CSV hand a switched-off pile back as one
+   * that counts and stay green. The CSV keeps everything Archidekt keeps, so the two parses are
+   * compared line for line — as sorted rows, because Archidekt groups by pile and the CSV does not.
+   */
+  it("brings every line back through a CSV in the zone, pile and flag Archidekt does", () => {
+    const cards = exportCardsFor(ARCHIDEKT_SECTIONED);
+    const rows = (format: "archidekt" | "csv") =>
+      parseDecklist(formatExport(cards, format, DECK_FIELDS(format)))
+        .lines.map((line) =>
+          JSON.stringify([line.name, line.quantity, line.section, line.categoryName, line.excluded]),
+        )
+        .sort();
+
+    expect(rows("csv")).toEqual(rows("archidekt"));
   });
 
   /**

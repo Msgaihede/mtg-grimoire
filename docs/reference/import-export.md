@@ -22,7 +22,7 @@ export dialog's radio row draws them:
 | Moxfield | Set + number | `*F*`/`*E*` | — | Fixed vocabulary heading | Yes |
 | Archidekt | Set + number (lowercase) | `*F*`/`*E*` | `[Name]` bracket, `{noDeck}` | Reader's own category names | Yes |
 | TCGplayer | `[SET] number` | — (chosen in cart) | — | Flat, no headings at all | **No** |
-| CSV | Set + number columns | `Finish` column | `Category` column | One row per card, header row | **Yes, since Task 10** |
+| CSV | Set + number columns | `Finish` column | `Category` column, `Category active` | One row per card, header row | **Yes, since Task 10** |
 
 **TCGplayer is the one write-only format now.** `decklists.test.ts`'s `READABLE` array excludes it
 by name — `parse.ts`'s bracket group is anchored to the end of the line, so `2 Lightning Bolt
@@ -38,7 +38,13 @@ format drops a row, and `tcgplayer` is the one flat format that keeps a switched
 the cart is usually exactly what the reader still has to buy. `archidekt` is the only writer whose
 headings are the reader's own words rather than a fixed vocabulary, and the only one that can say
 `{noDeck}` — the flag that is what makes an Archidekt export and a re-import agree about a
-maybeboard.
+maybeboard. **The CSV says the same thing in a column of its own** (issue #1174): `Category
+active`, `yes` / `no` beside the pile's name, on by default on a deck and offered by no other
+format. Before it the CSV was the one format that kept a switched-off pile's name and dropped
+the flag, so a file written with the box below ticked — or by the mirror, which writes every pile
+— imported its cut pile back as one that counts. `parse.ts` reads `no` (and `n`, `false`, `0`,
+`off`, `inactive`) into `excluded` **only beside a `Category` cell**: a `no` with no pile names
+nothing to switch off. Any other word, a blank, or a file without the column is a pile that counts.
 
 **Every sentence in that paragraph is about the _writer_, and since issue #390 the writer is no
 longer handed the whole deck.** `Include inactive categories` narrows the list in the export
@@ -70,8 +76,8 @@ deliberately declares fewer fields than it writes.
 
 **On by default for Archidekt and off for CSV.** Archidekt's other four optional fields are on
 too — its defaults are everything the format can say, and the caret group is something Archidekt
-itself emits. CSV's defaults are a deliberate core (printing, category, finish, condition) with
-everything else opt-in, so both boxes join the opt-in side there. `exportPrefs` is session state
+itself emits. CSV's defaults are a deliberate core (printing, category, finish, the category's
+active flag, condition) with everything else opt-in, so both boxes join the opt-in side there. `exportPrefs` is session state
 and not persisted (`store.ts`), so a default really does reach every reader on their next launch;
 what makes that acceptable here and not for the Arena filter is that this **adds a suffix** where
 that one **drops rows**, and the tickbox is on screen saying so. **`Include inactive categories`
@@ -247,7 +253,7 @@ Read off `ACTIVE_ONLY` in `format.ts` and `offersInactive`/`excludesInactive` in
 
 So **five formats changed what an existing reader's next deck export contains**, and Archidekt is
 the one where ticking the box is also a round trip: the flag goes out with the pile and comes back
-as `is_active = 0`. **What pays for the change is the count line** — whatever the box is holding
+as `is_active = 0`. CSV joined it in issue #1174, through its `Category active` column. **What pays for the change is the count line** — whatever the box is holding
 back is on screen, in copies, before Copy is pressed, so the change is never a silent one.
 
 `exportPrefs` is session state and is not persisted, so the default reaches every reader on every
@@ -388,11 +394,12 @@ space-insensitively, so a header never drifts out of sync with a column:
 | `collectorNumber` | Collector number | `proxy` | Proxy |
 | `category` | Category | `misprint` | Misprint |
 | `finish` | Finish | `tags` | Tags |
-| `label` | Label | `notes` | Notes |
-| `labelColor` | Label colour | `setName` | Set name |
-| `condition` | Condition | `rarity` | Rarity |
-| `lang` | Language | `typeLine` | Type line |
-| `tradelistQuantity` | Tradelist quantity | `unitPrice` | Price |
+| `categoryActive` | Category active | `notes` | Notes |
+| `label` | Label | `setName` | Set name |
+| `labelColor` | Label colour | `rarity` | Rarity |
+| `condition` | Condition | `typeLine` | Type line |
+| `lang` | Language | `unitPrice` | Price |
+| `tradelistQuantity` | Tradelist quantity | | |
 | `purchasePrice` | Purchase price | | |
 | `purchaseCurrency` | Purchase currency | | |
 | `acquiredAt` | Acquired | | |
