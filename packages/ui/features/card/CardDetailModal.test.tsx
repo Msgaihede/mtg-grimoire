@@ -1011,6 +1011,80 @@ it("keeps the wishlist rows on the wishlist surface, where its own stepper write
   await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalledWith(7, 2));
 });
 
+/**
+ * **Issue #1167: quick presses on the owned stepper must not lose increments or add twice.**
+ *
+ * Both commands take an *absolute* quantity computed from the number the stepper draws. Drawn off
+ * the cached rows alone, that number stood still until a refetch landed — so three presses of `+`
+ * on one copy sent `set_quantity(42, 2)` three times, and a "12" typed over no row sent
+ * `collectionAdd(1)` and then `collectionAdd(12)`. The backend here is a little store behind a
+ * gate, so every press is made while the writes before it are still on their way.
+ */
+function slowCollection(start: { id: number; cardId: string; quantity: number }[]) {
+  let held = start;
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => (open = resolve));
+  collectionList.mockImplementation(async () => ({ items: held, total: held.length }));
+  collectionSetQuantity.mockImplementation(async (id: number, quantity: number) => {
+    await gate;
+    held = held.map((row) => (row.id === id ? { ...row, quantity } : row));
+    return { id, quantity, removed: false };
+  });
+  collectionAdd.mockImplementation(async (entry: { cardId: string; quantity: number }) => {
+    await gate;
+    held = [...held, { id: 99, cardId: entry.cardId, quantity: entry.quantity }];
+    return { id: 99, quantity: entry.quantity, removed: false };
+  });
+  return { open: () => act(open) };
+}
+
+it("draws each press at once and sends them in order, so three presses are three copies", async () => {
+  const backend = slowCollection([{ id: 42, cardId: "c1", quantity: 1 }]);
+  useAppStore.setState({ activeView: "collection" });
+  renderModal("c1");
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt you own/i,
+  });
+  await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(1));
+
+  await userEvent.click(up);
+  await userEvent.click(up);
+  await userEvent.click(up);
+  // The number moves with the presses rather than with the backend…
+  expect(screen.getByRole("spinbutton")).toHaveValue(4);
+  // …and the presses are queued: the second waits for the first to land.
+  expect(collectionSetQuantity).toHaveBeenCalledTimes(1);
+
+  await backend.open();
+  await waitFor(() => expect(collectionSetQuantity).toHaveBeenCalledTimes(3));
+  expect(collectionSetQuantity.mock.calls).toEqual([
+    [42, 2],
+    [42, 3],
+    [42, 4],
+  ]);
+  await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(4));
+});
+
+it("steps the row an add made rather than adding again, when a press is queued behind it", async () => {
+  const backend = slowCollection([]);
+  useAppStore.setState({ activeView: "collection" });
+  renderModal("c1");
+  await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(0));
+
+  // Typed, so the field writes per keystroke: "1", then "12".
+  await userEvent.type(screen.getByRole("spinbutton"), "{selectall}12");
+  expect(screen.getByRole("spinbutton")).toHaveValue(12);
+
+  await backend.open();
+  await waitFor(() => expect(collectionSetQuantity).toHaveBeenCalledWith(99, 12));
+  // One add, and the rest of the typing landed on the row it made — 12 copies, not 13.
+  expect(collectionAdd).toHaveBeenCalledTimes(1);
+  expect(collectionAdd).toHaveBeenCalledWith(
+    expect.objectContaining({ cardId: "c1", quantity: 1 }),
+  );
+  await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(12));
+});
+
 it("steps a printing whose rows fall past the first page of the oracle's (issue #1169)", async () => {
   // A basic-land collector: a full page of other Island printings, and this printing's one row on
   // the page after. One capped read stopped at the first page, so the stepper read 0 and + added
