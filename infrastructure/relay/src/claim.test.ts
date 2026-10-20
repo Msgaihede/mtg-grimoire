@@ -1473,6 +1473,114 @@ describe("/claim — the binding moves rather than being refused", () => {
     expect(dropped).toEqual([]);
   });
 
+  /**
+   * Issue #1192: the payer's pledge ends, and another member of the same group connects their own
+   * Patreon and pastes the code. `revoke` leaves a dead row's `group_id` where it was, so the bind
+   * used to meet `entitlements_group` and answer the 409 meant for a shared subscription.
+   *
+   * `sub-0` holds the code and has never claimed; `sub-1` is the lapsed payer, bound to `g1` and
+   * holding its mirror at the epoch `g1` stands on, as every relay write leaves it.
+   */
+  function lapsedHolder(holder: { status: string; grace_until: number | null }): Harness {
+    const made = harness({ groups: ["unused", "g1"] });
+    withCode(made.tables);
+    keyed(made.tables, "g1", 0);
+    Object.assign(made.tables.entitlements[0], { group_id: null, refresh_secret: null });
+    Object.assign(made.tables.entitlements[1], { ...holder, group_epoch: 0, group_auth: AUTH_TWO });
+    seat(made.tables, "g1", "desk");
+    return made;
+  }
+
+  it.each([
+    ["revoked", () => ({ status: "dead", grace_until: null })],
+    // **The row `revoke` has not been asked about yet.** A window closes with nothing to announce
+    // it, so a claim that released only `status = 'dead'` would still refuse this one.
+    // Built inside the test rather than here: the table is read before this file's clock is set.
+    ["out of grace", () => ({ status: "grace", grace_until: Date.now() - 1000 })],
+  ])("takes the group over from a %s holder, mirror and all", async (_, holder) => {
+    const { tables, env, dropped } = lapsedHolder(holder());
+
+    const { status } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env),
+    );
+
+    expect(status).toBe(200);
+    expect(tables.entitlements[0]).toMatchObject({
+      group_id: "g1",
+      group_epoch: 0,
+      group_auth: AUTH_TWO,
+    });
+    // The lapsed row holds no group and no auth for one, so nothing can mint for `g1` off it.
+    expect(tables.entitlements[1]).toMatchObject({
+      group_id: null,
+      group_epoch: null,
+      group_auth: null,
+    });
+    // ⚠️ **And the group itself is taken over, not taken apart.** Its manifest is what every
+    // remaining device reads its membership off; an emptied one is all of them removed at once.
+    expect(tables.group_keys).toHaveLength(1);
+    expect(JSON.parse(String(tables.group_keys[0].keys))).toEqual({ desk: "blob" });
+    expect(idsIn(tables, "g1")).toEqual([DEVICE, "desk"]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("leaves the group alone when the lapsed holder's old secret is presented after", async () => {
+    // The out-of-grace holder still holds `secret-1`. Settled at the refresh door it would be
+    // revoked, and `revoke` drops the log of the group the row names — the one just taken over —
+    // were the row still to name it.
+    const { env, dropped } = lapsedHolder({ status: "grace", grace_until: Date.now() - 1000 });
+    await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env);
+
+    const { status } = await answer(
+      await handleToken(post("/token", { refresh: "secret-1", device: "desk" }), env),
+    );
+
+    expect(status).toBe(401);
+    expect(dropped).toEqual([]);
+  });
+
+  it("still refuses a holder whose grace window is open", async () => {
+    // A declined card is seven days of service, and the subscription is still serving `g1`: two
+    // subjects on it would be the shared subscription `entitlements_group` exists to stop.
+    const { tables, env } = lapsedHolder({ status: "grace", grace_until: Date.now() + 60_000 });
+
+    const { status, body } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env),
+    );
+
+    expect(status).toBe(409);
+    expect(body.error).toBe("that sync group is bound to another membership");
+    expect(tables.entitlements[0].group_id).toBeNull();
+    expect(tables.entitlements[1]).toMatchObject({ group_id: "g1", group_auth: AUTH_TWO });
+  });
+
+  it("releases nothing when a rotation lands between the auth check and the bind", async () => {
+    // **The release carries the bind's fences, and this is the race they are for.** A batch rolls
+    // back on a throw and not on a zero, so a release fenced on less than the bind would unbind
+    // the lapsed row while the bind that should have followed changed nothing — a group held by
+    // no row at all, whose every device then fails `authIsCurrent`.
+    const { tables, env } = lapsedHolder({ status: "dead", grace_until: null });
+    const batch = env.DB.batch.bind(env.DB);
+    env.DB.batch = ((statements: D1PreparedStatement[]) => {
+      tables.group_keys.push({
+        group_id: "g1",
+        epoch: 2,
+        auth: AUTH_ONE,
+        keys: "{}",
+        created_at: 0,
+      });
+      return batch(statements);
+    }) as typeof env.DB.batch;
+
+    const { status } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env),
+    );
+
+    expect(status).toBe(401);
+    expect(tables.entitlements[0].group_id).toBeNull();
+    expect(tables.entitlements[1]).toMatchObject({ group_id: "g1", group_auth: AUTH_TWO });
+  });
+
   it("takes nothing apart when the group claimed is the one already bound", async () => {
     // A reader who sold the laptop holding the refresh secret connects Patreon again and
     // re-claims the group they are still in. `seedGroup` is `INSERT OR IGNORE` for this: writing

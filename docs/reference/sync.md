@@ -4142,6 +4142,24 @@ nothing. The `UPDATE`'s `WHERE` is a compare-and-swap on the binding this reques
 (`previous`, spelled `(group_id IS NULL OR group_id = ?)` because SQL's `=` is never true against
 a NULL), so a second claim racing this one finds the row already moved and changes nothing.
 
+⚠️ **And a holder whose membership is dead is not "another subject" (issue #1192).** `revoke` sets
+`status = 'dead'` and leaves `group_id` where it is, so once the payer's pledge ended, every other
+member who connected their own Patreon and pasted the code met the unique index and this same
+409 — the only ways out were leaving and re-pairing every device, or editing D1 by hand. So the
+bind is now a two-statement batch, one D1 transaction. The first statement clears `group_id` and
+the `group_epoch`/`group_auth` mirror from a row bound to this group whose status `settle` would
+call dead — spelled in SQL, so a grace window that closed with nothing to announce it releases
+too. The second binds the claimer and, when the group is keyed, writes the mirror onto the
+claimer's row, so the group's current auth moves from one row to the other with no moment in which
+`/token`'s group door finds none. The release carries the bind's own fences (the claimer's row by
+subject, the epoch and the auth), because a batch rolls back on a throw and not on a zero: a
+release fenced on less would empty a group whose bind then changed nothing. The auth fence reads
+`group_keys`' newest row rather than the mirror, which is the same fact (`recordRotation` writes
+both in one batch) from the home the release does not clear. Nothing of the group is taken apart —
+its manifest, roll and log carry on under the new holder, and the lapsed row's leftover refresh
+secret then meets a row bound to no group and is refused without `revoke` dropping anything. A
+holder still inside its grace window is served, and is still the 409.
+
 ⚠️ **The cost, stated rather than discovered: a re-claim silently orphans whatever devices remain
 in the old group.** Their manifest and their log are gone and they fail their next key check. They
 are *already* orphaned when the payer has left, and for that reader this tells them nothing new —
