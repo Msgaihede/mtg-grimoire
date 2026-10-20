@@ -1,4 +1,4 @@
-import { MAX_SHARES_PER_GROUP, json, shareUrl, type Env } from "./env";
+import { MAX_SHARES_PER_GROUP, deleteSnapshots, json, shareUrl, type Env } from "./env";
 
 /**
  * The three gated writes: publish a share, list what a group has published, and withdraw one.
@@ -570,15 +570,21 @@ export async function handleList(env: Env, group: string): Promise<Response> {
  * in which an upload commits a new object the delete then never hears about. With the read inside
  * the flip, an upload either committed before it — and its key is the one answered here — or
  * meets `state = 'revoked'` in its own compare-and-swap and deletes what it wrote (`blob.ts`).
- * The second statement then points the row at nothing, which is now the truth; it cannot race an
- * upload, because nothing writes `object_key` on a revoked row.
  *
- * **The delete runs after both, and is not caught.** A failed R2 delete is a 500 the app can
- * retry — revoking is idempotent — and the row is already revoked either way, so no viewer is
- * served in between.
+ * ⚠️ **The R2 delete runs before the row is pointed at nothing, and is not caught.** Until
+ * 2026-10-20 it ran after: a delete that threw was a 500 whose retry read `RETURNING object_key`
+ * as NULL, answered 204 and deleted nothing — the snapshot stayed in R2 with no row naming it,
+ * which is exactly the leftover this route exists to prevent (issue #1193). Now a failed delete
+ * leaves the key in the row, and the app's retry finds it again. Clearing the column afterwards
+ * cannot race an upload, because nothing writes `object_key` on a revoked row; and the row is
+ * revoked from the first statement on, so no viewer is served in between.
+ *
+ * **The delete empties the share's whole R2 folder** (`deleteSnapshots`), which also takes any
+ * superseded object an upload failed to delete — the key in the row is only the newest of them.
  *
  * Idempotent: revoking an already-revoked share answers 204 again, because the state it asked
- * for is the state it is in — and its `object_key` is already NULL, so there is nothing to delete.
+ * for is the state it is in. The folder is listed again, which is what lets a press after a
+ * half-finished one finish it, and is empty otherwise.
  */
 export async function handleRevoke(
   env: Env,
@@ -592,11 +598,11 @@ export async function handleRevoke(
     .bind(REVOKED, now, id, group)
     .first<{ object_key: string | null }>();
   if (revoked === null) return json({ error: "no such share" }, 404);
+  await deleteSnapshots(env, id);
   if (revoked.object_key !== null) {
     await env.DB.prepare(`UPDATE shares SET object_key = NULL, bytes = NULL WHERE id = ?`)
       .bind(id)
       .run();
-    await env.SHARES.delete(revoked.object_key);
   }
   return new Response(null, { status: 204 });
 }
