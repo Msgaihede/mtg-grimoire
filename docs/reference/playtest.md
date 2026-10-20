@@ -446,8 +446,12 @@ the command zone, another spell on the stack), and `targetPlayers`. They are rea
 (`stack_targets`); a target in a hand or a library is left out, as the reader may not see it.
 
 **A printing follows its card.** phase keeps an object's id across zones and bumps its
-`incarnation`. The session still re-homes a printing whose object is gone, by seat and name
-(`follow_printings`), so a deck's second art stays on its card wherever the card goes.
+`incarnation`. The session still re-homes a printing whose object is gone, by seat and card
+(`follow_printings`), so a deck's second art stays on its card wherever the card goes. An object is
+named by the face it shows, so every face of a card of several faces is read as the card
+(`card_names`, issue #1144): a Pathway or a Bala Ged Recovery played as its back face keeps its
+printing, and a commander on its back face is still the commander — its tax, its tile, its way back
+to the command zone.
 
 ## The setup page
 
