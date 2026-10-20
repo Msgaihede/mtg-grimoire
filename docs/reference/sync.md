@@ -106,8 +106,13 @@ The four layers behind it, and the boundary between them is that only the last t
   and cannot seal a blob to the peer it never met. `client::publish_join` therefore reads `/keys`
   and publishes **only when what it would publish is a superset of what the relay already holds**;
   otherwise it marks `roster_dirty` and stays quiet, because publishing from a partial view would
-  *be* the eviction rather than the fix. Carrying public keys in the manifest is the change that
-  would close the rest, and it is a wire change on both sides that this branch does not make.
+  *be* the eviction rather than the fix. **Since issue #1115 a removal and a departure ask the same
+  question** (`client::drops_only`, with the device each may drop): a removal from a partial
+  roster is refused (`pairing::ROSTER_NOT_WHOLE`), and a departure from one publishes nothing and
+  still clears. `/rotate` backs both with a refusal of its own — a manifest that leaves off more
+  than one device of the group's standing manifest is a 409 `partial_roster`. Carrying public keys
+  in the manifest is the change that would close the rest, and it is a wire change on both sides
+  that this branch does not make.
 - **`sync_pair::pairing`** — the state machine and the nine commands. Two of them do network I/O
   now (`accept`, `confirm`), so they and `poll` run on a blocking worker with a runtime of their
   own (`sync::on_a_worker`). **Since 2026-10-03 each takes the pending offer's lock and then the
@@ -445,7 +450,10 @@ The remover does four things and **the order is the fix**
    pays any join paired here and not yet published; **a debt it could not pay refuses the
    removal** (`pairing::JOIN_NOT_PUBLISHED`), because the others would not know the device being
    dropped and would keep the old keys it holds.
-3. **Plan the rotation, which writes nothing**, and publish it to `POST /g/{group}/rotate`. The
+3. **Plan the rotation, which writes nothing**, ask the relay's manifest whether the plan names
+   everybody it knows but the device being removed (`client::drops_only`; a plan that does not is
+   a partial roster, refused with `pairing::ROSTER_NOT_WHOLE` — issue #1115), and publish it to
+   `POST /g/{group}/rotate`. The
    plan is the new key rewrapped once per device that stays:
    `kek = HKDF-SHA256(X25519(remover_secret, target_public), salt = group_id, info = "mtg-grimoire/rotate/v1|" || epoch)`,
    sealed with `group_id\0target_device\0epoch` as its associated data. `sync_devices.public_key`
@@ -606,7 +614,9 @@ whatever the second answered is the whole of the guarantee:
    yourself are different acts: a single entrance that took either would let a mis-click on a
    roster row throw this device's own key away.
 2. `client::post_rotation` — **best effort**. A 500, a timeout or a plane is not a reason a reader
-   cannot leave.
+   cannot leave. **Only when `client::drops_only` says the plan names everybody the relay knows
+   but this device** (issue #1115): a leaver holding a partial roster would otherwise evict the
+   device it never learned of on its way out. Unasked or unanswered is unpublished.
 3. `identity::leave_group` **and** `entitlement::clear` — **unconditionally**.
 
 ⚠️ **"Everything after the in-a-group check is best effort" includes the *planning*, and that
@@ -3731,7 +3741,7 @@ wire and against that cap; base64 is four thirds and URL-safe.
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}&limit={rows}` | | 200 with `{ envelopes, cursor, more }` — a page; 400 `bad limit` | **bearer** |
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` — everything, streamed; what every build before step 6.5b sends | **bearer** |
 | `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads; a departed device's is not stored, and a cursor past the log's newest row is stored as that row; 403 `device_mismatch` for a `device` that is not the token's `dev` | **bearer** |
-| `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch, for one past the group's (a join) or two past it (a removal or a departure); 409 behind or equal; 422 further | the group's current auth, and nothing else |
+| `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch, for one past the group's (a join) or two past it (a removal or a departure); 409 behind or equal; 409 `partial_roster` for a manifest leaving off more than one device the standing one names; 422 further | the group's current auth, and nothing else |
 | `GET {relay}/g/{group}/keys?device={id}[&epoch={n}]` | | 200 with `{ epoch, blob, devices, removalStep }` — with `epoch`, that epoch's manifest, or 404 `no_such_epoch` | any auth this group has used within eight epochs |
 | `POST /g/{group}/roster` — **internal** | `{ epoch, devices }` | 204 | built by the Worker after an accepted rotation; not on the public pattern, a 404 from outside |
 

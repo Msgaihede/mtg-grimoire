@@ -515,7 +515,7 @@ exemption.** ⚠️ **This section said "every one of them is behind the bearer 
 
 | Request | Body | Guarded by | Answer |
 | --- | --- | --- | --- |
-| `POST /g/{group}/rotate` | `{epoch, auth, keys}` | the group's current auth | `200 {epoch}` for one past the group's newest (a join) or two past it (a removal or a departure); `409` behind or equal; `422` further ahead |
+| `POST /g/{group}/rotate` | `{epoch, auth, keys}` | the group's current auth | `200 {epoch}` for one past the group's newest (a join) or two past it (a removal or a departure); `409` behind or equal; `409 {code: "partial_roster"}` for a manifest leaving off more than one device the standing one names (issue #1115); `422` further ahead |
 | `GET /g/{group}/keys?device={id}[&epoch={n}]` | — | any auth the group has used within `EPOCH_HISTORY` epochs | `200 {epoch, blob, devices, removalStep: 2}` — the newest manifest, or with `epoch` the one stored at exactly `n`; `404 no_such_epoch` for none there |
 
 A device that has just been rotated away from **cannot mint a token** — the auth it would present
