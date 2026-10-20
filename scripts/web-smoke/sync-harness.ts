@@ -328,7 +328,9 @@ export async function startRelay(pageOrigin: string) {
     for (const line of lines) {
       if (line.trim() !== "") tail.push(`${new Date().toISOString().slice(11, 23)} ${line.trim()}`);
       if (tail.length > 12) tail.shift();
-      const request = /\[wrangler:info\] ([A-Z]+) (\S+) (\d{3}) (?:.*\((\d+)ms\))?/.exec(line);
+      const request = /\[wrangler(?:-\w+)?:info\] ([A-Z]+) (\S+) (\d{3}) (?:.*\((\d+)ms\))?/.exec(
+        line,
+      );
       if (request) {
         log.push({
           method: request[1],
@@ -338,7 +340,7 @@ export async function startRelay(pageOrigin: string) {
           // What wrangler prints after the status, when it prints it: the answer's own time.
           ms: request[4] === undefined ? null : Number(request[4]),
         });
-      } else if (/\[wrangler:info\] Ready on https:\/\/127\.0\.0\.1:/.test(line)) {
+      } else if (/\[wrangler(?:-\w+)?:info\] Ready on https:\/\/127\.0\.0\.1:/.test(line)) {
         ready();
       } else if (/\[ERROR\]|Uncaught|exception/i.test(line)) {
         said.push(line.trim());
