@@ -6082,17 +6082,25 @@ fn fill_unknown_power_toughness(conn: &Connection, rows: &mut [DeckCardRow]) -> 
 /// to command a deck. Everything else has no box, so NULL is not a gap in the data but the
 /// fact itself, and looking is a guaranteed miss.
 ///
-/// Matched against the **whole** type line, which is why a transform card is covered: `cards`
-/// stores the combined `"Land // Legendary Creature — Demon"`, so a back-face creature is
-/// found by the same substring. A **NULL** type line is treated as *could be* — an orphan has
-/// no type line and neither does a card row that arrived without one, and the conservative
-/// direction for an unknown is to look. One wasted lookup is cheaper than a commander refused.
+/// Matched against the **front face's** type line only — the text before the first ` // ` of
+/// the combined line `cards` stores — because that is the only face [`printed_power_toughness`]
+/// (and the ingest before it) ever reads a P/T from. Gating on the whole line let a back-face
+/// creature through (`"Land // Legendary Creature — Demon"`, a NEO Saga's `"Enchantment —
+/// Saga // Enchantment Creature — …"`): its blob was inflated and parsed on every deck open,
+/// found `(None, None)` on face 0, and was looked at again next time, for ever (issue #1127).
+/// A front-face creature with a non-creature back (`"Creature — Human // Land"`, an Adventure)
+/// is still looked at. A **NULL** type line is treated as *could be* — an orphan has no type
+/// line and neither does a card row that arrived without one, and the conservative direction
+/// for an unknown is to look. One wasted lookup is cheaper than a commander refused.
 fn may_have_a_power_toughness_box(type_line: Option<&str>) -> bool {
     match type_line {
         None => true,
-        Some(t) => ["Creature", "Vehicle", "Spacecraft"]
-            .iter()
-            .any(|k| t.contains(k)),
+        Some(t) => {
+            let front = t.split(" // ").next().unwrap_or(t);
+            ["Creature", "Vehicle", "Spacecraft"]
+                .iter()
+                .any(|k| front.contains(k))
+        }
     }
 }
 
@@ -15302,8 +15310,8 @@ mod tests {
     }
 
     /// The gate itself, over the type lines that decide it. `Vehicle` and `Spacecraft` are
-    /// on the list for CR 903.3's reason, and the combined type line of a transform card is
-    /// why a back-face creature needs no special case.
+    /// on the list for CR 903.3's reason, and only the front face of a combined type line
+    /// counts, because the front face is the only one a P/T is ever read from (issue #1127).
     #[test]
     fn only_a_type_line_that_could_print_a_power_toughness_box_is_worth_a_lookup() {
         for worth in [
@@ -15311,7 +15319,8 @@ mod tests {
             "Legendary Artifact — Vehicle",
             "Artifact — Spacecraft",
             "Land Creature — Forest Dryad",
-            "Land // Legendary Creature — Demon",
+            "Creature — Human Werewolf // Creature — Werewolf",
+            "Creature — Giant // Sorcery — Adventure",
         ] {
             assert!(may_have_a_power_toughness_box(Some(worth)), "{worth}");
         }
@@ -15322,6 +15331,9 @@ mod tests {
             "Enchantment — Aura",
             "Legendary Planeswalker — Jace",
             "Artifact — Equipment",
+            // A back-face creature: face 0 has no P/T, so the blob would be a guaranteed miss.
+            "Land // Legendary Creature — Demon",
+            "Enchantment — Saga // Enchantment Creature — Human Samurai",
         ] {
             assert!(!may_have_a_power_toughness_box(Some(not)), "{not}");
         }
