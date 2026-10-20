@@ -1242,6 +1242,85 @@ describe("prices", () => {
 });
 
 /**
+ * `sorting::held_price_expr` — what one held copy costs: a deck row, a collection entry, an open
+ * trade line (issue #1187). A row that names a finish is priced at it with no fallback; a row
+ * that names none, or names a `nonfoil` its printing is not sold in (issue #983), takes the
+ * `nonfoil → foil → etched` chain.
+ */
+describe("a held copy's price", () => {
+  /** `mh2 259`, Urza's Saga: usd 39.86, usd_foil 67.89 — sold in both. */
+  const URZA = printing("mh2", "259");
+  /** `acr 211`, Restart Sequence: sold in etched only, usd_etched 2.07. */
+  const RESTART = printing("acr", "211");
+
+  it("prices a deck row at the finish it names, in its category total and the deck's value", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: URZA.id, finish: "foil" }),
+        deckCard({ id: 2, cardId: URZA.id, finish: null }),
+        // A `foil` row on a printing never sold in foil is a statement, and stays unpriced.
+        deckCard({ id: 3, cardId: RESTART.id, finish: "foil" }),
+      ],
+    });
+    const r = readHandlers(db);
+    const detail = r.deck_get({ id: 1, variant: "live" })!;
+    const unit = (id: number) => detail.cards.find((c) => c.id === id)!.unitPrice;
+    expect(unit(1)).toBe(67.89);
+    expect(unit(2)).toBe(39.86);
+    expect(unit(3)).toBeNull();
+    expect(detail.categories.find((c) => c.kind === "main")!.totalPrice).toBeCloseTo(107.75, 2);
+    const [value] = r.deck_values({});
+    expect(value.value).toBeCloseTo(107.75, 2);
+    expect(value.unpriced).toBe(1);
+  });
+
+  it("prices a nonfoil copy of an etched-only printing by the chain, and a foil one strictly", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: RESTART.id, finish: "nonfoil" }),
+        entry({ id: 2, cardId: RESTART.id, finish: "foil" }),
+      ],
+    });
+    const r = readHandlers(db);
+    const items = r.collection_list({ query: { limit: 10, offset: 0 } }).items;
+    expect(items.find((i) => i.finish === "nonfoil")!.unitPrice).toBe(2.07);
+    expect(items.find((i) => i.finish === "foil")!.unitPrice).toBeNull();
+    expect(r.collection_summary({ query: { limit: 0, offset: 0 } }).value).toBeCloseTo(2.07);
+    expect(r.price_history({ cardId: RESTART.id, finish: "nonfoil" }).now).toBe(2.07);
+  });
+
+  it("prices an open trade's nonfoil line on an etched-only printing by the chain", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const id = w.trade_create({ trade: {} });
+    w.trade_add_lines({
+      id,
+      side: "theirs",
+      lines: [{ cardId: RESTART.id, finish: "nonfoil", quantity: 1, source: "search" }],
+    });
+    expect(readHandlers(db).trade_get({ id })!.lines[0].unitPrice).toBe(2.07);
+  });
+
+  it("records today's price of a newly watched card, and nothing for an unchanged list", () => {
+    const db = makeDb({ priceHistory: [] });
+    const w = writeHandlers(db);
+    w.set_price_watch({ cardIds: [URZA.id] });
+    const today = db.priceHistory.filter(
+      (s) => s.marketplace === "tcgplayer" && s.cardId === URZA.id,
+    );
+    // Every finish the marketplace prices, at `copies = 0`; the etched one it does not is no row.
+    expect(today.map((s) => [s.finish, s.price, s.copies, s.takenAt])).toEqual([
+      ["nonfoil", 39.86, 0, CLOCK_BASE],
+      ["foil", 67.89, 0, CLOCK_BASE],
+    ]);
+    const before = db.priceHistory;
+    w.set_price_watch({ cardIds: [` ${URZA.id} `] });
+    expect(db.priceHistory).toBe(before);
+  });
+});
+
+/**
  * Which printing stands for a collapsed row — `released_at DESC, price ASC NULLS LAST, id DESC`.
  *
  * **The corpus cannot show this and a fixture has to.** The rule only bites when two printings
@@ -5249,7 +5328,9 @@ describe("the collection's folders", () => {
         entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
         // A row at zero: still a row, and worth nothing — so it moves neither figure.
         entry({ id: 2, cardId: BOLT_2X2.id, quantity: 0, folderId: 1 }),
-        entry({ id: 3, cardId: FOIL_ONLY.id, finish: "nonfoil", quantity: 3, folderId: 2 }),
+        // An etched copy of a foil-only printing names a finish nobody quotes: unpriced, where a
+        // `nonfoil` one would take the chain (issue #983).
+        entry({ id: 3, cardId: FOIL_ONLY.id, finish: "etched", quantity: 3, folderId: 2 }),
         entry({ id: 4, cardId: BOLT.id, quantity: 9, folderId: null }),
       ],
     });
@@ -21132,7 +21213,9 @@ describe("deck completion", () => {
       wanted: 7,
       owned: 4,
       missing: 3,
-      unpricedMissing: 0,
+      // The two foils: `lea` is sold in nonfoil only, and a row that names `foil` is priced at
+      // foil or not at all (`deck_card_price_expr`).
+      unpricedMissing: 2,
     });
     const diff = reads.deck_theory_diff({ deckId: 1, marketplace: "tcgplayer" });
     expect(row.missing).toBe(diff.reduce((n, r) => n + r.quantity, 0));
