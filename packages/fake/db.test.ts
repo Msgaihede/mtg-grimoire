@@ -8,7 +8,7 @@
  * the block is one `it` shorter and the argument for it is unchanged, because two answers
  * under one name is already one too many to hard-code.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { invoke, registerCommands, resetCommands } from "./core";
 import {
   ART_TAGGED_PRINTINGS,
@@ -15707,6 +15707,34 @@ describe("categories, labels, folders, history and the plan", () => {
     // Newest first, and the id breaks a same-second tie.
     const rows = r.deck_audit_list({ deckId: 4, limit: 500 });
     expect(rows[0].at).toBeGreaterThanOrEqual(rows[1].at);
+  });
+
+  /**
+   * Issue #1189: the seeds' "today" rows sit at fixed hours, so before 16:40 they are in the
+   * future — and a write stamped with the bare wall clock sorted *below* them. Pinned to an
+   * early-morning clock so the outcome does not depend on when the suite runs.
+   */
+  it("puts a story's own edit at the top of the history whatever the time of day", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const morning = new Date();
+      morning.setHours(3, 0, 0, 0);
+      vi.setSystemTime(morning);
+      const { db, r, w } = testbed();
+      w.deck_set_folder({ deckId: 4, folderId: null });
+      const made = lastAudit(db)!;
+
+      expect(r.deck_audit_list({ deckId: 4, limit: 1 })[0].id).toBe(made.id);
+      expect(r.activity_recent({ limit: 1 })[0]).toMatchObject({ scope: "deck", id: made.id });
+      // Still today: the floor is the newest seeded row, and the seeds stop short of midnight.
+      expect(new Date(made.at * 1000).toDateString()).toBe(morning.toDateString());
+
+      // A second write in the same second still lands above the first.
+      w.deck_set_folder({ deckId: 4, folderId: 2 });
+      expect(lastAudit(db)!.at).toBeGreaterThan(made.at);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("compares the two lists by the exact card, one direction, skipping inactive piles", () => {
