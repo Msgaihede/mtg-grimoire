@@ -372,6 +372,14 @@ attempt that could not write back would lose the refresh token Patreon had just 
 with no Patreon token counts against the budget like any other. `RECONCILE_INTERVAL_MS` is twenty
 hours, so the hourly cron asks about a subject about once a day and not twenty-four times.
 
+⚠️ **The rotated refresh token is written the moment the refresh returns, before the identity
+read.** Patreon rotates it on every use, so the stored one is dead as soon as it has been
+presented. Until issue #1117 the new one was written only beside the decision — one `5xx` or one
+unreadable document from the identity endpoint threw it away, every later pass failed at the
+refresh, and the backstop was off for that subject for good. **A row Patreon gives no answer about
+still has its grace window settled** — revoked if it has closed, as a token-less row is — and
+otherwise decides nothing: an `active` row that throws stays `active`.
+
 ⚠️ **The pass this replaced walked the table by `subject` from the beginning, daily at `0 3`,** so
 it reached the same first subjects every day — and by the arithmetic below every fetch after about
 the twenty-fifth row threw, each caught, logged and forgotten. A cancellation whose webhook was
@@ -390,7 +398,8 @@ rather than stops — each subject every `rows / 480` days — and the webhook s
 unverified.** They are search summaries of Cloudflare's pages, which could not be read from where
 this was written: **50 external subrequests per invocation**, against two per row that holds a
 token (the refresh and the identity read) — 40 at this budget; and **50 D1 queries per
-invocation**, against one `SELECT`, one stamp and at most two `UPDATE`s a row — 42, and 45 with the
+invocation**, against one `SELECT`, one stamp and at most two `UPDATE`s a row (the token write, then
+the decision — a `dead` one is `revoke`'s own `UPDATE`) — 42, and 45 with the
 rendezvous and claim sweeps `scheduled` runs after it. The old pass's ~25 subjects a day is derived from the
 same reported figure, not measured against the host.
 

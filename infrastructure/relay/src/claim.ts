@@ -1310,33 +1310,67 @@ export async function reconcile(env: Env): Promise<void> {
  * and that is right for a reader Patreon says has no membership — but a document this code
  * cannot parse is the *absence* of an answer, and turning that into a cancellation is how one
  * shape change on Patreon's side becomes a mass revocation in a job nobody is watching.
+ *
+ * ⚠️ **The rotated refresh token is written the moment Patreon hands it over, before the identity
+ * read.** Patreon rotates the refresh token on every use (`patreon.ts`), so the stored one is dead
+ * as soon as `refreshTokens` returns. Until issue #1117 the new one was written only beside the
+ * decision, after `fetchIdentity` — so one 5xx or one unreadable document there threw it away,
+ * every later pass failed at the refresh for ever, and the backstop was off for that subject: a
+ * missed cancellation webhook left its group syncing for as long as the relay ran.
+ *
+ * **A failure still settles the window, and decides nothing else.** Whatever Patreon did not
+ * answer, a grace window that has closed is a local fact — the same one `/token` acts on — and a
+ * row that throws on every pass (a revoked grant) would otherwise sit in `grace` for ever, which
+ * is a status the share Worker's lapse reads. An `active` row that throws stays `active`: an
+ * unanswered question is not a cancellation.
+ *
+ * **At most two `UPDATE`s a row, which `RECONCILE_BUDGET`'s D1 arithmetic counts on.** The token
+ * write is one; the decision is the other, and a `dead` decision is `revoke`'s own `UPDATE` rather
+ * than a second one before it — `revoke` writes everything a dead row's decision would.
  */
 async function reconcileOne(env: Env, row: EntitlementRow): Promise<void> {
   const now = Date.now();
 
   if (row.patreon_refresh === null || row.patreon_refresh === "") {
-    if (settle(row.status, row.grace_until, now) === "dead") {
-      await revoke(env, row.subject, row.group_id);
-    }
+    await settleWindow(env, row, now);
     return;
   }
 
-  const tokens = await refreshTokens(row.patreon_refresh, env);
-  const identity = await fetchIdentity(tokens.accessToken, env);
-  if (identity === null) {
-    throw new Error("patreon answered an identity document with no user id");
+  let identity: Identity;
+  try {
+    const tokens = await refreshTokens(row.patreon_refresh, env);
+    await env.DB.prepare(`UPDATE entitlements SET patreon_refresh = ? WHERE subject = ?`)
+      .bind(tokens.refreshToken, row.subject)
+      .run();
+
+    const read = await fetchIdentity(tokens.accessToken, env);
+    if (read === null) {
+      throw new Error("patreon answered an identity document with no user id");
+    }
+    identity = read;
+  } catch (error) {
+    await settleWindow(env, row, now);
+    throw error;
   }
 
   const decision = decide(identity.patronStatus, now, row.grace_until);
-  await env.DB.prepare(
-    `UPDATE entitlements
-        SET status = ?, grace_until = ?, patreon_refresh = ?, checked_at = ?
-      WHERE subject = ?`,
-  )
-    .bind(decision.status, decision.graceUntil, tokens.refreshToken, now, row.subject)
-    .run();
+  if (decision.status === "dead") {
+    await revoke(env, row.subject, row.group_id);
+    return;
+  }
 
-  if (decision.status === "dead") await revoke(env, row.subject, row.group_id);
+  await env.DB.prepare(
+    `UPDATE entitlements SET status = ?, grace_until = ?, checked_at = ? WHERE subject = ?`,
+  )
+    .bind(decision.status, decision.graceUntil, now, row.subject)
+    .run();
+}
+
+/** A row Patreon gave no answer about: revoke it if its grace window has closed, else nothing. */
+async function settleWindow(env: Env, row: EntitlementRow, now: number): Promise<void> {
+  if (settle(row.status, row.grace_until, now) === "dead") {
+    await revoke(env, row.subject, row.group_id);
+  }
 }
 
 /**

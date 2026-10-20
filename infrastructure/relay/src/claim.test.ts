@@ -1676,12 +1676,21 @@ function jsonResponse(body: unknown, status = 200): Response {
  * `refusing` is a set of refresh tokens the token endpoint answers `400` to — **a reader who
  * revoked the app's access on Patreon's side**, which throws on every attempt for ever and is the
  * row a queue ordered by success would starve behind.
+ *
+ * `identityFails` maps a refresh token to how the identity read goes wrong **after** that token
+ * was successfully traded: `"5xx"` is a `503`, `"unreadable"` a document with no user id. The
+ * token endpoint has already rotated the token by then, which is issue #1117's whole case.
  */
 function fakePatreon(
-  options: { refusing?: Set<string>; statusOf?: Record<string, string> } = {},
+  options: {
+    refusing?: Set<string>;
+    statusOf?: Record<string, string>;
+    identityFails?: Record<string, "5xx" | "unreadable">;
+  } = {},
 ): Patreon {
   const refusing = options.refusing ?? new Set<string>();
   const statusOf = options.statusOf ?? {};
+  const identityFails = options.identityFails ?? {};
   const patreon: Patreon = { asked: [], fetches: 0 };
   vi.stubGlobal(
     "fetch",
@@ -1696,6 +1705,8 @@ function fakePatreon(
         );
       }
       const token = (init?.headers?.authorization ?? "").replace("Bearer access-for-", "");
+      if (identityFails[token] === "5xx") return Promise.resolve(jsonResponse({}, 503));
+      if (identityFails[token] === "unreadable") return Promise.resolve(jsonResponse({}));
       return Promise.resolve(
         jsonResponse({
           data: { id: `user-${token}` },
@@ -1879,6 +1890,91 @@ describe("reconcile — an hourly pass on a budget", () => {
     const before = patreon.asked.length;
     await reconcile(env);
     expect(patreon.asked.slice(before)).toEqual(["token-sub-0+"]);
+  });
+
+  /**
+   * ⚠️ **Issue #1117.** Patreon rotates the refresh token on every use, so once the token endpoint
+   * has answered, the stored token is dead. The new one used to be written only beside the
+   * decision, after the identity read — so one failure there threw it away, and every later pass
+   * presented a token Patreon had already retired. Both ways the read can fail are pinned: a
+   * `503`, and a document the code cannot read, which throws rather than deciding.
+   */
+  it.each(["5xx", "unreadable"] as const)(
+    "keeps the rotated refresh token when the identity read fails (%s)",
+    async (failure) => {
+      const { tables, env, dropped } = queue(1);
+      const patreon = fakePatreon({ identityFails: { "token-sub-0": failure } });
+
+      await reconcile(env);
+
+      const row = tables.entitlements[0];
+      expect(patreon.asked).toEqual(["token-sub-0"]);
+      expect(row.patreon_refresh).toBe("token-sub-0+");
+      // **A failure decides nothing**: the row is still serving and its log is untouched.
+      expect(row.status).toBe("active");
+      expect(dropped).toEqual([]);
+
+      // And the next pass presents the token Patreon handed over, not the one it retired.
+      row.reconciled_at = null;
+      await reconcile(env);
+      expect(patreon.asked).toEqual(["token-sub-0", "token-sub-0+"]);
+      expect(row.patreon_refresh).toBe("token-sub-0++");
+    },
+  );
+
+  /**
+   * A grace window that closed is a local fact, and Patreon not answering does not keep it open.
+   * Without this a row whose grant was revoked would sit in `grace` for ever — the status the
+   * share Worker's lapse reads. A window still open, or an `active` row, is left exactly as it was.
+   */
+  it("settles a closed grace window even when Patreon cannot be asked", async () => {
+    const { tables, env, dropped } = queue(3);
+    for (const index of [0, 1]) {
+      tables.entitlements[index].status = "grace";
+    }
+    tables.entitlements[0].grace_until = Date.now() - 1;
+    tables.entitlements[1].grace_until = Date.now() + 60 * 60 * 1000;
+    fakePatreon({ refusing: new Set(tokensOf(tables, [0, 1, 2])) });
+
+    await reconcile(env);
+
+    expect(tables.entitlements.map((row) => row.status)).toEqual(["dead", "grace", "active"]);
+    expect(tables.entitlements[0].refresh_secret).toBeNull();
+    expect(dropped).toEqual(["/g/g0/drop"]);
+  });
+
+  /**
+   * `RECONCILE_BUDGET`'s second ceiling: fifty D1 queries an invocation, with three left for the
+   * sweeps `scheduled` runs after this pass. The heaviest row is a cancellation — the token write
+   * and `revoke`'s `UPDATE` — and a whole budget of them must still fit.
+   */
+  it("stays inside fifty D1 queries when every row is a cancellation", async () => {
+    const { tables, env } = queue(RECONCILE_BUDGET);
+    const statusOf = Object.fromEntries(
+      tokensOf(tables, range(0, RECONCILE_BUDGET)).map((token) => [token, "former_patron"]),
+    );
+    fakePatreon({ statusOf });
+    const db = env.DB;
+    let queries = 0;
+    Object.assign(env, {
+      DB: {
+        prepare: (sql: string) => {
+          queries += 1;
+          return db.prepare(sql);
+        },
+        batch: (sent: D1PreparedStatement[]) => {
+          queries += sent.length;
+          return db.batch(sent);
+        },
+      },
+    });
+
+    await reconcile(env);
+
+    expect(tables.entitlements.every((row) => row.status === "dead")).toBe(true);
+    // One `SELECT`, one stamp, and two `UPDATE`s a row.
+    expect(queries).toBe(2 + 2 * RECONCILE_BUDGET);
+    expect(queries).toBeLessThanOrEqual(50 - 3);
   });
 
   it("counts a row with no Patreon token against the budget, and settles it locally", async () => {
