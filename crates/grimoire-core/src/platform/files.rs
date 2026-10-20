@@ -80,6 +80,14 @@ pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     imp::write(path, bytes)
 }
 
+/// Write `bytes` as a **new** file at `path`: one that already exists is refused with
+/// `AlreadyExists` and left exactly as it was. The check and the create are one call to the
+/// filesystem, so two writers racing for one name cannot both win.
+pub fn create_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    kept()?;
+    imp::create_new(path, bytes)
+}
+
 pub fn remove(path: &Path) -> io::Result<()> {
     kept()?;
     imp::remove(path)
@@ -266,6 +274,15 @@ mod imp {
         std::fs::write(path, bytes)
     }
 
+    pub fn create_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)?
+            .write_all(bytes)
+    }
+
     pub fn remove(path: &Path) -> io::Result<()> {
         std::fs::remove_file(path)
     }
@@ -427,6 +444,10 @@ mod imp {
     }
 
     pub fn write(_path: &Path, _bytes: &[u8]) -> io::Result<()> {
+        Err(unsupported())
+    }
+
+    pub fn create_new(_path: &Path, _bytes: &[u8]) -> io::Result<()> {
         Err(unsupported())
     }
 
