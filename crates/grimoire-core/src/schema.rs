@@ -9134,7 +9134,7 @@ fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()>
 /// `false` in silence. That is every first launch of the light app's Android host — which has no
 /// `split::convert` to make the file first — and on the desktop it is a reader who deleted
 /// `corpus.db` to force a resync. Both used to take the replace path, because
-/// [`corpus_is_readable`] answers `false` for a missing file, and log that the card database
+/// the probe answered `false` for a missing file, and log that the card database
 /// "could not be opened and has been replaced" over a folder that had never held one (the first
 /// phone run, 2026-10-04). Nothing needs doing: the `ATTACH` creates it, as above. A *mark* over a
 /// missing file still goes the long way, so the mark is cleared.
@@ -9144,8 +9144,28 @@ fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()>
 pub fn replace_unreadable_corpus(data_dir: &std::path::Path) -> bool {
     let marked = crate::platform::files::is_file(&data_dir.join(CORPUS_DAMAGED_MARK));
     let present = crate::platform::files::is_file(&data_dir.join(crate::db::CORPUS_DB));
-    if !marked && (!present || corpus_is_readable(data_dir)) {
-        return false;
+    if !marked {
+        if !present {
+            return false;
+        }
+        // **Only damage deletes** (issue #1125). The probe used to answer `false` for every
+        // failure — a busy file past the 5 s timeout, an I/O error off a flaky stick, a file that
+        // could not be opened — and each of those deleted ~800 MB of cards that were probably
+        // fine, on a disk that may not hold the resync. They are [`CorpusCheck::Unanswered`]
+        // now, as they are for the background check: the file stays, and the open that follows
+        // meets the same failure and stops the launch in its own sentence, or goes on if
+        // whatever held the file has let go.
+        match probe_corpus(data_dir) {
+            CorpusCheck::Sound => return false,
+            CorpusCheck::Unanswered(why) => {
+                eprintln!(
+                    "the card database could not be read at launch ({why}); it was left in \
+                     place, because that says nothing about whether it is damaged."
+                );
+                return false;
+            }
+            CorpusCheck::Damaged(_) => {}
+        }
     }
     // **The mark goes only when the corpus did** (issue #550). A delete refused by a sharing
     // violation — antivirus or the indexer holding the file for a moment, on Windows — used to
@@ -9184,18 +9204,26 @@ pub fn replace_unreadable_corpus(data_dir: &std::path::Path) -> bool {
 /// Asked by opening it rather than by reading its header bytes, because "can this be opened" has
 /// no cheaper honest answer: `sqlite_master` is what every later statement parses first, and a
 /// file that is not a database, or whose schema page is gone, fails here.
-pub fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
+///
+/// **A failure is sorted as [`check_corpus`] sorts one** ([`classify_check_error`]): only
+/// `SQLITE_CORRUPT` and `SQLITE_NOTADB` are [`CorpusCheck::Damaged`]. A busy or locked file, an
+/// I/O error, a file that cannot be opened and no memory are [`CorpusCheck::Unanswered`], and
+/// so is a file that is not there — which [`replace_unreadable_corpus`] asks about first.
+pub fn probe_corpus(data_dir: &std::path::Path) -> CorpusCheck {
     let path = data_dir.join(crate::db::CORPUS_DB);
     if !crate::platform::files::is_file(&path) {
-        return false;
+        return CorpusCheck::Unanswered(format!("{} does not exist", path.display()));
     }
-    let Ok(conn) = crate::db::open(&path) else {
-        return false;
+    let conn = match crate::db::open(&path) {
+        Ok(conn) => conn,
+        Err(e) => return classify_check_error(e),
     };
-    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+    match conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
         r.get::<_, i64>(0)
-    })
-    .is_ok()
+    }) {
+        Ok(_) => CorpusCheck::Sound,
+        Err(e) => classify_check_error(e),
+    }
 }
 
 /// The file beside `corpus.db` that says a background [`check_corpus`] found it damaged.
@@ -9220,7 +9248,7 @@ pub enum CorpusCheck {
 
 /// A full `PRAGMA quick_check(1)` over `corpus.db`, on a read-only connection of its own.
 ///
-/// The half of [`corpus_is_readable`]'s old job that is too slow for a launch. `desktop::start`
+/// The half of [`probe_corpus`]'s old job that is too slow for a launch. `desktop::start`
 /// runs it on its own thread once the app is up, and marks the corpus for replacement when it
 /// answers [`CorpusCheck::Damaged`]. **Only an answer about the pages counts as damage**:
 /// `SQLITE_CORRUPT` and `SQLITE_NOTADB` do, while a busy file, an I/O error or a process exiting

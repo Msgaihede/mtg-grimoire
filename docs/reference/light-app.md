@@ -623,7 +623,7 @@ row above is a debug build answering, not a timing.
 
 - **`schema` reaches the filesystem in seven functions** — `remove_database_files`,
   `back_up_user_file`, `prune_user_backups`, `replace_unreadable_corpus`,
-  `corpus_is_readable`, `check_corpus` and `mark_corpus_damaged`. Each compiles for a browser and fails there when called. The I/O step's
+  `probe_corpus` (`corpus_is_readable` until issue #1125), `check_corpus` and `mark_corpus_damaged`. Each compiles for a browser and fails there when called. The I/O step's
   files interface inherits them.
 - **`db::lock_for` in a browser answers `BUSY` on its first contended attempt.** Right for one
   thread; whether one write connection in a Worker is the shape at all is step 3's.

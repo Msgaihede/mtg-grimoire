@@ -352,6 +352,40 @@ mod tests {
         );
     }
 
+    /// **A corpus that cannot be read *right now* is not a damaged one** (issue #1125). Another
+    /// process holding the file past the busy timeout used to make the probe answer `false`, and
+    /// the launch deleted the whole corpus for a lock that said nothing about its pages.
+    #[test]
+    fn a_locked_corpus_is_left_in_place() {
+        let root = crate::scratch::path("launch-locked-corpus");
+        let dir = root.join("data");
+        drop(open(&dir).unwrap());
+        let corpus = dir.join(db::CORPUS_DB);
+
+        let holder = Connection::open(&corpus).unwrap();
+        holder
+            .pragma_update(None, "locking_mode", "EXCLUSIVE")
+            .unwrap();
+        holder.execute_batch("BEGIN EXCLUSIVE").unwrap();
+
+        assert!(
+            matches!(
+                schema::probe_corpus(&dir),
+                schema::CorpusCheck::Unanswered(_)
+            ),
+            "a lock is no answer about the file"
+        );
+        assert!(
+            !schema::replace_unreadable_corpus(&dir),
+            "and is never a reason to replace it"
+        );
+        assert!(corpus.is_file(), "the corpus is still there");
+
+        holder.execute_batch("ROLLBACK").unwrap();
+        drop(holder);
+        assert_eq!(schema::probe_corpus(&dir), schema::CorpusCheck::Sound);
+    }
+
     /// A second launch over the same folder migrates nothing and keeps what the reader wrote.
     #[test]
     fn a_second_launch_keeps_what_the_first_wrote() {
