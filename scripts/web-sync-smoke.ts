@@ -360,7 +360,7 @@ async function main() {
     if (performance.now() > stop) {
       fail(
         `${second.name} relaunched paired and never settled: it reads ${live}, and its card ` +
-          `sync ${JSON.stringify(status)}`,
+          `sync ${JSON.stringify(status)}.${await second.trouble()}`,
       );
     }
     await pause(50);
