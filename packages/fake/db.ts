@@ -20667,7 +20667,9 @@ export function writeHandlers(db: FakeDb) {
         );
         const group = deckGroup(db, deck.id);
         if (group) db.collectionFolders = db.collectionFolders.filter((f) => f !== group);
-      } else if (virtualOnly === false && before.virtualOnly) {
+      } else if (virtualOnly === false && before.virtualOnly && !deckGroup(db, deck.id)) {
+        // Only when there is none — `deck.rs`'s arm (issue #1113): a group an undone press left
+        // on a virtual deck must not become a second one.
         createDeckGroup(db, deck.id, deck.name);
       }
       deck.virtualOnly = virtualOnly ?? deck.virtualOnly;
@@ -27887,6 +27889,7 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
     // share one list: the same step is read again on a redo, and again after that.
     const { todosOpen } = db.decks[at];
     db.decks[at] = { ...copyDeck(state.deck), todosOpen };
+    settleDeckGroup(db, db.decks[at]);
   }
   db.deckCards = [
     ...db.deckCards.filter((c) => c.deckId !== deckId),
@@ -27925,6 +27928,41 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
 }
 
 /**
+ * `deck::settle_deck_group` — the deck's group made to agree with its kind after a step put
+ * `virtualOnly` back (issue #1113): a Regular deck with none gets one, empty; a Virtual deck's
+ * empty group goes. A group holding copies is never dropped here — {@link groupBlocksStep}
+ * refuses that step before the restore.
+ */
+function settleDeckGroup(db: FakeDb, deck: FakeDeck): void {
+  const group = deckGroup(db, deck.id);
+  if (!deck.virtualOnly && !group) createDeckGroup(db, deck.id, deck.name);
+  else if (
+    deck.virtualOnly &&
+    group &&
+    !db.collectionEntries.some((e) => e.folderId === group.id)
+  ) {
+    db.collectionFolders = db.collectionFolders.filter((f) => f !== group);
+  }
+}
+
+/**
+ * `deck_undo::group_can_go`, negated: would putting `state` back turn a Regular deck Virtual over
+ * a group the reader has filed copies into since? The crate's plan refuses that step — an undo is
+ * retired, a redo answers `MOVED_ON` — rather than scattering the copies.
+ */
+function groupBlocksStep(db: FakeDb, deckId: number, state: FakeDeckState): boolean {
+  const deck = db.decks.find((d) => d.id === deckId);
+  const group = deckGroup(db, deckId);
+  return (
+    deck !== undefined &&
+    !deck.virtualOnly &&
+    state.deck.virtualOnly &&
+    group !== undefined &&
+    db.collectionEntries.some((e) => e.folderId === group.id)
+  );
+}
+
+/**
  * `deck_undo` — the cursor, and the two reversals.
  *
  * Outside {@link writeHandlers} because {@link journalled} wraps everything in there, and these
@@ -27958,6 +27996,14 @@ function undoHandlers(db: FakeDb) {
             "Open the history to see what happened.",
         );
       }
+      if (groupBlocksStep(db, args.deckId, cursor.before)) {
+        // `deck_undo::RETIRED`: the step is taken off the list, as the crate's refusal does.
+        db.deckUndo = db.deckUndo.filter((s) => s !== cursor);
+        throw refuse(
+          "That change can no longer be undone — the deck has changed since, " +
+            "so it was taken off the undo list.",
+        );
+      }
       // Behind the backstop, as the crate's reversal runs behind `with_write`'s: a restore that
       // moved the deck's cards reconciles its tokens, and those deletions sit in no step.
       backstopping(db, () => restoreDeck(db, args.deckId, cursor.before));
@@ -27986,6 +28032,12 @@ function undoHandlers(db: FakeDb) {
         nextRedo(db, args.deckId)?.auditId !== args.auditId ||
         !auditOfDeck(db, args.auditId, args.deckId)
       ) {
+        throw refuse(
+          "That is not the most recent change any more — the deck has been edited since. " +
+            "Open the history to see what happened.",
+        );
+      }
+      if (groupBlocksStep(db, args.deckId, step.after)) {
         throw refuse(
           "That is not the most recent change any more — the deck has been edited since. " +
             "Open the history to see what happened.",
