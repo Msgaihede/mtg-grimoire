@@ -96,4 +96,38 @@ describe("trapTab", () => {
     expect(preventDefault).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(a);
   });
+
+  /**
+   * #1184: a `radioKeys` group is one stop by `tabIndex`, not by `name` — the checked
+   * `role="radio"` button is `0` and its siblings `-1`. Counted as stops, the unchecked last
+   * sibling became `last`, so forward Tab from the checked first one never wrapped and the caret
+   * walked out of the modal.
+   */
+  it("skips roving tabIndex=-1 radio buttons, so the checked one can be last", () => {
+    const panel = document.createElement("div");
+    panel.tabIndex = -1;
+    const before = document.createElement("button");
+    const group = document.createElement("div");
+    group.setAttribute("role", "radiogroup");
+    const radios = ["7d", "30d", "all"].map((label, i) => {
+      const radio = document.createElement("button");
+      radio.setAttribute("role", "radio");
+      radio.setAttribute("aria-checked", String(i === 0));
+      radio.tabIndex = i === 0 ? 0 : -1;
+      radio.textContent = label;
+      return radio;
+    });
+    group.append(...radios);
+    panel.append(before, group);
+    document.body.append(panel);
+
+    radios[0].focus();
+    const preventDefault = press(panel);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(before);
+
+    // And back: Shift+Tab from the first stop lands on the checked radio, not on `all`.
+    press(panel, { shiftKey: true });
+    expect(document.activeElement).toBe(radios[0]);
+  });
 });

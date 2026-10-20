@@ -17,24 +17,26 @@
  */
 
 /**
- * What counts as a stop on the way round.
+ * What *could* be a stop on the way round — the candidates `tabStops` then narrows.
  *
- * `[tabindex="-1"]` is excluded by the selector rather than by a filter, so the **panel
- * itself** never appears in its own cycle — which is what lets the caret sitting on the panel
- * count as *before* the first stop, where the opening effect leaves it.
+ * A negative `tabIndex` is not excluded here but by `tabStops`' filter, because the selector can
+ * only see the attribute: a `<button>` is matched by its tag whatever its `tabIndex`, so a
+ * `[tabindex="-1"]` exclusion in this list never reached the one shape that needs it most — the
+ * unchecked members of a `radioKeys` group (#1184).
  */
-const FOCUSABLE = [
-  "a[href]",
-  "button",
-  "input",
-  "select",
-  "textarea",
-  '[tabindex]:not([tabindex="-1"])',
-].join(", ");
+const FOCUSABLE = ["a[href]", "button", "input", "select", "textarea", "[tabindex]"].join(", ");
 
 /**
- * The panel's real Tab stops — `FOCUSABLE`'s matches, minus the disabled and `aria-hidden` ones,
- * and **one per named radio-button group rather than one per `<input>`**.
+ * The panel's real Tab stops — `FOCUSABLE`'s matches, minus the disabled, `aria-hidden` and
+ * negative-`tabIndex` ones, and **one per named radio-button group rather than one per `<input>`**.
+ *
+ * **A negative `tabIndex` is never a stop**, whatever the element. The browser's Tab skips it, so
+ * the trap must too — and the case that matters is a `role="radio"` group walked by `radioKeys`,
+ * where the checked button is `0` and every other member `-1`. Counted as stops, an unchecked
+ * member could be `last`: forward Tab from the checked one — the group's real stop — never
+ * matches it, and the caret leaves the modal for the view behind (#1184). The same filter keeps
+ * the panel's own `tabIndex={-1}` and any `-1` scroll region inside it out of the cycle, which is
+ * what lets the caret sitting on the panel count as *before* the first stop.
  *
  * A native `<input type="radio">` group is a single Tab stop: the browser lands on whichever
  * member is `checked` (the first, if none is), and Tab never visits the others at all — they
@@ -49,7 +51,8 @@ const FOCUSABLE = [
  */
 function tabStops(panel: HTMLElement): HTMLElement[] {
   const all = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE)].filter(
-    (el) => !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
+    (el) =>
+      el.tabIndex >= 0 && !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true",
   );
   // One representative per radio group: whichever member is checked, or — if none is — the
   // first one this panel carries. Built as its own pass because the answer for an unchecked

@@ -466,10 +466,8 @@ function useMountOpener(openerRef: React.RefObject<HTMLElement | null>): void {
  * `aria-checked` is the only thing that says which to a reader who cannot see the fill.
  *
  * **One Tab stop, and the arrows move the choice** — a roving `tabIndex` through `radioKeys`,
- * as every radio group in the app is since #558. ⚠️ `trapTab` still counts every `<button>` in
- * the panel as a stop whatever its `tabIndex`, so the group's list of stops disagrees with the
- * trap's — harmless while the group sits in the middle of the panel, and the silent
- * Tab-out-of-an-`aria-modal` bug the day it is first or last (#1184).
+ * as every radio group in the app is since #558. `trapTab` skips the `tabIndex={-1}` members, so
+ * its stops agree with the group's wherever the row sits in the panel, first or last (#1184).
  *
  * **Drawn as the deck editor's `Theory | Actual` switch** — one bordered, clipped group, the
  * pressed half filled — because it is the same kind of control: a choice of which one thing the
