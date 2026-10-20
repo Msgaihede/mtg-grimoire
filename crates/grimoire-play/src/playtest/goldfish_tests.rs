@@ -1423,3 +1423,128 @@ fn foretelling_is_refused_saying_why_when_it_cannot_be_paid() {
     });
     assert!(refused.contains("can't be foretold"), "{refused}");
 }
+
+/// A modal double-faced card of two faces, each `(name, cost, type line, text)`.
+fn modal(
+    card_id: &str,
+    front: (&str, &str, &str, &str),
+    back: (&str, &str, &str, &str),
+) -> CardFacts {
+    let face = |(name, cost, type_line, text): (&str, &str, &str, &str)| FaceFacts {
+        name: name.into(),
+        mana_cost: Some(cost.into()),
+        type_line: Some(type_line.into()),
+        oracle_text: Some(text.into()),
+        ..FaceFacts::default()
+    };
+    CardFacts {
+        card_id: card_id.into(),
+        // The engine joins a card's faces by their oracle id.
+        oracle_id: Some(format!("oracle-{card_id}")),
+        name: format!("{} // {}", front.0, back.0),
+        quantity: 1,
+        type_line: Some(format!("{} // {}", front.2, back.2)),
+        layout: Some("modal_dfc".into()),
+        faces: vec![face(front), face(back)],
+        color_identity: vec!["G".into()],
+        ..CardFacts::default()
+    }
+}
+
+/// Answer whatever the board asks with its first option, until it asks nothing.
+fn answer_first(game: &mut Playtest, mut step: PlaytestStep) -> PlaytestStep {
+    for _ in 0..8 {
+        if step.view.stage != Stage::Prompt {
+            return step;
+        }
+        step = game.act(A::Choose { index: 0 }).expect("answer");
+    }
+    panic!("the board kept asking: {:?}", step.view.prompt);
+}
+
+/// A modal double-faced card played on its back face keeps its printing, there and after it
+/// leaves the battlefield on its front face again as a new object (issue #1144).
+#[test]
+fn a_modal_double_faced_card_played_by_its_back_face_keeps_its_printing() {
+    let (played, gone) = engine(|| {
+        let mut cards = deck();
+        cards.push(modal(
+            "print-bala-ged",
+            (
+                "Bala Ged Recovery",
+                "{2}{G}",
+                "Sorcery",
+                "Return target card from your graveyard to your hand.",
+            ),
+            ("Bala Ged Sanctuary", "", "Land", "{T}: Add {G}."),
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let id = in_hand(&mut game, "Bala Ged Recovery");
+        let step = game.act(A::Play { id }).unwrap();
+        let played = answer_first(&mut game, step);
+        let id = find(&played.view.you.battlefield, "Bala Ged Sanctuary")
+            .expect("played as its land")
+            .id;
+        let gone = game
+            .act(A::Move {
+                id,
+                to: Place::Graveyard,
+            })
+            .unwrap();
+        (played, gone)
+    });
+    let land = find(&played.view.you.battlefield, "Bala Ged Sanctuary").unwrap();
+    assert_eq!(land.card_id.as_deref(), Some("print-bala-ged"));
+    assert_eq!(land.lane, Lane::Land);
+    let card = find(&gone.view.you.graveyard, "Bala Ged Recovery").expect("its front face");
+    assert_eq!(card.card_id.as_deref(), Some("print-bala-ged"));
+}
+
+/// A commander on its back face is still the commander: it shows so, keeps its printing and goes
+/// back to the command zone, its tax raised (issue #1144).
+#[test]
+fn a_commander_cast_by_its_back_face_is_still_the_commander() {
+    let (cast, back) = engine(|| {
+        let mut cards = deck();
+        cards.retain(|c| !c.commander);
+        let mut halvar = modal(
+            "print-halvar",
+            (
+                "Halvar, God of Battle",
+                "{2}{G}{G}",
+                "Legendary Creature — God",
+                "",
+            ),
+            ("Sword of the Realms", "{1}{G}", "Legendary Artifact", ""),
+        );
+        halvar.faces[0].power = Some("4".into());
+        halvar.faces[0].toughness = Some("4".into());
+        halvar.commander = true;
+        cards.push(halvar);
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let id = game.view().you.command[0].id;
+        let step = game.act(A::Play { id }).unwrap();
+        let prompt = step.view.prompt.clone().expect("which face");
+        let index = prompt.options.last().expect("two faces").index;
+        let cast = game.act(A::Choose { index }).unwrap();
+        let cast = answer_first(&mut game, cast);
+        let id = find(&cast.view.you.battlefield, "Sword of the Realms")
+            .expect("cast as its back face")
+            .id;
+        let back = game
+            .act(A::Move {
+                id,
+                to: Place::Command,
+            })
+            .expect("a commander goes to the command zone");
+        (cast, back)
+    });
+    let sword = find(&cast.view.you.battlefield, "Sword of the Realms").unwrap();
+    assert!(sword.is_commander);
+    assert_eq!(sword.card_id.as_deref(), Some("print-halvar"));
+    assert_eq!(back.view.you.command.len(), 1);
+    assert!(back.view.you.command[0].is_commander);
+    assert_eq!(back.view.you.command[0].tax, 2);
+}
