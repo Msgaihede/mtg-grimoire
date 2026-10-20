@@ -197,6 +197,25 @@ describe("QuickSearch", () => {
     expect(field()).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("holds an Enter pressed straight after typing until the typed text has answered", async () => {
+    // Issue #1166: the empty box's newest copy (Sol Ring) is still the first row when the reader
+    // types and presses Enter inside the debounce — it must not be the card that opens.
+    mount();
+    await userEvent.click(field());
+    await screen.findByRole("option", { name: /Sol Ring/ });
+    await userEvent.type(field(), "bolt{Enter}");
+    expect(useAppStore.getState().pendingReveal).toBeNull();
+    await waitFor(() =>
+      expect(useAppStore.getState().pendingReveal).toEqual({
+        scope: "collection",
+        folderId: 4,
+        query: '!"Lightning Bolt" e:lea cn:161 lang:en',
+      }),
+    );
+    expect(field()).toHaveValue("");
+    expect(field()).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("reveals a collection card in the folder it is filed in", async () => {
     mount();
     await userEvent.type(field(), "bolt");
