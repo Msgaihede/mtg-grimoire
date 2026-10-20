@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   ipc,
+  ipcError,
   type QueryPredicate,
   type SearchRequest,
   type SearchResponse,
@@ -973,8 +974,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     const seen = new Set<string>();
     const unknown: TagToken[] = [];
     parsed.tags.forEach((token, i) => {
-      // Undefined while the query is in flight, which is why the search is gated below rather
-      // than being allowed to run against a half-resolved list.
+      // Undefined while the query is in flight, and for good once it has been refused — which
+      // is why the search is gated below on both rather than being allowed to run against a
+      // half-resolved list.
       const ref = answers?.[i];
       if (ref === undefined) return;
       if (ref === null) {
@@ -1103,9 +1105,17 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * shows the reader the unfiltered wall in reply to a narrowing they asked for, which is the
    * one direction a search must never fail in. Scryfall 404s here; this draws an empty wall and
    * `tagNotFound` is what the box says about it.
+   *
+   * *Refused*: the lookup itself failed (a SQL error, a host that would not answer) and its one
+   * retry with it (issue #1165). There is no answer to skip a token for, so without this arm
+   * every typed tag dropped out of the payload unseen — no chip, no "no such tag" — and the
+   * search ran on the free text alone: `otag:ramp bolt` answered with every bolt. **Only while
+   * nothing was ever answered**: query-core keeps the last answer through a failed refetch, and
+   * an answer in hand is still the right one to filter by.
    */
   const tagsPending = asks.length > 0 && tagResolution.isPending;
-  const tagQueryBlocked = tagsPending || typed.unknown.length > 0;
+  const tagsRefused = asks.length > 0 && tagResolution.isError && tagResolution.data === undefined;
+  const tagQueryBlocked = tagsPending || tagsRefused || typed.unknown.length > 0;
 
   /**
    * Rewrite the box, and let the wall follow immediately.
@@ -1472,6 +1482,14 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     /** Whether the typed names are still being looked up. The wall is empty and *not* a result
      *  while this is true, which is what tells a spinner from an answer. */
     tagsResolving: tagsPending,
+    /**
+     * Why the typed names could not be looked up — the refusal's sentence, or `null` when there
+     * is none to tell. Non-null means the wall is deliberately empty (see `tagQueryBlocked`): a
+     * search that cannot read its tags is held, never run without them.
+     */
+    tagLookupFailure: tagsRefused ? ipcError(tagResolution.error) : null,
+    /** Ask the tag lookup again — the "Try again" under {@link tagLookupFailure}. */
+    retryTagLookup: () => void tagResolution.refetch(),
     /**
      * Take one typed tag out of the query — a chip's ✕.
      *

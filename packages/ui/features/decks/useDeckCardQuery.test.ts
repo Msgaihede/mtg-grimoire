@@ -99,6 +99,16 @@ describe("useDeckCardQuery", () => {
     expect(deckQueryCards).not.toHaveBeenCalled();
   });
 
+  /** Issue #1165: a refused lookup is no answer at all, and it empties the deck as an unknown
+   *  name does — never the deck narrowed by the free text alone, the tag dropped. */
+  it("fails closed when the tag lookup is refused", async () => {
+    tagResolve.mockRejectedValue("database is locked");
+    const { result } = renderHook(() => useDeckCardQuery(7, "otag:removal"), { wrapper });
+
+    await waitFor(() => expect(result.current.matching).toEqual(new Set()));
+    expect(deckQueryCards).not.toHaveBeenCalled();
+  });
+
   /** The last answer stands while the next term is asked, so the deck does not blink whole. */
   it("keeps the previous answer while a changed term is asked", async () => {
     const { result, rerender } = renderHook(({ text }) => useDeckCardQuery(7, text), {

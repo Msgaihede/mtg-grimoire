@@ -8,12 +8,12 @@ import { AnimatePresence, motion } from "motion/react";
 import { rowHasBackFace } from "@/features/card/printings";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar, type FilterLabels } from "@/features/search/FilterBar";
-import { summaryOf, tileUnreleased } from "@/features/search/SearchPage";
+import { failureOf, summaryOf, tileUnreleased } from "@/features/search/SearchPage";
 import type { CardSearch } from "@/features/search/useCardSearch";
 import type { ZoomSection } from "@/lib/cardZoom";
 import type { Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { ipcError, type CardSummary } from "@/lib/ipc";
+import type { CardSummary } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { pricesAsOf } from "@/lib/prices";
 import { priceRange } from "@/lib/priceRange";
@@ -203,7 +203,7 @@ export function CardSearchBody({
   // query-core keeps the pages it has when a fetch fails, so `isError` arrives with rows still
   // in hand — reading it as "show the error instead" would throw away results the reader is
   // part way through.
-  const failure = query.isError ? ipcError(query.error) : null;
+  const failure = failureOf(search);
   const empty = rows.length === 0;
 
   return (
