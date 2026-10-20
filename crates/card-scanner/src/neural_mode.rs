@@ -337,6 +337,7 @@ impl Session {
             // The read is the detector, the embedder and the search at once; it is timed whole.
             hash_ms: read_ms,
             search_ms: 0.0,
+            descriptors: Default::default(),
         });
         let quad = best.map(|b| b.quad.map(|p| (p.x, p.y)));
 

@@ -1077,8 +1077,32 @@ averaged over the few frames before a decision. Every accuracy column of both Ex
 identical to the baseline in every stratum, and every Fast accuracy column but *printing ✓* is too — **basic lands
 included**, the stratum the chroma half exists for. Fast's printing figure read 75.6% before and
 74.4% after, two cards, and both are the evaluation's own noise: see the reproducibility note in
-§10. The resolve's own whole-card tier still hashes its burst both ways up, once per card; it
-reads its views from `StoredView`, not from the session's hold.
+§10. The resolve's own whole-card tier searches its burst both ways up, once per card — and since
+#1135 it hashes only the half each frame's hold skipped (below).
+
+### A descriptor is computed once (#1135)
+
+**Every match keeps what it hashed** — `MatchReport::descriptors`, a `ViewDescriptors` with a slot
+per framing and orientation, `None` where a held match did not hash — and the searches that came
+after it on the same views now start from that rather than hashing again:
+
+- **Exact's whole-card tier** completes each burst view's descriptors (`StoredView` keeps the
+  frame's, `Reference::describe_views` hashes only the missing half) and searches them with
+  `Reference::match_descriptors`. Before, it hashed 3 views × 5 framings × 2 ways up = 30, every one
+  of which the frames' own matches had already computed or half of.
+- **The re-rank** searches the descriptors the whole-card tier just completed when a title read
+  brings in unscored survivors — the foil rescue — where it hashed all 30 again.
+- **Fast's title pick** searches the frame's own descriptors, hashing only what a held orientation
+  skipped, where it hashed every framing both ways up moments after the frame's match had.
+- **The reframing's reading of the quad as found** (`reframe::choose_keeping`) hands its two warps
+  and its two descriptors on as a `detect::Warped`. A frame that keeps that quad rectifies from it
+  (`detect::rectify_views_from`) instead of warping it again, and its match searches the two
+  descriptors when the trim cut nothing — a trimmed card is other pixels and is hashed afresh.
+
+**A set is tied to the bundle that made it**: one of another kind or width is ignored rather than
+searched, since a descriptor of another width compares to nothing. Every answer is the same as
+before — a search over a complete set is the search over the views it came from, and the resolve
+tests prove the burst resolves identically with its descriptors or without.
 
 **The art section is built but not matched against.** Its hashes are of Scryfall's isolated art
 crop and a rectified photograph is a whole card; using it needs an art-window extractor, which

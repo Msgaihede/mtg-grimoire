@@ -14,6 +14,7 @@
 //! it simply answers with ids, which is enough to prove the pipeline works.
 
 use crate::filters::ScanFilters;
+use crate::hash::{Descriptor, HashKind};
 use crate::index::{format_uuid, Bundle, Mask, Match, Section, ID_LEN};
 use std::collections::{HashMap, HashSet};
 
@@ -83,6 +84,69 @@ pub struct MatchReport {
     /// margin means the runner-up is nearly as good an explanation of the pixels.
     pub margin: Option<u32>,
     pub search_ms: f32,
+    /// Every descriptor this match searched, computed here or handed in — so a later search over
+    /// the same views ([`Reference::match_descriptors`]) need not hash them again (#1135).
+    #[serde(skip)]
+    pub descriptors: ViewDescriptors,
+}
+
+/// The descriptors of a set of framings, both ways up, as far as anything has computed them.
+///
+/// **Hashing is the expensive half of a match** (~22 ms a view in release against ~3.5 ms to
+/// search every printing), and the same views are searched more than once: a frame's own match,
+/// then Fast's title pick on that frame, then Exact's whole-card tier and its re-rank over the
+/// burst. A match keeps what it hashed here ([`MatchReport::descriptors`]) and the later searches
+/// start from it (issue #1135).
+///
+/// **Partial, because a match may hash only half.** A held orientation hashes one way up
+/// ([`Reference::match_views_held`]); the other half is `None` until something needs it, and
+/// [`Reference::describe_views`] fills only what is missing.
+///
+/// **Tied to the bundle that made it.** A descriptor of another kind or width compares to
+/// nothing — a search against it returns nothing — so a set made under a different bundle is
+/// ignored rather than trusted.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ViewDescriptors {
+    of: Option<(HashKind, u16)>,
+    /// Per framing, in the order the views were handed over: upright, then rotated.
+    views: Vec<[Option<Descriptor>; 2]>,
+}
+
+impl ViewDescriptors {
+    fn empty(views: usize, kind: HashKind, bits: u16) -> Self {
+        ViewDescriptors { of: Some((kind, bits)), views: vec![[None, None]; views] }
+    }
+
+    /// How many framings this covers.
+    pub fn views(&self) -> usize {
+        self.views.len()
+    }
+
+    /// One framing's descriptor, one way up — `rotated` as in [`MatchReport::rotated`].
+    pub fn get(&self, view: usize, rotated: bool) -> Option<&Descriptor> {
+        self.views.get(view)?[usize::from(rotated)].as_ref()
+    }
+
+    /// How many descriptors are held.
+    pub fn count(&self) -> usize {
+        self.views.iter().flatten().flatten().count()
+    }
+
+    /// Every framing both ways up is held.
+    pub fn is_complete(&self) -> bool {
+        self.count() == 2 * self.views.len()
+    }
+
+    /// The same descriptors over `views` framings: the first ones kept, any further ones empty.
+    /// How the primary framing's descriptors are carried to a match that adds alternates.
+    pub fn with_views(mut self, views: usize) -> Self {
+        self.views.resize(views, [None, None]);
+        self
+    }
+
+    fn set(&mut self, p: ViewPick, d: Descriptor) {
+        self.views[p.view][usize::from(p.rotated)] = Some(d);
+    }
 }
 
 /// One card filed under a name in [`Reference`]'s name index.
@@ -743,8 +807,72 @@ impl Reference {
         chroma_weight: Option<f32>,
     ) -> MatchReport {
         let every = every_pick(views.len());
-        let found = self.search_picks(views, &every, k, mask, field, chroma_weight);
-        self.report(views.len(), found)
+        let mut known = self.known(views.len(), None);
+        let found = self.search_picks(views, &mut known, &every, k, mask, field, chroma_weight);
+        self.report(views.len(), found, known)
+    }
+
+    /// The same, searching descriptors already computed rather than hashing views — the
+    /// search-by-descriptor entry point (#1135).
+    ///
+    /// Every descriptor `known` holds is searched, and nothing is hashed: a complete set answers
+    /// exactly as [`Reference::match_views`] over the views it was made from, and a set made
+    /// under another bundle answers nothing. [`Reference::describe_views`] completes a partial one.
+    pub fn match_descriptors(&self, known: &ViewDescriptors, k: usize, mask: &Mask) -> MatchReport {
+        let mut known = self.known(known.views(), Some(known));
+        let picks: Vec<ViewPick> = every_pick(known.views())
+            .into_iter()
+            .filter(|p| known.get(p.view, p.rotated).is_some())
+            .collect();
+        let field = crate::index::Field::All;
+        let found = self.search_picks(&[], &mut known, &picks, k, mask, field, None);
+        self.report(known.views(), found, known)
+    }
+
+    /// Every framing of `views` both ways up, hashing only what `known` does not already hold —
+    /// in parallel, where the host has threads.
+    ///
+    /// `known` is used only when it was made under this bundle and covers as many framings;
+    /// otherwise every descriptor is computed afresh.
+    pub fn describe_views(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        known: Option<&ViewDescriptors>,
+    ) -> ViewDescriptors {
+        let mut out = self.known(views.len(), known);
+        let missing: Vec<ViewPick> = every_pick(views.len())
+            .into_iter()
+            .filter(|p| out.get(p.view, p.rotated).is_none())
+            .collect();
+        for (p, d) in missing.iter().zip(self.hash_picks(views, &missing)) {
+            out.set(*p, d);
+        }
+        out
+    }
+
+    /// `known`, when it was made under this bundle for `views` framings; else an empty set.
+    fn known(&self, views: usize, known: Option<&ViewDescriptors>) -> ViewDescriptors {
+        let of = (self.bundle.kind, self.bundle.bits);
+        match known {
+            Some(k) if k.of == Some(of) && k.views() == views => k.clone(),
+            _ => ViewDescriptors::empty(views, of.0, of.1),
+        }
+    }
+
+    /// Hash each pick, in parallel when there is more than one.
+    fn hash_picks(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        picks: &[ViewPick],
+    ) -> Vec<Descriptor> {
+        let (kind, bits) = (self.bundle.kind, self.bundle.bits);
+        // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
+        // grayscale call would silently drop it — matching a colour bundle with a colourless
+        // query returns confident nonsense rather than an error.
+        crate::host::par_map(picks, |p| {
+            let (upright, rotated) = views[p.view];
+            crate::hash::hash_rgb(if p.rotated { rotated } else { upright }, kind, bits)
+        })
     }
 
     /// Match one frame of a held card, hashing only the way up the stretch has settled on.
@@ -776,22 +904,27 @@ impl Reference {
     /// widened winner's when that was **plain** — under the gate, with the other orientation's
     /// best at least [`ORIENTATION_GAP`] worse — and `None` otherwise, so the next frame searches
     /// both.
+    ///
+    /// `known` is descriptors of these views already computed — the reframing's of the quad as
+    /// found ([`crate::reframe::choose_keeping`]) — which are searched rather than hashed again.
     pub fn match_views_held(
         &self,
         views: &[(&image::RgbImage, &image::RgbImage)],
+        known: Option<&ViewDescriptors>,
         k: usize,
         mask: &Mask,
         held: Option<bool>,
         gate: f32,
     ) -> (MatchReport, Option<bool>) {
         let field = crate::index::Field::All;
+        let mut known = self.known(views.len(), known);
         let mut found: Vec<(ViewPick, Searched)> = Vec::new();
         if let Some(held) = held.filter(|_| !views.is_empty()) {
             let half: Vec<ViewPick> =
                 every_pick(views.len()).into_iter().filter(|p| p.rotated == held).collect();
-            let searched = self.search_picks(views, &half, k, mask, field, None);
+            let searched = self.search_picks(views, &mut known, &half, k, mask, field, None);
             if winner_of(&searched).1 <= gate {
-                return (self.report(views.len(), searched), Some(held));
+                return (self.report(views.len(), searched, known), Some(held));
             }
             found = searched;
         }
@@ -799,7 +932,7 @@ impl Reference {
             .into_iter()
             .filter(|p| !found.iter().any(|(q, _)| q == p))
             .collect();
-        found.extend(self.search_picks(views, &rest, k, mask, field, None));
+        found.extend(self.search_picks(views, &mut known, &rest, k, mask, field, None));
         // Back into canonical order, so the winner is chosen exactly as an unheld match would.
         found.sort_by_key(|(p, _)| (p.view, p.rotated));
 
@@ -810,33 +943,40 @@ impl Reference {
             .map(|(_, s)| best_of(&s.matches))
             .fold(f32::INFINITY, f32::min);
         let plain = best <= gate && other - best >= ORIENTATION_GAP;
-        (self.report(views.len(), found), plain.then_some(pick.rotated))
+        (self.report(views.len(), found, known), plain.then_some(pick.rotated))
     }
 
     /// Hash and search each pick, in parallel when there is more than one — and one after
     /// another where the host has no second thread ([`crate::host::par_map`]).
     ///
+    /// **A pick `known` already holds is searched, not hashed**, and every pick hashed here is
+    /// added to it — so `views` may be empty when `known` holds every pick.
+    ///
     /// **Two phases, each timed as wall time**, so `hash_ms` and `search_ms` stay what a frame
     /// waits for rather than a sum of work done side by side.
+    #[allow(clippy::too_many_arguments)]
     fn search_picks(
         &self,
         views: &[(&image::RgbImage, &image::RgbImage)],
+        known: &mut ViewDescriptors,
         picks: &[ViewPick],
         k: usize,
         mask: &Mask,
         field: crate::index::Field,
         chroma_weight: Option<f32>,
     ) -> Vec<(ViewPick, Searched)> {
-        let (kind, bits) = (self.bundle.kind, self.bundle.bits);
+        let missing: Vec<ViewPick> =
+            picks.iter().copied().filter(|p| known.get(p.view, p.rotated).is_none()).collect();
         let t_hash = crate::host::Stopwatch::start();
-        // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
-        // grayscale call would silently drop it — matching a colour bundle with a colourless
-        // query returns confident nonsense rather than an error.
-        let hashes = crate::host::par_map(picks, |p| {
-            let (upright, rotated) = views[p.view];
-            crate::hash::hash_rgb(if p.rotated { rotated } else { upright }, kind, bits)
-        });
+        let hashed = self.hash_picks(views, &missing);
         let hash_ms = t_hash.ms();
+        for (p, d) in missing.iter().zip(hashed) {
+            known.set(*p, d);
+        }
+        let hashes: Vec<Descriptor> = picks
+            .iter()
+            .map(|p| *known.get(p.view, p.rotated).expect("every pick was hashed above"))
+            .collect();
 
         let t_search = crate::host::Stopwatch::start();
         let matches = crate::host::par_map(&hashes, |h| match chroma_weight {
@@ -853,15 +993,21 @@ impl Reference {
             .enumerate()
             .map(|(i, (p, matches))| {
                 let (hash_ms, search_ms) = if i == 0 { (hash_ms, search_ms) } else { (0.0, 0.0) };
-                (*p, Searched { matches, hash_ms, search_ms })
+                let hashed = missing.contains(p);
+                (*p, Searched { matches, hash_ms, search_ms, hashed })
             })
             .collect()
     }
 
     /// The report for a set of searched picks, in canonical order.
-    fn report(&self, views: usize, found: Vec<(ViewPick, Searched)>) -> MatchReport {
+    fn report(
+        &self,
+        views: usize,
+        found: Vec<(ViewPick, Searched)>,
+        descriptors: ViewDescriptors,
+    ) -> MatchReport {
         let (pick, _) = winner_of(&found);
-        let hashes = found.len();
+        let hashes = found.iter().filter(|(_, s)| s.hashed).count();
         let hash_ms = found.iter().map(|(_, s)| s.hash_ms).sum();
         let search_ms = found.iter().map(|(_, s)| s.search_ms).sum();
         let winner =
@@ -881,6 +1027,7 @@ impl Reference {
             margin,
             hash_ms,
             search_ms,
+            descriptors,
         }
     }
 }
@@ -906,6 +1053,8 @@ struct Searched {
     matches: Vec<Match>,
     hash_ms: f32,
     search_ms: f32,
+    /// Hashed for this search, rather than handed in already computed.
+    hashed: bool,
 }
 
 /// **`normalized`, not `distance`.** This chooses between orientations and between framings,
@@ -1108,7 +1257,7 @@ mod tests {
         // searched one way up, and the framing is still chosen among them.
         let r = reference();
         let views = [(&img(98), &img(97)), (&img(96), &img(9)), (&img(94), &img(93))];
-        let (report, next) = r.match_views_held(&views, 3, &Mask::all(), Some(true), 0.0);
+        let (report, next) = r.match_views_held(&views, None, 3, &Mask::all(), Some(true), 0.0);
         assert_eq!(report.hashes, 3, "a held orientation that matched still paid for the other");
         assert_eq!((report.view, report.rotated, report.views), (1, true, 3));
         assert_eq!(report.candidates[0].id, format_uuid(&id(9)));
@@ -1121,7 +1270,7 @@ mod tests {
         // way up it now is.
         let r = reference();
         let views = [(&img(98), &img(97)), (&img(96), &img(9))];
-        let (report, next) = r.match_views_held(&views, 3, &Mask::all(), Some(false), 0.0);
+        let (report, next) = r.match_views_held(&views, None, 3, &Mask::all(), Some(false), 0.0);
         assert_eq!(report.hashes, 4, "the held half is searched once, never twice");
         assert_eq!(report.candidates[0].id, format_uuid(&id(9)));
         assert_eq!((report.view, report.rotated), (1, true));
@@ -1133,16 +1282,63 @@ mod tests {
         let r = reference();
         // Nothing under the gate: every view searched, nothing held.
         let (report, next) =
-            r.match_views_held(&[(&img(98), &img(97))], 3, &Mask::all(), None, 0.0);
+            r.match_views_held(&[(&img(98), &img(97))], None, 3, &Mask::all(), None, 0.0);
         assert_eq!((report.hashes, next), (2, None));
         // Under the gate both ways up: a match, but no orientation to hold.
-        let (_, next) = r.match_views_held(&[(&img(5), &img(5))], 3, &Mask::all(), None, 0.3);
+        let (_, next) = r.match_views_held(&[(&img(5), &img(5))], None, 3, &Mask::all(), None, 0.3);
         assert_eq!(next, None, "two equal orientations were held as though one had won");
         // One way up matches and the other matches nothing: held.
-        let (_, next) = r.match_views_held(&[(&img(5), &img(99))], 3, &Mask::all(), None, 0.3);
+        let (_, next) = r.match_views_held(&[(&img(5), &img(99))], None, 3, &Mask::all(), None, 0.3);
         assert_eq!(next, Some(false));
-        let (_, next) = r.match_views_held(&[(&img(99), &img(5))], 3, &Mask::all(), None, 0.3);
+        let (_, next) = r.match_views_held(&[(&img(99), &img(5))], None, 3, &Mask::all(), None, 0.3);
         assert_eq!(next, Some(true));
+    }
+
+    #[test]
+    fn a_search_by_descriptor_answers_as_the_views_did_without_hashing() {
+        // #1135: the descriptors a match keeps are searched later instead of hashing again.
+        let r = reference();
+        let views = [(&img(98), &img(97)), (&img(96), &img(9)), (&img(5), &img(94))];
+        let plain = r.match_views(&views, 3, &Mask::all());
+        assert!(plain.descriptors.is_complete());
+        let again = r.match_descriptors(&plain.descriptors, 3, &Mask::all());
+        assert_eq!(again.hashes, 0, "a search by descriptor hashed");
+        let ids = |m: &MatchReport| {
+            m.candidates.iter().map(|c| (c.id.clone(), c.distance)).collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&again), ids(&plain));
+        assert_eq!((again.view, again.rotated, again.views), (plain.view, plain.rotated, 3));
+        // Restricted to a mask, as the re-rank and the title pick search.
+        let only = Mask::allow_only([id(5)]);
+        let masked = r.match_descriptors(&plain.descriptors, 3, &only);
+        assert_eq!(ids(&masked), ids(&r.match_views(&views, 3, &only)));
+    }
+
+    #[test]
+    fn describing_views_hashes_only_what_a_held_match_skipped() {
+        let r = reference();
+        let views = [(&img(98), &img(97)), (&img(96), &img(9))];
+        let (held, _) = r.match_views_held(&views, None, 3, &Mask::all(), Some(true), 1.0);
+        assert_eq!((held.hashes, held.descriptors.count()), (2, 2));
+        let whole = r.describe_views(&views, Some(&held.descriptors));
+        assert!(whole.is_complete());
+        assert_eq!(whole, r.match_views(&views, 3, &Mask::all()).descriptors);
+        // Handed to the held match, nothing it already knows is hashed again.
+        let (report, _) = r.match_views_held(&views, Some(&whole), 3, &Mask::all(), None, 0.0);
+        assert_eq!(report.hashes, 0);
+    }
+
+    #[test]
+    fn descriptors_made_under_another_bundle_are_not_trusted() {
+        let r = reference();
+        let mut b = BundleBuilder::new(HashKind::DHash, 128);
+        b.push(Section::Card, id(5), &hash_rgb(&img(5), HashKind::DHash, 128));
+        let narrow = Reference::new(b.finish(0));
+        let views = [(&img(5), &img(99))];
+        let theirs = narrow.match_views(&views, 3, &Mask::all()).descriptors;
+        assert!(r.match_descriptors(&theirs, 3, &Mask::all()).candidates.is_empty());
+        let ours = r.describe_views(&views, Some(&theirs));
+        assert_eq!(ours, r.match_views(&views, 3, &Mask::all()).descriptors);
     }
 
     #[test]
@@ -1158,7 +1354,7 @@ mod tests {
         for views in sets {
             let plain = r.match_views(views, 3, &Mask::all());
             for held in [None, Some(true), Some(false)] {
-                let (widened, _) = r.match_views_held(views, 3, &Mask::all(), held, -1.0);
+                let (widened, _) = r.match_views_held(views, None, 3, &Mask::all(), held, -1.0);
                 assert_eq!((widened.view, widened.rotated), (plain.view, plain.rotated));
                 assert_eq!(widened.hashes, plain.hashes);
                 let ids = |m: &MatchReport| {
