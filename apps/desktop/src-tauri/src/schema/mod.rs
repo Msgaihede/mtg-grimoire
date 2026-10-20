@@ -73,8 +73,9 @@ pub(crate) mod tests {
         let corpus = dir.path().join(crate::db::CORPUS_DB);
         let size = std::fs::metadata(&corpus).unwrap().len();
 
-        assert!(
-            corpus_is_readable(dir.path()),
+        assert_eq!(
+            probe_corpus(dir.path()),
+            CorpusCheck::Sound,
             "page one is sound, so the launch probe passes"
         );
         assert!(
