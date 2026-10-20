@@ -5450,6 +5450,121 @@ async fn a_stamp_already_sent_or_received_that_far_ahead_is_never_restamped_unde
     }
 }
 
+/// A relay that refuses an envelope stamped more than a day past `now` and takes any other — the
+/// two mocks [`a_clock_set_right_again_restamps_what_it_wrote_ahead_and_the_retry_goes`] sets up.
+fn a_relay_at(server: &MockServer, now: i64) -> (httpmock::Mock<'_>, httpmock::Mock<'_>) {
+    let refused = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(stamped_ahead_of(now, true));
+        then.status(422).json_body(clock_ahead());
+    });
+    let taken = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(stamped_ahead_of(now, false));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    (refused, taken)
+}
+
+/// ⚠ **An op a lost answer may have delivered keeps its stamp through a rebase** (issue #1119).
+/// A push is at-least-once: the relay took the op, its receipt never arrived, and the op stayed
+/// pending. Restamped by a later rebase, it would be on the relay twice — a peer that applied the
+/// old stamp first skips the new one and every op restamped under it, and one that sees both
+/// applies the copy twice. Left where it is, the retry sends it again at the stamp the relay
+/// already holds, which the far side drops as seen, and what was written after it goes above it.
+///
+/// **What makes it red**: a rebase that takes every pending op as never sent (the first stamp
+/// moves), or one that stamps the next op under it.
+#[tokio::test]
+async fn an_op_a_lost_answer_may_have_delivered_keeps_its_stamp_through_a_rebase() {
+    let a = paired("dev-a", 0);
+    let now = now_ms(&a);
+    // Ahead, but inside the relay's bound: the relay takes it, and the answer is lost.
+    a.execute("UPDATE sync_clock SET ms = ?1, ctr = 0", [now + DAY_MS / 2])
+        .unwrap();
+    add_copy(&a, "delivered", 1);
+    let lost = MockServer::start_async().await;
+    let stored = lost.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(200).body("a receipt cut short");
+    });
+    assert!(push(&a, &lost.base_url(), "access-1").await.is_err());
+    stored.assert();
+    assert_eq!(unpushed_count(&a), 1, "a receipt never read was stamped");
+
+    // Then the date runs a year ahead for one write, and is set right again.
+    a.execute("UPDATE sync_clock SET ms = ?1, ctr = 0", [now + YEAR_MS])
+        .unwrap();
+    add_copy(&a, "ahead", 1);
+    let written = stamps(&a);
+    let server = MockServer::start_async().await;
+    let (refused, taken) = a_relay_at(&server, now);
+
+    let pushed = push(&a, &server.base_url(), "access-1").await.unwrap();
+
+    assert_eq!(
+        pushed,
+        Pushed {
+            sent: 2,
+            deferred: None,
+        }
+    );
+    assert_eq!((refused.calls(), taken.calls()), (1, 1));
+    let sent = stamps(&a);
+    assert_eq!(
+        sent[0], written[0],
+        "restamped an op the relay may already hold"
+    );
+    assert!(sent[0] < sent[1], "stamped under it: {sent:?}");
+    assert!(
+        !hlc::too_far_ahead(sent[1].ms, now_ms(&a)),
+        "still ahead: {sent:?}"
+    );
+}
+
+/// **An op offered stamped past the relay's bound is still restamped**, whatever became of the
+/// answer: the relay refused it when it was offered, so no copy of it is anywhere. Taking every
+/// offered op as delivered would pin this device behind a stamp the group never held, for as long
+/// as the clock had been ahead.
+///
+/// **What makes it red**: a base that counts an offered op stamped more than a day past the wall
+/// clock (the rebase answers `Pinned` and nothing goes).
+#[tokio::test]
+async fn an_op_offered_past_the_relays_bound_is_still_restamped() {
+    let a = paired("dev-a", 0);
+    let now = now_ms(&a);
+    a.execute("UPDATE sync_clock SET ms = ?1, ctr = 0", [now + YEAR_MS])
+        .unwrap();
+    add_copy(&a, "ahead", 1);
+    let unknown = MockServer::start_async().await;
+    unknown.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(502).body("bad gateway");
+    });
+    assert!(push(&a, &unknown.base_url(), "access-1").await.is_err());
+    let server = MockServer::start_async().await;
+    let (refused, taken) = a_relay_at(&server, now);
+
+    let pushed = push(&a, &server.base_url(), "access-1").await.unwrap();
+
+    assert_eq!(
+        pushed,
+        Pushed {
+            sent: 1,
+            deferred: None,
+        }
+    );
+    assert_eq!((refused.calls(), taken.calls()), (1, 1));
+    let sent = stamps(&a);
+    assert!(
+        !hlc::too_far_ahead(sent[0].ms, now_ms(&a)),
+        "still ahead: {sent:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // A device removed and paired back across a walk — issue #546's review, finding 3
 // ---------------------------------------------------------------------------------------
