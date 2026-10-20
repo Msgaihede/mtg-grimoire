@@ -1400,7 +1400,14 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // because React Query hashes this object with its `undefined` values dropped: a bare
     // `false` would mint a second key for the search an untouched row has always had.
     manaX: manaX || undefined,
-    owned,
+    // **Missing does not ride in the deck builder** (#1129). The index's one `owned` bitset means
+    // "a copy anywhere", while this search's Missing means "no copy *this deck* can use" — so it
+    // also returns cards whose only copies sit in another deck's group or a locked folder, and a
+    // facet base that dropped every owned card would count those chips 0 and grey them. Left off,
+    // the other dimensions count over a superset of the wall and read high, the direction this
+    // row fails in. Owned (`true`) still rides: its base is a superset already. The Owned/Missing
+    // counts themselves skip their own dimension, so they are the same either way.
+    owned: owned === false && availableForDeck !== undefined ? undefined : owned,
     rarities: raritiesParam,
     // **The price band deliberately does not ride.** `CardIndex` has no price dimension — two of
     // the four marketplaces price out of `marketplace_prices`, a table the corpus scan does not

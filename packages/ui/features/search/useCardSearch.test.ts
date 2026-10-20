@@ -2010,6 +2010,33 @@ describe("the deck a search counts copies for", () => {
   });
 
   /**
+   * #1129: the index's `owned` bitset is "a copy anywhere", so a facet base narrowed by Missing
+   * drops cards this deck's Missing search still returns (their only copies are elsewhere) and
+   * greys chips that would work. Left off, the counts read high instead. Owned still rides — its
+   * base is already a superset of the wall.
+   */
+  it("keeps Missing off the facet request, but not Owned", async () => {
+    const { result } = renderHook(() => useCardSearch({ availableForDeck: 7 }), { wrapper });
+    await waitFor(() => expect(facetCards).toHaveBeenCalled());
+
+    act(() => result.current.setOwned(false));
+    await waitFor(() => expect(lastSearchRequest().owned).toBe(false));
+    expect(lastFacetRequest().owned).toBeUndefined();
+
+    act(() => result.current.setOwned(true));
+    await waitFor(() => expect(lastFacetRequest().owned).toBe(true));
+    expect(lastSearchRequest().owned).toBe(true);
+  });
+
+  it("keeps Missing on the facet request when no deck is named", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(facetCards).toHaveBeenCalled());
+
+    act(() => result.current.setOwned(false));
+    await waitFor(() => expect(lastFacetRequest().owned).toBe(false));
+  });
+
+  /**
    * **The assertion the query-key segment exists for.** Two decks are two answers to identical
    * filters, so a key that left the deck out would serve the second deck opened out of the
    * first one's cached pages — no request, no spinner, and a wall of numbers about somebody
