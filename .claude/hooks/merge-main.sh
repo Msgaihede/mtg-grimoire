@@ -2,8 +2,8 @@
 # Keep a Claude worktree close to origin/main, so a PR never ends in a 300-commit merge.
 #
 # Wired to two events in .claude/settings.json:
-#   PostToolUse / Bash    - fires after `git commit`, the one moment the tree is clean
-#   SessionStart          - catches a worktree that has sat idle for days
+#   PostToolUse / Bash|PowerShell - fires after `git commit`, the one moment the tree is clean
+#   SessionStart                  - catches a worktree that has sat idle for days
 #
 # On a conflict the merge is left IN PROGRESS, with markers in the tree, and Claude is told
 # to resolve it before carrying on - resolving while the conflict is still small is the whole
@@ -20,8 +20,9 @@ FETCH_THROTTLE_SECONDS=120
 payload=""
 if [ ! -t 0 ]; then payload="$(cat 2>/dev/null || true)"; fi
 
-# PostToolUse fires on every Bash call. A commit is the only one that leaves a clean tree,
-# and grepping the raw payload catches `cd x && git commit` and `git -C path commit` too.
+# PostToolUse fires on every Bash and PowerShell call. A commit is the only one that leaves a
+# clean tree, and grepping the raw payload catches `cd x && git commit`, `git -C path commit`
+# and PowerShell's `; git commit` alike.
 if [ "$trigger" = "commit" ]; then
   case "$payload" in
     *"git commit"*) ;;
