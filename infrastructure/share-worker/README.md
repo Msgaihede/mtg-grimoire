@@ -161,10 +161,15 @@ card is a failed payment Patreon retries, not a cancellation the reader chose.
 
 **`revoked` is never touched.** The reader's own press is terminal and the cron's flip is
 reversible, which is the whole reason `state` is a state rather than a `revoked_at` stamp. The
-`AND state = ?` clause in the one `UPDATE` is what enforces it, and the candidate query ahead of
-it is deliberately **not** narrowed to the rows that can move — narrowing it would be free,
-correct, and would make that clause unreachable for a group whose only share is a tombstone, which
-is exactly the case it exists for.
+`AND state = ?` clause in both `UPDATE`s is what enforces it.
+
+**Two statements a pass, however many groups have shared** — one `UPDATE … WHERE group_id IN
+(serving groups)` that relights and one `… NOT IN (serving groups)` that darkens, in one `batch`.
+Until 2026-10-20 the pass sent one statement per group that had ever published, a set that only
+grows because revoked rows stay; past the free plan's fifty queries an invocation that would have
+thrown every day (issue #1194). The serving subquery's `group_id IS NOT NULL` is load-bearing: a
+NULL in a `NOT IN` list makes the condition NULL for every row, so one subject who had connected
+Patreon without claiming a group would have frozen every lapse on the account.
 
 **A group with no entitlement row at all is not serving, and goes dark.** That is a real state
 rather than a hypothesis: `/claim` _moves_ a binding rather than refusing one, so a subject who
