@@ -520,6 +520,129 @@ const exactNotFound: ScannerVerdict = {
   },
 };
 
+/* --------------------------------------------------------------------------- Neural ---- */
+
+/**
+ * What every Neural frame with a card in it shares — `card-scanner`'s Neural arm (the plan's §2,
+ * `docs/superpowers/plans/2026-10-20-neural-scan-mode.md`): the first card's quad, `method:
+ * "neural"`, **no lock** (Neural tracks no quad across frames), no detector score, no previews, and
+ * never a read — no title, no collector line, and so no `wants_detail`.
+ *
+ * Its match is the embedder's search dressed as a `MatchReport`: one view of the whole card
+ * (`section: "card"`), each candidate a gallery entry's pictured printing with `normalized` the
+ * cosine distance halved and `distance` that × 256 — so every panel's 0–256 bits still holds — and
+ * the margin in bits over 128. Its tracker is the agreement count, two frames to decide.
+ */
+const neuralBase: ScannerVerdict = {
+  ...baseVerdict,
+  mode: "neural",
+  lock: null,
+  method: "neural",
+  from_lock: false,
+  search: "full",
+  score: null,
+  hash: null,
+  rectified: null,
+  // The read's whole time as the total, and nothing of the edge detector's stages.
+  timings: { resize_ms: 0, mask_ms: 0, contour_ms: 0, rectify_ms: 0, total_ms: 18.4 },
+  // The cards the detector found in the frame.
+  candidates_examined: 1,
+};
+
+/** The agreement count, decided on the card the standing names. */
+const agreedOn = (standing: ScannerStanding): ScannerTracked => ({
+  committed: true,
+  confidence: 1,
+  rule: "votes",
+  decide_at: 2,
+  lead: null,
+  frozen: true,
+  early: false,
+  streak: 2,
+  frames: 2,
+  misses: 0,
+  standings: [standing],
+});
+
+/** The embedder's search over one crop: the candidates as the gallery ranked them. */
+const neuralMatch = (
+  candidates: ScannerCandidate[],
+  margin: number,
+): NonNullable<ScannerVerdict["match"]> => ({
+  section: "card",
+  rotated: false,
+  view: 0,
+  views: 1,
+  hashes: 1,
+  candidates,
+  // The whole read — detector, embedder and search — is `hash_ms`; the search has no time apart.
+  hash_ms: 18.4,
+  margin,
+  search_ms: 0,
+});
+
+/** A Neural decision on a picture that is one printing: `resolved`, with no choices. */
+const neuralDecided: ScannerVerdict = {
+  ...neuralBase,
+  decision_seq: 1,
+  decision: {
+    printing: lotusChoice.id,
+    oracle_id: LOTUS_ORACLE,
+    label: lotusLea,
+    outcome: "resolved",
+    choices: [],
+    replaces_previous: false,
+    finishes: ["nonfoil"],
+    // Neural reads no collector line, so there is never a separator to measure.
+    finish_mark: null,
+  },
+  match: neuralMatch(
+    [{ id: lotusChoice.id, distance: 16, normalized: 0.062, label: lotusLea, printings: null }],
+    31,
+  ),
+  tracked: agreedOn({
+    id: lotusChoice.id,
+    evidence: 2,
+    share: 1,
+    seen: 2,
+    label: lotusLea,
+    best_distance: 0.062,
+  }),
+};
+
+/**
+ * A Neural decision on a picture that stands for three printings of one card: `ambiguous`, the
+ * printings it stands for as the choices — the named one first, each at the picture's own
+ * distance — and **no resolution**, because Neural runs none. This decision is the only place its
+ * choice of printings is said.
+ */
+const neuralAmbiguous: ScannerVerdict = {
+  ...neuralBase,
+  decision_seq: 2,
+  decision: {
+    printing: boltChoices[0].id,
+    oracle_id: BOLT_ORACLE,
+    label: bolt2x2,
+    outcome: "ambiguous",
+    choices: boltChoices.map((c) => ({ ...c, distance: 0.071 })),
+    replaces_previous: false,
+    finishes: ["nonfoil", "foil"],
+    finish_mark: null,
+  },
+  match: neuralMatch(
+    [{ id: boltChoices[0].id, distance: 18, normalized: 0.071, label: bolt2x2, printings: null }],
+    24,
+  ),
+  tracked: agreedOn({
+    id: boltChoices[0].id,
+    evidence: 2,
+    share: 1,
+    seen: 2,
+    label: bolt2x2,
+    best_distance: 0.071,
+  }),
+};
+
 export const VERDICTS = {
   voting,
   decided,
@@ -530,6 +653,8 @@ export const VERDICTS = {
   exactResolved,
   exactAmbiguous,
   exactNotFound,
+  neuralDecided,
+  neuralAmbiguous,
 };
 
 /**
@@ -578,7 +703,30 @@ export const READS = { ocr, collector };
 
 const scannerDir = "D:\\app\\data\\scanner\\";
 
-/** All three files placed in `data/scanner/` by hand — the state before assets shipped. */
+/**
+ * Where a native build takes the Neural models from — `scanner::NEURAL_SOURCE` in
+ * `crates/grimoire-core/src/scanner.rs`, verbatim. Not a place in `data/scanner/`: no file there
+ * overrides them.
+ */
+const NEURAL_SOURCE = "crates/card-neural/models";
+
+/**
+ * The Neural models as a desktop or Android build carries them: compiled in, and loaded. Built in
+ * on every host that has them at all (the web fetches its copy and says `store`), so every status
+ * below that has a working scanner has this one.
+ */
+const neuralEmbedded: ScannerStatus["neural"] = {
+  path: NEURAL_SOURCE,
+  present: true,
+  loaded: true,
+  error: null,
+  source: "embedded",
+};
+
+/**
+ * All three files placed in `data/scanner/` by hand — the state before assets shipped — and the
+ * Neural models built in, as they always are where a build has them.
+ */
 const present: ScannerStatus = {
   bundle: { path: `${scannerDir}card-hashes.bin`, present: true, loaded: true, error: null, source: "file" },
   detection_model: {
@@ -595,6 +743,7 @@ const present: ScannerStatus = {
     error: null,
     source: "file",
   },
+  neural: neuralEmbedded,
   labels: 117630,
   scans_dir: `${scannerDir}scans`,
   unapplied_filters: null,
@@ -609,6 +758,7 @@ const embedded: ScannerStatus = {
   bundle: { ...present.bundle, source: "embedded" },
   detection_model: { ...present.detection_model, source: "embedded" },
   recognition_model: { ...present.recognition_model, source: "embedded" },
+  neural: neuralEmbedded,
   labels: 117630,
   scans_dir: `${scannerDir}scans`,
   unapplied_filters: null,
@@ -630,6 +780,14 @@ const missing: ScannerStatus = {
     error: null,
     source: "absent",
   },
+  // A build with nothing at all — no Neural models either, so a Neural frame names nothing too.
+  neural: {
+    path: NEURAL_SOURCE,
+    present: false,
+    loaded: false,
+    error: null,
+    source: "absent",
+  },
   labels: 0,
   scans_dir: `${scannerDir}scans`,
   unapplied_filters: null,
@@ -639,6 +797,7 @@ const noModels: ScannerStatus = {
   bundle: present.bundle,
   detection_model: missing.detection_model,
   recognition_model: missing.recognition_model,
+  neural: neuralEmbedded,
   labels: 117630,
   scans_dir: `${scannerDir}scans`,
   unapplied_filters: null,
@@ -671,6 +830,7 @@ const corrupt: ScannerStatus = {
     error: "could not load model: unsupported operator",
     source: "file",
   },
+  neural: { ...neuralEmbedded, loaded: false, error: "gallery: bad magic" },
   labels: 0,
   scans_dir: `${scannerDir}scans`,
   unapplied_filters: null,

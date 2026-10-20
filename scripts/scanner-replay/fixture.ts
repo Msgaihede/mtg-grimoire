@@ -23,7 +23,7 @@ export function slice(over: Partial<Slice> & Pick<Slice, "frame" | "kind" | "fil
 export function pass(name: string, score: Score, over: Partial<Pass> = {}): Pass {
   const made: Pass = {
     name,
-    mode: name === "Exact" ? "exact" : "fast",
+    mode: name === "Exact" ? "exact" : name === "Neural" ? "neural" : "fast",
     score,
     ambiguous: false,
     true_in_choices: false,

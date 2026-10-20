@@ -65,6 +65,22 @@ describe("runFrameOf", () => {
     expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.voting, false).mode).toBe("fast");
     expect(VERDICTS.exactAmbiguous.mode).toBe("exact");
     expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.exactAmbiguous, false).mode).toBe("exact");
+    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.neuralAmbiguous, false).mode).toBe("neural");
+  });
+
+  /**
+   * Neural keeps no quad lock, so its frames say no lock rather than a phase; the rest is read as
+   * for any mode — its distance is the `MatchReport`'s 0–256 bits, as the inbox reads it.
+   */
+  it("reads a Neural frame with no lock, its distance in bits and its decided printing", () => {
+    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.neuralDecided, false)).toMatchObject({
+      ok: true,
+      lock: null,
+      confidence: 1,
+      distance: 16,
+      decided: VERDICTS.neuralDecided.decision?.printing,
+      mode: "neural",
+    });
   });
 
   it("says nothing was found, locked, weighed or decided for a frame with no card in it", () => {
@@ -148,6 +164,12 @@ describe("pushRunFrame", () => {
     // Back again is a break too: it is the change that forgets, whichever way it goes.
     pushRunFrame(ring, frame(10, 1000));
     expect(ring.map((one) => one.jpeg[0])).toEqual([10]);
+    // And Neural is a mode like the others: into it, and out of it to Exact, each start over.
+    pushRunFrame(ring, frame(11, 1100, { mode: "neural" }));
+    pushRunFrame(ring, frame(12, 1200, { mode: "neural" }));
+    expect(ring.map((one) => one.jpeg[0])).toEqual([11, 12]);
+    pushRunFrame(ring, frame(13, 1300, { mode: "exact" }));
+    expect(ring.map((one) => one.jpeg[0])).toEqual([13]);
   });
 
   /**

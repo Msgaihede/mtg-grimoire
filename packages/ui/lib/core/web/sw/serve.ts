@@ -13,7 +13,7 @@ import {
   type CachesLike,
   type PictureAsk,
 } from "./pictures";
-import { isScannerModule, SCANNER_CACHE } from "../assets";
+import { isNeuralFile, isScannerModule, SCANNER_CACHE } from "../assets";
 import { DOCUMENT, routeFor, shellCacheName, staleShells, type Routable } from "./shell";
 
 /**
@@ -282,9 +282,10 @@ export function createWorker(env: WorkerEnv): Served {
   }
 
   /**
-   * A file of the card scanner's module: **the scanner's cache first, then the network — and a
-   * good answer from the network is kept.** The address is content-addressed (`assets.ts`), so
-   * what is kept under it is never stale and is never asked about again.
+   * A file of the card scanner's module, or one of the Neural scanner's four: **the scanner's
+   * cache first, then the network — and a good answer from the network is kept.** The address is
+   * content-addressed (`assets.ts`), so what is kept under it is never stale and is never asked
+   * about again.
    *
    * - **Read to its end and rebuilt from the bytes**, as a shell file is and for its reasons: the
    *   two headers that describe the wire and not the body are not carried over, and the answer
@@ -292,7 +293,9 @@ export function createWorker(env: WorkerEnv): Served {
    * - **Only a 200 that is not a document is kept.** A host that hands its page to a path it
    *   does not know would otherwise be this module for good.
    * - **Another build's module is let go when this build's is kept**: two files of four and a
-   *   half megabytes, of which only the newest can ever be asked for again.
+   *   half megabytes, of which only the newest can ever be asked for again. **And another set's
+   *   Neural files when this set's are** — twenty-seven megabytes — each kind sweeping only its
+   *   own: the module and the Neural files move apart.
    * - **A Cache Storage that throws is a miss, and a `put` that fails costs nothing but the
    *   keeping** — `fromShell`'s rule. With no network and no copy, the rejection is the
    *   Worker's failed load, which the page says in a sentence (`scanner.ts`).
@@ -319,10 +322,13 @@ export function createWorker(env: WorkerEnv): Served {
     later(
       (async () => {
         await cache.put(key, rebuilt());
+        // `/wasm/<build>/scanner/…` and `/scanner-neural/<set>/…` alike: the id is the second
+        // segment.
         const build = key.split("/")[2];
+        const sameKind = isNeuralFile(key) ? isNeuralFile : isScannerModule;
         for (const { url } of await cache.keys()) {
           const path = new URL(url).pathname;
-          if (isScannerModule(path) && path.split("/")[2] !== build) {
+          if (sameKind(path) && path.split("/")[2] !== build) {
             await cache.delete(path, { ignoreVary: true });
           }
         }

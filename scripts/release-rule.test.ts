@@ -27,6 +27,7 @@ import lightToml from "../apps/light/src-tauri/Cargo.toml?raw";
 import webToml from "../crates/grimoire-web/Cargo.toml?raw";
 import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
 import playToml from "../crates/grimoire-play/Cargo.toml?raw";
+import neuralToml from "../crates/card-neural/Cargo.toml?raw";
 import desktopConf from "../apps/desktop/src-tauri/tauri.conf.json?raw";
 import lightConf from "../apps/light/src-tauri/tauri.conf.json?raw";
 import appGradle from "../apps/light/src-tauri/gen/android/app/build.gradle.kts?raw";
@@ -67,6 +68,9 @@ const CRATES = [
   { name: "grimoire-scan", dir: "crates/grimoire-scan", toml: scanToml, conf: null },
   // The game board's rules engine (goldfish and playtest), linked by the desktop alone.
   { name: "grimoire-play", dir: "crates/grimoire-play", toml: playToml, conf: null },
+  // The Scanner's Neural mode: its recogniser and model files, linked by the core and both
+  // native hosts, and into the browser's scanner module.
+  { name: "card-neural", dir: "crates/card-neural", toml: neuralToml, conf: null },
 ];
 
 /** A file with its `#` comment lines removed — these files explain themselves in prose. */
@@ -110,7 +114,7 @@ describe("one version in the tree", () => {
   });
 
   it("knows every member of the cargo workspace", () => {
-    // A sixth member owes a row above, and with it a lockfile selector in the config (its
+    // A new member owes a row above, and with it a lockfile selector in the config (its
     // manifest inherits the workspace's version): one the config does not name is not bumped
     // in the lockfile, and ships a version behind the app.
     const members = /^members = \[([^\]]*)\]$/m.exec(workspaceToml)?.[1];

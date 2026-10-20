@@ -47,8 +47,11 @@ name = "grimoire_scan"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# `ocr`, and nothing else: the two readers. See above for why never `corpus`.
-card-scanner = { path = "../card-scanner", features = ["ocr"] }
+# `ocr` — the two readers — and `neural` — the Neural mode's two networks and gallery, whose four
+# files the page fetches from the app's origin on the first Neural frame and hands over with
+# `load_neural`; none is compiled in (`card-neural`'s `bundled` is the native hosts'). Nothing
+# else. See above for why never `corpus`.
+card-scanner = { path = "../card-scanner", features = ["ocr", "neural"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

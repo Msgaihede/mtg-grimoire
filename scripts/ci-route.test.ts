@@ -287,6 +287,12 @@ describe("the arms", () => {
     ["crates/card-scanner/src/session.rs", T, T, T, F, F, F, T],
     ["crates/card-scanner/Cargo.lock", T, T, T, F, F, F, T],
     ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F, F, T],
+    // The Neural mode's crate, by `crates/*`; its model files by their own arm, the README with
+    // them — the web build's pin table, not prose — and the crate's CLAUDE.md as prose.
+    ["crates/card-neural/src/gallery.rs", T, T, T, F, F, F, T],
+    ["crates/card-neural/models/gallery.bin", T, T, T, F, F, F, T],
+    ["crates/card-neural/models/README.md", T, T, T, F, F, F, T],
+    ["crates/card-neural/CLAUDE.md", F, F, F, F, F, F, F],
     ["infrastructure/share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
     // The sync relay: tested by `frontend`, read as text by Rust tests, and **run** by `web`,
     // whose sync smoke starts it under workerd. Out of the fail-safe: not `core`, not `storybook`.

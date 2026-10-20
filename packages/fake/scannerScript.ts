@@ -20,6 +20,14 @@
  * did not settle (`Unknown`, for the reader), a printing sold one way, and Lightning Bolt — which
  * Fast names outright and Exact cannot tell from two reprints, so the row waits on a pick.
  *
+ * **Neural is answered as Neural** (2026-10-20), never as Fast under another name: the same pile at
+ * the same pace — the fake's timing is one script for every mode — but each frame in Neural's shape
+ * (no lock, `method: "neural"`, one view of the whole card, no resolve) and its decisions as the
+ * session makes them. Lightning Bolt's picture stands for all three of its printings, so Neural
+ * answers it `ambiguous` with the three as its choices and the row waits on a pick, as in Exact;
+ * and Neural reads no collector line, so no decision carries a separator — under *Detect* a
+ * printing made in two finishes lands `Unknown`, which is what the engine's Neural does too.
+ *
  * **What it does not do**: it never asks for a detail frame (`wants_detail` stays `false`), it
  * reads no title and no collector line, it ignores the filters, and the quad it reports is the
  * fixture's whatever the camera shows. Those are the engine's to prove.
@@ -61,9 +69,12 @@ const BOLT_STA = "b14fae63-2e82-49c1-8e62-d84a65f27479";
 const BOLT_SLD = "4f43c378-9e6a-4ece-9c24-5dc08c977746";
 
 interface PileCard {
-  /** The printing Fast names, and Exact's first choice. */
+  /** The printing Fast names, and Exact's and Neural's first choice. */
   id: string;
-  /** The reprints Exact's resolve cannot split from it — none for a card it pins. */
+  /**
+   * The reprints Exact's resolve cannot split from it — none for a card it pins — and the other
+   * printings Neural's matched picture stands for.
+   */
   rivals: readonly string[];
   /** The collector line's separator as it measured, or `null` for a card with no such line. */
   mark: ScannerFinishMark | null;
@@ -132,12 +143,33 @@ function standingOf(id: string, evidence: number, seen: number): ScannerStanding
 
 /** A verdict as the frame asked for it: the mode echoed, and no previews unless they were asked for. */
 function framed(verdict: ScannerVerdict, mode: ScanMode, previews: boolean, seq: number): ScannerVerdict {
+  const shaped = mode === "neural" ? asNeural(verdict) : verdict;
   return {
-    ...verdict,
+    ...shaped,
     mode,
     decision_seq: seq,
-    rectified: previews ? verdict.rectified : null,
-    hash: previews ? verdict.hash : null,
+    rectified: previews ? shaped.rectified : null,
+    hash: previews ? shaped.hash : null,
+  };
+}
+
+/**
+ * A frame in Neural's shape — `card-scanner`'s Neural arm: no lock (it tracks no quad across
+ * frames), its own method on a frame with a card in it, no detector score, no hash or preview of
+ * its own, and its search reported as one view of the whole card. The tracker is left as the pile
+ * paces it: what differs between the modes here is the shape of an answer, not its timing.
+ */
+function asNeural(verdict: ScannerVerdict): ScannerVerdict {
+  return {
+    ...verdict,
+    lock: null,
+    from_lock: false,
+    method: verdict.quad === null ? null : "neural",
+    search: "full",
+    score: null,
+    hash: null,
+    rectified: null,
+    match: verdict.match && { ...verdict.match, section: "card", view: 0, views: 1, hashes: 1 },
   };
 }
 
@@ -179,17 +211,37 @@ function resolutionOf(card: PileCard): ScannerResolution {
   };
 }
 
+/**
+ * The printings Neural's matched picture stands for, the one it names first — each at the
+ * picture's own distance, since it is one picture that matched them all.
+ */
+function lookOf(card: PileCard): ScannerChoice[] {
+  return [card.id, ...card.rivals].map((id) => choiceOf(id, 0.071));
+}
+
+/**
+ * What each mode decides on a card. Fast names the printing and offers no choice. Exact's choices
+ * are its resolve's, even when it pinned one. **Neural** offers choices only when its picture
+ * stands for more than one printing — `ambiguous`, with them as the choices — and is `resolved`
+ * with none otherwise; it reads no collector line, so it never carries a separator.
+ */
 function decisionOf(card: PileCard, mode: ScanMode): ScannerDecision {
-  const ambiguous = mode === "exact" && card.rivals.length > 0;
+  const ambiguous = mode !== "fast" && card.rivals.length > 0;
+  const choices =
+    mode === "exact"
+      ? resolutionOf(card).choices
+      : mode === "neural" && ambiguous
+        ? lookOf(card)
+        : [];
   return {
     printing: card.id,
     oracle_id: corpusCard(card.id).oracleId,
     label: labelOf(card.id),
     outcome: ambiguous ? "ambiguous" : "resolved",
-    choices: mode === "exact" ? resolutionOf(card).choices : [],
+    choices,
     replaces_previous: false,
     finishes: finishesOf(card.id),
-    finish_mark: card.mark,
+    finish_mark: mode === "neural" ? null : card.mark,
   };
 }
 
@@ -251,5 +303,7 @@ export function sentOptions(
   const raw = options?.headers?.["x-scanner-options"];
   if (raw === undefined) return null;
   const parsed = JSON.parse(raw) as { mode?: unknown; previews?: unknown };
-  return { mode: parsed.mode === "exact" ? "exact" : "fast", previews: parsed.previews === true };
+  // A word the fake does not know is Fast, the crate's default — never a mode it would echo.
+  const mode: ScanMode = parsed.mode === "exact" || parsed.mode === "neural" ? parsed.mode : "fast";
+  return { mode, previews: parsed.previews === true };
 }

@@ -32,6 +32,18 @@ export function load(
 ): string;
 
 /**
+ * Give the session the Neural mode's four files — `card-neural`'s detector, embedder, gallery and
+ * `neural.json`. **Not the envelope**: `undefined`, or the crate's sentence for files that would
+ * not load. Into the session `load` built; a later `load` lets them go with it.
+ */
+export function load_neural(
+  detector: Uint8Array,
+  embedder: Uint8Array,
+  gallery: Uint8Array,
+  meta: Uint8Array,
+): string | undefined;
+
+/**
  * One frame. `options` is a `FrameOptions` as JSON; left out, empty, or text that is not one,
  * it is the defaults. Answers the verdict exactly as the desktop's `scanner_frame` serialises it.
  */

@@ -33,6 +33,11 @@
 //! The status reports the exact path it looked at for each, and [`Asset::source`] says which of
 //! the three answered, so "no bundle" is never the whole message.
 //!
+//! **The Neural scanner's files are built in or absent, and nothing else** ([`Embedded::neural`],
+//! [`ScannerStatus::neural`]): they are in git, so the desktop and Android carry them on every
+//! build; no file in `data/scanner/` overrides them, and `scanner_assets` never owes or fetches
+//! them.
+//!
 //! **Every file goes through `platform::files`**, the models included — `TitleReader::load`
 //! reads its two files with `std::fs` inside the crate, so [`load`] reads them here and hands the
 //! bytes to `TitleReader::from_bytes`, with that function's sentences kept word for word. **In a
@@ -148,6 +153,8 @@ pub enum AssetSource {
 pub struct Asset {
     /// The file this load looked at in `data/scanner/` — named even when the asset came out of
     /// the binary or from nowhere, so the "put it here" sentence always has a path to name.
+    /// **Except the Neural asset's**, which has no file to look at: [`NEURAL_SOURCE`], where its
+    /// files are built in from, carried or not.
     pub path: String,
     /// There was something to load: the file exists, or (for `Embedded`) the binary carries it.
     pub present: bool,
@@ -163,29 +170,54 @@ pub struct Asset {
 /// tested on every build, whether or not this one embedded anything. It is also what keeps the
 /// `cfg` out of this crate, whose fence refuses one outside `platform/`: the desktop's
 /// `scanner::compiled()` is where `cfg(scanner_assets)` is asked.
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// **`Clone`, not `Copy`, since the Neural scanner's files joined it**: their
+/// [`card_scanner::neural::Files`] holds `Cow`s, so that a host handed owned buffers needs no
+/// copy. A clone of what a host carries is four borrowed slices — no byte is copied.
+#[derive(Debug, Clone, Default)]
 pub struct Embedded {
     pub bundle: Option<&'static [u8]>,
     /// Detection, then recognition. A pair because the models load as one or not at all.
     pub models: Option<(&'static [u8], &'static [u8])>,
+    /// The Neural scanner's four files — `card_neural::bundled()`, which the desktop and Android
+    /// carry on every build because the files are in git (`crates/card-neural/models/`).
+    /// **Built in or nothing**: no file in `data/scanner/` overrides them, since the four are one
+    /// set (the gallery is the embedder's own and the thresholds were tuned on the pair) and a
+    /// new set is a rebuild; and no download is owed for them ([`crate::scanner_assets`]).
+    pub neural: Option<card_scanner::neural::Files<'static>>,
 }
 
 impl Embedded {
-    /// Nothing embedded — a host that carries no assets, a desktop build without
-    /// `apps/desktop/src-tauri/scanner-assets/`, and every test that is about files.
+    /// Nothing embedded — a host that carries no assets, and every test that is about files.
+    /// (A desktop build without `apps/desktop/src-tauri/scanner-assets/` still carries the
+    /// Neural scanner's files.)
     pub fn none() -> Embedded {
         Embedded {
             bundle: None,
             models: None,
+            neural: None,
         }
     }
 }
+
+/// [`ScannerStatus::neural`]'s `path`: where the Neural scanner's files are built in from — the
+/// repository, not `data/scanner/`, because no file there is read for them. Named whether or not
+/// this build carries them, as every other asset names its path either way.
+pub const NEURAL_SOURCE: &str = "crates/card-neural/models";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScannerStatus {
     pub bundle: Asset,
     pub detection_model: Asset,
     pub recognition_model: Asset,
+    /// **The Neural scanner's files, as one asset** — its detector, its embedder, the gallery of
+    /// looks they are searched against and `neural.json` load together or not at all
+    /// (`Session::load_neural`). `Embedded` and loaded on the desktop and Android, which build
+    /// them in; `Absent` on a host that carries none, where a Neural frame answers
+    /// `card_scanner::session::NEURAL_UNAVAILABLE_ERROR`; `Embedded` with the crate's sentence in
+    /// `error` when they were carried and did not load. Never `File`, and never owed to a
+    /// download. The web host composes its own (`Store`), as for the other three.
+    pub neural: Asset,
     /// Labels loaded from `corpus.db`; 0 when there is no bundle to label.
     pub labels: usize,
     /// Where `scanner_capture` writes — the same names and sidecar as the debug server's.
@@ -468,9 +500,10 @@ impl ScannerState {
     }
 
     /// What the host said its binary carries, or nothing if it never said — what
-    /// `scanner_assets` reads to know which files no download could be owed for.
+    /// `scanner_assets` reads to know which files no download could be owed for. A clone, which
+    /// copies references and no bytes ([`Embedded`]).
     pub fn carried(&self) -> Embedded {
-        self.embedded.get().copied().unwrap_or_default()
+        self.embedded.get().cloned().unwrap_or_default()
     }
 
     /// Admit the calling window, or refuse with [`OPEN_ELSEWHERE`]. The answer is the command's
@@ -703,7 +736,8 @@ fn asset(path: &Path) -> Asset {
 ///
 /// **Per asset, first hit wins: the file in `dir`, then `embedded`, then absent.** The models
 /// stay a pair — they are `File` only when **both** files exist; one file alone falls through to
-/// the embedded pair (or to nothing), because a lone model reads nothing.
+/// the embedded pair (or to nothing), because a lone model reads nothing. The Neural scanner's
+/// files are the embedded copy or nothing ([`load_neural`]).
 pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded {
     let bundle_path = dir.join(BUNDLE_FILE);
     let mut bundle = asset(&bundle_path);
@@ -792,18 +826,48 @@ pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded
         }
     };
 
+    let mut session = Session::new(reference, reader, top);
+    let neural = load_neural(&mut session, embedded.neural);
+
     Loaded {
-        session: Session::new(reference, reader, top),
+        session,
         status: ScannerStatus {
             bundle,
             detection_model,
             recognition_model,
+            neural,
             labels,
             scans_dir: dir.join("scans").display().to_string(),
             // What `ScannerState::status` fills in; a bare load owes nobody anything.
             unapplied_filters: None,
         },
     }
+}
+
+/// The Neural scanner's files into `session`, and the asset that says how that went:
+/// `Embedded` when the binary carries them — loaded, or with the crate's sentence in `error` —
+/// and `Absent` when it carries none. **No file is looked for first**, unlike the three above:
+/// see [`Embedded::neural`] for why the four are built in or nothing.
+fn load_neural(
+    session: &mut Session,
+    files: Option<card_scanner::neural::Files<'static>>,
+) -> Asset {
+    let mut asset = Asset {
+        path: NEURAL_SOURCE.to_owned(),
+        present: false,
+        loaded: false,
+        error: None,
+        source: AssetSource::Absent,
+    };
+    if let Some(files) = files {
+        asset.present = true;
+        asset.source = AssetSource::Embedded;
+        match session.load_neural(files) {
+            Ok(()) => asset.loaded = true,
+            Err(sentence) => asset.error = Some(sentence),
+        }
+    }
+    asset
 }
 
 /// The model pair at `detection` and `recognition`, read through [`files`] — what
@@ -1327,6 +1391,7 @@ mod tests {
             Embedded {
                 bundle: Some(&b"not a bundle"[..]),
                 models: None,
+                neural: None,
             },
         );
         assert_eq!(l.status.bundle.source, AssetSource::File);
@@ -1345,6 +1410,7 @@ mod tests {
             Embedded {
                 bundle: Some(tiny_bundle()),
                 models: None,
+                neural: None,
             },
         );
         let b = &l.status.bundle;
@@ -1370,10 +1436,94 @@ mod tests {
             &l.status.bundle,
             &l.status.detection_model,
             &l.status.recognition_model,
+            &l.status.neural,
         ] {
             assert_eq!(a.source, AssetSource::Absent, "{a:?}");
             assert!(!a.present && !a.loaded, "{a:?}");
         }
+        // A host that carries no Neural files: no Neural scanner, and still the place they come
+        // from, so the status has a path to name.
+        assert!(!l.session.has_neural());
+        assert_eq!(l.status.neural.path, NEURAL_SOURCE);
+        assert_eq!(l.status.neural.error, None);
+    }
+
+    /// **The Neural scanner's files, as the desktop and Android carry them**, load into the
+    /// session and say so — and they need nothing else: no bundle, no OCR models, no folder.
+    #[test]
+    fn the_built_in_neural_files_load_and_say_so() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let l = load(
+            &dir.path().join("scanner"),
+            &dir.path().join("corpus.db"),
+            5,
+            Embedded {
+                neural: Some(card_neural::bundled()),
+                ..Embedded::none()
+            },
+        );
+        let n = &l.status.neural;
+        assert_eq!(n.source, AssetSource::Embedded, "{n:?}");
+        assert!(n.present && n.loaded && n.error.is_none(), "{n:?}");
+        assert_eq!(n.path, NEURAL_SOURCE);
+        assert!(l.session.has_neural());
+        // The other three are their own: nothing embedded, nothing on disk.
+        assert_eq!(l.status.bundle.source, AssetSource::Absent);
+        assert_eq!(l.status.detection_model.source, AssetSource::Absent);
+        assert!(!l.session.has_reference() && !l.session.has_reader());
+    }
+
+    /// Files the binary carries that do not load are `Embedded`, there, not loaded, and carry
+    /// the crate's sentence — and the session is built anyway, with no Neural scanner.
+    #[test]
+    fn neural_files_that_do_not_load_say_why() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let garbage = card_scanner::neural::Files {
+            detector: Cow::Borrowed(&b"not a model"[..]),
+            embedder: Cow::Borrowed(&b"not a model"[..]),
+            gallery: Cow::Borrowed(&b"not a gallery"[..]),
+            meta: Cow::Borrowed(&b"not json"[..]),
+        };
+        let l = load(
+            &dir.path().join("scanner"),
+            &dir.path().join("corpus.db"),
+            5,
+            Embedded {
+                neural: Some(garbage),
+                ..Embedded::none()
+            },
+        );
+        let n = &l.status.neural;
+        assert_eq!(n.source, AssetSource::Embedded, "{n:?}");
+        assert!(n.present && !n.loaded, "{n:?}");
+        assert!(n.error.as_deref().is_some_and(|e| !e.is_empty()), "{n:?}");
+        assert!(!l.session.has_neural());
+    }
+
+    /// **What the host carries reaches every load**, the first and one after a
+    /// [`ScannerState::forget`] alike: the Neural scanner is there again after a reload, with no
+    /// second word from the host.
+    #[test]
+    fn a_carried_neural_scanner_loads_and_loads_again_after_a_forget() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(dir.path().to_path_buf());
+        state.carry(Embedded {
+            neural: Some(card_neural::bundled()),
+            ..Embedded::none()
+        });
+        assert!(state.carried().neural.is_some());
+        let first = state.status().expect("status");
+        assert!(first.neural.loaded, "{:?}", first.neural);
+        state.forget();
+        let again = state.status().expect("status");
+        assert!(again.neural.loaded, "{:?}", again.neural);
+        assert!(state
+            .ensure()
+            .expect("ensure")
+            .as_ref()
+            .expect("loaded")
+            .session
+            .has_neural());
     }
 
     /// The models are a pair: `File` only when both files are there, and one file alone falls
@@ -1388,11 +1538,12 @@ mod tests {
         let embedded = Embedded {
             bundle: None,
             models: Some(garbage),
+            neural: None,
         };
 
         // One file on disk: the embedded pair answers, for both.
         std::fs::write(scanner.join(DETECTION_MODEL), b"on disk").expect("write");
-        let one = load(&scanner, &dir.path().join("corpus.db"), 5, embedded);
+        let one = load(&scanner, &dir.path().join("corpus.db"), 5, embedded.clone());
         for a in [&one.status.detection_model, &one.status.recognition_model] {
             assert_eq!(a.source, AssetSource::Embedded, "{a:?}");
             assert!(a.present && !a.loaded && a.error.is_some(), "{a:?}");
@@ -1870,6 +2021,7 @@ mod tests {
         let embedded = Embedded {
             bundle: Some(tiny_bundle()),
             models: None,
+            neural: None,
         };
         let loaded = load(&scanner, &dir.path().join("corpus.db"), 5, embedded);
         assert!(loaded.status.bundle.present);

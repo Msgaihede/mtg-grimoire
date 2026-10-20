@@ -3,9 +3,11 @@ import scannerRs from "../../../../../crates/grimoire-core/src/scanner.rs?raw";
 import {
   DETAIL_HEADER,
   frameMessage,
+  isNeuralFrame,
   isUnsupported,
   loadFactsOf,
   loadMessage,
+  neuralMessage,
   OPTIONS_HEADER,
   scanAnswerOf,
   type ScanOutgoing,
@@ -49,6 +51,31 @@ describe("a load, as the message the scanner's Worker is sent", () => {
     });
     expect(message).toMatchObject({ kind: "load", filters: null, bundle: null });
     expect(transfer).toEqual([]);
+  });
+});
+
+describe("the Neural files, as the message the scanner's Worker is sent", () => {
+  it("hands over all four buffers, in `load_neural`'s order, and copies none", () => {
+    const detector = new Uint8Array([1, 2]);
+    const embedder = new Uint8Array([3]);
+    const gallery = new Uint8Array([4, 5, 6]);
+    const meta = new Uint8Array([7]);
+    const { message, transfer } = neuralMessage(9, { detector, embedder, gallery, meta });
+    expect(message).toEqual({ kind: "neural", id: 9, detector, embedder, gallery, meta });
+    expect(transfer).toEqual([detector.buffer, embedder.buffer, gallery.buffer, meta.buffer]);
+  });
+});
+
+describe("which frame is a Neural one", () => {
+  it("is one whose options say the mode as serde writes `ScanMode::Neural`", () => {
+    expect(isNeuralFrame('{"mode":"neural"}')).toBe(true);
+    expect(isNeuralFrame('{"previews":false,"mode":"neural","decide_at":2}')).toBe(true);
+  });
+
+  it("is no other: another mode, no mode, and options the module reads as the defaults", () => {
+    for (const options of ['{"mode":"fast"}', '{"mode":"exact"}', '{"mode":"Neural"}', "{}", "", "{not json", "null", '"neural"', '["neural"]']) {
+      expect(isNeuralFrame(options), options).toBe(false);
+    }
   });
 });
 

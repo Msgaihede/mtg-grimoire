@@ -68,7 +68,7 @@ export interface ScanBarProps {
   onHistory?: (opener: HTMLElement) => void;
 }
 
-// The two modes' words and the unrestricted filter are `readerText.ts`'s — shared with the light
+// The three modes' words and the unrestricted filter are `readerText.ts`'s — shared with the light
 // app's phone page, which draws its own switch and its own Clear from them.
 const MODES = SCAN_MODES;
 
@@ -229,11 +229,12 @@ export function ScanBar({
 }
 
 /**
- * **Fast | Exact**, in the scanner's segment grammar: `role="group"` with `aria-pressed` per
- * button, never a radiogroup.
+ * **Fast | Exact | Neural**, in the scanner's segment grammar: `role="group"` with `aria-pressed`
+ * per button, never a radiogroup. Neural is the third and newest (2026-10-20); its tooltip says it
+ * is new and worth trying, which is all a reader needs to know to press it.
  *
  * `ControlsPanel`'s `Segment` is the grammar and its argument verbatim — these are toggles that
- * happen to be exclusive, and a radio's roving tab stop would put the reader inside a two-way
+ * happen to be exclusive, and a radio's roving tab stop would put the reader inside a three-way
  * keyboard mode to change one word. That component is module-private and drawn *inside* a panel,
  * so its box does not transfer: this one stands on the page ground beside 36px triggers, so it is
  * the deck editor's `Theory | Actual` box instead — 36px, a hairline, and the chosen word filled
@@ -539,9 +540,9 @@ function DefaultsBody({
 /**
  * Which camera reads the cards: one radio per camera, the open one ticked and marked `Live`.
  *
- * **A radiogroup, where the mode beside it is a pair of toggles**, because this is a list of
- * unknown length and exactly one value — the shape `ModeSwitch`'s comment says a two-way switch is
- * not. One Tab stop and the arrows choose, through `radioKeys` like every group in the app.
+ * **A radiogroup, where the mode beside it is a row of toggles**, because this is a list of
+ * unknown length and exactly one value — the shape `ModeSwitch`'s comment says a three-way switch
+ * is not. One Tab stop and the arrows choose, through `radioKeys` like every group in the app.
  *
  * **A press chooses and closes; an arrow only chooses.** Both are the same choice — `onCamera` with
  * the camera's id — and differ only in whether the panel stays: a press is "that one", while an

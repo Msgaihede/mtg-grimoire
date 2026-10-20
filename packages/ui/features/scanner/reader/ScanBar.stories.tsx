@@ -191,6 +191,33 @@ export const ExactWithFilters: Story = {
 };
 
 /**
+ * Neural, the third mode and the newest: lit in the switch, its hint ("New: …") the tooltip a
+ * reader meets before trying it. A press on Fast hands the switch back.
+ */
+export const Neural: Story = {
+  args: { mode: "neural" },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const group = canvas.getByRole("group", { name: "Scan mode" });
+    await expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Fast", "Exact", "Neural"]);
+    await expect(canvas.getByRole("button", { name: "Neural" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(canvas.getByRole("button", { name: "Fast" }));
+    await expect(args.onMode).toHaveBeenCalledWith("fast");
+    await expect(canvas.getByRole("button", { name: "Neural" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  },
+};
+
+/**
  * The session refused the last filter, drawn where the reader made it — inside the open popover,
  * so the sentence is beside the field it is about rather than somewhere under the camera.
  */

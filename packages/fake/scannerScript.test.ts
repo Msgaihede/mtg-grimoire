@@ -150,6 +150,69 @@ describe("the fake scanner's script", () => {
     expect(matchStrip(weighing ?? null, "exact", null, true, null).word).toBe("Reading");
   });
 
+  /**
+   * Neural is answered as Neural, not as Fast under its name: the engine's shape for the mode —
+   * no lock, its own method, one view of the whole card, and never a resolve or a read.
+   */
+  it("answers a Neural frame in Neural's shape, with no resolve and no read", () => {
+    const frames = session("neural");
+    expect(frames.every((frame) => frame.mode === "neural")).toBe(true);
+    expect(frames.every((frame) => frame.lock === null && frame.resolution === null)).toBe(true);
+    expect(frames.every((frame) => frame.ocr === null && frame.collector === null)).toBe(true);
+    expect(frames.every((frame) => frame.wants_detail === false)).toBe(true);
+    const found = frames.filter((frame) => frame.quad !== null);
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.every((frame) => frame.method === "neural")).toBe(true);
+    expect(found.every((frame) => frame.match?.section === "card" && frame.match.views === 1)).toBe(
+      true,
+    );
+    // No collector line is read, so no decision carries a separator.
+    expect(
+      frames.every((frame) => frame.decision === null || frame.decision.finish_mark === null),
+    ).toBe(true);
+  });
+
+  it("cannot pin the last card in Neural either: its picture stands for three printings", () => {
+    const frames = session("neural");
+    const rows = trayAfter(frames);
+    expect(rows[0].name).toBe("Lightning Bolt");
+    expect(rows[0].choices.map((choice) => `${choice.setCode} ${choice.collectorNumber}`)).toEqual([
+      "2x2 117",
+      "sta 105",
+      "sld 1638",
+    ]);
+    // The cards whose picture is one printing are decided outright, with nothing to pick. With no
+    // separator read, a printing made in two finishes lands `Unknown` under Detect — and an
+    // `Unknown` row never takes a second copy (`addDecision`), so the two Sagas are two rows.
+    expect(
+      rows.slice(1).map((row) => [row.name, row.quantity, row.finish, row.choices.length]),
+    ).toEqual([
+      ["Black Lotus", 1, "nonfoil", 0],
+      ["Ancient Tomb", 1, "nonfoil", 0],
+      ["Urza's Saga", 1, "unknown", 0],
+      ["Urza's Saga", 1, "unknown", 0],
+    ]);
+    const decisions = frames.flatMap((frame) => (frame.decision === null ? [] : [frame.decision]));
+    expect(new Set(decisions.map((decision) => decision.outcome))).toEqual(
+      new Set(["resolved", "ambiguous"]),
+    );
+    expect(
+      decisions.filter((d) => d.outcome === "resolved").every((d) => d.choices.length === 0),
+    ).toBe(true);
+  });
+
+  it("never reads Reading in Neural, and asks for a pick on the card it cannot pin", () => {
+    const frames = session("neural");
+    const weighing = frames.find((frame) => frame.quad !== null && frame.decision === null);
+    expect(matchStrip(weighing ?? null, "neural", null, true, null).word).toBe("Matching");
+    const bolt = frames.find((frame) => frame.decision?.outcome === "ambiguous");
+    expect(matchStrip(bolt ?? null, "neural", null, true, null)).toMatchObject({
+      word: "3 printings",
+      name: "Lightning Bolt",
+      sentence: "Pick a printing in the tray",
+    });
+  });
+
   it("names nothing and decides nothing with no bundle", () => {
     const frames = session("fast", true);
     expect(frames.some((frame) => frame.quad !== null)).toBe(true);
@@ -190,6 +253,19 @@ describe("reading a frame's options out of its header", () => {
     expect(sentOptions({ headers })).toEqual({ mode: "exact", previews: true });
     expect(
       sentOptions({ headers: { "x-scanner-options": JSON.stringify({ mode: "fast", previews: false }) } }),
+    ).toEqual({ mode: "fast", previews: false });
+    expect(
+      sentOptions({
+        headers: { "x-scanner-options": JSON.stringify({ mode: "neural", previews: false }) },
+      }),
+    ).toEqual({ mode: "neural", previews: false });
+  });
+
+  it("takes a mode it does not know as Fast, the crate's default", () => {
+    expect(
+      sentOptions({
+        headers: { "x-scanner-options": JSON.stringify({ mode: "psychic", previews: false }) },
+      }),
     ).toEqual({ mode: "fast", previews: false });
   });
 
@@ -239,6 +315,22 @@ describe("scanner_frame over the fake", () => {
       last = await next;
     }
     expect(last).toMatchObject({ mode: "fast", decision_seq: 1 });
+    expect(last?.decision?.printing).toBe(FAKE_PILE[0].id);
+  });
+
+  it("answers a frame sent in Neural as Neural, never falling back to Fast", async () => {
+    vi.useFakeTimers();
+    const handlers = allHandlers(makeDb());
+    const neural = {
+      headers: { "x-scanner-options": JSON.stringify({ mode: "neural", previews: false }) },
+    };
+    let last: ScannerVerdict | null = null;
+    for (let i = 0; i < FRAMES_PER_CARD; i++) {
+      const next = handlers.scanner_frame(new Uint8Array([1]), neural);
+      await vi.advanceTimersByTimeAsync(FAKE_FRAME_MS);
+      last = await next;
+    }
+    expect(last).toMatchObject({ mode: "neural", method: "neural", lock: null, decision_seq: 1 });
     expect(last?.decision?.printing).toBe(FAKE_PILE[0].id);
   });
 

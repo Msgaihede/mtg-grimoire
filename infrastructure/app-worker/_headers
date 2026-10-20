@@ -154,6 +154,20 @@
   ! Cache-Control
   Cache-Control: no-cache
 
+# --- The Neural scanner's four files ------------------------------------------------------------
+#
+# `scanner-neural/<set>/detector.onnx`, `embedder.onnx`, `gallery.bin` and `neural.json` — the
+# Neural mode's two networks, its gallery and their constants, in git under
+# `crates/card-neural/models/` and copied in by the web build. CONTENT-ADDRESSED, unlike the three
+# above: `<set>` is a hash of the four (`packages/ui/lib/core/web/assets.ts`, `NEURAL_PREFIX`), so a
+# new gallery is a new address and these are kept a year like the two trees at the top. The page
+# asks for them the first time a Neural frame is due, and the service worker keeps them in the
+# scanner's Cache Storage then; neither precaches them. Each is under the host's 25 MiB a file,
+# which the build checks.
+/scanner-neural/*
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable
+
 # --- The service worker's script ----------------------------------------------------------------
 #
 # `sw.js` is the web build's last file (`apps/light/vite.sw.ts`, step 5.3), written at the root of `apps/light/dist-web/`

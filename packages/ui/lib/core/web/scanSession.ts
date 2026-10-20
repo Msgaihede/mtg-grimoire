@@ -10,10 +10,10 @@ import { isUnsupported, scanAnswerOf, type FromScanner, type ToScanner } from ".
  * `scanWorker.ts` is the two handed in.
  */
 
-/** The module's five calls — its exports, less the initialiser. */
+/** The module's six calls — its exports, less the initialiser. */
 export type ScanGlue = Pick<
   typeof ScanModule,
-  "load" | "frame" | "reset" | "set_filters" | "memory_bytes"
+  "load" | "load_neural" | "frame" | "reset" | "set_filters" | "memory_bytes"
 >;
 
 export interface ScanSession {
@@ -60,6 +60,12 @@ export function createScanSession(
         // to say (`unapplied_filters`), so this answer is not read.
         if (message.filters !== null) glue.set_filters(message.filters);
         return glue.load(message.bundle, message.labels, message.detection, message.recognition);
+      case "neural": {
+        // The one export with no value to carry: a refusal, or nothing. Put in the envelope here,
+        // so the page hears it as it hears every other answer.
+        const refusal = glue.load_neural(message.detector, message.embedder, message.gallery, message.meta);
+        return JSON.stringify(typeof refusal === "string" ? { err: refusal } : { ok: null });
+      }
       case "frame":
         return glue.frame(message.jpeg, message.detail, message.options);
       case "reset":

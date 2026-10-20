@@ -74,6 +74,7 @@ This file contains only global instructions. **The binding rules for any specifi
 | [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md)                   | Shared headless engine (schema, decks, collection, wishlist, search, Scryfall client, platform abstraction) |
 | [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md)                     | Web host — engine compiled to WASM module for browser execution                                             |
 | [`crates/grimoire-scan/CLAUDE.md`](crates/grimoire-scan/CLAUDE.md)                   | Web host's scanner — `card-scanner` as a WASM module of its own, for a Worker of its own                    |
+| [`crates/card-neural/CLAUDE.md`](crates/card-neural/CLAUDE.md)                       | The Scanner's Neural mode — two CNNs and a gallery of looks on `rten`; its model files are in git, as a set |
 | [`crates/grimoire-play/CLAUDE.md`](crates/grimoire-play/CLAUDE.md)                   | Games on a deck over phase.rs's rules engine and AI — one game, goldfish or playtest, desktop-only          |
 | [`apps/light/CLAUDE.md`](apps/light/CLAUDE.md)                                       | Light app — Android and web UI faces and responsive boundary                                                |
 | [`packages/ui/CLAUDE.md`](packages/ui/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |

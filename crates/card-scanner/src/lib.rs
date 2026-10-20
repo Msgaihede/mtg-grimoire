@@ -23,6 +23,10 @@ pub mod reframe;
 pub mod replay;
 pub mod resolve;
 pub mod session;
+/// The Neural mode's recogniser, for a host handing the session its files
+/// ([`session::Session::load_neural`]) — `card_neural::bundled()` on a native host.
+#[cfg(feature = "neural")]
+pub use card_neural as neural;
 #[cfg(feature = "builder")]
 pub mod synth;
 pub mod track;

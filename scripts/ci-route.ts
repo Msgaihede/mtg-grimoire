@@ -163,6 +163,13 @@ export const ARMS = [
   // so this arm is here by hand. **Above the prose arm**, whose `*.md` would take them.
   { match: ["changelog/*"], jobs: ["frontend"] },
 
+  // **The Neural scanner's model files** (2026-10-20): `crates/card-neural/models/`, in git as a
+  // set. Every job `crates/*` sends the crate to — the files are compiled into the native hosts and
+  // fetched by the browser's — and its README with them, which is no prose: its table is the web
+  // build's pin on the four files (`apps/light/vite.config.ts`), and `assets.test.ts` reads it.
+  // **Above the prose arm**, whose `*.md` would take the README and skip the build that reads it.
+  { match: ["crates/card-neural/models/*"], jobs: CORE_SIDE },
+
   // Affects no job. Nothing here is compiled, linted or tested: `eslint .` never sees a `.md`,
   // and no test on either side reads one (`ci-route.test.ts` holds that to the census). **Keep
   // this list small — it is the only arm that can wrongly skip work.**

@@ -1609,6 +1609,19 @@ describe("the run useScanLoop keeps, across the session's own breaks", () => {
     expect(numbers(result.current.recent())).toEqual([4, 5]);
   });
 
+  it("starts the run over when the scanner first answers in Neural, as for any mode", async () => {
+    const gates = gated(3);
+    const { result } = mount({ grabFrame: numbered(), detailWaitMs: 0 });
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    await act(async () => gates[1].resolve(VERDICTS.voting));
+    expect(numbers(result.current.recent())).toEqual([1, 2]);
+
+    await act(async () => gates[2].resolve({ ...VERDICTS.voting, mode: "neural" }));
+    expect(numbers(result.current.recent())).toEqual([3]);
+    expect(result.current.recent()[0].mode).toBe("neural");
+  });
+
   it("lets the run go at breakRun, and starts it again with the next frame sent", async () => {
     const gates = gated(4);
     const { result } = mount({ grabFrame: numbered(), detailWaitMs: 0 });

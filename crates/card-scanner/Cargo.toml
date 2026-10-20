@@ -45,8 +45,15 @@ ocr = ["dep:ocrs", "dep:rten", "dep:rten-imageproc"]
 # synthetic evaluation (`bin/build_hashes.rs`, `bin/eval.rs`). Each turns the app's two on for
 # its own use; neither is ever compiled into the app. `builder` takes `ocr` for the evaluation,
 # which runs both modes with their readers: Exact without a collector read is not Exact.
-cli = ["dep:clap", "dep:tiny_http", "corpus", "ocr"]
-builder = ["dep:clap", "dep:ureq", "dep:rayon", "corpus", "ocr"]
+# Both take `card-neural/cli` for `card_neural::read_dir`: `serve` and `replay` read the Neural
+# mode's files from `crates/card-neural/models/` (or `--neural-models`), not compiled in.
+cli = ["dep:clap", "dep:tiny_http", "corpus", "ocr", "neural", "card-neural/cli"]
+builder = ["dep:clap", "dep:ureq", "dep:rayon", "corpus", "ocr", "neural", "card-neural/cli"]
+# **The Neural mode** (`ScanMode::Neural`): `crates/card-neural`'s two CNNs and gallery of looks,
+# run per frame by the session once a host hands it the files (`Session::load_neural`). Without
+# the feature the mode still parses — a reader's stored prefs and the inbox's labels keep their
+# word — and a Neural frame says the build has no Neural scanner.
+neural = ["dep:card-neural"]
 
 [dependencies]
 # `webp` is not optional here: every reference image the builder hashes comes from
@@ -94,6 +101,8 @@ rten = { version = "0.26", optional = true }
 # re-export. Held to `ocrs`'s own `0.26` so the type is the one it expects — a second
 # version would be a second, incompatible `RotatedRect`.
 rten-imageproc = { version = "0.26", optional = true }
+
+card-neural = { path = "../card-neural", optional = true }
 
 [[bin]]
 name = "scan"
@@ -162,4 +171,9 @@ opt-level = 3
 [profile.dev.package.image]
 opt-level = 3
 [profile.dev.package.imageproc]
+opt-level = 3
+# The Neural mode's sampler and gallery search, and the network runtime under it.
+[profile.dev.package.card-neural]
+opt-level = 3
+[profile.dev.package.rten]
 opt-level = 3

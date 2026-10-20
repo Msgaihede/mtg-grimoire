@@ -16,6 +16,15 @@ describe("the replay's summary", () => {
     expect(tally(four, "Fast")).toMatchObject({ printing: 1, card: 1, wrong: 1, undecided: 1 });
   });
 
+  it("counts and tables a Neural pass beside the other three", () => {
+    const runs = [
+      run({ id: "n1", passes: [pass("As scanned", "undecided"), pass("Neural", "printing")] }),
+      run({ id: "n2", passes: [pass("As scanned", "wrong"), pass("Neural", "card")] }),
+    ];
+    expect(tally(runs, "Neural")).toMatchObject({ n: 2, printing: 1, card: 2, wrong: 0 });
+    expect(summaryMarkdown(results(runs), null)).toMatch(/^\| Neural \|/m);
+  });
+
   it("takes the median of the frames a decision took, over the runs that decided", () => {
     const runs = [5, 9, 12].map((n, i) =>
       run({ id: String(i), passes: [pass("As scanned", "printing", { first_decision_frame: n })] }),

@@ -7,6 +7,9 @@
 //! - **`load(bundle?, labels?, detection?, recognition?)`** — build the session, replacing any
 //!   there was, from the reference bundle, the labels the engine encoded
 //!   (`card_scanner::labels`) and the two OCR models. Answers what loaded, as facts;
+//! - **`load_neural(detector, embedder, gallery, meta)`** — the Neural mode's four files
+//!   (`crates/card-neural`), which the page fetches from the app's origin the first time a
+//!   Neural frame is due. Answers nothing, or the crate's sentence for files that would not load;
 //! - **`frame(jpeg, detail?, options)`** — one frame through the session, and its verdict;
 //! - **`reset()`**, **`set_filters(filters)`** — the session's own two;
 //! - **`memory_bytes()`** — the module's linear memory, which only ever grows;
@@ -22,9 +25,10 @@
 //! | `glue` | the browser only | The `#[wasm_bindgen]` shell, the `thread_local`, `performance.now()` and the console |
 //!
 //! **Every string an export answers is `{"ok": …}` or `{"err": "<sentence>"}`** — the web
-//! host's envelope — and none may throw for anything it is handed: bytes that are not a bundle,
-//! labels cut short, a model that is not a model, a JPEG that is not one and options that are
-//! not JSON are each an answer. **A trap is only ever a real panic**, and a panic here ends
+//! host's envelope; `load_neural`, which has no value to carry, answers its sentence or nothing
+//! — and none may throw for anything it is handed: bytes that are not a bundle, labels cut
+//! short, a model that is not a model, Neural files that are not them, a JPEG that is not one
+//! and options that are not JSON are each an answer. **A trap is only ever a real panic**, and a panic here ends
 //! the instance: the module is built with `panic = "abort"`, where the crate's own guard
 //! guards nothing (`docs/reference/card-scanner.md` §11). The Worker is thrown away and a new
 //! one loaded; that is the whole of the containment, and the reason this module is not the

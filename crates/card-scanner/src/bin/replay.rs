@@ -11,10 +11,17 @@
 //!        --models models --out <dir> [--commit <sha>] [--only <text>]... [--jobs N]
 //! ```
 //!
-//! **Three passes a run, a fresh [`Session`] each**: as it was scanned (the label's mode and
-//! filters), Fast unfiltered, Exact unfiltered. Every frame is fed, in order, and a pass is
-//! judged on the decision the session holds on the last one — the label names the card in the
-//! last frame, and `scanner.reported` is that frame's own decision too.
+//! **Four passes a run, a fresh [`Session`] each**: as it was scanned (the label's mode and
+//! filters), Fast unfiltered, Exact unfiltered, Neural unfiltered. Every frame is fed, in order,
+//! and a pass is judged on the decision the session holds on the last one — the label names the
+//! card in the last frame, and `scanner.reported` is that frame's own decision too.
+//!
+//! **The Neural pass ages its votes by the label's own frame times** (`run[].ms`), not by how
+//! fast this machine decodes: its agreement reads the session's clock, and the replay installs
+//! one ([`host::set_clock`]) that answers the label's time while a Neural pass feeds the thread
+//! and the wall clock otherwise. Its models are `crates/card-neural/models/`, or
+//! `--neural-models`; a replay with none loaded ([`Ingredients::neural`], the tests) has three
+//! passes.
 //!
 //! **What a pass reports beyond its score**: `first_decision_frame` and `decision_frame` (the
 //! frame the last decision was made on, 1-based; the score is the decision held on the last
@@ -29,9 +36,11 @@
 //! frame, no detail pictures, and the developer sliders at their defaults. `then` and
 //! `decided_differs` are how far that moved an answer, apart from any change to the scanner.
 //!
-//! **No clock decides anything**: the resolve runs inside its frame ([`ResolveOn::Inline`]),
-//! so a run answers the same on a loaded machine and frames are fed as fast as they decode.
+//! **No wall clock decides anything**: the resolve runs inside its frame ([`ResolveOn::Inline`]),
+//! the Neural agreement reads the label's times, so a run answers the same on a loaded machine
+//! and frames are fed as fast as they decode.
 
+use card_scanner::host;
 use card_scanner::index::{format_uuid, parse_uuid, Bundle, ID_LEN};
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
@@ -42,10 +51,12 @@ use card_scanner::session::{
 };
 use clap::Parser;
 use serde::Serialize;
+use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 #[path = "support/ab.rs"]
 mod ab;
@@ -82,6 +93,72 @@ struct Args {
     only: Vec<String>,
     #[arg(long)]
     jobs: Option<usize>,
+    /// The Neural mode's four files. `crates/card-neural/models/` of this checkout when not
+    /// given — they are in git.
+    #[arg(long)]
+    neural_models: Option<PathBuf>,
+}
+
+/// `crates/card-neural/models/` beside this crate — where the Neural mode's files are in git.
+fn neural_models_in_tree() -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../card-neural/models"))
+}
+
+thread_local! {
+    /// Where the Neural pass feeding this thread is in its run: the label's milliseconds since
+    /// its first frame. `None` outside a pass — and on every thread a pass did not start, which
+    /// is every thread a frame of Fast or Exact fans its work out to.
+    static LABEL_MS: Cell<Option<f64>> = const { Cell::new(None) };
+}
+
+/// The replay's clock ([`host::set_clock`]): the label's frame time while a Neural pass feeds this
+/// thread, the wall clock otherwise — so Fast's and Exact's timings stay what they measure.
+fn replay_clock() -> f64 {
+    LABEL_MS.with(Cell::get).unwrap_or_else(|| {
+        static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
+        ORIGIN.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
+    })
+}
+
+/// The label's frame times on this thread, for as long as it lives: 0 when it starts — before the
+/// session is built, because the Neural agreement's clock starts when its models load — and then
+/// whatever [`label_time`] says, until it is dropped.
+struct LabelClock;
+
+impl LabelClock {
+    /// Refused when another clock was installed first: the pass would then age its votes by
+    /// this machine's speed, and say nothing about it.
+    fn start() -> Result<LabelClock, String> {
+        host::set_clock(replay_clock);
+        let clock = LabelClock;
+        LABEL_MS.with(|ms| ms.set(Some(0.0)));
+        let probe = host::Stopwatch::start();
+        LABEL_MS.with(|ms| ms.set(Some(1.0)));
+        let read = probe.ms();
+        LABEL_MS.with(|ms| ms.set(Some(0.0)));
+        if read == 1.0 {
+            Ok(clock)
+        } else {
+            Err("the replay's clock is not the one installed, so a Neural pass cannot read the \
+                 label's frame times"
+                .to_string())
+        }
+    }
+}
+
+impl Drop for LabelClock {
+    fn drop(&mut self) {
+        LABEL_MS.with(|ms| ms.set(None));
+    }
+}
+
+/// Move this thread's label clock to `ms` — only while a [`LabelClock`] lives on it.
+fn label_time(ms: f64) {
+    LABEL_MS.with(|at| {
+        if at.get().is_some() {
+            at.set(Some(ms));
+        }
+    });
 }
 
 /// What a session is built from, loaded once and shared by every worker.
@@ -92,9 +169,27 @@ struct Ingredients {
     detection: Option<Vec<u8>>,
     recognition: Option<Vec<u8>>,
     oracles: HashMap<[u8; ID_LEN], [u8; ID_LEN]>,
+    /// The Neural mode's files. `None` replays no Neural pass — what most tests use.
+    neural: Option<card_scanner::neural::Files<'static>>,
 }
 
 impl Ingredients {
+    /// A session for one pass: a Neural one with its models loaded, which costs a load each and
+    /// is why the other modes go without.
+    fn session_for(&self, mode: ScanMode) -> Result<Session, String> {
+        let mut session = self.session()?;
+        if let (ScanMode::Neural, Some(f)) = (mode, &self.neural) {
+            let files = card_scanner::neural::Files {
+                detector: Cow::Borrowed(&f.detector),
+                embedder: Cow::Borrowed(&f.embedder),
+                gallery: Cow::Borrowed(&f.gallery),
+                meta: Cow::Borrowed(&f.meta),
+            };
+            session.load_neural(files).map_err(|e| format!("neural: {e}"))?;
+        }
+        Ok(session)
+    }
+
     fn session(&self) -> Result<Session, String> {
         let bundle = Bundle::from_bytes(&self.bundle).map_err(|e| format!("bundle: {e}"))?;
         let mut reference = Reference::new(bundle);
@@ -126,7 +221,7 @@ impl Ingredients {
     }
 }
 
-/// One of the three passes.
+/// One of the passes.
 struct Pass {
     name: &'static str,
     mode: ScanMode,
@@ -138,13 +233,21 @@ struct Pass {
 
 const AS_SCANNED: &str = "As scanned";
 
-fn passes(label: &ScanLabel) -> [Pass; 3] {
-    [
+/// The passes a run gets: Neural's only when its models are loaded.
+fn passes(label: &ScanLabel, neural: bool) -> Vec<Pass> {
+    let mut passes = vec![
         Pass { name: AS_SCANNED, mode: label.scanner.mode, filtered: true, slices: true },
         Pass { name: "Fast", mode: ScanMode::Fast, filtered: false, slices: false },
         Pass { name: "Exact", mode: ScanMode::Exact, filtered: false, slices: false },
-    ]
+    ];
+    if neural {
+        passes.push(NEURAL_PASS);
+    }
+    passes
 }
+
+const NEURAL_PASS: Pass =
+    Pass { name: "Neural", mode: ScanMode::Neural, filtered: false, slices: false };
 
 #[derive(Debug, Clone, Serialize)]
 struct Got {
@@ -202,7 +305,8 @@ struct PassOut {
     decision_frame: Option<usize>,
     /// The final `decision_seq`.
     decisions: u64,
-    /// Fast always; Exact once any frame carried a resolution.
+    /// Fast and Neural always — neither waits for anything before it can decide; Exact once any
+    /// frame carried a resolution.
     resolve_ran: bool,
     locked_frames: usize,
     confidence: Option<f32>,
@@ -225,7 +329,7 @@ impl PassOut {
             first_decision_frame: None,
             decision_frame: None,
             decisions: 0,
-            resolve_ran: pass.mode == ScanMode::Fast,
+            resolve_ran: pass.mode != ScanMode::Exact,
             locked_frames: 0,
             confidence: None,
             distance: None,
@@ -287,7 +391,12 @@ fn run_pass(
     let mut failure: Option<String> = None;
     let mut seq = 0u64;
     let mut last: Option<Verdict> = None;
+    let first_ms = label.run.first().map_or(0, |f| f.ms);
     for (i, jpeg) in frames.iter().enumerate() {
+        // The frame's own time, for a Neural pass's agreement (see `LabelClock`).
+        if pass.mode == ScanMode::Neural {
+            label_time(label.run.get(i).map_or(0, |f| f.ms).saturating_sub(first_ms) as f64);
+        }
         let v = session.frame(jpeg, &opts);
         let n = i + 1;
         if let Some(msg) = v.failure() {
@@ -481,20 +590,36 @@ fn same_decision(a: &Option<String>, b: &Option<String>) -> bool {
     }
 }
 
+/// One pass from a fresh session — a Neural one on the label's clock, started before its models
+/// load (see [`LabelClock`]).
+fn replay_pass(
+    pass: &Pass,
+    label: &ScanLabel,
+    frames: &[&[u8]],
+    ingredients: &Ingredients,
+    truth_oracle: Option<&str>,
+) -> PassOut {
+    let built = (pass.mode == ScanMode::Neural)
+        .then(LabelClock::start)
+        .transpose()
+        .and_then(|clock| ingredients.session_for(pass.mode).map(|session| (clock, session)));
+    match built {
+        Ok((_clock, mut session)) => run_pass(&mut session, pass, label, frames, truth_oracle,
+            |p| ingredients.oracle_of(p)),
+        Err(e) => {
+            let mut out = PassOut::new(pass, 0);
+            out.score = Score::Error;
+            out.error = Some(e);
+            out
+        }
+    }
+}
+
 fn replay_run(label: &ScanLabel, frames: &[&[u8]], ingredients: &Ingredients) -> RunOut {
     let truth_oracle = ingredients.oracle_of(&label.card.id);
-    let passes: Vec<PassOut> = passes(label)
+    let passes: Vec<PassOut> = passes(label, ingredients.neural.is_some())
         .iter()
-        .map(|pass| match ingredients.session() {
-            Ok(mut session) => run_pass(&mut session, pass, label, frames,
-                truth_oracle.as_deref(), |p| ingredients.oracle_of(p)),
-            Err(e) => {
-                let mut out = PassOut::new(pass, 0);
-                out.score = Score::Error;
-                out.error = Some(e);
-                out
-            }
-        })
+        .map(|pass| replay_pass(pass, label, frames, ingredients, truth_oracle.as_deref()))
         .collect();
     let reported = label.scanner.reported.as_deref();
     let then = Then {
@@ -927,6 +1052,11 @@ fn run(args: Args) -> Result<(), String> {
         std::fs::read(&path).map_err(|e| format!("model {}: {e}", path.display()))
     };
     let (detection, recognition) = (model("text-detection.rten")?, model("text-recognition.rten")?);
+    let neural_dir = args.neural_models.clone().unwrap_or_else(neural_models_in_tree);
+    let neural = card_scanner::neural::read_dir(&neural_dir)
+        .map_err(|e| format!("neural models {}: {e}", neural_dir.display()))?;
+    // Before any session: a Neural pass's frames are timed by it (see `LabelClock`).
+    host::set_clock(replay_clock);
     let conn = open_corpus(&args.corpus)?;
     let labels = rows_from_corpus(&conn)?;
     labels_agree(&bundle, &labels, &conn)?;
@@ -937,8 +1067,9 @@ fn run(args: Args) -> Result<(), String> {
         detection: Some(detection),
         recognition: Some(recognition),
         oracles,
+        neural: Some(neural),
     };
-    drop(ingredients.session()?);
+    drop(ingredients.session_for(ScanMode::Neural)?);
 
     let mut skipped = Vec::new();
     let mut ready = Vec::new();
@@ -1112,6 +1243,7 @@ mod tests {
             detection: None,
             recognition: None,
             oracles,
+            neural: None,
         }
     }
 
@@ -1412,6 +1544,55 @@ mod tests {
         assert_eq!(out.decision_frame, out.first_decision_frame);
         assert!(out.decision_frame.is_some_and(|n| n <= 12), "{:?}", out.decision_frame);
         assert!(out.frames.iter().all(|f| f.error.is_none()));
+    }
+
+    /// The replay's clock answers the label's time on a thread a Neural pass is feeding, and
+    /// the wall clock everywhere else — a stopwatch started at the pass's first frame reads the
+    /// label's milliseconds since it.
+    #[test]
+    fn a_neural_pass_reads_the_labels_frame_times_and_nothing_else_does() {
+        let clock = LabelClock::start().expect("nothing else installs a clock here");
+        let at_load = host::Stopwatch::start();
+        label_time(750.0);
+        assert_eq!(at_load.ms(), 750.0);
+        label_time(1_900.0);
+        assert_eq!(at_load.ms(), 1_900.0);
+        // Another thread — where a Fast frame fans its work out — has the wall clock.
+        assert!(std::thread::spawn(|| LABEL_MS.with(Cell::get)).join().unwrap().is_none());
+        drop(clock);
+        assert_eq!(LABEL_MS.with(Cell::get), None);
+        // And off a pass, moving the label clock moves nothing.
+        label_time(5.0);
+        assert_eq!(LABEL_MS.with(Cell::get), None);
+    }
+
+    /// With models, a run gets a fourth pass, Neural: every frame read, none a failure. The
+    /// synthetic card is no printing the gallery knows, so what it decides is not asked.
+    #[test]
+    fn with_the_neural_models_a_run_replays_a_fourth_pass() {
+        let mut ing = ingredients();
+        let models = card_scanner::neural::read_dir(&neural_models_in_tree()).expect("in git");
+        ing.neural = Some(models);
+        let jpegs = frames();
+        let label = label_for(id(1), jpegs);
+        let cut: Vec<&[u8]> = jpegs.iter().map(Vec::as_slice).collect();
+        let named = |neural: bool| passes(&label, neural).iter().map(|p| p.name).collect::<Vec<_>>();
+        assert_eq!(named(ing.neural.is_some()), ["As scanned", "Fast", "Exact", "Neural"]);
+        assert_eq!(named(false).len(), 3, "no models, no Neural pass");
+        // The pass alone: the other three are `shared()`'s, and slow in a debug build.
+        let neural = &replay_pass(&NEURAL_PASS, &label, &cut, &ing, None);
+        assert_eq!(neural.mode, ScanMode::Neural);
+        assert_ne!(neural.score, Score::Error, "{:?}", neural.error);
+        assert_eq!(neural.frames.len(), 12);
+        assert!(neural.frames.iter().all(|f| f.error.is_none() && f.lock.is_none()));
+        assert!(neural.resolve_ran, "Neural waits for nothing before it can decide");
+        assert_eq!(LABEL_MS.with(Cell::get), None, "the pass left its clock behind");
+
+        // Without them, a Neural pass — a label scanned in Neural — is an error, not undecided.
+        let plain = ingredients();
+        let out = replay_pass(&NEURAL_PASS, &label, &cut, &plain, None);
+        assert_eq!(out.score, Score::Error);
+        assert!(out.error.as_deref().is_some_and(|e| e.contains("not loaded")), "{:?}", out.error);
     }
 
     /// `--only` text that no scan carries is said so, with the text.

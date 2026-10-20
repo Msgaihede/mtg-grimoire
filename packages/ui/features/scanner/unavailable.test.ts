@@ -52,6 +52,7 @@ const status = (over: Partial<ScannerStatus>): ScannerStatus => ({
   bundle: stored(),
   detection_model: stored({ path: "/scanner-assets/text-detection.rten" }),
   recognition_model: stored({ path: "/scanner-assets/text-recognition.rten" }),
+  neural: stored({ path: "/scanner-neural/" }),
   scans_dir: "",
   ...over,
 });

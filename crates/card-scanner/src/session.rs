@@ -12,7 +12,9 @@
 //! [`EXACT_BURST`] locked frames and, once the lock has held, runs [`crate::resolve`] over them
 //! once per card and commits the tracker on its answer. Both count decisions in
 //! [`Verdict::decision_seq`], and both search under the session's filters
-//! ([`Session::set_filters`]).
+//! ([`Session::set_filters`]). **A third, Neural, shares none of that loop** — `crates/card-neural`'s
+//! two CNNs and their agreement, in `neural_mode.rs` — and answers in the same verdict, counting
+//! its decisions in the same number.
 //!
 //! **An Exact resolve runs on its own thread** ([`ResolveOn`]). It took **1,316 ms** in the app
 //! (debug, 2026-09-15), and while it ran inside a frame no frame was processed: the overlay
@@ -144,7 +146,7 @@ pub enum ResolveOn {
 /// reads produced. `Err` is a panic inside it, caught on that thread.
 type ResolveResult = host::Caught<(ResolutionView, Option<OcrView>, Option<CollectorView>)>;
 
-/// The two ways a session decides.
+/// The three ways a session decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ScanMode {
@@ -153,6 +155,10 @@ pub enum ScanMode {
     Fast,
     /// The lock, then a tier pipeline over a burst of frames — see [`crate::resolve`].
     Exact,
+    /// Two small CNNs and a gallery of looks (`crates/card-neural`), agreed over two frames —
+    /// none of the above's detector, hash, lock or readers. See `src/neural_mode.rs`. Needs the
+    /// `neural` feature and [`Session::load_neural`]; otherwise its frames say so.
+    Neural,
 }
 
 /// The OCR reader — [`crate::ocr::TitleReader`] when the `ocr` feature is on.
@@ -236,7 +242,8 @@ pub struct FrameOptions {
     pub decide_at: f32,
     /// How far ahead of its best rival the leader must be to decide.
     pub lead_margin: f32,
-    /// Fast or Exact. Changing it between frames resets the tracker and any resolution.
+    /// Fast, Exact or Neural. Changing it between frames resets the tracker, the Neural mode's
+    /// agreement and any resolution.
     pub mode: ScanMode,
 }
 
@@ -452,7 +459,8 @@ pub struct Verdict {
     pub decode_ms: f32,
     /// Whether a bundle is loaded at all — "no bundle" and "a bundle is loaded but this frame
     /// held no card" are different states, and the page said the former for both until this
-    /// existed.
+    /// existed. **In Neural, whether its recogniser is** ([`Session::has_neural`]): that mode
+    /// matches against its own gallery, never the bundle.
     pub matcher: bool,
     pub lock: Option<LockState>,
     /// The lock's smoothed quad, which is what an overlay draws: raw detection jitters by a
@@ -527,11 +535,16 @@ pub const RESOLVE_FAILED_ERROR: &str = "the Exact resolve failed on this card �
 
 impl Verdict {
     /// The frame's `error` when it is a failure of the scanner — a panic, an undecodable
-    /// JPEG or a failed resolve — and not the ordinary "no card in this frame".
+    /// JPEG, a failed resolve, a Neural read that failed or a Neural mode with no models — and
+    /// not the ordinary "no card in this frame".
     pub fn failure(&self) -> Option<&str> {
         let e = self.error.as_deref()?;
-        (e == PANIC_ERROR || e == RESOLVE_FAILED_ERROR || e.starts_with(DECODE_ERROR_PREFIX))
-            .then_some(e)
+        (e == PANIC_ERROR
+            || e == RESOLVE_FAILED_ERROR
+            || e == NEURAL_UNAVAILABLE_ERROR
+            || e.starts_with(DECODE_ERROR_PREFIX)
+            || e.starts_with(NEURAL_ERROR_PREFIX))
+        .then_some(e)
     }
 
     fn failed(
@@ -631,6 +644,8 @@ fn detail_due(
                 && seq.is_multiple_of(OCR_EVERY)
         }
         ScanMode::Exact => !attempted,
+        // Reads no band.
+        ScanMode::Neural => false,
     }
 }
 
@@ -908,7 +923,16 @@ pub struct Session {
     /// Hold back answers whose appearance match does not stand out — see [`GapGate`].
     /// [`GapGate::default`] unless [`Session::set_gap_gate`] changed it.
     gap_gate: Option<GapGate>,
+    /// The Neural mode's recogniser and what it remembers across frames, once
+    /// [`Session::load_neural`] has given it its files. See `neural_mode.rs`.
+    neural: neural_mode::NeuralMode,
 }
+
+/// The Neural mode's frame, a child of this module so it shares the session's bookkeeping —
+/// `decision_seq`, the previous decision, the filters' mask.
+#[path = "neural_mode.rs"]
+mod neural_mode;
+pub use neural_mode::{NEURAL_ERROR_PREFIX, NEURAL_UNAVAILABLE_ERROR};
 
 /// The gap gate: an appearance match that stands less than this clear of the nearest match naming
 /// **another card** is treated as no evidence. See [`crate::resolve::resolve_gated`] for the
@@ -989,6 +1013,7 @@ impl Session {
             promo_last: true,
             reframe_plain: false,
             gap_gate: Some(GapGate::default()),
+            neural: neural_mode::NeuralMode::default(),
         }
     }
 
@@ -1060,6 +1085,9 @@ impl Session {
         };
         self.mask = mask;
         self.filters = f;
+        // The Neural mode searches looks, not printings: the looks this mask admits are worked
+        // out again on its next frame.
+        self.neural.filters_changed();
         self.forget_card();
         Ok(())
     }
@@ -1149,6 +1177,8 @@ impl Session {
         self.decided_mark = None;
         self.decision_read_due = false;
         self.drop_pending_resolve();
+        // The Neural mode's agreement, which is its tracker.
+        self.neural.forget();
     }
 
     /// Forget what this stretch read off the card — the title's cards and pick, the collector
@@ -1368,6 +1398,8 @@ impl Session {
                     finish_mark: self.decided_mark,
                 })
             }
+            // The tracker never decides in Neural; `neural_mode.rs` builds its own.
+            ScanMode::Neural => None,
         }
     }
 
@@ -1544,6 +1576,10 @@ impl Session {
         // A mode switch forgets the card before anything reads the session, so even a frame
         // that fails to decode reports the mode it was judged in.
         self.set_mode(opts.mode);
+        // Neural shares none of what follows — no edge detector, hash, lock or reader.
+        if self.mode == ScanMode::Neural {
+            return self.neural_frame(jpeg, opts);
+        }
         let matcher = self.reference.is_some();
         let decode_started = Stopwatch::start();
         let source = match image::load_from_memory(jpeg) {
@@ -2104,6 +2140,8 @@ impl Session {
                     self.poll_resolve(v);
                 }
             }
+            // A Neural frame never locks: it left `frame_inner` before the detector ran.
+            ScanMode::Neural => {}
         }
 
         // A far frame may be one of a new card at rest; its votes wait with the run.
@@ -2857,7 +2895,7 @@ mod tests {
 
     // ---- Modes, filters and the decision ----------------------------------------------------
 
-    fn id(n: u8) -> [u8; crate::index::ID_LEN] {
+    pub(super) fn id(n: u8) -> [u8; crate::index::ID_LEN] {
         let mut b = [0u8; crate::index::ID_LEN];
         b[0] = n;
         b
@@ -2904,7 +2942,7 @@ mod tests {
     /// other — a crowd, which is exactly what the gate holds back by design — and these tests are
     /// about which frame decides and how often, not about whether the card stands out. The gate's
     /// own session test is `the_gap_gate_holds_back_a_crowded_resolve_by_default`.
-    fn inline(r: Reference) -> Session {
+    pub(super) fn inline(r: Reference) -> Session {
         let mut s = Session::new(Some(r), None, 5);
         s.set_resolve_on(ResolveOn::Inline);
         s.set_gap_gate(None);
@@ -4083,7 +4121,7 @@ mod tests {
     /// Two cards as far apart as a descriptor can be — `card_image(3)` and its negative — each
     /// the only printing of its own oracle card, both in `hob`. Unlike `labelled()`, whose
     /// gradients sit a couple of bits apart, each decides on the votes alone in Fast.
-    fn two_far_cards() -> (Reference, RgbImage, RgbImage) {
+    pub(super) fn two_far_cards() -> (Reference, RgbImage, RgbImage) {
         two_far_cards_with_oracles(true)
     }
 
@@ -4113,7 +4151,7 @@ mod tests {
     }
 
     /// Locked frames of `card` until `decision_seq` moves, and the frame it moved on.
-    fn until_decided(s: &mut Session, card: &RgbImage) -> Verdict {
+    pub(super) fn until_decided(s: &mut Session, card: &RgbImage) -> Verdict {
         let before = s.decision_seq;
         for _ in 0..40 {
             let v = locked_frame(s, card);

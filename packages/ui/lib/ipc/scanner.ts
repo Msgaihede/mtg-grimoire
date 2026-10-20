@@ -31,10 +31,16 @@ export type ScannerRule = "votes" | "confidence";
  * How the scanner judges a card — `ScanMode` in `session.rs`, lowercased by serde.
  *
  * `fast` is the vote rule over hash matches, with a title read only after a leaderless stretch;
- * `exact` runs the tier pipeline once per steady card and can answer with a choice of printings.
- * Switching resets the tracker, so a card half-voted in one mode is not decided in the other.
+ * `exact` runs the tier pipeline once per steady card and can answer with a choice of printings;
+ * `neural` is `card-neural`'s two networks (a detector and an embedder searched against a gallery
+ * of pictures), deciding on agreeing frames and reading no text — it answers with a choice of
+ * printings when the picture it matched stands for several. Switching resets the tracker, so a
+ * card half-voted in one mode is not decided in another.
+ *
+ * **A build without the Neural files still parses `neural`** (so a stored pref survives); its
+ * frames come back failed, in the crate's sentence.
  */
-export type ScanMode = "fast" | "exact";
+export type ScanMode = "fast" | "exact" | "neural";
 
 /**
  * Which printings the scanner may answer with — `ScanFilters` in
@@ -92,7 +98,7 @@ export interface ScannerOptions {
  * binary, then nothing. `file` also covers a file that is there and did not parse.
  *
  * **`store` is a host with no folder** — the web host, which keeps what it downloaded in the
- * browser's own storage and says `store` of all three assets, one it has not fetched yet
+ * browser's own storage and says `store` of every asset, one it has not fetched yet
  * included: `absent` promises a path a reader could put a file at, and a page has none. So a
  * `store` asset is never told to be placed anywhere (`verdictText.ts`).
  */
@@ -115,7 +121,7 @@ export interface ScannerAsset {
 /**
  * What `scanner_status` answers — `ScannerStatus` in `crates/grimoire-core/src/scanner.rs`.
  *
- * The three assets are separate because they fail separately and the sentences differ: no
+ * The assets are separate because they fail separately and the sentences differ: no
  * bundle means nothing can be named, no models mean the OCR tiers stand down and the
  * appearance match carries the frame alone.
  */
@@ -123,6 +129,18 @@ export interface ScannerStatus {
   bundle: ScannerAsset;
   detection_model: ScannerAsset;
   recognition_model: ScannerAsset;
+  /**
+   * The Neural scanner's built-in models — its detector, its embedder and the gallery they are
+   * searched against — as one asset, because they load together or not at all. `embedded` on
+   * desktop and Android, which build them in; `store` on the web, once the page has fetched them
+   * from the app's origin; `absent` in a build that has none, where a Neural frame fails. `error`
+   * is the load's sentence when the files were there and did not load.
+   *
+   * **Built in or nothing, never placed by hand**: no file in `data/scanner/` overrides them, so
+   * `path` is where a native build takes them from (`NEURAL_SOURCE`, `crates/card-neural/models`)
+   * and never a place to put a file, and they are never among the files `scanner_assets` owes.
+   */
+  neural: ScannerAsset;
   labels: number;
   scans_dir: string;
   /**
@@ -520,7 +538,10 @@ export interface ScannerChoice {
  * The card the session has decided on — `DecisionView` in `session.rs`, on every committed frame.
  *
  * In Fast it is the tracker's printing, `resolved`, with no choices. In Exact it is the last
- * resolve's first choice, and `ambiguous` carries the rest. The page adds a tray row when
+ * resolve's first choice, and `ambiguous` carries the rest. In Neural it is the matched picture's
+ * printing (or the first one the filters admit), and `ambiguous` with those printings as the
+ * choices when the picture stands for more than one — Neural runs no resolve, so this decision is
+ * the only place its choices are said. The page adds a tray row when
  * {@link ScannerVerdict.decision_seq} moves, and reads this to build it.
  */
 export interface ScannerDecision {

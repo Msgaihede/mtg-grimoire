@@ -202,6 +202,42 @@ export const Options: Story = {
 };
 
 /**
+ * The page in **Neural**, the third mode and the newest: lit on the bar, and named on the sheet's
+ * first page; its own page says each mode's sentence, Neural's the one that says it is new and
+ * worth a try.
+ *
+ * The bar is three segments now, and at a phone's width they do not fit beside *Stop scanning*:
+ * the switch and the Options press go to a line of their own together. Narrow the canvas to 360px
+ * with the workbench's viewport tool to see it fold; at 412px it is one line.
+ */
+export const NeuralMode: Story = {
+  render: () => <Refused prefs={{ mode: "neural" }} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() =>
+      expect(canvas.getByRole("button", { name: "Neural" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+    const group = canvas.getByRole("group", { name: "Scan mode" });
+    await expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Fast", "Exact", "Neural"]);
+    await userEvent.click(canvas.getByRole("button", { name: "Scanner options" }));
+    const sheet = await canvas.findByRole("dialog", { name: "Scanner options" });
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Scan mode/ }));
+    const modes = within(within(sheet).getByRole("list", { name: "Scan modes" })).getAllByRole(
+      "button",
+    );
+    await expect(modes[2]).toHaveAttribute("aria-current", "true");
+    await expect(modes[2]).toHaveTextContent(/^Neural\s*New:/);
+  },
+};
+
+/**
  * Where the tray files, opened from the footer: the Collection, then the reader's own folders,
  * nested — and nothing the app owns. A drawer set aside is offered, and marked.
  */

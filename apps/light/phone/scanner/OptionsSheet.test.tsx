@@ -89,12 +89,29 @@ describe("the scanner's options sheet", () => {
     expect(modes.map((m) => m.textContent)).toEqual([
       "FastRecognizes cards by their picture. Fastest for mixed piles.",
       "ExactAlso reads the name and collector number to identify the exact printing.",
+      "NeuralNew: names the card and its printing from the picture alone. Worth a try — it may replace Fast and Exact.",
     ]);
     expect(modes[0]).toHaveAttribute("aria-current", "true");
     await userEvent.click(modes[1]);
     expect(props.onMode).toHaveBeenCalledWith("exact");
     // Back on the first page.
     expect(within(dialog).getByRole("button", { name: /^Filters/ })).toBeInTheDocument();
+  });
+
+  it("writes Neural from its page, and names it on the first page once chosen", async () => {
+    const props = mount({ mode: "neural" });
+    const rows = within(await sheet())
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(rows).toContain("Scan modeNeural");
+    await open(/^Scan mode/);
+    const dialog = await sheet();
+    const modes = within(within(dialog).getByRole("list", { name: "Scan modes" })).getAllByRole(
+      "button",
+    );
+    expect(modes[2]).toHaveAttribute("aria-current", "true");
+    await userEvent.click(modes[0]);
+    expect(props.onMode).toHaveBeenCalledWith("fast");
   });
 
   it("refuses the filters, with the reason in the row's name, where the scanner has no card names", async () => {

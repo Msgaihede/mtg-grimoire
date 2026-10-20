@@ -15,6 +15,13 @@ import {
   buildIdOf,
   GLUE_FILE,
   isNavigation,
+  NEURAL_FILES,
+  NEURAL_PREFIX,
+  neuralContentType,
+  neuralFault,
+  neuralFileOf,
+  neuralPath,
+  neuralTable,
   NOT_A_PLACE,
   SCANNER_ASSETS_PREFIX,
   SCANNER_DIR,
@@ -409,6 +416,78 @@ function webScanner(files: Built[], format: number): Plugin {
 }
 
 /**
+ * `crates/card-neural/models/`: the Neural scanner's four files, **in git** (the owner's decision,
+ * 2026-10-20) — so a build needs no script to fetch them and no manifest to trust them by. Read
+ * from where they are, and resolved against this file.
+ */
+const NEURAL_DIR = fileURLToPath(new URL("../../crates/card-neural/models/", import.meta.url));
+
+/** The four as they are on disk: their bytes in a build, their lengths alone in dev. */
+function neuralFiles(read: boolean): { name: string; size: number; bytes: Uint8Array }[] {
+  return NEURAL_FILES.filter((name) => existsSync(NEURAL_DIR + name)).map((name) => {
+    const bytes = read ? readFileSync(NEURAL_DIR + name) : new Uint8Array(0);
+    return { name, size: read ? bytes.length : statSync(NEURAL_DIR + name).size, bytes };
+  });
+}
+
+/**
+ * **The Neural scanner's four files, served and shipped** — `card-neural`'s detector, embedder,
+ * gallery and `neural.json`, which the page fetches from `/scanner-neural/<set>/` the first time a
+ * Neural frame is due (`packages/ui/lib/core/web/scanNeural.ts`), and never before.
+ *
+ * - **In dev**, `/scanner-neural/<any set>/<one of the four>` is answered from `models/` as it is
+ *   at that moment, uncached; anything else there is a 404.
+ * - **In a build**, the four are held to `models/README.md`'s table — each one's length and
+ *   digest, and the host's 25 MiB a file (`assets.ts`' `neuralFault`) — and a set that fails it
+ *   **fails the build**: the files are in git, so there is nothing to fetch and no developer's
+ *   build that may go without them. Then each is emitted under `scanner-neural/<set>/`, where the
+ *   set is a hash of the four and `_headers` keeps them a year. In no precache (`sw/shell.ts`).
+ */
+function webNeural(set: string, files: { name: string; bytes: Uint8Array }[], building: boolean): Plugin {
+  return {
+    name: "web:neural",
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const path = pathOf(request as unknown as Asked);
+        if (!path.startsWith(NEURAL_PREFIX)) return next();
+        const res = response as unknown as Answer;
+        const name = neuralFileOf(path);
+        if (name === null || !existsSync(NEURAL_DIR + name)) {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end("Not one of the Neural scanner's files: crates/card-neural/models/ has four.");
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", neuralContentType(name));
+        // The address does not move in dev, so nothing may keep what it answered.
+        res.setHeader("Cache-Control", "no-store");
+        res.end(readFileSync(NEURAL_DIR + name));
+      });
+    },
+    buildStart() {
+      if (!building) return;
+      const found = files.map(({ name, bytes }) => ({
+        name,
+        bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      }));
+      const readme = existsSync(`${NEURAL_DIR}README.md`)
+        ? readFileSync(`${NEURAL_DIR}README.md`, "utf8")
+        : "";
+      const fault = neuralFault(found, neuralTable(readme));
+      if (fault !== null) this.error(`The Neural scanner's files cannot ship: ${fault}`);
+    },
+    generateBundle() {
+      for (const { name, bytes } of files) {
+        this.emitFile({ type: "asset", fileName: neuralPath(set, name).slice(1), source: bytes });
+      }
+    },
+  };
+}
+
+/**
  * The hosting's response headers — Cloudflare's `_headers` file, kept in
  * `infrastructure/app-worker/` beside the `wrangler.jsonc` that deploys the build, and what it is
  * copied to: `dist-web/` in this folder.
@@ -523,6 +602,11 @@ export default defineConfig(({ mode, command, isPreview }) => {
   const engineBuild = building ? buildIdOf(engine) : "dev";
   const scannerBuild = building ? buildIdOf(built.scanner) : "dev";
   const format = web ? scannerFormat() : 0;
+  // The Neural scanner's four files: read whole by a build, which ships them under a set of their
+  // own bytes; measured only by a dev server, which serves them uncached from where they are.
+  const neural = web ? neuralFiles(building) : [];
+  const neuralSet = building ? buildIdOf(neural) : "dev";
+  const neuralBytes = Object.fromEntries(neural.map(({ name, size }) => [name, size]));
 
   return mergeConfig(base, {
     // **`webHosting()` stays first among the `web` plugins.** A preview middleware answers in the
@@ -544,6 +628,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
             webHosting(),
             webEngine(engineBuild, engine, building, { build: scannerBuild, files: built.scanner }),
             webScanner(built.assets, format),
+            webNeural(neuralSet, neural, building),
             // From the repository root, which is how `vite.sw.ts` reads it.
             serviceWorker(`apps/light/${WEB_DIR}`),
           ]
@@ -573,12 +658,15 @@ export default defineConfig(({ mode, command, isPreview }) => {
     // How the Worker is told where its engine is. `define` reaches the Worker's bundle as it
     // reaches the page's, and an `import.meta.env` key is replaced by the dev server too.
     // The scanner's Worker is told its module's id the same way, and the page the bundle
-    // format that module reads — which a manifest for another format is refused by.
+    // format that module reads — which a manifest for another format is refused by — and the
+    // Neural files' set and lengths, which each is held to as it arrives.
     define: web
       ? {
           "import.meta.env.VITE_ENGINE_BUILD": JSON.stringify(engineBuild),
           "import.meta.env.VITE_SCANNER_BUILD": JSON.stringify(scannerBuild),
           "import.meta.env.VITE_SCANNER_FORMAT": JSON.stringify(String(format)),
+          "import.meta.env.VITE_NEURAL_SET": JSON.stringify(neuralSet),
+          "import.meta.env.VITE_NEURAL_BYTES": JSON.stringify(JSON.stringify(neuralBytes)),
         }
       : {},
     // **The preview answers a missing file with a 404, as a real host does.** Vite's own

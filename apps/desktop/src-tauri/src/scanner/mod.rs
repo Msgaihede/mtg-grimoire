@@ -4,9 +4,10 @@
 //!
 //! **What is still here names this host, and nothing else is** (the light app's step 7.3,
 //! 2026-10-07 — until then the commands' bodies and the body parsing were here too). The assets
-//! `build.rs` embeds, under `cfg(scanner_assets)`, which [`compiled`] hands the core's
-//! `ScannerState::carry` as the app starts. **The raw request** a frame and a capture arrive in:
-//! [`frame_payload`] and `capture_payload` take Tauri's `InvokeBody` and `HeaderMap`, refuse a
+//! `build.rs` embeds, under `cfg(scanner_assets)`, and the Neural scanner's, on every build,
+//! which [`compiled`] hands the core's `ScannerState::carry` as the app starts. **The raw
+//! request** a frame and a capture arrive in: [`frame_payload`] and `capture_payload` take
+//! Tauri's `InvokeBody` and `HeaderMap`, refuse a
 //! JSON body in words, and hand the bytes and a header lookup to the core's `frame_from` and
 //! `capture_from`, which do the reading — the three header names, the detail split and every
 //! sentence are the core's, shared with the command table. And **the `#[tauri::command]`s**,
@@ -38,19 +39,26 @@ const EMBEDDED_RECOGNITION: &[u8] = include_bytes!("../../scanner-assets/text-re
 
 /// What this build carries, for the core's [`ScannerState::carry`]. `build.rs` sets
 /// `cfg(scanner_assets)` only when all three files are present, so a bundle is never embedded
-/// without its models or the reverse.
+/// without its models or the reverse. **The Neural scanner's files are carried by every build**,
+/// whatever that `cfg` says: they are in git (`crates/card-neural/models/`), so there is no build
+/// without them.
 #[cfg(scanner_assets)]
 pub fn compiled() -> Embedded {
     Embedded {
         bundle: Some(EMBEDDED_BUNDLE),
         models: Some((EMBEDDED_DETECTION, EMBEDDED_RECOGNITION)),
+        neural: Some(card_neural::bundled()),
     }
 }
 
-/// What this build carries: nothing, because `apps/desktop/src-tauri/scanner-assets/` was not filled.
+/// What this build carries: the Neural scanner's files and nothing else, because
+/// `apps/desktop/src-tauri/scanner-assets/` was not filled.
 #[cfg(not(scanner_assets))]
 pub fn compiled() -> Embedded {
-    Embedded::none()
+    Embedded {
+        neural: Some(card_neural::bundled()),
+        ..Embedded::none()
+    }
 }
 
 /// What [`frame_payload`] reads out of one request: the frame, the detail image if one came, and

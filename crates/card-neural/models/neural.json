@@ -1,0 +1,29 @@
+{
+  "detector": { "width": 192, "height": 320, "stride": 8, "cornerNorm": 64 },
+  "embedder": {
+    "width": 128,
+    "height": 128,
+    "box": [0.03, 0.02, 0.97, 0.72],
+    "maxBatch": 6,
+    "dim": 128,
+    "topk": 10
+  },
+  "maxCards": 3,
+  "refine": true,
+  "ranking": "aimed",
+  "thresholds": {
+    "detLogit": -1,
+    "detAccept": 0.5,
+    "detInstant": 0.6,
+    "accept": 0.575,
+    "margin": 0.045,
+    "instant": 0.675,
+    "instantMargin": 0.0675,
+    "weak": 0.475,
+    "weakMargin": 0.01875,
+    "support": 0.455,
+    "supportMargin": 0.03,
+    "detSupport": 0.8,
+    "flipSure": 0.4
+  }
+}

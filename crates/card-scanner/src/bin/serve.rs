@@ -93,6 +93,17 @@ struct Args {
     /// Fetch them with `scripts/fetch-ocr-models.mjs`.
     #[arg(long)]
     ocr_models: Option<PathBuf>,
+
+    /// Directory holding the Neural mode's four files (`detector.onnx`, `embedder.onnx`,
+    /// `gallery.bin`, `neural.json`). `crates/card-neural/models/` of this checkout when not
+    /// given — they are in git. Without them the page's neural segment says so on every frame.
+    #[arg(long)]
+    neural_models: Option<PathBuf>,
+}
+
+/// `crates/card-neural/models/` beside this crate — where the Neural mode's files are in git.
+fn neural_models_in_tree() -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../card-neural/models"))
 }
 
 /// The session is shared rather than per-request, because it is the one deliberately stateful
@@ -135,6 +146,7 @@ fn options_from_query(url: &str) -> FrameOptions {
         lead_margin: num("margin", d.lead_margin),
         mode: match q.get("mode").map(String::as_str) {
             Some("exact") => ScanMode::Exact,
+            Some("neural") => ScanMode::Neural,
             _ => ScanMode::Fast,
         },
     }
@@ -451,7 +463,16 @@ fn main() {
             }
         }
     });
-    let session: Shared = Arc::new(Mutex::new(Session::new(reference, reader, args.top)));
+    let mut session = Session::new(reference, reader, args.top);
+    let neural = args.neural_models.clone().unwrap_or_else(neural_models_in_tree);
+    match card_scanner::neural::read_dir(&neural)
+        .map_err(|e| e.to_string())
+        .and_then(|files| session.load_neural(files))
+    {
+        Ok(()) => eprintln!("  neural: models loaded from {}", neural.display()),
+        Err(e) => eprintln!("  neural {}: {e} — continuing without it", neural.display()),
+    }
+    let session: Shared = Arc::new(Mutex::new(session));
 
     println!("card-scanner live view: http://{addr}");
     println!();
@@ -601,6 +622,17 @@ mod tests {
             options_from_query("/frame"),
             FrameOptions { previews: true, ..FrameOptions::default() }
         );
+        // The third segment, spelled as the JSON spells it.
+        let neural: FrameOptions =
+            serde_json::from_str(r#"{"previews":true,"mode":"neural"}"#).expect("json");
+        assert_eq!(options_from_query("/frame?mode=neural"), neural);
+        assert_eq!(neural.mode, ScanMode::Neural);
+    }
+
+    #[test]
+    fn the_neural_models_in_the_tree_are_where_the_server_looks() {
+        let files = card_scanner::neural::read_dir(&neural_models_in_tree()).expect("in git");
+        assert!(!files.gallery.is_empty() && !files.meta.is_empty());
     }
 
     #[test]

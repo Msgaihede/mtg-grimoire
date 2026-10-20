@@ -189,8 +189,12 @@ export interface Answered {
 export interface StoreEnv {
   /** `caches`. Absent in a browser, or a context, with none. */
   caches?: CachesLike;
-  /** `fetch`, to the app's own origin. `no-store`: what arrives is kept here, not there too. */
-  fetch(path: string, init: { cache: "no-store" }): Promise<Answered>;
+  /**
+   * `fetch`, to the app's own origin. `no-store` for the three files: what arrives is kept here,
+   * not there too. `default` for the Neural scanner's four, which are content-addressed and kept
+   * by the HTTP cache and the service worker (`scanNeural.ts`).
+   */
+  fetch(path: string, init: { cache: "no-store" | "default" }): Promise<Answered>;
   /** SHA-256 as lower-case hex. Absent where there is no `crypto.subtle`. */
   digest?: (bytes: Uint8Array) => Promise<string>;
   /** Run `run` after `ms`. */
@@ -232,7 +236,30 @@ export function owedRows(manifest: ScanManifest, kept: Record<ScanKey, Kept | nu
 }
 
 /** `1 234 567`, as the core's sentences write a byte count. */
-const spaced = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+export const spaced = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+
+/**
+ * `promise`, or a rejection once {@link STALL_MS} has passed with it still pending — on `env`'s
+ * clock. The bound on an answer and on each chunk of a download, here and in `scanNeural.ts`.
+ */
+export function unstalledBy<T>(env: Pick<StoreEnv, "after">, promise: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let over = false;
+    env.after(STALL_MS, () => {
+      if (!over) reject(new Error("stalled"));
+    });
+    promise.then(
+      (value) => {
+        over = true;
+        resolve(value);
+      },
+      (error: unknown) => {
+        over = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
 
 export function createScanStore(env: StoreEnv): ScanStore {
   /** The scanner's cache when it exists — **never created by a question**, only by a write. */
@@ -248,25 +275,7 @@ export function createScanStore(env: StoreEnv): ScanStore {
     }
   }
 
-  /** `promise`, or a rejection once {@link STALL_MS} has passed with it still pending. */
-  function unstalled<T>(promise: Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      let over = false;
-      env.after(STALL_MS, () => {
-        if (!over) reject(new Error("stalled"));
-      });
-      promise.then(
-        (value) => {
-          over = true;
-          resolve(value);
-        },
-        (error: unknown) => {
-          over = true;
-          reject(error instanceof Error ? error : new Error(String(error)));
-        },
-      );
-    });
-  }
+  const unstalled = <T>(promise: Promise<T>): Promise<T> => unstalledBy(env, promise);
 
   async function download(
     file: ScanFile,

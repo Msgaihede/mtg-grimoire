@@ -122,6 +122,27 @@ describe("ScanBar", () => {
     expect(onMode).toHaveBeenCalledWith("exact");
   });
 
+  it("draws three modes, Neural last, and switches to it", async () => {
+    const user = userEvent.setup();
+    const onMode = vi.fn();
+    wrap(<ScanBar {...props({ onMode })} />);
+    const group = screen.getByRole("group", { name: "Scan mode" });
+    expect(
+      within(group)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Fast", "Exact", "Neural"]);
+    await user.click(within(group).getByRole("button", { name: "Neural" }));
+    expect(onMode).toHaveBeenCalledWith("neural");
+  });
+
+  it("lights Neural when the reader is scanning in it", () => {
+    wrap(<ScanBar {...props({ mode: "neural" })} />);
+    expect(screen.getByRole("button", { name: "Neural" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Fast" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Exact" })).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("says any set on the Filters button for empty filters", () => {
     wrap(<ScanBar {...props()} />);
     const filters = screen.getByRole("button", { name: "Filters: Any set" });

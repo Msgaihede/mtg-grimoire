@@ -10,7 +10,7 @@ reasons: [the spec](../superpowers/specs/2026-10-08-repository-layout-and-worksp
 | `apps/share/` | The public viewer page the share Worker serves. |
 | `packages/ui/` | The shared frontend: `components/`, `features/`, `lib/`. `@/` means this folder. All three apps are built from it. |
 | `packages/fake/` | The engine faked in TypeScript, for Storybook, the tests and the light app's `--mode fake`. |
-| `crates/` | The shared Rust: `grimoire-core` (the engine), `card-scanner`, and the web host's two modules, `grimoire-web` and `grimoire-scan`. |
+| `crates/` | The shared Rust: `grimoire-core` (the engine), `card-scanner`, `card-neural` (the Scanner's Neural mode, with its model files), and the web host's two modules, `grimoire-web` and `grimoire-scan`. |
 | `infrastructure/` | The three Cloudflare Workers: `relay/`, `share-worker/`, `app-worker/`. |
 
 **Build outputs** sit in the app that makes them — `apps/desktop/dist/`, `apps/light/dist-web/`,

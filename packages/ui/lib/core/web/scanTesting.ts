@@ -1,4 +1,5 @@
-import { SCANNER_ASSETS_PREFIX } from "./assets";
+import { neuralPath, SCANNER_ASSETS_PREFIX, type NeuralFile } from "./assets";
+import type { NeuralSource } from "./scanNeural";
 import type { Answered, ScanManifest, StoreEnv } from "./scanStore";
 import type { CacheLike, CachesLike } from "./sw/pictures";
 
@@ -81,6 +82,23 @@ export const MANIFEST: ScanManifest = {
   ],
 };
 
+/** The Neural scanner's four as an origin serves them: small, each unlike the others. */
+export const NEURAL_TEST_FILES: Record<NeuralFile, Uint8Array> = {
+  "detector.onnx": Uint8Array.from({ length: 400 }, (_, i) => (i * 3) % 256),
+  "embedder.onnx": Uint8Array.from({ length: 600 }, (_, i) => (i * 5) % 256),
+  "gallery.bin": Uint8Array.from({ length: 900 }, (_, i) => (i * 11) % 256),
+  // Copied out of the encoder's array, which can be another realm's than the suite's.
+  "neural.json": Uint8Array.from(new TextEncoder().encode('{"ranking":"aimed"}')),
+};
+
+/** The set those four are served under, and their lengths — what a build tells the page. */
+export const NEURAL_SOURCE: NeuralSource = {
+  set: "n3ur4l",
+  bytes: Object.fromEntries(
+    Object.entries(NEURAL_TEST_FILES).map(([name, bytes]) => [name, bytes.byteLength]),
+  ),
+};
+
 /** A response whose body arrives `chunk` bytes at a time. */
 export function answered(
   body: Uint8Array | string,
@@ -111,11 +129,13 @@ export function answered(
 
 /**
  * A browser the test owns: a Cache Storage, a clock whose timers run when the test says, and an
- * origin answering the manifest and the three files — each of which a test can replace.
+ * origin answering the manifest, the three files and the Neural scanner's four — each of which a
+ * test can replace. `asked` is every path fetched, and `modes` the cache mode each was asked with.
  */
 export function fakeBrowser(over: Partial<Record<string, () => Answered | Promise<Answered>>> = {}) {
   const caches = new FakeCaches();
   const asked: string[] = [];
+  const modes: string[] = [];
   let now = Date.UTC(2026, 9, 7, 12);
   const timers: { at: number; run: () => void }[] = [];
   const served: Record<string, () => Answered | Promise<Answered>> = {
@@ -127,11 +147,18 @@ export function fakeBrowser(over: Partial<Record<string, () => Answered | Promis
         () => answered(bytes),
       ]),
     ),
+    ...Object.fromEntries(
+      Object.entries(NEURAL_TEST_FILES).map(([name, bytes]) => [
+        neuralPath(NEURAL_SOURCE.set, name),
+        () => answered(bytes, { type: "application/octet-stream" }),
+      ]),
+    ),
   };
   const env: StoreEnv = {
     caches,
-    fetch: async (path) => {
+    fetch: async (path, init) => {
       asked.push(path);
+      modes.push(init.cache);
       const answer = over[path] ?? served[path];
       return answer ? answer() : answered("Not found", { status: 404, type: "text/plain" });
     },
@@ -143,6 +170,7 @@ export function fakeBrowser(over: Partial<Record<string, () => Answered | Promis
     env,
     caches,
     asked,
+    modes,
     /** Move the clock on, running every timer that falls due — those a timer sets included. */
     advance(ms: number): void {
       const until = now + ms;

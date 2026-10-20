@@ -1,4 +1,4 @@
-//! **The browser**: the six `#[wasm_bindgen]` exports a dedicated Worker imports, and the one
+//! **The browser**: the seven `#[wasm_bindgen]` exports a dedicated Worker imports, and the one
 //! `thread_local` that is this module's whole memory.
 //!
 //! Compiled for `wasm32-unknown-unknown` and nowhere else (`lib.rs` gates the module), which
@@ -102,6 +102,29 @@ pub fn frame(jpeg: &[u8], detail: Option<Vec<u8>>, options: Option<String>) -> S
     // omitted argument was a `TypeError` in the glue, before a line of this ran.
     let options = options.as_deref().unwrap_or_default();
     with(|scanner| scanner.frame(jpeg, detail.as_deref(), options))
+}
+
+/// `load_neural(detector, embedder, gallery, meta): string | undefined` — give the session the
+/// Neural mode's four files, as the page fetched them from the app's origin. Answers nothing, or
+/// the crate's sentence when they would not load ([`Scanner::load_neural`]) — **never a throw**,
+/// and not the envelope: there is no value to carry, only a refusal. After a panic it answers
+/// [`scanner::PANICKED`], as every string export does.
+///
+/// Taken, not borrowed, for `load`'s reason: the glue has copied each into this module's
+/// memory, and the recogniser keeps those buffers rather than copy them a second time.
+#[wasm_bindgen]
+pub fn load_neural(
+    detector: Vec<u8>,
+    embedder: Vec<u8>,
+    gallery: Vec<u8>,
+    meta: Vec<u8>,
+) -> Option<String> {
+    SCANNER.with(|slot| match slot.try_borrow_mut() {
+        Ok(mut held) => held
+            .get_or_insert_with(Scanner::new)
+            .load_neural(detector, embedder, gallery, meta),
+        Err(_) => Some(scanner::PANICKED.to_owned()),
+    })
 }
 
 /// `reset(): string` — forget the card in front of the lens. `{"ok":null}`.

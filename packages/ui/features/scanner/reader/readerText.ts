@@ -19,12 +19,14 @@ import type {
 import { barFill } from "../verdictText";
 
 /**
- * The two modes, in the order a reader meets them: the quick one first.
+ * The three modes, in the order a reader meets them: the quick one first, then the one that reads,
+ * then **Neural, the new one, last** — offered beside the other two so readers can try it before it
+ * replaces them (the owner's plan, 2026-10-20), and its hint says so.
  *
  * The hints say what each mode *does for the reader* and never how — no hashes, no tiers, no
- * bursts. Those words belong to the developer panels, and a reader choosing between two scans needs
- * only to know which one pins the printing. Here rather than in `ScanBar`, so the phone page's
- * switch says the same two words and the same two sentences.
+ * bursts, no networks. Those words belong to the developer panels, and a reader choosing between
+ * the scans needs only to know which one pins the printing. Here rather than in `ScanBar`, so the
+ * phone page's switch and its options sheet say the same words and the same sentences.
  */
 export const SCAN_MODES: readonly { id: ScanMode; label: string; hint: string }[] = [
   { id: "fast", label: "Fast", hint: "Recognizes cards by their picture. Fastest for mixed piles." },
@@ -32,6 +34,11 @@ export const SCAN_MODES: readonly { id: ScanMode; label: string; hint: string }[
     id: "exact",
     label: "Exact",
     hint: "Also reads the name and collector number to identify the exact printing.",
+  },
+  {
+    id: "neural",
+    label: "Neural",
+    hint: "New: names the card and its printing from the picture alone. Worth a try — it may replace Fast and Exact.",
   },
 ];
 
@@ -176,7 +183,15 @@ function sharedName(choices: readonly ScannerChoice[]): string | null {
  *
  * **Exact is settled by its resolve, not by the tracker**, so an Exact commit with no decision
  * still reads as reading; Fast's decision *is* the commit, and its one unconfirmed frame reads as
- * matched on the tracker's leader.
+ * matched on the tracker's leader. **Neural is Fast's case**: it reads no text, so it never says
+ * *Reading*, and a committed Neural frame is a decided one (the session commits only while a
+ * decision stands).
+ *
+ * **Neural's printings to pick from ride the decision, not a resolve.** It runs none, so
+ * `lastResolution` stays `null` in Neural; a picture that stands for several printings comes back
+ * as an `ambiguous` decision with them as its choices, on every frame that decision stands — which
+ * is the latch's lifetime already, so the strip reads it straight off the verdict and puts it on
+ * the ambiguous rung, above "added", for that rung's reason.
  *
  * **A filed card is named from the tray's row, never from the hash's leader** — in Exact the
  * resolve can pin another printing than the one the tracker leads with, and the strip has to name
@@ -218,13 +233,19 @@ export function matchStrip(
   const lead = tracked?.standings[0]?.label ?? null;
   const full = { fill: 1, committed: true, threshold };
 
-  if (lastResolution?.outcome === "ambiguous" && committed) {
-    const count = lastResolution.choices.length;
+  const pick =
+    lastResolution?.outcome === "ambiguous"
+      ? lastResolution.choices
+      : mode === "neural" && verdict.decision?.outcome === "ambiguous"
+        ? verdict.decision.choices
+        : null;
+  if (pick !== null && committed) {
+    const count = pick.length;
     return {
       ...full,
       word: count > 1 ? `${count} printings` : "Pick a printing",
       tone: "attention",
-      name: sharedName(lastResolution.choices),
+      name: sharedName(pick),
       // A card, not a printing: which printing is the question the tray is asking.
       printing: null,
       sentence: "Pick a printing in the tray",
@@ -247,7 +268,8 @@ export function matchStrip(
       sentence,
     };
   }
-  if (decided || (committed && mode === "fast")) {
+  // Every mode but Exact is settled by its tracker, so a commit is a match there.
+  if (decided || (committed && mode !== "exact")) {
     // The decision's name before the leader's: a Fast title read that names a card overrides the
     // hash, so the two can differ, and the decision is what the tray is about to file.
     const label = verdict.decision?.label ?? lead;
