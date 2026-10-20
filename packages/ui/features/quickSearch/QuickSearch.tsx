@@ -1,4 +1,12 @@
-import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { AnimatePresence } from "motion/react";
 import { Folder, RectangleVertical, Search, Settings, type LucideIcon } from "lucide-react";
 import { Cards } from "@/components/icons";
@@ -76,6 +84,13 @@ function useGoTo(): (target: QuickTarget) => void {
  * by index, because the groups answer at different speeds — a deck lit while the collection's rows
  * arrive above-or-below it stays the deck the reader is looking at.
  *
+ * **Enter waits for the text it was pressed on** (issue #1166). The collection and wishlist rows
+ * keep the last text's answer on screen while the next one is asked, so the first row in the list
+ * just after typing is often the previous text's — the recent copies, before anything was typed.
+ * An Enter on that default row while the panel is `busy` is held and spent once the rows have
+ * settled; a row the reader lit themselves (arrows or pointer) opens at once, since it is the row
+ * they were looking at. Typing again, or closing the panel, drops a held press.
+ *
  * **`Ctrl+K` from anywhere** puts the caret here (except under a modal, which owns the keyboard),
  * and Escape hands it back to wherever it was. The panel is drawn inside the title bar, so it
  * rides that row's `LAYER.caption` over every page.
@@ -90,6 +105,8 @@ export function QuickSearch() {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  /** An Enter pressed while the rows were still answering an older text — spent once they settle. */
+  const [enterHeld, setEnterHeld] = useState(false);
   const goTo = useGoTo();
 
   const { groups, busy } = useQuickSearch(text, open);
@@ -100,6 +117,7 @@ export function QuickSearch() {
     setOpen(false);
     setText("");
     setActiveKey(null);
+    setEnterHeld(false);
     const back = returnRef.current;
     returnRef.current = null;
     if (restore && back !== null && back.isConnected) back.focus();
@@ -110,6 +128,25 @@ export function QuickSearch() {
     close(false);
     goTo(item.target);
   };
+
+  // The newest lit row, read when the rows settle rather than listed as a reason to look again.
+  const spendHeldEnter = useEffectEvent(() => {
+    if (active === undefined) setEnterHeld(false);
+    else choose(active);
+  });
+  // Spent from a task the effect queues rather than in its body: `react-hooks/set-state-in-effect`
+  // refuses a `setState` there, and the press is the settling's consequence, not a value derived
+  // from it. The cleanup cancels a queued press the next render has already overtaken.
+  useEffect(() => {
+    if (!open || !enterHeld || busy) return;
+    let live = true;
+    queueMicrotask(() => {
+      if (live) spendHeldEnter();
+    });
+    return () => {
+      live = false;
+    };
+  }, [open, enterHeld, busy]);
 
   useDismissOnEscape({ layer: "inner", enabled: open, onDismiss: () => close(true) });
 
@@ -149,7 +186,9 @@ export function QuickSearch() {
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (active !== undefined) choose(active);
+      const picked = activeKey !== null && active?.key === activeKey;
+      if (open && busy && !picked) setEnterHeld(true);
+      else if (active !== undefined) choose(active);
       return;
     }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -179,6 +218,7 @@ export function QuickSearch() {
         if (!rootRef.current?.contains(e.relatedTarget)) {
           setOpen(false);
           setActiveKey(null);
+          setEnterHeld(false);
         }
       }}
     >
@@ -205,6 +245,7 @@ export function QuickSearch() {
         onChange={(e) => {
           setText(e.target.value);
           setActiveKey(null);
+          setEnterHeld(false);
           setOpen(true);
         }}
         onKeyDown={onKeyDown}

@@ -197,6 +197,65 @@ describe("QuickSearch", () => {
     expect(field()).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("holds an Enter pressed before the rows answer what was typed (issue #1166)", async () => {
+    const slow = deferred<{ items: CollectionRow[]; total: number }>();
+    collectionList.mockImplementation(({ text }: { text?: string }) =>
+      text === undefined
+        ? Promise.resolve({
+            items: [copy({ name: "Sol Ring", setCode: "cmm", collectorNumber: "1" })],
+            total: 1,
+          })
+        : slow.promise,
+    );
+    mount();
+    await userEvent.click(field());
+    await screen.findByRole("option", { name: /Sol Ring/ });
+    await userEvent.type(field(), "bolt{Enter}");
+    // The recent copy is still the first row drawn, and the press has not spent itself on it.
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("Sol Ring");
+    expect(useAppStore.getState().pendingReveal).toBeNull();
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ text: "bolt" })),
+    );
+    await act(async () =>
+      slow.resolve({ items: [copy({ name: "Lightning Bolt", folderId: 4 })], total: 1 }),
+    );
+    await waitFor(() =>
+      expect(useAppStore.getState().pendingReveal).toEqual({
+        scope: "collection",
+        folderId: 4,
+        query: '!"Lightning Bolt" e:lea cn:161 lang:en',
+      }),
+    );
+    expect(field()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens a row the reader lit at once, even while the rows are answering", async () => {
+    collectionList.mockImplementation(({ text }: { text?: string }) =>
+      text === undefined
+        ? Promise.resolve({ items: [copy({ name: "Sol Ring" })], total: 1 })
+        : new Promise(() => {}),
+    );
+    mount();
+    await userEvent.type(field(), "a");
+    await screen.findByRole("option", { name: /Atraxa/ });
+    await userEvent.keyboard("{ArrowDown}{ArrowUp}{Enter}");
+    expect(useAppStore.getState().openDeckId).toBe(2);
+  });
+
+  it("drops a held Enter when the reader types on", async () => {
+    const slow = deferred<{ items: CollectionRow[]; total: number }>();
+    collectionList.mockImplementation(({ text }: { text?: string }) =>
+      text === undefined ? Promise.resolve({ items: [], total: 0 }) : slow.promise,
+    );
+    mount();
+    await userEvent.type(field(), "bolt{Enter}x");
+    await act(async () => slow.resolve({ items: [copy({ name: "Lightning Bolt" })], total: 1 }));
+    await screen.findByRole("option", { name: /Search all cards for “boltx”/ });
+    expect(useAppStore.getState().pendingReveal).toBeNull();
+    expect(field()).toHaveValue("boltx");
+  });
+
   it("reveals a collection card in the folder it is filed in", async () => {
     mount();
     await userEvent.type(field(), "bolt");
