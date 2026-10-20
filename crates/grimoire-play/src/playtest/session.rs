@@ -3035,7 +3035,7 @@ pub(super) fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<Playte
                 departed_source_lki,
                 ..
             } => {
-                if matches!(kind, ActivatedAbilityKind::Mana) {
+                if matches!(kind, ActivatedAbilityKind::Mana) || secret(source_id) {
                     continue;
                 }
                 let source = name(source_id)
