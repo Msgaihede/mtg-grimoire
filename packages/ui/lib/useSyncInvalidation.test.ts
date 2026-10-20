@@ -125,10 +125,14 @@ it("stops listening when it unmounts", async () => {
  * `["trade"]` is the eighth: an open trade prices every line from `cards` at read time, so a sync
  * that brings new prices has changed what a trade left open says both sides are worth.
  *
+ * `["newPrintings"]` is the ninth: the home page's New printings feed is half the corpus, sits under a
+ * root of its own rather than `["decks"]`, and a feed on screen across a sync kept the pre-sync list
+ * until it remounted (#1182).
+ *
  * `["formatSpecs"]` is **not** here and must not be: the table is seeded by a migration and
  * a sync cannot touch it.
  */
-it("invalidates exactly the eight known roots", () => {
+it("invalidates exactly the nine known roots", () => {
   expect(SYNC_INVALIDATED).toEqual([
     ["cards"],
     ["collection"],
@@ -138,6 +142,7 @@ it("invalidates exactly the eight known roots", () => {
     ["decks"],
     ["trade"],
     ["scanner", "status"],
+    ["newPrintings"],
   ]);
 });
 
