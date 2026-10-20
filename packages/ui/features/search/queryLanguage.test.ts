@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   IS_VALUES,
   parseQuery,
-  parseTagQuery,
   predicateKey,
   predicateLabel,
   QUERY_KEYWORDS,
@@ -18,9 +17,9 @@ import {
 
 /** `namespace:value`, negation marked with a leading `-`, so a whole parse reads on one line. */
 const terms = (input: string): string[] =>
-  parseTagQuery(input).tokens.map((t) => `${t.negated ? "-" : ""}${t.namespace}:${t.value}`);
+  parseQuery(input).tags.map((t) => `${t.negated ? "-" : ""}${t.namespace}:${t.value}`);
 
-describe("parseTagQuery", () => {
+describe("parseQuery — tags", () => {
   it("reads every alias Scryfall documents", () => {
     // Measured live 2026-08-20 (see the art-tags research): all four art spellings answer 1,145
     // for `dragon` and all five oracle ones answer 6,428 for `removal`. `a:` and `o:` were on
@@ -46,13 +45,13 @@ describe("parseTagQuery", () => {
 
   it("leaves a keyword it does not know as free text", () => {
     // `itag:`, `ftag:` and `otags:` are HTTP 400 on Scryfall; here they are words to search for.
-    const parsed = parseTagQuery("itag:dragon ftag:removal otags:removal bolt");
-    expect(parsed.tokens).toEqual([]);
+    const parsed = parseQuery("itag:dragon ftag:removal otags:removal bolt");
+    expect(parsed.tags).toEqual([]);
     expect(parsed.text).toBe("itag:dragon ftag:removal otags:removal bolt");
   });
 
   it("keeps a quoted value whole and hands the rest to FTS", () => {
-    const parsed = parseTagQuery('bolt otag:"spot removal" dragon');
+    const parsed = parseQuery('bolt otag:"spot removal" dragon');
     expect(terms('bolt otag:"spot removal" dragon')).toEqual(["oracle:spot removal"]);
     // The decisive half: `spot` must not fall out of the quotes into the text.
     expect(parsed.text).toBe("bolt dragon");
@@ -75,8 +74,8 @@ describe("parseTagQuery", () => {
   it("drops a keyword with nothing after it rather than filtering or searching by it", () => {
     // Every keystroke on the way to a tag passes through this state. A token would sit there
     // reporting `""` as an unknown tag; free text would search the corpus for `otag`.
-    const parsed = parseTagQuery("otag: -atag: bolt");
-    expect(parsed.tokens).toEqual([]);
+    const parsed = parseQuery("otag: -atag: bolt");
+    expect(parsed.tags).toEqual([]);
     expect(parsed.text).toBe("bolt");
   });
 
@@ -84,14 +83,14 @@ describe("parseTagQuery", () => {
     expect(terms("atag:dog atag:dog")).toEqual(["art:dog", "art:dog"]);
   });
 
-  it("answers an empty query with no tokens and no text", () => {
-    expect(parseTagQuery("")).toEqual({ text: "", tokens: [] });
-    expect(parseTagQuery("   ")).toEqual({ text: "", tokens: [] });
+  it("answers an empty query with no tags, no predicates and no text", () => {
+    expect(parseQuery("")).toEqual({ text: "", tags: [], predicates: [] });
+    expect(parseQuery("   ")).toEqual({ text: "", tags: [], predicates: [] });
   });
 
   it("spans the whole term, dash and quotes included", () => {
     const input = 'bolt -otag:"spot removal" x';
-    const [token] = parseTagQuery(input).tokens;
+    const [token] = parseQuery(input).tags;
     expect(input.slice(token.start, token.end)).toBe('-otag:"spot removal"');
   });
 
@@ -101,7 +100,7 @@ describe("parseTagQuery", () => {
 });
 
 describe("removeToken", () => {
-  const only = (input: string): TagToken => parseTagQuery(input).tokens[0];
+  const only = (input: string): TagToken => parseQuery(input).tags[0];
 
   it("takes the term out and leaves one space between what is left", () => {
     const input = "bolt atag:dragon lightning";
@@ -120,13 +119,13 @@ describe("removeToken", () => {
 
   it("removes the term it was given rather than the first one that looks like it", () => {
     const input = "atag:dog otag:ramp atag:dog";
-    const second = parseTagQuery(input).tokens[2];
+    const second = parseQuery(input).tags[2];
     expect(removeToken(input, second)).toBe("atag:dog otag:ramp");
   });
 });
 
 describe("setTokenNegated", () => {
-  const only = (input: string): TagToken => parseTagQuery(input).tokens[0];
+  const only = (input: string): TagToken => parseQuery(input).tags[0];
 
   it("adds and removes the dash in place", () => {
     expect(setTokenNegated("bolt atag:dragon x", only("bolt atag:dragon x"), true)).toBe(
@@ -141,7 +140,7 @@ describe("setTokenNegated", () => {
     // `toggleChipMode`'s rule: a chip that jumped when it was flipped would make the row
     // unreadable exactly while the reader is editing it — and here it reorders their sentence.
     const input = "atag:dog otag:ramp";
-    const first = parseTagQuery(input).tokens[0];
+    const first = parseQuery(input).tags[0];
     expect(setTokenNegated(input, first, true)).toBe("-atag:dog otag:ramp");
   });
 
