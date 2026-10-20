@@ -302,6 +302,16 @@ pub fn card_wishes(
 ///    accept a virtual deck's live row perfectly happily — the list is real, it is the cardboard
 ///    that does not exist — so nothing here covers it and a refusal about the *deck* cannot be
 ///    reached from a question about the *card*.
+///
+///    **Then the shortfall at the exact `(card_id, finish)`**, re-read inside the transaction
+///    ([issue #1128](https://github.com/Msgaihede/mtg-grimoire/issues/1128)) — the fence
+///    [`crate::deck_missing::to_collection`] has always had, with its sentences:
+///    [`crate::deck_pull::NOT_SHORT_OF_THAT`] for a printing or finish the deck is short of
+///    nothing at, [`crate::deck_pull::MORE_THAN_MISSING`] for more copies than it is short of.
+///    `plays_card` stays in front of it so a card the deck does not play at all still hears
+///    [`crate::collection_alloc::NOT_IN_DECK`]. A copy past the shortfall, or of another
+///    printing, is one no deck row is attributed — `owned_by_printing` hands it to nobody — and
+///    the next printing swap's `release_unclaimed_copies` would sweep it out to Recently removed.
 /// 4. **[`crate::deck::deck_group`]**, else [`crate::collection_alloc::NO_DECK_GROUP`]. There is
 ///    one group per deck since schema v25, so `None` is a database somebody has edited by hand —
 ///    and filing at the root instead would record copies no deck claims.
@@ -380,6 +390,19 @@ pub fn quick_add(
     if !crate::deck::plays_card(&tx, deck_id, card_id)? {
         return Err(crate::collection_alloc::NOT_IN_DECK.to_owned());
     }
+    // Step 3's second half (issue #1128): `plays_card` asks about the *card*, and a copy of
+    // another printing, or one more than the deck is short of, passes it — then lands in the group
+    // with no deck row `owned_by_printing` attributes it to, and the next printing swap's
+    // `release_unclaimed_copies` sweeps it out to Recently removed. So the press is held to the
+    // shortfall at its exact `(card_id, finish)`, re-read inside the transaction —
+    // [`crate::deck_missing::to_collection`]'s fence and its sentences, one row of it.
+    match shortfall_at(&tx, deck_id, card_id, &finish)? {
+        None => return Err(crate::deck_pull::NOT_SHORT_OF_THAT.to_owned()),
+        Some(short) if quantity > short => {
+            return Err(crate::deck_pull::MORE_THAN_MISSING.to_owned())
+        }
+        Some(_) => {}
+    }
     let group = crate::deck::deck_group(&tx, deck_id)?
         .ok_or_else(|| crate::collection_alloc::NO_DECK_GROUP.to_owned())?;
 
@@ -410,14 +433,41 @@ pub fn quick_add(
     })
 }
 
+/// What the live list is still short of at this printing and finish, or `None` when it is short
+/// of nothing there.
+///
+/// [`crate::deck::live_shortfall`]'s rows are keyed on the finish each row *plays*, in the deck's
+/// spelling; `finish` is the collection's (the caller ran [`crate::deck::entry_finish_for`]), so
+/// each row is translated once and compared like with like — [`crate::deck_missing::
+/// to_collection`]'s keying, for one key.
+fn shortfall_at(
+    tx: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    finish: &str,
+) -> Result<Option<i64>, String> {
+    for row in crate::deck::live_shortfall(tx, deck_id)? {
+        if row.card_id != card_id {
+            continue;
+        }
+        let played = crate::deck::normalise_finish(row.finish.as_deref())?
+            .unwrap_or_else(|| crate::schema::FINISHES[0].to_owned());
+        if played == finish {
+            return Ok(Some(row.short));
+        }
+    }
+    Ok(None)
+}
+
 /// File copies into a deck's group — the one spelling of the [`crate::collection::EntryInput`] a
 /// deck-boundary *create* uses.
 ///
 /// Written once because it is written twice: [`quick_add`]'s step 5 and
 /// [`crate::deck_missing::to_collection`]'s step 6 are the same eight lines, and this module owns
 /// the idea because it made the first of them. **It is deliberately this small.** The two presses'
-/// *fences* differ — one asks [`crate::deck::plays_card`], the other re-plans inside its own
-/// transaction, which is strictly stronger — and their wish halves differ, one named and one
+/// *fences* are each one's own — both hold the copies to the live shortfall at `(card_id,
+/// finish)` since issue #1128, one for a single row and one for a re-planned batch — and their
+/// wish halves differ, one named and one
 /// chosen; hoisting either would be one rule kept in two places rather than one.
 ///
 /// **`..Default::default()` rather than explicit empties**, so a column added to `EntryInput`
@@ -802,18 +852,61 @@ mod tests {
     }
 
     #[test]
-    fn another_printing_of_a_card_the_deck_plays_is_accepted() {
-        // `plays_card` matches on `PLAYED_KEY` — the oracle card with the printing as the
-        // fallback — so a deck listing the Alpha Bolt takes the M10 copies the reader bought.
-        // The fence is about the *card*, never about the printing.
+    fn another_printing_of_a_card_the_deck_plays_is_refused() {
+        // Issue #1128. `plays_card` matches on `PLAYED_KEY`, so the M10 copies pass it for a deck
+        // listing the Alpha Bolt — but no deck row is attributed an M10 copy, and the next
+        // printing swap would sweep them out to Recently removed. The shortfall is per printing.
         let (conn, deck, cat) = fixture();
         seed_reprint(&conn, "bolt-m10", "bolt");
         live_card(&conn, deck, cat, "bolt", 4);
 
-        let out = quick_add(&conn, deck, "bolt-m10", None, Some("NM"), 4, None).unwrap();
+        let err = quick_add(&conn, deck, "bolt-m10", None, Some("NM"), 4, None).unwrap_err();
 
-        assert_eq!(out.copies, 4);
-        assert_eq!(group_copies(&conn, deck, "bolt-m10"), 4);
+        assert_eq!(err, crate::deck_pull::NOT_SHORT_OF_THAT);
+        assert_eq!(entry_count(&conn), 0, "a refused press records nothing");
+        assert!(history(&conn, deck).is_empty(), "and writes no history");
+    }
+
+    #[test]
+    fn another_finish_of_the_printing_the_deck_plays_is_refused() {
+        // The grain is `(card_id, finish)`: a foil copy is not what a regular line is short of.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        let err = quick_add(&conn, deck, "bolt", Some("foil"), Some("NM"), 1, None).unwrap_err();
+
+        assert_eq!(err, crate::deck_pull::NOT_SHORT_OF_THAT);
+        assert_eq!(entry_count(&conn), 0);
+    }
+
+    #[test]
+    fn more_copies_than_the_deck_is_short_of_are_refused() {
+        // Issue #1128's surplus: the batch twin refuses it, and so does the single press now —
+        // and the shortfall is re-read, so copies the first press recorded count against it.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+        let wish = seed_wish(&conn, Some("bolt"), None, 1, None);
+
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 5, Some(wish)).unwrap_err();
+        assert_eq!(err, crate::deck_pull::MORE_THAN_MISSING);
+        assert_eq!(entry_count(&conn), 0, "nothing recorded");
+        assert_eq!(
+            wish_quantity(&conn, wish),
+            Some(1),
+            "and the wish is untouched"
+        );
+
+        quick_add(&conn, deck, "bolt", None, Some("NM"), 3, None).unwrap();
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 2, None).unwrap_err();
+        assert_eq!(err, crate::deck_pull::MORE_THAN_MISSING);
+        assert_eq!(group_copies(&conn, deck, "bolt"), 3);
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 1, None);
+        assert!(err.is_ok(), "the last copy still fits");
+        assert_eq!(
+            quick_add(&conn, deck, "bolt", None, Some("NM"), 1, None).unwrap_err(),
+            crate::deck_pull::NOT_SHORT_OF_THAT,
+            "a full line is short of nothing"
+        );
     }
 
     #[test]

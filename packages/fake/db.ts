@@ -19376,7 +19376,9 @@ export function writeHandlers(db: FakeDb) {
      *    list only. A card the deck merely *plans* is refused here with no theory fence of its
      *    own, and that is a statement rather than an omission: a plan holds no cards, so there is
      *    nothing for a group to hold on its behalf — {@link THEORY_HOLDS_NOTHING}'s reasoning
-     *    reached from the other end.
+     *    reached from the other end. Then the shortfall at the exact `(cardId, finish)`
+     *    (issue #1128) — {@link NOT_SHORT_OF_THAT} or {@link MORE_THAN_MISSING}, the batch
+     *    twin's fence and sentences, so a copy no deck row would be attributed is never filed.
      * 5. The group — {@link NO_DECK_GROUP}, because there is nowhere to put them.
      *
      * **The fold is {@link addEntry}'s and not a second one**, so a second quick add on the same
@@ -19442,6 +19444,16 @@ export function writeHandlers(db: FakeDb) {
       // none of is copies.
       if (deck.virtualOnly) throw refuse(VIRTUAL_HOLDS_NOTHING);
       if (!deckPlays(db, args.deckId, args.cardId)) throw refuse(NOT_IN_DECK);
+      // Issue #1128: held to the shortfall at the exact `(cardId, finish)`, as
+      // {@link deck_missing_to_collection} is — another printing, or more copies than the line is
+      // short of, would land in the group with no deck row attributed them, and the next
+      // printing swap's {@link releaseUnclaimedCopies} would sweep them to Recently removed.
+      const key = `${args.cardId}|${finish}`;
+      const shortRow = readHandlers(db)
+        .deck_missing_plan({ deckId: args.deckId })
+        .find((row) => entryKey(db, row.cardId, row.finish) === key);
+      if (!shortRow) throw refuse(NOT_SHORT_OF_THAT);
+      if (args.quantity > shortRow.short) throw refuse(MORE_THAN_MISSING);
       const group = deckGroup(db, args.deckId);
       if (!group) throw refuse(NO_DECK_GROUP);
 
