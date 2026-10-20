@@ -1498,10 +1498,10 @@ pub fn decode(bytes: &[u8]) -> ImportFile {
 /// The extensions the open dialog offers under "Decklist".
 ///
 /// A decklist is text; the other three are what the desktop clients have always written one as
-/// (`.dec` MTGO's text, `.dek` MTGO's XML, `.csv` a spreadsheet export). **A filter and not a
-/// fence** — the dialog lets the reader switch it off, and [`read_import_file`] reads whatever
-/// they chose, so a list saved as `.md` is still a list. It lived in
-/// `packages/ui/features/transfer/files.ts` until the dialog moved here.
+/// (`.dec` MTGO's text, `.dek` MTGO's XML — read by `parse.ts`'s `parseDek` since issue #1175 —
+/// and `.csv` a spreadsheet export). **A filter and not a fence** — the dialog lets the reader
+/// switch it off, and [`read_import_file`] reads whatever they chose, so a list saved as `.md` is
+/// still a list. It lived in `packages/ui/features/transfer/files.ts` until the dialog moved here.
 pub const DECKLIST_EXTENSIONS: [&str; 4] = ["txt", "dec", "dek", "csv"];
 
 /// The cap and the decode, over anything readable — a file the desktop opened by path, or a

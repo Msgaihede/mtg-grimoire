@@ -167,6 +167,25 @@ SB: 2 Duress
 SB: 1 Path to Exile`;
 
 /**
+ * MTGO's `.dek`, as its client saves one: a BOM, CRLF, an XML prolog, then one `<Cards … />` per
+ * card. `CatID` is MTGO's catalogue number, and the commander is the sideboard entry annotated
+ * `16777728`.
+ */
+export const MTGO_DEK = [
+  '\uFEFF<?xml version="1.0" encoding="utf-8"?>',
+  '<Deck xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+  "  <NetDeckID>0</NetDeckID>",
+  "  <PreconstructedDeckID>0</PreconstructedDeckID>",
+  '  <Cards CatID="57934" Quantity="4" Sideboard="false" Name="Lightning Bolt" Annotation="0" />',
+  '  <Cards CatID="2843" Quantity="2" Sideboard="false" Name="Sol Ring" Annotation="0" />',
+  '  <Cards CatID="65230" Quantity="1" Sideboard="false" Name="Jace&apos;s Erasure" Annotation="0" />',
+  '  <Cards CatID="47386" Quantity="2" Sideboard="true" Name="Duress" Annotation="0" />',
+  '  <Cards CatID="78302" Quantity="1" Sideboard="true" Name="Atraxa, Praetors&apos; Voice" Annotation="16777728" />',
+  "</Deck>",
+  "",
+].join("\r\n");
+
+/**
  * Archidekt's full text export: a heading per category, and every line carrying its category in
  * brackets, its printing, and often a `^Label,#colour^`.
  *

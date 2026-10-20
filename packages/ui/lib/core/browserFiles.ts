@@ -29,6 +29,7 @@ export const MAX_DECKLIST_BYTES = 8 * 1024 * 1024;
  * What the picker offers. The desktop dialog's four (`import.rs`'s `DECKLIST_EXTENSIONS`) and the
  * two MIME types a phone's picker files them under — **a hint and not a fence**, like the desktop
  * filter: a browser may still hand over anything the reader chooses, and the parser reads it.
+ * `.dek` is MTGO's XML, which `parse.ts`'s `parseDek` reads by its elements (issue #1175).
  *
  * **`application/octet-stream` is for Android** (phase 4): its WebView maps each extension through
  * `MimeTypeMap` and drops the ones it does not know, so `.dec` and `.dek` were greyed out — and the
