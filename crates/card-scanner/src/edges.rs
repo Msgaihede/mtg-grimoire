@@ -242,6 +242,7 @@ const FIT_REACH: f32 = 0.03;
 /// from a minimum-area rectangle, and two rounds of assign-and-fit move it onto the contour
 /// either way. `None` when the contour does not support four sides — the caller keeps the seed.
 pub(crate) fn fit_sides(points: &[Point<i32>], seed: &Quad) -> Option<Quad> {
+    let seed_scale = scale(seed);
     let mut quad = *seed;
     for _ in 0..2 {
         let s = scale(&quad);
@@ -283,7 +284,9 @@ pub(crate) fn fit_sides(points: &[Point<i32>], seed: &Quad) -> Option<Quad> {
             };
         }
         let next = corners_of(&lines)?;
-        if !close_to(&next, &quad, s) {
+        // Against the seed, not the last round: two rounds each under the bound may not add
+        // up to more than it.
+        if !close_to(&next, seed, seed_scale) {
             return None;
         }
         quad = next;
