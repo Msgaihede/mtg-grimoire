@@ -1641,6 +1641,42 @@ describe("useCardSearch, reading tag syntax out of the box", () => {
   });
 
   /**
+   * Issue #1165: a refused lookup has no answer to skip a token for, and every typed tag used to
+   * drop out of the payload unseen — `otag:ramp bolt` answered with every bolt, no chip and no
+   * note. A search that cannot read its tags is held, never run without them, and says why.
+   */
+  it("holds the search and says why when the tag lookup is refused", async () => {
+    searchCards.mockResolvedValue({
+      items: [{ id: "c1" }],
+      total: 1,
+      totalIsCapped: false,
+    });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(result.current.rows.length).toBe(1));
+    tagResolve.mockRejectedValue("database is locked");
+
+    act(() => result.current.setText("otag:ramp bolt"));
+
+    await waitFor(() => expect(result.current.tagLookupFailure).toBe("database is locked"));
+    // No request ever carried this text: the one it would have made has no tag filter in it.
+    expect(searchCards.mock.calls.some(([req]) => req.text === "bolt")).toBe(false);
+    expect(result.current.rows).toEqual([]);
+    expect(result.current.total).toBe(0);
+    expect(result.current.tagChips).toEqual([]);
+
+    // Try again, and an answer lets the search go out — with the tag in it.
+    tagResolve.mockResolvedValue([{ slug: "ramp", label: "Ramp", namespace: "oracle" }]);
+    act(() => result.current.retryTagLookup());
+
+    await waitFor(() => expect(lastSearchRequest().oracleTags).toEqual({
+      include: ["ramp"],
+      exclude: [],
+    }));
+    expect(lastSearchRequest().text).toBe("bolt");
+    expect(result.current.tagLookupFailure).toBeNull();
+  });
+
+  /**
    * The Tags page hands its rail's chips down while the reader can still type into the box, so
    * both halves have to arrive. Either one silently dropping the other's tags would answer a
    * question nobody asked, and the wall would look like a working filter.

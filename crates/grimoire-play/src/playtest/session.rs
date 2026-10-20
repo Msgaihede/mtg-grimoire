@@ -119,7 +119,7 @@ const STEP_LIMIT: usize = 2000;
 /// view, so a runaway loop of triggers cannot make a step huge.
 const FRAME_LIMIT: usize = 80;
 
-const NOT_IN_GAME: &str = "That card is no longer where it was. The board has been refreshed.";
+const NOT_IN_GAME: &str = "That card is no longer where it was.";
 const NOT_NOW: &str = "Keep or mulligan the opening hand first.";
 const ALREADY_KEPT: &str = "The opening hand has already been kept.";
 const OVER: &str = "The game is over. Start a new one from the game menu.";
@@ -144,7 +144,8 @@ struct Checkpoint {
 }
 
 /// The printing an object is drawn by, with whose and what it was — so a printing can follow
-/// its card into a new zone after the object it was on is gone.
+/// its card into a new zone after the object it was on is gone. `name` is the card's
+/// (`engine_name`), never a face's: the object may be on its back face.
 #[derive(Debug, Clone)]
 struct Printing {
     owner: PlayerId,
@@ -181,9 +182,14 @@ pub struct Playtest {
     state: GameState,
     printings: HashMap<ObjectId, Printing>,
     /// The printing a card is drawn by when its object has none of its own (a copy, a card the
-    /// engine made): the deck's first printing of that name, per seat.
+    /// engine made): the deck's first printing of that name, per seat. Keyed, like `commanders`,
+    /// by the card's name (`engine_name`); an object's name is read through `card_names` first.
     by_name: HashMap<(PlayerId, String), String>,
     commanders: HashSet<(PlayerId, String)>,
+    /// Each face's name of a card of several faces → the card's name (`engine_name`), so an
+    /// object on its back face (a Pathway played as its other land, a transformed commander) is
+    /// still its card (issue #1144). Fixed for the game, so not in a `Moment`.
+    card_names: HashMap<String, String>,
     /// What the engine does not play of each face in the game, by the face's name — phase's own
     /// `card_face_gaps`, as `support.rs` asks it before a game (issue #1093). Only the faces with
     /// a gap; fixed for the game, so not in a `Moment`.
@@ -237,10 +243,11 @@ pub struct Playtest {
     history: History<Moment>,
 }
 
-/// The whole of a game an action can change, for undo and redo: the checkpoint a refusal goes
-/// back to, and the session's own place in the game around it — a cast half made, the board's
-/// own question, the end told, the turn being ended, the stop last stopped at. The stops the
-/// reader set are a setting, not the game, and stay as they are.
+/// The whole of a game an action can change, for undo and redo and for a refusal, which goes
+/// back to it whole (issue #1143): the engine's checkpoint, and the session's own place in the
+/// game around it — a cast half made, the board's own question, the end told, the turn being
+/// ended, the stop last stopped at. The stops the reader set are a setting, not the game, and
+/// stay as they are.
 struct Moment {
     checkpoint: Checkpoint,
     pending: Option<Pending>,
@@ -292,6 +299,7 @@ impl Playtest {
 
         let mut by_name = HashMap::new();
         let mut commanders = HashSet::new();
+        let mut card_names = HashMap::new();
         let mut piles = |deck: &[CardFacts], seat: PlayerId| {
             let mut main = Vec::new();
             let mut commander = Vec::new();
@@ -299,6 +307,11 @@ impl Playtest {
                 let name = cards::engine_name(card);
                 if db.get_face_by_name(&name).is_none() {
                     continue;
+                }
+                for face in cards::face_names(card) {
+                    if face != name {
+                        card_names.insert(face, name.clone());
+                    }
                 }
                 by_name
                     .entry((seat, name.clone()))
@@ -435,6 +448,7 @@ impl Playtest {
             printings: HashMap::new(),
             by_name,
             commanders,
+            card_names,
             gaps,
             mulligans: 0,
             tokens,
@@ -519,7 +533,7 @@ impl Playtest {
             .collect();
         ids.sort();
         for id in ids {
-            let name = self.state.objects[&id].name.clone();
+            let name = card_name(&self.card_names, &self.state.objects[&id].name).to_string();
             if let Some(card_id) = queue.get_mut(&name).and_then(Vec::pop) {
                 self.printings.insert(
                     id,
@@ -534,13 +548,16 @@ impl Playtest {
     }
 
     /// After the engine has moved things: a printing whose object is gone goes to an object of
-    /// the same seat and name that has none (CR 400.7 — a card that changed zones may be a new
-    /// object), so a card keeps its art wherever it goes.
+    /// the same seat and card that has none (CR 400.7 — a card that changed zones may be a new
+    /// object), so a card keeps its art wherever it goes, on either face.
     fn follow_printings(&mut self) {
         let objects = &self.state.objects;
+        let names = &self.card_names;
         let mut orphans: HashMap<(PlayerId, String), Vec<String>> = HashMap::new();
         self.printings.retain(|id, p| {
-            let alive = objects.get(id).is_some_and(|o| o.name == p.name);
+            let alive = objects
+                .get(id)
+                .is_some_and(|o| card_name(names, &o.name) == p.name);
             if !alive {
                 orphans
                     .entry((p.owner, p.name.clone()))
@@ -560,15 +577,13 @@ impl Playtest {
         bare.sort();
         for id in bare.into_iter().rev() {
             let o = &objects[&id];
-            if let Some(card_id) = orphans
-                .get_mut(&(o.owner, o.name.clone()))
-                .and_then(Vec::pop)
-            {
+            let name = card_name(names, &o.name).to_string();
+            if let Some(card_id) = orphans.get_mut(&(o.owner, name.clone())).and_then(Vec::pop) {
                 self.printings.insert(
                     id,
                     Printing {
                         owner: o.owner,
-                        name: o.name.clone(),
+                        name,
                         card_id,
                     },
                 );
@@ -888,7 +903,7 @@ impl Playtest {
                 ..c
             });
         }
-        let is_commander = !o.is_token && self.commanders.contains(&(o.owner, o.name.clone()));
+        let is_commander = !o.is_token && self.is_commander(o.owner, &o.name);
         // A token is phase's preset, never a face of the deck's: its maker's gaps are the maker's.
         let gaps = if o.is_token {
             Vec::new()
@@ -911,7 +926,16 @@ impl Playtest {
                     .and_then(|t| t.printing_of(o.token_image_ref.as_ref(), &o.name))
             })
             .or_else(|| o.token_image_ref.as_ref().map(|r| r.scryfall_id.clone()))
-            .or_else(|| self.by_name.get(&(o.owner, o.name.clone())).cloned())
+            .or_else(|| {
+                let name = card_name(&self.card_names, &o.name);
+                self.by_name.get(&(o.owner, name.to_string())).cloned()
+            })
+    }
+
+    /// Whether `name`, on any of its faces, is one of `owner`'s commanders.
+    fn is_commander(&self, owner: PlayerId, name: &str) -> bool {
+        let name = card_name(&self.card_names, name);
+        self.commanders.contains(&(owner, name.to_string()))
     }
 
     fn card_ref(&self, id: ObjectId) -> Option<PlaytestCardRef> {
@@ -1570,8 +1594,9 @@ impl Playtest {
             action,
             PlaytestAction::SetStops { .. } | PlaytestAction::SetSandbox { .. }
         );
-        let before = remembered.then(|| self.moment());
-        let checkpoint = self.checkpoint();
+        // The whole moment, not the checkpoint alone: a refusal puts back the session's own place
+        // in the game too — the board's question, a cast half made, the turn being ended.
+        let before = self.moment();
         let mut happened = Vec::new();
         let choice = self.choice.take();
         self.frames.clear();
@@ -1580,7 +1605,7 @@ impl Playtest {
             .and_then(|()| self.end_free())
         {
             Ok(()) => {
-                if let Some(before) = before {
+                if remembered {
                     self.history.record(before);
                 }
                 self.follow_printings();
@@ -1593,7 +1618,7 @@ impl Playtest {
             }
             Err(e) => {
                 self.frames.clear();
-                self.restore(checkpoint);
+                self.go_to(before);
                 Err(e)
             }
         }
@@ -1629,7 +1654,6 @@ impl Playtest {
             return Err(OVER.into());
         }
         if is_sandbox(&action) && !self.sandbox {
-            self.choice = choice;
             return Err(SANDBOX_OFF.into());
         }
         match action {
@@ -1710,7 +1734,7 @@ impl Playtest {
                 let answer = answers
                     .into_iter()
                     .nth(index as usize)
-                    .ok_or("That answer is no longer on offer. The board has been refreshed.")?;
+                    .ok_or("That answer is no longer on offer.")?;
                 if let Some(c) = choice {
                     self.begin(c.source);
                 }
@@ -1785,10 +1809,8 @@ impl Playtest {
                 self.restore(pending.checkpoint);
                 Ok(())
             }
+            // The board's own question stays open, as it was: `act` puts it back on a refusal.
             _ if stage == PlaytestStage::Prompt => {
-                // The board's own question is put back: an action that is not an answer leaves
-                // it open, as it was.
-                self.choice = choice;
                 Err("Answer the question first, or cancel it.".into())
             }
 
@@ -2291,7 +2313,7 @@ impl Playtest {
         let name = obj.name.clone();
         let is_token = obj.is_token;
         let owner = obj.owner;
-        if to == Place::Command && !self.commanders.contains(&(owner, name.clone())) {
+        if to == Place::Command && !self.is_commander(owner, &name) {
             return Err(format!(
                 "Only a commander goes to the command zone, and {name} is not one."
             ));
@@ -2716,12 +2738,7 @@ impl Playtest {
         } else {
             self.history.redo(now).ok_or(NOTHING_TO_REDO)?
         };
-        self.restore(then.checkpoint);
-        self.pending = then.pending;
-        self.choice = then.choice;
-        self.over_told = then.over_told;
-        self.ending = then.ending;
-        self.stopped_at = then.stopped_at;
+        self.go_to(then);
         self.frames.clear();
         Ok(PlaytestStep {
             view: self.view(),
@@ -2739,6 +2756,16 @@ impl Playtest {
             ending: self.ending,
             stopped_at: self.stopped_at,
         }
+    }
+
+    /// Back to `then`, whole: for undo and redo, and for a refusal.
+    fn go_to(&mut self, then: Moment) {
+        self.restore(then.checkpoint);
+        self.pending = then.pending;
+        self.choice = then.choice;
+        self.over_told = then.over_told;
+        self.ending = then.ending;
+        self.stopped_at = then.stopped_at;
     }
 
     fn checkpoint(&self) -> Checkpoint {
@@ -2780,6 +2807,12 @@ fn is_sandbox(action: &PlaytestAction) -> bool {
             | PlaytestAction::Shuffle
             | PlaytestAction::SetLife { .. }
     )
+}
+
+/// The card an object of this name is a face of (`Playtest::card_names`): the card's own name
+/// for a back face, `name` itself otherwise.
+fn card_name<'a>(card_names: &'a HashMap<String, String>, name: &'a str) -> &'a str {
+    card_names.get(name).map_or(name, String::as_str)
 }
 
 /// The wire's name for a player: `PlayerId(n)` is `PlaytestPlayer::ALL[n]`. A game never seats

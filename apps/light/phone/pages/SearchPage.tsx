@@ -6,6 +6,7 @@ import { TagQueryRow } from "@grimoire/ui/features/search/TagQueryRow";
 import { useCardSearch, type CardSearch } from "@grimoire/ui/features/search/useCardSearch";
 import { TagChips } from "@grimoire/ui/features/tags/TagChips";
 import { useTagSelection, type TagFilter } from "@grimoire/ui/features/tags/useTagSelection";
+import { useHeldDownloads } from "../../heldDownloads";
 import { useCardData } from "../cardData";
 import { CardWall, type WallItem } from "../CardWall";
 import { searchItem } from "../items";
@@ -79,6 +80,7 @@ export function SearchResults({
 }) {
   const { query } = search;
   const cardData = useCardData();
+  const held = useHeldDownloads();
   return query.isLoadingError ? (
     <ReadError>The search could not be read.</ReadError>
   ) : !query.isPending && items.length === 0 ? (
@@ -86,6 +88,7 @@ export function SearchResults({
       empty={cardData.cardCount === 0 || search.unfiltered}
       sync={cardData.sync}
       error={cardData.error}
+      onDownload={held.held ? held.offer : undefined}
     />
   ) : (
     <CardWall

@@ -61,6 +61,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
 } from "@tanstack/react-query";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { RECENT_CARDS_ROOT } from "@/features/home/keys";
@@ -75,6 +76,7 @@ import { departureFrom, useReturnToRemovedCard, type PaneDeparture } from "./car
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { useCopyFinish, useCopyPrinting } from "@/features/collection/useCopyWrites";
+import { sweep } from "@/features/transfer/export/scope";
 import { MENU_CONDITION } from "@/lib/conditions";
 import { parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -341,6 +343,65 @@ export function artistOf(
  *  reader knows. Pointed at the constant because two literals holding one decision drift the
  *  first time either moves — which is `useDeck`'s rule at the app's other one-press add. */
 const MODAL_CONDITION = MENU_CONDITION;
+
+/** The two lists the modal draws a stepper of its own on, by the root each is cached under. */
+type StepperList = "collection" | "wishlist";
+
+/** The rows behind the modal's owned or wished stepper — every printing of the oracle card, which
+ *  the panel narrows to the one it is open on. */
+const stepperRowsKey = (list: StepperList, oracleId: string | null) =>
+  [list, "card", oracleId] as const;
+
+/**
+ * One press of the owned or wished stepper (issue #1167): the number the reader asked for and the
+ * printing it was asked of. **No row id**, because which row the press lands on is decided when
+ * the write runs rather than when the button was pressed — see `stepperRows`.
+ */
+interface StepPress {
+  cardId: string;
+  oracleId: string;
+  quantity: number;
+}
+
+/**
+ * The rows of one printing as the cache holds them **now** — read inside the write rather than at
+ * the press, which is the whole of issue #1167's second half.
+ *
+ * The presses are queued (`scope` on both mutations), and each one's `onSuccess` waits for these
+ * rows to be re-read before the next one starts. So a press made while an add was still on its way
+ * finds the row that add made and steps it, where an id taken at the press was `null` and the
+ * press added again: `collectionAdd(1)` then `collectionAdd(12)` for a typed "12" was 13 copies.
+ */
+function stepperRows(
+  queryClient: QueryClient,
+  list: StepperList,
+  { cardId, oracleId }: StepPress,
+): { id: number }[] {
+  const rows = queryClient.getQueryData<{ id: number; cardId: string }[]>(
+    stepperRowsKey(list, oracleId),
+  );
+  return (rows ?? []).filter((row) => row.cardId === cardId);
+}
+
+/**
+ * Wait for {@link stepperRows}' read to land after a write — the in-flight refetch `settle` just
+ * started if there is one (`cancelRefetch: false`), so this is never a second round trip.
+ *
+ * `refetchType: "all"` because the queue outlives the panel: a reader who presses `+` three times
+ * and walks to the next card has left this read without an observer, and an inactive read is one
+ * `invalidateQueries` would otherwise only mark — handing the press still queued behind it the rows
+ * from before its predecessor's write.
+ */
+const stepperRowsLanded = (queryClient: QueryClient, list: StepperList, oracleId: string) =>
+  queryClient.invalidateQueries(
+    { queryKey: stepperRowsKey(list, oracleId), exact: true, refetchType: "all" },
+    { cancelRefetch: false },
+  );
+
+/** The refusal a stepper press gets on a printing held in more than one row — said at the press,
+ *  and again by the write in the rare case a row arrived between the two. */
+const manyRowsRefusal = (rows: number, list: StepperList) =>
+  `You have this printing in ${rows} rows. Open your ${list} to change one.`;
 
 /**
  * Remember each card the modal opens, for the home page's **Recently viewed** strip.
@@ -993,20 +1054,29 @@ function Body({
    * `skipToken` is for an argument that does not exist, and `oracleId` exists on every wall. What
    * is missing on the search, tags and deck surfaces is a *reason* — `scope.quantity` says no
    * stepper is drawn there, so the rows would be fetched for nothing.
+   *
+   * **Swept to the end, not one page** (issue #1169). The read is at the oracle grain and the
+   * narrowing to this printing is {@link ownedRows}' below, so one capped page could stop short
+   * of the printing's rows: a basic-land collector with more than 200 Island entries opened a
+   * printing whose rows fell past the cap, the stepper read 0, and + added a new row instead of
+   * stepping the one they had. `sweep` stops on a short page, which for every card but a stack of
+   * basics is the first one.
    */
   const owned = useQuery({
-    queryKey: ["collection", "card", oracleId],
+    queryKey: stepperRowsKey("collection", oracleId),
     queryFn:
       oracleId === null
         ? skipToken
-        : () => ipc.collectionList({ oracleId, limit: 200, offset: 0 }),
+        : () => sweep((limit, offset) => ipc.collectionList({ oracleId, limit, offset })),
     enabled: scope.quantity === "owned",
   });
   /** The same, for the wishlist's own stepper — `wishlist_set_quantity` takes a row id too. */
   const wished = useQuery({
-    queryKey: ["wishlist", "card", oracleId],
+    queryKey: stepperRowsKey("wishlist", oracleId),
     queryFn:
-      oracleId === null ? skipToken : () => ipc.wishlistList({ oracleId, limit: 200, offset: 0 }),
+      oracleId === null
+        ? skipToken
+        : () => sweep((limit, offset) => ipc.wishlistList({ oracleId, limit, offset })),
     enabled: scope.quantity === "wished",
   });
 
@@ -1044,11 +1114,11 @@ function Body({
    *  printing can honestly address. Empty on every surface that draws no stepper, because the
    *  read behind each is `enabled` on exactly that — see {@link owned}. */
   const ownedRows = useMemo(
-    () => (owned.data?.items ?? []).filter((row) => row.cardId === cardId),
+    () => (owned.data ?? []).filter((row) => row.cardId === cardId),
     [owned.data, cardId],
   );
   const wishedRows = useMemo(
-    () => (wished.data?.items ?? []).filter((row) => row.cardId === cardId),
+    () => (wished.data ?? []).filter((row) => row.cardId === cardId),
     [wished.data, cardId],
   );
 
@@ -1073,7 +1143,7 @@ function Body({
   const copyRow = useMemo(() => {
     const id = scope.copy?.entryId;
     if (id === undefined) return null;
-    return (owned.data?.items ?? []).find((row) => row.id === id) ?? null;
+    return (owned.data ?? []).find((row) => row.id === id) ?? null;
   }, [owned.data, scope.copy]);
   /**
    * The copy as `CardModalArt` reads a row — which is what turns its `View as …` into `Set as …`.
@@ -1125,35 +1195,72 @@ function Body({
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
     void refreshCardSearches(queryClient);
   };
+  /**
+   * The owned and wished steppers' writes — **queued, and drawn before they land** (issue #1167).
+   *
+   * Both commands take an *absolute* quantity, and the stepper computes it from the number it is
+   * drawing. Drawn off the cached rows alone, that number stood still until a refetch landed, so
+   * holding `+` on one copy sent `set_quantity(id, 2)` three times and stored 2 — the failure
+   * `useCollectionEntryWrites` documents and fixes on the page's own stepper. Three parts, each
+   * closing a different half of it:
+   *
+   * - **The stepper draws the last press** while any is in flight (`quantity` below reads the
+   *   mutation's own `variables`), so the next press counts from it rather than from the cache.
+   * - **`scope` queues the presses**, so `set(2)`, `set(3)`, `set(4)` reach the backend in the
+   *   order they were made and the last word is the last press.
+   * - **The row is resolved when the write runs** ({@link stepperRows}), and `onSuccess` holds the
+   *   queue until the rows are re-read ({@link stepperRowsLanded}) — so a press queued behind an
+   *   add steps the row that add made rather than adding a second time, and one queued behind a
+   *   delete at zero adds afresh rather than stepping a row that is gone.
+   *
+   * A patch of the cached rows in `onMutate`, which is what the page does, covers the first part
+   * and not the third: a printing with no row has nothing to patch, and the add is where the
+   * surplus copies came from.
+   */
   const setOwned = useMutation({
-    mutationFn: ({ id, quantity }: { id: number | null; quantity: number }) =>
-      id === null
-        ? ipc.collectionAdd({
-            cardId,
-            finish: soleFinish(card?.finishes ?? null) ?? "nonfoil",
-            condition: MODAL_CONDITION,
-            quantity,
-            // Never omitted: `folder_id` is the eleventh term of the collection's grain, so a
-            // folder the caller failed to pass is a *second row* at the root rather than a copy
-            // filed in the wrong drawer.
-            folderId: null,
-          })
-        : ipc.collectionSetQuantity(id, quantity),
+    mutationFn: async (press: StepPress & { finish: Finish }) => {
+      const rows = stepperRows(queryClient, "collection", press);
+      if (rows.length > 1) throw manyRowsRefusal(rows.length, "collection");
+      const row = rows[0];
+      if (row !== undefined) return ipc.collectionSetQuantity(row.id, press.quantity);
+      // Nothing held and nothing asked for — a zero typed over a zero — is no write at all.
+      if (press.quantity === 0) return null;
+      return ipc.collectionAdd({
+        cardId: press.cardId,
+        finish: press.finish,
+        condition: MODAL_CONDITION,
+        quantity: press.quantity,
+        // Never omitted: `folder_id` is the eleventh term of the collection's grain, so a
+        // folder the caller failed to pass is a *second row* at the root rather than a copy
+        // filed in the wrong drawer.
+        folderId: null,
+      });
+    },
+    scope: { id: "cardModal:owned" },
     onMutate: () => setRefusal(null),
-    onSuccess: settle,
+    onSuccess: (_change, press) => {
+      settle();
+      return stepperRowsLanded(queryClient, "collection", press.oracleId);
+    },
     onError: (e) => setRefusal(`Couldn't change what you own — ${ipcError(e)}`),
   });
   const setWished = useMutation({
-    mutationFn: ({ id, quantity }: { id: number | null; quantity: number }) =>
-      id === null
-        ? ipc.wishlistAdd({ cardId, quantity, folderId: null })
-        : ipc.wishlistSetQuantity(id, quantity),
+    mutationFn: async (press: StepPress) => {
+      const rows = stepperRows(queryClient, "wishlist", press);
+      if (rows.length > 1) throw manyRowsRefusal(rows.length, "wishlist");
+      const row = rows[0];
+      if (row !== undefined) return ipc.wishlistSetQuantity(row.id, press.quantity);
+      if (press.quantity === 0) return null;
+      return ipc.wishlistAdd({ cardId: press.cardId, quantity: press.quantity, folderId: null });
+    },
+    scope: { id: "cardModal:wished" },
     onMutate: () => setRefusal(null),
     // Two keys rather than four: a wish is a copy the reader does not have, so it moves no
     // collection figure and no deck's arithmetic.
-    onSuccess: () => {
+    onSuccess: (_change, press) => {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void refreshCardSearches(queryClient);
+      return stepperRowsLanded(queryClient, "wishlist", press.oracleId);
     },
     onError: (e) => setRefusal(`Couldn't change your wishlist — ${ipcError(e)}`),
   });
@@ -1196,13 +1303,27 @@ function Body({
    * rail's figures beside it are the oracle-wide ones, and the two genuinely answer different
    * questions — a reader owning three Bolts of which one is this printing sees `3 owned` in the
    * rail and a stepper on `1`.
+   *
+   * **The last press, while any press on this printing is in flight** — the optimistic half of
+   * {@link setOwned}'s argument. The mutation's `variables` are the latest press, and the latest
+   * press is the last in its queue, so `isPending` stays true until every press before it has
+   * landed and the rows have been re-read: the number hands over from the press to the cache with
+   * no frame of the old figure between.
    */
+  const stepping =
+    scope.quantity === "owned" ? setOwned : scope.quantity === "wished" ? setWished : null;
+  const pressed =
+    stepping?.isPending === true && stepping.variables.cardId === cardId
+      ? stepping.variables.quantity
+      : null;
   const quantity =
     scope.quantity === "deck"
       ? (deckCard?.quantity ?? 0)
-      : scope.quantity === "owned"
-        ? ownedRows.reduce((sum, row) => sum + row.quantity, 0)
-        : wishedRows.reduce((sum, row) => sum + row.quantity, 0);
+      : (pressed ??
+        (scope.quantity === "owned" ? ownedRows : wishedRows).reduce(
+          (sum, row) => sum + row.quantity,
+          0,
+        ));
 
   /**
    * The press, per surface — and **the refusal is a sentence rather than a silence** where the
@@ -1228,13 +1349,13 @@ function Body({
     const rows = scope.quantity === "owned" ? ownedRows : wishedRows;
     if (rows.length > 1) {
       setRefusal(
-        `You have this printing in ${rows.length} rows. Open your ${
-          scope.quantity === "owned" ? "collection" : "wishlist"
-        } to change one.`,
+        manyRowsRefusal(rows.length, scope.quantity === "owned" ? "collection" : "wishlist"),
       );
       return;
     }
-    const id = rows[0]?.id ?? null;
+    // No oracle id is no rows read (`owned`'s `skipToken`), so nothing a press could address.
+    // Never the case for a live card, whose `cards.oracle_id` is never null.
+    if (oracleId === null) return;
     /**
      * **Zero deletes the entry on both of these lists too** — `collection_set_quantity` and
      * `wishlist_set_quantity` each `DELETE` the row rather than storing a zero — so the card the
@@ -1250,20 +1371,24 @@ function Body({
      * comes to be made at the wrong moment. One rule: at the press, off the walk the reader is
      * looking at.
      *
-     * `id === null` is a printing the reader holds no row of, where this press is an **add** and
-     * `next` cannot be zero anyway; naming it keeps the departure out of the one arm where a
-     * zero would mean nothing.
+     * **Off the number drawn, not off a row id**, because the row is the write's to find
+     * ({@link stepperRows}): a zero pressed over a drawn `0` is no removal, and a zero pressed over
+     * a `1` whose add has not landed yet is one — the queued write finds the row and deletes it.
      */
-    const departure = next === 0 && id !== null ? removalDeparture : null;
+    const departure = next === 0 && quantity > 0 ? removalDeparture : null;
     // A per-call `onSuccess`, which TanStack runs after the mutation's own — so the invalidations
-    // in `settle` are already queued and nothing here has to know about them. Omitted entirely
-    // when there is no departure, rather than passed as a callback that does nothing.
+    // in `settle` are already queued, and the rows already re-read, and nothing here has to know
+    // about them. Omitted entirely when there is no departure, rather than passed as a callback
+    // that does nothing.
     const moveOn =
       departure === null
         ? undefined
         : { onSuccess: () => leaveRemovedCard(departure.leaving, departure.to) };
-    if (scope.quantity === "owned") setOwned.mutate({ id, quantity: next }, moveOn);
-    else setWished.mutate({ id, quantity: next }, moveOn);
+    const press = { cardId, oracleId, quantity: next };
+    if (scope.quantity === "owned") {
+      const finish = soleFinish(card?.finishes ?? null) ?? "nonfoil";
+      setOwned.mutate({ ...press, finish }, moveOn);
+    } else setWished.mutate(press, moveOn);
   };
 
   const categoryOptions: DropdownOption[] = useMemo(
