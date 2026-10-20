@@ -1,28 +1,42 @@
 {
   "about": "What the files in this folder scored when they were trained, by network. neural-deliver.yml compares a new run against it in the pull request and rewrites it with the run it delivers (crates/card-neural/train/update_readme.py). Not read by the app.",
   "embedder": {
-    "run": "qd-mnv4-e",
-    "where": "scanner lab",
-    "finished_at": null,
-    "git_sha": null,
+    "run": "2026-10-20-0951",
+    "where": "modal",
+    "finished_at": "2026-10-20T10:37:38Z",
+    "git_sha": "a6330276f3664129472e75b6c1c33f9e62bb2f87",
     "looks": 70402,
     "metrics": {
-      "retrieval_top1": 0.9997,
-      "epochs": 30
+      "retrieval_top1": 0.9996666666666667,
+      "epochs": 30,
+      "views_per_s": 1051,
+      "usd": 1.2391
     }
   },
   "detector": {
-    "run": "det-a",
-    "where": "scanner lab",
-    "finished_at": null,
-    "git_sha": null,
+    "run": "2026-10-20-0951",
+    "where": "modal",
+    "finished_at": "2026-10-20T10:37:38Z",
+    "git_sha": "a6330276f3664129472e75b6c1c33f9e62bb2f87",
     "metrics": {
-      "found": 0.993,
-      "corner_err": 0.0277,
-      "corner_err_p90": 0.0483,
-      "wrong_way": 0.0033,
-      "steps": 30000
+      "found": 0.9956284153005465,
+      "corner_err": 0.02773524533396906,
+      "corner_err_p90": 0.04639523742332922,
+      "wrong_way": 0.003293084522502744,
+      "scenes_per_s": 817,
+      "steps": 30000,
+      "usd": 1.3155
     }
   },
-  "last_run": null
+  "last_run": {
+    "run": "2026-10-20-0951",
+    "where": "modal",
+    "finished_at": "2026-10-20T10:37:38Z",
+    "git_sha": "a6330276f3664129472e75b6c1c33f9e62bb2f87",
+    "retrained": [
+      "embedder",
+      "detector"
+    ],
+    "spend_usd": 2.5786
+  }
 }
