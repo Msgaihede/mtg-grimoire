@@ -6,6 +6,7 @@ import {
   colorIdentityIssues,
   commanderIdentity,
   commanderIneligibility,
+  commandZoneIneligibility,
   identityOf,
   validateCommanderZone,
 } from "./commanders";
@@ -663,6 +664,25 @@ describe("eligibility by rule", () => {
     expect(commanderIneligibility(GRIZZLY_BEARS, "brawl", spec("brawl"))).toContain(
       "is not a legal commander in Brawl",
     );
+  });
+
+  /**
+   * Issue #1161: the zone-wide predicate, which the editor's **Set as commander** row and
+   * `oathbreakerZoneIssues` both ask. It differs from `commanderIneligibility` only by passing
+   * Oathbreaker's signature spell.
+   */
+  it("passes the signature spell in an oathbreaker's command zone, and nowhere else", () => {
+    expect(
+      commandZoneIneligibility(SWORDS_TO_PLOWSHARES, "oathbreaker", spec("oathbreaker")),
+    ).toBeNull();
+    expect(commandZoneIneligibility(NAHIRI, "oathbreaker", spec("oathbreaker"))).toBeNull();
+    expect(commandZoneIneligibility(commander(), "oathbreaker", spec("oathbreaker"))).toBe(
+      commanderIneligibility(commander(), "oathbreaker", spec("oathbreaker")),
+    );
+    expect(commandZoneIneligibility(SWORDS_TO_PLOWSHARES, "edh", spec("commander"))).toBe(
+      commanderIneligibility(SWORDS_TO_PLOWSHARES, "edh", spec("commander")),
+    );
+    expect(commandZoneIneligibility(SWORDS_TO_PLOWSHARES, "edh", spec("commander"))).not.toBeNull();
   });
 
   it("takes only a planeswalker in oathbreaker", () => {

@@ -43,8 +43,7 @@ export const BUTTON_OVER_ART = "bg-bg/88 text-text disabled:hover:text-text";
  * The glyph is 7/12 of the box, which is the fraction the doc on {@link size} argues for and
  * the reason neither number is a round one.
  */
-export const QUANTITY_STEPPER_CARD_BOX =
-  "size-[calc(2.25rem*var(--control-scale,1))] rounded-lg";
+export const QUANTITY_STEPPER_CARD_BOX = "size-[calc(2.25rem*var(--control-scale,1))] rounded-lg";
 export const QUANTITY_STEPPER_CARD_ICON = "size-[calc(1.3125rem*var(--control-scale,1))]";
 
 /**
@@ -68,12 +67,30 @@ const NO_NATIVE_STEPS = cn(
 );
 
 /**
+ * How long the box goes on showing a number it committed when `value` has not moved to meet it.
+ *
+ * A local SQLite round trip and the re-read behind it answer in tens of milliseconds, so this is
+ * a ceiling for a write that failed rather than a wait anybody sees.
+ */
+const SENT_HOLD_MS = 1500;
+
+/**
  * A quantity, and the two buttons that change it.
  *
  * The number is an `<input type="number">` rather than a label: typing `12` is one action
  * and pressing `+` eleven times is eleven, and a collection is full of twelves. It is
  * `font-mono tabular-nums` because a quantity is data — the direction reserves colour for
  * mana and art, so this control is grey, and its only emphasis is the focus outline.
+ *
+ * **A press reports at once; typing reports on Enter or on leaving the box** (issue #1110).
+ * `onChange` is a write on every surface that draws this, and on several it is more than a
+ * number: a lower count in the deck editor is a *cut* that files copies into Recently removed,
+ * `0` in the collection deletes the entry with its notes and price, and a lower count clamps
+ * the tradelist for good. Reporting every keystroke made each half-typed number one of those —
+ * "12" over 8 Mountains was a cut to 1 and then a set to 12, and deleting the "1" of "10" was a
+ * delete. So the box holds what is typed as a draft, and only Enter or blur sends it; Escape
+ * throws it away. Inside a `Dialog` Escape is the dialog's (its rung listens in the capture
+ * phase), and the focus it hands back is a blur like any other, so there it commits.
  */
 export function QuantityStepper({
   value,
@@ -218,8 +235,8 @@ export function QuantityStepper({
       : size === "card"
         ? "h-[calc(2.25rem*var(--control-scale,1))] w-[calc(3.5rem*var(--control-scale,1))] rounded-lg"
         : size === "sm"
-        ? "h-7 w-12"
-        : "h-9 w-14";
+          ? "h-7 w-12"
+          : "h-9 w-14";
   // `fill` trades the fixed width for whatever the row has left. `min-w-0` beside it because a
   // flex item's floor is its content, and `w-14`'s replacement has to be allowed to shrink below
   // the digits it holds when the column is narrow.
@@ -245,10 +262,60 @@ export function QuantityStepper({
    * A controlled `<input>` whose `onChange` does not move the state has its DOM value
    * *reverted* by React — so ignoring the empty string, as the obvious version of this does,
    * makes Backspace do nothing at all and turns replacing "1" with "12" into "112". The
-   * draft is what lets the box be empty for the one keystroke between the two numbers,
-   * without `0` ever reaching the collection.
+   * draft is what lets the box hold "", "1" and then "12" while nothing but the last of them
+   * is ever reported — see the component's doc for what reporting the others did.
    */
   const [draft, setDraft] = useState<string | null>(null);
+
+  /**
+   * The number a typed commit just reported, held until `value` moves.
+   *
+   * No caller is optimistic: `value` is the row as the database last answered, so it is still
+   * the old count for the length of the round trip. Clearing the draft on commit without this
+   * drew "12", then the old "8" for a frame, then "12" again with a tick. It is also what the
+   * buttons step from, so a `+` pressed straight after typing — the press whose mousedown is the
+   * blur that commits — counts from the number the reader typed and not from the stale one.
+   *
+   * Let go when `value` changes (whatever it changed to is the truth, a parent that refused or
+   * capped the write included) and after {@link SENT_HOLD_MS} regardless, so a write that failed
+   * outright and left `value` where it was does not leave the box claiming it succeeded.
+   */
+  const [sent, setSent] = useState<number | null>(null);
+  const [seen, setSeen] = useState(value);
+  if (seen !== value) {
+    setSeen(value);
+    setSent(null);
+  }
+  useEffect(() => {
+    if (sent === null) return;
+    const id = window.setTimeout(() => setSent(null), SENT_HOLD_MS);
+    return () => window.clearTimeout(id);
+  }, [sent]);
+  const current = sent ?? value;
+
+  /**
+   * Send the draft, if there is one: Enter and blur. An empty or unparseable box sends nothing
+   * and goes back to the number it stands for, and so does one **below the floor** — "-3" in a
+   * collection box is a slip, and clamping it would make it `0`, which there is a delete. One
+   * equal to what the box already stood for is not a write at all.
+   */
+  const commit = () => {
+    if (draft === null) return;
+    setDraft(null);
+    const typed = Number.parseInt(draft, 10);
+    if (Number.isNaN(typed) || typed < min) return;
+    const next = clamp(typed);
+    if (next === current) return;
+    setSent(next);
+    onChange(next);
+  };
+
+  // A press is not held: it reports at once and the box follows `value` exactly as it always
+  // has. It only clears a typed number still in flight, which it counted from.
+  const step = (next: number) => {
+    setSent(null);
+    onChange(next);
+  };
 
   /**
    * The tick: the number swells by a tenth and settles, once per change.
@@ -267,8 +334,9 @@ export function QuantityStepper({
    * preference — an imperative `animate()` out of `useAnimate` does not.
    *
    * The ref is compared rather than the render being trusted: this fires on the value the
-   * control *reports*, so a step, a typed digit and a quantity that came back changed from the
-   * database all tick, and a re-render that moved nothing does not.
+   * control *is given*, so a step, a committed number and a quantity that came back changed from
+   * the database all tick, and a re-render that moved nothing — or a digit still being typed —
+   * does not.
    */
   const tick = useAnimationControls();
   const ticked = useRef(value);
@@ -282,9 +350,9 @@ export function QuantityStepper({
     <button
       type="button"
       aria-label={`Decrease ${label}`}
-      disabled={value <= min}
+      disabled={current <= min}
       onClick={() => {
-        onChange(clamp(value - 1));
+        step(clamp(current - 1));
       }}
       className={button}
     >
@@ -296,9 +364,9 @@ export function QuantityStepper({
     <button
       type="button"
       aria-label={`Increase ${label}`}
-      disabled={value >= max}
+      disabled={current >= max}
       onClick={() => {
-        onChange(clamp(value + 1));
+        step(clamp(current + 1));
       }}
       className={button}
     >
@@ -313,26 +381,30 @@ export function QuantityStepper({
       type="number"
       inputMode="numeric"
       aria-label={label}
-      value={draft ?? value}
+      value={draft ?? current}
       min={min}
       max={max}
       onChange={(e) => {
         const raw = e.target.value;
         const typed = Number.parseInt(raw, 10);
-        // An empty box is a box being typed in, not a zero: it is kept as typed and
-        // reported to nobody, so the value behind it is still the last real number.
-        if (Number.isNaN(typed)) {
-          setDraft(raw);
-          return;
-        }
-        const next = clamp(typed);
-        // Out of range is shown *clamped* rather than left as typed — a box reading 99
-        // over a ceiling of 3 is a promise the control has already broken.
-        setDraft(next === typed ? raw : null);
-        onChange(next);
+        // Over the ceiling is shown *clamped* rather than left as typed — a box reading 99
+        // over a ceiling of 3 is a promise the control has already broken. Only the ceiling:
+        // more digits only ever make a number larger, so the floor is the commit's to apply,
+        // and clamping "1" up to a floor of 5 would make "12" impossible to type.
+        setDraft(!Number.isNaN(typed) && typed > max ? String(max) : raw);
       }}
-      // Whatever was left half-typed, the box goes back to the number it stands for.
-      onBlur={() => setDraft(null)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          commit();
+        } else if (e.key === "Escape" && draft !== null) {
+          // Spent on the draft, so the view behind (the `"navigation"` rung) does not also take
+          // the press. In a dialog the capture rung has spent it already, and the blur its
+          // hand-back caused has committed — see the component's doc.
+          e.preventDefault();
+          setDraft(null);
+        }
+      }}
+      onBlur={commit}
       className={cn(
         "rounded-md border border-border bg-surface text-center font-mono tabular-nums",
         NO_NATIVE_STEPS,

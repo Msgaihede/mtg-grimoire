@@ -11,9 +11,10 @@
  *
  * **The two surfaces still count different rows, and that is not a contradiction.** The bars are
  * over every **active** pile, because a sideboard is cards you own and sleeve; the odds are over
- * the **sized** piles alone, because a card in the sideboard is not in the deck you are drawing
- * your opening seven from. {@link activeCards} and {@link sizedCards} are those two readings,
- * named once here so a chart and a table cannot come to disagree about which is which.
+ * the **library** alone — the sized piles less the command zone — because neither a card in the
+ * sideboard nor the commander is in the deck you are drawing your opening seven from.
+ * {@link activeCards} and {@link libraryCards} are those two readings, named once here so a chart
+ * and a table cannot come to disagree about which is which.
  *
  * The type-line vocabulary also lives here — `TYPE_BUCKETS`, `front`, `isLand` and `typeCounts`
  * were `DeckStats.tsx`'s until the distribution needed them too, and a second spelling of "is
@@ -210,17 +211,34 @@ export function activeCards(cards: readonly DeckCard[]): DeckCard[] {
  * Copies in the active piles whose **kind** the format's size rule counts — `engine.SIZE_KINDS`,
  * imported rather than restated.
  *
- * **This is the deck you draw an opening hand from**, and it is a smaller number than
- * {@link activeCards} on purpose: a sideboard is cards you own, sleeve and pay for, and it is not
- * in the library when you take your seven. Kinds and not categories, because a deck may own any
- * number of `main` piles — what a card is *for* is the kind, what it is *called* is the reader's.
+ * **This is the deck the format counts**, and it is a smaller number than {@link activeCards} on
+ * purpose: a sideboard is cards you own, sleeve and pay for, and it is not part of the 60 or the
+ * 100. Kinds and not categories, because a deck may own any number of `main` piles — what a card
+ * is *for* is the kind, what it is *called* is the reader's.
  *
- * Summed, this is `DeckStatsSummary.sized`, and a test pins the two together: the odds table's
- * denominator and the Cards figure over it must be one number or the table is answering about a
- * deck the reader is not being shown.
+ * Summed, this is `DeckStatsSummary.sized`, and a test pins the two together. It is **not** the
+ * library an opening hand comes out of — the command zone is counted here and drawn from never;
+ * that is {@link libraryCards}.
  */
 export function sizedCards(cards: readonly DeckCard[]): DeckCard[] {
   return cards.filter((card) => card.categoryActive && SIZE_KINDS.includes(card.categoryKind));
+}
+
+/**
+ * {@link sizedCards} less the `commander` kind — **the library you draw an opening hand from**,
+ * and the population the odds table counts (issue #1163).
+ *
+ * The format's size rule counts the command zone ("exactly 100 incl cmdr", "60 incl Oathbreaker +
+ * signature spell"), but the game starts those cards in the command zone and never shuffles them
+ * into the library. Counted, a Commander deck's odds were taken out of 100 rather than 99 (98 with
+ * partners), and a `Card name` cut listed the commander itself with a chance of drawing it.
+ *
+ * Every format, not only the ones with a commander: a card parked in a `commander` pile of a Modern
+ * deck is already an error the validator asks the reader to fix, and answering odds as if it were
+ * moved would be guessing at where it is going.
+ */
+export function libraryCards(cards: readonly DeckCard[]): DeckCard[] {
+  return sizedCards(cards).filter((card) => card.categoryKind !== "commander");
 }
 
 /**

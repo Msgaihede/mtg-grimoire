@@ -41,6 +41,7 @@ import { tileUnreleased } from "./SearchPage";
 import { resetShownFaces } from "@/features/card/shownFace";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
+import { QuantityStepper } from "@/components/QuantityStepper";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import {
   DEFAULT_SECTION_ZOOMS,
@@ -2583,5 +2584,52 @@ describe("flipping a tile", () => {
     );
     expect(cardMenu).toHaveBeenCalledWith(dfc, [], true);
     expect(cardMenu).toHaveBeenCalledWith(plain, [], false);
+  });
+});
+
+/**
+ * Issue #1111 — a tile is keyed by its slot, and what the caller hangs on it must not be.
+ *
+ * Typing "0" over a copy's "10" and pressing Enter saves it and removes the copy, and the next
+ * card moves up into the same slot. A stepper keyed by the slot would still be focused and still
+ * read "0", and the next number typed and entered would be a write to a card the reader never
+ * touched. (A typed number is sent on Enter or blur since issue #1110, not on each keystroke.)
+ */
+describe("a slot that changes card", () => {
+  const base = {
+    onNeedNextPage: vi.fn(),
+    onSelect: vi.fn(),
+    listKey: "k",
+    zoomSection: "collection" as const,
+  };
+
+  it("draws a new stepper for the card that moved up, not the old card's draft", async () => {
+    const user = userEvent.setup();
+    const quantities: Record<string, number> = { a: 10, b: 3 };
+    const onSetQuantity = vi.fn();
+    const column = (c: CardSummary) => (
+      <QuantityStepper
+        value={quantities[c.id]}
+        onChange={(next) => onSetQuantity(c.id, next)}
+        label={`Quantity of ${c.name}`}
+      />
+    );
+    const rows = [card("a", "Lightning Bolt"), card("b", "Shivan Dragon")];
+    const { rerender } = render(<CardGrid rows={rows} column={column} {...base} />);
+
+    const boltBox = screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt" });
+    await user.tripleClick(boltBox);
+    await user.keyboard("0{Enter}");
+    expect(onSetQuantity).toHaveBeenLastCalledWith("a", 0);
+
+    // The zero removed the copy; the dragon now sits in the bolt's slot.
+    rerender(<CardGrid rows={[rows[1]]} column={column} {...base} />);
+    const dragonBox = screen.getByRole("spinbutton", { name: "Quantity of Shivan Dragon" });
+    expect(dragonBox).toHaveValue(3);
+    expect(dragonBox).not.toHaveFocus();
+
+    onSetQuantity.mockClear();
+    await user.keyboard("5{Enter}");
+    expect(onSetQuantity).not.toHaveBeenCalled();
   });
 });

@@ -15,7 +15,8 @@ import { LAPSED, LIVE } from "./shares";
  * **It reads the stored `status` and does not re-run `decide`.** `reconcile` is what moves a
  * subject through `active → grace → dead` against Patreon; duplicating that judgement here would
  * give one account two opinions about when a membership ended, and the one that drifted would be
- * the one nobody drives by hand. This pass reads the answer the relay already wrote.
+ * the one nobody drives by hand. This pass reads the answer the relay already wrote — and reads
+ * a `grace` the way the relay's own `settle` does, by its `grace_until` (see `SERVING_GROUPS`).
  *
  * **What this buys is the shape of the public read.** Because a membership's verdict is written
  * into `shares.state` once a day, `GET /s/{id}` reads one row and branches on a column — no join
@@ -28,7 +29,7 @@ import { LAPSED, LIVE } from "./shares";
  */
 
 /**
- * The statuses that serve, as an **allowlist**.
+ * The statuses that serve, as an **allowlist** — `active`, and `grace` inside its window.
  *
  * `entitlement.ts`'s `Status` is the same three strings and is deliberately not imported:
  * `infrastructure/share-worker/tsconfig.json` names the two relay modules this Worker depends on and
@@ -46,11 +47,20 @@ import { LAPSED, LIVE } from "./shares";
  * Patreon retries, not a cancellation the reader chose, so a reader inside the window syncs — and
  * shares — exactly as they did the day before.
  */
-const SERVING: readonly string[] = ["active", "grace"];
+const ACTIVE = "active";
+const GRACE = "grace";
 
 /**
- * The groups whose membership serves, as a subquery both statements below share — with one `?`
- * per entry of `SERVING`, bound in that order.
+ * The groups whose membership serves, as a subquery both statements below share — bound by
+ * `servingBindings`, in that order.
+ *
+ * ⚠️ **A stored `grace` serves only while `grace_until` has not passed.** That is the relay's
+ * `settle`, spelled in SQL: `/token` refuses a reader whose window has closed, and nothing writes
+ * `dead` into the row until the relay's cron next reaches it — which, for a row Patreon refuses
+ * every time, was never until issue #1117. Read as a bare status, such a member's links stayed
+ * live for ever after their sync had stopped. A NULL or non-positive deadline is a closed window
+ * there and fails `grace_until >= ?` here, NULL comparing as not true; `>=` because the deadline
+ * instant is the last one inside the window, `decide`'s and `settle`'s `>` read from this side.
  *
  * ⚠️ **`group_id IS NOT NULL` is load-bearing, and it was not until the pass went set-based.** An
  * unbound entitlement is a subject who has connected Patreon and claimed no group; its `group_id`
@@ -61,7 +71,12 @@ const SERVING: readonly string[] = ["active", "grace"];
  */
 const SERVING_GROUPS =
   `SELECT group_id FROM entitlements ` +
-  `WHERE group_id IS NOT NULL AND status IN (${SERVING.map(() => "?").join(", ")})`;
+  `WHERE group_id IS NOT NULL AND (status = ? OR (status = ? AND grace_until >= ?))`;
+
+/** `SERVING_GROUPS`'s parameters, with the instant the windows are judged at. */
+function servingBindings(nowMs: number): [string, string, number] {
+  return [ACTIVE, GRACE, nowMs];
+}
 
 /**
  * Move every share to whichever state its group's membership now says, in **two statements
@@ -91,7 +106,7 @@ const SERVING_GROUPS =
  * relit after a month of lapse told every Discord preview that a month-old binder was fresh. The
  * row's state is what moved; the column that says when the *owner* last published stays theirs.
  */
-export async function sweepLapsed(env: Env): Promise<void> {
+export async function sweepLapsed(env: Env, nowMs = Date.now()): Promise<void> {
   // ⚠️ **`AND state = ?` is the load-bearing clause of the whole file.** `revoked` is the reader's
   // own press and is terminal; `lapsed` is this pass's and is reversible, and that asymmetry is
   // the reason `state` is a state rather than a `revoked_at` stamp. Without this clause the
@@ -104,12 +119,15 @@ export async function sweepLapsed(env: Env): Promise<void> {
   // **One `batch`, so one transaction**: a pass that failed between the two statements would
   // leave nothing half-moved — and the two touch disjoint groups, so their order is not a choice.
   // A relay with no shares on it is two statements that match nothing, not an empty `batch`.
+  //
+  // **One clock for both**, so a window closing between them cannot leave a group in neither set.
+  const serving = servingBindings(nowMs);
   await env.DB.batch([
     env.DB.prepare(
       `UPDATE shares SET state = ? WHERE state = ? AND group_id IN (${SERVING_GROUPS})`,
-    ).bind(LIVE, LAPSED, ...SERVING),
+    ).bind(LIVE, LAPSED, ...serving),
     env.DB.prepare(
       `UPDATE shares SET state = ? WHERE state = ? AND group_id NOT IN (${SERVING_GROUPS})`,
-    ).bind(LAPSED, LIVE, ...SERVING),
+    ).bind(LAPSED, LIVE, ...serving),
   ]);
 }

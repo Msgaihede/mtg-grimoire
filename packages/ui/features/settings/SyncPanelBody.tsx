@@ -69,8 +69,9 @@ export const REMOVAL_WARNING =
   "synced, and it can't be wiped remotely.";
 
 export const LEAVE_WARNING =
-  "Your collection stays on this device. If the relay can't be reached, other devices may " +
-  "still list this one until they remove it.";
+  "Your collection stays on this device. If the relay can't be reached, or this device hasn't " +
+  "heard of every device in the group, other devices may still list this one until they " +
+  "remove it.";
 
 /**
  * What the host has to say to a paired device about its storage — the light-app spec §7:
@@ -674,7 +675,8 @@ const LAPSE_REASSURANCE =
  * The one dead end this press can still walk a reader into, and the reassurance beside it.
  *
  * **Connecting founds a group of one when this device is in none** (§6.3, `ensure_group`), and
- * `pairing::complete` refuses a `group_id` that differs from the one this device already holds. So
+ * `pairing::accept` refuses an invite into a `group_id` that differs from the one this device
+ * already holds — before its answer reaches the other device, so nothing is left there. So
  * a device that has connected can still *invite* others into its group, but can never *join* a
  * group that already exists — and there is no Leave and no Disconnect in this panel to undo it.
  * A reader who connects on their phone and then tries to join their desktop's group meets

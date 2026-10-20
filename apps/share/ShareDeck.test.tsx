@@ -65,12 +65,33 @@ describe("a shared deck on the public page", () => {
     expect(screen.getByText("1 Krenko, Mob Boss")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Grid" }));
-    expect(screen.getAllByRole("img").length).toBeGreaterThan(0);
+    // The piles' pictures, not the ribbon's logo. Not virtualised, like Stacks, so the browser's
+    // gate is what bounds the requests (#1154).
+    const pictures = screen.getAllByRole("region").flatMap((r) => within(r).getAllByRole("img"));
+    expect(pictures.length).toBeGreaterThan(0);
+    for (const img of pictures) expect(img).toHaveAttribute("loading", "lazy");
 
     // Nothing anywhere on the page writes: no steppers, no checkboxes, no text box.
     expect(screen.queryByRole("checkbox")).toBeNull();
     expect(screen.queryByRole("spinbutton")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("draws no picture from a host the publisher chose, in stacks or in the grid (issue #1153)", async () => {
+    const user = userEvent.setup();
+    const s = snapshot();
+    s.cards[0].img = "https://tracker.example/?c=0";
+    const { container } = mount(s);
+    const sources = () => Array.from(container.querySelectorAll("img"), (img) => img.src);
+
+    expect(sources().length).toBeGreaterThan(0);
+    expect(sources().every((src) => src.startsWith("https://cards.scryfall.io/"))).toBe(true);
+    // Still drawn — as the named frame a card with no picture gets.
+    expect(screen.getAllByText(s.cards[0].n).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Grid" }));
+    expect(sources().length).toBeGreaterThan(0);
+    expect(sources().every((src) => src.startsWith("https://cards.scryfall.io/"))).toBe(true);
   });
 
   it("is still a binder when the snapshot carries no deck half", () => {

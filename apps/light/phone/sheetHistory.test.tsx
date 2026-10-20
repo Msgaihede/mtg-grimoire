@@ -132,6 +132,55 @@ describe("a sheet on the phone face", () => {
     expect(isSheetEntry(window.history.state)).toBe(false);
   });
 
+  it("keeps a Back step while it refuses Back, so the next Back asks it again (issue #1158)", async () => {
+    let refusing = true;
+    let asked = 0;
+    function Busy() {
+      const [open, setOpen] = useState(false);
+      const dismiss = () => {
+        asked++;
+        if (!refusing) setOpen(false);
+      };
+      return (
+        <DialogHostContext.Provider value={HOST}>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open
+          </button>
+          <Dialog
+            open={open}
+            title="Busy"
+            closeLabel="Close"
+            size="w-full"
+            onDismiss={dismiss}
+            onClose={dismiss}
+          >
+            <p>Adding</p>
+          </Dialog>
+        </DialogHostContext.Provider>
+      );
+    }
+    render(<Busy />);
+    await userEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    const refused = popped();
+    act(() => window.history.back());
+    await refused;
+    expect(asked).toBe(1);
+    expect(screen.getByRole("dialog", { name: "Busy" })).toBeInTheDocument();
+    expect(isSheetEntry(window.history.state)).toBe(true);
+    expect(url()).toBe("/decks");
+
+    refusing = false;
+    const closed = popped();
+    act(() => window.history.back());
+    await closed;
+    expect(asked).toBe(2);
+    expect(screen.queryByRole("dialog", { name: "Busy" })).toBeNull();
+    // The page the dialog was over, not the one before it.
+    expect(url()).toBe("/decks");
+    expect(isSheetEntry(window.history.state)).toBe(false);
+  });
+
   it("claims nothing where no host lends Back — the desktop face's dialogs", async () => {
     const length = window.history.length;
     function Bare() {

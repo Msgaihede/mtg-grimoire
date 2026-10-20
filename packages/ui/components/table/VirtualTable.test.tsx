@@ -5,6 +5,7 @@ import { compile } from "tailwindcss";
 import twEntry from "tailwindcss/index.css?raw";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import appCss from "@/index.css?raw";
+import { QuantityStepper } from "@/components/QuantityStepper";
 import { FOCUS_INSET } from "@/lib/focus";
 import { KEYBOARD_MODALITY_ATTR } from "@/lib/keyboardModality";
 import { LAYER } from "@/lib/layers";
@@ -1710,5 +1711,62 @@ describe("VirtualTable's roving tab stop", () => {
     fireEvent.scroll(scroller);
     expect(document.activeElement).toBe(rowOf("Card 99"));
     expect(stops()).toEqual([rowOf("Card 99")]);
+  });
+});
+
+/**
+ * Issue #1111 — a row is keyed by its position, and what its cells hold must not be.
+ *
+ * A quantity typed to zero and entered removes its entry, and the next entry moves up into the
+ * same position. Without `rowKey` the box would still be focused and still read "0", and the next
+ * number typed and entered would be a write to an entry the reader never touched. (A typed number
+ * is sent on Enter or blur since issue #1110, not on each keystroke.)
+ */
+describe("VirtualTable's rowKey", () => {
+  it("draws a new cell for the entry that moved up, not the old entry's draft", async () => {
+    const user = userEvent.setup();
+    const quantities: Record<string, number> = { a: 10, b: 3 };
+    const onSetQuantity = vi.fn();
+    const columns: TableColumn<Row>[] = [
+      ...COLUMNS,
+      {
+        key: "qty",
+        width: "6rem",
+        header: "Qty",
+        interactive: true,
+        cell: (r) => (
+          <QuantityStepper
+            value={quantities[r.id]}
+            onChange={(next) => onSetQuantity(r.id, next)}
+            label={`Quantity of ${r.name}`}
+          />
+        ),
+      },
+    ];
+    const table = (rows: Row[]) => (
+      <VirtualTable
+        {...BASE}
+        columns={columns}
+        rows={rows}
+        total={rows.length}
+        rowKey={(r) => r.id}
+      />
+    );
+    const { rerender } = render(table(ROWS));
+
+    const lotusBox = screen.getByRole("spinbutton", { name: "Quantity of Black Lotus" });
+    await user.tripleClick(lotusBox);
+    await user.keyboard("0{Enter}");
+    expect(onSetQuantity).toHaveBeenLastCalledWith("a", 0);
+
+    // The zero removed the entry; the dragon now sits in the lotus's position.
+    rerender(table([ROWS[1]]));
+    const dragonBox = screen.getByRole("spinbutton", { name: "Quantity of Shivan Dragon" });
+    expect(dragonBox).toHaveValue(3);
+    expect(dragonBox).not.toHaveFocus();
+
+    onSetQuantity.mockClear();
+    await user.keyboard("5{Enter}");
+    expect(onSetQuantity).not.toHaveBeenCalled();
   });
 });

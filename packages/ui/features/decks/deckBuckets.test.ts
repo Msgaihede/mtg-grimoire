@@ -13,6 +13,7 @@ import {
   isCreature,
   isLand,
   isMdfcLand,
+  libraryCards,
   MODAL_DFC,
   OTHER,
   sizedCards,
@@ -519,7 +520,7 @@ describe("foldBuckets", () => {
   });
 });
 
-describe("activeCards and sizedCards", () => {
+describe("activeCards, sizedCards and libraryCards", () => {
   /**
    * A deck holding every case at once: two active `main` piles of one category, a Sideboard, a
    * Commander, a Companion, the seeded switched-off Maybeboard, a pile of the reader's own they
@@ -597,6 +598,35 @@ describe("activeCards and sizedCards", () => {
     // Not vacuous: the deck really does hold copies this figure leaves out.
     expect(sized).toBeGreaterThan(0);
     expect(sized).toBeLessThan(copies(activeCards(DECK)));
+  });
+
+  /**
+   * Issue #1163: the format counts the command zone toward 100, but the game never shuffles it
+   * into the library — so the odds table's population is the sized piles less the commander.
+   */
+  it("leaves the command zone out of the library and keeps everything else sized", () => {
+    expect(names(sizedCards(DECK))).toContain("Kenrith, the Returned King");
+    expect(names(libraryCards(DECK))).not.toContain("Kenrith, the Returned King");
+    expect(names(libraryCards(DECK))).toContain("Ponder");
+    expect(names(libraryCards(DECK))).toContain("Island");
+    expect(copies(libraryCards(DECK))).toBe(copies(sizedCards(DECK)) - 1);
+  });
+
+  it("draws a 100-card Commander deck from 99 cards, and 98 with partners", () => {
+    const edh = [
+      card({ name: "Kenrith, the Returned King", categoryKind: "commander", quantity: 1 }),
+      card({ name: "Island", categoryKind: "main", quantity: 99 }),
+    ];
+    expect(copies(sizedCards(edh))).toBe(100);
+    expect(copies(libraryCards(edh))).toBe(99);
+
+    const partners = [
+      card({ name: "Thrasios, Triton Hero", categoryKind: "commander", quantity: 1 }),
+      card({ name: "Tymna the Weaver", categoryKind: "commander", quantity: 1 }),
+      card({ name: "Island", categoryKind: "main", quantity: 98 }),
+    ];
+    expect(copies(sizedCards(partners))).toBe(100);
+    expect(copies(libraryCards(partners))).toBe(98);
   });
 
   it("still agrees when every pile counts", () => {

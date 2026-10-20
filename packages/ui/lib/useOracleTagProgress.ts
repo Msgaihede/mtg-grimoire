@@ -136,6 +136,11 @@ export function useOracleTagProgress(): OracleTagRefresh {
           // so a prefix is the only thing that reaches the oracle branch of either.
           void queryClient.invalidateQueries({ queryKey: ["tag-children"] });
           void queryClient.invalidateQueries({ queryKey: ["tag-search"] });
+          // **The typed `otag:` chips too** (issue #1183): `["tags", "resolve", askKey]` is
+          // answered from the table this refresh rewrote, so a name typed while it ran stays
+          // "unknown" and the wall stays failed closed until the query is edited. The whole root,
+          // because the card panel's `["tags", "oracle", …]` reads are that table's too.
+          void queryClient.invalidateQueries({ queryKey: ["tags"] });
         }
       }),
     [queryClient],

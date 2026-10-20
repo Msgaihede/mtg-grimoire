@@ -177,8 +177,8 @@ mod tests {
         "price",
     ];
 
-    /// The core's key check sentence in full (`sync_engine::client`); the core has no const for it.
-    const CORE_KEY_CHECK: &str = "the relay did not recognise this device's group key. If your devices synced together before today, reconnect Patreon once on the device you connected it on - that registers the group with the relay again. Otherwise this group has no membership connected to it yet, or this device has been offline across more key changes than the relay keeps.";
+    /// The core's key check sentence in full (`sync_engine::client`).
+    const CORE_KEY_CHECK: &str = grimoire_core::sync_engine::client::UNRECOGNISED_GROUP;
 
     /// `sync_pair::pairing`'s `COULD_NOT_COLLECT`, which is private there. It is the prefix the
     /// core puts in front of whatever the relay round trip said.

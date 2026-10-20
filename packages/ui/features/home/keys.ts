@@ -67,9 +67,10 @@
  * first's. The feed's answer is half `deck_cards` and half the corpus, so `["decks"]` is the root
  * it *looks* like it belongs under — but a deck write says nothing about the corpus, and the
  * widget's own cursor write is not a deck write at all. Filed under `["decks"]` it would refetch
- * after every card added to any deck. The sync is not the reason: it invalidates `["decks"]`
- * (`SYNC_INVALIDATED`) and, today, not this root (#1182). The whole argument is at the constant
- * itself.
+ * after every card added to any deck. Leaving `["decks"]` costs the one other refresh that root
+ * would have brought: the sync invalidates `["decks"]`, and it is what actually brings the new
+ * printings in, so `SYNC_INVALIDATED` names this root too (#1182). The whole argument is at the
+ * constant itself.
  *
  * {@link scannerTrayCountKey} sits under `["scanner"]`, and **with one window open it is the one key
  * in this file no write invalidates**: the scanner writes its tray with `setQueryData` on its own
@@ -297,10 +298,11 @@ export const stickyNotesKey: QueryKey = ["stickyNotes"];
  * belongs under — and a deck write genuinely does change it. But the other half of the answer is
  * the corpus, which a deck write says nothing about, and the cursor write below is not a deck
  * write at all: filing it under `["decks"]` would refetch the feed after every card added to any
- * deck. A root of its own, invalidated by this widget's own cursor write and refetched on mount,
- * is the arrangement. **The sync does not refresh it yet**: `useSyncInvalidation`'s
- * `SYNC_INVALIDATED` lists `["decks"]` but not this root, so a feed on screen keeps the pre-sync
- * list until it remounts (#1182).
+ * deck. A root of its own, invalidated by this widget's own cursor write and by a finished sync, is
+ * the arrangement. **The sync is named explicitly**: it is what brings the new printings in, and its
+ * invalidation of `["decks"]` does not reach a root outside it, so `useSyncInvalidation`'s
+ * `SYNC_INVALIDATED` spells `["newPrintings"]` itself (#1182) — `keys.test.tsx` holds the two
+ * equal.
  */
 export const NEW_PRINTINGS_ROOT: QueryKey = ["newPrintings"];
 

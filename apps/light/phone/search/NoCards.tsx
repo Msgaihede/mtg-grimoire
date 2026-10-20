@@ -1,4 +1,7 @@
 import type { Activity } from "@grimoire/ui/lib/activity";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import { DimNote } from "../pages/parts";
 
 /**
@@ -18,12 +21,15 @@ import { DimNote } from "../pages/parts";
  *   phase and its count sit here in the ribbon's words (`syncActivity`).
  * - **An empty database with nothing running** — a reader who said *Not now* on a metered link, a
  *   first download that failed — says so, with the failure when there is one. It names no host's
- *   reason, because which one applies is not this page's to know.
+ *   reason, because which one applies is not this page's to know. **Where the host is holding the
+ *   launch's downloads it offers them** (`onDownload`, issue #1155): a *Not now* is otherwise
+ *   final until Android ends the process.
  */
 export function NoCards({
   empty,
   sync,
   error,
+  onDownload,
 }: {
   /** The database has no cards — not merely none this search found. */
   empty: boolean;
@@ -31,6 +37,8 @@ export function NoCards({
   sync: Activity | null;
   /** Why the last card sync failed (`CardData.error`). */
   error: string | null;
+  /** Open the mobile-data prompt again — given only while the host holds the downloads. */
+  onDownload?: () => void;
 }) {
   if (!empty) return <DimNote>No cards match.</DimNote>;
 
@@ -64,6 +72,19 @@ export function NoCards({
         No card data yet — search has nothing to look through until it downloads.
       </p>
       {error && <p className="text-destructive">{error}</p>}
+      {onDownload && (
+        <button
+          type="button"
+          onClick={onDownload}
+          className={cn(
+            "flex h-11 items-center justify-center self-start rounded-md bg-accent px-4 font-medium text-accent-fg",
+            PRESS_SOFT,
+            FOCUS,
+          )}
+        >
+          Download card data…
+        </button>
+      )}
     </div>
   );
 }

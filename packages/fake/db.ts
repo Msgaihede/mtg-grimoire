@@ -1100,10 +1100,13 @@ export interface FakeActivity {
  * the reversal to keep in step with the first, which is exactly the drift the fake exists under
  * `ipc.ts` to avoid rather than to add.
  *
- * What it therefore does **not** model: the id remap (a restored pile keeps its id here because
- * nothing reassigns one), and the scope narrowing (the crate touches only the cells the write
- * was about, this replaces the deck). Neither is visible from a story — both are about not
- * disturbing rows the press never touched, and here nothing else is touching them.
+ * **What a reversal writes is still narrowed to what the step changed** ({@link reverseDeck}):
+ * the rows and deck columns that differ between the two snapshots, checked against the deck
+ * first and refused when it no longer holds them — the crate's scope and its `holds`. It used to
+ * replace the whole deck and the whole label table unchecked, which let a Ctrl+Z take every
+ * step-less edit since with it (issue #1186). What it does **not** model is the id remap for
+ * piles, notes and tokens: a restored one keeps its id, and an id another row has since taken
+ * is a deck that moved on.
  */
 export interface FakeDeckUndo {
   /** The history row this reverses — **the last one the press wrote**, so a `deck_update` that
@@ -2308,9 +2311,9 @@ export interface FakeDb {
   /**
    * `app_meta.price_watch` — the printings this device's snapshots remember a price for whether
    * or not they are owned: the cards the page's Price movers widgets name (issue #906), written by
-   * {@link writeHandlers.set_price_watch}. **No snapshot runs in this workbench**, so nothing here
-   * reads it — a story stands in a watched card's history by seeding
-   * {@link FakeDb.priceHistory} for it, as the crate's snapshot would have.
+   * {@link writeHandlers.set_price_watch}, which records today's snapshot when the list changes
+   * ({@link snapshotToday}, issue #1080). Only today's row is written — a story that wants a
+   * watched card's past seeds {@link FakeDb.priceHistory} for it, as earlier snapshots would have.
    */
   priceWatch: string[];
   /**
@@ -3875,7 +3878,7 @@ function priceDrift(cardId: string, finish: string, mp: string): number {
 /**
  * `price_history` for a world with a collection: one snapshot per {@link HISTORY_DAYS} day for
  * every held printing's finish the corpus knows, at every marketplace this app can quote — today's
- * price is {@link finishPriceAt}, the collection's own, and each older one walks back along
+ * price is {@link heldPriceAt}, the collection's own, and each older one walks back along
  * {@link priceDrift} in proportion to its age, rounded to the cent.
  *
  * So a printing up 30 % over ninety days is up about 2 % over the week, and a cheap card can round
@@ -3913,7 +3916,7 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
     for (const e of owned.values()) {
       const card = byId.get(e.cardId);
       if (card === undefined) continue;
-      const now = finishPriceAt(db, card, e.finish, mp);
+      const now = heldPriceAt(db, card, e.finish, mp);
       const drift = priceDrift(e.cardId, e.finish, mp);
       for (const days of HISTORY_DAYS) {
         out.push({
@@ -3928,6 +3931,63 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
     }
   }
   return out;
+}
+
+/**
+ * `price_history::snapshot` — rewrite today's rows ({@link CLOCK_BASE}'s day) of every priced
+ * marketplace with what the reader holds **or watches** now. What
+ * {@link writeHandlers.set_price_watch} runs when the list changed (issue #1080), so a card chosen
+ * now has today's price recorded now.
+ *
+ * `held_cte`'s holding: an **owned** printing and finish is a row, priced or not, at
+ * {@link heldPriceAt} and carrying its copies; a **wanted** one — a wish's printing in its
+ * preferred finish (every finish when it names none) and each watched card in every finish — is a
+ * row only when {@link finishPriceAt} prices it, at `copies = 0`. A printing both owned and wanted
+ * is one row, the owned one. **The one gate**: a marketplace that prices nothing held keeps no
+ * rows for the day at all. Today's other rows go — the day holds its last snapshot's holding.
+ *
+ * The crate's prune on a day's first snapshot is not mirrored: the fake's clock never moves, so
+ * there is no older day for it to thin.
+ */
+function snapshotToday(db: FakeDb): void {
+  const today = Math.floor(CLOCK_BASE / 86_400);
+  const owned = new Map<string, { cardId: string; finish: Finish; copies: number }>();
+  for (const e of db.collectionEntries) {
+    if (e.quantity <= 0) continue;
+    const key = `${e.cardId}:${e.finish}`;
+    const held = owned.get(key);
+    if (held) held.copies += e.quantity;
+    else owned.set(key, { cardId: e.cardId, finish: e.finish, copies: e.quantity });
+  }
+  const wanted = [
+    ...db.wishlistEntries.flatMap((w) =>
+      w.cardId === null
+        ? []
+        : (w.preferredFinish === null ? EVERY_FINISH : [w.preferredFinish]).map((finish) => ({
+            cardId: w.cardId as string,
+            finish,
+          })),
+    ),
+    ...db.priceWatch.flatMap((cardId) => EVERY_FINISH.map((finish) => ({ cardId, finish }))),
+  ];
+  for (const { id: mp } of Object.values(MARKETPLACES).filter((m) => m.priced)) {
+    const rows = new Map<string, FakePriceSnapshot>();
+    for (const [key, e] of owned) {
+      const price = heldPriceAt(db, cardById(db, e.cardId), e.finish, mp);
+      rows.set(key, { marketplace: mp, ...e, price, takenAt: CLOCK_BASE });
+    }
+    for (const w of wanted) {
+      const key = `${w.cardId}:${w.finish}`;
+      if (rows.has(key)) continue;
+      const price = finishPriceAt(db, cardById(db, w.cardId), w.finish, mp);
+      if (price === null) continue;
+      rows.set(key, { marketplace: mp, ...w, price, takenAt: CLOCK_BASE, copies: 0 });
+    }
+    db.priceHistory = db.priceHistory.filter(
+      (s) => s.marketplace !== mp || Math.floor(s.takenAt / 86_400) !== today,
+    );
+    if ([...rows.values()].some((r) => r.price !== null)) db.priceHistory.push(...rows.values());
+  }
 }
 
 /**
@@ -4115,25 +4175,53 @@ function finishPricesAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): F
 }
 
 /**
- * `printing_price_by_finish_expr(marketplace)` — a deck card's, a category total's and a theory
- * row's figure.
+ * `printing_price_by_finish_expr(marketplace)` — what a printing costs when nothing says which
+ * finish: the `nonfoil → foil → etched` chain, {@link heldPriceAt}'s first arm.
  *
- * A deck names a printing and not a finish, so there is no finish to price at and the row is
- * quoted in whichever one the marketplace sells it in. **It used to read `$.usd`/`$.eur` flat, on
- * the reasoning that "no finish" means nonfoil — and 13 515 foil-only printings have no nonfoil
- * price at any marketplace**, so every one of them drew an em dash in a deck while the search
- * wall beside it quoted the same printing.
+ * **It used to read `$.usd`/`$.eur` flat, on the reasoning that "no finish" means nonfoil — and
+ * 13 515 foil-only printings have no nonfoil price at any marketplace**, so every one of them drew
+ * an em dash in a deck while the search wall beside it quoted the same printing.
  *
  * {@link finishPriceAt} once per finish rather than {@link priceColumnAt}'s column, which is the
  * composition `sorting.rs` uses: each marketplace's own holes then travel with it, so Cardmarket
  * keeps the `eur_etched` one it has always had and an etched-only printing stays unpriced there.
  */
-function deckPriceAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): number | null {
+function chainPriceAt(db: FakeDb, card: FakeCard | null, mp: MarketplaceId): number | null {
   return (
     finishPriceAt(db, card, "nonfoil", mp) ??
     finishPriceAt(db, card, "foil", mp) ??
     finishPriceAt(db, card, "etched", mp)
   );
+}
+
+/**
+ * `held_price_expr(marketplace, finish)` — what one **held copy** costs: a deck row
+ * (`deck_card_price_expr` is this over `dc.finish`), a collection entry and an open trade line.
+ *
+ * * **No finish** (a deck row that has not said) is {@link chainPriceAt}.
+ * * **`nonfoil` on a printing whose `finishes` lists no `nonfoil`** is the chain too (issue #983):
+ *   `nonfoil` is the finish a row gets when nobody chose one — an import line naming no finish, an
+ *   add that kept the default — and on a foil- or etched-only printing it names an object no
+ *   marketplace quotes. The test is the crate's `instr(c.finishes, '"nonfoil"') = 0`, so a
+ *   printing with no `finishes` at all (or no card) is no evidence and stays strict.
+ * * **Any other named finish** is {@link finishPriceAt} at that finish and no other. A `foil` row
+ *   is quoted at the foil rate and never falls back: a stored `foil` or `etched` is a statement
+ *   somebody made, and a printing not sold in it stays an em dash.
+ *
+ * **Not a wish's figure**: `row_price_expr` prices a preferred finish across other printings too
+ * ({@link wishPriceAt}), where a printing not sold in it must stay unpriced.
+ */
+function heldPriceAt(
+  db: FakeDb,
+  card: FakeCard | null,
+  finish: string | null,
+  mp: MarketplaceId,
+): number | null {
+  const unsold =
+    finish === "nonfoil" && card?.finishes != null && !card.finishes.includes('"nonfoil"');
+  return finish === null || unsold
+    ? chainPriceAt(db, card, mp)
+    : finishPriceAt(db, card, finish, mp);
 }
 
 /**
@@ -6495,7 +6583,7 @@ function toDeckTokenRow(
     finishes: drawn?.finishes ?? null,
     // **At the entry's own finish, with no fallback** — `deck_tokens::printing_price`, which is
     // `price_expr(market, finish)`: a foil Treasure quoted at the nonfoil rate is a price nobody
-    // published. It was {@link deckPriceAt}'s `nonfoil → foil → etched` chain until v52, while a
+    // published. It was {@link chainPriceAt}'s `nonfoil → foil → etched` chain until v52, while a
     // token stored no finish; an implicit entry of a foil-only printing is `foil` by its default
     // finish, so the case that chain existed for still reads its foil price. `null` is the em
     // dash and never `0`.
@@ -7512,7 +7600,7 @@ function toCollectionRow(
     condition: e.condition,
     quantity: e.quantity,
     tradelistQuantity: e.tradelistQuantity,
-    unitPrice: finishPriceAt(db, card, e.finish, mp),
+    unitPrice: heldPriceAt(db, card, e.finish, mp),
     purchasePrice: e.purchasePrice,
     purchaseCurrency: e.purchaseCurrency,
     acquiredAt: e.acquiredAt,
@@ -8366,7 +8454,7 @@ function toDeckCategory(
   const totalPrice = ((): number | null => {
     const priced = rows
       .map((dc) => {
-        const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
+        const unit = heldPriceAt(db, cardById(db, dc.cardId), dc.finish, mp);
         return unit === null ? null : unit * dc.quantity;
       })
       .filter((n): n is number => n !== null);
@@ -8943,11 +9031,12 @@ function toDeckCard(
     // recomputation answers `false` and a legal commander renders ineligible. `false` for an
     // orphan, because nothing is known about a card that is not there.
     everUncommon: card?.everUncommon ?? false,
-    // What this printing costs at the marketplace this read named, in whichever finish it is
-    // sold in: a deck names a printing and not a finish, so a foil-only one is quoted at its
-    // foil rate rather than reading as unpriced. Never the `price_usd` column, which is that
-    // chain precomputed for the search's sort and is the one a total must not sum.
-    unitPrice: deckPriceAt(db, card, mp),
+    // What this row costs at the marketplace this read named — `deck_card_price_expr`: at the
+    // finish it names and no other, and in whichever finish the printing is sold in when it
+    // names none, so a foil-only one is quoted at its foil rate rather than reading as unpriced.
+    // Never the `price_usd` column, which is that chain precomputed for the search's sort and is
+    // the one a total must not sum.
+    unitPrice: heldPriceAt(db, card, dc.finish, mp),
     ownedQuantity,
   };
 }
@@ -9028,10 +9117,10 @@ function collectionOrder(
   /** `coalesce(c.name, e.card_id)`: an orphan sorts under its card id rather than at the top
    *  under an empty string. */
   const name = (e: FakeEntry) => cards.get(e.id)?.name ?? e.cardId;
-  /** `price_expr(marketplace)` at this row's finish — the same number the Value cell prints,
+  /** `held_price_expr(marketplace)` at this row's finish — the same number the Value cell prints,
    *  which is what stops a column being ordered in one marketplace's money while showing
    *  another's. */
-  const unitPrice = (e: FakeEntry) => finishPriceAt(db, cards.get(e.id) ?? null, e.finish, mp);
+  const unitPrice = (e: FakeEntry) => heldPriceAt(db, cards.get(e.id) ?? null, e.finish, mp);
   /** `COLLECTION_DEFAULT_ORDER`, written out rather than composed from the `name` and `set`
    *  columns below: it stops at the natural collector number and never reaches the raw string
    *  those three terms end with. */
@@ -10510,7 +10599,7 @@ export function readHandlers(db: FakeDb) {
       const rows = collectionScope(db, args.query);
       const priced = rows.map((e) => ({
         e,
-        unit: finishPriceAt(db, cardById(db, e.cardId), e.finish, mp),
+        unit: heldPriceAt(db, cardById(db, e.cardId), e.finish, mp),
       }));
       const sum = (f: (r: (typeof priced)[number]) => number) =>
         priced.reduce((n, r) => n + f(r), 0);
@@ -10533,7 +10622,7 @@ export function readHandlers(db: FakeDb) {
     /**
      * `collection::shelf_counts` — one row per non-empty shelf over {@link collectionScope}, search
      * and filters included. A tile is a printing and a finish **on one shelf** (spec decision 11),
-     * priced by {@link finishPriceAt} like the list's own `unitPrice`; `unpriced` counts **copies**,
+     * priced by {@link heldPriceAt} like the list's own `unitPrice`; `unpriced` counts **copies**,
      * {@link readHandlers.collection_summary}'s unit.
      */
     collection_shelf_counts: (args: { query: CollectionQuery }): ShelfCount[] => {
@@ -10543,7 +10632,7 @@ export function readHandlers(db: FakeDb) {
           shelf: e.folderId ?? 0,
           tile: `${e.cardId}/${e.finish}`,
           copies: e.quantity,
-          unit: finishPriceAt(db, cardById(db, e.cardId), e.finish, mp),
+          unit: heldPriceAt(db, cardById(db, e.cardId), e.finish, mp),
           unpricedBy: e.quantity,
         })),
         // The peek reads every entry, not the scope: a filter narrows the figures and never the
@@ -10565,9 +10654,9 @@ export function readHandlers(db: FakeDb) {
      * list is showing, so there is no {@link CollectionQuery} to narrow it and the only
      * exclusion is the quantity one below.
      *
-     * **It prices through {@link finishPriceAt}, which is the very function
+     * **It prices through {@link heldPriceAt}, which is the very function
      * {@link readHandlers.collection_summary} sums** — the crate's own arrangement, where both
-     * statements interpolate one `sorting::price_expr` fragment — so a bar can never disagree
+     * statements interpolate one `sorting::held_price_expr` fragment — so a bar can never disagree
      * with the total printed above it. Two implementations of one figure disagree the first
      * time either changes.
      *
@@ -10624,7 +10713,7 @@ export function readHandlers(db: FakeDb) {
         if (e.quantity <= 0) continue;
         const card = cardById(db, e.cardId);
         const [key, name] = bucketOf(e, card);
-        rows.push({ key, name, copies: e.quantity, unit: finishPriceAt(db, card, e.finish, mp) });
+        rows.push({ key, name, copies: e.quantity, unit: heldPriceAt(db, card, e.finish, mp) });
       }
       return foldBuckets(rows).sort((a, b) => cmp(a.key, b.key));
     },
@@ -10849,7 +10938,7 @@ export function readHandlers(db: FakeDb) {
         if (e.folderId === null) continue;
         const row = byFolder.get(e.folderId) ?? { folderId: e.folderId, cards: 0, value: null };
         row.cards += e.quantity;
-        const unit = finishPriceAt(db, cardById(db, e.cardId), e.finish, mp);
+        const unit = heldPriceAt(db, cardById(db, e.cardId), e.finish, mp);
         if (unit !== null) row.value = (row.value ?? 0) + e.quantity * unit;
         byFolder.set(e.folderId, row);
       }
@@ -10858,8 +10947,8 @@ export function readHandlers(db: FakeDb) {
 
     /**
      * `folder_rules::collection_conflicts` (issue #980) — which owned rows break their folder's
-     * effective rules (spec §1–§2), priced at `marketplace` off {@link finishPriceAt}, the
-     * folder summary's own figure. An orphan breaks nothing, and an unpriced row passes a price
+     * effective rules (spec §1–§2), priced at `marketplace` off {@link finishPriceAt} — the
+     * crate's `price_expr` at the row's finish, strict where the summary is held. An orphan breaks nothing, and an unpriced row passes a price
      * rule: a rule only breaks on a fact the app knows. **A row breaks when not every effective
      * rule passes** ({@link rulesAllPass}) — a group (issue #1053) answering as its `and`/`or`
      * over its members, each read on the row's printing and the row's own facts at once.
@@ -11146,9 +11235,9 @@ export function readHandlers(db: FakeDb) {
      * is an em dash, and a deck of *tokens* really is worth nothing. `unpriced` is copies rather
      * than rows, because the total it qualifies is copies too.
      *
-     * The price is {@link deckPriceAt}, which is what a deck card's own `unitPrice` is quoted
-     * at — a deck names a printing and not a finish — so a tile and the deck it opens can never
-     * quote one pile at two prices.
+     * The price is {@link heldPriceAt} at the row's own finish, which is what a deck card's own
+     * `unitPrice` is quoted at, so a tile and the deck it opens can never quote one pile at two
+     * prices.
      */
     deck_values: (args: { marketplace?: MarketplaceId }): DeckValue[] => {
       const mp = marketplaceOf(args.marketplace);
@@ -11161,7 +11250,7 @@ export function readHandlers(db: FakeDb) {
             const category = categoryById(db, dc.categoryId);
             if (category === undefined || !category.isActive) continue;
             if (!SIZE_KINDS.includes(category.kind)) continue;
-            const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
+            const unit = heldPriceAt(db, cardById(db, dc.cardId), dc.finish, mp);
             if (unit === null) row.unpriced += dc.quantity;
             else row.value = (row.value ?? 0) + dc.quantity * unit;
           }
@@ -12743,8 +12832,9 @@ export function readHandlers(db: FakeDb) {
      * `missingCost` is `deckStats`' `missingPrice` exactly — `null` while nothing counted is priced
      * at this marketplace, else the priced rows' `unit × short` summed (so a complete, priced deck
      * answers `0`, and so does one whose only missing copies are unpriced). `unpricedMissing` is
-     * missing **copies** with no price. The unit is {@link deckPriceAt}, which is what this fake's
-     * deck rows quote — so a story's widget and the editor it opens can never disagree.
+     * missing **copies** with no price. The unit is {@link heldPriceAt} at the row's finish, which
+     * is what this fake's deck rows quote — so a story's widget and the editor it opens can never
+     * disagree.
      */
     deck_completion: (args: {
       marketplace?: MarketplaceId | null;
@@ -12793,7 +12883,7 @@ export function readHandlers(db: FakeDb) {
             row.wanted += dc.quantity;
             row.owned += have;
             row.missing += short;
-            const unit = deckPriceAt(db, cardById(db, dc.cardId), mp);
+            const unit = heldPriceAt(db, cardById(db, dc.cardId), dc.finish, mp);
             if (unit === null) row.unpricedMissing += short;
             else row.missingCost = (row.missingCost ?? 0) + unit * short;
           }
@@ -12905,8 +12995,8 @@ export function readHandlers(db: FakeDb) {
      * widget tell *no history yet* from *nothing moved*, so both are answered even when the list
      * is empty.
      *
-     * Today's price is {@link finishPriceAt}, the collection's own, so a mover can never disagree
-     * with the row it names. **A printing that did not move is not a mover**, and neither is one
+     * Today's price is {@link finishPriceAt}, the crate's `price_expr` at the row's finish, so a
+     * mover can never disagree with the row it names. **A printing that did not move is not a mover**, and neither is one
      * with no price today or none in the baseline. `limit` is clamped to `1..=100`; a window or a
      * direction this command does not know is refused in words.
      *
@@ -12996,8 +13086,8 @@ export function readHandlers(db: FakeDb) {
      * crate's `INSERT OR REPLACE`, where a second snapshot on one afternoon replaces the first.
      * `day` is that day's UTC midnight. **Today is {@link CLOCK_BASE}**, the fake's own, exactly
      * as {@link readHandlers.price_movers} measures from it, and today's snapshot is left out
-     * because today's figure is `now`: {@link finishPriceAt}, the collection's own and the number
-     * a mover's `now` is, so the popup's last point can never disagree with the row it opened
+     * because today's figure is `now`: {@link heldPriceAt}, the collection's own and the number
+     * a mover's `now` is wherever the row names a finish its printing is sold in, so the popup's last point can never disagree with the row it opened
      * from. `null` for a finish this marketplace does not quote and for a card the corpus does not
      * know, which is an answer rather than a refusal — the popup is opened from a row that exists.
      *
@@ -13029,7 +13119,7 @@ export function readHandlers(db: FakeDb) {
       const points: PricePoint[] = [...latest]
         .sort(([a], [b]) => a - b)
         .flatMap(([day, s]) => (s.price === null ? [] : [{ day, price: s.price }]));
-      const now = finishPriceAt(db, cardById(db, args.cardId), finish, mp);
+      const now = heldPriceAt(db, cardById(db, args.cardId), finish, mp);
       return { points, now, today };
     },
 
@@ -13050,7 +13140,7 @@ export function readHandlers(db: FakeDb) {
      * **Only rows with a `copies` count are read** ({@link FakePriceSnapshot.copies}): a row from
      * before the upgrade has a price and no holding, and a line drawn from it would be a guess.
      *
-     * **Today is a live point, never a snapshot**, and it is priced by {@link finishPriceAt} over
+     * **Today is a live point, never a snapshot**, and it is priced by {@link heldPriceAt} over
      * the entries in the order {@link readHandlers.collection_summary} sums them — so the graph's
      * last point is the Collection value widget's figure to the cent, which is the one thing the
      * two widgets on one page must never disagree about. Today's own snapshot is left out for
@@ -13164,7 +13254,7 @@ export function readHandlers(db: FakeDb) {
       };
       for (const e of held) {
         const card = cardById(db, e.cardId);
-        const unit = finishPriceAt(db, card, e.finish, mp);
+        const unit = heldPriceAt(db, card, e.finish, mp);
         add(live, card, e.quantity * (unit ?? 0));
         live.present.set(`${e.cardId}:${e.finish}`, unit ?? 0);
       }
@@ -14541,6 +14631,27 @@ function recordNote(
  *  `action` first for exactly that reason. */
 function recordLabel(db: FakeDb, deckId: number, payload: Record<string, unknown>): void {
   record(db, deckId, DECK_LEVEL, "label", null, payload, 0);
+}
+
+/** `deck::add_card`'s `add` row — the copies **added**, never the total the row landed on: the
+ *  history is a list of changes and `delta` is what the day header adds up. */
+function recordAdd(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  card: { id: string; name: string },
+  category: string,
+  quantity: number,
+): void {
+  record(
+    db,
+    deckId,
+    variant,
+    "add",
+    { id: card.id, name: card.name },
+    { category, quantity },
+    quantity,
+  );
 }
 
 /**
@@ -17175,7 +17286,7 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           // Filled below, once both sides are summed.
           quantity: 0,
           // The same price the deck read uses, at the same marketplace.
-          unitPrice: deckPriceAt(db, card, mp),
+          unitPrice: heldPriceAt(db, card, dc.finish, mp),
           setCode: dc.setCode,
           collectorNumber: dc.collectorNumber,
           // The finish played rather than stored — the half of the key the line reports, and
@@ -21064,6 +21175,8 @@ export function writeHandlers(db: FakeDb) {
       const finish = normaliseFinish(args.finish);
       const existing = deckCardAt(db, args.deckId, args.cardId, category.id, variant, finish);
       deck.updatedAt = stamp(db);
+      // `deck::add_card`'s row: the copies **added**, never the total the row landed on.
+      recordAdd(db, args.deckId, variant, card, category.name, args.quantity);
       if (existing) {
         // The quantities add; `labelId` and `needsReview` are left alone, because the row that
         // is already there is the one the user labelled.
@@ -21136,6 +21249,8 @@ export function writeHandlers(db: FakeDb) {
       const target = counterpartIn(db, variant, source);
       const existing = deckCardAt(db, args.deckId, args.cardId, target.id, variant, finish);
       deck.updatedAt = stamp(db);
+      // `add_card`'s body in the crate, so `add_card`'s row — filed under the list it went into.
+      recordAdd(db, args.deckId, variant, card, target.name, args.quantity);
       if (existing) {
         existing.quantity += args.quantity;
         return { id: existing.id, quantity: existing.quantity, removed: false };
@@ -21192,13 +21307,35 @@ export function writeHandlers(db: FakeDb) {
       if (args.quantity === 0) {
         db.deckCards = db.deckCards.filter((dc) => dc !== row);
         deck.updatedAt = stamp(db);
+        // A slot already empty removed nothing, so it records nothing — and so files no step.
+        if (row) {
+          record(
+            db,
+            args.deckId,
+            variant,
+            "remove",
+            { id: row.cardId, name: row.name },
+            { category: category.name, quantity: row.quantity, reason: null },
+            -row.quantity,
+          );
+        }
         return { id: row?.id ?? 0, quantity: 0, removed: true };
       }
       // The `GONE` asymmetry: an *adjustment* to a row that is not there could not do what it
       // was asked. Putting a card into a category is `deck_add_card`.
       if (!row) throw refuse(cardGone(category.name));
+      const was = row.quantity;
       row.quantity = args.quantity;
       deck.updatedAt = stamp(db);
+      record(
+        db,
+        args.deckId,
+        variant,
+        "quantity",
+        { id: row.cardId, name: row.name },
+        { category: category.name, from: was, to: args.quantity },
+        args.quantity - was,
+      );
       return { id: row.id, quantity: row.quantity, removed: false };
     },
 
@@ -21245,6 +21382,17 @@ export function writeHandlers(db: FakeDb) {
       releasePileCopies(db, args.deckId, doomed);
       db.deckCards = db.deckCards.filter((dc) => !doomed.includes(dc));
       deck.updatedAt = stamp(db);
+      // `REMOVE` with no card, `clear_category`'s row: `action` is what tells `auditText.ts` it
+      // is about a pile rather than one printing.
+      record(
+        db,
+        args.deckId,
+        variant,
+        "remove",
+        null,
+        { action: "clear", category: category.name, cards: cleared },
+        -cleared,
+      );
       return cleared;
     },
 
@@ -21298,6 +21446,16 @@ export function writeHandlers(db: FakeDb) {
       releasePileCopies(db, args.deckId, doomed);
       db.deckCards = db.deckCards.filter((dc) => !doomed.includes(dc));
       deck.updatedAt = stamp(db);
+      // The sibling's row with `scope` for `category`: a clear of the list names no pile.
+      record(
+        db,
+        args.deckId,
+        variant,
+        "remove",
+        null,
+        { action: "clear", scope: "deck", cards: cleared },
+        -cleared,
+      );
       return cleared;
     },
 
@@ -21367,6 +21525,16 @@ export function writeHandlers(db: FakeDb) {
       }
       db.deckCards = db.deckCards.filter((dc) => dc !== row);
       deck.updatedAt = stamp(db);
+      // `delta` 0: a move changes no count, and the moved row's own name names it.
+      record(
+        db,
+        args.deckId,
+        variant,
+        "move",
+        { id: row.cardId, name: row.name },
+        { from: from.name, to: to.name },
+        0,
+      );
       return to.id;
     },
 
@@ -21427,6 +21595,8 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       const quantity = row.quantity;
+      // Read before the in-place rewrite below overwrites it.
+      const fromSet = row.setCode;
       const target = deckCardAt(db, args.deckId, args.toCardId, category.id, variant, finish);
       let landed: number;
       if (target) {
@@ -21456,7 +21626,18 @@ export function writeHandlers(db: FakeDb) {
       releaseUnclaimedCopies(db, args.deckId, variant);
       // `CHECK (quantity > 0)` means a row that was already there contributed at least one
       // copy, so the landed total is strictly greater than what moved exactly when it folded.
-      return { folded: landed > quantity, quantity: landed };
+      const folded = landed > quantity;
+      // `delta` 0 and the **new** printing's id: the line the history draws is the one there now.
+      record(
+        db,
+        args.deckId,
+        variant,
+        "swap",
+        { id: args.toCardId, name: to.name },
+        { category: category.name, fromSet, toSet: to.setCode, folded },
+        0,
+      );
+      return { folded, quantity: landed };
     },
 
     /**
@@ -21523,7 +21704,24 @@ export function writeHandlers(db: FakeDb) {
       }
       deck.updatedAt = stamp(db);
       releaseUnclaimedCopies(db, args.deckId, variant);
-      return { folded: landed > args.quantity, quantity: landed };
+      const folded = landed > args.quantity;
+      // `swap`'s kind and row; `split` is what tells the history's sentence apart.
+      record(
+        db,
+        args.deckId,
+        variant,
+        "swap",
+        { id: args.toCardId, name: to.name },
+        {
+          category: category.name,
+          fromSet: row.setCode,
+          toSet: to.setCode,
+          split: args.quantity,
+          folded,
+        },
+        0,
+      );
+      return { folded, quantity: landed };
     },
 
     /**
@@ -21583,6 +21781,16 @@ export function writeHandlers(db: FakeDb) {
       }
       // §2.2's sweep, after the rewrite either branch took — see the doc above.
       releaseUnclaimedCopies(db, args.deckId, variant);
+      // `swap`'s kind, `delta` 0: the same number of the same card, in a different object.
+      record(
+        db,
+        args.deckId,
+        variant,
+        "swap",
+        { id: row.cardId, name: row.name },
+        { category: category.name, fromFinish: from, toFinish: to, folded: result.folded },
+        0,
+      );
       return result;
     },
 
@@ -23767,7 +23975,9 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `price_history::set_watched` — replace the device's price watch list (issue #906). Blank ids
      * dropped, each kept once at its first place, more than {@link MAX_PRICE_WATCH} refused in the
-     * crate's words rather than cut.
+     * crate's words rather than cut. **A list that changed takes today's snapshot at once**
+     * (`price_history::watch`, issue #1080) — {@link snapshotToday} — so a card chosen now has its
+     * first price recorded now; an unchanged list writes nothing.
      */
     set_price_watch: (args: { cardIds: string[] }): void => {
       refuseIfBusy(db);
@@ -23776,7 +23986,11 @@ export function writeHandlers(db: FakeDb) {
         if (id !== "" && !list.includes(id)) list.push(id);
       }
       if (list.length > MAX_PRICE_WATCH) throw refuse(TOO_MANY_WATCHED);
+      if (list.length === db.priceWatch.length && list.every((id, i) => db.priceWatch[i] === id)) {
+        return;
+      }
       db.priceWatch = list;
+      snapshotToday(db);
     },
 
     record_recent_card: (args: { cardId: string }): void => {
@@ -24893,8 +25107,8 @@ export function writeHandlers(db: FakeDb) {
      *
      * **All five `share_*` commands are in `writeHandlers`, and two of them are reads.** That is
      * `sync_relay_status`' call one feature over and it is the crate's own words rather than an
-     * inference: four of the five go through `on_the_write_connection`, so a running sync really
-     * does refuse them. Which table a handler sits in here is a fact about the *lock*, never
+     * inference: four of the five go through `on_the_lane`, which takes the sync lane as a press
+     * does, so a running sync really does refuse them. Which table a handler sits in here is a fact about the *lock*, never
      * about whether the command sounds like a read. **`share_open` is the fifth and the
      * exception since 2026-09-28** (issue #545): it holds no connection while it fetches, so it
      * answers through a sync — see its own doc below.
@@ -25869,14 +26083,14 @@ function tradeStamp(db: FakeDb): number {
  * marketplace.
  *
  * **Live while the trade is open and the figure it closed with once it is not** — the one branch
- * the whole feature's price rule is. {@link finishPriceAt} is the collection's figure for a
- * printing in a finish (`price_expr`, on both sides of the wire), so a card picked from the
+ * the whole feature's price rule is. {@link heldPriceAt} is the collection's figure for a
+ * printing in a finish (`held_price_expr`, on both sides of the wire), so a card picked from the
  * collection is quoted on the trade at exactly what the collection row beside it said. A printing
  * that has left the corpus has no live price, which is what it freezes as too.
  */
 function tradeLinePrice(db: FakeDb, trade: FakeTrade, line: FakeTradeLine): number | null {
   if (trade.status !== "open") return line.unitPrice;
-  return finishPriceAt(db, cardById(db, line.cardId), line.finish, trade.marketplace);
+  return heldPriceAt(db, cardById(db, line.cardId), line.finish, trade.marketplace);
 }
 
 /** `trade::freeze_prices` and the close — copy every line's live price into the line and file
@@ -27607,22 +27821,11 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * all — an untouched patch, a stepper landing on an already-empty slot — files nothing, because
  * a step for a change that did not happen is a press that appears to do nothing.
  *
- * **Known gap, and it is this fake's rather than this feature's**: the card writes
- * (`deck_add_card`, `deck_add_card_to_other_list`, `deck_set_card_quantity`, `deck_move_card`,
- * `deck_swap_printing`, `deck_split_printing`, `deck_set_card_finish`, `deck_category_clear` and
- * `deck_clear`) record no history row here, though their Rust twins do and `deck_audit.rs`'s
- * `every_deck_write_leaves_exactly_one_audit_row` pins the four of them that sweep drives. So
- * Storybook's history drawer has never listed a card add, and — consistently — its Undo button
- * does not offer to take one back. The app is unaffected; closing it means giving those
- * handlers a `record(…)` call, which is a change to what the *history* stories draw and belongs
- * with them.
- *
- * **The list said "five" until `deck_clear` landed and it was wrong by one before that**, which
- * is the reason it is spelled out rather than counted: `deck_set_card_finish` arrived with
- * `Set as foil`, `set_card_finish` writes a `SWAP` row on the crate side, and the fake's twin
- * has never written one — so the gap widened once without anybody noticing and once here.
- * `deck_clear` is `deck_category_clear`'s neighbour and joins for its reason: `clear_variant`
- * writes a `REMOVE` row with no card and a `scope` of the whole list.
+ * **The card writes record their crate twins' rows** (`deck_add_card`,
+ * `deck_add_card_to_other_list`, `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`,
+ * `deck_split_printing`, `deck_set_card_finish`, `deck_category_clear` and `deck_clear`), so each
+ * files a step here as it does in the app. Until issue #1186 they recorded none, and a Ctrl+Z
+ * labelled with an older write restored a snapshot taken before them — and took them with it.
  *
  * **`collection_to_deck` and `deck_to_collection` are outside that gap and always were.** They
  * are not among those, and closing the gap on the add side alone would have left the pair
@@ -27872,56 +28075,242 @@ function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
   };
 }
 
-/** Put one deck back to a recorded state. */
-function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
-  const at = db.decks.findIndex((d) => d.id === deckId);
-  if (at >= 0) {
-    // **`todosOpen` is kept as it stands, never put back.** `Op::Deck` writes only
-    // `deck_undo::DECK_FIELDS`, and `todos_open` is not on it. The lists themselves are rows of
-    // `deck_todo_lists` that {@link deckState} never records, so no undo touches them: a to-do
-    // write files no step of its own, and restoring a snapshot's copy would let a Ctrl+Z on a
-    // rename quietly take back every to-do typed since, which the crate cannot do.
-    //
-    // **`tags` is put back with the rest**, which is `DECK_FIELDS` naming the column since user
-    // schema v62 — and through {@link copyDeck}, so the row and the step it came from do not
-    // share one list: the same step is read again on a redo, and again after that.
-    const { todosOpen } = db.decks[at];
-    db.decks[at] = { ...copyDeck(state.deck), todosOpen };
+/**
+ * `deck_undo::DECK_FIELDS` in this file's spelling — the deck columns a step may put back, and
+ * the whole of the fence around them. **`updatedAt` is deliberately absent**, the crate's
+ * reason: an undo is an edit and moves the deck to the top of the gallery. So are the
+ * disclosures (`tokensOpen`, `statsOpen`, `notesOpen`, `todosOpen`) and `curveCreatures`: no
+ * history row records them, so there is nothing for a Ctrl+Z to put back. (`cover_image_path`
+ * is on the crate's list and has no column here.)
+ */
+const DECK_FIELDS: readonly (keyof FakeDeck)[] = [
+  "name",
+  "formatKey",
+  "gameKey",
+  "description",
+  "coverCardId",
+  "coverKind",
+  "folderId",
+  "theoryEnabled",
+  "virtualOnly",
+  "archived",
+  "separateXGroup",
+  "defaultCategoryId",
+  "bracket",
+  "theoryMarkExact",
+  "theoryMarkName",
+  "theoryMarkUnplanned",
+  "managedWishlist",
+  "managedWishlistTokens",
+  "tokenRailIndex",
+  "tokenMode",
+  "tags",
+  "lastVariant",
+  "lastGroupBy",
+  "lastSortBy",
+];
+
+/** `deck_undo::VIEW_FIELDS` — the {@link DECK_FIELDS} a tab switch writes with no step. A
+ *  reversal still writes them back, and never refuses over them: which tab was open since is
+ *  not an edit, and a Ctrl+Z refused for it is refused for a reason the reader cannot see. */
+const VIEW_FIELDS: ReadonlySet<keyof FakeDeck> = new Set([
+  "lastVariant",
+  "lastGroupBy",
+  "lastSortBy",
+]);
+
+/** `deck_undo::RETIRED` — the undo at the cursor could not be applied and was taken off the
+ *  list, so the next Ctrl+Z is the change below it. Not {@link MOVED_ON}: that sentence would
+ *  send the reader pressing again to retry, and undo the older change without meaning to. */
+const RETIRED =
+  "That change can no longer be undone — the deck has changed since, so it was taken off the " +
+  "undo list.";
+
+/** `deck_undo::MOVED_ON` — the id is not the cursor, or a redo finds the deck moved on. */
+const MOVED_ON =
+  "That is not the most recent change any more — the deck has been edited since. " +
+  "Open the history to see what happened.";
+
+/** One value of a step against one value of the deck: by content, with absent and `null` one
+ *  answer, because a snapshot is a spread of a row and an optional column can be either. */
+function sameValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/** Two rows, column by column — by name rather than by `JSON.stringify` of the whole, so a row
+ *  rebuilt with its keys in another order is still the same row. `skip` names the columns that
+ *  are not the row's content. */
+function sameStepRow(a: object | undefined, b: object | undefined, skip?: string): boolean {
+  if (!a || !b) return a === b;
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(ra), ...Object.keys(rb)])) {
+    if (key !== skip && !sameValue(ra[key], rb[key])) return false;
   }
-  db.deckCards = [
-    ...db.deckCards.filter((c) => c.deckId !== deckId),
-    ...state.cards.map((c) => ({ ...c })),
+  return true;
+}
+
+/** One table's half of a reversal: whether the deck still holds the side being left, and the
+ *  write that puts the other side back. Every plan is checked before any is applied. */
+interface ReversalPlan {
+  holds: boolean;
+  apply: () => void;
+}
+
+/**
+ * One table of a step, narrowed to **the rows the write changed** — the keys whose row differs
+ * between the two sides — which is the crate's scope: a step touches the cells its write was
+ * about and nothing else, so a later write that files no step (a cut, a filing, another deck's
+ * label rename) is left standing wherever it did not touch the same row.
+ *
+ * `inScope` is where the row is looked for **now**. Rows keyed by id are looked for across the
+ * whole table, so a row another deck has since taken that id for is a deck that moved on rather
+ * than a slot to write into. Card rows are keyed by their grain inside the deck — the crate's
+ * cell — and a restored one whose id has since gone to another row takes a fresh one, which is
+ * the crate's remap (nothing points at `deck_cards.id`); `skip` leaves the id out of the check.
+ */
+function rowsPlan<R extends { id: number }>(
+  rows: () => R[],
+  write: (next: R[]) => void,
+  leaving: readonly R[],
+  target: readonly R[],
+  key: (row: R) => string,
+  inScope: (row: R) => boolean,
+  skip?: "id",
+): ReversalPlan {
+  const was = new Map(leaving.map((r) => [key(r), r]));
+  const will = new Map(target.map((r) => [key(r), r]));
+  const changed = new Set<string>();
+  for (const k of new Set([...was.keys(), ...will.keys()])) {
+    if (!sameStepRow(was.get(k), will.get(k), skip)) changed.add(k);
+  }
+  const now = (k: string) => rows().find((r) => inScope(r) && key(r) === k);
+  return {
+    holds: [...changed].every((k) => sameStepRow(now(k), was.get(k), skip)),
+    apply: () => {
+      // In place where the row is there now, so a reversal leaves the table in the order it
+      // found it; a row coming back takes its place by id, which is where a rowid sorts.
+      const placed = new Set<string>();
+      const next: R[] = [];
+      for (const r of rows()) {
+        const k = key(r);
+        if (!inScope(r) || !changed.has(k)) next.push(r);
+        else if (will.has(k) && !placed.has(k)) {
+          next.push({ ...will.get(k)!, id: r.id });
+          placed.add(k);
+        }
+      }
+      for (const k of changed) {
+        const row = will.get(k);
+        if (!row || placed.has(k)) continue;
+        const copy = { ...row };
+        if (next.some((r) => r.id === copy.id)) copy.id = nextId(next);
+        const at = next.findIndex((r) => r.id > copy.id);
+        next.splice(at < 0 ? next.length : at, 0, copy);
+      }
+      write(next);
+    },
+  };
+}
+
+/**
+ * `deck_undo::apply_reversal` over a whole-deck snapshot: check the deck still holds `leaving`
+ * — the step's `after` for an undo, its `before` for a redo — **on what the step changed**, and
+ * only then put `target` back over exactly that. Answers `false`, having written nothing, when
+ * the deck has moved on.
+ *
+ * It replaced a restore that overwrote the deck's cards, piles, notes and tokens, and the
+ * **whole** label table, with the snapshot unchecked (issue #1186): a Ctrl+Z on a category
+ * create took three card edits filed since with it, an undo in one deck put back a label
+ * renamed from another, and `updatedAt` went backwards.
+ */
+function reverseDeck(
+  db: FakeDb,
+  deckId: number,
+  leaving: FakeDeckState,
+  target: FakeDeckState,
+): boolean {
+  const deck = db.decks.find((d) => d.id === deckId);
+  if (!deck) return false;
+  const fields = DECK_FIELDS.filter((f) => !sameValue(leaving.deck[f], target.deck[f]));
+  const anywhere = () => true;
+  const plans: ReversalPlan[] = [
+    {
+      holds: fields.every((f) => VIEW_FIELDS.has(f) || sameValue(deck[f], leaving.deck[f])),
+      apply: () => {
+        const restored = copyDeck(target.deck);
+        const row = deck as unknown as Record<string, unknown>;
+        for (const f of fields) row[f] = (restored as unknown as Record<string, unknown>)[f];
+        // Undo is an edit like any other — `DECK_FIELDS` has no `updated_at` for this.
+        deck.updatedAt = stamp(db);
+      },
+    },
+    rowsPlan(
+      () => db.deckCards,
+      (next) => (db.deckCards = next),
+      leaving.cards,
+      target.cards,
+      (c) => `${c.variant}|${c.categoryId}|${c.cardId}|${c.finish ?? ""}`,
+      (c) => c.deckId === deckId,
+      "id",
+    ),
+    rowsPlan(
+      () => db.deckCategories,
+      (next) => (db.deckCategories = next),
+      leaving.categories,
+      target.categories,
+      (c) => String(c.id),
+      anywhere,
+    ),
+    // The table is app-wide and the snapshot holds all of it, but only the labels this step
+    // changed are checked or written — never another deck's rename.
+    rowsPlan(
+      () => db.deckLabels,
+      (next) => (db.deckLabels = next),
+      leaving.labels,
+      target.labels,
+      (l) => String(l.id),
+      anywhere,
+    ),
+    rowsPlan(
+      () => db.deckNotes,
+      (next) => (db.deckNotes = next),
+      leaving.notes,
+      target.notes,
+      (n) => String(n.id),
+      anywhere,
+    ),
+    rowsPlan(
+      () => db.deckNoteCards,
+      (next) => (db.deckNoteCards = next),
+      leaving.noteCards,
+      target.noteCards,
+      (c) => String(c.id),
+      anywhere,
+    ),
+    rowsPlan(
+      () => db.deckTokens,
+      (next) => (db.deckTokens = next),
+      leaving.tokens,
+      target.tokens,
+      (t) => String(t.id),
+      anywhere,
+    ),
+    rowsPlan(
+      () => db.deckTokenPrintings,
+      (next) => (db.deckTokenPrintings = next),
+      leaving.tokenPrintings,
+      target.tokenPrintings,
+      (e) => String(e.id),
+      anywhere,
+    ),
   ];
-  db.deckCategories = [
-    ...db.deckCategories.filter((c) => c.deckId !== deckId),
-    ...state.categories.map((c) => ({ ...c })),
-  ];
-  // The whole table, for the reason `deckState` records the whole table.
-  db.deckLabels = state.labels.map((l) => ({ ...l }));
-  // The notes, and the attachments after them. The attachments are filtered by the ids this deck
-  // holds **now** rather than by the ids the snapshot recorded, which is the half that is easy to
-  // get wrong: a note written since the step was filed is about to be dropped by the line above,
-  // and its attachments have to go with it or they outlive the note they name.
-  const held = new Set(db.deckNotes.filter((n) => n.deckId === deckId).map((n) => n.id));
-  db.deckNotes = [
-    ...db.deckNotes.filter((n) => n.deckId !== deckId),
-    ...state.notes.map((n) => ({ ...n })),
-  ];
-  db.deckNoteCards = [
-    ...db.deckNoteCards.filter((c) => !held.has(c.noteId)),
-    ...state.noteCards.map((c) => ({ ...c })),
-  ];
-  // The token state rows and both lists' entries — `Op::Tokens`' `states`, `restore` and
-  // `delete` in one move, because a snapshot is "make the deck look like this again" rather than
-  // three primitives.
-  db.deckTokens = [
-    ...db.deckTokens.filter((t) => t.deckId !== deckId),
-    ...state.tokens.map((t) => ({ ...t })),
-  ];
-  db.deckTokenPrintings = [
-    ...db.deckTokenPrintings.filter((e) => e.deckId !== deckId),
-    ...state.tokenPrintings.map((e) => ({ ...e })),
-  ];
+  if (!plans.every((p) => p.holds)) return false;
+  for (const plan of plans) plan.apply();
+  // An attachment cascades away with its note, so one whose note this reversal took goes too.
+  const notes = new Set(db.deckNotes.map((n) => n.id));
+  db.deckNoteCards = db.deckNoteCards.filter((c) => notes.has(c.noteId));
+  return true;
 }
 
 /**
@@ -27953,14 +28342,21 @@ function undoHandlers(db: FakeDb) {
       const cursor = nextUndo(db, args.deckId);
       if (!cursor) throw refuse("There is nothing left to undo in this deck.");
       if (cursor.auditId !== args.auditId || !auditOfDeck(db, cursor.auditId, args.deckId)) {
-        throw refuse(
-          "That is not the most recent change any more — the deck has been edited since. " +
-            "Open the history to see what happened.",
-        );
+        throw refuse(MOVED_ON);
       }
       // Behind the backstop, as the crate's reversal runs behind `with_write`'s: a restore that
       // moved the deck's cards reconciles its tokens, and those deletions sit in no step.
-      backstopping(db, () => restoreDeck(db, args.deckId, cursor.before));
+      let applied = false;
+      backstopping(db, () => {
+        applied = reverseDeck(db, args.deckId, cursor.after, cursor.before);
+      });
+      // **A refused undo retires its step** — the crate's rule: the step is the cursor, and a
+      // cursor that refuses is refused again at every press after it, so nothing older could
+      // ever be undone. The history row stays; the next Ctrl+Z is the change below it.
+      if (!applied) {
+        db.deckUndo = db.deckUndo.filter((s) => s !== cursor);
+        throw refuse(RETIRED);
+      }
       // And the managed wishlist settles after it, as `with_write`'s settle does after any write
       // its triggers saw — a step putting a token entry back is one (user schema v55).
       settleManagedWishlist(db, args.deckId);
@@ -27980,18 +28376,20 @@ function undoHandlers(db: FakeDb) {
       if (!step || step.undoneAt === null) {
         throw refuse("That change has not been undone, so there is nothing to redo.");
       }
-      // Only the change undone last — `deck_undo::next_redo`. The fake keeps whole-deck
-      // snapshots and makes no content check; the order is the half a story can reach.
+      // Only the change undone last — `deck_undo::next_redo` — and only onto a deck that still
+      // holds what the undo left. A refused redo changes nothing: the id is the webview's, and
+      // the webview drops it on any refusal.
       if (
         nextRedo(db, args.deckId)?.auditId !== args.auditId ||
         !auditOfDeck(db, args.auditId, args.deckId)
       ) {
-        throw refuse(
-          "That is not the most recent change any more — the deck has been edited since. " +
-            "Open the history to see what happened.",
-        );
+        throw refuse(MOVED_ON);
       }
-      backstopping(db, () => restoreDeck(db, args.deckId, step.after));
+      let applied = false;
+      backstopping(db, () => {
+        applied = reverseDeck(db, args.deckId, step.before, step.after);
+      });
+      if (!applied) throw refuse(MOVED_ON);
       settleManagedWishlist(db, args.deckId);
       step.undoneAt = null;
       recordReversal(db, args.deckId, "redo", step.auditId);

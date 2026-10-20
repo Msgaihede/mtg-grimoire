@@ -24,13 +24,15 @@ import { useDangerZone, useLocalCache } from "@grimoire/ui/features/settings/use
 import { useHiddenTags } from "@grimoire/ui/features/settings/useHiddenTags";
 import { count } from "@grimoire/ui/lib/counts";
 import { LIGHT_SETTINGS, type LightPanel } from "@grimoire/ui/lib/edition";
-import { FOCUS_INSET } from "@grimoire/ui/lib/focus";
+import { FOCUS, FOCUS_INSET } from "@grimoire/ui/lib/focus";
 import { ipc } from "@grimoire/ui/lib/ipc";
 import { LAYER } from "@grimoire/ui/lib/layers";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
 import { REVIEW_KEY } from "@grimoire/ui/lib/query";
 import { useErrorLog, type ErrorLog } from "@grimoire/ui/lib/useErrorLog";
 import { useMarketplace } from "@grimoire/ui/lib/useMarketplace";
 import { cn } from "@grimoire/ui/lib/utils";
+import { useHeldDownloads } from "../../heldDownloads";
 
 /**
  * The light edition's panels, in the desktop's drawing order, and the groups that hold them.
@@ -135,6 +137,7 @@ export function SettingsPage(): JSX.Element {
   /** What is waiting in the review queue, on `ReviewPanel`'s own key — the desktop rail's `Sync`
    *  count, read for the same reason: the row has to count while its panel is not mounted. */
   const review = useQuery({ queryKey: REVIEW_KEY, queryFn: () => ipc.syncReviewList() });
+  const downloads = useHeldDownloads();
   const badges: Record<BadgeId, number> = {
     review: review.data?.length ?? 0,
     errors: log.entries.length,
@@ -146,6 +149,27 @@ export function SettingsPage(): JSX.Element {
     <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain select-text">
       {/* The column the desktop's panels were written for (`max-w-2xl`), so a tablet-wide phone face
           does not run their prose to a hundred characters a line. */}
+      {/* The launch's downloads, still held after a *Not now* (issue #1155): the way back to the
+          prompt, above the groups, for as long as the host holds and not a moment longer. */}
+      {downloads.held && (
+        <div className="mx-auto flex max-w-2xl flex-col gap-2 border-b border-border px-4 py-3 text-sm">
+          <p className="text-dim">
+            The card data is waiting to download. Until it arrives, search and the card pages have
+            nothing to show.
+          </p>
+          <button
+            type="button"
+            onClick={downloads.offer}
+            className={cn(
+              "flex h-11 items-center justify-center self-start rounded-md bg-accent px-4 font-medium text-accent-fg",
+              PRESS_SOFT,
+              FOCUS,
+            )}
+          >
+            Download card data…
+          </button>
+        </div>
+      )}
       <ul aria-label="Settings sections" className="mx-auto max-w-2xl">
         {GROUP_LIST.map((id) => {
           const meta = GROUPS[id];
@@ -170,7 +194,9 @@ export function SettingsPage(): JSX.Element {
                   // it, so the press that closes it is never a scroll away — and only within its
                   // own `<li>`, so the next group's row takes over rather than stacking. Opaque,
                   // and on the header rung `SettingsNav`'s pinned rail uses for the same pairing.
-                  expanded ? cn("sticky top-0 border-b border-border text-text", LAYER.header) : "text-dim",
+                  expanded
+                    ? cn("sticky top-0 border-b border-border text-text", LAYER.header)
+                    : "text-dim",
                   FOCUS_INSET,
                 )}
               >
