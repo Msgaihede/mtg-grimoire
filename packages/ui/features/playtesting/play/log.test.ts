@@ -17,6 +17,7 @@ const CASES: [PlaytestHappened, string | null, string][] = [
     "The opponent cast Lightning Bolt",
     "cast",
   ],
+  [{ type: "cast", seat: "opponent", name: null }, "The opponent cast a face-down spell", "cast"],
   [{ type: "activated", seat: "you", name: "Sol Ring" }, "Activated Sol Ring", "cast"],
   [
     { type: "activated", seat: "opponent", name: "Smuggler's Copter" },
@@ -57,6 +58,16 @@ const CASES: [PlaytestHappened, string | null, string][] = [
   [
     { type: "moved", seat: "opponent", name: "Ragavan", from: "battlefield", to: "exile" },
     "The opponent's Ragavan was exiled",
+    "move",
+  ],
+  [
+    { type: "moved", seat: "opponent", name: null, from: "libraryTop", to: "exile" },
+    "The opponent's face-down card was exiled",
+    "move",
+  ],
+  [
+    { type: "moved", seat: "opponent", name: null, from: "libraryTop", to: "battlefield" },
+    "The opponent's face-down card entered the battlefield",
     "move",
   ],
   [

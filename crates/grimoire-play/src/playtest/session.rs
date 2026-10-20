@@ -756,7 +756,12 @@ impl Playtest {
                     let (targets, target_players) = stack_targets(s, entry);
                     Some(PlaytestStackItem {
                         id: entry.id.0,
-                        name: source.name.clone(),
+                        // A face-down spell of an opponent's has no name to them (CR 708.4).
+                        name: if concealed(source) {
+                            String::new()
+                        } else {
+                            source.name.clone()
+                        },
                         card_id: self.printing_of(shown),
                         seat: seat_of(entry.controller),
                         ability: !matches!(entry.kind, StackEntryKind::Spell { .. }),
@@ -806,11 +811,12 @@ impl Playtest {
         let s = &self.state;
         let player = &s.players[seat.0 as usize];
         let reader = seat == YOU;
-        // An opponent's face-down exiled cards (a foretold card) are theirs alone to look at.
+        // An opponent's face-down exiled cards (a foretold card, a hideaway card) are theirs
+        // alone to look at.
         let mine = |id: &&ObjectId| {
             s.objects
                 .get(id)
-                .is_some_and(|o| o.owner == seat && (reader || !o.face_down))
+                .is_some_and(|o| o.owner == seat && !concealed(o))
         };
         let cards = |ids: &mut dyn Iterator<Item = &ObjectId>| -> Vec<GameCard> {
             ids.filter_map(|id| self.card(*id))
@@ -874,6 +880,14 @@ impl Playtest {
 
     fn card(&self, id: ObjectId) -> Option<GameCard> {
         let o = self.state.objects.get(&id)?;
+        if concealed(o) {
+            // An opponent's face-down permanent (a morph, a manifest): only what the effect that
+            // turned it face down gives it (CR 708.2a), never the card's name, picture or gaps.
+            return game_card(&self.state, id, None, false, Vec::new()).map(|c| GameCard {
+                name: String::new(),
+                ..c
+            });
+        }
         let is_commander = !o.is_token && self.commanders.contains(&(o.owner, o.name.clone()));
         // A token is phase's preset, never a face of the deck's: its maker's gaps are the maker's.
         let gaps = if o.is_token {
@@ -884,8 +898,9 @@ impl Playtest {
         game_card(&self.state, id, self.printing_of(id), is_commander, gaps)
     }
 
+    /// The printing to draw a card by; none for a card the reader may not see the face of.
     fn printing_of(&self, id: ObjectId) -> Option<String> {
-        let o = self.state.objects.get(&id)?;
+        let o = self.state.objects.get(&id).filter(|o| !concealed(o))?;
         self.printings
             .get(&id)
             .map(|p| p.card_id.clone())
@@ -903,7 +918,11 @@ impl Playtest {
         let o = self.state.objects.get(&id)?;
         Some(PlaytestCardRef {
             id: id.0,
-            name: o.name.clone(),
+            name: if concealed(o) {
+                String::new()
+            } else {
+                o.name.clone()
+            },
             card_id: self.printing_of(id),
             text: None,
             cause: None,
@@ -915,6 +934,16 @@ impl Playtest {
         self.state.objects.get(&id).is_some_and(|o| {
             o.owner == YOU || o.controller == YOU || !matches!(o.zone, Zone::Hand | Zone::Library)
         })
+    }
+
+    /// A card's name, when the reader may see the card and what it is: not in an opponent's
+    /// hand or library, and not an opponent's face-down card.
+    fn shown_name(&self, id: ObjectId) -> Option<String> {
+        self.state
+            .objects
+            .get(&id)
+            .filter(|o| self.visible(id) && !concealed(o))
+            .map(|o| o.name.clone())
     }
 
     /// What set a trigger off, read from the event that did — phase's `{ "type": …, "data": { …
@@ -960,10 +989,7 @@ impl Playtest {
         let (id, name) = match ids.first() {
             Some(&id) if self.state.objects.contains_key(&id) => {
                 if self.visible(id) {
-                    (
-                        Some(id.0),
-                        self.state.objects.get(&id).map(|o| o.name.clone()),
-                    )
+                    (Some(id.0), self.shown_name(id))
                 } else {
                     (None, None)
                 }
@@ -1143,10 +1169,7 @@ impl Playtest {
         let field = |key: &str| data.and_then(|d| d.get(key));
         let named = field("source_id")
             .and_then(Value::as_u64)
-            .map(ObjectId)
-            .filter(|id| self.visible(*id))
-            .and_then(|id| self.state.objects.get(&id))
-            .map(|o| o.name.clone());
+            .and_then(|id| self.shown_name(ObjectId(id)));
         let source_text = field("description")
             .and_then(Value::as_str)
             .filter(|t| !t.is_empty())
@@ -2220,7 +2243,7 @@ impl Playtest {
                         if let Some(o) = self.state.objects.get(id) {
                             out.push(PlaytestHappened::Moved {
                                 seat: PlaytestPlayer::You,
-                                name: o.name.clone(),
+                                name: Some(o.name.clone()),
                                 from: Place::LibraryTop,
                                 to: Place::Graveyard,
                             });
@@ -2662,6 +2685,29 @@ impl Playtest {
         .expect("the engine moves it");
     }
 
+    /// Tests only: turn `seat`'s permanent `name` face down, as a morph or a manifest is — the
+    /// flag alone, so a test sees the session hide the card whatever phase leaves on it.
+    #[cfg(test)]
+    pub(super) fn face_down_for_test(&mut self, seat: PlaytestPlayer, name: &str) -> u64 {
+        let player = PlayerId(seat.index());
+        let id = self
+            .state
+            .battlefield
+            .iter()
+            .copied()
+            .find(|id| {
+                let o = &self.state.objects[id];
+                o.controller == player && o.name == name
+            })
+            .expect("the permanent is on the battlefield");
+        self.state
+            .objects
+            .get_mut(&id)
+            .expect("on the battlefield")
+            .face_down = true;
+        id.0
+    }
+
     /// Undo (`back`) or redo: the game as it was before the last action, or before the last undo.
     fn travel(&mut self, back: bool) -> Result<PlaytestStep, String> {
         let now = self.moment();
@@ -2908,10 +2954,26 @@ fn names_source(action: &GameAction, id: ObjectId) -> bool {
     .any(|key| data.get(*key).and_then(Value::as_u64) == Some(id.0))
 }
 
+/// Whether a card's face is hidden from the reader: an opponent's face-down card — a morph or a
+/// manifest on the battlefield, a face-down spell, a hideaway or foretold card in exile. The
+/// reader looks at their own (CR 708.5) and at nobody else's. Where a card the reader may not
+/// see is described — the log, the table, the stack, a prompt — it has no name and no printing.
+fn concealed(o: &engine::game::GameObject) -> bool {
+    o.face_down && o.owner != YOU && o.controller != YOU
+}
+
 /// What a run of the engine's events comes to, as the log's facts. `state` is the game after
-/// them, which names the objects they point at. An opponent's draws are told without the card.
-fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>) {
-    let name = |id: &ObjectId| state.objects.get(id).map(|o| o.name.clone());
+/// them, which names the objects they point at. An opponent's draws are told without the card,
+/// and so is anything of theirs face down.
+pub(super) fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>) {
+    let secret = |id: &ObjectId| state.objects.get(id).is_some_and(concealed);
+    let name = |id: &ObjectId| {
+        state
+            .objects
+            .get(id)
+            .filter(|o| !concealed(o))
+            .map(|o| o.name.clone())
+    };
     let seat = |id: &ObjectId| state.objects.get(id).map(|o| seat_of(o.controller));
     let lands: BTreeSet<ObjectId> = events
         .iter()
@@ -2954,10 +3016,15 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                 controller,
                 ..
             } => {
-                if let Some(name) = name(object_id) {
+                if secret(object_id) {
                     out.push(PlaytestHappened::Cast {
                         seat: seat_of(*controller),
-                        name,
+                        name: None,
+                    });
+                } else if let Some(name) = name(object_id) {
+                    out.push(PlaytestHappened::Cast {
+                        seat: seat_of(*controller),
+                        name: Some(name),
                     });
                 }
             }
@@ -3011,9 +3078,11 @@ fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<PlaytestHappened>
                     // A card going back to a hidden zone the reader cannot follow.
                     (Zone::Hand, Zone::Library) if hidden => {}
                     (Zone::Library, Zone::Library) => {}
+                    // An opponent's card that is face down where it went (a hideaway card, a
+                    // manifest) is theirs to know.
                     _ => out.push(PlaytestHappened::Moved {
                         seat: whose,
-                        name: record.name.clone(),
+                        name: (!secret(object_id)).then(|| record.name.clone()),
                         from: from_place,
                         to: to_place,
                     }),

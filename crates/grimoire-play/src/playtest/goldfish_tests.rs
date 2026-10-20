@@ -270,7 +270,7 @@ fn a_spell_is_cast_from_untapped_mana_and_cast_unpaid_without_it() {
     assert!(
         cast.happened.contains(&H::Cast {
             seat: YOU,
-            name: "Llanowar Elves".into(),
+            name: Some("Llanowar Elves".into()),
         }),
         "{:?}",
         cast.happened
@@ -289,7 +289,7 @@ fn a_spell_is_cast_from_untapped_mana_and_cast_unpaid_without_it() {
     assert!(
         unpaid.happened.contains(&H::Cast {
             seat: YOU,
-            name: "Grizzly Bears".into(),
+            name: Some("Grizzly Bears".into()),
         }),
         "cast without paying (CR 118.9): {:?}",
         unpaid.happened
@@ -791,7 +791,7 @@ fn a_spell_with_one_target_is_cast_at_it() {
     });
     assert!(step.happened.contains(&H::Cast {
         seat: YOU,
-        name: "Giant Growth".into(),
+        name: Some("Giant Growth".into()),
     }));
     let bear = find(&step.view.you.battlefield, "Grizzly Bears").unwrap();
     assert_eq!((bear.power, bear.toughness), (Some(5), Some(5)));
@@ -1008,7 +1008,7 @@ fn a_life_total_the_rules_change_is_told_for_either_seat() {
     assert!(
         step.happened.contains(&H::Cast {
             seat: YOU,
-            name: "Fish Feast".into(),
+            name: Some("Fish Feast".into()),
         }),
         "{:?}",
         step.happened
@@ -1194,7 +1194,7 @@ fn a_card_played_unpaid_is_cast_and_its_cast_from_hand_trigger_happens() {
     assert!(
         free.happened.contains(&H::Cast {
             seat: YOU,
-            name: "Wakening Sun's Avatar".into(),
+            name: Some("Wakening Sun's Avatar".into()),
         }),
         "{:?}",
         free.happened
@@ -1208,7 +1208,7 @@ fn a_card_played_unpaid_is_cast_and_its_cast_from_hand_trigger_happens() {
     assert!(find(&free.view.you.graveyard, "Grizzly Bears").is_some());
     assert!(paid.happened.contains(&H::Cast {
         seat: YOU,
-        name: "Savannah Lions".into(),
+        name: Some("Savannah Lions".into()),
     }));
     assert!(
         find(&paid.view.you.battlefield, "Plains").unwrap().tapped,
@@ -1361,7 +1361,7 @@ fn a_foretold_card_is_exiled_for_two_and_cast_from_exile_on_a_later_turn() {
     let (happened, view) = cast;
     assert!(happened.contains(&H::Cast {
         seat: YOU,
-        name: "Behold the Multiverse".into(),
+        name: Some("Behold the Multiverse".into()),
     }));
     assert!(find(&view.you.exile, "Behold the Multiverse").is_none());
     assert!(find(&view.you.graveyard, "Behold the Multiverse").is_some());

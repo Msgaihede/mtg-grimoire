@@ -338,11 +338,13 @@ export type PlaytestHappened =
   | { type: "kept"; size: number; bottomed: number }
   | { type: "turnBegan"; turn: number; seat: PlaytestPlayer }
   | { type: "played"; seat: PlaytestPlayer; name: string }
-  | { type: "cast"; seat: PlaytestPlayer; name: string }
+  /** `name` is `null` for an opponent's spell cast face down (a morph), which only they know. */
+  | { type: "cast"; seat: PlaytestPlayer; name: string | null }
   | { type: "activated"; seat: PlaytestPlayer; name: string }
   /** A card exiled face down from its owner's hand; `name` is `null` for an opponent's. */
   | { type: "foretold"; seat: PlaytestPlayer; name: string | null }
-  | { type: "moved"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
+  /** `name` is `null` for an opponent's card face down where it went (a hideaway card, a manifest). */
+  | { type: "moved"; seat: PlaytestPlayer; name: string | null; from: GamePlace; to: GamePlace }
   | { type: "drew"; seat: PlaytestPlayer; name: string | null }
   | { type: "attacked"; seat: PlaytestPlayer; names: string[] }
   | { type: "blocked"; seat: PlaytestPlayer; blocker: string; attacker: string }

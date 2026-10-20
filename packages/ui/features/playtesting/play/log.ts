@@ -89,10 +89,14 @@ export function listed(names: readonly string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** A rules move of a card, by whose card it was: a draw, a discard, a death, an arrival. */
+/**
+ * A rules move of a card, by whose card it was: a draw, a discard, a death, an arrival. A card
+ * with no `name` is an opponent's that went face down ("The opponent's face-down card was
+ * exiled"): the wire never says what it is.
+ */
 function movedSentence(
   seat: PlaytestPlayer,
-  name: string,
+  named: string | null,
   from: GamePlace,
   to: GamePlace,
   opponents: number,
@@ -100,6 +104,7 @@ function movedSentence(
   const you = seat === "you";
   const who = playerName(seat, opponents);
   const whose = playerPossessive(seat, opponents);
+  const name = named ?? "face-down card";
   if (from === "libraryTop" && to === "hand") return you ? `Drew ${name}` : `${who} drew a card`;
   if (from === "libraryTop" && to === "graveyard")
     return you ? `Milled ${name}` : `${who} milled ${name}`;
@@ -208,6 +213,7 @@ export function playtestSentence(
         ? `Played ${h.name}`
         : `${playerName(h.seat, opponents)} played ${h.name}`;
     case "cast":
+      if (h.name === null) return `${playerName(h.seat, opponents)} cast a face-down spell`;
       return h.seat === "you"
         ? `Cast ${h.name}`
         : `${playerName(h.seat, opponents)} cast ${h.name}`;
