@@ -147,16 +147,19 @@ pub fn format_uuid(id: &[u8; ID_LEN]) -> String {
 }
 
 /// Parse the hyphenated form back to raw bytes. `None` for anything that is not a UUID.
+///
+/// Reads hex digits rather than slicing the string, so a multi-byte character (which would put
+/// a slice boundary inside it and panic — a trap in WASM) or a `+` sign (which `from_str_radix`
+/// accepts) is a plain `None`.
 pub fn parse_uuid(s: &str) -> Option<[u8; ID_LEN]> {
-    let hex: String = s.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return None;
-    }
+    let mut digits = s.chars().filter(|c| *c != '-').map(|c| c.to_digit(16));
     let mut out = [0u8; ID_LEN];
-    for i in 0..ID_LEN {
-        out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    for byte in &mut out {
+        let hi = digits.next()??;
+        let lo = digits.next()??;
+        *byte = (hi << 4 | lo) as u8;
     }
-    Some(out)
+    digits.next().is_none().then_some(out)
 }
 
 /// Restrict a search to a set of ids.
@@ -867,6 +870,20 @@ mod tests {
         assert_eq!(text, "0000419b-0bba-4488-8f7a-6194544ce91e");
         assert_eq!(parse_uuid(&text), Some(raw));
         assert_eq!(parse_uuid("not-a-uuid"), None);
+        assert_eq!(parse_uuid(&text[..text.len() - 1]), None);
+        assert_eq!(parse_uuid(&format!("{text}0")), None);
+    }
+
+    #[test]
+    fn uuid_parse_rejects_non_hex_without_panicking() {
+        // 32 bytes once the hyphens go, but `é` is two of them: a byte slice at 28..30 used to
+        // cut through it and panic.
+        let multibyte = format!("{}é0", "0".repeat(29));
+        assert_eq!(multibyte.len(), 32);
+        assert_eq!(parse_uuid(&multibyte), None);
+        assert_eq!(parse_uuid(&"é".repeat(16)), None);
+        // `from_str_radix` takes a leading sign; a UUID does not.
+        assert_eq!(parse_uuid(&"+f".repeat(16)), None);
     }
 
     #[test]
