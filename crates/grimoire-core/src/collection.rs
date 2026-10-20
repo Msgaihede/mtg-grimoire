@@ -1542,9 +1542,10 @@ fn set_quantity_inner(conn: &Connection, id: i64, quantity: i64) -> Result<Entry
 /// patch at all. **A new CHECK on `collection_entries` needs its refusal on this list**, or it
 /// will be reported to a reader as a deleted row.
 ///
-/// One constant because [`update_entry`] runs it **twice** on the folding path — once with every
-/// hole filled, and once with the eight grain holes bound to NULL, which is the same statement
-/// saying "leave the grain alone".
+/// One constant because [`update_entry`] runs it **three times** on the folding path — once with
+/// every hole filled, then with only the two quantities onto the source before the fold, then
+/// with the grain and quantity holes bound to NULL onto the survivor after it, which is the same
+/// statement saying "leave the grain alone".
 const PATCH_SQL: &str = "UPDATE OR IGNORE collection_entries SET
                 finish = coalesce(?2, finish),
                 condition = coalesce(?3, condition),
@@ -1592,10 +1593,15 @@ const PATCH_SQL: &str = "UPDATE OR IGNORE collection_entries SET
 /// carries an `id` for, and the collection table has to follow it: the row the reader was editing
 /// is gone.
 ///
-/// **The patch's non-grain half is applied to the source *before* the fold**, so a reader who
+/// **The patch's two quantities are applied to the source *before* the fold**, so a reader who
 /// corrects the condition and the quantity in one press folds the quantity they typed rather
-/// than the one the row had. The grain half is applied to nothing at all — the surviving row
-/// already carries every value it names, which is precisely why the two collided.
+/// than the one the row had. **The rest of its non-grain half is applied to the survivor
+/// *after* it** (issue #1124): [`fold_entry`] keeps the survivor's own price, date, source and
+/// note and never moves `tags` or `condition_original`, which is right for a fold nobody typed
+/// and wrong for this one — a tag or a price typed into the form is the reader's latest
+/// statement about these copies, and the feed line names it as changed. The grain half is
+/// applied to nothing at all — the surviving row already carries every value it names, which is
+/// precisely why the two collided.
 ///
 /// **Why not `collection_folders::refile_entry`, which is the crate's other merge-on-taken-grain
 /// door**: that one probes for a target using the row's grain *as stored*, so it can express
@@ -1743,17 +1749,46 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
         return Err(GONE.to_owned());
     };
 
-    // The same statement, with the eight grain holes bound to NULL: everything the reader
-    // typed that is *not* what made the two rows one, onto the row that is about to fold.
+    // The same statement with only the two quantity holes filled, onto the row that is about to
+    // fold: the counts the reader typed are what the fold sums.
     tx.query_row(
         PATCH_SQL,
         params![
             id,
             None::<String>,
             None::<String>,
-            patch.condition_original,
+            None::<String>,
             patch.quantity,
             patch.tradelist_quantity,
+            None::<f64>,
+            None::<String>,
+            None::<String>,
+            None::<String>,
+            None::<String>,
+            None::<bool>,
+            None::<bool>,
+            None::<bool>,
+            None::<bool>,
+            None::<String>,
+            None::<String>,
+            None::<String>,
+        ],
+        |r| r.get::<_, i64>(0),
+    )
+    .map_err(|e| e.to_string())?;
+    fold_entry(&tx, target, id).map_err(|e| e.to_string())?;
+    // And once more onto the survivor, with the grain and quantity holes bound to NULL:
+    // everything else the reader typed wins over what either row had, because `fold_entry`'s
+    // "the survivor's own answer stands" is a rule for folds nobody typed (issue #1124).
+    tx.query_row(
+        PATCH_SQL,
+        params![
+            target,
+            None::<String>,
+            None::<String>,
+            patch.condition_original,
+            None::<i64>,
+            None::<i64>,
             patch.purchase_price,
             patch.purchase_currency,
             patch.acquired_at,
@@ -1770,7 +1805,6 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
         |r| r.get::<_, i64>(0),
     )
     .map_err(|e| e.to_string())?;
-    fold_entry(&tx, target, id).map_err(|e| e.to_string())?;
     let quantity: i64 = tx
         .query_row(
             "SELECT quantity FROM collection_entries WHERE id = ?1",
@@ -5801,6 +5835,80 @@ mod tests {
             Some("the good one"),
             "the survivor had no note of its own, so it takes the folded row's"
         );
+    }
+
+    /// Issue #1124: the fold keeps the survivor's own price and never moves tags — right for a
+    /// fold nobody typed, wrong for this one. The reader changed LP to NM, tagged it and typed a
+    /// new price in one press; an NM row with a price, tags and a note of its own was already
+    /// there. What the reader typed wins; what they did not type stays the survivor's.
+    #[test]
+    fn an_edit_that_folds_keeps_the_tags_and_price_the_reader_typed() {
+        let conn = seeded();
+        let nm = add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("NM".into()),
+                purchase_price: Some(3.0),
+                purchase_currency: Some("EUR".into()),
+                tags: Some(r#"["binder"]"#.into()),
+                notes: Some("from the box".into()),
+                acquisition_source: Some("Local shop".into()),
+                ..input("bolt-lea", "nonfoil", 2)
+            },
+        )
+        .unwrap();
+        let lp = add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("LP".into()),
+                ..input("bolt-lea", "nonfoil", 1)
+            },
+        )
+        .unwrap();
+
+        let change = update_entry(
+            &conn,
+            lp.id,
+            &EntryPatch {
+                condition: Some("NM".into()),
+                tags: Some(r#"["cube"]"#.into()),
+                purchase_price: Some(9.5),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(change.id, nm.id);
+        assert_eq!(change.quantity, 3, "the quantities still sum");
+        assert_eq!(entry_count(&conn), 1);
+        let text = |column: &str| -> Option<String> {
+            conn.query_row(
+                &format!("SELECT {column} FROM collection_entries WHERE id = ?1"),
+                params![nm.id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let price: Option<f64> = conn
+            .query_row(
+                "SELECT purchase_price FROM collection_entries WHERE id = ?1",
+                params![nm.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            text("tags").as_deref(),
+            Some(r#"["cube"]"#),
+            "the typed tags win"
+        );
+        assert_eq!(price, Some(9.5), "the typed price wins");
+        assert_eq!(
+            text("purchase_currency").as_deref(),
+            Some("EUR"),
+            "an untyped field stays the survivor's"
+        );
+        assert_eq!(text("notes").as_deref(), Some("from the box"));
+        assert_eq!(text("acquisition_source").as_deref(), Some("Local shop"));
     }
 
     /// `packages/ui/lib/ipc.ts` mirrors this by hand and nothing checks that the two still agree.
