@@ -60,6 +60,11 @@
           "type": "toml",
           "path": "Cargo.lock",
           "jsonpath": "$.package[?(@.name.value=='card-neural')].version"
+        },
+        {
+          "type": "toml",
+          "path": "crates/card-scanner/Cargo.lock",
+          "jsonpath": "$.package[?(@.name.value=='card-neural')].version"
         }
       ]
     }

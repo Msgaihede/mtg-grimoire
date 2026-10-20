@@ -26,17 +26,23 @@
  * One minted claim set. `sub` is the Patreon member, `grp` the sync group, `exp` a wall-clock ms.
  *
  * **`dev` is the device that presented itself to `/token` or `/claim`**, added 2026-10-01 for the
- * share Worker (issue #548): a token outlives the device's removal by up to `TOKEN_TTL_MS`, and the
- * relay's own routes do not care — a removed device can push nothing at an epoch it holds no key
- * for — but a share is plaintext, so the share Worker checks `dev` against the group's newest
- * manifest. **Optional because a token minted by an older relay has none**, and such a token lives
- * at most a day; nothing in the relay reads it.
+ * share Worker (issue #548): a token outlives the device's removal by up to `TOKEN_TTL_MS`, so the
+ * share Worker's gate and the relay's push check `dev` against the group's newest manifest
+ * ([`stillInGroup`]), and the relay holds a push and an ack to the device they name
+ * (`admit.ts`'s `bindDevice`). **Optional because a token minted by an older relay has none**, and
+ * such a token lives at most a day.
+ *
+ * **`ep` is the group epoch whose auth the door checked**, read in the same row as that auth
+ * (`groupauth.ts`'s `authenticatedEpoch`). [`stillInGroup`] orders a grant against the group's
+ * newest rotation by it, without comparing clocks, which a mint time cannot. Optional for `dev`'s
+ * reason, and a token without one is ordered by its mint time as before.
  */
 export interface Claims {
   sub: string;
   grp: string;
   exp: number;
   dev?: string;
+  ep?: number;
 }
 
 /**
@@ -161,16 +167,110 @@ export async function verify(token: string, secret: string, nowMs: number): Prom
   }
   if (typeof parsed !== "object" || parsed === null) return null;
 
-  const { sub, grp, exp, dev } = parsed as Partial<Claims>;
+  const { sub, grp, exp, dev, ep } = parsed as Partial<Claims>;
   if (typeof sub !== "string" || typeof grp !== "string") return null;
   if (typeof exp !== "number" || !Number.isFinite(exp)) return null;
   // Absent is an older relay's token; present and not a string is a shape no minter writes.
   if (dev !== undefined && typeof dev !== "string") return null;
+  // The same for `ep`, and an epoch is a non-negative integer or it is not one the relay wrote.
+  if (ep !== undefined && !(Number.isSafeInteger(ep) && ep >= 0)) return null;
   // `<=` and not `<`: the instant it names is the first instant it is no longer good for.
   if (exp <= nowMs) return null;
 
   // Rebuilt from the checked fields rather than returned as-is, so a caller can never be handed a
-  // property this function did not check — and `dev` only when it was there, so a token without
-  // one reads back exactly as it was minted.
-  return dev === undefined ? { sub, grp, exp } : { sub, grp, exp, dev };
+  // property this function did not check — and `dev` and `ep` only when they were there, so a
+  // token without them reads back exactly as it was minted.
+  return {
+    sub,
+    grp,
+    exp,
+    ...(dev === undefined ? {} : { dev }),
+    ...(ep === undefined ? {} : { ep }),
+  };
+}
+
+/**
+ * Was a token minted by a device the group has not since removed? **One rule, read by two
+ * Workers**: the relay's push gate (`index.ts`) and the share Worker's gate in front of every
+ * `/g/…` route (`infrastructure/share-worker/src/env.ts`, issue #548). It lived in the share
+ * Worker alone until the relay's push needed it too, and it moved here rather than being copied,
+ * so the two cannot drift into two different ideas of who is in a group. **Here, in the token's
+ * module, because this is the one relay module the share Worker bundles** — by an exact-module
+ * alias in a job with nothing installed (`scripts/share-worker-alias.test.ts`), which is also why
+ * it imports nothing.
+ *
+ * **A token outlives its device's removal by up to a day** (`TOKEN_TTL_MS`), because it is signed
+ * rather than looked up. The signature and `claims.grp` say only that the bearer *was* in the
+ * group when it minted; this is what says it still is.
+ *
+ * **The roster is the newest `group_keys` row**, the manifest a rotation published: its key set is
+ * who is in the group at that epoch (`infrastructure/relay/schema.sql`). Every join, removal and
+ * departure is a rotation, so a device the newest manifest omits is a device that has left — but
+ * only if its token predates that manifest. A device that paired *after* it holds a key the manifest does not
+ * name yet (a first claim seeds `{}`), and it could only have minted with the current group auth,
+ * which a removed device no longer derives. So the rule is two clauses, and both are needed:
+ *
+ * * granted **at** the newest epoch → in the group, whatever the manifest says;
+ * * granted **before** it → in the group only if that manifest names `dev`.
+ *
+ * **"At" is the token's `ep`**: the epoch whose auth the relay's door checked, read in the same row
+ * as that auth. Epochs order a grant against a rotation by what the door actually saw, so a
+ * removal that lands while a removed device's `/token` is in flight — or whose mirror has not
+ * moved yet — leaves its token at the older epoch.
+ *
+ * A token with no `ep` was minted by an older relay and lives at most a day; it falls back to its
+ * mint time, `exp − TOKEN_TTL_MS` (`claim.ts`'s `grantFor` stamps `exp` exactly that far past its
+ * issue time), against the newest row's `created_at` — the weaker rule, because it compares two
+ * clocks. A token with no `dev` was minted by a relay older than the change that added it
+ * (2026-10-01), and before the newest rotation it is refused rather than trusted — it cannot say
+ * which device it is for.
+ *
+ * **A group with no `group_keys` row has never rotated**, so nobody has ever been removed from it.
+ *
+ * An unreadable manifest throws rather than refusing: a 500 that names the group is recoverable,
+ * where a quiet refusal would read as every device's membership ending at once.
+ */
+export function stillInGroup(newest: NewestKeys | null, group: string, claims: Claims): boolean {
+  if (newest === null) return true;
+  if (claims.ep !== undefined) {
+    if (claims.ep >= newest.epoch) return true;
+  } else if (claims.exp - TOKEN_TTL_MS >= newest.created_at) {
+    return true;
+  }
+  if (claims.dev === undefined) return false;
+
+  let roster: unknown;
+  try {
+    roster = JSON.parse(newest.keys);
+  } catch {
+    throw new Error(`group ${group} has an unreadable manifest`);
+  }
+  if (typeof roster !== "object" || roster === null || Array.isArray(roster)) {
+    throw new Error(`group ${group} has an unreadable manifest`);
+  }
+  return Object.prototype.hasOwnProperty.call(roster, claims.dev);
+}
+
+/** The newest `group_keys` row's three columns the push gate and the share gate read. */
+export interface NewestKeys {
+  epoch: number;
+  /** The manifest as stored — JSON text, parsed only when a pre-rotation token asks. */
+  keys: string;
+  created_at: number;
+}
+
+/**
+ * The group's newest key row, or `null` for a group with none — **one point read on
+ * `group_keys_by_group`**, which is the whole of what a push's epoch check and its membership
+ * check need between them, so the push gate pays one D1 read for both.
+ *
+ * Takes the binding rather than an `Env`, because two Workers with two `Env`s call it.
+ */
+export async function newestKeys(db: D1Database, group: string): Promise<NewestKeys | null> {
+  return db
+    .prepare(
+      `SELECT epoch, keys, created_at FROM group_keys WHERE group_id = ? ORDER BY epoch DESC LIMIT 1`,
+    )
+    .bind(group)
+    .first<NewestKeys>();
 }

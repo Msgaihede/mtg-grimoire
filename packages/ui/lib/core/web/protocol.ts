@@ -72,7 +72,8 @@ export type FromWorker =
   /**
    * The answer to `labels`: `card_scanner::labels` bytes, **transferred** — six megabytes for a
    * full corpus, handed over rather than copied, and handed on to the scanner's Worker the same
-   * way. No bytes is an answer: the corpus is empty, or the read failed and the console said why.
+   * way. No bytes is an answer: the corpus is empty. A read that failed is not one —
+   * `scanner_labels` rejects, and `engine.ts` turns that into an `err` with its sentence.
    */
   | { kind: "labels"; id: number; bytes: Uint8Array }
   /** An engine event, its payload already parsed. */

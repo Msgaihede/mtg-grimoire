@@ -66,12 +66,12 @@ resolver = "2"
 members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan", "crates/grimoire-play", "crates/card-neural"]
 exclude = ["crates/card-scanner"]
 
-# One version, edition and license for the five members, which inherit each with
+# One version, edition and license for the six members, which inherit each with
 # `<key>.workspace = true` (since 2026-10-08). **The version is release-please's to write**:
 # `release-please-config.json` bumps `$.workspace.package.version` here, where it used to bump
 # five manifests (and the lockfile). `crates/card-scanner` is not a member and keeps its own.
 [workspace.package]
-version = "0.55.0"
+version = "0.56.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 

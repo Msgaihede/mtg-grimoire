@@ -89,8 +89,10 @@ order" says why, and [infrastructure/relay/README.md](../../infrastructure/relay
 
 **A seventh half — issue #548's `dev` claim (`f5223fdf`) — was deployed 2026-10-01 at 19:17 UTC**,
 from `main` at `2b845048`, version `ca3dfd11`. `token.ts` stamps the presenting device into every
-token and `verify` carries it through; nothing in the relay reads it, and it exists for the share
-Worker's gate. **No migration, no route, and no credential-free tell** — like the refresh-secret
+token and `verify` carries it through; nothing in the relay read it then, and it existed for the share
+Worker's gate. **The relay now holds a push and an ack to it** (`403 device_mismatch`, `admit.ts`'s
+`bindDevice`) — in this tree, and live only once a release deploys it; the relay's README,
+"Binding the token's device", has it. **No migration, no route, and no credential-free tell** — like the refresh-secret
 change it is known to be live from the tree that was deployed. Step 0's six probes and the two
 secret probes of item 8 were re-run straight after and answered as before. It was the first deploy
 an agent ran, at Markus's instruction that day; the rule below is otherwise unchanged.
@@ -550,7 +552,7 @@ the streamed answer and compaction by length are what every existing device is s
    reached would roll the index back with the duplicate-column error. **A Worker without the column
    fails quietly rather than loudly**: nothing a device calls reads it, so sync is untouched and
    every probe above looks healthy, but every hourly `scheduled` throws on its `SELECT` — no subject
-   is reconciled, and the rendezvous sweep that runs after it never runs either. So check it landed,
+   is reconciled, and the rendezvous and claim sweeps that run after it never run either. So check it landed,
    against the host, before step 6:
    ```
    npx wrangler d1 execute mtg-grimoire-relay --remote \
@@ -991,7 +993,7 @@ the one that can take sync down.
   invocation's log is step 2's missing `ALTER`, and it is the only place that failure shows.
 - ⚠️ **The free plan's per-invocation ceilings.** The budget of twenty is sized to **50 external
   subrequests** (a row spends two Patreon fetches — 40) and **50 D1 queries** (one `SELECT`, one
-  stamp and at most two `UPDATE`s a row — 42, 43 with the rendezvous sweep) per invocation. Both
+  stamp and at most two `UPDATE`s a row — 42, 45 with the rendezvous and claim sweeps) per invocation. Both
   figures are search summaries of Cloudflare's pages, which could not be read from the sandbox that
   sized the budget, and the ~25 subjects a day the old pass is said to have reached is derived from
   them rather than measured. If either ceiling is lower, a full pass fails part way through, one

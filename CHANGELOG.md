@@ -30,6 +30,35 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.56.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.55.0...v0.56.0) (2026-10-19)
+
+
+### Features
+
+* **sync:** a signed roster document per epoch, and device capabilities ([a258a50](https://github.com/Msgaihede/mtg-grimoire/commit/a258a508952fae01a3c303e8ef8a717cbd9ed293))
+* **sync:** a signed roster document per epoch, and device capabilities ([7d53097](https://github.com/Msgaihede/mtg-grimoire/commit/7d53097ad5f1b7b87b526c3bd1907800b5d541bb))
+* **sync:** sign every envelope with a per-device Ed25519 key ([84ec1f7](https://github.com/Msgaihede/mtg-grimoire/commit/84ec1f79ddaf054b9f40b981c3412fa964a31705))
+* **sync:** sign every envelope with a per-device Ed25519 key ([9d8bb90](https://github.com/Msgaihede/mtg-grimoire/commit/9d8bb901211aa67e541aa8239413b53222b714a2))
+
+
+### Bug Fixes
+
+* **relay:** bind push and ack to the token's device, and bound an ack's cursor ([eecc8fd](https://github.com/Msgaihede/mtg-grimoire/commit/eecc8fdb2e9ff2b28621767b379bcb6b7c743abd))
+* **relay:** bind push and ack to the token's device, and bound an ack's cursor ([f0d6333](https://github.com/Msgaihede/mtg-grimoire/commit/f0d6333c5fa621238d25afcecacd3c64431770b8))
+* **relay:** date /token grants from before the door's credential check ([aba3a7f](https://github.com/Msgaihede/mtg-grimoire/commit/aba3a7ff0fcee9bfbc18d94e1a9f8c9ad0f9fdcb))
+* **relay:** order share-gate grants by group epoch ([72e4023](https://github.com/Msgaihede/mtg-grimoire/commit/72e40233dfbd4829c4ddf2985bcb58185763864f))
+* **relay:** order share-gate grants by group epoch instead of mint time ([a668745](https://github.com/Msgaihede/mtg-grimoire/commit/a668745d2e6bf33c61450092b5a51bebb13245e7))
+* **relay:** record a rotation's writes in one D1 batch ([cb2221a](https://github.com/Msgaihede/mtg-grimoire/commit/cb2221aaaaaf12a3f6e2120f9cf6b62337023efa))
+* **relay:** record a rotation's writes in one D1 batch ([22cc139](https://github.com/Msgaihede/mtg-grimoire/commit/22cc139890d94f133b1f9944e12abb5021e5d970))
+* **relay:** refuse a push under a token the group's newest rotation has outlived ([084f791](https://github.com/Msgaihede/mtg-grimoire/commit/084f7912069005ad861cd08a3b38c6c2fcdff045))
+* **relay:** refuse a push under a token the group's newest rotation has outlived ([73ad263](https://github.com/Msgaihede/mtg-grimoire/commit/73ad26307505d0cf9e15035825dac4309e66ea8f))
+
+
+### Reverts
+
+* **sync:** back out signed envelopes and the signed roster ([4af902c](https://github.com/Msgaihede/mtg-grimoire/commit/4af902c07331ee8f4f5aa8e122c183d9c2117d15))
+* **sync:** back out signed envelopes and the signed roster ([779af2a](https://github.com/Msgaihede/mtg-grimoire/commit/779af2a346b30ceaa20cd853c1086e8af3e65122))
+
 ## [0.55.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.54.0...v0.55.0) (2026-10-17)
 
 

@@ -61,6 +61,8 @@ jobs:
   release-please:
     name: release-please
     runs-on: ubuntu-22.04
+    # Warm: under a minute. Every later push's changelog run waits in `release` behind it.
+    timeout-minutes: 15
     # Tags and releases, the release branch and its PR, and the labels it keeps on that PR.
     permissions:
       contents: write
@@ -71,17 +73,48 @@ jobs:
       release_id: ${{ steps.release.outputs.id }}
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # **A release builds and deploys the commit it is tagged at, not the one this run is on.**
+      # Every push to `main` shares the `release` group, and GitHub replaces a *pending* run in a
+      # group with the next arrival; so when the release PR's merge run is replaced, or its
+      # release-please step fails, the next push's run creates the release — tagging the release
+      # PR's merge commit while `github.sha` is a newer one (#1197). Every checkout after this job,
+      # and `publish`'s read of the notes, names `sha` for that reason. An empty `sha` would send
+      # each checkout back to `github.sha` without a word, so a release without one goes no further.
+      - name: Name the commit the release is tagged at
+        if: steps.release.outputs.release_created == 'true'
+        shell: bash
+        env:
+          SHA: ${{ steps.release.outputs.sha }}
+          RUN_SHA: ${{ github.sha }}
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          if [ -z "$SHA" ]; then
+            echo "release-please emitted no sha for $TAG; refusing to build a commit it did not name." >&2
+            exit 1
+          fi
+          if [ "$SHA" != "$RUN_SHA" ]; then
+            {
+              echo "### $TAG is tagged at an earlier commit"
+              echo
+              echo "This run is on \`$RUN_SHA\`; $TAG is tagged at \`$SHA\`, which every job builds and deploys."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   build:
     name: build (${{ matrix.os }})
     needs: release-please
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ${{ matrix.os }}
+    # Warm: ~25 min on Linux. A hung leg would hold the `release` concurrency group for six
+    # hours, replacing every later push's changelog run while pending.
+    timeout-minutes: 90
     # Uploads to the draft: tauri-action's bundles, and the portable zip below.
     permissions:
       contents: write
@@ -110,6 +143,7 @@ jobs:
       # — every upload is `gh` or tauri-action, each handed its token explicitly.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       - name: Install Linux system dependencies
@@ -224,6 +258,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -262,7 +297,7 @@ jobs:
         run: pnpm exec tauri android build --apk --aab --target aarch64 --ci
 
       # The `versionName` and `versionCode` come from `tauri.conf.json`'s `version`, which
-      # release-please bumped in the commit this run is on. Held here, before anything is signed:
+      # release-please bumped in the commit the release is tagged at. Held here, before anything is signed:
       # a bundle that says another version is one Play Console refuses after the release has run.
       - name: Find the bundle, and hold it to the release's version
         shell: bash
@@ -338,6 +373,7 @@ jobs:
       # The scripts, and the fingerprint the next step looks for. Nothing is installed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       # A job's `if:` cannot ask whether a value is set, so a step does and says what it found.
@@ -467,6 +503,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       - name: Install clang
@@ -595,6 +632,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -656,6 +694,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
+    # What `web-deploy` asks before anything else: did this job put the relay on its address.
+    outputs:
+      deployed: ${{ steps.token.outputs.present }}
     permissions:
       contents: read
     steps:
@@ -663,6 +704,7 @@ jobs:
       # `infrastructure/wrangler/`, the tool's lockfile, and the probe.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       # Told whether each is set, never what it is — as in `android-sign`.
@@ -770,11 +812,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
+    # What `web-deploy` asks before anything else: did this job put the share Worker on its address.
+    outputs:
+      deployed: ${{ steps.token.outputs.present }}
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       - name: Is there a token to deploy with
@@ -907,6 +953,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
+    # What `web-deploy` asks before anything else: did this job put the scan inbox on its address.
+    outputs:
+      deployed: ${{ steps.token.outputs.present }}
     permissions:
       contents: read
     steps:
@@ -914,6 +963,7 @@ jobs:
       # the tool's lockfile, and the probe.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       - name: Is there a token to deploy with
@@ -1026,12 +1076,18 @@ jobs:
   # what that leaves: the address serves the previous deploy until somebody deploys this tag by
   # hand. With one of the two values and not the other, it fails.
   #
+  # **With its token and the other three not deployed, it fails** (issue #1198): each of them
+  # says whether it deployed (`deployed`, its token step's `present`), and a missing
+  # `CLOUDFLARE_INFRA_API_TOKEN` ends them green having deployed nothing. Deploying this one
+  # then would put a page live ahead of the relay it asks, and `publish` would call the
+  # release done; failing here deploys nothing and leaves the release a draft.
+  #
   # **`environment: release`**, for `android-sign`'s reason: the token is handed only to a job
   # that names the environment, and from `main` alone once the owner has restricted the
   # environment to it (step 0 of "What only the owner can do"); until then, from any branch.
   web-deploy:
     name: web (deploy)
-    needs: [release-please, build, android-sign, web, share-deploy, scan-deploy]
+    needs: [release-please, build, android-sign, web, relay-deploy, share-deploy, scan-deploy]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1043,6 +1099,7 @@ jobs:
       # the tool's lockfile, and the probe.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       # Told whether each is set, never what it is — as in `android-sign`.
@@ -1053,6 +1110,9 @@ jobs:
           HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
           HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
+          RELAY_DEPLOYED: ${{ needs.relay-deploy.outputs.deployed }}
+          SHARE_DEPLOYED: ${{ needs.share-deploy.outputs.deployed }}
+          SCAN_DEPLOYED: ${{ needs.scan-deploy.outputs.deployed }}
         run: |
           set -euo pipefail
           missing=""
@@ -1061,6 +1121,12 @@ jobs:
           has CLOUDFLARE_API_TOKEN "$HAS_TOKEN"
           has CLOUDFLARE_ACCOUNT_ID "$HAS_ACCOUNT"
           if [ -z "$missing" ]; then
+            if [ "$RELAY_DEPLOYED" != true ] || [ "$SHARE_DEPLOYED" != true ] || [ "$SCAN_DEPLOYED" != true ]; then
+              echo "The web app's token is set and the other three Workers were not all deployed (relay: $RELAY_DEPLOYED, share: $SHARE_DEPLOYED, scan: $SCAN_DEPLOYED)." >&2
+              echo "A page ahead of the relay asks it without its half, so nothing was deployed and the release stays a draft." >&2
+              echo "Set CLOUDFLARE_INFRA_API_TOKEN, or deploy $TAG by hand — docs/reference/ci-and-releases.md, 'What only the owner can do'." >&2
+              exit 1
+            fi
             echo "present=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -1205,6 +1271,7 @@ jobs:
       # The script. Nothing is installed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       # Told whether the key is set, never what it is — and what `android-sign` said it did.
@@ -1278,6 +1345,7 @@ jobs:
     needs: [release-please, build, android-sign, relay-deploy, share-deploy, scan-deploy, web-deploy, play-upload]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
     # Flips the draft to published, and nothing else.
     permissions:
       contents: write
@@ -1291,7 +1359,7 @@ jobs:
       # **The release's body is `changelog/<version>.md`, as it was merged.** `changelog-write`
       # wrote that file from this release's pull requests while the release PR was open, and the
       # owner read it there; no model is asked anything here. Read through the API at the commit
-      # this run is on, so this job needs no checkout.
+      # the release is tagged at, so this job needs no checkout.
       #
       # **Notes never hold a release up.** No file, an empty one, or a failed call leaves the body
       # release-please wrote, says so in the summary, and goes on to publish. Written here, after
@@ -1303,7 +1371,7 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
           VERSION: ${{ needs.release-please.outputs.version }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ needs.release-please.outputs.sha }}
         run: |
           set -uo pipefail
           file="changelog/$VERSION.md"
@@ -1359,6 +1427,7 @@ jobs:
       # The script. Nothing is installed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.release-please.outputs.sha }}
           persist-credentials: false
 
       # Told whether it is set, never what it is — as in `android-sign`.

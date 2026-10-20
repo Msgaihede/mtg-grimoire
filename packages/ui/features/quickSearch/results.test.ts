@@ -12,7 +12,7 @@ import {
   settingItems,
   type CardRowLike,
   type DeckLike,
-} from "./quickSearch";
+} from "./results";
 import { PANEL_ORDER } from "@/features/settings/nav";
 
 const deck = (id: number, name: string, over: Partial<DeckLike> = {}): DeckLike => ({

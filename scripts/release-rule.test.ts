@@ -28,6 +28,7 @@ import webToml from "../crates/grimoire-web/Cargo.toml?raw";
 import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
 import playToml from "../crates/grimoire-play/Cargo.toml?raw";
 import neuralToml from "../crates/card-neural/Cargo.toml?raw";
+import scannerLock from "../crates/card-scanner/Cargo.lock?raw";
 import desktopConf from "../apps/desktop/src-tauri/tauri.conf.json?raw";
 import lightConf from "../apps/light/src-tauri/tauri.conf.json?raw";
 import appGradle from "../apps/light/src-tauri/gen/android/app/build.gradle.kts?raw";
@@ -89,9 +90,9 @@ function packageOf(toml: string) {
   };
 }
 
-/** Every version the root `Cargo.lock` records for a package name. */
-const lockedVersions = (name: string) =>
-  [...cargoLock.matchAll(/^\[\[package\]\]\r?\nname = "([^"]+)"\r?\nversion = "([^"]+)"/gm)]
+/** Every version a `Cargo.lock` records for a package name — the root's unless told another. */
+const lockedVersions = (name: string, lock: string = cargoLock) =>
+  [...lock.matchAll(/^\[\[package\]\]\r?\nname = "([^"]+)"\r?\nversion = "([^"]+)"/gm)]
     .filter((m) => m[1] === name)
     .map((m) => m[2]);
 
@@ -179,10 +180,25 @@ describe("one version in the tree", () => {
     },
   );
 
+  // **`card-scanner` keeps a lockfile of its own** (it is not a member) and links `card-neural`,
+  // a member that wears the app's version — so that lockfile records the app's version too, and
+  // a release that left it behind would fail its `--locked` suite in CI on the next run.
+  it("card-scanner's own lockfile records card-neural at it, and release-please bumps it", () => {
+    expect(lockedVersions("card-neural", scannerLock)).toEqual([version]);
+    expect(
+      names({
+        type: "toml",
+        path: "crates/card-scanner/Cargo.lock",
+        jsonpath: "$.package[?(@.name.value=='card-neural')].version",
+      }),
+    ).toBe(true);
+  });
+
   it("names nothing else, so this file is the whole list", () => {
     const tauriHosts = CRATES.filter((crate) => crate.conf !== null).length;
-    // The workspace's one manifest, each member's lockfile entry, each Tauri host's config.
-    expect(extra).toHaveLength(1 + CRATES.length + tauriHosts);
+    // The workspace's one manifest, each member's lockfile entry, each Tauri host's config, and
+    // card-neural's entry in card-scanner's own lockfile.
+    expect(extra).toHaveLength(1 + CRATES.length + tauriHosts + 1);
   });
 });
 
@@ -562,6 +578,12 @@ const RUNS: Record<string, string[][]> = {
       'has CLOUDFLARE_API_TOKEN "$HAS_TOKEN"',
       'has CLOUDFLARE_ACCOUNT_ID "$HAS_ACCOUNT"',
       'if [ -z "$missing" ]; then',
+      'if [ "$RELAY_DEPLOYED" != true ] || [ "$SHARE_DEPLOYED" != true ] || [ "$SCAN_DEPLOYED" != true ]; then',
+      'echo "The web app\'s token is set and the other three Workers were not all deployed (relay: $RELAY_DEPLOYED, share: $SHARE_DEPLOYED, scan: $SCAN_DEPLOYED)." >&2',
+      'echo "A page ahead of the relay asks it without its half, so nothing was deployed and the release stays a draft." >&2',
+      "echo \"Set CLOUDFLARE_INFRA_API_TOKEN, or deploy $TAG by hand — docs/reference/ci-and-releases.md, 'What only the owner can do'.\" >&2",
+      "exit 1",
+      "fi",
       'echo "present=true" >> "$GITHUB_OUTPUT"',
       "exit 0",
       "fi",
@@ -735,6 +757,7 @@ describe("release.yml", () => {
       "build",
       "android-sign",
       "web",
+      "relay-deploy",
       "share-deploy",
       "scan-deploy",
     ]);
@@ -793,6 +816,30 @@ describe("release.yml", () => {
       ]);
     }
     expect(code(releaseYml)).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)|continue-on-error/);
+  });
+
+  // **A release ships the commit it is tagged at** (#1197). The `release` group is shared by every
+  // push to `main`, so the run that creates a release can be a later push's — on a newer commit
+  // than the release PR's merge, which is what release-please tags. Every checkout on a release
+  // names the tagged commit, and release-please refuses to go on without one: an empty `ref`
+  // checks out `github.sha` without a word.
+  it("builds, signs and deploys the commit release-please tagged, not the run's", () => {
+    const TAGGED = "          ref: ${{ needs.release-please.outputs.sha }}";
+    expect(jobs["release-please"]).toMatch(/^ {6}sha: \$\{\{ steps\.release\.outputs\.sha \}\}$/m);
+    const [, guard] = stepsOf(jobs["release-please"]);
+    expect(guard).toMatch(/^ {8}if: steps\.release\.outputs\.release_created == 'true'$/m);
+    expect(guard).toContain('if [ -z "$SHA" ]; then');
+    expect(guard).toContain("exit 1");
+    let checkouts = 0;
+    for (const [name, job] of Object.entries(jobs)) {
+      if (name === "release-please" || CHANGELOG_JOBS.includes(name)) continue;
+      expect(job, name).not.toContain("github.sha");
+      for (const step of stepsOf(job).filter((s) => /^uses: actions\/checkout@/.test(s))) {
+        expect(step.split("\n"), name).toContain(TAGGED);
+        checkouts++;
+      }
+    }
+    expect(checkouts).toBeGreaterThanOrEqual(11);
   });
 
   // **A release is a push to `main` and nothing else.** A `workflow_dispatch` or a
@@ -854,6 +901,8 @@ describe("release.yml", () => {
   });
 
   it.each([
+    "release-please",
+    "build",
     "android",
     "android-sign",
     "web",
@@ -866,6 +915,7 @@ describe("release.yml", () => {
     "announce",
     "changelog-write",
     "changelog-commit",
+    "publish",
   ])("%s has a deadline", (name) => {
     expect(jobs[name]).toMatch(/^ {4}timeout-minutes: \d+$/m);
   });
@@ -1018,6 +1068,39 @@ describe("release.yml", () => {
       }
     },
   );
+
+  // **The web app goes live only behind the other three** (issue #1198). With no infra token
+  // they end green having deployed nothing, so each says whether it deployed, and `web-deploy`
+  // holding its own token fails on any of them that did not — before anything is downloaded or
+  // deployed, so the release stays a draft rather than a page ahead of its relay.
+  it.each(["relay-deploy", "share-deploy", "scan-deploy"])(
+    "%s says whether it deployed, from its token step",
+    (name) => {
+      expect(jobs[name]).toMatch(
+        /^ {4}outputs:\n {6}deployed: \$\{\{ steps\.token\.outputs\.present \}\}$/m,
+      );
+    },
+  );
+
+  it("web-deploy refuses to deploy, its token in hand, unless the other three deployed", () => {
+    const ask = stepsOf(jobs["web-deploy"])[1];
+    for (const [env, job] of [
+      ["RELAY_DEPLOYED", "relay-deploy"],
+      ["SHARE_DEPLOYED", "share-deploy"],
+      ["SCAN_DEPLOYED", "scan-deploy"],
+    ]) {
+      expect(ask).toContain(`${env}: \${{ needs.${job}.outputs.deployed }}`);
+      expect(needsOf(jobs["web-deploy"])).toContain(job);
+    }
+    const lines = runsOf(ask)[0];
+    const at = (line: string) => lines.indexOf(line);
+    const check =
+      'if [ "$RELAY_DEPLOYED" != true ] || [ "$SHARE_DEPLOYED" != true ] || [ "$SCAN_DEPLOYED" != true ]; then';
+    // Inside "both values are set", and before `present=true` is ever written.
+    expect(at(check)).toBe(at('if [ -z "$missing" ]; then') + 1);
+    expect(lines[at(check) + 4]).toBe("exit 1");
+    expect(at('echo "present=true" >> "$GITHUB_OUTPUT"')).toBeGreaterThan(at(check) + 4);
+  });
 
   it("builds the share viewer at the tag, as every pull request does, and hands it on", () => {
     const share = stepsOf(jobs.share);
@@ -1346,7 +1429,7 @@ describe("release.yml", () => {
     const [notes, flip] = stepsOf(jobs.publish);
     expect(stepsOf(jobs.publish)).toHaveLength(2);
     expect(notes).toContain('file="changelog/$VERSION.md"');
-    expect(notes).toContain("SHA: ${{ github.sha }}");
+    expect(notes).toContain("SHA: ${{ needs.release-please.outputs.sha }}");
     expect(notes).toContain('"repos/$REPO/contents/$file?ref=$SHA" > notes.md');
     expect(notes).toContain('gh release edit "$TAG" --notes-file notes.md --repo "$REPO"');
     // **Notes never hold a release up**: nothing in the step can end it non-zero.

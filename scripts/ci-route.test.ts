@@ -508,4 +508,14 @@ describe("ci.yml", () => {
     expect(ciYml).toMatch(new RegExp(`for result in [^;]*"\\$${env}"`));
     expect(ciYml).toMatch(new RegExp(`for job in [a-z ]*\\b${job}\\b[a-z ]*; do`));
   });
+
+  // A job has six hours by default, and a hung one holds `ci-ok` all of them.
+  const body = ciYml.slice(ciYml.search(/^jobs:/m));
+  const starts = [...body.matchAll(/^ {2}([a-z][a-z0-9-]*):[ \t]*$/gm)];
+  it.each(starts.map((m, i) => [m[1], body.slice(m.index, starts[i + 1]?.index)]))(
+    "%s has a deadline",
+    (_, job) => {
+      expect(job).toMatch(/^ {4}timeout-minutes: \d+$/m);
+    },
+  );
 });

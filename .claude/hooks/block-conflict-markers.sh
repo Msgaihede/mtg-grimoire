@@ -6,7 +6,9 @@
 # ordinary content, git raises no objection, the markers land on the branch, and the next
 # post-commit merge sails forward on top of them. This is the backstop for that.
 #
-# Wired to PreToolUse/Bash in .claude/settings.json.
+# Wired to PreToolUse on Bash and PowerShell in .claude/settings.json - agents resolve merges
+# in PowerShell (Bash refuses git merge/reset/switch here), so both tools need the backstop.
+# The payload is grepped raw, so either tool's command shape matches.
 
 set -uo pipefail
 

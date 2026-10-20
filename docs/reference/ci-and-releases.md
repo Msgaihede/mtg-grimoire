@@ -543,6 +543,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
   guard — so release-please, the three hosts' builds and the publish step are jobs in one file,
   chained on `release_created`.
+- **"From one tag" means the tagged commit, not the run's** (2026-10-20, #1197). Every push to
+  `main` shares the `release` concurrency group, and GitHub replaces a *pending* run with the next
+  arrival; so if the release PR's merge run is replaced while pending, or its release-please step
+  fails, the next push's run is the one that creates the release. release-please tags the release
+  PR's merge commit, but `github.sha` is then the newer push — and every checkout used to take
+  `github.sha`, so the binaries, the bundle and all four Workers would ship code the tag does not
+  hold (a `USER_SCHEMA_VERSION` rung among it, which `web:deploy-guard` would then compare
+  against the wrong tag). Now `release-please` passes on its `sha` output, every checkout on a
+  release names it (`ref: ${{ needs.release-please.outputs.sha }}`), `publish` reads the notes at
+  it, and a release with no `sha` fails in `release-please` — an empty `ref` would fall back to
+  `github.sha` without a word. When the two differ, the run's summary says so. The workflow's own
+  text is still the run's commit's; only what it builds and deploys is the tag's.
+  `scripts/release-rule.test.ts` holds all of it.
 - **The release rule: the three hosts ship from one tag** (light app phase 6, step 6.6,
   decided by the owner on 2026-10-04). One core means one user schema per commit. Sync stamps
   every op with the sender's `USER_SCHEMA_VERSION` (`sync_engine/wire.rs`, `stamp`), and a
@@ -881,6 +894,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     without the other; these two do not, because the account id is already in the environment
     for `web-deploy`, so asking for both would fail every release until the new token existed.
     (`scripts/release-rule.test.ts`: *asks for the token alone, and does nothing without it*.)
+  - **`web-deploy` does not go live ahead of them (2026-10-20, issue #1198).** Each of the three
+    infra jobs has a `deployed` output (its token step's `present`). `web-deploy` needs all three
+    and, holding its own token, fails in its first step when any did not deploy: nothing is
+    deployed, `play-upload` and `publish` do not run, and the release stays a draft. Before,
+    a missing `CLOUDFLARE_INFRA_API_TOKEN` shipped a green release whose page asked a relay
+    without its half, the only signal a summary line. The way out is the token set and the
+    run's jobs run again, or the four Workers deployed from the tag by hand and the draft
+    published (*What only the owner can do*). (`scripts/release-rule.test.ts`: *web-deploy
+    refuses to deploy, its token in hand, unless the other three deployed*.)
   - **The scan inbox is the fourth Worker a release deploys (2026-10-11, the same day; the
     owner's decision, with the card scanner's Send — #890).** `scan-deploy` puts
     `infrastructure/scan-worker/` on `https://scans.mtg-grimoire.app` — a Custom Domain from its
@@ -1238,7 +1260,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **The file is written again whenever `main` moves**: release-please rebuilds its branch and
     the notes are generated from the full set. A hand edit lasts only if it is the last thing
     before the merge. A correction that should last is made to the pull request's description.
-  - **`publish` sets the release body from the file** at the run's commit, before it flips the
+  - **`publish` sets the release body from the file** at the commit the release is tagged at, before it flips the
     draft, and no model is called on a release. Missing, empty or unreadable → release-please's
     notes stay, the summary says so, and the release is published.
   - **A published note is corrected in its file**, by pull request, then

@@ -25,6 +25,21 @@ describe("token", () => {
     expect(await verify(await mint(claims(), SECRET), SECRET, NOW)).not.toHaveProperty("dev");
   });
 
+  it("carries the epoch it was granted at, and reads a token without one as it was minted", async () => {
+    // Optional for `dev`'s reason; the share Worker orders a grant against a rotation by it.
+    const withEpoch = claims({ dev: "9f".repeat(16), ep: 3 });
+    expect(await verify(await mint(withEpoch, SECRET), SECRET, NOW)).toEqual(withEpoch);
+    expect(await verify(await mint(claims(), SECRET), SECRET, NOW)).not.toHaveProperty("ep");
+  });
+
+  it.each([[-1], [1.5], ["2"], [null], [Number.MAX_SAFE_INTEGER + 1]])(
+    "refuses an epoch claim of %j",
+    async (ep) => {
+      const odd = { ...claims(), ep } as unknown as Claims;
+      expect(await verify(await mint(odd, SECRET), SECRET, NOW)).toBeNull();
+    },
+  );
+
   it("refuses a device claim that is not a string", async () => {
     const odd = { ...claims(), dev: 7 } as unknown as Claims;
     expect(await verify(await mint(odd, SECRET), SECRET, NOW)).toBeNull();
@@ -45,7 +60,10 @@ describe("token", () => {
     const [payload, signature] = token.split(".");
     const decoded = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as Claims;
     decoded.grp = "ffffffffffffffffffffffffffffffff";
-    const forged = btoa(JSON.stringify(decoded)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const forged = btoa(JSON.stringify(decoded))
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
 
     expect(await verify(`${forged}.${signature}`, SECRET, NOW)).toBeNull();
   });

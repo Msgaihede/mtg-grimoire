@@ -258,9 +258,46 @@ export async function seedGroup(
 }
 
 /**
+ * What an accepted rotation settles besides the key history and the mirror — read by the caller
+ * **before** [`recordRotation`], so that every write the rotation makes is inside its one batch.
+ *
+ * `retireSecret` is the refresh secret to clear, as it was read: the write is a compare-and-swap
+ * on that value, so a claim that minted a new one in between is left alone (`rotate.ts`'s
+ * `orphanedSecret` says why it is retired at all). `dropDevices` are the slot-roll rows the new
+ * manifest does not name, from [`devicesOutside`].
+ */
+export interface RotationEffects {
+  retireSecret: string | null;
+  dropDevices: string[];
+}
+
+const NO_EFFECTS: RotationEffects = { retireSecret: null, dropDevices: [] };
+
+/**
+ * "The group's newest row is the one [`recordRotation`] is inserting", as a condition the rest of
+ * its batch can carry: six parameters, bound as `[group, epoch, auth, manifest, epoch, group]`.
+ *
+ * **Everything the row holds but its stamp, and newest.** Newest stops a refused rotation that
+ * repeats an *older* row from moving the mirror back onto it. The auth and the manifest stop one
+ * that repeats the newest row's epoch with an auth of its own from pointing the mirror at an auth
+ * no row holds. What can still match is a request identical to the rotation the group already
+ * stands on, and re-applying that writes the state that is already there. The stamp is left out
+ * on purpose: a Worker's clock does not advance between I/O, so two requests can read the same
+ * millisecond, and a guard that leaned on it matched a refused rotation against a claim's row.
+ *
+ * **Binding the auth here is not a timing oracle.** The caller has already passed
+ * `authIsCurrent`, and the only row this can match is the newest, whose auth is the one it
+ * presented. A `count(*)` and not `EXISTS`, because it is the shape `seedGroup` and `admitDevice`
+ * already use.
+ */
+const ADOPTED = `(SELECT count(*) FROM group_keys
+                   WHERE group_id = ? AND epoch = ? AND auth = ? AND keys = ?) > 0
+                 AND ? = (SELECT max(epoch) FROM group_keys WHERE group_id = ?)`;
+
+/**
  * Record a rotation: a new epoch, the auth derived from the new group key, and the key sealed for
- * every device that stays. `false` when `epoch` is not **one or [`REMOVAL_STEP`] past** the
- * group's newest, and nothing is written in that case.
+ * every device that stays — plus its [`RotationEffects`]. `false` when `epoch` is not **one or
+ * [`REMOVAL_STEP`] past** the group's newest, and nothing is written in that case.
  *
  * **The monotonic check is one statement, and that is the whole guard.** D1 has no interactive
  * transaction — `handleClaim`'s `DELETE … RETURNING` says so for the claim code and the reasoning
@@ -273,6 +310,16 @@ export async function seedGroup(
  * more than a removal steps". **Both bounds sit in that one `WHERE`**, and splitting them — the
  * upper one checked from a `groupEpoch` read first, say — would reopen the window for exactly the
  * half that was moved out.
+ *
+ * ⚠️ **And every other write rides in the same `batch`, which D1 runs as one transaction.** The
+ * mirror, the prune, the secret retirement and the slot frees used to follow the insert as
+ * separate round trips, so a D1 error or a cancelled request after the insert left `group_keys`
+ * on the new epoch with `entitlements.group_auth` still on the old one: [`authIsCurrent`] kept
+ * answering for the auth the rotation replaced, refused the one it introduced, and a removed
+ * holder's refresh secret could survive its removal. In one batch the rotation lands whole or not
+ * at all. A transaction cannot branch, so each follow-up carries [`ADOPTED`] — "the newest row is
+ * the one this call inserts" — and is a no-op when the insert was refused. The insert's own
+ * `meta.changes` is still the answer.
  *
  * **One step or two, and not merely higher.** A join plans `epoch + 1` from the epoch the device
  * stands on and a removal or a departure `epoch + 2` (see [`REMOVAL_STEP`] for why the two
@@ -294,48 +341,52 @@ export async function recordRotation(
   epoch: number,
   auth: string,
   keys: Record<string, string>,
+  effects: RotationEffects = NO_EFFECTS,
 ): Promise<boolean> {
-  const written = await env.DB.prepare(
-    `INSERT INTO group_keys (group_id, epoch, auth, keys, created_at)
-     SELECT ?, ?, ?, ?, ?
-      WHERE ? > coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1)
-        AND ? <= coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1) + ?`,
-  )
-    .bind(
-      group,
-      epoch,
-      auth,
-      JSON.stringify(keys),
-      Date.now(),
-      epoch,
-      group,
-      epoch,
-      group,
-      REMOVAL_STEP,
-    )
-    .run();
-  if (written.meta.changes === 0) return false;
+  const manifest = JSON.stringify(keys);
+  const adopted = [group, epoch, auth, manifest, epoch, group];
 
-  // Prune and mirror, and the order inside the batch does not matter because it is one
-  // transaction. **The prune runs on every write rather than on a schedule** — a sweep would be
-  // a cron that has to know which groups exist, where this is a `DELETE` against the one group
-  // the caller has already named. **The mirror is what makes `/token`'s group door a single
-  // lookup**: without it that door would have to find the group's newest epoch before it could
-  // compare anything, on the hottest route this table has.
-  //
-  // ⚠️ **The prune is epoch arithmetic, so a removal's step of two spends two epochs of the
-  // window.** A run of removals leaves four rows in it rather than eight; [`EPOCH_HISTORY`]'s doc
-  // carries what that costs a device that is dark across them.
-  await env.DB.batch([
-    env.DB.prepare(`DELETE FROM group_keys WHERE group_id = ? AND epoch <= ? - ?`).bind(
-      group,
-      epoch,
-      EPOCH_HISTORY,
-    ),
-    env.DB.prepare(`UPDATE entitlements SET group_epoch = ?, group_auth = ? WHERE group_id = ?`)
-      .bind(epoch, auth, group),
-  ]);
-  return true;
+  const statements = [
+    env.DB.prepare(
+      `INSERT INTO group_keys (group_id, epoch, auth, keys, created_at)
+       SELECT ?, ?, ?, ?, ?
+        WHERE ? > coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1)
+          AND ? <= coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1) + ?`,
+    ).bind(group, epoch, auth, manifest, Date.now(), epoch, group, epoch, group, REMOVAL_STEP),
+    // **The mirror is what makes `/token`'s group door a single lookup**: without it that door
+    // would have to find the group's newest epoch before it could compare anything, on the
+    // hottest route this table has.
+    env.DB.prepare(
+      `UPDATE entitlements SET group_epoch = ?, group_auth = ? WHERE group_id = ? AND ${ADOPTED}`,
+    ).bind(epoch, auth, group, ...adopted),
+    // **The prune runs on every write rather than on a schedule** — a sweep would be a cron that
+    // has to know which groups exist, where this is a `DELETE` against the one group the caller
+    // has already named. ⚠️ It is epoch arithmetic, so a removal's step of two spends two epochs
+    // of the window; [`EPOCH_HISTORY`]'s doc carries what that costs a device dark across a run.
+    env.DB.prepare(
+      `DELETE FROM group_keys WHERE group_id = ? AND epoch <= ? - ? AND ${ADOPTED}`,
+    ).bind(group, epoch, EPOCH_HISTORY, ...adopted),
+  ];
+  if (effects.retireSecret !== null) {
+    // The compare-and-swap binds the secret the caller read, never a presented one, so it is not
+    // a timing oracle on a credential.
+    statements.push(
+      env.DB.prepare(
+        `UPDATE entitlements SET refresh_secret = NULL, refresh_device = NULL
+          WHERE group_id = ? AND refresh_secret = ? AND ${ADOPTED}`,
+      ).bind(group, effects.retireSecret, ...adopted),
+    );
+  }
+  for (const device of effects.dropDevices) {
+    statements.push(
+      env.DB.prepare(
+        `DELETE FROM group_devices WHERE group_id = ? AND device_id = ? AND ${ADOPTED}`,
+      ).bind(group, device, ...adopted),
+    );
+  }
+
+  const [written] = await env.DB.batch(statements);
+  return written.meta.changes > 0;
 }
 
 /**
@@ -417,6 +468,34 @@ export async function authIsCurrent(env: Env, group: string, auth: string): Prom
     .first<{ group_auth: string | null }>();
   if (row === null || row.group_auth === null) return false;
   return equalsConstantTime(row.group_auth, auth);
+}
+
+/**
+ * `authIsCurrent`'s question, answered with the epoch the group stands on when the answer is yes,
+ * or `null` for no. What the two `/token` doors and `/claim` stamp into a token's `ep`.
+ *
+ * **The epoch comes from the same row read as the auth it is compared with**, because the two
+ * mirror columns are only ever written together: whatever moment that read lands in, the pair is
+ * one epoch's. An epoch read from `group_keys` in a second statement could be newer than the auth
+ * just checked — a rotation recorded whose mirror has not moved yet — and a token stamped with it
+ * would read as post-rotation to the share Worker for a device that rotation removed.
+ *
+ * A current auth with no mirrored epoch is no write this relay makes, and is refused rather than
+ * answered without one.
+ */
+export async function authenticatedEpoch(
+  env: Env,
+  group: string,
+  auth: string,
+): Promise<number | null> {
+  const row = await env.DB.prepare(
+    `SELECT group_epoch, group_auth FROM entitlements WHERE group_id = ?`,
+  )
+    .bind(group)
+    .first<{ group_epoch: number | null; group_auth: string | null }>();
+  if (row === null || row.group_auth === null) return null;
+  if (!equalsConstantTime(row.group_auth, auth)) return null;
+  return row.group_epoch;
 }
 
 /**
@@ -559,7 +638,9 @@ export async function admitDevice(
 }
 
 /**
- * Drop the rows for devices this manifest does not name — the way a slot is freed.
+ * The slot-roll rows this manifest does not name — the devices whose slots a rotation to it frees.
+ * Read only: the deletes are [`recordRotation`]'s, as [`RotationEffects`]`.dropDevices`, so a
+ * rotation that is refused or fails frees nothing.
  *
  * **The manifest is the roster, so `/rotate` is the only place a slot needs to be given back.** A
  * removal and a departure both publish one, so neither needs a mechanism of its own: the set of
@@ -574,23 +655,18 @@ export async function admitDevice(
  * a device that just presented a valid token. Note that neither is a membership decision —
  * membership is the manifest, and this table only counts.
  */
-export async function keepOnly(env: Env, group: string, devices: string[]): Promise<void> {
+export async function devicesOutside(
+  env: Env,
+  group: string,
+  devices: string[],
+): Promise<string[]> {
   const { results } = await env.DB.prepare(
     `SELECT device_id FROM group_devices WHERE group_id = ?`,
   )
     .bind(group)
     .all<{ device_id: string }>();
   const keep = new Set(devices);
-  const doomed = results.map((row) => row.device_id).filter((id) => !keep.has(id));
-  if (doomed.length === 0) return;
-  await env.DB.batch(
-    doomed.map((id) =>
-      env.DB.prepare(`DELETE FROM group_devices WHERE group_id = ? AND device_id = ?`).bind(
-        group,
-        id,
-      ),
-    ),
-  );
+  return results.map((row) => row.device_id).filter((id) => !keep.has(id));
 }
 
 /**

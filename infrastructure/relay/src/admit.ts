@@ -1,5 +1,6 @@
 import type { Envelope } from "./group";
 import { MAX_CLOCK_AHEAD_MS, MAX_GROUP_LOG_CHARS, MAX_SEALED_CHARS } from "./log";
+import type { Claims } from "./token";
 
 /**
  * Every refusal a push can meet, as pure functions over values already read — the Worker's
@@ -20,6 +21,9 @@ import { MAX_CLOCK_AHEAD_MS, MAX_GROUP_LOG_CHARS, MAX_SEALED_CHARS } from "./log
  * The two 400s — a body that is not JSON, an envelope missing a field — are not here. They were
  * the object's refusals before this file existed, they carry no `code` because there is nothing
  * for a client to do about one but fix itself, and `index.ts` still sends them in the same words.
+ *
+ * **One check here is an ack's as well as a push's**: whether the device a body names is the one
+ * its token was minted for ([`deviceMismatch`], [`bindDevice`]).
  */
 
 export interface Refusal {
@@ -85,10 +89,11 @@ export function admitBody(chars: number): Refusal | null {
  *    row; see that constant.
  * 2. **An epoch below the group's → 409 `stale_epoch`.** Two devices send one, and it is the
  *    right answer to both. A device *removed* from the group still holds the key it was removed
- *    from and a token that lives up to a day, and this is what stops it writing under that key in
- *    the meantime; a device merely *behind* a rotation is told to catch up, and the app re-reads
- *    `/keys`, adopts the new key and seals again. 409 because the push is fine and the group has
- *    moved.
+ *    from and a token that lives up to a day, and this stops it writing under that key; a device
+ *    merely *behind* a rotation is told to catch up, and the app re-reads `/keys`, adopts the new
+ *    key and seals again. 409 because the push is fine and the group has moved. **It does not
+ *    stop a removed device writing at the epoch the group is on** — the relay cannot read the
+ *    seal, and `/keys` tells any recent auth the epoch's number. [`admitMember`] does that.
  * 3. **An epoch above the group's → 422 `epoch_ahead`.** No shipped client seals ahead of the
  *    relay — `/rotate` records the new epoch in D1 *before* the rotating device commits it and
  *    pushes at it — so this is a push nothing honest sends. It is also the one that did the most
@@ -135,6 +140,31 @@ export function admit(
 }
 
 /**
+ * A push past `admit`, from a token `token.ts`'s `stillInGroup` has answered for: **409
+ * `stale_token`** when it was minted before the group's newest rotation by a device that rotation
+ * left out, or by a relay too old to say which device it was.
+ *
+ * **After `admit` and not before it**, so a push at an epoch the group has left is still
+ * `stale_epoch` — the answer every released app reads as "ask `/keys`", which is how a device
+ * removed between its key check and its push finds out. What is left for this one is a push at the
+ * current epoch, which no removed device running the app sends.
+ *
+ * **409 and never 401.** A 401 on a sync route is the app's lapse (`client::lapsed`): it revokes
+ * the grant and draws *Membership ended*. The token is what is stale here, not the membership — a
+ * device the manifest still names under a token with no `dev` is in the group and needs only a new
+ * token, which the app mints on its next trip once it has dropped this one. A build that does not
+ * know the code records the refusal and retries; its next `/keys` check is a removal's notice.
+ */
+export function admitMember(stillInGroup: boolean): Refusal | null {
+  if (stillInGroup) return null;
+  return {
+    status: 409,
+    code: "stale_token",
+    error: "that token predates the group's newest key change and is not for a device still in it",
+  };
+}
+
+/**
  * The object's one check: would storing `sealedChars` more take the log past
  * [`MAX_GROUP_LOG_CHARS`]? **507 `quota`** if so. Exactly at the cap is still stored.
  *
@@ -148,4 +178,70 @@ export function admit(
 export function admitToLog(storedChars: number, sealedChars: number): Refusal | null {
   if (storedChars + sealedChars <= MAX_GROUP_LOG_CHARS) return null;
   return { status: 507, code: "quota", error: "this group's log is full" };
+}
+
+/**
+ * The code a push or an ack is refused with when the device its body names is not the device its
+ * token was minted for. **403**.
+ */
+export const DEVICE_MISMATCH = "device_mismatch";
+
+/**
+ * Whether `device` — an envelope's `device` on a push, a body's `device` on an ack — is the device
+ * the token names: `null` when it is, or when the token names none, else the 403 it is refused
+ * with. Pure; [`bindDevice`] is what acts on it.
+ *
+ * **Why the relay binds the token's device at all.** The gate checks the token's `grp`, and that
+ * says only that the caller is in the group. The object stores the cursor of whatever `device` an
+ * ack names, and that cursor is the device's place on the compaction floor (`log.compact`) — so
+ * without this, a token for one device could move another device's place on it, or push an
+ * envelope stamped as another device. Each device should speak for itself and no other.
+ *
+ * **Refused, and not only recorded, because no honest client can meet it.** Every door that mints
+ * a token (`claim.ts`'s grant) writes the device it admitted into `dev`, and the app names that
+ * same id — `sync_identity.device_id`, which nothing ever re-mints — on every push and every ack
+ * (`sync_engine::client`'s `me`, and `entitlement`'s `this_device` for the door).
+ *
+ * **A token with no `dev` is never a mismatch.** It would be an older relay's, lives at most
+ * `TOKEN_TTL_MS`, and names no device to hold a body to; [`bindDevice`] lets it through and
+ * records that it did.
+ */
+export function deviceMismatch(claims: Pick<Claims, "dev">, device: string): Refusal | null {
+  if (claims.dev === undefined || claims.dev === device) return null;
+  return {
+    status: 403,
+    code: DEVICE_MISMATCH,
+    error: "that body names a device this token was not minted for",
+  };
+}
+
+/**
+ * [`deviceMismatch`], acted on — **the one place it is**, for a push and an ack alike: `null` to
+ * pass the request on, or the refusal to answer it with.
+ *
+ * **What it logs is fixed text**: the code or the gap and which of the two routes, and nothing a
+ * request carried — no group, no device id, no token, no byte of the body. The invocation log
+ * beside it already records the URL; what this adds is that the binding failed, or could not be
+ * checked. `warn` and not `error`: neither is the relay's fault.
+ */
+export function bindDevice(
+  route: "push" | "ack",
+  claims: Pick<Claims, "dev">,
+  device: string,
+): Refusal | null {
+  if (claims.dev === undefined) {
+    unboundToken(route);
+    return null;
+  }
+  const mismatch = deviceMismatch(claims, device);
+  if (mismatch !== null) console.warn(`${DEVICE_MISMATCH} on ${route}`);
+  return mismatch;
+}
+
+/**
+ * The line [`bindDevice`] writes for a token that names no device: let through, and counted, so
+ * that the day none are left is a day someone can read off the log rather than assume.
+ */
+export function unboundToken(route: "push" | "ack"): void {
+  console.warn(`token without dev on ${route}`);
 }

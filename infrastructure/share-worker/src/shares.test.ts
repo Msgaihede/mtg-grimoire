@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { fakeEnvOver, type Tables } from "@grimoire/relay/src/fakeD1";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { handleToken } from "@grimoire/relay/src/claim";
+import { fakeEnvOver, fakeTables, type Tables } from "@grimoire/relay/src/fakeD1";
+import { recordRotation, seedGroup } from "@grimoire/relay/src/groupauth";
+import type { Env as RelayEnv } from "@grimoire/relay/src/index";
 import { mint, TOKEN_TTL_MS } from "@grimoire/relay/src/token";
 import worker, { type Env } from "./index";
 
@@ -523,11 +526,40 @@ describe("a device the group has removed", () => {
     return { env, rotatedAt };
   }
 
-  /** A token minted at `mintedAt`, as `grantFor` would have: `exp` one TTL past its clock. */
+  /**
+   * A token minted at `mintedAt`, as `grantFor` would have: `exp` one TTL past its clock. With no
+   * `ep`, which is an older relay's token and is judged by that mint time.
+   */
   async function mintedAt(at: number, dev?: string): Promise<string> {
     const claims = { sub: "sub-0", grp: "g1", exp: at + TOKEN_TTL_MS };
     return mint(dev === undefined ? claims : { ...claims, dev }, KEY);
   }
+
+  /** A token granted at epoch `ep`, minted `at` — the two can disagree, and `ep` is what counts. */
+  async function grantedAt(ep: number, at: number, dev: string): Promise<string> {
+    return mint({ sub: "sub-0", grp: "g1", exp: at + TOKEN_TTL_MS, dev, ep }, KEY);
+  }
+
+  it("orders a token that carries an epoch by it, and not by when it was minted", async () => {
+    // Granted behind the newest rotation, for a device it omits: refused even though its clock
+    // says after. Granted at it: accepted even though its clock says before.
+    const { env, rotatedAt } = rotatedEnv();
+    const behind = await grantedAt(1, rotatedAt + 1_000, REMOVED);
+    const at = await grantedAt(3, rotatedAt - 1_000, JOINED);
+
+    expect((await worker.fetch(post("g1", behind, META), env)).status).toBe(401);
+    expect((await worker.fetch(list("g1", behind), env)).status).toBe(401);
+    expect((await worker.fetch(post("g1", at, META), env)).status).toBe(200);
+  });
+
+  it("goes on accepting a device the newest manifest names, whatever epoch it was granted at", async () => {
+    const { env, rotatedAt } = rotatedEnv();
+    const res = await worker.fetch(
+      post("g1", await grantedAt(1, rotatedAt - 1_000, STAYED), META),
+      env,
+    );
+    expect(res.status).toBe(200);
+  });
 
   it("refuses the token it was handed before the rotation that removed it", async () => {
     // ⚠️ The token is still validly signed and still unexpired — that is the whole bug. A share is
@@ -580,6 +612,93 @@ describe("a device the group has removed", () => {
       env,
     );
     expect(res.status).toBe(401);
+  });
+
+  /**
+   * The relay's two `/token` doors and this gate over one database, with `REMOVED`'s removal
+   * recorded between the door reading its credential and minting. The door has already said yes,
+   * so it answers a token; what must hold is that the token reads as pre-rotation here, where the
+   * manifest that removal published is then asked and does not name it.
+   */
+  describe("while its token is in flight at the relay", () => {
+    const AUTH_ONE = "ab12".repeat(16);
+    const AUTH_TWO = "cd34".repeat(16);
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it.each([
+      ["group", "group_auth FROM entitlements", { group: "g1", auth: AUTH_ONE }],
+      ["refresh", "WHERE refresh_secret = ?", { refresh: "secret-0" }],
+    ])("refuses what the %s door minted for it", async (_door, fragment, credential) => {
+      const start = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+      const env = shareEnv(fakeTables({ groups: ["g1"] }));
+      await seedGroup(env as unknown as RelayEnv, "g1", 0, AUTH_ONE);
+      const prepare = env.DB.prepare.bind(env.DB);
+      let removed = false;
+      vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (removed || !sql.includes(fragment)) return statement;
+        const bind = statement.bind.bind(statement);
+        vi.spyOn(statement, "bind").mockImplementation((...params) => {
+          const bound = bind(...params);
+          const first = bound.first.bind(bound) as () => Promise<unknown>;
+          vi.spyOn(bound, "first").mockImplementationOnce((async () => {
+            const result = await first();
+            removed = true;
+            // Same millisecond as the door's read, then the door's own round trips go by.
+            await recordRotation(env as unknown as RelayEnv, "g1", 2, AUTH_TWO, { [STAYED]: "b" });
+            clock.mockReturnValue(start + 100);
+            return result;
+          }) as typeof bound.first);
+          return bound;
+        });
+        return statement;
+      });
+
+      const minted = await handleToken(
+        new Request("https://relay.example/token", {
+          method: "POST",
+          body: JSON.stringify({ ...credential, device: REMOVED }),
+        }),
+        env as unknown as RelayEnv,
+      );
+      expect(removed).toBe(true);
+      expect(minted.status).toBe(200);
+      const { access } = (await minted.json()) as { access: string };
+
+      expect((await worker.fetch(post("g1", access, META), env)).status).toBe(401);
+      expect((await worker.fetch(list("g1", access), env)).status).toBe(401);
+    });
+
+    it("refuses what the group door minted it while the rotation's mirror lagged", async () => {
+      // The rotation's row is recorded and its mirror has not moved, so the old auth is still
+      // current to the door, and the token is minted well after the row's `created_at`.
+      const tables = fakeTables({ groups: ["g1"] });
+      const env = shareEnv(tables);
+      await seedGroup(env as unknown as RelayEnv, "g1", 0, AUTH_ONE);
+      tables.group_keys.push({
+        group_id: "g1",
+        epoch: 2,
+        auth: AUTH_TWO,
+        keys: JSON.stringify({ [STAYED]: "b" }),
+        created_at: Date.now() - 1_000,
+      });
+
+      const minted = await handleToken(
+        new Request("https://relay.example/token", {
+          method: "POST",
+          body: JSON.stringify({ group: "g1", auth: AUTH_ONE, device: REMOVED }),
+        }),
+        env as unknown as RelayEnv,
+      );
+      expect(minted.status).toBe(200);
+      const { access } = (await minted.json()) as { access: string };
+
+      expect((await worker.fetch(post("g1", access, META), env)).status).toBe(401);
+    });
   });
 
   it("asks nothing of a group that has never rotated", async () => {

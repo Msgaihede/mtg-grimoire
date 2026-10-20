@@ -23,10 +23,6 @@ the one-line versions.
   its siblings are still modifying, and `pnpm verify` is too slow to pay for N times.
   Instead: implement all changes for the feature first, have subagents report what they changed, and run
   `pnpm verify` once centrally at the end to prove the completed feature works.
-- **Commits match the size of a feature (one commit per feature).** Bundle all work for a feature
-  (code, tests, and documentation) into a single atomic commit. Do not split a feature into multiple
-  commits (such as a code commit followed by a docs or fix commit). Multiple commits per feature
-  mess up our `release-please` changelog by producing duplicate or fragmented changelog items.
 - **A pull request's description is what the release notes are written from.** `scripts/changelog/`
   reads every merged pull request's title and description and has a model write what users see
   in the app's Updates panel. So a description **opens with what changes for a person using the

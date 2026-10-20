@@ -569,7 +569,20 @@ export class Group implements DurableObject {
     // longer open anything new. Only a roster that names it again un-departs it. 204 rather than a
     // refusal: the device learns it is out from `/keys`, which is the one answer it acts on.
     if (prior.departed) return new Response(null, { status: 204 });
-    const before = prior.cursor ?? -1;
+
+    // **No stored cursor points past the log's newest row** — the incoming one, and the one
+    // already stored, which is how a value from before this bound existed is brought back under
+    // it by the device's next ack. An ack is only ever of rows that exist, so a cursor past them
+    // stands for nothing a device could have read.
+    //
+    // **Clamped, not refused, and always in the safe direction.** An honest cursor can stand past
+    // the newest row: a pull answers `max(since, newest)` (`head`), and a compaction or a `drop`
+    // that empties the log leaves every device's cursor above what is left. Held lower, a device
+    // only holds the floor lower — rows are kept longer, never deleted sooner — and its next ack
+    // after the next push moves it on. Its own cursor is the app's, and nothing here changes it.
+    const newest = this.head(0);
+    const cursor = Math.min(body.cursor, newest);
+    const before = prior.cursor === null ? -1 : Math.min(prior.cursor, newest);
 
     // `max(...)` and not a plain assignment: an ack is a watermark, and a retry that arrives
     // out of order must not walk a device's cursor backwards into rows it has already folded.
@@ -577,15 +590,16 @@ export class Group implements DurableObject {
     this.sql.exec(
       `INSERT INTO acks (device, cursor, heard_at) VALUES (?, ?, ?)
          ON CONFLICT (device) DO UPDATE
-           SET cursor = max(acks.cursor, excluded.cursor), heard_at = excluded.heard_at`,
+           SET cursor = max(min(acks.cursor, ?), excluded.cursor), heard_at = excluded.heard_at`,
       body.device,
-      body.cursor,
+      cursor,
       Date.now(),
+      newest,
     );
 
     // A re-ack of a value already stored cannot move the floor, and `compactNow` is two full
     // table scans plus a DELETE per doomed row.
-    if (body.cursor > before) this.compactNow();
+    if (cursor > before) this.compactNow();
     return new Response(null, { status: 204 });
   }
 

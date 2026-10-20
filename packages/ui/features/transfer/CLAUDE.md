@@ -98,7 +98,3 @@ Run verification only at the end of feature work:
 | `pnpm test` / `pnpm exec vitest packages/ui/features/transfer` | Run transfer parser, planner, and export unit tests |
 | `cargo test -p mtg-grimoire transfer::` | Run Rust mirror writer parity tests |
 | `pnpm golden` | Regenerate golden files after deliberate writer or field changes |
-
-Commit discipline:
-- One commit per feature matching feature size, bundling implementation, tests, and goldens together for clean `release-please` tracking.
-

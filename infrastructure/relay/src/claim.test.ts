@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codeFrom,
+  DEAD_REFRESH_RETENTION_MS,
   DEVICE_ID,
   GROUP_ID,
   handleCallback,
@@ -12,6 +13,7 @@ import {
   reconcile,
   RELAY_AUTH,
   settle,
+  sweepClaims,
   unixSeconds,
 } from "./claim";
 import { fakeEnv, fakeEnvOver, fakeTables, type Tables } from "./fakeD1";
@@ -393,6 +395,20 @@ describe("/token — the refresh door", () => {
     expect(body.since).toBe(0);
   });
 
+  it("stamps the epoch the secret's own row stands on, and none for a group never seeded", async () => {
+    // Read in the same statement that found the secret, so the epoch is one it was standing at.
+    const env = tokenEnv("g1", "g2");
+    await seedGroup(env, "g1", 4, AUTH_ONE);
+
+    const seeded = post("/token", { refresh: "secret-0", device: DEVICE });
+    const unseeded = post("/token", { refresh: "secret-1", device: DEVICE });
+    const keyed = (await answer(await handleToken(seeded, env))).body;
+    const bare = (await answer(await handleToken(unseeded, env))).body;
+
+    expect((await verify(keyed.access!, HMAC, Date.now()))!.ep).toBe(4);
+    expect(await verify(bare.access!, HMAC, Date.now())).not.toHaveProperty("ep");
+  });
+
   it("refuses a secret no row holds", async () => {
     const env = tokenEnv("g1");
 
@@ -481,8 +497,20 @@ describe("/token — the group door", () => {
     // `dev` is what the share Worker checks against the group's newest manifest, so a removed
     // device's leftover token cannot publish or revoke (issue #548).
     expect(claims?.dev).toBe(DEVICE);
+    // `ep` is the epoch that auth was current at, which the share Worker orders the grant by.
+    expect(claims?.ep).toBe(3);
     // The milliseconds-to-seconds boundary, asserted where it actually crosses.
     expect(body.expires).toBe(unixSeconds(Number(claims?.exp)));
+  });
+
+  it("refuses a current auth with no epoch mirrored beside it", async () => {
+    // No relay write sets one column without the other; a row that has one has nothing to stamp.
+    const { tables, env } = harness({ groups: ["g1"] });
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    tables.entitlements[0].group_epoch = null;
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+    expect((await answer(await handleToken(request, env))).status).toBe(401);
   });
 
   it("refuses an auth the group is not standing on", async () => {
@@ -877,6 +905,156 @@ describe("/token — the five-device cap", () => {
   });
 });
 
+/**
+ * Run `during` once, as soon as the first statement whose SQL contains `fragment` has answered its
+ * `first()`: the gap between a door reading the caller's credential and minting its token.
+ */
+function afterRead(env: Env, fragment: string, during: () => Promise<void>): () => boolean {
+  const prepare = env.DB.prepare.bind(env.DB);
+  let fired = false;
+  vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    if (fired || !sql.includes(fragment)) return statement;
+    const bind = statement.bind.bind(statement);
+    vi.spyOn(statement, "bind").mockImplementation((...params) => {
+      const bound = bind(...params);
+      const first = bound.first.bind(bound) as () => Promise<unknown>;
+      vi.spyOn(bound, "first").mockImplementationOnce((async () => {
+        const result = await first();
+        fired = true;
+        await during();
+        return result;
+      }) as typeof bound.first);
+      return bound;
+    });
+    return statement;
+  });
+  return () => fired;
+}
+
+/**
+ * A removal of `DEVICE` while its `/token` is in flight: `desk` rotates the group from epoch 0 to
+ * 2 at `at`, publishing a manifest that names only itself, and the clock then moves on so a door
+ * that stamped its grant after this would date it later than the rotation.
+ */
+async function removeInFlight(
+  env: Env,
+  clock: { mockReturnValue(value: number): unknown },
+  at: number,
+): Promise<void> {
+  clock.mockReturnValue(at);
+  const rotation = await handleRotate(
+    new Request("https://relay.example/g/g1/rotate", {
+      method: "POST",
+      headers: { authorization: `Bearer ${AUTH_ONE}` },
+      body: JSON.stringify({ epoch: 2, auth: AUTH_TWO, keys: { desk: "blob" } }),
+    }),
+    env,
+    "g1",
+  );
+  expect(rotation.status).toBe(200);
+  clock.mockReturnValue(at + 100);
+}
+
+/**
+ * **The share Worker dates a token by `exp − TOKEN_TTL_MS` and asks the manifest only about one
+ * dated before the group's newest rotation** (`infrastructure/share-worker/src/env.ts`). So each
+ * door has to stamp its grant from before its credential check: a removal that lands during the
+ * door's later D1 round trips — or in the same millisecond as the check — must find the grant
+ * dated before it, or the removed device's token would read as post-rotation for a day.
+ * `handleClaim` pins the same rule in `/claim — current group auth`.
+ */
+describe("/token — a removal while the token is in flight", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** The newest rotation's `created_at`, which is what the share gate compares a mint time to. */
+  function rotatedAt(tables: Tables): number {
+    return Math.max(...tables.group_keys.map((row) => Number(row.created_at)));
+  }
+
+  it.each([0, 50])(
+    "dates a group-door grant before a removal %ims after its auth check",
+    async (lag) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+      const { tables, env } = harness({ groups: ["g1"] });
+      await seedGroup(env, "g1", 0, AUTH_ONE);
+      const fired = afterRead(env, "group_auth FROM entitlements", () =>
+        removeInFlight(env, clock, NOW + lag),
+      );
+
+      const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+      const { status, body } = await answer(await handleToken(request, env));
+
+      expect(fired()).toBe(true);
+      expect(status).toBe(200);
+      const claims = await verify(body.access!, HMAC, Date.now());
+      expect(claims!.dev).toBe(DEVICE);
+      expect(claims!.ep).toBe(0);
+      expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(rotatedAt(tables));
+    },
+  );
+
+  it.each([0, 50])(
+    "dates a refresh-door grant before a removal %ims after its secret was read",
+    async (lag) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+      const { tables, env } = harness({ groups: ["g1"] });
+      await seedGroup(env, "g1", 0, AUTH_ONE);
+      tables.entitlements[0].refresh_device = DEVICE;
+      const fired = afterRead(env, "WHERE refresh_secret = ?", () =>
+        removeInFlight(env, clock, NOW + lag),
+      );
+
+      const request = post("/token", { refresh: "secret-0", device: DEVICE });
+      const { status, body } = await answer(await handleToken(request, env));
+
+      expect(fired()).toBe(true);
+      // The removal retired the secret, but only after this door had read it.
+      expect(tables.entitlements[0].refresh_secret).toBeNull();
+      expect(status).toBe(200);
+      const claims = await verify(body.access!, HMAC, Date.now());
+      expect(claims!.dev).toBe(DEVICE);
+      expect(claims!.ep).toBe(0);
+      expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(rotatedAt(tables));
+    },
+  );
+
+  it("stamps the epoch the auth was checked at while a recorded rotation's mirror lags", async () => {
+    // A rotation's row is written before the mirror moves, so for a moment the old auth is still
+    // current to the door. The token must carry the epoch that auth belongs to, not the newest
+    // row's: the share Worker then asks the newest manifest, which does not name this device.
+    const { tables, env } = harness({ groups: ["g1"] });
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    tables.group_keys.push({
+      group_id: "g1",
+      epoch: 2,
+      auth: AUTH_TWO,
+      keys: JSON.stringify({ desk: "blob" }),
+      created_at: Date.now() - 1000,
+    });
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+    const { status, body } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(200);
+    expect((await verify(body.access!, HMAC, Date.now()))!.ep).toBe(0);
+  });
+
+  it("still dates a grant with no rotation in flight from the request it answers", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+    const { body } = await answer(await handleToken(request, env));
+
+    const claims = await verify(body.access!, HMAC, NOW);
+    expect(claims!.exp).toBe(NOW - 1 + TOKEN_TTL_MS);
+  });
+});
+
 // ---------------------------------------------------------------------------------------
 // /claim's two new body fields
 // ---------------------------------------------------------------------------------------
@@ -1034,6 +1212,8 @@ describe("/claim — current group auth (#752)", () => {
         expect(status).toBe(200);
         const claims = await verify(body.access!, HMAC, Date.now());
         expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(NOW + 100);
+        // Granted at the epoch the removal then left behind.
+        expect(claims!.ep).toBe(0);
       }
       // A claim that won the write was then retired by removal; one that lost cannot replace it.
       expect(tables.entitlements[0].refresh_secret).not.toBe(body.refresh);
@@ -1138,10 +1318,12 @@ describe("/claim — registering the group's relay key", () => {
     const { tables, env } = harness({ groups: ["g1"], bound: false });
     withCode(tables);
 
-    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+    const { status, body } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
 
     expect(status).toBe(200);
     expect(tables.entitlements[0].group_id).toBe("g1");
+    // The epoch it just seeded, read back the way the doors read theirs.
+    expect((await verify(body.access!, HMAC, Date.now()))!.ep).toBe(0);
     // The manifest starts empty — a group of one has nobody to rewrap for — but the ROW has to
     // exist, because `recordRotation` refuses an epoch that does not advance one.
     expect(tables.group_keys).toHaveLength(1);
@@ -1302,6 +1484,8 @@ describe("/claim — the binding moves rather than being refused", () => {
     // *caught up* finds — and the only one in which `INSERT OR IGNORE` has a conflict to ignore,
     // since `group_keys` is keyed on `(group_id, epoch)`.
     keyed(tables, "g1", 0);
+    // The mirror's two columns, written together as every relay write writes them.
+    tables.entitlements[0].group_epoch = 0;
     tables.entitlements[0].group_auth = AUTH_TWO;
     seat(tables, "g1", "desk");
 
@@ -1722,5 +1906,52 @@ describe("reconcile — an hourly pass on a budget", () => {
 
     await reconcile(env);
     expect(patreon.asked).toEqual(tokensOf(tables, [RECONCILE_BUDGET]));
+  });
+});
+
+describe("sweepClaims — what the hourly cron forgets", () => {
+  it("deletes every expired claim code and keeps every claimable one", async () => {
+    const tables = fakeTables({ groups: ["g0"] });
+    const now = Date.now();
+    tables.claim_codes.push(
+      { code: "STALE", subject: "sub-0", expires_at: now - 60_000 },
+      // The instant itself is expired: `handleClaim` reads `expires_at > now`, so this one could
+      // no longer be redeemed and must not outlive the sweep.
+      { code: "EDGE", subject: "sub-0", expires_at: now },
+      { code: "LIVE", subject: "sub-0", expires_at: now + 60_000 },
+    );
+
+    await sweepClaims(fakeEnvOver(tables), now);
+
+    expect(tables.claim_codes.map((row) => row.code)).toEqual(["LIVE"]);
+  });
+
+  it("forgets a dead row's Patreon token only once it has been dead past the retention", async () => {
+    const tables = fakeTables({ groups: ["g0", "g1", "g2", "g3"] });
+    const now = Date.now();
+    const long = now - DEAD_REFRESH_RETENTION_MS - 1;
+    const [old, recent, edge, alive] = tables.entitlements;
+    Object.assign(old, { status: "dead", patreon_refresh: "tok-old", checked_at: long });
+    Object.assign(recent, { status: "dead", patreon_refresh: "tok-recent", checked_at: now - 1 });
+    // Exactly at the boundary is still inside the window.
+    Object.assign(edge, {
+      status: "dead",
+      patreon_refresh: "tok-edge",
+      checked_at: now - DEAD_REFRESH_RETENTION_MS,
+    });
+    // A serving row is never touched however long since it was checked: the cron needs its token.
+    Object.assign(alive, { status: "active", patreon_refresh: "tok-alive", checked_at: long });
+
+    await sweepClaims(fakeEnvOver(tables), now);
+
+    expect(tables.entitlements.map((row) => row.patreon_refresh)).toEqual([
+      null,
+      "tok-recent",
+      "tok-edge",
+      "tok-alive",
+    ]);
+    // Only the token goes — the row, its subject and its status stay.
+    expect(old.status).toBe("dead");
+    expect(old.subject).toBe("sub-0");
   });
 });
