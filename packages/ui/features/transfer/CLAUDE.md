@@ -59,6 +59,7 @@ Exporting transforms card lists into canonical formats via `format.ts`: `(cards,
   - Canonical output: Uses LF and trailing newlines. An empty card list outputs an empty string `""`.
   - `tcgplayer`: Mass-entry cart format (flat list, exact printing `[SET] NUM`, no finish markers, retains inactive categories).
   - `archidekt`: Writes `{noDeck}` flags for inactive categories and sanitizes delimiters in pile names (replaces commas and brackets).
+  - `csv`: Says the same flag in its `Category active` column (`categoryActive`, yes/no, deck-only, on by default, CSV-only — issue #1174); `parse.ts` reads `no` into `excluded` only beside a `Category` cell.
   - `arena` / `mtgo`: Omit inactive categories (maybeboards are invalid imports in Arena).
 - **Two row filters**:
   - `Only cards MTG Arena has`: Filters by Scryfall Arena legality keys (excluding `gladiator`).

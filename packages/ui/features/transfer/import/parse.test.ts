@@ -1005,6 +1005,44 @@ describe("a CSV another app wrote", () => {
   });
 });
 
+/** Issue #1174: the column that carries Archidekt's `{noDeck}` through a CSV. */
+describe("a CSV's Category active column", () => {
+  const lineOf = (category: string, active: string) =>
+    parseDecklist(`Quantity,Name,Category,Category active\n1,Sol Ring,${category},${active}\n`)
+      .lines[0];
+
+  it("switches off the pile the row names when the cell says it is off", () => {
+    for (const cell of ["no", "No", "N", "false", "0", "inactive", "off"]) {
+      expect(lineOf("Cut pile", cell), cell).toMatchObject({
+        categoryName: "Cut pile",
+        excluded: true,
+      });
+    }
+  });
+
+  it("leaves the pile counting for yes, a blank and a word it does not know", () => {
+    for (const cell of ["yes", "", "maybe"]) {
+      expect(lineOf("Cut pile", cell).excluded, JSON.stringify(cell)).toBe(false);
+    }
+  });
+
+  /** `{noDeck}` only ever arrives beside a name, and a `no` with no pile names nothing to switch
+   *  off — the auto-sort's choice is not a pile the file said was off. */
+  it("switches nothing off on a row that names no pile", () => {
+    expect(lineOf("", "no")).toMatchObject({ categoryName: null, excluded: false });
+  });
+
+  /** Archidekt's `[Sideboard{noDeck}]` does the same: the zone is set, and the flag rides along. */
+  it("carries the flag beside a zone the section vocabulary knows", () => {
+    expect(lineOf("Maybeboard", "no")).toMatchObject({ section: "maybeboard", excluded: true });
+  });
+
+  it("reads every pile as counting in a file with no such column", () => {
+    const list = parseDecklist("Quantity,Name,Category\n1,Sol Ring,Cut pile\n");
+    expect(list.lines[0].excluded).toBe(false);
+  });
+});
+
 describe("a CSV's finish column", () => {
   const finishOf = (cell: string) =>
     parseDecklist(`Quantity,Name,Finish\n1,Sol Ring,${cell}\n`).lines[0].finish;

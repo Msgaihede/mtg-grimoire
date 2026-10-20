@@ -246,6 +246,25 @@ describe("what the mirror writes, the app can read", () => {
   });
 
   /**
+   * Issue #1174's file: the mirror writes every pile, so its deck CSV holds `Cut pile`, which is
+   * switched off. Its `Category active` cell is what brings it back switched off — before the
+   * column existed the reader hard-coded `excluded: false` and the pile came back counted. Every
+   * other row's flag is checked too, against the corpus it was written from.
+   */
+  it("reads the switched-off pile back out of the mirror's CSV", () => {
+    const parsed = parseDecklist(GOLDEN[`${DIR}/deck.csv.default.txt`]);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.lines.map((l) => [l.name, l.categoryName, l.excluded])).toContainEqual([
+      "Sol Ring",
+      "Cut pile",
+      true,
+    ]);
+    expect(parsed.lines.map((l) => l.excluded)).toEqual(
+      cards.map((c) => c.categoryActive === false),
+    );
+  });
+
+  /**
    * And issue #555's CSV cells, the other way round: the writer puts an apostrophe in front of a
    * formula trigger and the reader takes one back off (`formula.ts`), so what a reader wrote in a
    * note is what comes back — including a note that already started `'=`, which is written `''=`

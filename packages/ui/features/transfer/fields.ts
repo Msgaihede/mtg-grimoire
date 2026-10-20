@@ -12,9 +12,9 @@ import type { ExportFormat } from "./formats";
 import type { TransferCard } from "./TransferCard";
 
 /**
- * Every field, **in the order a CSV writes its columns**. The first six are today's deck CSV
- * header, spelled in today's order, which is what makes `defaultFields("csv", "deck")` a
- * byte-for-byte reproduction of what shipped.
+ * Every field, **in the order a CSV writes its columns**. The first six are the deck CSV header
+ * as it first shipped, spelled in that order, and `categoryActive` is the seventh — the one
+ * column `defaultFields("csv", "deck")` has added since (issue #1174).
  */
 export const TRANSFER_FIELD_IDS = [
   "quantity",
@@ -23,9 +23,12 @@ export const TRANSFER_FIELD_IDS = [
   "collectorNumber",
   "category",
   "finish",
-  // After the first six on purpose: those are today's deck CSV header, spelled in today's order,
-  // and inserting into them would change every existing CSV's column order for a field that is
-  // switched off by default there.
+  // Seventh rather than beside `category` (issue #1174): appended, the six columns a deck CSV
+  // has always opened with stay where they were.
+  "categoryActive",
+  // After the first six on purpose: those are the deck CSV header as it shipped, and inserting
+  // into them would change every existing CSV's column order for a field that is switched off by
+  // default there.
   "label",
   "labelColor",
   "condition",
@@ -72,6 +75,26 @@ export const TRANSFER_FIELDS: Record<TransferFieldId, TransferField> = {
     read: (c) => c.collectorNumber ?? "",
   },
   category: { label: "Category", csvHeader: "Category", read: (c) => c.categoryName ?? "" },
+  /**
+   * Whether the pile counts toward the deck — `is_active`, Archidekt's `{noDeck}` the other way
+   * round (issue #1174).
+   *
+   * **A column of its own because a CSV cell holds one value**, `labelColor`'s reason: Archidekt
+   * folds the flag into the bracket beside the name, and a `Category` cell reading `Cut pile
+   * {noDeck}` would be a pile name to every spreadsheet and every other site's reader. Until this
+   * column the CSV was the one format that kept a switched-off pile's name and dropped the flag,
+   * so a file written with `Include inactive categories` ticked — or by the mirror, which writes
+   * every pile — imported its cut pile back as one that counts.
+   *
+   * On by default and offered by the CSV alone: every other format already answers the question
+   * in its own grammar (Archidekt's flag, Moxfield's and Arena's maybeboard, MTGO's omission).
+   * `""` on a surface with no piles, where `categoryActive` is `null`.
+   */
+  categoryActive: {
+    label: "Category active",
+    csvHeader: "Category active",
+    read: (c) => flag(c.categoryActive),
+  },
   /**
    * The deck label — `deck_labels` by name.
    *
@@ -185,7 +208,7 @@ export const FORMAT_FIELDS: Record<ExportFormat, FormatFields> = {
   // is what makes them two rows; on a deck it is not available and drops out.
   csv: {
     optional: TRANSFER_FIELD_IDS,
-    defaultOn: [...PRINTING, "category", "finish", "condition"],
+    defaultOn: [...PRINTING, "category", "finish", "categoryActive", "condition"],
   },
 };
 
@@ -193,8 +216,8 @@ export type TransferSurface = "deck" | "collection" | "wishlist" | "trade";
 
 export const SURFACE_FIELDS: Record<TransferSurface, readonly TransferFieldId[]> = {
   deck: [
-    "quantity", "name", "setCode", "collectorNumber", "category", "finish", "label", "labelColor",
-    "lang", "setName", "rarity", "typeLine", "unitPrice",
+    "quantity", "name", "setCode", "collectorNumber", "category", "finish", "categoryActive",
+    "label", "labelColor", "lang", "setName", "rarity", "typeLine", "unitPrice",
   ],
   collection: [
     "quantity", "name", "setCode", "collectorNumber", "finish", "condition", "lang",

@@ -8,6 +8,7 @@ import {
   TRANSFER_FIELDS,
 } from "./fields";
 import { EXPORT_FORMATS } from "./formats";
+import { transferCard } from "./fixtures";
 
 describe("availableFields", () => {
   it("is the intersection of what the format can carry and what the surface has", () => {
@@ -103,10 +104,35 @@ describe("the deck label's fields", () => {
   });
 });
 
+/**
+ * A pile's on/off switch (issue #1174). Archidekt says it in `{noDeck}`, Moxfield and Arena by
+ * the maybeboard and MTGO by leaving the pile out, so only the CSV — which keeps the pile's name
+ * and has no grammar of its own for the flag — spends a column on it.
+ */
+describe("the category's active flag", () => {
+  it("is offered by the CSV alone, and only where there are piles", () => {
+    for (const format of EXPORT_FORMATS) {
+      expect(availableFields(format, "deck").includes("categoryActive"), format).toBe(
+        format === "csv",
+      );
+    }
+    for (const surface of ["collection", "wishlist", "trade"] as const) {
+      expect(availableFields("csv", surface), surface).not.toContain("categoryActive");
+    }
+  });
+
+  it("writes no for a switched-off pile and nothing where a row has no pile", () => {
+    const read = TRANSFER_FIELDS.categoryActive.read;
+    expect(read(transferCard({ categoryActive: false }))).toBe("no");
+    expect(read(transferCard({ categoryActive: true }))).toBe("yes");
+    expect(read(transferCard({ categoryActive: null }))).toBe("");
+  });
+});
+
 describe("defaultFields", () => {
-  it("reproduces today's deck CSV columns exactly", () => {
+  it("keeps the deck CSV's six shipped columns in order and appends the active flag", () => {
     expect(defaultFields("csv", "deck")).toEqual([
-      "quantity", "name", "setCode", "collectorNumber", "category", "finish",
+      "quantity", "name", "setCode", "collectorNumber", "category", "finish", "categoryActive",
     ]);
   });
 
