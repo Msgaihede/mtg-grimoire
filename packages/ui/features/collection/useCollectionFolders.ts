@@ -4,7 +4,7 @@ import { offerUndo } from "@/lib/bulkUndo";
 import { plural } from "@/lib/counts";
 import { ipc, type CollectionFolder, type FolderConflicts, type FolderRule } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { refreshCardSearches } from "@/lib/searchMarks";
+import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 
 /** Stable identity for "no folders yet" — a collection nobody has filed is the ordinary case, and
  *  the tree builder's `useMemo` does not see a new identity every render. */
@@ -149,12 +149,16 @@ export function useCollectionFolders() {
    * helper would put the decision at five call sites where most of them are "no", and a rename
    * that invalidates a root nothing is observing costs nothing at all — the reader is on the
    * collection page, where neither a card search nor a deck editor is mounted.
+   *
+   * **`["wishlist"]` is the fourth root, since 2026-10-20** (issue #1168), and with it the set is
+   * exactly `OWNED_WRITE_KEYS`, so it is fired through `invalidateOwnedWrite` rather than spelled
+   * here. A wish row's `ownedPlaces` names the folder each owned copy sits in and whether that
+   * folder is `held` — a deck's group, or locked by its own flag or an ancestor's — so a lock, a
+   * move under a locked parent or a delete that re-files a sub-tree turns a wall's `Own` chip into
+   * `In use` or back without moving a single quantity, and a wishlist wall a navigation away went
+   * on drawing the old chip for up to the 30 s `staleTime`.
    */
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["collection"] });
-    void refreshCardSearches(queryClient);
-    void queryClient.invalidateQueries({ queryKey: ["decks"] });
-  };
+  const invalidate = () => invalidateOwnedWrite(queryClient);
   const writes = { onSuccess: invalidate, onError: invalidate };
 
   /** A new folder — at the root with `parentId: null`, or inside another one. */
@@ -216,7 +220,8 @@ export function useCollectionFolders() {
    * a theory row began to (2026-09-09, issue #435). Both are the *same* omission and both are out
    * of scope for the change that noticed the second; whoever closes it should close it once, for
    * the re-parent arm, and say in this comment that a plain same-level placement still settles
-   * narrowly.
+   * narrowly. `["wishlist"]` (issue #1168, a wish's `held` places) is the third member of the
+   * same omission and belongs in that one change.
    *
    * **The re-parent half is what tempts a wider set, and it is answered by the same key.** A
    * folder card's recursive total is summed by the *tree builder*, in TypeScript, over these flat
@@ -477,6 +482,13 @@ function settleFiling(queryClient: QueryClient): void {
   // A copy dragged into a locked drawer is the plainest case: nothing was gained or lost and
   // every deck's badge for that card is one lower.
   void refreshCardSearches(queryClient);
+  // **And the wishlist, since 2026-10-20** (issue #1168) — the same drawer, read by a wish. A
+  // wish row's `ownedPlaces` breaks its owned copies down by folder and marks the ones in a
+  // deck's group or a locked folder `held`, which the wall draws as `In use` rather than `Own`.
+  // No `ownedQuantity` moves, so the sentence at the top of the decks paragraph still holds;
+  // where the copies sit is what changed, and that is this row's whole reading. The four roots
+  // are `OWNED_WRITE_KEYS`, but spelled out here so each keeps the paragraph that says why.
+  void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
 }
 
 /** What {@link useSetCollectionFolderMany} files: the entries, the drawer, and the drawer's name
