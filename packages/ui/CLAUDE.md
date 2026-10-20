@@ -115,6 +115,7 @@ For global repo workflow, style, and testing conventions, refer to:
 | `packages/ui/lib/` | Infrastructure (`ipc.ts`, `layers.ts`, `motion.ts`, `shortcuts.ts`, `tokens.ts`) |
 
 - **Occasional views are lazy**: `App.tsx` loads Scanner, Settings, Trade, Playtesting (its setup page and the game board, one chunk), the deck editor's goldfish (`features/playtesting/GoldfishPage`, a thin wrapper over the same board) and Shared with `React.lazy` under one `Suspense`; a static import of any of them puts its chunk back in the first load (`App.test.tsx` fences it).
+- **A view that throws stays in its box** (issue #1181): `components/ViewBoundary` wraps that `Suspense` inside `AppShell`, keyed by where the reader stands, so the caption and the rail outlive a failed render or chunk. The desktop's root has `RootBoundary` (it draws `TitleBar` itself — the window has no other caption) and `onUncaughtError`; the light app's is `FaceBoundary`.
 
 Run verification tests only at the end of feature work:
 
