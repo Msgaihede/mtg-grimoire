@@ -1672,8 +1672,16 @@ impl Session {
         if let (true, Some(held)) = (self.tracking, self.lock.trusted_quad()) {
             if self.windowed < FULL_SWEEP_EVERY {
                 let lock = self.lock.options();
+                // **While a reading is held, the window looks for the inner box** (issue
+                // #1134): the lock follows the card the reading implies, but the frame's contour
+                // is the box, and the reframe below reapplies the reading to it.
+                let expect = self
+                    .reframe_held
+                    .filter(|_| self.reframe.is_some())
+                    .and_then(|r| crate::reframe::inner(&held, r))
+                    .unwrap_or(held);
                 let near = each_method(&methods, |m| {
-                    locate_near(&source, &held, lock, &opts.detect_options(m, settled, &insets))
+                    locate_near(&source, &held, &expect, lock, &opts.detect_options(m, settled, &insets))
                 });
                 if near.iter().any(|(_, (result, _))| result.is_ok()) {
                     attempts = near;
@@ -4793,6 +4801,34 @@ mod tests {
         want.extend(std::iter::repeat_n(Search::Window, FULL_SWEEP_EVERY as usize));
         want.extend([Search::Full, Search::Window, Search::Window]);
         assert_eq!(seen, want);
+    }
+
+    #[test]
+    fn a_held_reading_is_searched_for_in_its_window() {
+        // **Issue #1134.** While a reframe reading is held, the lock follows the card the
+        // reading implies and the frame shows only the inner box — here a little over half its
+        // area, which the window used to refuse as not what the lock holds, every frame.
+        let mut s = Session::new(None, None, 5);
+        let jpeg = card_jpeg(480.0);
+        let found = (0..3)
+            .filter_map(|_| s.frame(&jpeg, &FrameOptions::default()).quad_raw)
+            .last()
+            .map(|corners| crate::detect::Quad { corners })
+            .expect("the card is found");
+        let h = crate::reframe::hypotheses(&found)
+            .into_iter()
+            .find(|h| h.region == crate::reframe::UPPER.name && !h.flipped)
+            .expect("an upper reading");
+        assert!(h.card.area() / found.area() > s.lock.options().max_area_ratio);
+        s.lock.reset();
+        for _ in 0..s.lock.options().min_agree {
+            s.lock.observe(Some(h.card));
+        }
+        s.reframe_held = Some(h.reading());
+        s.windowed = 0;
+        let v = s.frame(&jpeg, &FrameOptions::default());
+        assert!(v.ok, "the frame lost the card: {:?}", v.error);
+        assert_eq!(v.search, Search::Window, "the window refused the box the reading implies");
     }
 
     #[test]

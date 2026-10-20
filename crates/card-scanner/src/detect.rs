@@ -1026,9 +1026,18 @@ impl Window {
 /// `max_area_ratio` of the held quad, and never below the full sweep's floor: **the window
 /// answers only with what the lock would accept, and anything else is a miss** — which the
 /// caller sends to the full sweep.
+///
+/// **`expect` is what that is measured against**, not always `held` (issue #1134). The window
+/// is drawn around `held`, the quad the lock follows; the areas are `expect`'s, the quad the
+/// detector should find inside it. The two differ while a reframe reading is held: the lock
+/// follows the card the reading implies, the frame's contour is still the inner box — 31% to
+/// 56% of that card — and measured against the card every frame of it was refused, so every
+/// locked frame paid for the window and then for the sweep. The caller passes the box the
+/// reading implies ([`crate::reframe::inner`]), and the held reading puts the card back.
 pub fn locate_near(
     source: &DynamicImage,
     held: &Quad,
+    expect: &Quad,
     lock: &crate::lock::LockOptions,
     opts: &DetectOptions,
 ) -> (Result<Located, DetectError>, Option<DetectTrace>) {
@@ -1053,8 +1062,8 @@ pub fn locate_near(
     .max(1);
     let (frame_area, window_area) = (sw as f32 * sh as f32, window.w as f32 * window.h as f32);
     let ratio = lock.max_area_ratio.max(1.0);
-    let min_area_frac = (held.area() / ratio / frame_area).max(opts.min_area_frac);
-    let max_area_frac = (held.area() * ratio / frame_area).min(opts.max_area_frac);
+    let min_area_frac = (expect.area() / ratio / frame_area).max(opts.min_area_frac);
+    let max_area_frac = (expect.area() * ratio / frame_area).min(opts.max_area_frac);
     let window_share = window_area / frame_area;
     // Split Otsu where the sweep would — the whole frame's working image, made exactly as
     // `locate` makes it, and no masks over it.
@@ -2318,7 +2327,7 @@ mod tests {
                 let full = detect(&frame, &opts).0.expect("the full sweep finds the card");
                 // The lock's quad is smoothed and a few pixels behind, never exactly this frame's.
                 let held = Quad { corners: full.quad.corners.map(|(x, y)| (x + 12.0, y - 8.0)) };
-                let near = locate_near(&frame, &held, &crate::lock::LockOptions::default(), &opts)
+                let near = locate_near(&frame, &held, &held, &crate::lock::LockOptions::default(), &opts)
                     .0
                     .unwrap_or_else(|e| panic!("{method:?} lost a {card_w} px card: {e}"));
                 for (a, b) in near.quad.corners.iter().zip(full.quad.corners.iter()) {
@@ -2335,7 +2344,7 @@ mod tests {
         // had been picked up and put down elsewhere. The window must miss, so the caller sweeps.
         let frame = synth(1280, 720, 220.0, 0.0);
         let held = Quad { corners: [(60.0, 40.0), (160.0, 40.0), (160.0, 180.0), (60.0, 180.0)] };
-        assert!(locate_near(&frame, &held, &crate::lock::LockOptions::default(), &DetectOptions::default()).0.is_err());
+        assert!(locate_near(&frame, &held, &held, &crate::lock::LockOptions::default(), &DetectOptions::default()).0.is_err());
     }
 
     #[test]
@@ -2359,7 +2368,7 @@ mod tests {
         let lock = crate::lock::LockOptions::default();
         let opts = DetectOptions { method: EdgeMethod::Otsu, ..Default::default() };
         assert!(detect(&frame, &opts).0.is_ok(), "the small card is a card to the full sweep");
-        assert!(locate_near(&frame, &held, &lock, &opts).0.is_err());
+        assert!(locate_near(&frame, &held, &held, &lock, &opts).0.is_err());
     }
 
     #[test]
