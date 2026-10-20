@@ -161,6 +161,22 @@ fn label_time(ms: f64) {
     });
 }
 
+/// The Neural files as borrows that live as long as the process: `load_neural` wants
+/// `Files<'static>`, and each Neural pass builds a session of its own, so the files are read
+/// once and leaked rather than copied 27 MB a scan.
+fn pinned(files: card_scanner::neural::Files<'static>) -> card_scanner::neural::Files<'static> {
+    let pin = |bytes: Cow<'static, [u8]>| match bytes {
+        Cow::Owned(owned) => Cow::Borrowed(&*Box::leak(owned.into_boxed_slice())),
+        borrowed => borrowed,
+    };
+    card_scanner::neural::Files {
+        detector: pin(files.detector),
+        embedder: pin(files.embedder),
+        gallery: pin(files.gallery),
+        meta: pin(files.meta),
+    }
+}
+
 /// What a session is built from, loaded once and shared by every worker.
 struct Ingredients {
     bundle: Vec<u8>,
@@ -179,13 +195,8 @@ impl Ingredients {
     fn session_for(&self, mode: ScanMode) -> Result<Session, String> {
         let mut session = self.session()?;
         if let (ScanMode::Neural, Some(f)) = (mode, &self.neural) {
-            let files = card_scanner::neural::Files {
-                detector: Cow::Borrowed(&f.detector),
-                embedder: Cow::Borrowed(&f.embedder),
-                gallery: Cow::Borrowed(&f.gallery),
-                meta: Cow::Borrowed(&f.meta),
-            };
-            session.load_neural(files).map_err(|e| format!("neural: {e}"))?;
+            // Borrowed for the life of the process (see `pinned`), so a clone copies no bytes.
+            session.load_neural(f.clone()).map_err(|e| format!("neural: {e}"))?;
         }
         Ok(session)
     }
@@ -1067,7 +1078,7 @@ fn run(args: Args) -> Result<(), String> {
         detection: Some(detection),
         recognition: Some(recognition),
         oracles,
-        neural: Some(neural),
+        neural: Some(pinned(neural)),
     };
     drop(ingredients.session_for(ScanMode::Neural)?);
 
@@ -1572,7 +1583,7 @@ mod tests {
     fn with_the_neural_models_a_run_replays_a_fourth_pass() {
         let mut ing = ingredients();
         let models = card_scanner::neural::read_dir(&neural_models_in_tree()).expect("in git");
-        ing.neural = Some(models);
+        ing.neural = Some(pinned(models));
         let jpegs = frames();
         let label = label_for(id(1), jpegs);
         let cut: Vec<&[u8]> = jpegs.iter().map(Vec::as_slice).collect();
