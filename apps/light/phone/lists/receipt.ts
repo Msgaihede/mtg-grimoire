@@ -75,20 +75,24 @@ export function useListReceipt(): ListReceipt {
   );
 
   const text = tracked?.error ?? tracked?.said ?? null;
+  const busy = tracked?.busy === true;
 
-  // The line goes by itself, once there is something to say — `useReceipt`'s timer.
+  // The line goes by itself, once there is something to say — `useReceipt`'s timer. **Not while
+  // the undo is out**: a timer that cleared the line under it would leave a refused undo nowhere
+  // to land (issue #1157). The undo's answer re-arms it — a refusal gets a full `RECEIPT_MS` of
+  // its own; a success has already put the line down.
   useEffect(() => {
-    if (text === null) return;
+    if (text === null || busy) return;
     const timer = setTimeout(() => setTracked(null), RECEIPT_MS);
     return () => clearTimeout(timer);
-  }, [text]);
+  }, [text, busy]);
 
   return {
     track,
     text,
     refused: tracked?.error != null,
     undoName: tracked?.error == null ? (tracked?.back?.name ?? null) : null,
-    busy: tracked?.busy === true,
+    busy,
     undo: () => {
       const now = tracked;
       if (now === null || now.back === null || now.busy) return;
