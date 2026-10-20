@@ -16,7 +16,7 @@
 // debugging address when it starts.
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -27,6 +27,7 @@ import { gzipSync } from "node:zlib";
 // reader of `_headers`, and the rule its script and both local servers tell a place by.
 import { headersFor, parseHeaders } from "../../infrastructure/app-worker/src/headers.ts";
 import { isNavigation } from "../../packages/ui/lib/core/web/assets.ts";
+import { BrowserFault, WHY, attempts, faultIn } from "./fault.ts";
 
 import type { AddressInfo } from "node:net";
 import type {
@@ -49,6 +50,9 @@ type FixtureCard = {
   card_faces?: { image_uris?: Record<string, string> }[];
 };
 type Fixture = { body: Buffer; headers: Record<string, string | null> };
+/** A request `intercept` let through to a host that really answers, and how continuing it went:
+ *  `null` until the browser answered the `continueRequest`, then `"ok"` or its refusal. */
+type Passed = { method: string; url: string; at: number; continued: string | null };
 type Routes = Map<string, Fixture>;
 type BrowseOptions = {
   args?: string[];
@@ -72,7 +76,14 @@ export const FIXTURES = dirname(fileURLToPath(import.meta.url));
  * {@link runAs} sets both. CI's step has a longer bound of its own behind the second.
  */
 const run = { name: "smoke", deadlineMs: 180_000 };
-const started = performance.now();
+/** When this attempt at the run began ({@link runAs} runs one again after a browser fault). */
+let started = performance.now();
+/**
+ * What any browser of this attempt said that is the browser's fault and not the app's
+ * (`fault.ts`) — its network service dying under it, above all. Every wait stops on one
+ * ({@link intercept}'s `check`), and {@link runAs} reads it after a failure.
+ */
+const faults: string[] = [];
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -196,27 +207,63 @@ function stopOnEveryWayOut() {
  * Run `main` as the run called `name`, bounded by `deadlineMs`, and stop everything it started
  * however it ends ({@link stopOnEveryWayOut}).
  *
- * **The timer is the one bound on the whole run.** `until` polls against the deadline too, but a
- * protocol call that never answers — a navigation, an OPFS walk that never settles — polls
- * nothing, so this is a timer and not a check. Unreferenced, so it never keeps a finished run
- * alive.
+ * **The timer is the one bound on the whole run** — on each attempt at it. `until` polls against
+ * the deadline too, but a protocol call that never answers — a navigation, an OPFS walk that never
+ * settles — polls nothing, so this is a timer and not a check. Unreferenced, so it never keeps a
+ * finished run alive.
+ *
+ * `times` is how many attempts a run may make in all, **and only a browser fault earns another**
+ * (`fault.ts`): one whose browser's network service died has said nothing about the app, and is
+ * stopped and started again from nothing. Any other failure is the run's verdict at once.
  */
-export function runAs(name: string, deadlineMs: number, main: () => Promise<unknown>) {
+export function runAs(name: string, deadlineMs: number, main: () => Promise<unknown>, times = 1) {
   run.name = name;
   run.deadlineMs = deadlineMs;
   stopOnEveryWayOut();
-  setTimeout(async () => {
-    console.error(`${run.name}: FAILED — still running after ${run.deadlineMs / 1000} s`);
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let walks = 0;
+  /** One attempt, under a deadline of its own. */
+  const attempt = async () => {
+    walks += 1;
+    clearTimeout(deadline);
+    started = performance.now();
+    deadline = setTimeout(async () => {
+      console.error(`${run.name}: FAILED — still running after ${run.deadlineMs / 1000} s`);
+      await stopEverything();
+      process.exit(1);
+    }, run.deadlineMs);
+    deadline.unref();
+    await main();
+  };
+  /**
+   * The browser's word on a failed attempt. **Read after a moment and not at once**: a request
+   * the dying network service took with it can reach the walk — as a refusal it checks for at
+   * once, a departure's log row — before the browser's own line has been read off its stderr.
+   */
+  const faultBehind = async (error: unknown) => {
+    if (error instanceof BrowserFault) return faults[0] ?? error.message;
+    await pause(1_000);
+    return faults[0] ?? null;
+  };
+  /** Everything stopped and forgotten, so the next attempt starts from nothing. */
+  const again = async (said: string, left: number) => {
+    console.error(
+      `${run.name}: ${WHY} (Chrome said: ${said}). That is no verdict on the app, so the ` +
+        `walk runs again from the start — ${left} more time${left === 1 ? "" : "s"} at most`,
+    );
     await stopEverything();
-    process.exit(1);
-  }, run.deadlineMs).unref();
-  return main()
+    faults.length = 0;
+    process.exitCode = undefined;
+  };
+  return attempts(times, attempt, faultBehind, again)
     .then(() => {
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
-      console.log(`${run.name}: passed in ${seconds} s`);
+      const again = walks > 1 ? `, on walk ${walks} — a browser fault stopped the one before` : "";
+      console.log(`${run.name}: passed in ${seconds} s${again}`);
     })
     .catch((error) => {
-      if (process.exitCode !== 1) {
+      // A fault is said even after a `fail` — which may have been the dying browser's doing.
+      if (process.exitCode !== 1 || error instanceof BrowserFault) {
         console.error(`${run.name}: FAILED — ${error.message}`);
         process.exitCode = 1;
       }
@@ -596,12 +643,27 @@ async function launch(profile: string, extra: string[] = []) {
     // Asked for rather than measured: whatever it still tries meets the resolver above.
     "--disable-background-networking",
     "--disable-component-update",
+    // `SMOKE_CRASH_DUMPS=<dir>`: a crashed process's minidump, kept where the run's profile —
+    // removed when it ends — would otherwise have held it.
+    ...(process.env.SMOKE_CRASH_DUMPS
+      ? [`--crash-dumps-dir=${process.env.SMOKE_CRASH_DUMPS}`]
+      : []),
     ...extra,
   ];
   // A runner's kernel refuses the sandbox's namespaces to an unprivileged process, and the only
   // page this browser ever loads is the one this script serves.
   if (process.env.CI) args.push("--no-sandbox");
   const child = spawn(browserPath(), args, { stdio: ["ignore", "ignore", "pipe"] });
+  // Each whole line it writes, read for a fault of its own (`fault.ts`) for as long as it runs.
+  let partial = "";
+  child.stderr.on("data", (chunk) => {
+    const lines = (partial + chunk).split(/\r?\n/);
+    partial = lines.pop() ?? "";
+    for (const line of lines) {
+      const said = faultIn(line);
+      if (said !== null) faults.push(said);
+    }
+  });
   // Registered before anything can fail, so a browser that never listens is still stopped.
   const kill = () => child.kill();
   undo.push(kill);
@@ -609,7 +671,16 @@ async function launch(profile: string, extra: string[] = []) {
   let heard = "";
   return new Promise<{ address: string; kill: () => boolean; pid: number | undefined }>(
     (found, lost) => {
+      // `SMOKE_BROWSER_LOG=<file>`: everything each browser prints, under its process id — where
+      // Chrome says its network service crashed, which no DevTools event reports.
+      const keep = process.env.SMOKE_BROWSER_LOG;
       child.stderr.on("data", (chunk) => {
+        if (keep) {
+          const lines = String(chunk)
+            .split(/\r?\n/)
+            .filter((line) => line !== "");
+          appendFileSync(keep, lines.map((line) => `[${child.pid}] ${line}\n`).join(""));
+        }
         heard += chunk;
         const hit = /DevTools listening on (ws:\/\/\S+)/.exec(heard);
         if (hit) found({ address: hit[1], kill, pid: child.pid });
@@ -696,6 +767,8 @@ async function intercept(
 ) {
   /** Each cross-origin request that has a fixture, in order: `{ method, url, headers }`. */
   const asked: { method: string; url: string; headers: Record<string, string> }[] = [];
+  /** Each request `through` let go, in order. */
+  const passed: Passed[] = [];
   /** URLs whose answer waits on a caller: `url -> promise`. */
   const held = new Map<string, Promise<void>>();
   /** No network: a request that has a fixture is still written down, and then fails. */
@@ -709,8 +782,18 @@ async function intercept(
       return answer("Fetch.continueRequest");
     }
     if (through(request.url)) {
+      const entry: Passed = {
+        method: request.method,
+        url: request.url,
+        at: Date.now(),
+        continued: null,
+      };
+      passed.push(entry);
       await gate(request);
-      return answer("Fetch.continueRequest");
+      return browser.send("Fetch.continueRequest", { requestId }).then(
+        () => (entry.continued = "ok"),
+        (error: Error) => (entry.continued = error.message),
+      );
     }
     // The fragment-free URL as asked, query included: a fixture answers one address.
     const route = routes.get(request.url);
@@ -748,12 +831,14 @@ async function intercept(
 
   return {
     asked,
+    passed,
     /** Take every other host away, or give them back. */
     offline(gone: boolean) {
       offline = gone;
     },
-    /** Fail the run on anything written down so far. */
+    /** Fail the run on anything written down so far — and stop it on a browser's fault. */
     check() {
+      if (faults.length > 0) throw new BrowserFault(`${WHY}. Chrome said: ${faults[0]}`);
       // Each once: an issue is reported again to a session that starts listening after it.
       if (problems.length > 0) fail([...new Set(problems)].join("\n"));
     },
@@ -896,11 +981,13 @@ async function openPage(
     if (exceptionDetails) throw new Error(exceptionDetails.exception?.description ?? "threw");
     return result.value as T;
   };
-  /** Poll until `expression` is truthy; answer its value, or say what the page showed instead. */
+  /** Poll until `expression` is truthy; answer its value, or say what the page showed instead —
+   *  and `more`, what else a run can say about why it never was. */
   const until = async <T = unknown>(
     what: string,
     expression: string,
     withinMs = 90_000,
+    more: () => Promise<string> = async () => "",
   ): Promise<NonNullable<T>> => {
     const stop = performance.now() + withinMs;
     for (;;) {
@@ -910,7 +997,8 @@ async function openPage(
       if (value) return value;
       if (performance.now() > stop || performance.now() - started > run.deadlineMs) {
         const shown = await evaluate("document.body.innerText").catch(() => "(no document)");
-        return fail(`${what} — never happened. The page shows:\n${shown}`);
+        const also = await more().catch((error) => ` (and asking why failed: ${error.message})`);
+        return fail(`${what} — never happened.${also} The page shows:\n${shown}`);
       }
       await pause(250);
     }

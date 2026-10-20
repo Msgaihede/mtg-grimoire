@@ -8,7 +8,7 @@
 use serde::Serialize;
 
 use crate::sync::{self, AppState};
-use grimoire_core::state::InHand;
+use grimoire_core::state::Lane;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -80,31 +80,28 @@ fn unfinished(e: tauri::Error) -> String {
     format!("the share list could not be written: {e}")
 }
 
-/// A blocking worker with a runtime of its own, for the commands whose network trip ends in a
-/// write to `collection_shares` — the list's reconcile, a publish's cached row, a withdrawal's
-/// state.
+/// A blocking worker with a runtime of its own and **the sync lane**, for the commands whose
+/// network trip reads or writes `collection_shares` — the list's reconcile, a publish's cached
+/// row, a withdrawal's state.
 ///
-/// **This was [`crate::sync_engine::commands::sync_now`]'s shape until the light app's step 6
-/// took the connection out of a sync trip's hands, and it is still this module's.** The write
-/// connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a
-/// multi-threaded runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on`
-/// is legal and the guard never has to be `Send`.
+/// **The lane and not the connection, since issue #1145.** A publish mints its bearer through
+/// `entitlement::access_token`, which writes the grant a trip or a claim in flight is writing
+/// too, so it takes the lane as a press takes it — its turn within
+/// [`crate::db::WRITE_LOCK_WAIT`], or [`crate::db::BUSY`]. The lane is the work's
+/// [`Store`](grimoire_core::state::Store): what it reads and writes is a stretch, and every request is
+/// made between two with the connection free, which is a sync trip's own shape. Until
+/// 2026-10-20 this held the write connection for the whole trip, so an upload over a slow uplink
+/// was every edit in the app answering `BUSY` for as long as it took.
 ///
-/// ⚠️ **It holds the writer for the whole trip, which is only tolerable because the far end is
-/// the reader's own Worker.** [`share_open`] talks to whatever host a stranger's link names, and
-/// ran in here until 2026-09-28 — see its doc for what that cost and why it no longer does.
+/// **`spawn_blocking` and a runtime of its own is still the shape**, because a stretch waits for
+/// the connection by blocking its thread (`with_write_waiting`), which must not be one of the
+/// async runtime's.
 ///
-/// **And it takes the sync lane first** (the light app's step 6). A publish is not a sync
-/// operation, but it mints its bearer through one — `entitlement::access_token` — and that
-/// writes the grant a trip or a claim in flight is writing too. So the lane is taken as a press
-/// takes it, the connection after it, and the connection in hand is passed down as the store
-/// the token is asked through (`Lane::in_hand`): asking through the lane itself would be this
-/// thread waiting for the connection it already holds.
-async fn on_the_write_connection<T: Send + 'static>(
+/// [`share_open`] never came in here: it talks to whatever host a stranger's link names and
+/// holds nothing at all — see its doc for what that cost before 2026-09-28.
+async fn on_the_lane<T: Send + 'static>(
     state: Arc<AppState>,
-    work: impl FnOnce(&rusqlite::Connection, &InHand<'_>, &tokio::runtime::Runtime) -> Result<T, String>
-        + Send
-        + 'static,
+    work: impl FnOnce(&Lane<'_>, &tokio::runtime::Runtime) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -112,7 +109,7 @@ async fn on_the_write_connection<T: Send + 'static>(
             .build()
             .map_err(|e| e.to_string())?;
         let lane = runtime.block_on(state.lane_for_press())?;
-        sync::with_write(&state, |conn| work(conn, &lane.in_hand(conn), &runtime))
+        work(&lane, &runtime)
     })
     .await
     .map_err(unfinished)?
@@ -127,8 +124,8 @@ async fn on_the_write_connection<T: Send + 'static>(
 #[tauri::command]
 pub async fn share_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<ShareRow>, String> {
     let state = state.inner().clone();
-    on_the_write_connection(state, |conn, tokens, runtime| {
-        runtime.block_on(super::publish::list(conn, tokens))
+    on_the_lane(state, |lane, runtime| {
+        runtime.block_on(super::publish::list(lane))
     })
     .await
 }
@@ -142,10 +139,9 @@ pub async fn share_create(
     fields: ShareFieldsArg,
 ) -> Result<ShareRow, String> {
     let state = state.inner().clone();
-    on_the_write_connection(state, move |conn, tokens, runtime| {
+    on_the_lane(state, move |lane, runtime| {
         runtime.block_on(super::publish::publish(
-            conn,
-            tokens,
+            lane,
             folder_uid.as_deref(),
             &owner_name,
             fields.into(),
@@ -161,8 +157,8 @@ pub async fn share_refresh(
     id: String,
 ) -> Result<ShareRow, String> {
     let state = state.inner().clone();
-    on_the_write_connection(state, move |conn, tokens, runtime| {
-        runtime.block_on(super::publish::refresh(conn, tokens, &id))
+    on_the_lane(state, move |lane, runtime| {
+        runtime.block_on(super::publish::refresh(lane, &id))
     })
     .await
 }
@@ -191,8 +187,10 @@ impl Drop for AutoUpdating {
 /// [`super::publish::changed`]: a read and a hash per share, on the **read** connection, with no
 /// token and no request — so the pass the shell makes on a timer holds neither the writer nor the
 /// sync lane while it decides that nothing needs doing, which is nearly every time. Only when a
-/// folder has moved does it take [`on_the_write_connection`] and run the same
-/// [`super::publish::refresh`] the *Update now* press runs, share by share.
+/// folder has moved does it take [`on_the_lane`] and run the same [`super::publish::refresh`]
+/// the *Update now* press runs, share by share — **holding the writer only for each one's read
+/// and commit** (issue #1145), so the reader editing the folder that is going up is not told
+/// the app is busy.
 ///
 /// **One share's failure does not stop the others**, and it is not this command's error: the
 /// publish has already written its `error_log` row, the previous snapshot is still serving, and
@@ -215,14 +213,10 @@ pub async fn share_auto_update(
     if due.is_empty() {
         return Ok(Vec::new());
     }
-    on_the_write_connection(state, move |conn, tokens, runtime| {
+    on_the_lane(state, move |lane, runtime| {
         Ok(due
             .iter()
-            .filter_map(|id| {
-                runtime
-                    .block_on(super::publish::refresh(conn, tokens, id))
-                    .ok()
-            })
+            .filter_map(|id| runtime.block_on(super::publish::refresh(lane, id)).ok())
             .collect())
     })
     .await
@@ -235,8 +229,8 @@ pub async fn share_revoke(
     id: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    on_the_write_connection(state, move |conn, tokens, runtime| {
-        runtime.block_on(super::publish::revoke(conn, tokens, &id))
+    on_the_lane(state, move |lane, runtime| {
+        runtime.block_on(super::publish::revoke(lane, &id))
     })
     .await
 }
@@ -247,7 +241,7 @@ pub async fn share_revoke(
 /// link is the whole of the capability.
 ///
 /// ⚠️ **It holds no connection while it fetches, and until 2026-09-28 it held the write one**
-/// (issue #545). It ran inside [`on_the_write_connection`] so that [`super::publish::open`] could
+/// (issue #545). It ran inside the helper the other four share so that [`super::publish::open`] could
 /// record a failure in `error_log` — which handed a stranger's host the length of time the app's
 /// only writer was held. One byte a minute kept the per-chunk read timeout from ever firing, and
 /// every other press in the app answered [`crate::db::BUSY`] for as long as the host liked. So the

@@ -63,6 +63,9 @@ function useArtTagStatus(): ArtTagStatus | null {
         void queryClient.invalidateQueries({ queryKey: ART_TAGS_KEY });
         void queryClient.invalidateQueries({ queryKey: ["tag-children"] });
         void queryClient.invalidateQueries({ queryKey: ["tag-search"] });
+        // The typed `atag:` chips (issue #1183). Only the resolve branch: `["tags", "oracle", …]`
+        // is the other taxonomy, which this refresh did not touch.
+        void queryClient.invalidateQueries({ queryKey: ["tags", "resolve"] });
       }),
     [queryClient],
   );

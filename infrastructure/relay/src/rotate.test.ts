@@ -1258,3 +1258,100 @@ describe("the router", () => {
     expect(postOnKeys.headers.get("allow")).toBe("GET");
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// POST /g/{group}/rotate — a partial roster does not speak for the group (issue #1115)
+// ---------------------------------------------------------------------------------------
+
+describe("POST /rotate — one device off the manifest at most", () => {
+  /** `g1` standing on epoch 1 with a manifest naming the desktop, the phone and the laptop. */
+  async function groupOfThree(): Promise<Env & { reached: Reached[] }> {
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    const joined = await worker.fetch(
+      rotateRequest("g1", hex64(0), {
+        epoch: 1,
+        auth: hex64(1),
+        keys: { desk: "blob-desk", phone: "blob-phone", laptop: "blob-laptop" },
+      }),
+      env,
+    );
+    expect(joined.status).toBe(200);
+    env.reached.length = 0;
+    return env;
+  }
+
+  it("refuses a manifest that leaves off two devices, and records nothing", async () => {
+    // **The failure scenario, as the relay sees it.** The phone adopted the join that brought the
+    // laptop in and never learned of it, so its departure names the desktop alone — and the
+    // laptop, off that manifest, would read itself removed.
+    const env = await groupOfThree();
+
+    const response = await worker.fetch(
+      rotateRequest("g1", hex64(1), { epoch: 3, auth: hex64(3), keys: { desk: "blob-desk-3" } }),
+      env,
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "partial_roster" });
+    expect((await currentManifest(env, "g1"))?.epoch).toBe(1);
+    expect(await authIsCurrent(env, "g1", hex64(1))).toBe(true);
+    expect(env.reached).toEqual([]);
+  });
+
+  it("accepts a removal, a departure and a join, which each leave off one device or none", async () => {
+    const env = await groupOfThree();
+
+    const removal = await worker.fetch(
+      rotateRequest("g1", hex64(1), {
+        epoch: 3,
+        auth: hex64(3),
+        keys: { desk: "blob-desk-3", phone: "blob-phone-3" },
+      }),
+      env,
+    );
+    expect(removal.status).toBe(200);
+
+    const join = await worker.fetch(
+      rotateRequest("g1", hex64(3), {
+        epoch: 4,
+        auth: hex64(4),
+        keys: { desk: "blob-desk-4", phone: "blob-phone-4", tablet: "blob-tablet-4" },
+      }),
+      env,
+    );
+    expect(join.status).toBe(200);
+
+    const departure = await worker.fetch(
+      rotateRequest("g1", hex64(4), {
+        epoch: 6,
+        auth: hex64(6),
+        keys: { desk: "blob-desk-6", tablet: "blob-tablet-6" },
+      }),
+      env,
+    );
+    expect(departure.status).toBe(200);
+    expect(await currentManifest(env, "g1")).toEqual({
+      epoch: 6,
+      keys: { desk: "blob-desk-6", tablet: "blob-tablet-6" },
+    });
+  });
+
+  it("counts a device the manifest names as `constructor` like any other", async () => {
+    // A manifest is JSON a caller chose the key set of: `in` or a bare index would find
+    // `constructor` on the prototype of a rotation that does not name it and count it as kept.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    await recordRotation(env, "g1", 1, hex64(1), {
+      desk: "blob-desk",
+      constructor: "blob-c",
+      toString: "blob-t",
+    });
+
+    const response = await worker.fetch(
+      rotateRequest("g1", hex64(1), { epoch: 3, auth: hex64(3), keys: { desk: "blob-desk-3" } }),
+      env,
+    );
+    expect(response.status).toBe(409);
+  });
+});

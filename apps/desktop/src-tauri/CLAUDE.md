@@ -22,7 +22,7 @@ Detailed subsystem specifications are maintained in reference documentation:
 ## 1. Architecture & Core Re-Exports
 
 - **Engine separation**: Most modules have moved to `crates/grimoire-core`. Desktop modules under `apps/desktop/src-tauri/src/<module>/mod.rs` re-export core logic via `pub use grimoire_core::<module>::*;` and append desktop `#[tauri::command]` wrappers.
-- **`AppState` structure**: `AppState` wraps `State` (`Arc<State>`) via `Deref`. Holds desktop-specific fields: `mirror` (filesystem mirror), `mirror_status`, and `changes` (multi-window synchronization).
+- **`AppState` structure**: `AppState` wraps `State` (`Arc<State>`) via `Deref`. Holds desktop-specific fields: `mirror` (filesystem mirror), `mirror_status`, `mirror_pass` (one mirror pass at a time — the thread's and `Rebuild now`'s), and `changes` (multi-window synchronization).
 - **Command implementation rules**:
   - Functions in `grimoire-core` take `&Connection` (or `&State`) and return plain DTOs or `Result`.
   - Desktop wrappers in `src-tauri` unpack Tauri arguments and handle window/state routing.
@@ -80,8 +80,9 @@ The desktop manages two SQLite databases in the application data folder:
 - Portable updater (`src/update.rs`): executes atomic application binary replacement without requiring elevated installers.
 
 ### Tauri Capabilities (`capabilities/desktop.json`)
-- Strict security permissions: `core:default`, `opener:allow-open-url`, scoped file pickers (`dialog`), and restricted file export paths (`fs`).
-- No broad or unvetted filesystem access is granted to the webview.
+- What the webview is granted, and nothing more: `core:default` (the one `:default` allowed), the opener pair `opener:allow-open-url` + `opener:allow-default-urls` (URLs only, no `allow-reveal-item-in-dir`), `clipboard-manager:allow-write-text` (write only, never read), the four window controls (`core:window:allow-minimize`, `-toggle-maximize`, `-close`, `-start-dragging`), the two `snap-layout:` bounds permissions, and the three `mcp-bridge:` permissions.
+- **No `dialog:` and no `fs:` permission, deliberately (issue #545).** Rust opens every file dialog and does every read and write (`src/file_dialog.rs`); no command takes a path from the page and no path crosses IPC in either direction. A capability gates plugin commands, not the arguments of the app's own `#[tauri::command]`s, so a page-side dialog grant was never a fence — it would only let a script put a native window over the app. Do not add either back; a new file command takes its `WebviewWindow` and opens its own dialog through `file_dialog::modal_to`/`show`.
+- Held by tests in `desktop.rs`: `the_desktop_capability_is_the_permission_set_that_shipped` pins the exact list above (a change to it is a decision, made in that test on purpose), `the_capability_directory_is_exactly_the_desktop_file` refuses a second capability file, and `the_capability_grants_no_dialog_no_filesystem_and_only_the_clipboard_write` / `the_capability_grants_no_default_but_core_s` / `the_opener_opens_urls_and_nothing_on_disk` hold the individual rules.
 
 ---
 

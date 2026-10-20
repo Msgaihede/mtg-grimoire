@@ -15,12 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
 import { parseSnapshot, type ShareSnapshot } from "@grimoire/ui/lib/shareSnapshot";
 import golden from "../desktop/src-tauri/src/share/__golden__/snapshot.json?raw";
-import {
-  ShareBoundary,
-  SharePage,
-  snapshotHref,
-  SNAPSHOT_UNDRAWABLE,
-} from "./SharePage";
+import { ShareBoundary, SharePage, snapshotHref, SNAPSHOT_UNDRAWABLE } from "./SharePage";
 import { NOTHING } from "./ShareTile";
 
 const snapshot = () => parseSnapshot(golden);
@@ -84,6 +79,29 @@ describe("SharePage", () => {
     expect(tiles()).toHaveLength(2);
   });
 
+  it("draws no picture from a host the publisher chose (issue #1153)", () => {
+    // Nothing upstream reads a snapshot's `img`s — the Worker checks the gzip magic and stores
+    // the rest — so a tracker named here would be asked by every stranger the link reaches.
+    const s = edited((s) => {
+      s.cards[0].img = "https://tracker.example/?c=0";
+    });
+    const { container } = mount(s);
+    const sources = Array.from(container.querySelectorAll("img"), (img) => img.src);
+    expect(sources).toEqual([s.cards[1].img]);
+    // The card is still on the wall, as the named frame a card with no picture gets.
+    expect(tiles()).toHaveLength(2);
+    expect(within(wall()).getAllByText(s.cards[0].n).length).toBeGreaterThan(0);
+  });
+
+  it("gates every picture on the wall behind the browser's lazy load", () => {
+    // Issue #1154: the wall mounts every row with no virtualiser, so a binder of thousands of
+    // rows opened on a phone would otherwise ask for every picture at once.
+    mount(snapshot());
+    const pictures = within(wall()).getAllByRole("img");
+    expect(pictures.length).toBeGreaterThan(0);
+    for (const img of pictures) expect(img).toHaveAttribute("loading", "lazy");
+  });
+
   it("narrows the wall from the search box", async () => {
     const user = userEvent.setup();
     mount(snapshot());
@@ -142,7 +160,9 @@ describe("SharePage", () => {
     mount(edited((s) => (s.cards[0].p = null as unknown as number)));
     // The golden is two cards — Fury Sliver ×2 and Tundra ×1, both at 0.34 — so nulling the
     // first leaves one quoted copy and two unquoted ones.
-    expect(screen.getByText(/Worth \$0\.34 at TCGplayer prices, with 2 unquoted/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Worth \$0\.34 at TCGplayer prices, with 2 unquoted/),
+    ).toBeInTheDocument();
     const first = tiles().find((t) => within(t).queryByAltText("Fury Sliver") !== null);
     expect(within(first as HTMLElement).getByText(NOTHING)).toBeInTheDocument();
   });
@@ -345,11 +365,14 @@ describe("snapshotHref", () => {
  *   merely miss them — its lazy `[\s\S]*?` runs past and captures the *next* specifier instead.
  */
 describe("the viewer's import graph", () => {
-  const sources = import.meta.glob(["../../packages/ui/**/*.{ts,tsx}", "../desktop/src/**/*.{ts,tsx}"], {
-    query: "?raw",
-    import: "default",
-    eager: true,
-  }) as Record<string, string>;
+  const sources = import.meta.glob(
+    ["../../packages/ui/**/*.{ts,tsx}", "../desktop/src/**/*.{ts,tsx}"],
+    {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    },
+  ) as Record<string, string>;
   const own = import.meta.glob("./*.tsx", {
     query: "?raw",
     import: "default",
@@ -364,9 +387,7 @@ describe("the viewer's import graph", () => {
    * arm is what keeps `https://…` out of it.
    */
   function specifiersOf(source: string): string[] {
-    const code = source
-      .replace(/\/\*[\s\S]*?\*\//g, " ")
-      .replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
     const pattern = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["']([^"']+)["']/g;
     return [...code.matchAll(pattern)].map(([, spec]) => spec);
   }

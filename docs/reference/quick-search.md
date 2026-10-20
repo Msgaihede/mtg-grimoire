@@ -44,6 +44,14 @@ All cards group is drawn only once the collection and the wishlist have answered
 (or failed). The lit row is held by key, not index, so rows arriving above it never move the
 reader's selection to another thing.
 
+**Enter on the first row waits for the typed text's answer** (issue #1166). The collection and
+wishlist rows keep the previous text's answer (`keepPreviousData`) while the next one is asked,
+and every card group still shows the old text through the debounce, so the first row can be a
+card the reader never searched for — the empty box's newest copy, say. An Enter pressed while the
+panel is busy and no row has been lit by hand is held, and spent on the first row of the render
+the search settles in; typing, an arrow, a blur or Escape drops it. A row the reader lit
+themselves (an arrow or the pointer, after the last keystroke) opens at once.
+
 Inside a group, `rankName` orders name matches (whole name, then prefix, then a word's start,
 then anywhere); the backend's searches also match type lines and rules text, and those rows stay,
 below the cards actually called what was typed. Collection and wishlist rows are merged to one per

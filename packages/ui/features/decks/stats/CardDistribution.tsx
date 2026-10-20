@@ -149,9 +149,9 @@ export function CardDistribution({
 
   const bars = useMemo<ChartBar[]>(() => {
     // **Active** copies, not sized ones: the bars are a picture of what the reader has built, and
-    // a sideboard is cards they own and sleeve. The odds below count the sized piles alone,
-    // because a sideboard is not in the library the opening seven comes out of. `activeCards` and
-    // `sizedCards` are those two readings, and the difference between them is deliberate.
+    // a sideboard is cards they own and sleeve. The odds below count the library alone, because
+    // neither a sideboard nor the command zone is where the opening seven comes out of.
+    // `activeCards` and `libraryCards` are those two readings, and the difference is deliberate.
     const cut = distribution(activeCards(cards), by, separateXGroup);
     // Which keys the cut itself produced. `foldBuckets` only ever *appends* one bucket of its own,
     // so a bar whose key the cut did not answer with is that fold — read that way rather than by

@@ -509,16 +509,19 @@ Three of the five are worth a sentence each:
 - **`share_open` needs no membership and sends no token.** Viewing is open to everyone and the
   link is the whole of the capability.
 
-Four of the five run on the **write** connection through one `spawn_blocking` helper, so each can
-record its failure in `error_log` and write its answer to `collection_shares` — and because a
-guard on a `Mutex`-held connection cannot cross an `await` on a multi-threaded runtime. That was
-`sync_engine::commands::sync_now`'s shape exactly — precedent rather than a new sin — until
-2026-10-03, when a sync trip stopped holding the connection across its requests; it is still this
-module's, and it is tolerable only because the far end is the reader's own Worker. **It takes the
-sync lane first now**, as a press does: a publish mints its bearer through
-`entitlement::access_token`, which writes the grant a sync trip or a claim is writing too, so the
-two must not interleave. The connection in hand is what the token is asked through
-(`Lane::in_hand`).
+Four of the five run **on the sync lane** through one `spawn_blocking` helper (`on_the_lane`),
+taken as a press takes it — its turn within `WRITE_LOCK_WAIT`, or `BUSY`. A publish mints its
+bearer through `entitlement::access_token`, which writes the grant a sync trip or a claim is
+writing too, so the two must not interleave. **The lane is the publisher's `Store`, and the write
+connection is held only in stretches** — the snapshot's read, an `error_log` row, the commit to
+`collection_shares` — and never across a request, which is a sync trip's own shape since
+2026-10-03. ⚠️ **Until 2026-10-20 the helper held the write connection for the whole trip**
+(`on_the_write_connection`, [issue #1145](https://github.com/Msgaihede/mtg-grimoire/issues/1145)):
+the token, the metadata and up to 8 MB of gzip, each read under a 60 s per-chunk timeout and none
+under a deadline. With `share_auto_update` on a timer that was every edit in the app answering
+`BUSY` while the folder being edited went up over a slow uplink. A reader's write can now land
+between the read and the commit, and it is harmless: the upload and the digest the commit stores
+are both the read's, so the next pass sees the edit as a change and publishes it.
 
 ⚠️ **All five did until 2026-09-28, and `share_open` was the sin** — it talks to whatever host a
 stranger's link names, and held the app's only writer while it did. It holds nothing now; see
@@ -569,7 +572,8 @@ after. The command splits on two connections:
   No token, no request, no writer and no sync lane — so the ordinary pass, where nothing moved,
   costs the account's shared Worker budget nothing.
 - **Only a changed share is published**, by the same `publish::refresh` the press runs, on the
-  write connection. Its two requests are the only cost, and a burst of filing is one publish per
+  sync lane — the writer is held for its read and its commit, never across its requests
+  ([issue #1145](https://github.com/Msgaihede/mtg-grimoire/issues/1145)). Its two requests are the only cost, and a burst of filing is one publish per
   interval, not one per card. A failure is not the command's error: the publish has written its
   `error_log` row, the old snapshot is still serving, and the stored digest is still the old one,
   so the next pass tries again.
@@ -586,7 +590,7 @@ bookkeeping, never synced or drawn, and losing it costs exactly one republish �
 A process-wide flag (`AUTO_UPDATING`) makes a second window's concurrent pass answer `[]` at once
 instead of uploading the same change twice. The answer patches the `["share", "list"]` cache in
 place rather than invalidating it, because re-reading the list is `share_list`, which reconciles
-against the relay on the write connection.
+against the relay on the sync lane.
 
 **What it cannot do: publish while the app is closed.** An edit made just before closing is
 published by the next launch's first pass. Nothing else in this design could do better without a
@@ -1220,9 +1224,10 @@ it, withdraw it.
   panel carries that panel's whole module graph**, which is a bundling fact no lint sees.
 - ⚠️ **`useShares(connected)` takes its gate as an argument, and this is about the write
   connection rather than about what the control draws** (2026-09-08). `share_list` is the only one
-  of the five commands that reconciles, and `share::commands` runs it inside
-  `on_the_write_connection` → `sync::with_write` — so it **holds the exclusive write lock across a
-  relay round trip**, and every other user write in the app answers `db::BUSY` after
+  of the five commands that reconciles, and `share::commands` ran it inside
+  `on_the_write_connection` → `sync::with_write` — so it **held the exclusive write lock across a
+  relay round trip** (until 2026-10-20 and issue #1145; it holds the sync lane across it now, and
+  the connection only for the reconcile), and every other user write in the app answers `db::BUSY` after
   `WRITE_LOCK_WAIT` (5 s), whose own doc says only something genuinely stuck should hold it that
   long. The share client's read timeout is **60 s**. That shape was `sync_now`'s and was deferred as
   matching it (it no longer is: since 2026-10-03 a sync trip holds the connection only for a

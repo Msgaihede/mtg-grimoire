@@ -410,12 +410,16 @@ describe("useCollectionFolders", () => {
    * error; both are a **stale number** under a 30 s `staleTime`, which is the kind nobody
    * reports.
    *
-   * The exact call list still is the assertion, now naming all three — a fourth root appearing
+   * **`["wishlist"]` joined on 2026-10-20** (issue #1168), for the same effective lock read a
+   * third way: a wish row's `ownedPlaces` marks a locked folder's copies `held`, which the wall
+   * draws as `In use` rather than `Own`. With it the set is `OWNED_WRITE_KEYS`, in its order.
+   *
+   * The exact call list still is the assertion, now naming all four — a fifth root appearing
    * here would mean a folder write had quietly started claiming to change something else, and a
    * *missing* one is what this shape catches: an `expect(...).toHaveBeenCalledWith` per root
    * passes over a settle set that has lost one.
    */
-  it("refreshes every collection query, the card search and the decks after a lock", async () => {
+  it("refreshes every collection query, the wishlist, the card search and the decks after a lock", async () => {
     const { result } = renderHook(() => useCollectionFolders(), { wrapper });
     await waitFor(() => expect(result.current.folders).toHaveLength(2));
     const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -424,6 +428,7 @@ describe("useCollectionFolders", () => {
 
     expect(invalidate.mock.calls).toEqual([
       [{ queryKey: ["collection"] }],
+      [{ queryKey: ["wishlist"] }],
       [{ queryKey: ["cards", "search"] }],
       [{ queryKey: ["decks"] }],
     ]);
@@ -440,7 +445,7 @@ describe("useCollectionFolders", () => {
    * The exact call list again, for the reason above it: a settle set that has quietly lost a root
    * passes every per-root `toHaveBeenCalledWith` written about the roots it kept.
    */
-  it("refreshes the decks after a folder move, so a plan's owned count cannot go stale", async () => {
+  it("refreshes the decks and the wishlist after a folder move, so neither owned reading goes stale", async () => {
     const { result } = renderHook(() => useCollectionFolders(), { wrapper });
     await waitFor(() => expect(result.current.folders).toHaveLength(2));
     const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -450,6 +455,7 @@ describe("useCollectionFolders", () => {
     expect(collectionFolderMove).toHaveBeenCalledWith(1, 2);
     expect(invalidate.mock.calls).toEqual([
       [{ queryKey: ["collection"] }],
+      [{ queryKey: ["wishlist"] }],
       [{ queryKey: ["cards", "search"] }],
       [{ queryKey: ["decks"] }],
     ]);
@@ -499,6 +505,7 @@ describe("folder rules", () => {
     await result.current.setRules.mutateAsync({ id: 1, rules: [CHEAP] });
     expect(invalidate.mock.calls).toEqual([
       [{ queryKey: ["collection"] }],
+      [{ queryKey: ["wishlist"] }],
       [{ queryKey: ["cards", "search"] }],
       [{ queryKey: ["decks"] }],
     ]);
@@ -601,6 +608,7 @@ describe("useSetCollectionFolderMany", () => {
         [{ queryKey: ["collection"] }],
         [{ queryKey: ["decks"] }],
         [{ queryKey: ["cards", "search"] }],
+        [{ queryKey: ["wishlist"] }],
       ]),
     );
   });

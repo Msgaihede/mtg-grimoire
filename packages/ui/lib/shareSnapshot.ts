@@ -143,6 +143,36 @@ export interface ShareDeck {
   cover?: { img: string; artist: string };
 }
 
+/**
+ * The one host a shared card's picture may be drawn from — `crates/grimoire-core`'s
+ * `image_uri::IMAGE_HOST`, the host the writer takes every `img` from (issue #1153).
+ *
+ * **The trailing slash is the whole check**, as it is there: `https://cards.scryfall.io.evil.test/…`
+ * and `https://cards.scryfall.io@evil.test/…` both fail it, because the byte after the host has to
+ * be the path separator.
+ *
+ * It is a check at all because **nothing upstream makes one**: the share Worker stores a blob after
+ * checking its gzip magic and nothing else, so a snapshot is whatever its publisher uploaded. An
+ * `img` at `https://tracker.example/?c=N` would have every stranger who opened the link ask that
+ * host for a picture — their address and user agent, logged by somebody the link's reader never
+ * chose to visit. The share Worker's `PREVIEW_IMAGE_ORIGIN` is the same string for the same
+ * reason on `og:image`, and its shell's `img-src` names the same host; `shareSnapshot.test.ts`
+ * holds the three equal.
+ */
+export const SHARE_IMAGE_ORIGIN = "https://cards.scryfall.io/";
+
+/**
+ * The picture a viewer may draw for this card, or `null` for the named frame.
+ *
+ * `null` both for a card with no `img` — a printing that left the publisher's corpus — and for
+ * one whose `img` is not under {@link SHARE_IMAGE_ORIGIN}. The two read the same on the page
+ * because they are the same answer: there is no picture this viewer will fetch.
+ */
+export function shareImage(card: Pick<ShareCard, "img">): string | null {
+  const img: unknown = card.img;
+  return typeof img === "string" && img.startsWith(SHARE_IMAGE_ORIGIN) ? img : null;
+}
+
 /** One folder. The set of these is the tree the viewer draws the cards into. */
 export interface ShareFolder {
   uid: string;

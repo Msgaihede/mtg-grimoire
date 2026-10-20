@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import { RANK } from "@grimoire/ui/lib/activity";
 import { NoCards } from "./NoCards";
 
@@ -77,5 +77,16 @@ export const FirstRunFailed: Story = {
     await expect(
       within(canvasElement).getByText("Couldn't reach Scryfall: connection timed out"),
     ).toBeInTheDocument();
+  },
+};
+
+/** …and with the launch's downloads held after a *Not now*: the way back to the prompt. */
+export const DownloadsHeld: Story = {
+  args: { empty: true, onDownload: fn() },
+  play: async ({ args, canvasElement }) => {
+    await userEvent.click(
+      within(canvasElement).getByRole("button", { name: "Download card data…" }),
+    );
+    await expect(args.onDownload).toHaveBeenCalledOnce();
   },
 };

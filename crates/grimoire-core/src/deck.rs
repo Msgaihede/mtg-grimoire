@@ -1991,9 +1991,23 @@ pub(crate) fn release_live_copies(
 /// quantity a targeted [`release_group_copies`] would need is a function of the fold. Reading the
 /// finished list against the group answers the plain case and the folded one with one query.
 ///
+/// **The plan's rows claim too, and a copy both lists name is one copy**
+/// ([issue #1112](https://github.com/Msgaihede/mtg-grimoire/issues/1112)). Switching the plan on
+/// moves the live list into it and leaves every copy in the group
+/// (`enabling_theory_leaves_the_copies_in_the_decks_group`), so a sweep that read the live list
+/// alone found the whole box unclaimed: one Sol Ring added to the empty Actual list and swapped
+/// to another printing filed the other fifty-nine cards into `Recently removed`, and no undo
+/// brings them back. Each key's claim is therefore the **larger** of the two lists' — not their
+/// sum, because the Actual list is the part of the plan that is sleeved and a Bolt in both is
+/// one Bolt in the box. **Read whether the switch is on or off**, the switched-off pile's
+/// argument above one level up: switching the plan off hides a tab and keeps its rows
+/// (`disabling_theory_keeps_the_rows`), and a display switch that turned the next swap into an
+/// eviction would be the same destructive reading.
+///
 /// **The `live` fence is here rather than in the callers**, [`release_live_copies`]' rule: a plan
 /// holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so `theory` is a loop that
-/// never runs, and a rule written down twice is a rule one copy will not have.
+/// never runs, and a rule written down twice is a rule one copy will not have. A plan's rows are
+/// claims on what the group *keeps*; a press on the plan still rewrites nothing the box holds.
 ///
 /// A deck with no group holds nothing rather than refusing, and `Recently removed` is resolved
 /// only once there is something to file — both [`release_group_copies`]' asymmetries, so the two
@@ -2009,6 +2023,18 @@ pub(crate) fn release_unclaimed_copies(
     if variant != LIVE {
         return Ok(());
     }
+    sweep_group(tx, deck_id, &[LIVE, THEORY])
+}
+
+/// [`release_unclaimed_copies`]' sweep, with the lists whose rows claim named by the caller.
+///
+/// **Two callers and two answers.** A swap, a split or a finish change keeps what either list
+/// names (`[LIVE, THEORY]`). Becoming Virtual empties the group outright and then drops it, so
+/// there the plan must claim nothing (`[LIVE]`): [`release_live_copies`] gives back only what the
+/// live list claims, and a copy the plan kept back would be left in a group about to be deleted —
+/// scattered to the root by `ON DELETE SET NULL`. A plan can outlive its switch, so the switch
+/// being forced off on the way in is no guarantee its rows are gone.
+fn sweep_group(tx: &Connection, deck_id: i64, claimants: &[&str]) -> Result<(), String> {
     let Some(group) = deck_group(tx, deck_id)? else {
         return Ok(());
     };
@@ -2018,28 +2044,39 @@ pub(crate) fn release_unclaimed_copies(
     // SQL, which made the foil copy an unsaid row of a foil-only printing stands for read as
     // unclaimed: the next swap or finish change anywhere in the deck filed it into `Recently
     // removed`. The printing's finishes ride a `LEFT JOIN`, so an orphan keeps its own spelling.
+    //
+    // Summed within a list and maxed across them — issue #1112's rule, on the doc above: the
+    // Actual list is the sleeved part of the plan, so a printing in both is claimed once, at the
+    // larger count.
     let mut claimed: HashMap<(String, String), i64> = HashMap::new();
-    let listed: Vec<(String, Option<String>, Option<String>, i64)> = tx
-        .prepare(
-            "SELECT dc.card_id, dc.finish, c.finishes, sum(dc.quantity)
-               FROM deck_cards dc
-               LEFT JOIN cards c ON c.id = dc.card_id
-              WHERE dc.deck_id = ?1 AND dc.variant = ?2
-              GROUP BY dc.card_id, dc.finish",
-        )
-        .and_then(|mut s| {
-            s.query_map(params![deck_id, LIVE], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })?
-            .collect()
-        })
-        .map_err(|e| e.to_string())?;
-    for (card_id, finish, finishes, quantity) in listed {
-        let key = (
-            card_id,
-            entry_finish(finish.as_deref(), finishes.as_deref()),
-        );
-        *claimed.entry(key).or_insert(0) += quantity;
+    for list in claimants {
+        let mut wants: HashMap<(String, String), i64> = HashMap::new();
+        let listed: Vec<(String, Option<String>, Option<String>, i64)> = tx
+            .prepare(
+                "SELECT dc.card_id, dc.finish, c.finishes, sum(dc.quantity)
+                   FROM deck_cards dc
+                   LEFT JOIN cards c ON c.id = dc.card_id
+                  WHERE dc.deck_id = ?1 AND dc.variant = ?2
+                  GROUP BY dc.card_id, dc.finish",
+            )
+            .and_then(|mut s| {
+                s.query_map(params![deck_id, list], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .collect()
+            })
+            .map_err(|e| e.to_string())?;
+        for (card_id, finish, finishes, quantity) in listed {
+            let key = (
+                card_id,
+                entry_finish(finish.as_deref(), finishes.as_deref()),
+            );
+            *wants.entry(key).or_insert(0) += quantity;
+        }
+        for (key, want) in wants {
+            let claim = claimed.entry(key).or_insert(0);
+            *claim = (*claim).max(want);
+        }
     }
 
     // The group's rows folded onto the same key, in the statement's order — a `nonfoil` row and a
@@ -2824,9 +2861,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // cascade, the import's `replace` arm and [`delete_deck`] all put them — and then the group
     // itself goes.
     //
-    // **Two release calls and neither loop is written here.** [`release_unclaimed_copies`] first,
-    // then [`release_live_copies`], and the order is what empties the drawer rather than a
-    // preference: the first releases what the group holds *over* what the live list claims, the
+    // **Two release calls and neither loop is written here.** [`sweep_group`] first — over the
+    // live list alone, so a plan the deck kept claims nothing in a group about to go (issue
+    // #1112) — then [`release_live_copies`], and the order is what empties the drawer rather than
+    // a preference: the first releases what the group holds *over* what the live list claims, the
     // second releases the claim itself, and running them the other way round would compute the
     // surplus against a group the second call had already emptied and leave a group holding more
     // copies than its list names exactly where it was. Between them they are total, which is
@@ -2857,7 +2895,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // on the way out, so `will_move`'s `!before.theory_enabled` is the only other thing that
     // could have been true and a virtual deck's theory switch is already off.
     if virtual_only == Some(true) && !before.virtual_only {
-        release_unclaimed_copies(&tx, id, LIVE)?;
+        sweep_group(&tx, id, &[LIVE])?;
         release_live_copies(&tx, id, LIVE, None)?;
         tx.execute(
             "DELETE FROM collection_folders WHERE deck_id = ?1 AND kind = ?2",
@@ -14114,6 +14152,180 @@ mod tests {
         assert_eq!(
             folder_copies(&conn, group_of(&conn, deck.id), "bolt-m10"),
             1
+        );
+    }
+
+    /// The plan switch, by its own patch — the press the reader makes on the deck's header.
+    fn switch_plan(conn: &Connection, deck_id: i64, on: bool) {
+        update_deck(
+            conn,
+            deck_id,
+            &DeckPatch {
+                theory_enabled: Some(on),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
+    /// A deck that holds its cardboard and has just had its plan switched on: four Bolts and an
+    /// Angel in the group, the plan naming them, and an Actual list the switch emptied.
+    fn planned_deck(conn: &Connection) -> (i64, i64) {
+        let deck = create_deck(conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(conn, deck);
+        add(conn, deck, "bolt-lea", main, 4);
+        add(conn, deck, "serra-lea", main, 1);
+        file_into_group(conn, deck, "bolt-lea", 4);
+        file_into_group(conn, deck, "serra-lea", 1);
+        switch_plan(conn, deck, true);
+        assert_eq!(
+            count(
+                conn,
+                &format!("deck_cards WHERE deck_id = {deck} AND variant = 'live'")
+            ),
+            0,
+            "the switch moved the list, so the group's copies are named by the plan alone"
+        );
+        (deck, main)
+    }
+
+    /// The copies the group and `Recently removed` hold of each printing, in that order —
+    /// one value to compare, so a failure prints the whole box at once.
+    fn custody(conn: &Connection, deck_id: i64, cards: &[&str]) -> Vec<(i64, i64)> {
+        let group = group_of(conn, deck_id);
+        let removed = removed_group(conn);
+        cards
+            .iter()
+            .map(|card| {
+                (
+                    folder_copies(conn, group, card),
+                    folder_copies(conn, removed, card),
+                )
+            })
+            .collect()
+    }
+
+    /// [Issue #1112](https://github.com/Msgaihede/mtg-grimoire/issues/1112), as the reader
+    /// met it: the plan switched on, one card added to the Actual list and *Use this printing*
+    /// pressed on it. The sweep read the live list alone, found the plan's copies claimed by
+    /// nothing and filed every one of them into `Recently removed`.
+    #[test]
+    fn a_swap_on_the_actual_list_leaves_the_plans_copies_in_the_group() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let (deck, main) = planned_deck(&conn);
+        add(&conn, deck, "serra-lea", main, 1);
+
+        swap_printing(&conn, deck, "serra-lea", "serra-8ed", main, LIVE, None).unwrap();
+
+        assert_eq!(
+            custody(&conn, deck, &["bolt-lea", "serra-lea"]),
+            vec![(4, 0), (1, 0)],
+            "the plan still names every copy in the box, so none of them leaves it"
+        );
+    }
+
+    /// The same hole through the other two presses that sweep — a finish change and a split.
+    #[test]
+    fn a_finish_change_or_split_on_the_actual_list_leaves_the_plans_copies_in_the_group() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let (deck, main) = planned_deck(&conn);
+        add(&conn, deck, "bolt-m10", main, 2);
+
+        set_card_finish(&conn, deck, "bolt-m10", main, LIVE, None, Some("foil")).unwrap();
+        split_printing(
+            &conn,
+            deck,
+            "bolt-m10",
+            "bolt-lea",
+            main,
+            LIVE,
+            Some("foil"),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(
+            custody(&conn, deck, &["bolt-lea", "serra-lea"]),
+            vec![(4, 0), (1, 0)]
+        );
+    }
+
+    /// **The plan claims with its switch off as well**: switching it off hides a tab and keeps
+    /// every row, and a display switch must not turn the next swap into an eviction — the
+    /// switched-off pile's rule, one level up.
+    #[test]
+    fn a_swap_after_the_plan_is_switched_off_still_spares_its_copies() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let (deck, main) = planned_deck(&conn);
+        switch_plan(&conn, deck, false);
+        add(&conn, deck, "serra-lea", main, 1);
+
+        swap_printing(&conn, deck, "serra-lea", "serra-8ed", main, LIVE, None).unwrap();
+
+        assert_eq!(
+            custody(&conn, deck, &["bolt-lea", "serra-lea"]),
+            vec![(4, 0), (1, 0)]
+        );
+    }
+
+    /// **A printing both lists name is one copy, not two.** The Actual list is the sleeved part
+    /// of the plan, so each key claims the larger of the two counts: a Bolt in each list against
+    /// two in the box is one surplus, and three in the plan against one sleeved is none.
+    #[test]
+    fn the_sweep_claims_the_larger_of_the_two_lists_not_their_sum() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let plan = plan_pile(&conn, deck, main);
+        add(&conn, deck, "bolt-lea", main, 1);
+        add_card(&conn, deck, "bolt-lea", Some(plan), None, THEORY, None, 1).unwrap();
+        add(&conn, deck, "serra-lea", main, 1);
+        add_card(&conn, deck, "serra-lea", Some(plan), None, THEORY, None, 3).unwrap();
+        file_into_group(&conn, deck, "bolt-lea", 2);
+        file_into_group(&conn, deck, "serra-lea", 3);
+
+        release_unclaimed_copies(&conn, deck, LIVE).unwrap();
+
+        assert_eq!(
+            custody(&conn, deck, &["bolt-lea", "serra-lea"]),
+            vec![(1, 1), (3, 0)]
+        );
+    }
+
+    /// **Becoming Virtual still empties the whole box when the deck keeps a plan.** The plan's
+    /// claims are on what a group *keeps*, and this group is about to be deleted: a copy the
+    /// plan held back would be scattered to the root by `ON DELETE SET NULL`.
+    #[test]
+    fn becoming_virtual_releases_the_copies_a_plan_names() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let (deck, _) = planned_deck(&conn);
+
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                virtual_only: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            !has_group(&conn, deck),
+            "the drawer goes with the cardboard"
+        );
+        let removed = removed_group(&conn);
+        assert_eq!(folder_copies(&conn, removed, "bolt-lea"), 4);
+        assert_eq!(folder_copies(&conn, removed, "serra-lea"), 1);
+        assert_eq!(
+            count(&conn, "collection_entries WHERE folder_id IS NULL"),
+            0,
+            "`ON DELETE SET NULL` must never be what moves these rows"
         );
     }
 

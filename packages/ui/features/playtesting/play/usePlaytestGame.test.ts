@@ -8,8 +8,8 @@ import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
 // Hoisted with the mock below, which runs before this file's own top level.
 const { playtestStart, playtestAct, playtestEnd } = vi.hoisted(() => ({
   playtestStart: vi.fn<(...args: unknown[]) => Promise<PlaytestStep>>(),
-  playtestAct: vi.fn<(action: unknown) => Promise<PlaytestStep>>(),
-  playtestEnd: vi.fn<() => Promise<void>>(),
+  playtestAct: vi.fn<(game: number, action: unknown) => Promise<PlaytestStep>>(),
+  playtestEnd: vi.fn<(game: number) => Promise<void>>(),
 }));
 
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -47,13 +47,14 @@ describe("usePlaytestGame", () => {
     const { result, unmount } = renderHook(() => usePlaytestGame(PICKS));
     await waitFor(() => expect(result.current.view?.stage).toBe("mulligan"));
     expect(playtestStart).toHaveBeenCalledWith(
+      expect.any(Number),
       7,
       "theory",
       [{ deckId: 9, variant: "live" }],
       "hard",
       expect.any(Number),
     );
-    expect(Number.isSafeInteger(playtestStart.mock.calls[0][4])).toBe(true);
+    expect(Number.isSafeInteger(playtestStart.mock.calls[0][5])).toBe(true);
     expect(result.current.log.map((l) => l.text)).toEqual([
       "The opponent drew a card",
       "Shuffled both decks and drew seven",
@@ -66,7 +67,7 @@ describe("usePlaytestGame", () => {
   it("sends actions one at a time, in order, busy until the last answers", async () => {
     const order: string[] = [];
     let release: () => void = () => {};
-    playtestAct.mockImplementation(async (a) => {
+    playtestAct.mockImplementation(async (_game, a) => {
       const type = (a as { type: string }).type;
       order.push(`start ${type}`);
       if (type === "endTurn") await new Promise<void>((r) => (release = r));
@@ -164,7 +165,7 @@ describe("usePlaytestGame", () => {
     );
     await waitFor(() => expect(result.current.view?.stage).toBe("mulligan"));
     expect(playtestStart).toHaveBeenCalledTimes(1);
-    expect(playtestStart.mock.calls[0][2]).toEqual(opponents);
+    expect(playtestStart.mock.calls[0][3]).toEqual(opponents);
     expect(result.current.log.map((l) => l.text)).toContain("Shuffled every deck and drew seven");
   });
 
@@ -173,7 +174,7 @@ describe("usePlaytestGame", () => {
   it("undoes a step mid-replay to the log before it, and redoes it whole", async () => {
     const { step } = replayStep();
     const back = turnFive().view;
-    playtestAct.mockImplementation(async (a) => {
+    playtestAct.mockImplementation(async (_game, a) => {
       const type = (a as { type: string }).type;
       if (type === "undo") return { view: back, happened: [], frames: [] };
       if (type === "redo") return { view: step.view, happened: [], frames: [] };
@@ -198,7 +199,14 @@ describe("usePlaytestGame", () => {
     playtestStart.mockResolvedValue({ view: goldfishHand(), happened: [], frames: [] });
     const { result } = renderHook(() => usePlaytestGame(GOLDFISH));
     await waitFor(() => expect(result.current.view?.goldfish).toBe(true));
-    expect(playtestStart).toHaveBeenCalledWith(7, "live", [], "medium", expect.any(Number));
+    expect(playtestStart).toHaveBeenCalledWith(
+      expect.any(Number),
+      7,
+      "live",
+      [],
+      "medium",
+      expect.any(Number),
+    );
     expect(result.current.log.map((l) => l.text)).toEqual(["Shuffled and drew seven"]);
   });
 
@@ -215,25 +223,61 @@ describe("usePlaytestGame", () => {
     await waitFor(() => expect(result.current.log[0]?.text).toBe("The opponent is dead"));
   });
 
-  // React's StrictMode mounts, unmounts and mounts again: two deals go out, and only the second
-  // is the page's. The first is put away, and its answer is never drawn.
-  it("draws only the second deal of StrictMode's double mount", async () => {
-    const first = goldfishHand();
-    const second = goldfishHand();
-    playtestStart
-      .mockResolvedValueOnce({ view: first, happened: [], frames: [] })
-      .mockResolvedValueOnce({ view: second, happened: [], frames: [] });
+  // React's StrictMode mounts, unmounts and mounts again: the first mount's deal is put away
+  // before its turn in the queue comes, so it is never sent, and only the second is dealt.
+  it("deals only the second mount of StrictMode's double mount", async () => {
+    playtestStart.mockResolvedValue({ view: goldfishHand(), happened: [], frames: [] });
     const { result } = renderHook(() => usePlaytestGame(GOLDFISH), { wrapper: StrictMode });
-    await waitFor(() => expect(result.current.view).toBe(second));
-    expect(playtestStart).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    expect(playtestStart).toHaveBeenCalledTimes(1);
     expect(playtestEnd).toHaveBeenCalledTimes(1);
+    expect(playtestEnd.mock.calls[0][0]).not.toBe(playtestStart.mock.calls[0][0]);
     expect(result.current.log.map((l) => l.text)).toEqual(["Shuffled and drew seven"]);
+  });
+
+  // Issue #1141: every call names its game, so the host never acts on, or ends, another.
+  it("names every call by its game, and a new game by a new name", async () => {
+    playtestAct.mockResolvedValue({ view: turnFive().view, happened: [], frames: [] });
+    const { result, unmount } = renderHook(() => usePlaytestGame(PICKS));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    const first = playtestStart.mock.calls[0][0];
+    act(() => result.current.act({ type: "pass" }));
+    await waitFor(() => expect(playtestAct).toHaveBeenCalledWith(first, { type: "pass" }));
+    act(() => result.current.newGame());
+    await waitFor(() => expect(playtestStart).toHaveBeenCalledTimes(2));
+    const second = playtestStart.mock.calls[1][0];
+    expect(second).not.toBe(first);
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    unmount();
+    expect(playtestEnd).toHaveBeenCalledWith(second);
+  });
+
+  // Issue #1141: leaving while the AI plays out its turn ends the game then, not after the turn
+  // (the host drops the turn's answer), and an action queued behind that turn is never sent.
+  it("ends its game at once on leaving mid-action, and sends nothing queued behind", async () => {
+    let release: () => void = () => {};
+    playtestAct.mockImplementation(async () => {
+      await new Promise<void>((r) => (release = r));
+      return { view: turnFive().view, happened: [], frames: [] };
+    });
+    const { result, unmount } = renderHook(() => usePlaytestGame(PICKS));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    act(() => {
+      result.current.act({ type: "endTurn" });
+      result.current.act({ type: "pass" });
+    });
+    await waitFor(() => expect(playtestAct).toHaveBeenCalledTimes(1));
+    unmount();
+    expect(playtestEnd).toHaveBeenCalledWith(playtestStart.mock.calls[0][0]);
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(playtestAct).toHaveBeenCalledTimes(1);
   });
 
   // Issue #1022: the engine takes the game back; the hook takes the action's lines off the log.
   it("takes an undone action's lines off the log, and a redone one's back on", async () => {
     playtestStart.mockResolvedValue({ view: goldfishHand(), happened: [], frames: [] });
-    playtestAct.mockImplementation(async (a) => {
+    playtestAct.mockImplementation(async (_game, a) => {
       const type = (a as { type: string }).type;
       return {
         view: turnFive().view,
@@ -254,14 +298,14 @@ describe("usePlaytestGame", () => {
     await waitFor(() =>
       expect(texts()).toEqual(["Shuffled the library", "Shuffled and drew seven"]),
     );
-    expect(playtestAct).toHaveBeenLastCalledWith({ type: "redo" });
+    expect(playtestAct).toHaveBeenLastCalledWith(expect.any(Number), { type: "redo" });
   });
 
   // The sandbox is a setting, like the stops: the engine has nothing to undo for it, so an undo
   // after it goes back past it to the last real action — and the log must go back the same way.
   it("does not remember a sandbox toggle or the stops as an action for undo", async () => {
     playtestStart.mockResolvedValue({ view: goldfishHand(), happened: [], frames: [] });
-    playtestAct.mockImplementation(async (a) => {
+    playtestAct.mockImplementation(async (_game, a) => {
       const type = (a as { type: string }).type;
       return {
         view: turnFive().view,

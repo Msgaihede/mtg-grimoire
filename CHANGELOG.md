@@ -30,6 +30,66 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.57.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.56.0...v0.57.0) (2026-10-20)
+
+
+### Features
+
+* **card-neural:** retrain the Neural models monthly on a Modal GPU ([df52dfd](https://github.com/Msgaihede/mtg-grimoire/commit/df52dfd60b3eba371455a02f8c1223566e3febed))
+* **card-neural:** retrain the Neural models monthly on a Modal GPU ([8eb8411](https://github.com/Msgaihede/mtg-grimoire/commit/8eb84112a437fba2f1fdf4f3ad03ba51e29d21e8))
+* **scanner:** add a Neural scan mode ([2e45a09](https://github.com/Msgaihede/mtg-grimoire/commit/2e45a09a6166ef7abb5f05601208590c7f466bff))
+* **scanner:** add a Neural scan mode ([5dd93db](https://github.com/Msgaihede/mtg-grimoire/commit/5dd93db1689e4bb22495db94c3187a99d5a6f551))
+
+
+### Bug Fixes
+
+* carry a deck pile's inactive flag through CSV export and import ([ce44639](https://github.com/Msgaihede/mtg-grimoire/commit/ce446394e53932bdaca45cf4841dc1bc514a7f9a))
+* carry a deck pile's inactive flag through CSV export and import ([16d8ce1](https://github.com/Msgaihede/mtg-grimoire/commit/16d8ce1ad3e5f04383caad6baabdd12eed8721b6)), closes [#1174](https://github.com/Msgaihede/mtg-grimoire/issues/1174)
+* end Arena's About block on any line that is not a Name ([ddaf27e](https://github.com/Msgaihede/mtg-grimoire/commit/ddaf27e5b8a3ccfd14c467bfbfdeaf7054327455))
+* end Arena's About block on any line that is not a Name ([8f0c6a8](https://github.com/Msgaihede/mtg-grimoire/commit/8f0c6a8f5c0e90eab88087368da9f087a79b455d)), closes [#1177](https://github.com/Msgaihede/mtg-grimoire/issues/1177)
+* **fake:** drop a deleted deck's undo steps and check the step's deck on apply ([cbb9fe9](https://github.com/Msgaihede/mtg-grimoire/commit/cbb9fe92ed496f1d0e9ec2e11c7f3a5988ae41c1))
+* **fake:** drop a deleted deck's undo steps and check the step's deck on apply ([3d89f80](https://github.com/Msgaihede/mtg-grimoire/commit/3d89f80a61e93fba0cf84ec5f02ccd5ac25f7afb)), closes [#1188](https://github.com/Msgaihede/mtg-grimoire/issues/1188)
+* **fake:** keep a handler's events in the world that answered the call ([4c9ec96](https://github.com/Msgaihede/mtg-grimoire/commit/4c9ec96a10345a4ecfb89d2a5a58657bb719b487))
+* **fake:** keep a handler's events in the world that answered the call ([82fb463](https://github.com/Msgaihede/mtg-grimoire/commit/82fb463ab561fca184e4d64a577c21e7d4972a12)), closes [#1191](https://github.com/Msgaihede/mtg-grimoire/issues/1191)
+* **fake:** match collection_set_folder_many to set_entries_folder ([577146c](https://github.com/Msgaihede/mtg-grimoire/commit/577146c78475fe76e7fc0dd0113794e49ada4e82))
+* **fake:** match collection_set_folder_many to set_entries_folder ([5f30bac](https://github.com/Msgaihede/mtg-grimoire/commit/5f30bac86a310e8e723d3a3db481b8c9d580edcb)), closes [#1190](https://github.com/Msgaihede/mtg-grimoire/issues/1190)
+* **fake:** stamp deck history past the seeded "today" rows ([5a4952d](https://github.com/Msgaihede/mtg-grimoire/commit/5a4952df814a410fe1d76402f4e47fd7d892d324))
+* **fake:** stamp deck history past the seeded "today" rows ([b7614cf](https://github.com/Msgaihede/mtg-grimoire/commit/b7614cf0d2b3311f2f8a19c131fd983281325159)), closes [#1189](https://github.com/Msgaihede/mtg-grimoire/issues/1189)
+* give quick search's recent cards a query key of its own ([084255e](https://github.com/Msgaihede/mtg-grimoire/commit/084255e37346cca245561ccde3c177b3dbdfd95b))
+* give quick search's recent cards a query key of its own ([b27117a](https://github.com/Msgaihede/mtg-grimoire/commit/b27117ab3d07937b7d8742e37650169adfae69b8)), closes [#1170](https://github.com/Msgaihede/mtg-grimoire/issues/1170)
+* **import:** preview the list the press resolved, not the box as it is now ([a1c1193](https://github.com/Msgaihede/mtg-grimoire/commit/a1c11931d9ff9c5f63c0b96f7f3cdc5c319f3d40))
+* **import:** preview the list the press resolved, not the box as it is now ([6914c6e](https://github.com/Msgaihede/mtg-grimoire/commit/6914c6e13b6ef4deffab5f3b75b1a8c7647f6ed7)), closes [#1172](https://github.com/Msgaihede/mtg-grimoire/issues/1172)
+* **import:** read MTGO .dek XML by its &lt;Cards&gt; elements ([271b358](https://github.com/Msgaihede/mtg-grimoire/commit/271b358ec2ffcf007ead1cdf84700bb45ebade53))
+* **import:** read MTGO .dek XML by its &lt;Cards&gt; elements ([5bbb953](https://github.com/Msgaihede/mtg-grimoire/commit/5bbb95321ba7d8edd9abd69960030598917a74c1)), closes [#1175](https://github.com/Msgaihede/mtg-grimoire/issues/1175)
+* keep a folded wishlist line's notes and list the fold ([a633027](https://github.com/Msgaihede/mtg-grimoire/commit/a6330276f3664129472e75b6c1c33f9e62bb2f87))
+* keep a folded wishlist line's notes and list the fold ([02e8200](https://github.com/Msgaihede/mtg-grimoire/commit/02e8200f03e56cdbad0152ba23dc546afea83dc5)), closes [#1176](https://github.com/Msgaihede/mtg-grimoire/issues/1176)
+* merge-main hook matches only a real `git commit` command ([220286d](https://github.com/Msgaihede/mtg-grimoire/commit/220286df9ff9fcaae4657547455c5d183eb2436b))
+* merge-main hook matches only a real `git commit` command ([b964375](https://github.com/Msgaihede/mtg-grimoire/commit/b964375c39b7d59bbee3f407c3c4df853009a09e)), closes [#1200](https://github.com/Msgaihede/mtg-grimoire/issues/1200)
+* **relay:** sweep expired claim codes and dead rows' Patreon tokens ([0ef3f3f](https://github.com/Msgaihede/mtg-grimoire/commit/0ef3f3fbedea4d190d05a3add2481fffd8cbd7d3))
+* **relay:** sweep expired claim codes and dead rows' Patreon tokens ([1cd7222](https://github.com/Msgaihede/mtg-grimoire/commit/1cd722271fe1cf207133225e2bce028483181261)), closes [#1195](https://github.com/Msgaihede/mtg-grimoire/issues/1195)
+* **release:** build and deploy the commit release-please tagged ([e9e2b9a](https://github.com/Msgaihede/mtg-grimoire/commit/e9e2b9a2863718f0b0e036980c67c1a41be5113d))
+* **release:** build and deploy the commit release-please tagged ([da8dcbc](https://github.com/Msgaihede/mtg-grimoire/commit/da8dcbc039785d43e2aa8c5aa25b6a16385da1bc)), closes [#1197](https://github.com/Msgaihede/mtg-grimoire/issues/1197)
+* **release:** web-deploy refuses to go live when the infra Workers did not deploy ([601aa75](https://github.com/Msgaihede/mtg-grimoire/commit/601aa7516308c50bca176e53a4c91d0deceef733))
+* **release:** web-deploy refuses to go live when the infra Workers did not deploy ([209fb81](https://github.com/Msgaihede/mtg-grimoire/commit/209fb8145e83710b7d3d09f05d09545e4e095f59)), closes [#1198](https://github.com/Msgaihede/mtg-grimoire/issues/1198)
+* resume a part-failed binder import and wishlist add instead of re-writing what landed ([bd0a307](https://github.com/Msgaihede/mtg-grimoire/commit/bd0a307517a30c8e8e440dd80d95e1b6a457f69f))
+* resume a part-failed binder import and wishlist add instead of re-writing what landed ([ec5a4fe](https://github.com/Msgaihede/mtg-grimoire/commit/ec5a4fec85c065618c0cfd1617738752f2c64d78)), closes [#1173](https://github.com/Msgaihede/mtg-grimoire/issues/1173)
+* run the conflict-marker guard and post-commit merge hook on PowerShell too ([ef977c3](https://github.com/Msgaihede/mtg-grimoire/commit/ef977c3698bfd40627b769bd163a619d9db2ce73))
+* run the conflict-marker guard and post-commit merge hook on PowerShell too ([384dcd5](https://github.com/Msgaihede/mtg-grimoire/commit/384dcd51da9715723e9fd80cf4f8bf4216fea760)), closes [#1199](https://github.com/Msgaihede/mtg-grimoire/issues/1199)
+* **scanner:** give the replay's Neural session files that outlive it ([715b055](https://github.com/Msgaihede/mtg-grimoire/commit/715b055616b0cdf48743fbb03485ca4c68417e80))
+* **settings:** refresh the wishlist after clearing decks or the collection ([f86119e](https://github.com/Msgaihede/mtg-grimoire/commit/f86119e422e48a4632503c1c64e9c24f8ea3025e))
+* **settings:** refresh the wishlist after clearing decks or the collection ([04b447b](https://github.com/Msgaihede/mtg-grimoire/commit/04b447bde4c21b0359a227558f21bbbf0b13ed87)), closes [#1179](https://github.com/Msgaihede/mtg-grimoire/issues/1179)
+* **share-worker:** delete a withdrawn share's snapshots before clearing its key ([6f895c6](https://github.com/Msgaihede/mtg-grimoire/commit/6f895c6f8ba7144c7be9b939c7ae9a293c5d456c))
+* **share-worker:** delete a withdrawn share's snapshots before clearing its key ([abcd541](https://github.com/Msgaihede/mtg-grimoire/commit/abcd541ed3bc0ac689a651ff31f99a0bd1514e59)), closes [#1193](https://github.com/Msgaihede/mtg-grimoire/issues/1193)
+* **share-worker:** move lapsed shares in two set-based statements ([04365c8](https://github.com/Msgaihede/mtg-grimoire/commit/04365c8945373390db27930d63514563e7de1c3a))
+* **share-worker:** move lapsed shares in two set-based statements ([1766dec](https://github.com/Msgaihede/mtg-grimoire/commit/1766decf9392dd8155f5720e0083830e98421998)), closes [#1194](https://github.com/Msgaihede/mtg-grimoire/issues/1194)
+* **transfer:** write the commander as an MTGO SB: line ([931f1c1](https://github.com/Msgaihede/mtg-grimoire/commit/931f1c10a164d9d9fc0cb14af401384599f1f4c4))
+* **transfer:** write the commander as an MTGO SB: line ([b9ea25f](https://github.com/Msgaihede/mtg-grimoire/commit/b9ea25f7d4659dc9db08c5f4668774632792f7b5)), closes [#1180](https://github.com/Msgaihede/mtg-grimoire/issues/1180)
+* **ui:** keep Tab inside a dialog past a roving radio group ([2c9f3ba](https://github.com/Msgaihede/mtg-grimoire/commit/2c9f3bae446c6422e2a668240555af43aca2bd20))
+* **ui:** keep Tab inside a dialog past a roving radio group ([0404447](https://github.com/Msgaihede/mtg-grimoire/commit/04044475ff7ea9e0b6b22dad80eb230aaa037d4e)), closes [#1184](https://github.com/Msgaihede/mtg-grimoire/issues/1184)
+* **ui:** rename quickSearch.ts so the Windows build resolves QuickSearch ([6e96144](https://github.com/Msgaihede/mtg-grimoire/commit/6e96144f65285d5a88bfe7210a45464af454f24a))
+* write Archidekt pile headings only when Category is chosen ([81ab70d](https://github.com/Msgaihede/mtg-grimoire/commit/81ab70d566c45338613ca85bb75ea006b1b6ed54))
+* write Archidekt pile headings only when Category is chosen ([b9b1cc0](https://github.com/Msgaihede/mtg-grimoire/commit/b9b1cc0f37020560d6ca51c561a381eb28c208db)), closes [#1178](https://github.com/Msgaihede/mtg-grimoire/issues/1178)
+
 ## [0.56.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.55.0...v0.56.0) (2026-10-19)
 
 

@@ -40,6 +40,12 @@ export const DEFAULT_DIFFICULTY: PlaytestDifficulty = "medium";
  * the engine deals the same game from the same seed, which its own tests rely on and a reader
  * never wants.
  *
+ * **Each deal is a game of its own name** (`game`, drawn the same way), which every call for it
+ * carries, so the host acts on and ends only that game (issue #1141). A board that leaves while
+ * the AI is mid-turn ends its game at once — not after the turn — and that turn's answer is
+ * dropped on the host rather than put back over the next board's game; a late action or end from
+ * a board that has gone, or from another window's, never touches a newer game.
+ *
  * **Every action is sent one at a time, in the order the reader made them.** An action names
  * cards by the ids of the view it was made on (`GameCard.id` is a new id after every zone change,
  * CR 400.7), so two drags fired before the first answer would otherwise race, and the second
@@ -48,7 +54,8 @@ export const DEFAULT_DIFFICULTY: PlaytestDifficulty = "medium";
  * and the board kept as the last answer left it, so nothing is lost but that one action.
  *
  * **An answer from an older deal is dropped, not drawn** (the generation counter): a deal that
- * StrictMode's second mount replaced, an action sent before New game.
+ * StrictMode's second mount replaced, an action sent before New game. **And one still waiting its
+ * turn in the queue is never sent**: it is for a game already put away.
  *
  * **An answer here can take seconds**, not milliseconds: `playtestAct` returns only once the AI
  * has played everything up to the reader's next decision — its whole turn, often. So `busy` is
@@ -88,7 +95,8 @@ export interface PlaytestGame {
   skip: () => void;
 }
 
-function freshSeed(): number {
+/** A fresh 53-bit number: a deal's seed, and its game's name. */
+function fresh(): number {
   const words = new Uint32Array(2);
   crypto.getRandomValues(words);
   // A JS number holds 53 bits exactly; the engine takes a u64 and any of those is one.
@@ -112,6 +120,9 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
   /** Which deal the page is on; an answer from an older one is dropped rather than drawn. */
   const generation = useRef(0);
   const pending = useRef(0);
+  /** The host's name for the game on the board, or being dealt: what `act` and `playtestEnd`
+   *  carry. */
+  const game = useRef(0);
 
   /** One beat on the board: its view drawn, its facts logged and (unless skipped past) popped. */
   const apply = useCallback((entry: ReplayEntry) => {
@@ -154,8 +165,11 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
     (mine: number) => {
       const seats = JSON.parse(lineup) as [number, string][];
       const opponents = seats.map(([id, list]) => ({ deckId: id, variant: list }));
-      enqueue(() =>
-        ipc.playtestStart(deckId, variant, opponents, difficulty, freshSeed()).then(
+      const named = fresh();
+      game.current = named;
+      enqueue(() => {
+        if (mine !== generation.current) return Promise.resolve();
+        return ipc.playtestStart(named, deckId, variant, opponents, difficulty, fresh()).then(
           (step) => {
             if (mine !== generation.current) return;
             // The goldfish's deck is nobody's to shuffle: the old goldfish board's first line.
@@ -171,8 +185,8 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
           (e: unknown) => {
             if (mine === generation.current) setError(ipcError(e));
           },
-        ),
-      );
+        );
+      });
     },
     [enqueue, show, deckId, variant, lineup, difficulty],
   );
@@ -189,12 +203,15 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
   }, [request, cancel]);
 
   useEffect(() => {
-    // The ref object, not its value: the cleanup must bump the counter the next deal reads.
+    // The ref objects, not their values: the cleanup must bump the counter the next deal reads,
+    // and end the game on the board as it leaves, which New game may have changed since.
     const deals = generation;
+    const named = game;
     request(++deals.current);
     return () => {
       deals.current++;
-      void ipc.playtestEnd().catch(() => undefined);
+      // Not queued: an action the AI is still playing out ends with it, rather than first.
+      void ipc.playtestEnd(named.current).catch(() => undefined);
     };
   }, [request]);
 
@@ -204,8 +221,10 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
       // on the view the replay ends on, so that view is shown first.
       skip();
       const mine = generation.current;
-      enqueue(() =>
-        ipc.playtestAct(action).then(
+      const named = game.current;
+      enqueue(() => {
+        if (mine !== generation.current) return Promise.resolve();
+        return ipc.playtestAct(named, action).then(
           (step) => {
             if (mine !== generation.current) return;
             setError(null);
@@ -229,8 +248,8 @@ export function usePlaytestGame(picks: PlaytestPicks): PlaytestGame {
           (e: unknown) => {
             if (mine === generation.current) setError(ipcError(e));
           },
-        ),
-      );
+        );
+      });
     },
     [enqueue, show, skip],
   );

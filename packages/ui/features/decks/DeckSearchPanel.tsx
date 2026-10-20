@@ -969,29 +969,45 @@ function OpenPanel({
             // and the hook computes the word it sends, from the same function over the same
             // facts. With no slugs in hand it sends none, and the hook reads them itself —
             // which is the press a button that named no pile makes.
-            // The per-call `onSuccess` carries the row the write landed in back to the
-            // editor, which marks it for five seconds — the whole point being that the deck
-            // is over *there* and the reader is looking *here*. It is per call rather than
-            // on the mutation because the mutation is shared: `useDeck`'s own `onSuccess`
-            // answers for every surface that borrows it, including one with no editor on
-            // screen. See {@link DeckSearchPanelProps.onAdded}.
+            // The per-press answer carries the row the write landed in back to the editor,
+            // which marks it for five seconds — the whole point being that the deck is over
+            // *there* and the reader is looking *here*. It is per press rather than on the
+            // mutation because the mutation is shared: `useDeck`'s own `onSuccess` answers for
+            // every surface that borrows it, including one with no editor on screen. See
+            // {@link DeckSearchPanelProps.onAdded}.
+            //
+            // **`mutateAsync(...).then` and not `mutate(..., { onSuccess, onError })`**
+            // (issue #1162), because this button is never disabled mid-write: a `mutate`
+            // call's own callbacks belong to the *observer*, and the next press replaces them,
+            // so three quick presses were three adds, one toast and one landed mark — and a
+            // refusal of an earlier press said nothing at all. Each `mutateAsync` is a promise
+            // of its own, and its `.then` is that press's and nobody else's; the rejection arm
+            // is the handler, and the observer still carries the refusal to the line beside
+            // the panel. `useDeckDrops` makes the same choice for a multi-card drop (#553).
             onClick={() =>
-              add.mutate(
-                auto
-                  ? {
-                      cardId: card.id,
-                      typeLine: card.typeLine,
-                      oracleTags: tags,
-                      finish: wanted,
-                      quantity: 1,
-                    }
-                  : { cardId: card.id, categoryId: targetCategoryId, finish: wanted, quantity: 1 },
-                {
-                  onSuccess: (change) => {
+              add
+                .mutateAsync(
+                  auto
+                    ? {
+                        cardId: card.id,
+                        typeLine: card.typeLine,
+                        oracleTags: tags,
+                        finish: wanted,
+                        quantity: 1,
+                      }
+                    : {
+                        cardId: card.id,
+                        categoryId: targetCategoryId,
+                        finish: wanted,
+                        quantity: 1,
+                      },
+                )
+                .then(
+                  (change) => {
                     onAdded?.(change.id);
                     // **A receipt** (the owner's rule: every deliberate add to a deck says so —
                     // this panel's press is not one of the exempt three, the stepper, Quick Add
-                    // and a drag). Per call, so three quick presses are three adds and three
+                    // and a drag). Per press, so three quick presses are three adds and three
                     // toasts, each about its own copy; the cap keeps the corner from filling.
                     notify.success(
                       landsIn === null
@@ -1000,12 +1016,11 @@ function OpenPanel({
                     );
                   },
                   // Said beside the panel too; the toast is the rule's, and the inbox keeps it.
-                  onError: (error) =>
+                  (error) =>
                     notify.error(`Couldn't add “${card.name}” to the deck`, {
                       body: ipcError(error),
                     }),
-                },
-              )
+                )
             }
             className={cn(ADD_BUTTON, "hover:border-accent hover:text-accent")}
           >
