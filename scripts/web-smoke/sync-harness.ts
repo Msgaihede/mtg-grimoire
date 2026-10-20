@@ -412,6 +412,40 @@ export async function device(
     if (answer.refused !== undefined) fail(`${name}: ${command} was refused: ${answer.refused}`);
     return answer.value;
   };
+  /** Every event of this kind the browser reported for this device's targets, in order. */
+  const events = <M extends EventName>(method: M) =>
+    browser.heard.filter(
+      (message): message is Extract<ProtocolEvent, { method: M }> => message.method === method,
+    );
+  /**
+   * What this device can say about a wait that never ended: every request its targets saw fail,
+   * each with the browser's own reason — the `net::ERR_…` the engine's log flattens into "error
+   * sending request" — what its engine logged, and what an alert on its page says.
+   */
+  const trouble = async () => {
+    const failed = events("Network.loadingFailed")
+      .filter((event) => !event.params.canceled)
+      .map((event) => {
+        const url = events("Network.requestWillBeSent").find(
+          (sent) =>
+            sent.sessionId === event.sessionId && sent.params.requestId === event.params.requestId,
+        )?.params.request;
+        const cors = event.params.corsErrorStatus?.corsError;
+        return (
+          `${url?.method ?? "?"} ${url?.url ?? event.params.requestId}: ${event.params.errorText}` +
+          (cors ? ` (CORS ${cors})` : "")
+        );
+      });
+    const logged = await engine("error_log_list", { limit: 50 }).then(
+      (rows) => rows.map((row) => `${row.operation}: ${row.message}`),
+      (error) => [`(could not be read: ${error.message})`],
+    );
+    const alert = await page.evaluate<string | null>(`${ALERT} ?? null`).catch(() => null);
+    return (
+      ` Requests that failed: ${failed.join("; ") || "none"}. Logged: ${logged.join("; ") || "nothing"}.` +
+      (alert ? ` The page's alert: ${alert}` : "")
+    );
+  };
   /** Poll the engine until `done(answer)`; answers the answer. */
   const engineUntil = async <M extends keyof EngineResults>(
     what: string,
@@ -424,15 +458,13 @@ export async function device(
       const answer = await engine(command);
       if (done(answer)) return answer;
       if (performance.now() > stop) {
-        fail(`${name}: ${what} — never happened. ${command} answers ${JSON.stringify(answer)}`);
+        fail(
+          `${name}: ${what} — never happened. ${command} answers ${JSON.stringify(answer)}.` +
+            (await trouble()),
+        );
       }
     }
   };
-  /** Every event of this kind the browser reported for this device's targets, in order. */
-  const events = <M extends EventName>(method: M) =>
-    browser.heard.filter(
-      (message): message is Extract<ProtocolEvent, { method: M }> => message.method === method,
-    );
   /** What the page was told about live sync since it started listening (`listenToSync`). */
   const told = () => page.evaluate<Tellings>("window.__sync");
 
@@ -556,6 +588,7 @@ export async function device(
     problems,
     engine,
     engineUntil,
+    trouble,
     events,
     told,
     go,
