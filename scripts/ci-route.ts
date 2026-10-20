@@ -124,12 +124,16 @@ export const ARMS = [
   // pin), so a change to any of them runs those tests. **Above the prose arm**, where
   // `release.yml` sat until the first test existed. `android-emulator.yml` (phase 4, step 4.5)
   // measures the light app's first run on an emulator and gates nothing — **not `android`**,
-  // because it builds its own APK, and a change to it is proved by its own run.
+  // because it builds its own APK, and a change to it is proved by its own run. The two Neural
+  // training workflows (2026-10-20) train on Modal and deliver by pull request; neither builds
+  // anything this gate does, and the same fences read them.
   {
     match: [
       ".github/workflows/release.yml",
       ".github/workflows/scanner-bundle.yml",
       ".github/workflows/android-emulator.yml",
+      ".github/workflows/neural-train.yml",
+      ".github/workflows/neural-deliver.yml",
       ".github/dependabot.yml",
     ],
     jobs: ["frontend"],
@@ -169,6 +173,14 @@ export const ARMS = [
   // build's pin on the four files (`apps/light/vite.config.ts`), and `assets.test.ts` reads it.
   // **Above the prose arm**, whose `*.md` would take the README and skip the build that reads it.
   { match: ["crates/card-neural/models/*"], jobs: CORE_SIDE },
+
+  // **The Neural training pipeline** (2026-10-20): Python that runs on Modal and on the two
+  // `neural-*.yml` workflows' runners, and nowhere in this gate — no crate compiles it, no job
+  // here has Python, and no test reads it (the census would send a file a test read to that
+  // test's job, and fail here first). Its own unit tests run where it runs: `neural-deliver.yml`'s
+  // `build` job runs the delivery's before it builds. **Above `crates/*`**, which would send a
+  // Python change through every Rust build to prove nothing about it.
+  { match: ["crates/card-neural/train/*"], jobs: [] },
 
   // Affects no job. Nothing here is compiled, linted or tested: `eslint .` never sees a `.md`,
   // and no test on either side reads one (`ci-route.test.ts` holds that to the census). **Keep

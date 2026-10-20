@@ -20,14 +20,17 @@ app's own session (`docs/reference/card-scanner.md` §10 _Neural_).
 
 ## Where they came from, and how to make them again
 
-The training code, the runs and the datasets live in the scanner lab, outside this repository
-(`E:\mtg-scanner`: `spike\train\` for the code, `data\runs\` for the runs, `docs\` for the
-write-up):
+These were trained in the scanner lab, outside this repository (`E:\mtg-scanner`: `data\runs\`
+for the runs, `docs\` for the write-up). The code that trained them is now
+[`../train/`](../train/README.md), and the monthly pipeline runs it on a Modal GPU
+(`docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`); the lab keeps the experiments.
+By hand, from `train/`:
 
 1. **Data**: `scryfall_fetch.py` mirrors Scryfall's bulk `default_cards` and every paper face's
-   `normal` scan; `looks.py` groups printings into looks.
-2. **Embedder**: `qd_train.py` (30 epochs, ~55 min on an RTX 4070 Ti) → `qd_export.py`, which
-   writes `embedder.onnx` and the gallery as `gallery.head.matrix` + `gallery.json`.
+   `normal` scan, incrementally; `looks.py` groups printings into looks.
+2. **Embedder**: `qd_train.py` (30 epochs, ~55 min on an RTX 4070 Ti) →
+   `qd_export.py --head-only`, which writes `embedder.onnx` and the gallery as
+   `gallery.head.matrix` + `gallery.json`.
 3. **Detector**: `qd_detect_train.py` (30 000 steps) → `qd_detector.py export`.
 4. **This folder**: copy the two ONNX files here, and turn the gallery into `gallery.bin`:
 

@@ -1,0 +1,229 @@
+name: neural-deliver
+
+# Turns a finished Neural training run (`neural-train.yml`) into a pull request: every six hours,
+# and on dispatch. A run on the `card-neural` Volume whose `runs/<run>/DONE.json` says
+# `"status": "ok"` and that has no `DELIVERED.json` is delivered — one a workflow run, the oldest
+# first, or just the one a dispatch names: its files downloaded, `gallery.bin` built, the four rows
+# of `crates/card-neural/models/README.md` and `training.json` rewritten, `cargo test -p
+# card-neural` run on them, a branch `neural-models/<run>` pushed and a pull request opened into
+# `main` — then `DELIVERED.json` written, so it is delivered once. A failed run is reported in the
+# summary, turns the workflow run red once, and gets no pull request. A smoke run is built in a
+# scratch copy and its would-be pull request shown; it never gets one.
+#
+# The logic is `crates/card-neural/train/deliver.py`, which runs by hand too (`deliver.py run`,
+# `--dry-run`, `--from-dir`); this file wires its four commands to the secrets and toolchains.
+#
+# **Four jobs, so that no token shares a job with a build** (`release.yml`'s rule): `find` holds
+# the Modal token and downloads; `build` holds nothing and runs cargo — a build script of any
+# dependency is code from crates.io; `publish` holds the pull request token and runs git and `gh`,
+# no build and no install; `mark` holds the Modal token again and writes `DELIVERED.json`. What
+# passes between them is two artifacts, the run's files and the delivery.
+#
+# **The pull request token**: `NEURAL_PR_TOKEN` when it is set, a fine-grained token with
+# *Contents* and *Pull requests* read/write on this repository — a pull request opened with the
+# workflow's own `GITHUB_TOKEN` starts no workflow, so CI would not run on it. Without it the job
+# falls back to `GITHUB_TOKEN` (which needs *Allow GitHub Actions to create and approve pull
+# requests* in the repository's settings) and says so in the summary.
+
+on:
+  schedule:
+    - cron: "23 */6 * * *" # every six hours, off the hour
+  workflow_dispatch:
+    inputs:
+      run:
+        description: Deliver just this run (its name on the Volume, e.g. 2026-11); empty for the oldest finished one
+        type: string
+        required: false
+        default: ""
+
+# Nothing at the workflow level; each job names its own, and only `publish` may write.
+permissions: {}
+
+concurrency:
+  group: neural-deliver
+  cancel-in-progress: false
+
+jobs:
+  find:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.find.outputs.run }}
+      smoke: ${{ steps.find.outputs.smoke }}
+      failed: ${{ steps.find.outputs.failed }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Handed `true`/`false`, never the values.
+      - name: Are the Modal secrets set?
+        id: ask
+        env:
+          HAS_ID: ${{ secrets.MODAL_TOKEN_ID != '' }}
+          HAS_SECRET: ${{ secrets.MODAL_TOKEN_SECRET != '' }}
+        run: |
+          if [ "$HAS_ID" = true ] && [ "$HAS_SECRET" = true ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_ID" = false ] && [ "$HAS_SECRET" = false ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "No Modal account here (\`MODAL_TOKEN_ID\` and \`MODAL_TOKEN_SECRET\` are not set): nothing to deliver. \`crates/card-neural/train/README.md\` has the one-time setup." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**Only one of \`MODAL_TOKEN_ID\` and \`MODAL_TOKEN_SECRET\` is set.** Set both, or neither." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.ask.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.ask.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Modal's client, at the pinned version
+        if: steps.ask.outputs.ready == 'true'
+        run: python -m pip install --disable-pip-version-check -r crates/card-neural/train/requirements-ci.txt
+
+      # Lists every run in the summary, marks a newly failed one, and downloads the one to deliver.
+      - name: Find a finished run
+        id: find
+        if: steps.ask.outputs.ready == 'true'
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          RUN: ${{ inputs.run }}
+        run: python crates/card-neural/train/deliver.py find --run "$RUN" --out delivery-in
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.find.outputs.run != ''
+        with:
+          name: neural-run
+          path: delivery-in/
+          retention-days: 7
+          if-no-files-found: error
+
+  # No secret here: this is the job that runs cargo.
+  build:
+    needs: find
+    if: needs.find.outputs.run != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `rust-toolchain.toml`'s pin, never `stable` — see that file.
+      - uses: ./.github/actions/rust-toolchain
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: neural-run
+          path: delivery-in
+
+      # The runner's own Python: the delivery's scripts use the standard library alone.
+      - name: The delivery's own tests
+        run: python3 -B -m unittest discover -s crates/card-neural/train/tests -p "test_deliver*.py"
+
+      # `gallery.bin` by `build-gallery`, the README's four rows and `training.json`, then
+      # `cargo test -p card-neural` on the files — in the checkout for a real run, in a scratch
+      # copy for a smoke run. The pull request's body lands in the summary.
+      - name: Build the delivery
+        run: python3 -B crates/card-neural/train/deliver.py build --work delivery-in --out delivery-out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: neural-delivery
+          path: delivery-out/
+          retention-days: 7
+          if-no-files-found: error
+
+  # The pull request token, and no build: git and `gh` over the files `build` made. **Only from
+  # `main`**: a dispatch from another branch would carry that branch's commits into the pull
+  # request. A smoke run never gets here.
+  publish:
+    needs: [find, build]
+    if: needs.find.outputs.smoke != 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      pr: ${{ steps.publish.outputs.pr }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: neural-delivery
+          path: delivery-out
+
+      - name: Push the branch and open the pull request
+        id: publish
+        env:
+          PR_TOKEN: ${{ secrets.NEURAL_PR_TOKEN || github.token }}
+          HAS_PAT: ${{ secrets.NEURAL_PR_TOKEN != '' }}
+        run: python3 -B crates/card-neural/train/deliver.py publish --work delivery-out
+
+  # Once the pull request is open (or a smoke run is checked): `DELIVERED.json`, so the run is not
+  # delivered again. A failure before this leaves the run to the next delivery, which finds its
+  # pull request open rather than opening a second.
+  mark:
+    needs: [find, build, publish]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.find.outputs.smoke == 'true')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Modal's client, at the pinned version
+        run: python -m pip install --disable-pip-version-check -r crates/card-neural/train/requirements-ci.txt
+
+      - name: Mark the run delivered
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          RUN: ${{ needs.find.outputs.run }}
+          PR: ${{ needs.publish.outputs.pr }}
+          SMOKE: ${{ needs.find.outputs.smoke }}
+        run: python crates/card-neural/train/deliver.py mark --run "$RUN" --pr "$PR" --smoke "$SMOKE"
+
+  # A failed run turns the workflow run red, once: `find` has already said why in its summary,
+  # and marked it, so the next delivery does not report it again.
+  failed:
+    needs: find
+    if: needs.find.outputs.failed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: A training run failed
+        run: |
+          echo "::error title=Neural training run failed::A training run failed and was not delivered. The find job's summary names it and says why."
+          exit 1

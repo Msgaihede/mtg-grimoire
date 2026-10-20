@@ -4,9 +4,11 @@ Two small CNNs and a gallery of looks, on `rten`: what the Scanner's **Neural** 
 (`card-scanner`'s `neural` feature calls it; `docs/superpowers/plans/2026-10-20-neural-scan-mode.md`
 is the contract). The mode and its replay are
 [`docs/reference/card-scanner.md`](../../docs/reference/card-scanner.md) §10 _Neural_. **The
-development work is not in this repository** (the owner's choice, 2026-10-20): the spike, the
-training code, the runs and the research write-up live in the scanner lab, `E:\mtg-scanner`
-(its `README.md` maps it). Change the model files from there, by `models/README.md`'s recipe.
+training that remakes the model files is here**, in `train/` (§5): the monthly pipeline on a
+Modal GPU (`docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`). **The development
+work is not** (the owner's choice, 2026-10-20): the spike, the experiments, the replay on the
+readers' scans, the runs and the research write-up live in the scanner lab, `E:\mtg-scanner`
+(its `README.md` maps it).
 
 For global repo workflow, style, and testing conventions, refer to:
 
@@ -49,3 +51,17 @@ from `neural.json`, not from code.
 --features cli,bundled -- -D warnings`; it is a workspace member, so `pnpm verify` runs both
 without the features. `probe` runs the files on pictures:
 `cargo run --release -p card-neural --features cli --bin probe -- frame.jpg …`.
+
+## 5. Training (`train/`, Python)
+
+- **The production subset of the lab's `spike\train\`**, the code that trained the shipped
+  files; `train/README.md` has each script's command line, the dataset and run layouts, and a
+  local smoke run. **The recipe is the shipped one** — argparse defaults are the shipped runs'
+  values; a change to epochs, rates, augmentations or scene contexts belongs in the lab first,
+  measured on the readers' scans, because `neural.json`'s thresholds were tuned on this pair.
+- Differences from the lab, and only these: scans sharded as `normal/<2>/<id>.jpg` (the flat
+  layout still read), an incremental `scryfall_fetch.py`, a resumable `checkpoint.pt`
+  (preemptible GPUs), `--workers`/`--prefetch`, a final `{"done": true}` line, and
+  `qd_export.py --head-only`. Experiments (readers' crops, oracle, folds) stay in the lab.
+- `python -m unittest discover crates/card-neural/train/tests` — no GPU, no network; not part of
+  `pnpm verify`.

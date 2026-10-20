@@ -1,0 +1,177 @@
+name: neural-train
+
+# Retrains the Neural scanner's two networks on a Modal GPU: once a month, and on dispatch. This
+# job deploys the Modal app `card-neural-train` from the triggering commit
+# (`crates/card-neural/train/modal_app.py`), spawns its `pipeline` (`launch.py`) and returns at
+# once; the run goes on on Modal for an hour or two — Scryfall's images refreshed on the
+# `card-neural` Volume, the embedder and the detector trained side by side on L4s — and ends in
+# `runs/<run>/DONE.json`, which `neural-deliver.yml` turns into a pull request. The plan is
+# docs/superpowers/plans/2026-10-20-neural-training-pipeline.md; the owner's setup is
+# crates/card-neural/train/README.md, *Running it from GitHub*.
+#
+# **Every run is held to $10** (the owner's limit, 2026-10-20): a dispatch asking for more is
+# refused here, before anything is deployed, and `budget.py` holds the run to what it was given
+# on Modal — each stage's container time is charged as it runs, and a stage that would pass its
+# share is stopped. The Modal workspace's own spending limit is the backstop.
+#
+# **Run names**: `YYYY-MM` for the monthly run, `YYYY-MM-DD-HHMM` (UTC) for a dispatch, with
+# `-smoke` after a smoke run's. A re-run of a monthly job has the same name, and `pipeline`
+# resumes that run rather than starting another.
+#
+# No Modal secrets (a fork, a repository not set up): nothing deployed, a line in the summary,
+# green. One of the two without the other is a mistake, and fails.
+
+on:
+  schedule:
+    - cron: "41 3 1 * *" # 03:41 UTC on the 1st: monthly, off the hour, before Europe's morning
+  workflow_dispatch:
+    inputs:
+      detector:
+        description: Retrain the corner detector too (off keeps the current detector.onnx)
+        type: boolean
+        default: true
+      cpu:
+        description: Physical cores for each training container (1 to 64)
+        type: number
+        default: 16
+      memory_gib:
+        description: Memory for each training container, in GiB (4 to 256)
+        type: number
+        default: 24
+      budget_usd:
+        description: The run's spending limit in US dollars (10 at most)
+        type: number
+        default: 10
+      smoke:
+        description: A tiny run (one epoch, 300 detector steps) that proves the plumbing for cents; never a pull request
+        type: boolean
+        default: false
+
+# Nothing at the workflow level and a read on the job, `release.yml`'s shape. Actions are pinned
+# by SHA and the checkout keeps no token, for that file's reasons. What this job holds is the
+# Modal token, in the two steps that call Modal.
+permissions: {}
+
+concurrency:
+  group: neural-train
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Handed `true`/`false`, never the values.
+      - name: Are the Modal secrets set?
+        id: ask
+        env:
+          HAS_ID: ${{ secrets.MODAL_TOKEN_ID != '' }}
+          HAS_SECRET: ${{ secrets.MODAL_TOKEN_SECRET != '' }}
+        run: |
+          if [ "$HAS_ID" = true ] && [ "$HAS_SECRET" = true ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_ID" = false ] && [ "$HAS_SECRET" = false ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "No Modal account here (\`MODAL_TOKEN_ID\` and \`MODAL_TOKEN_SECRET\` are not set): nothing deployed or trained. \`crates/card-neural/train/README.md\` has the one-time setup." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "**Only one of \`MODAL_TOKEN_ID\` and \`MODAL_TOKEN_SECRET\` is set.** Set both, or neither; nothing was deployed." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      # A schedule has no inputs: each is empty there and takes the dispatch's default. Every
+      # value reaches the shell through `env:`, never written into the script.
+      - name: Name the run and check its arguments
+        id: args
+        if: steps.ask.outputs.ready == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          DETECTOR: ${{ inputs.detector }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY_GIB: ${{ inputs.memory_gib }}
+          BUDGET_USD: ${{ inputs.budget_usd }}
+          SMOKE: ${{ inputs.smoke }}
+        run: |
+          set -euo pipefail
+          detector=${DETECTOR:-true}
+          cpu=${CPU:-16}
+          memory=${MEMORY_GIB:-24}
+          budget=${BUDGET_USD:-10}
+          smoke=${SMOKE:-false}
+          refuse() {
+            echo "**Refused: $1** Nothing was deployed or started." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          for value in "$cpu" "$memory" "$budget"; do
+            [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]] || refuse "\`$value\` is not a number."
+          done
+          awk -v b="$budget" 'BEGIN { exit !(b > 0 && b <= 10) }' || refuse "a budget of \$$budget — a run may spend \$10 at most."
+          awk -v c="$cpu" 'BEGIN { exit !(c >= 1 && c <= 64) }' || refuse "$cpu cores — 1 to 64."
+          awk -v m="$memory" 'BEGIN { exit !(m >= 4 && m <= 256) }' || refuse "$memory GiB — 4 to 256."
+          if [ "$EVENT" = schedule ]; then run=$(date -u +%Y-%m); else run=$(date -u +%Y-%m-%d-%H%M); fi
+          if [ "$smoke" = true ]; then run="$run-smoke"; fi
+          {
+            echo "run=$run"
+            echo "detector=$detector"
+            echo "cpu=$cpu"
+            echo "memory=$memory"
+            echo "budget=$budget"
+            echo "smoke=$smoke"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.ask.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.ask.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Modal's client, at the pinned version
+        if: steps.ask.outputs.ready == 'true'
+        run: python -m pip install --disable-pip-version-check -r crates/card-neural/train/requirements-ci.txt
+
+      # The app is this commit's: the image's packages, the recipe and the budget guard.
+      - name: Deploy the training app
+        if: steps.ask.outputs.ready == 'true'
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+        run: modal deploy --tag "${GITHUB_SHA::12}" crates/card-neural/train/modal_app.py
+
+      - name: Start the run
+        if: steps.ask.outputs.ready == 'true'
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+          RUN: ${{ steps.args.outputs.run }}
+          DETECTOR: ${{ steps.args.outputs.detector }}
+          CPU: ${{ steps.args.outputs.cpu }}
+          MEMORY_GIB: ${{ steps.args.outputs.memory }}
+          BUDGET_USD: ${{ steps.args.outputs.budget }}
+          SMOKE: ${{ steps.args.outputs.smoke }}
+        run: |
+          set -euo pipefail
+          args=(--run "$RUN" --cpu "$CPU" --memory-gib "$MEMORY_GIB" --budget-usd "$BUDGET_USD" --git-sha "$GITHUB_SHA")
+          if [ "$DETECTOR" != true ]; then args+=(--no-detector); fi
+          if [ "$SMOKE" = true ]; then args+=(--smoke); fi
+          python crates/card-neural/train/launch.py "${args[@]}" | tee launch.json
+          call=$(tail -n 1 launch.json | jq -er .call_id)
+          if [ "$DETECTOR" = true ]; then nets="the embedder and the detector"; else nets="the embedder (the detector stays)"; fi
+          {
+            echo "### Neural training: run \`$RUN\`"
+            echo
+            echo "Started on Modal from \`${GITHUB_SHA::12}\` (app \`card-neural-train\`, call \`$call\`): $nets, each on one L4 with $CPU cores and $MEMORY_GIB GiB, within \$$BUDGET_USD in all. It runs for an hour or two; this job does not wait."
+            echo
+            if [ "$SMOKE" = true ]; then
+              echo "**A smoke run**: one epoch and 300 detector steps, for cents. \`neural-deliver.yml\` builds it in a scratch copy and shows the pull request it would open — it never opens one."
+            else
+              echo "**Delivery**: \`neural-deliver.yml\` looks every six hours. Once \`runs/$RUN/DONE.json\` on the \`card-neural\` Volume says \`ok\`, it opens the pull request *feat(scanner): retrain the Neural models ($RUN)*; dispatch it with \`run: $RUN\` to look sooner. A failed run is reported there, red, with its reason."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
