@@ -1576,6 +1576,13 @@ printing is in *this* device's card database is a fact about this device, and tw
 synced on different days can honestly disagree — each clears its own flag when its own corpus
 catches up.
 
+**Its own flag, and no other** (issue #1122, 2026-10-20). Until then the clear arm nulled every
+`needs_review` on a row whose printing resolved, sparing only Scryfall's delete sentence — so
+`apply::RESURRECTED` vanished at the next daily ingest, uncaptured and so without a trace. The
+sweep now clears only its own "not in the card database" sentence and `merge`'s "not in the card
+database yet" note, and a repoint in `merge` overwrites only `reconcile`'s own sentences
+(`replaceable_flag`).
+
 `Suppressed` is a second shape of the same guard, for a **mutable** connection: `suppressed()`
 takes `&Connection` and `reconcile::apply` needs `&mut` for its `Transaction`, which the borrow
 checker will not let a caller hold at once. It owns the `&mut` and lends it back, and its `Drop`
