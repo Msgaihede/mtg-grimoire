@@ -304,6 +304,8 @@ impl FrameOptions {
             // The same shape as the OCR tier, and for the same reason — an expensive tier
             // stands down when the cheap one has settled it.
             query_insets: if settled { Vec::new() } else { insets.to_vec() },
+            // Only a page with its pipeline panel open draws them (#1136).
+            trace_images: self.stages,
             ..Default::default()
         }
     }
@@ -1828,11 +1830,11 @@ impl Session {
                     timings.total_ms += rectify_ms;
                     v.timings = Some(timings);
                     v.candidates_examined = Some(t.candidates.len());
-                    if opts.stages {
+                    if let Some(i) = &t.images {
                         v.stages = Some(Stages {
-                            binary: preview_uri(&t.binary, 300, 62),
-                            contours: preview_uri(&t.contours, 300, 62),
-                            quad: preview_uri(&t.quads, 300, 62),
+                            binary: preview_uri(&i.binary, 300, 62),
+                            contours: preview_uri(&i.contours, 300, 62),
+                            quad: preview_uri(&i.quads, 300, 62),
                         });
                     }
                 }
@@ -1901,11 +1903,11 @@ impl Session {
                     v.rejected_cardness = t.candidates.first().and_then(|c| c.cardness);
                     v.timings = Some(t.timings);
                     v.candidates_examined = Some(t.candidates.len());
-                    if opts.stages {
+                    if let Some(i) = &t.images {
                         v.stages = Some(Stages {
-                            binary: preview_uri(&t.binary, 300, 62),
-                            contours: preview_uri(&t.contours, 300, 62),
-                            quad: preview_uri(&t.quads, 300, 62),
+                            binary: preview_uri(&i.binary, 300, 62),
+                            contours: preview_uri(&i.contours, 300, 62),
+                            quad: preview_uri(&i.quads, 300, 62),
                         });
                     }
                 }
