@@ -3283,13 +3283,20 @@ before that, or a receiver whose own clock is behind. **The pusher defers rather
 its trip still pulls and acks — **and rebases once its clock is set right** (`client::rebase`):
 `sync_clock` only ratchets forward, so one write under a date a year ahead stamps every later op a
 year ahead too, and without the rebase that device could send nothing for a year. Pending ops
-stamped past `base` — the latest of the wall clock, every peer's watermark and this device's own
-pushed stamps — are re-stamped from it with successive ticks in one transaction and the push goes
-again. It converges because nobody has seen those ops, their order among themselves is kept, and
-they still sort after everything this device observed or sent, so every last-writer-wins decision
-already made here is the one every other device makes. **It refuses when `base` is itself a day
-ahead** — a future stamp already reached the group through an older relay — and then the device
-waits until real time reaches it, which is the one case `error_log` still tells it to wait out.
+stamped past `base` — the latest of the wall clock, every peer's watermark, this device's own
+pushed stamps, and its pending ops a lost answer may have delivered — are re-stamped from it with
+successive ticks in one transaction and the push goes again. **A push is at-least-once** (issue
+#1119): a 2xx lost on its way back leaves ops pending that the relay holds, and one of those
+restamped would be on the relay under two stamps — a peer applying the old one first skips the new
+one and everything restamped under it, and one seeing both applies its counter deltas twice. So
+`push` raises `client::OFFERED` (`sync_state.push_offered`, the highest `seq` ever posted) before
+each request, and a pending op at or below it is part of `base` unless it is stamped more than a
+day past the wall clock, which the relay refused when it was offered. It converges because nobody
+has seen those ops, their order among themselves is kept, and they still sort after everything this
+device observed or sent, so every last-writer-wins decision already made here is the one every
+other device makes. **It refuses when `base` is itself a day ahead** — a future stamp already
+reached the group through an older relay — and then the device waits until real time reaches it,
+which is the one case `error_log` still tells it to wait out.
 
 **An envelope claiming an epoch above the relay's is not an epoch hold** (issue #546, item 3).
 `pull` used to hold for any `envelope.epoch > group.epoch`, and the relay stores `epoch` exactly as

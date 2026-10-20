@@ -197,6 +197,25 @@ pub const PULL_PAGE_ROWS: usize = 256;
 /// among the keys a change of group forgets, and need not be: a stray one costs one refresh.
 pub(crate) const UNANNOUNCED: &str = "pull_unannounced";
 
+/// The highest `seq` [`push`] has ever offered the relay, **raised before the request goes**
+/// (issue #1119).
+///
+/// **Why it exists.** A push is at-least-once: `pushed_at` is stamped only once the relay's answer
+/// has been read, so a 2xx lost on the way back — the connection dropped, a receipt that would not
+/// parse — leaves ops pending here that the relay already holds. [`rebase`] restamps pending ops,
+/// and one of those restamped would be on the relay twice, under two stamps: a peer that applied
+/// the old one first skips the new one *and* every op restamped under it, and a peer that sees both
+/// applies the same counter delta twice. This says which pending ops may be on the relay, so the
+/// rebase can leave them where they are.
+///
+/// **A mark and not a column**, because a push offers the outbox oldest first and stops at its
+/// first failure: every op still pending at or below this `seq` was in a post whose receipt this
+/// device never read, and no op above it was ever in one. It is never lowered — an answer that
+/// says the batch was not stored proves nothing of the posts before it — and it is not among the
+/// keys a change of group forgets, and need not be: what it keeps from a restamp is only an op
+/// already inside the relay's bound ([`rebase`]), which had no reason to move.
+const OFFERED: &str = "push_offered";
+
 /// A waiting hold is released once it has been seen on this many pulls...
 const WAITING_PULLS: i64 = 3;
 /// ...spanning at least this many seconds. A parent its sender owed — a first contact pushes a
@@ -1699,6 +1718,23 @@ fn stale_twice(db: &impl Store, url: &str) -> String {
     message
 }
 
+/// The [`OFFERED`] mark, `0` before the first push.
+fn offered(conn: &Connection) -> i64 {
+    get_state(conn, OFFERED)
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Raise [`OFFERED`] to the last of `seqs`, which are about to be posted.
+fn offer(conn: &Connection, seqs: &[i64]) -> Result<(), String> {
+    match seqs.last() {
+        Some(&last) if last > offered(conn) => {
+            set_state(conn, OFFERED, &last.to_string()).map_err(|e| e.to_string())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Mark `seqs` handed over.
 fn stamp_pushed(conn: &Connection, seqs: &[i64]) -> Result<(), String> {
     let holes: Vec<String> = (1..=seqs.len()).map(|n| format!("?{n}")).collect();
@@ -1769,13 +1805,16 @@ enum Rebase {
 ///   past the wall clock. When it is not, the wall clock itself is what is ahead
 ///   ([`Rebase::StillAhead`]), and there is nothing earlier to stamp with.
 /// * **Nothing this device has sent or received is that far ahead.** The base is the latest of the
-///   wall clock, the highest stamp it has observed from any device (its `sync_peers` watermarks)
-///   and the highest of its own ops with `pushed_at` set. When the base is itself too far ahead —
-///   a future-stamped op reached a relay that did not refuse it yet, or a peer's did and applied
-///   here, or an op too large to send was stamped over — it refuses ([`Rebase::Pinned`]): what it
-///   wrote has to stay after the base, so no stamp it could take would pass the relay's bound, and
-///   restamping it *below* an op the group already holds would put this device's own history in
-///   one order here and another on every other device. That is divergence, and waiting is not.
+///   wall clock, the highest stamp it has observed from any device (its `sync_peers` watermarks),
+///   the highest of its own ops with `pushed_at` set, and the highest of its pending ops **the
+///   relay may already hold** — offered in a post whose answer never arrived ([`OFFERED`]) and
+///   stamped inside the relay's bound, so a relay could have taken it. When the base is itself
+///   too far ahead — a future-stamped op reached a relay that did not refuse it yet, or a peer's
+///   did and applied here, or an op too large to send was stamped over — it refuses
+///   ([`Rebase::Pinned`]): what it wrote has to stay after the base, so no stamp it could take
+///   would pass the relay's bound, and restamping it *below* an op the group already holds would
+///   put this device's own history in one order here and another on every other device. That is
+///   divergence, and waiting is not.
 ///
 /// # What it does, in one transaction
 ///
@@ -1786,8 +1825,14 @@ enum Rebase {
 ///
 /// # Why it converges
 ///
-/// * **Nobody has seen the old stamps.** Only pending ops move, and a pending op has never left
-///   this device, so there is no copy anywhere for its new stamp to disagree with.
+/// * **Nobody has seen the old stamps.** Only pending ops above the base move, and none of them
+///   can be on the relay: one never offered has never left this device, and one offered whose
+///   answer was lost (`push` is at-least-once) is in the base unless it is stamped more than a
+///   day past the wall clock — which the relay, whose clock was no later than this one's is now,
+///   refused when it was offered. So there is no copy anywhere for its new stamp to disagree with.
+///   (Issue #1119: restamping a delivered op put it on the relay twice — a peer that applied the
+///   old stamp first skipped the new one and every op restamped under it, and one that saw both
+///   applied its counter deltas twice.)
 /// * **This device's own order is kept.** Its stamps rise with `seq` — the clock follows every op
 ///   it stamps — so the ops after the base are the outbox's tail. The ticks keep their order among
 ///   themselves and put them after every other op this device wrote: the pending ones left where
@@ -1803,22 +1848,28 @@ enum Rebase {
 ///   over it, the pending op would win on every other device: the same row, two answers. At or
 ///   below the base it is inside the relay's bound already, so it has no reason to move.
 fn rebase(conn: &Connection, device: &str) -> Result<Rebase, String> {
-    let latest = |sql: &str| -> Result<Option<(i64, i64)>, String> {
-        conn.query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
-            .optional()
-            .map_err(|e| e.to_string())
-    };
+    let latest =
+        |sql: &str, params: &[&dyn rusqlite::ToSql]| -> Result<Option<(i64, i64)>, String> {
+            conn.query_row(sql, params, |r| Ok((r.get(0)?, r.get(1)?)))
+                .optional()
+                .map_err(|e| e.to_string())
+        };
     let wall = wall_ms(conn)?;
-    let clock = latest("SELECT ms, ctr FROM sync_clock WHERE id = 1")?;
+    let clock = latest("SELECT ms, ctr FROM sync_clock WHERE id = 1", &[])?;
     if !clock.is_some_and(|(ms, _)| hlc::too_far_ahead(ms, wall)) {
         return Ok(Rebase::StillAhead);
     }
     let observed = latest(
         "SELECT last_ms, last_ctr FROM sync_peers ORDER BY last_ms DESC, last_ctr DESC LIMIT 1",
+        &[],
     )?;
+    // Taken, or offered in a post whose answer never came and stamped where the relay could have
+    // taken it — `hlc_ms <= ?2` is `!hlc::too_far_ahead(hlc_ms, wall)`.
     let sent = latest(
-        "SELECT hlc_ms, hlc_ctr FROM sync_ops WHERE pushed_at IS NOT NULL
+        "SELECT hlc_ms, hlc_ctr FROM sync_ops
+          WHERE pushed_at IS NOT NULL OR (seq <= ?1 AND hlc_ms <= ?2)
           ORDER BY hlc_ms DESC, hlc_ctr DESC LIMIT 1",
+        &[&offered(conn), &wall.saturating_add(hlc::MAX_AHEAD_MS)],
     )?;
     let base = [Some((wall, 0)), observed, sent]
         .into_iter()
@@ -1871,6 +1922,8 @@ fn rebase(conn: &Connection, device: &str) -> Result<Rebase, String> {
 /// **`pushed_at` is stamped only once the relay has taken the op**, so the next attempt sends the
 /// same ops and a network blip costs a retry rather than the reader's changes. The far side's
 /// second receipt is free: [`apply`]'s `sync_peers` watermark drops an op it has already applied.
+/// **Free only while the op keeps its stamp**, so each chunk raises [`OFFERED`] before it is posted
+/// and [`rebase`] does not restamp what an unanswered post may have delivered.
 ///
 /// **Cut by bytes as well as by count** ([`wire::batches`]), so a chunk's rows are found by a
 /// running offset into the outbox: slice `i` no longer starts at `i * wire::BATCH`, and computing
@@ -1941,6 +1994,8 @@ pub async fn push(db: &impl Store, base: &str, token: &str) -> Result<Pushed, St
                 })?;
                 continue;
             }
+            // Before the request, so a 2xx lost on its way back is still known to [`rebase`].
+            db.with(|conn| offer(conn, taken))?;
             let mut landed = post_ops(db, base, token, &group, &device, chunk).await;
             if matches!(landed, Err(Refusal::Stale)) {
                 if caught_up {
