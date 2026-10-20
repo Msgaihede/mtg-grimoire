@@ -238,6 +238,26 @@ it("puts the tag rail and the type-ahead out of date when a refresh lands", asyn
   });
 });
 
+/**
+ * Issue #1183: a name typed while the taxonomy was still downloading resolved to `null`, and the
+ * search failed closed on it. The resolve is answered from the table this refresh rewrites, so it
+ * goes out of date with the rest — or the chip reads "unknown" and the wall stays empty until
+ * the reader edits the query.
+ */
+it("re-resolves the tags a reader already typed when a refresh lands", async () => {
+  client.setQueryData(["tags", "resolve", "otag:ramp"], [null]);
+  const { result } = renderHook(() => useOracleTagProgress(), { wrapper });
+  await listening();
+  await waitFor(() => expect(result.current.status).not.toBeNull());
+  expect(client.getQueryState(["tags", "resolve", "otag:ramp"])?.isInvalidated).toBe(false);
+
+  emit({ phase: "done", done: 0, total: 0 });
+
+  await waitFor(() =>
+    expect(client.getQueryState(["tags", "resolve", "otag:ramp"])?.isInvalidated).toBe(true),
+  );
+});
+
 /** One registration per call, which is why `AppShell` is the only caller and the ribbon reads
  *  the result rather than starting a second subscription. */
 it("registers exactly one listener per call", async () => {
@@ -262,7 +282,6 @@ it("stops listening when it unmounts", async () => {
  * `useSyncProgress.test.ts`. The race moved to `packages/ui/lib/core/core.test.ts` along with the
  * subscribe itself.
  */
-
 
 /**
  * Outside a Tauri window (a plain `vite dev`, a story) the registration never lands —

@@ -33,5 +33,12 @@ the previous records.
 
 Installing an update through the app also writes a full ZIP to `data/backups/` before
 replacing the portable executable or starting the installer. If writing the backup fails,
-the update does not proceed. These automatic ZIPs are retained for the reader to manage;
-an update installed outside the app does not pass through this hook.
+the update does not proceed. An update installed outside the app does not pass through
+this hook.
+
+Automatic ZIPs are named `mtg-grimoire-{reason}-{ns}.zip` (`before-update`,
+`before-restore`). After each one is written, only the newest three of that reason are
+kept, so the folder stays bounded on a USB stick (issue #1148). Pruning touches nothing
+else in `data/backups/` — not the other reason's ZIPs, not the `user.v{N}.db` copies the
+schema ladder keeps, and not files the reader put there — and a failure to prune never
+fails the backup.

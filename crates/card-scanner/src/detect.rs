@@ -700,7 +700,10 @@ pub fn locate(
     candidates.sort_by(|a, b| {
         b.score.total.partial_cmp(&a.score.total).unwrap_or(std::cmp::Ordering::Equal)
     });
-    candidates.dedup_by(|a, b| (a.score.total - b.score.total).abs() < 1e-4);
+    // One quad found twice — by two threshold rungs, or by Otsu and Canny — goes before it can
+    // take two of the slots below. By its corners, not its score: two cards of one size side by
+    // side score alike to the last digit and are two candidates (#1140).
+    let mut candidates = distinct(candidates);
     candidates.truncate(opts.max_candidates);
 
     // ── Stage 5b: onto the outer edge, at full resolution ──────────────────────────
@@ -774,19 +777,7 @@ pub fn locate(
 
     // The inner edge of a border and the outer edge of the same card now land on one quad;
     // keep the first, which is the better scored.
-    let mut distinct: Vec<ScoredQuad> = Vec::with_capacity(candidates.len());
-    for c in candidates {
-        let tol = SAME_QUAD * crate::edges::scale(&c.quad);
-        let twin = distinct.iter().any(|k| {
-            k.quad.corners.iter().zip(&c.quad.corners).all(|(a, b)| {
-                ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() <= tol
-            })
-        });
-        if !twin {
-            distinct.push(c);
-        }
-    }
-    let mut candidates = distinct;
+    let mut candidates = distinct(candidates);
 
     timings.contour_ms = ms(t_passes) - timings.mask_ms;
     timings.total_ms = ms(t_start);
@@ -1187,6 +1178,25 @@ const NESTED_CARD: f32 = 0.6;
 /// Two refined quads are one if every corner agrees to within this fraction of the card's
 /// width.
 const SAME_QUAD: f32 = 0.015;
+
+/// The candidates with every quad that repeats an earlier one dropped — every corner within
+/// [`SAME_QUAD`] of the earlier one's. The first is kept, so ranked candidates keep the better
+/// scored of a pair. Corners are compared in order, which [`order_corners`] makes meaningful.
+fn distinct(candidates: Vec<ScoredQuad>) -> Vec<ScoredQuad> {
+    let mut kept: Vec<ScoredQuad> = Vec::with_capacity(candidates.len());
+    for c in candidates {
+        let tol = SAME_QUAD * crate::edges::scale(&c.quad);
+        let twin = kept.iter().any(|k| {
+            k.quad.corners.iter().zip(&c.quad.corners).all(|(a, b)| {
+                ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() <= tol
+            })
+        });
+        if !twin {
+            kept.push(c);
+        }
+    }
+    kept
+}
 
 /// How much less card-like a stack's top card may look than the stack's outline and still be
 /// preferred to it. The outline's rectification is the top card, stretched by a few percent,
@@ -2188,6 +2198,29 @@ mod tests {
             (w.area() - card.area()).abs() < 1e-2 && card.contains(&w) && w.contains(&card)
         });
         assert!(found, "neither proposal is the whole card: {:?}", doubled(&half));
+    }
+
+    #[test]
+    fn two_cards_that_score_alike_are_two_candidates() {
+        // **#1140.** Two cards of one size side by side score alike to the last digit; the old
+        // dedup compared scores and kept one. Only the same quad found twice is one candidate.
+        let score = QuadScore {
+            via: QuadSource::Lines,
+            skew: 0.0,
+            aspect: CARD_ASPECT,
+            area_frac: 0.2,
+            max_angle_error: 0.0,
+            total: 0.9,
+        };
+        let at = |x: f32| ScoredQuad {
+            quad: Quad { corners: [(x, 0.0), (x + 100.0, 0.0), (x + 100.0, 140.0), (x, 140.0)] },
+            score,
+            cardness: None,
+            edges: None,
+        };
+        let kept = distinct(vec![at(0.0), at(120.0), at(0.5)]);
+        let xs: Vec<f32> = kept.iter().map(|c| c.quad.corners[0].0).collect();
+        assert_eq!(xs, [0.0, 120.0], "the neighbour stays, the repeat goes");
     }
 
     #[test]

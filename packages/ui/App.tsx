@@ -5,6 +5,7 @@ import { AppShell } from "@/components/AppShell";
 import { CardZoomIndicator } from "@/components/CardZoomIndicator";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { ViewBoundary } from "@/components/ViewBoundary";
 import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
 import { CardDetailModal } from "@/features/card/CardDetailModal";
 import { CardTextDialog } from "@/features/card/CardTextDialog";
@@ -132,6 +133,33 @@ function ActiveView({ update }: { update: Update }) {
 }
 
 /**
+ * The view, under the two boundaries that keep a failing one inside its own box.
+ *
+ * **Keyed by where the reader stands** — the view, the open deck and the goldfish board — so a
+ * press in the rail is a fresh view rather than the failure following the reader there, which is
+ * what `ViewBoundary`'s retry is for a reader who stays. The key is the boundary's, not the
+ * view's: `ActiveView` keeps its own keys for the editor and the board.
+ */
+function ViewArea({ update }: { update: Update }) {
+  const place = useAppStore(
+    (s) =>
+      `${s.activeView}:${s.openDeckId ?? ""}:${s.goldfish ? `${s.goldfish.deckId}:${s.goldfish.variant}` : ""}`,
+  );
+  return (
+    <ViewBoundary key={place}>
+      {/* **The boundary for the lazy views, and it draws nothing while one arrives.** A view's
+          chunk is a file read on the desktop and one request on the web, so the wait is a frame
+          or two; a spinner there would be a flash of chrome longer than the wait it reports.
+          Around the view and inside the shell, so the rail and the title bar never blank with
+          it — and the five views in the first chunk never suspend, so they are drawn as before. */}
+      <Suspense fallback={null}>
+        <ActiveView update={update} />
+      </Suspense>
+    </ViewBoundary>
+  );
+}
+
+/**
  * The whole app.
  *
  * `QueryClientProvider` is here rather than in `main.tsx` so that any test can render
@@ -214,15 +242,9 @@ export default function App() {
               <AppShell update={update}>
                 {/* No flank column beside the view any more: the card is a centred modal
                     mounted below, so nothing here reserves width for it. */}
-                {/* **The boundary for the five lazy views, and it draws nothing while one
-                    arrives.** A view's chunk is a file read on the desktop and one request on
-                    the web, so the wait is a frame or two; a spinner there would be a flash of
-                    chrome longer than the wait it reports. Around the view and inside the shell,
-                    so the rail and the title bar never blank with it — and the five views in
-                    the first chunk never suspend, so they are drawn as before. */}
-                <Suspense fallback={null}>
-                  <ActiveView update={update} />
-                </Suspense>
+                {/* A view that throws is drawn as a failure in its own box, and the shell
+                    around it — the caption included — stays (issue #1181). */}
+                <ViewArea update={update} />
               </AppShell>
               {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
             `LAYER.popup`, and a z-index only competes inside its own stacking context — so

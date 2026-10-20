@@ -884,6 +884,9 @@ function Results({ search }: { search: CardSearch }) {
             rows={rows}
             columns={columns}
             label="Search results"
+            // The printing, so a quick-add left open over a list that refetches under an
+            // Owned/Missing filter closes rather than adding to the card that moved up (#1111).
+            rowKey={(card) => card.id}
             // `null` is ARIA's "the total is unknown", which is exactly what a capped count
             // is: 5 000 would be a smaller lie than 20, but still a lie.
             total={totalIsCapped ? null : total}

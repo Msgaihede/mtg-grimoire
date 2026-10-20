@@ -17,6 +17,7 @@ import type { ReactNode } from "react";
 import type { HomeWidget } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
+import { SYNC_INVALIDATED } from "@/lib/useSyncInvalidation";
 import { optimizePlanKey } from "@/features/wishlist/useWishlistOptimize";
 import { wholeWishlistQuery } from "@/features/wishlist/wholeWishlistQuery";
 import { makeFit } from "./fit";
@@ -186,6 +187,13 @@ describe("shape", () => {
     );
     expect(key).toEqual(["newPrintings", "feed", "chosen", "3,7", 90, "en,ja", "t", 100]);
     expect(key.slice(0, NEW_PRINTINGS_ROOT.length)).toEqual(NEW_PRINTINGS_ROOT);
+  });
+
+  // The sync is what brings the new printings in, and its `["decks"]` does not reach a root of
+  // its own — a feed on screen across a sync kept the pre-sync list until it remounted (#1182).
+  // `SYNC_INVALIDATED` spells the root itself, because a `lib` module does not import a feature.
+  it("is one of the roots a finished sync marks stale", () => {
+    expect(SYNC_INVALIDATED).toContainEqual([...NEW_PRINTINGS_ROOT]);
   });
 
   // **Two arrays with the same members are one cache entry.** The ids and the languages are

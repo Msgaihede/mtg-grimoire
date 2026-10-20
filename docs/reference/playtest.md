@@ -320,7 +320,11 @@ The AI may well notice: it reads the state as it is. Tokens wear each deck's own
 seat's ([goldfish.md](goldfish.md#the-table), _A token wears the deck's printing_). The hybrid model
 it comes from is [goldfish.md](goldfish.md#the-hybrid-model-what-is-a-rule-and-what-is-a-hand)'s.
 
-**A refused action changes nothing**: `act` restores its checkpoint on any `Err`.
+**A refused action changes nothing**: `act` takes the whole `Moment` before every action and
+restores it on any `Err` — the engine's checkpoint and the session's own place in the game: the
+board's own question, a cast half made, the turn being ended, the stop last stopped at (issue
+#1143; the checkpoint alone left a refused answer's question gone and an `endTurn` that failed
+still ending the turn). The page keeps the last view on a refusal, which is the game as it stands.
 
 ## Undo and redo
 
