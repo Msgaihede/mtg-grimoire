@@ -15,6 +15,7 @@ import {
   handleToken,
   handleWebhook,
   reconcile,
+  sweepClaims,
 } from "./claim";
 import { allowedOrigin, preflight, withCors, type CorsEnv } from "./cors";
 import { handlePair } from "./pair";
@@ -488,10 +489,10 @@ export default {
 
   /**
    * The reconciliation (spec §7.3) — hourly, `wrangler.jsonc`'s `0 * * * *`, each pass reaching at
-   * most `claim.ts`'s `RECONCILE_BUDGET` subjects — and then the rendezvous sweep. Awaited rather
-   * than handed to `ctx.waitUntil`, so a pass that throws is reported against the scheduled
-   * invocation that caused it rather than against nothing — and a `reconcile` that throws skips
-   * the sweep, which is why a database missing `reconciled_at` stops both.
+   * most `claim.ts`'s `RECONCILE_BUDGET` subjects — and then the rendezvous and claim sweeps.
+   * Awaited rather than handed to `ctx.waitUntil`, so a pass that throws is reported against the
+   * scheduled invocation that caused it rather than against nothing — and a `reconcile` that
+   * throws skips the sweeps, which is why a database missing `reconciled_at` stops all three.
    */
   // `ctx` is deliberately not in the signature. `reconcile` is awaited rather than handed to
   // `ctx.waitUntil`, so there is nothing to keep alive past the return — and eslint's
@@ -499,7 +500,9 @@ export default {
   // in front of a parameter that IS used and refuses a trailing one that is not.
   async scheduled(_controller: ScheduledController, env: Env) {
     await reconcile(env);
-    await sweepRendezvous(env, Date.now());
+    const now = Date.now();
+    await sweepRendezvous(env, now);
+    await sweepClaims(env, now);
   },
 } satisfies ExportedHandler<Env>;
 

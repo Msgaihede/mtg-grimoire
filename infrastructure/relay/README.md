@@ -212,9 +212,18 @@ drop a CHECK with `ALTER TABLE`; closing it would mean rebuilding the table on t
 arrives, which is the friction the subject indirection exists to avoid.
 
 `claim_codes` is the short-lived code the landing page shows. **It enforces neither of its two
-rules** — there is no `used` column and no sweep — so both live at the call site: the expiry is
+rules** — there is no `used` column — so both live at the call site: the expiry is
 `expires_at > now`, and single-use means the `DELETE` happens in the same transaction as the read.
-Read-then-delete would let two racing requests both claim.
+Read-then-delete would let two racing requests both claim. A code never typed is deleted by the
+hourly cron's `sweepClaims` once `expires_at <= now` (#1195); before that it stayed for good, with
+the subject it names. (`schema.sql`'s comment still says "no sweep": the baseline is never
+edited.)
+
+The same sweep forgets a **`dead` row's `patreon_refresh`** once its `checked_at` is older than
+`DEAD_REFRESH_RETENTION_MS` (thirty days). Nothing reads a dead row's token — `reconcile` skips dead
+rows and the callback overwrites it — except after a webhook revives the row, so a month keeps the
+cancel-and-pledge-again case reconciling; past it the row is token-less and the cron only settles
+its windows until the reader connects again.
 
 **Two more tables landed on 2026-08-30**, and `entitlements` gained `group_epoch` and `group_auth`
 beside them:
@@ -381,8 +390,8 @@ rather than stops — each subject every `rows / 480` days — and the webhook s
 unverified.** They are search summaries of Cloudflare's pages, which could not be read from where
 this was written: **50 external subrequests per invocation**, against two per row that holds a
 token (the refresh and the identity read) — 40 at this budget; and **50 D1 queries per
-invocation**, against one `SELECT`, one stamp and at most two `UPDATE`s a row — 42, and 43 with the
-rendezvous sweep `scheduled` runs after it. The old pass's ~25 subjects a day is derived from the
+invocation**, against one `SELECT`, one stamp and at most two `UPDATE`s a row — 42, and 45 with the
+rendezvous and claim sweeps `scheduled` runs after it. The old pass's ~25 subjects a day is derived from the
 same reported figure, not measured against the host.
 
 **`entitlements_reconcile`** is the partial index the query reads, `(reconciled_at, subject) WHERE
@@ -986,7 +995,7 @@ deploy between releases, which is still asked for.
    with `--command "SELECT reconciled_at FROM entitlements LIMIT 0"`: empty is the pass, `no such
    column` means the `ALTER` did not run. **A Worker without the column fails quietly**: nothing a
    device calls reads it, so sync is untouched, but every hourly `scheduled` throws on its `SELECT`
-   — no subject is reconciled, and the rendezvous sweep that runs after it never runs either. The
+   — no subject is reconciled, and the rendezvous and claim sweeps that run after it never run either. The
    Durable Object's own new column and tables need no step; see "Two things a deploy verifies"
    above.
 

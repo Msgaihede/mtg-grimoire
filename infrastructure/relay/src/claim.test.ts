@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codeFrom,
+  DEAD_REFRESH_RETENTION_MS,
   DEVICE_ID,
   GROUP_ID,
   handleCallback,
@@ -12,6 +13,7 @@ import {
   reconcile,
   RELAY_AUTH,
   settle,
+  sweepClaims,
   unixSeconds,
 } from "./claim";
 import { fakeEnv, fakeEnvOver, fakeTables, type Tables } from "./fakeD1";
@@ -1904,5 +1906,52 @@ describe("reconcile — an hourly pass on a budget", () => {
 
     await reconcile(env);
     expect(patreon.asked).toEqual(tokensOf(tables, [RECONCILE_BUDGET]));
+  });
+});
+
+describe("sweepClaims — what the hourly cron forgets", () => {
+  it("deletes every expired claim code and keeps every claimable one", async () => {
+    const tables = fakeTables({ groups: ["g0"] });
+    const now = Date.now();
+    tables.claim_codes.push(
+      { code: "STALE", subject: "sub-0", expires_at: now - 60_000 },
+      // The instant itself is expired: `handleClaim` reads `expires_at > now`, so this one could
+      // no longer be redeemed and must not outlive the sweep.
+      { code: "EDGE", subject: "sub-0", expires_at: now },
+      { code: "LIVE", subject: "sub-0", expires_at: now + 60_000 },
+    );
+
+    await sweepClaims(fakeEnvOver(tables), now);
+
+    expect(tables.claim_codes.map((row) => row.code)).toEqual(["LIVE"]);
+  });
+
+  it("forgets a dead row's Patreon token only once it has been dead past the retention", async () => {
+    const tables = fakeTables({ groups: ["g0", "g1", "g2", "g3"] });
+    const now = Date.now();
+    const long = now - DEAD_REFRESH_RETENTION_MS - 1;
+    const [old, recent, edge, alive] = tables.entitlements;
+    Object.assign(old, { status: "dead", patreon_refresh: "tok-old", checked_at: long });
+    Object.assign(recent, { status: "dead", patreon_refresh: "tok-recent", checked_at: now - 1 });
+    // Exactly at the boundary is still inside the window.
+    Object.assign(edge, {
+      status: "dead",
+      patreon_refresh: "tok-edge",
+      checked_at: now - DEAD_REFRESH_RETENTION_MS,
+    });
+    // A serving row is never touched however long since it was checked: the cron needs its token.
+    Object.assign(alive, { status: "active", patreon_refresh: "tok-alive", checked_at: long });
+
+    await sweepClaims(fakeEnvOver(tables), now);
+
+    expect(tables.entitlements.map((row) => row.patreon_refresh)).toEqual([
+      null,
+      "tok-recent",
+      "tok-edge",
+      "tok-alive",
+    ]);
+    // Only the token goes — the row, its subject and its status stay.
+    expect(old.status).toBe("dead");
+    expect(old.subject).toBe("sub-0");
   });
 });
