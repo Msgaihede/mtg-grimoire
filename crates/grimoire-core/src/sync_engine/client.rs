@@ -800,11 +800,12 @@ fn lapsed(conn: &Connection, what: &str) -> String {
 /// [`entitlement::never_entitled`] it is a group nobody has connected yet, and the loop waits
 /// quietly rather than failing a socket over it. The wording is a reader's and may be reworded;
 /// the comparison is against this constant.
-pub const UNRECOGNISED_GROUP: &str = "the relay did not recognise this device's group key. If \
-     your devices synced together before today, reconnect Patreon once on the device you \
-     connected it on - that registers the group with the relay again. Otherwise this group has \
-     no membership connected to it yet, or this device has been offline across more key changes \
-     than the relay keeps.";
+pub const UNRECOGNISED_GROUP: &str =
+    "the relay did not recognise this device's group key. If your devices synced \
+     together before today, reconnect Patreon once on the device you connected it on \
+     - that registers the group with the relay again. Otherwise this group has no \
+     membership connected to it yet, or this device has been offline across more key \
+     changes than the relay keeps.";
 
 /// What a `/keys` check found, and what [`round_trip`] does about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
