@@ -44,8 +44,8 @@
 //!   ([`crate::deck::plays_card`]), so a deck listing one printing takes another's copies.
 //!
 //! * **The move is [`crate::collection_folders::take_copies`]' and is never written a second
-//!   time.** Splitting a row, filing the half that travels and re-inserting the remainder is one
-//!   rule about the reader's cards, and this module carried a private twin of it —
+//!   time.** Stepping a row down in place and upserting the half that travels is one rule about
+//!   the reader's cards, and this module carried a private twin of it —
 //!   `move_copies` — until fan-in. Two implementations of one rule disagree the first time
 //!   either changes, so there is one, beside the merge it is built on. The refile underneath has
 //!   no kind fence precisely so these writes can file into a `deck` folder and the `removed`
@@ -1799,9 +1799,9 @@ mod tests {
         );
     }
 
-    /// The root row for a printing — the half [`take_copies`] leaves behind, which carries a
-    /// **new** id: the source row is the half that travels, so the id a caller filed with is in
-    /// the group afterwards and answers [`ALREADY_HERE`] if it is filed again.
+    /// The root row for a printing — the half [`take_copies`] leaves behind. Since issue #1116
+    /// that is the source row itself, stepped down in place; read by its folder all the same, so
+    /// a test says which row it means rather than which id it was handed.
     fn root_entry(conn: &Connection, card_id: &str) -> i64 {
         conn.query_row(
             "SELECT id FROM collection_entries WHERE card_id = ?1 AND folder_id IS NULL",

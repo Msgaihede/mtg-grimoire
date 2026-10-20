@@ -1324,24 +1324,39 @@ pub(crate) fn refile_entry(
 /// Move exactly `quantity` copies of entry `id` into `dest`, answering the id of the row they
 /// landed in — [`refile_entry`] where only *part* of a row is going.
 ///
-/// **The split is forward and the source row is the half that travels**, which is what lets the
-/// merge stay [`refile_entry`]'s:
+/// **Where the whole row is going, it is [`refile_entry`]'s and nothing else**: the row travels
+/// with its id and its `sync_uid`, and folds into whatever holds the grain at `dest`.
 ///
-/// 1. the source is stepped down to exactly the copies that are moving;
-/// 2. `refile_entry` files that row into `dest`, folding it into whatever holds the grain there;
-/// 3. the remainder is re-inserted into the folder the source has just left.
+/// **Where only part is going, the source stays and the travelling half is the new row** —
+/// schema v36's rung's split, in its order and for its reason:
 ///
-/// Step 3 is what forces this order. `idx_collection_grain` is unique on eleven terms including
-/// `coalesce(folder_id, 0)`, so a remainder row written *before* the move would collide with the
-/// source itself — the one row in that folder holding the grain. Once the source has gone the
-/// slot is free, and it is free whether the file was an `UPDATE` or a fold that deleted it.
+/// 1. the source is stepped down **in place** to the copies that stay, so its id, its
+///    `sync_uid` and every column the reader typed stay exactly where they were;
+/// 2. the copies that move are upserted onto the destination grain, **copied off the source**:
+///    a new row where `dest` holds none, and [`crate::collection::fold_entry`]'s rule where it
+///    does — the quantities add, and the receipt columns and the note are the survivor's
+///    wherever it has them. `tags` and `condition_original` stay the survivor's, for that
+///    function's stated reason.
 ///
-/// **The remainder is copied off the row the copies landed in**, and where that was a fold it is
-/// the survivor's story rather than the source's. The eleven grain terms are identical by
-/// construction — a fold happens only on an exact grain match — and
-/// [`crate::collection::fold_entry`] has already coalesced the source's money columns into the
-/// survivor wherever the survivor had none. What can differ is `tags`, `notes` and
-/// `condition_original`, which that fold leaves the survivor's for its own stated reason.
+/// **It was the other way round, and that was issue #1116.** The source used to be the half that
+/// travelled, with the remainder re-inserted off *the row the copies landed in* — which, after a
+/// fold, is a different row with a different story. The copies that never moved came back with
+/// the destination's price, acquisition date and tags (none, typically), the source's own were
+/// gone everywhere, and the remainder carried a fresh id and `sync_uid` a concurrent peer edit
+/// to the old one could resurrect beside it. Every copy that stays is now the row it always was.
+///
+/// The step-down runs first because it cannot collide with anything — it changes no grain term
+/// — and it makes `dest` = the source's own folder harmless rather than a special case: the
+/// upsert lands on the source itself and adds back exactly what the step-down took.
+///
+/// `ON CONFLICT` is [`crate::schema::COLLECTION_GRAIN`] verbatim, the eleven terms
+/// `idx_collection_grain` is unique on, so the probe [`refile_entry`] spells out by hand is the
+/// index's own here. **`RETURNING id`** names the row either arm wrote: the `DO UPDATE` arm
+/// inserts nothing, so `last_insert_rowid` would answer whatever was inserted last.
+///
+/// **`sync_uid` is not on the column list** — the v36 rung's answer: a new row lands with a NULL
+/// uid and `capture::insert_trigger` mints one, and the `DO UPDATE` arm keeps the uid the
+/// survivor already had.
 ///
 /// `tradelist_quantity` is split rather than duplicated: the copies that move take
 /// `min(tradelist, quantity)` and the remainder keeps the rest, so the two halves sum to what
@@ -1363,11 +1378,11 @@ pub(crate) fn take_copies(
     quantity: i64,
     dest: Option<i64>,
 ) -> Result<i64, String> {
-    let (folder_id, held, tradelist): (Option<i64>, i64, i64) = tx
+    let (held, tradelist): (i64, i64) = tx
         .query_row(
-            "SELECT folder_id, quantity, tradelist_quantity FROM collection_entries WHERE id = ?1",
+            "SELECT quantity, tradelist_quantity FROM collection_entries WHERE id = ?1",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -1376,23 +1391,22 @@ pub(crate) fn take_copies(
         return Err(crate::collection_alloc::NOT_THAT_MANY.to_owned());
     }
     let remainder = held - quantity;
+    if remainder == 0 {
+        return Ok(refile_entry(tx, id, dest)?.id);
+    }
     let moved_trade = tradelist.min(quantity);
     let kept_trade = tradelist - moved_trade;
 
-    if remainder > 0 {
-        tx.execute(
-            "UPDATE collection_entries
-                SET quantity = ?2, tradelist_quantity = ?3, updated_at = unixepoch()
-              WHERE id = ?1",
-            params![id, quantity, moved_trade],
-        )
-        .map_err(|e| e.to_string())?;
-    }
+    tx.execute(
+        "UPDATE collection_entries
+            SET quantity = ?2, tradelist_quantity = ?3, updated_at = unixepoch()
+          WHERE id = ?1",
+        params![id, remainder, kept_trade],
+    )
+    .map_err(|e| e.to_string())?;
 
-    let landed = refile_entry(tx, id, dest)?.id;
-
-    if remainder > 0 {
-        tx.execute(
+    tx.query_row(
+        &format!(
             "INSERT INTO collection_entries
                  (card_id, set_code, collector_number, lang, finish, condition,
                   condition_original, quantity, tradelist_quantity, purchase_price,
@@ -1404,12 +1418,27 @@ pub(crate) fn take_copies(
                     purchase_currency, acquired_at, acquisition_source, serial_number,
                     altered, signed, proxy, misprint, grading, tags, notes, needs_review,
                     ?4, created_at, unixepoch()
-               FROM collection_entries WHERE id = ?1",
-            params![landed, remainder, kept_trade, folder_id],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(landed)
+               FROM collection_entries WHERE id = ?1
+             ON CONFLICT({grain}) DO UPDATE SET
+                quantity = collection_entries.quantity + excluded.quantity,
+                tradelist_quantity =
+                    collection_entries.tradelist_quantity + excluded.tradelist_quantity,
+                purchase_price =
+                    coalesce(collection_entries.purchase_price, excluded.purchase_price),
+                purchase_currency =
+                    coalesce(collection_entries.purchase_currency, excluded.purchase_currency),
+                acquired_at = coalesce(collection_entries.acquired_at, excluded.acquired_at),
+                acquisition_source =
+                    coalesce(collection_entries.acquisition_source, excluded.acquisition_source),
+                notes = coalesce(collection_entries.notes, excluded.notes),
+                updated_at = unixepoch()
+             RETURNING id",
+            grain = crate::schema::COLLECTION_GRAIN
+        ),
+        params![id, quantity, moved_trade, dest],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Fold `source` into `target` and delete it — this module's name for
@@ -2398,6 +2427,176 @@ mod tests {
             Some(sold.id),
             "the row in the other folder is untouched"
         );
+    }
+
+    /// The columns a split must not trade between rows: what the reader paid, when, the tags
+    /// they curated, the trade-list offer and the identity the sync engine names the row by.
+    fn story(
+        conn: &Connection,
+        id: i64,
+    ) -> (
+        i64,
+        i64,
+        Option<f64>,
+        Option<String>,
+        String,
+        Option<String>,
+    ) {
+        conn.query_row(
+            "SELECT quantity, tradelist_quantity, purchase_price, acquired_at, tags, sync_uid
+               FROM collection_entries WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            },
+        )
+        .unwrap()
+    }
+
+    /// Give a row a story of its own — [`insert_entry`] holds every one of these columns at
+    /// its default.
+    fn tell(conn: &Connection, id: i64, price: f64, acquired: &str, tags: &str, uid: &str) {
+        conn.execute(
+            "UPDATE collection_entries
+                SET purchase_price = ?2, acquired_at = ?3, tags = ?4, sync_uid = ?5
+              WHERE id = ?1",
+            params![id, price, acquired, tags, uid],
+        )
+        .unwrap();
+    }
+
+    /// **Issue #1116.** Binder holds Sol Ring ×4 tagged `cube`, bought at $1.50 in 2020; the
+    /// destination already holds the grain at $3.00 from 2023 with no tags. One copy moves. The
+    /// three that stay are the row they always were — id, `sync_uid`, price, date and tags —
+    /// and the one that moves folds into the destination on [`crate::collection::fold_entry`]'s
+    /// rule, which keeps the survivor's own answers. The old split re-inserted the remainder
+    /// off the destination row and lost the source's story everywhere.
+    #[test]
+    fn a_partial_take_into_a_held_grain_keeps_the_remainder_its_own_row() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let deck = create_folder(&conn, None, "Deck").unwrap();
+        let source = insert_entry(&conn, "sol", Some(binder.id), 4);
+        tell(
+            &conn,
+            source,
+            1.5,
+            "2020-01-01",
+            r#"["cube"]"#,
+            "source-uid",
+        );
+        conn.execute(
+            "UPDATE collection_entries SET tradelist_quantity = 2 WHERE id = ?1",
+            params![source],
+        )
+        .unwrap();
+        let held = insert_entry(&conn, "sol", Some(deck.id), 1);
+        tell(&conn, held, 3.0, "2023-01-01", "[]", "held-uid");
+
+        let landed = take_copies(&conn, source, 1, Some(deck.id)).unwrap();
+
+        assert_eq!(landed, held, "the copy folded into the row already there");
+        assert_eq!(folder_of(&conn, source), Some(binder.id));
+        assert_eq!(
+            story(&conn, source),
+            (
+                3,
+                1,
+                Some(1.5),
+                Some("2020-01-01".to_owned()),
+                r#"["cube"]"#.to_owned(),
+                Some("source-uid".to_owned())
+            ),
+            "the copies that stayed keep their id, uid, price, date and tags"
+        );
+        assert_eq!(
+            story(&conn, held),
+            (
+                2,
+                1,
+                Some(3.0),
+                Some("2023-01-01".to_owned()),
+                "[]".to_owned(),
+                Some("held-uid".to_owned())
+            ),
+            "the survivor sums the copy and its offer and keeps its own answers"
+        );
+    }
+
+    /// Where the destination holds nothing at the grain, the copies that move are a new row
+    /// copied off the source — its price, date and tags travel with the cards — and the source
+    /// keeps its id and uid in the folder it was in.
+    #[test]
+    fn a_partial_take_into_an_empty_grain_copies_the_source() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let deck = create_folder(&conn, None, "Deck").unwrap();
+        let source = insert_entry(&conn, "sol", Some(binder.id), 4);
+        tell(
+            &conn,
+            source,
+            1.5,
+            "2020-01-01",
+            r#"["cube"]"#,
+            "source-uid",
+        );
+
+        let landed = take_copies(&conn, source, 3, Some(deck.id)).unwrap();
+
+        assert_ne!(landed, source);
+        assert_eq!(folder_of(&conn, landed), Some(deck.id));
+        assert_eq!(folder_of(&conn, source), Some(binder.id));
+        let (quantity, _, price, acquired, tags, _) = story(&conn, landed);
+        assert_eq!(
+            (quantity, price, acquired.as_deref(), tags.as_str()),
+            (3, Some(1.5), Some("2020-01-01"), r#"["cube"]"#)
+        );
+        assert_eq!(story(&conn, source).0, 1);
+        assert_eq!(story(&conn, source).5.as_deref(), Some("source-uid"));
+    }
+
+    /// A take of every copy is [`refile_entry`]: the row travels with its id.
+    #[test]
+    fn a_whole_take_moves_the_row_itself() {
+        let conn = open();
+        let deck = create_folder(&conn, None, "Deck").unwrap();
+        let source = insert_entry(&conn, "sol", None, 2);
+
+        assert_eq!(
+            take_copies(&conn, source, 2, Some(deck.id)).unwrap(),
+            source
+        );
+        assert_eq!(folder_of(&conn, source), Some(deck.id));
+    }
+
+    /// A partial take into the folder the row is already in lands on the row itself and
+    /// changes nothing — the step-down's order is what makes this need no case of its own.
+    #[test]
+    fn a_partial_take_into_its_own_folder_changes_nothing() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let source = insert_entry(&conn, "sol", Some(binder.id), 4);
+
+        assert_eq!(
+            take_copies(&conn, source, 1, Some(binder.id)).unwrap(),
+            source
+        );
+        assert_eq!(story(&conn, source).0, 4);
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries WHERE card_id = 'sol'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 
     /// An `UPDATE` changing 0 rows cannot tell a missing row from a collision, which is why the
