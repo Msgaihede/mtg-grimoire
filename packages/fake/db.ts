@@ -14452,6 +14452,13 @@ const DECK_LEVEL = LIVE;
  * into "Today", "Yesterday" or a heading, so a row written during a story at
  * {@link CLOCK_BASE}+1 would file that story's own edit under a fixed day in the past — below
  * the seeded history rather than above it. `unixepoch()` is a wall clock, and here so is this.
+ *
+ * **Floored one second past the newest row already there**, because the seeds' "today" rows
+ * sit at fixed hours (`seeds.ts`'s `daysAgo`) and so lie in the future for most of the day: a
+ * bare wall clock at 09:00 would sort a story's own edit *below* a seeded 16:40, and whether
+ * the newest row is the edit just made would depend on when the tests ran (issue #1189). Both
+ * tables are scanned because `activity_recent` reads them as one feed. The floor never leaves
+ * today — the seeds stop short of midnight — so the "Today" heading is still the truth.
  */
 function record(
   db: FakeDb,
@@ -14465,7 +14472,7 @@ function record(
   db.deckAudit.push({
     id: nextId(db.deckAudit),
     deckId,
-    at: Math.floor(Date.now() / 1000),
+    at: auditStamp(db),
     variant,
     kind,
     cardId: card?.id ?? null,
@@ -14476,6 +14483,14 @@ function record(
     payload: JSON.stringify(payload),
     delta,
   });
+}
+
+/** {@link record}'s `at`: the wall clock, or one past the newest history row if that is later. */
+function auditStamp(db: FakeDb): number {
+  let newest = 0;
+  for (const a of db.deckAudit) newest = Math.max(newest, a.at);
+  for (const a of db.activity) newest = Math.max(newest, a.at);
+  return Math.max(Math.floor(Date.now() / 1000), newest + 1);
 }
 
 /** A `category`-kind row: about no card, moving no copies, and the payload's `action` is the

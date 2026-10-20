@@ -1635,7 +1635,9 @@ function daysAgo(days: number, hour: number, minute: number): number {
  * What has happened to the seeded decks — **the past their writes wrote**, which is what makes
  * a drawer opened on the first frame of a story show a history rather than a blank column.
  * Every write in `db.ts` appends to this same table, so a change made during a story lands
- * above these under "Today".
+ * above these under "Today" — whatever the hour: today's rows sit at fixed times that are still
+ * ahead of the clock for most of the day, so `db.ts`'s `record` stamps one second past the
+ * newest of them rather than trusting the wall clock (issue #1189).
  *
  * **Deck 4 carries a week of building**, three days of three different shapes: one that gained
  * and cut, one that only cut, and the day the deck was made. Every kind is represented, because
