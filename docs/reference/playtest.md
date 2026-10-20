@@ -380,17 +380,27 @@ reader's hand is phase's business, not this board's.
 
 ## The commands and the wire
 
-| Command                                                         | Does                                                                                                                                                                                                                                                              |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `playtest_start(deck_id, variant, opponents, difficulty, seed)` | Reads every deck (`play::deck_cards`), deals, and answers with a `PlaytestStep` at the reader's opening hand. `opponents` is up to three `PlaytestOpponent { deckId, variant }`; **none is the goldfish** (`difficulty` unused). A fresh game replaces any other. |
-| `playtest_act(action)`                                          | One `PlaytestAction`, and everything the opponents do after it until the reader next decides. A refusal is one sentence and leaves the game exactly as it was.                                                                                                    |
-| `playtest_end()`                                                | Drops the game.                                                                                                                                                                                                                                                   |
-| `playtest_support(deck_id, variant)`                            | What the engine plays of a deck, before a game: a `DeckSupport` (its different cards, and the `UnsupportedCard`s phase reads only in part). See [the setup page](#the-setup-page).                                                                                |
+| Command                                                               | Does                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `playtest_start(game, deck_id, variant, opponents, difficulty, seed)` | Reads every deck (`play::deck_cards`), deals, and answers with a `PlaytestStep` at the reader's opening hand. `game` is the page's fresh name for the deal; `opponents` is up to three `PlaytestOpponent { deckId, variant }`; **none is the goldfish** (`difficulty` unused). A fresh game replaces any other, from the moment the call arrives. |
+| `playtest_act(game, action)`                                          | One `PlaytestAction` on `game`, and everything the opponents do after it until the reader next decides. A refusal is one sentence and leaves the game exactly as it was; a game since replaced is refused.                                                                                                                                        |
+| `playtest_end(game)`                                                  | Drops `game` — at once, even mid-action — and leaves a newer one be.                                                                                                                                                                                                                                                                              |
+| `playtest_support(deck_id, variant)`                                  | What the engine plays of a deck, before a game: a `DeckSupport` (its different cards, and the `UnsupportedCard`s phase reads only in part). See [the setup page](#the-setup-page).                                                                                                                                                                |
 
-**One game at a time, in one slot** (`PlaytestSlot`: `Empty | Busy | Game`), the goldfish's game
-and the AI's alike. An action takes the game out of the slot onto the engine's thread and puts it
-back after, so a call while one runs is told "The opponent is still thinking." rather than waiting.
-If the engine panics, the game is lost and the slot empties. All four commands are on
+**One game at a time, in one slot** (`PlaytestSlot`: `Empty | Dealing | Busy | Game`), the
+goldfish's game and the AI's alike. An action takes the game out of the slot onto the engine's
+thread and puts it back after, so a call while one runs is told "The opponent is still thinking."
+rather than waiting. If the engine panics, the game is lost and the slot empties.
+
+**Every game has the page's name, and every call names its game** (issue #1141, 2026-10-20). A
+start claims the slot for its game as it arrives (`Dealing`), so the game it replaces is gone at
+once; an action puts its game back only if the slot is still `Busy` with that name, and an end
+empties the slot only if it holds that name — even `Busy`. So a board that leaves while the AI is
+mid-turn ends its game then, and the turn's answer drops it; a new board's deal is never
+overwritten by the old board's late answer; and a late action or end from a board that has gone, or
+from another window's, never touches a newer game. On the page the name is drawn like the seed,
+fresh per deal (`usePlaytestGame`), and an action still queued when its deal is put away is not
+sent. All four commands are on
 `command_table::DESKTOP_ONLY`. The goldfish board's own three (`goldfish_start`, `goldfish_act`,
 `goldfish_end`) and its slot were removed on 2026-10-17, when its game became this one; the
 desktop's `facts` and `token_facts` live in `playtest/mod.rs` now.
@@ -450,8 +460,12 @@ the command zone, another spell on the stack), and `targetPlayers`. They are rea
 (`stack_targets`); a target in a hand or a library is left out, as the reader may not see it.
 
 **A printing follows its card.** phase keeps an object's id across zones and bumps its
-`incarnation`. The session still re-homes a printing whose object is gone, by seat and name
-(`follow_printings`), so a deck's second art stays on its card wherever the card goes.
+`incarnation`. The session still re-homes a printing whose object is gone, by seat and card
+(`follow_printings`), so a deck's second art stays on its card wherever the card goes. An object is
+named by the face it shows, so every face of a card of several faces is read as the card
+(`card_names`, issue #1144): a Pathway or a Bala Ged Recovery played as its back face keeps its
+printing, and a commander on its back face is still the commander — its tax, its tile, its way back
+to the command zone.
 
 ## The setup page
 

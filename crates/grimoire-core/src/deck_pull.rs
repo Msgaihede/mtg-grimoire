@@ -1744,4 +1744,69 @@ mod tests {
             .unwrap();
         assert_eq!(left, 1, "the remainder stays in the binder");
     }
+
+    #[test]
+    fn a_partial_pick_into_a_held_grain_leaves_the_remainder_its_own_story() {
+        // Issue #1116: the group already holds the grain, so the copy that travels folds into
+        // that row — and the copies left in the binder are still the binder's row, with its id,
+        // its price, its date and its tags, never the group row's.
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 2, None);
+        let group = crate::deck::deck_group(&conn, deck).unwrap().unwrap();
+        let held = seed_entry(&conn, "bolt", 1, Some(group));
+        conn.execute(
+            "UPDATE collection_entries SET purchase_price = 3.0, acquired_at = '2023-01-01'
+              WHERE id = ?1",
+            params![held],
+        )
+        .unwrap();
+        let binder = user_folder(&conn, "Binder", 0);
+        let entry = seed_entry(&conn, "bolt", 4, Some(binder));
+        conn.execute(
+            "UPDATE collection_entries
+                SET purchase_price = 1.5, acquired_at = '2020-01-01', tags = '[\"cube\"]'
+              WHERE id = ?1",
+            params![entry],
+        )
+        .unwrap();
+
+        from_collection(
+            &conn,
+            deck,
+            &[Pick {
+                entry_id: entry,
+                quantity: 1,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(group_copies(&conn, deck, "bolt"), 2);
+        let stayed: (i64, Option<i64>, f64, String, String) = conn
+            .query_row(
+                "SELECT quantity, folder_id, purchase_price, acquired_at, tags
+                   FROM collection_entries WHERE id = ?1",
+                params![entry],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            stayed,
+            (
+                3,
+                Some(binder),
+                1.5,
+                "2020-01-01".to_owned(),
+                r#"["cube"]"#.to_owned()
+            ),
+            "the binder row is the same row, stepped down in place"
+        );
+        let survivor: (i64, f64) = conn
+            .query_row(
+                "SELECT quantity, purchase_price FROM collection_entries WHERE id = ?1",
+                params![held],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(survivor, (2, 3.0), "and the group row keeps its own price");
+    }
 }

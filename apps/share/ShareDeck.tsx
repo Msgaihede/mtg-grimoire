@@ -3,10 +3,11 @@ import { CardArt } from "@grimoire/ui/components/CardArt";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { type Currency } from "@grimoire/ui/lib/marketplace";
 import { formatPrice } from "@grimoire/ui/lib/prices";
-import type {
-  ShareCard,
-  ShareDeck as ShareDeckHalf,
-  ShareSnapshot,
+import {
+  shareImage,
+  type ShareCard,
+  type ShareDeck as ShareDeckHalf,
+  type ShareSnapshot,
 } from "@grimoire/ui/lib/shareSnapshot";
 import { cn } from "@grimoire/ui/lib/utils";
 import { NOTHING, ShareTile, wireFinish } from "./ShareTile";
@@ -284,7 +285,7 @@ function Stacks({ groups }: { groups: Group[] }) {
                 <CardArt
                   cardId={null}
                   name={card.n}
-                  remoteSrc={card.img ?? null}
+                  remoteSrc={shareImage(card)}
                   finish={finishMark(card)}
                   loading="lazy"
                 />

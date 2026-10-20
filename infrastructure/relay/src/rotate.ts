@@ -263,6 +263,44 @@ function manifestProblem(keys: unknown): string | null {
   return null;
 }
 
+/**
+ * How many devices the group's standing manifest names that a rotation may leave off: one.
+ *
+ * **Every rotation a shipped client plans drops at most one device.** A join drops nobody, a
+ * removal drops the device removed, and a departure drops the leaver. A manifest that drops two
+ * is a device with a partial roster speaking for the group (issue #1115): it learned of a join
+ * only by adopting an epoch, so it holds no key for the device that joined, and its manifest
+ * leaves that device off as well as the one it meant to — which every device reads as its own
+ * removal, since the manifest is the roster.
+ */
+export const MAX_DROPPED = 1;
+
+/**
+ * The devices the group's standing manifest names and `keys` does not — what a rotation to
+ * `keys` would remove. `null` when there is no manifest to compare against, or it cannot be read.
+ *
+ * **Unreadable is `null`, and that fails open on purpose.** `currentManifest` throws on a corrupt
+ * row and `/keys` lets it, so every device stalls where it is; a rotation is one way that group
+ * is ever mended, and this backstop must not be the thing that closes it. The client asks the
+ * same question first (`client::drops_only`), so the relay's is the second answer, not the only.
+ */
+async function droppedBy(
+  env: Env,
+  group: string,
+  keys: Record<string, string>,
+): Promise<string[] | null> {
+  let standing;
+  try {
+    standing = await currentManifest(env, group);
+  } catch {
+    return null;
+  }
+  if (standing === null) return null;
+  // `Object.hasOwn` for `handleKeys`' reason: a device named `constructor` must not be found on
+  // the prototype of a manifest that does not name it.
+  return Object.keys(standing.keys).filter((device) => !Object.hasOwn(keys, device));
+}
+
 // ---------------------------------------------------------------------------------------
 // POST /g/{group}/rotate
 // ---------------------------------------------------------------------------------------
@@ -335,6 +373,20 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   // holds it, and a device removed from the group cannot derive the next one. The Patreon refresh
   // secret used to open this door too; see `orphanedSecret` for why it no longer does.
   if (!(await authIsCurrent(env, group, presented))) return json({ error: "unauthorized" }, 401);
+
+  // **A rotation drops one device at most** ([`MAX_DROPPED`]) — the backstop behind the client's
+  // own check, for a build that lacks it. A 409 with a code of its own: the rotator's roster is
+  // out of step with the group's, and a device that knows every member can still make the change.
+  // Read ahead of the batch rather than inside it, so it is a backstop and not a guard: a rotation
+  // that lands in between is not what it was compared against. Both sides of that race passed
+  // their own client's check, which is the guard.
+  const dropped = await droppedBy(env, group, keys);
+  if (dropped !== null && dropped.length > MAX_DROPPED) {
+    return json(
+      { error: "that rotation leaves off devices the group still has", code: "partial_roster" },
+      409,
+    );
+  }
 
   // **Every read the rotation needs, ahead of the one batch that writes it.** The secret to retire
   // and the slots to free are decided here and applied inside `recordRotation`'s transaction, each

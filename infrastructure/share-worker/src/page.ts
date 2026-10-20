@@ -1,5 +1,12 @@
 import { shareUrl, type Env } from "./env";
-import { LAPSED, publicShare, REVOKED, type PublicRow, type ShareKind } from "./shares";
+import {
+  LAPSED,
+  PREVIEW_IMAGE_ORIGIN,
+  publicShare,
+  REVOKED,
+  type PublicRow,
+  type ShareKind,
+} from "./shares";
 
 /**
  * `GET /s/{id}` — the one page this Worker renders, and the whole reason a snapshot is stored in
@@ -143,10 +150,62 @@ function gone(status: number, sentence: string): Response {
   );
 }
 
+/**
+ * The policy every page here is sent under (issue #1153) — the shell, and the 404 and 410 beside
+ * it, which share {@link page} and so share this.
+ *
+ * **`img-src` is the fence that matters**, and the viewer's own check is the one behind it. A
+ * snapshot is its publisher's document — `blob.ts` checks the gzip magic and nothing else — so an
+ * `img` naming `https://tracker.example/?c=N` would have every stranger the link reaches ask that
+ * host for a picture. The viewer draws only an `img` under `SHARE_IMAGE_ORIGIN`
+ * (`packages/ui/lib/shareSnapshot.ts`); this line refuses any other host whatever the bundle
+ * does. It is {@link PREVIEW_IMAGE_ORIGIN}'s host, the one `og:image` is already held to, and
+ * `data:` for the pictures the bundle carries inline. Not `'self'`: nothing on this origin is a
+ * picture.
+ *
+ * The rest is what the page is, written down:
+ *
+ *   script-src   `'self'`: `/assets/share.js` and its chunks. No inline script and no eval —
+ *                the shell writes none, and the bundle is plain modules.
+ *   style-src    `'self' 'unsafe-inline'`, and the second is not a loosening anyone chose. The
+ *                shell's own `<style>` is inline, and the bundle installs its sheet as a
+ *                `<style>` at run time (`apps/share/main.tsx` — the shell links one fixed script
+ *                and cannot learn a stylesheet's hashed name), so a hash for it would be a fact
+ *                about the build this Worker deploys beside, not one it can know. What an
+ *                injected style could do with it is fetch, and `img-src` and `font-src` say where.
+ *   font-src     `'self' data:`: the bundled faces, which Vite names under `/assets/` or inlines.
+ *   connect-src  `'self'`: the snapshot, fetched from `/s/{id}/{hash}.json.gz` — and the
+ *                `rel="preload" as="fetch"` that warms it is a fetch to this directive too.
+ *   frame-ancestors `'none'`, with `default-src`, `object-src`, `base-uri` and `form-action`:
+ *                nothing embeds a share, and it embeds, rebases and posts nothing.
+ *
+ * `Referrer-Policy` is the browsers' default, stated so it cannot drift: **the path of this page
+ * is the capability** — anyone with `/s/{id}` can read the share — so a picture request to
+ * Scryfall carries this origin and never the path.
+ */
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
+  `img-src ${new URL(PREVIEW_IMAGE_ORIGIN).origin} data:`,
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 function html(body: string, status: number, cache: string): Response {
   return new Response(body, {
     status,
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": cache },
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": cache,
+      "content-security-policy": CONTENT_SECURITY_POLICY,
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "strict-origin-when-cross-origin",
+    },
   });
 }
 
