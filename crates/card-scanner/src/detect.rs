@@ -232,6 +232,13 @@ pub struct DetectOptions {
     /// card-likeness, and the window's quad sat a mean 3.6% of the card's width from the full
     /// sweep's on the same frame.
     pub window_share: f32,
+    /// Draw the trace's images — [`DetectTrace::images`] — and keep every contour for them.
+    ///
+    /// **On for the CLI, off for the session unless a page asks for its stages** (#1136). The
+    /// images are a full-frame RGB conversion, two clones of it drawn on, a clone of the grey
+    /// image and a copy of every contour's points: about 6 MB at 1024 px, two to four times a
+    /// frame, for a session that reads only the trace's timings and candidates.
+    pub trace_images: bool,
 }
 
 impl Default for DetectOptions {
@@ -253,6 +260,7 @@ impl Default for DetectOptions {
             inset: 1.0,
             otsu_level: None,
             window_share: 1.0,
+            trace_images: true,
         }
     }
 }
@@ -477,19 +485,24 @@ pub struct DetectTimings {
     pub total_ms: f32,
 }
 
-/// Every intermediate, kept for the debug artifacts. Cheap to produce and the reason the
-/// CLI is worth having.
+/// Every intermediate, kept for the debug artifacts and the reason the CLI is worth having.
 pub struct DetectTrace {
     pub timings: DetectTimings,
+    /// `None` unless [`DetectOptions::trace_images`] asked for them.
+    pub images: Option<TraceImages>,
+    pub candidates: Vec<ScoredQuad>,
+    pub method: EdgeMethod,
+    /// Scale from the working image back to the source.
+    pub scale: f32,
+}
+
+/// The pictures of one [`locate`], at the working scale.
+pub struct TraceImages {
     pub gray: GrayImage,
     /// Canny edges or the Otsu mask, whichever ran.
     pub binary: GrayImage,
     pub contours: RgbImage,
     pub quads: RgbImage,
-    pub candidates: Vec<ScoredQuad>,
-    pub method: EdgeMethod,
-    /// Scale from the working image back to the source.
-    pub scale: f32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -858,13 +871,18 @@ pub fn locate(
         }
     }
 
-    let work_rgb = work.to_rgb8();
+    let images = opts.trace_images.then(|| {
+        let work_rgb = work.to_rgb8();
+        TraceImages {
+            gray,
+            binary: masks.swap_remove(0),
+            contours: draw_contours(&work_rgb, &all_contours),
+            quads: draw_quads(&work_rgb, &candidates),
+        }
+    });
     let trace = DetectTrace {
         timings,
-        gray: gray.clone(),
-        binary: masks.swap_remove(0),
-        contours: draw_contours(&work_rgb, &all_contours),
-        quads: draw_quads(&work_rgb, &candidates),
+        images,
         candidates: candidates.clone(),
         method: opts.method,
         scale,
@@ -1264,7 +1282,9 @@ fn collect_candidates(
         if touches_border(&contour.points, ww, wh) {
             continue;
         }
-        all_contours.push(contour.points.clone());
+        if opts.trace_images {
+            all_contours.push(contour.points.clone());
+        }
         // The hull first, then the approximation. A raw contour of a real card has
         // concave excursions — a thumb, a sleeve lip, a shadow notch — and
         // Douglas-Peucker on that converges to five or six vertices however the epsilon
@@ -1867,6 +1887,25 @@ mod tests {
                 "{method:?} aspect {} is not a card",
                 d.score.aspect
             );
+        }
+    }
+
+    #[test]
+    fn trace_images_are_drawn_only_on_request_and_change_nothing_else() {
+        // #1136: the session skips the pictures, and must get the same answer without them.
+        let frame = synth(800, 600, 300.0, 0.0);
+        let rgb = rgb_of(&frame);
+        for method in [EdgeMethod::Canny, EdgeMethod::Otsu] {
+            let drawn = DetectOptions { method, ..Default::default() };
+            let bare = DetectOptions { trace_images: false, ..drawn.clone() };
+            let (a, ta) = locate(&frame, &rgb, &drawn);
+            let (b, tb) = locate(&frame, &rgb, &bare);
+            let (ta, tb) = (ta.expect("a trace"), tb.expect("a trace"));
+            assert!(ta.images.is_some(), "{method:?} drew no images when asked");
+            assert!(tb.images.is_none(), "{method:?} drew images nobody asked for");
+            assert_eq!(ta.candidates.len(), tb.candidates.len());
+            let (a, b) = (a.expect("a card"), b.expect("a card"));
+            assert_eq!(a.quad.corners, b.quad.corners, "{method:?} moved without its images");
         }
     }
 
