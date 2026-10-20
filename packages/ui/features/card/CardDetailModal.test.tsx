@@ -119,6 +119,7 @@ import { LABEL_COLORS } from "@/features/decks/labelColors";
 import { openExternal } from "@/lib/externalLinks";
 import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
+import { SWEEP_PAGE } from "@/features/transfer/export/scope";
 
 const detail: CardDetail = {
   id: "c1",
@@ -980,7 +981,7 @@ it("keeps the collection rows on the collection surface, where the stepper write
   await screen.findByRole("dialog");
 
   await waitFor(() =>
-    expect(collectionList).toHaveBeenCalledWith({ oracleId: "o1", limit: 200, offset: 0 }),
+    expect(collectionList).toHaveBeenCalledWith({ oracleId: "o1", limit: SWEEP_PAGE, offset: 0 }),
   );
   // …and the *other* list is still not asked for. The gate is per surface, not "keep both".
   expect(wishlistList).not.toHaveBeenCalled();
@@ -999,7 +1000,7 @@ it("keeps the wishlist rows on the wishlist surface, where its own stepper write
   await screen.findByRole("dialog");
 
   await waitFor(() =>
-    expect(wishlistList).toHaveBeenCalledWith({ oracleId: "o1", limit: 200, offset: 0 }),
+    expect(wishlistList).toHaveBeenCalledWith({ oracleId: "o1", limit: SWEEP_PAGE, offset: 0 }),
   );
   expect(collectionList).not.toHaveBeenCalled();
 
@@ -1082,6 +1083,39 @@ it("steps the row an add made rather than adding again, when a press is queued b
     expect.objectContaining({ cardId: "c1", quantity: 1 }),
   );
   await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(12));
+});
+
+it("steps a printing whose rows fall past the first page of the oracle's (issue #1169)", async () => {
+  // A basic-land collector: a full page of other Island printings, and this printing's one row on
+  // the page after. One capped read stopped at the first page, so the stepper read 0 and + added
+  // a second row instead of stepping row 42.
+  const others = Array.from({ length: SWEEP_PAGE }, (_, i) => ({
+    id: 1000 + i,
+    cardId: `island-${i}`,
+    quantity: 1,
+  }));
+  collectionList.mockImplementation(async ({ offset }: { offset: number }) =>
+    offset === 0
+      ? { items: others, total: SWEEP_PAGE + 1 }
+      : { items: [{ id: 42, cardId: "c1", quantity: 2 }], total: SWEEP_PAGE + 1 },
+  );
+  useAppStore.setState({ activeView: "collection" });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  await waitFor(() =>
+    expect(collectionList).toHaveBeenCalledWith({
+      oracleId: "o1",
+      limit: SWEEP_PAGE,
+      offset: SWEEP_PAGE,
+    }),
+  );
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt you own/i,
+  });
+  await userEvent.click(up);
+  await waitFor(() => expect(collectionSetQuantity).toHaveBeenCalledWith(42, 3));
+  expect(collectionAdd).not.toHaveBeenCalled();
 });
 
 it("re-reads the figures after a write it has no callback to hang off", async () => {
