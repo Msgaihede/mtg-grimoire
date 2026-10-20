@@ -63,7 +63,7 @@ For global repo workflow, style, and testing conventions, refer to:
   - Centered over scrim at `LAYER.overlay`.
   - Modals must be bounded to window (`grid-rows-[minmax(0,1fr)]`) with internal scrolling (`min-h-0 flex-1 overflow-y-auto`).
   - Never mount modals inside `@container` elements (containment breaks `position: fixed`).
-  - **A face can lend its dialogs a finger's gestures** (`lib/dialogHost.ts`): under a `DialogHostContext` every open `Dialog` claims a Back step (`claimBack`, closed through `onDismiss`) and, with `swipeToClose`, a header that drags down to close through `onClose`. Only the light app's phone face provides one; with none (the desktop, every story) nothing changes. A dialog whose `open` is already a history entry passes `placeBacked`.
+  - **A face can lend its dialogs a finger's gestures** (`lib/dialogHost.ts`): under a `DialogHostContext` every open `Dialog` claims a Back step (`claimBack`, closed through `onDismiss`; a refused Back claims a fresh one) and, with `swipeToClose`, a header that drags down to close through `onClose`. Only the light app's phone face provides one; with none (the desktop, every story) nothing changes. A dialog whose `open` is already a history entry passes `placeBacked`.
 - **Escape dismissal protocol (`useDismissOnEscape`)**:
   - Inner dismissibles (dialogs, popups) register in the window capture phase (`preventDefault()`). Outer layers listen in bubble phase.
   - Search inputs clear on Escape when non-empty (`clearFieldOnEscape`) before dismissing parent views.

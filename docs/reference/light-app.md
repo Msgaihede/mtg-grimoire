@@ -2543,7 +2543,10 @@ became (`apps/light/CLAUDE.md` §4 carries the rules):
   Every `Dialog` under the phone face is now an entry of its own (`phone/sheetHistory.ts`, lent
   through `@grimoire/ui/lib/dialogHost`). The ordering rules — pop at the end of the tick, hand
   the entry to a sheet opened in the same tick, and let the router uncover before it writes —
-  exist because a traversal is a task later than the write that follows it.
+  exist because a traversal is a task later than the write that follows it. A dialog that
+  refuses the Back (a trade scan mid-Add, a scan being sent) claims a fresh entry, since the Back
+  spent its old one; until 2026-10-20 it stayed open with no step, and the next Back left the
+  page beneath it (issue #1158, `useBackClaim`).
 - **Back walked every tab ever pressed** (§8.6's "four backs walked Decks → Collection → Search →
   launcher"). Decided: Android's bottom navigation — a tab sits one step over the start view, Back
   from any tab is Search, Back from Search leaves. `router.ts`'s `switchTo` walks back by the depth
