@@ -1,12 +1,13 @@
 //! **What crosses between the Worker's script and this module, as JSON text.**
 //!
-//! Every export answers a string, and the Worker does one `JSON.parse` and switches on a key.
-//! Not a `JsValue` and not a rejected promise: the TypeScript side has to know these shapes
-//! anyway, and a second, structural representation of the same thing is a second place for it
-//! to drift. **The strings here are the contract with `packages/ui/lib/core/web/`** — the Worker,
-//! whose `protocol.ts` is the hand-written mirror of this file — held by this file's
-//! tests on every target — a module gated to the browser would be invisible to `cargo test`,
-//! and a typo in one of these is a silent `undefined` in a page.
+//! `open` and `call` answer a string, and the Worker does one `JSON.parse` and switches on a key
+//! (`scanner_labels` answers bytes, and `listen` nothing). Not a `JsValue` and not a rejected
+//! promise: the TypeScript side has to know these shapes anyway, and a second, structural
+//! representation of the same thing is a second place for it to drift. **The strings here are
+//! the contract with `packages/ui/lib/core/web/`** — the Worker, whose `protocol.ts` is the
+//! hand-written mirror of this file — held by this file's tests on every target — a module
+//! gated to the browser would be invisible to `cargo test`, and a typo in one of these is a
+//! silent `undefined` in a page.
 //!
 //! Two shapes: [`Opened`], what `open` answers once; and the answer to a `call`, which is
 //! `{"ok": <value>}` or `{"err": "<sentence>"}` ([`answer`]).

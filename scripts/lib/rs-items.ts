@@ -17,8 +17,8 @@ interface UseNode {
   children: Map<string, UseNode>;
   leaves: string[];
 }
-// A lossless splitter of a rustfmt-formatted Rust file into its top-level items — what
-// `scripts/core-step-4.ts` moves a module with.
+// A lossless splitter of a rustfmt-formatted Rust file into its top-level items — what the
+// light app's core steps moved modules with (`git log -- scripts/core-step-4.ts`).
 //
 // **Not a parser.** It tracks comments, string and char literals and bracket depth, and cuts at
 // depth 0 on a `;` or on the `}` that returns there. Each item carries its leading trivia (blank

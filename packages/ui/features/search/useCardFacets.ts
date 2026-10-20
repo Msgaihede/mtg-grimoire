@@ -26,12 +26,16 @@ import { facetsOrUndefined } from "./facets";
  * the price-band's reason one field over. `CardIndex` has a single global `owned` bitset — one
  * bit per card the reader owns a copy of, anywhere — and no deck-relative dimension, so the
  * Owned/Missing counts in the deck builder's filter row are taken as if every copy were
- * reachable. They therefore read **high** there, which is the direction this row is built to
- * fail in: `facets.ts` greys only what would change nothing, so an over-read count offers an
- * option that turns out thin, where an under-read one would hide cards nobody would report
- * missing. Those two numbers reach a `title` and never a greying, so the cost is a tooltip that
- * can exceed the wall under it, and the fix — a per-deck bitset rebuilt on every folder lock,
- * move and deck-group write — buys a tooltip.
+ * reachable. Those two numbers reach a `title` and never a greying, so the cost there is a
+ * tooltip that can exceed the wall under it, and the fix — a per-deck bitset rebuilt on every
+ * folder lock, move and deck-group write — buys a tooltip.
+ *
+ * **The other dimensions' counts read high only while Owned (`owned: true`) is pressed**, which
+ * is the direction this row is built to fail in: `facets.ts` greys only what would change
+ * nothing, so an over-read count offers an option that turns out thin. **Under Missing
+ * (`owned: false`) they read low**: the facet base drops every card owned anywhere, while the
+ * search keeps the ones whose only copies this deck cannot use — so a chip whose results are all
+ * "owned elsewhere" counts 0 and is greyed although pressing it would return cards (#1129).
  */
 export type FacetRequest = Omit<
   SearchRequest,

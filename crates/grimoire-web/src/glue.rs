@@ -1,4 +1,4 @@
-//! **The browser**: the three `#[wasm_bindgen]` exports a dedicated Worker imports, the OPFS
+//! **The browser**: the four `#[wasm_bindgen]` exports a dedicated Worker imports, the OPFS
 //! pool, and the three `thread_local`s that are this host's whole memory.
 //!
 //! Compiled for `wasm32-unknown-unknown` and nowhere else (`lib.rs` gates the module), which is
@@ -7,11 +7,12 @@
 //! browser can do — hold a JavaScript function, install a VFS over
 //! `FileSystemSyncAccessHandle`s, write to a console.
 //!
-//! **Every export answers a JSON string, and none may reject or trap.** A trap in a Worker does
-//! not arrive as a rejected promise with a message — it arrives in the Worker's `onerror` with
-//! nothing a page can show. So a call before `open` is an answer, arguments that are not JSON
-//! are an answer, and the panic hook is installed before anything can panic, so a bug that
-//! does trap leaves its sentence in the console first.
+//! **`open` and `call` answer a JSON string and never reject, and no export may trap.** A trap
+//! in a Worker does not arrive as a rejected promise with a message — it arrives in the Worker's
+//! `onerror` with nothing a page can show. So a call before `open` is an answer, arguments that
+//! are not JSON are an answer, and the panic hook is installed before anything can panic, so a
+//! bug that does trap leaves its sentence in the console first. `scanner_labels` answers bytes,
+//! and a failed read is a rejection with one sentence — never a trap.
 //!
 //! **It must run in a dedicated Worker, and exactly one instance of this module per Worker.**
 //! The pool's handles exist only off the main thread; and two instances of a `wasm-bindgen`

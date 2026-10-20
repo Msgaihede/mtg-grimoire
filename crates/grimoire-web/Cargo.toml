@@ -13,8 +13,8 @@ edition.workspace = true
 publish = false
 
 # **The light app's web host** (the light-app spec §6, phase 5): `grimoire-core` compiled to
-# WASM and loaded by one dedicated Worker. Three exports — `open`, `call`, `listen` — and the
-# OPFS pool the databases live in. Everything else is the core's.
+# WASM and loaded by one dedicated Worker. Four exports — `open`, `call`, `listen`,
+# `scanner_labels` — and the OPFS pool the databases live in. Everything else is the core's.
 #
 # **It builds natively as nearly nothing, on purpose.** Only the `#[wasm_bindgen]` shell and the
 # OPFS install (`src/glue.rs`) are gated to the target; the wire types and everything with a
