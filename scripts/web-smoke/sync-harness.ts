@@ -13,7 +13,15 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -132,6 +140,12 @@ function wranglerScript() {
   );
 }
 
+/** The last lines the running relay printed, kept by {@link startRelay}. */
+let relayTail: string[] = [];
+/** What the relay last said, for a sentence about a wait that never ended. */
+const quoteRelay = () =>
+  relayTail.length === 0 ? "" : ` The relay's last lines: ${relayTail.join(" | ")}.`;
+
 /** A port nobody is listening on, as of now. */
 function freePort() {
   return new Promise<number>((found, lost) => {
@@ -175,38 +189,42 @@ function stopTree(child: ChildProcess) {
  * wrangler's own process id, which workerd is a child of, and the port its DevTools inspector
  * listens on.
  *
- * **The state directory is under `infrastructure/relay/.wrangler/` and is named relatively.** wrangler 4.146 on
+ * **The run's folder is under `infrastructure/relay/.wrangler/` and is named relatively.** wrangler 4.146 on
  * Windows turns an absolute `--persist-to` into `./C:\…` and its D1 then answers "internal
  * error" (measured 2026-10-04); a relative path works on every host. `.wrangler/` is ignored by
- * git everywhere, and the directory is removed when the run ends.
+ * git everywhere, and the folder is removed when the run ends.
  */
 export async function startRelay(pageOrigin: string) {
   const script = wranglerScript();
-  const config = "infrastructure/relay/wrangler.jsonc";
-  const persist = `infrastructure/relay/.wrangler/sync-smoke-${process.pid}`;
+  // **A project of its own for this run's wrangler**: a copy of the relay's `wrangler.jsonc` in
+  // `infrastructure/relay/.wrangler/sync-smoke-<pid>/`, its `main` pointed back at the relay's
+  // source, and the D1's state beside it. wrangler keeps what it builds — the bundle it watches
+  // and serves — under its project's own `.wrangler/tmp/`, so this run's is inside that folder
+  // and nobody else's is. Two runs in one checkout used to share `infrastructure/relay/.wrangler/tmp/`,
+  // and the one that ended removed the other's bundle under a wrangler still watching it, which
+  // rebuilt, failed ("Could not resolve …/middleware-loader.entry.ts") and held every request to
+  // its relay unanswered (measured 2026-10-20). The folder goes when the run ends — and with it
+  // what a wrangler stopped as Windows stops a process tree leaves behind.
+  const project = `infrastructure/relay/.wrangler/sync-smoke-${process.pid}`;
+  const config = `${project}/wrangler.jsonc`;
+  const persist = `${project}/state`;
   const env = { ...process.env, WRANGLER_SEND_METRICS: "false", NO_COLOR: "1", FORCE_COLOR: "0" };
-  // What wrangler keeps beside the Worker while it runs: the bundle it built, in `tmp/`. A
-  // wrangler told to stop removes its own; one stopped as Windows stops a process tree does
-  // not, so whatever is there afterwards that was not there before is this run's, and goes.
-  const scratch = join(ROOT, "infrastructure/relay/.wrangler/tmp");
-  const before = new Set(existsSync(scratch) ? readdirSync(scratch) : []);
-  const mine = () => [
-    join(ROOT, persist),
-    ...(existsSync(scratch) ? readdirSync(scratch) : [])
-      .filter((entry) => !before.has(entry))
-      .map((entry) => join(scratch, entry)),
-  ];
+  const relayConfig = readFileSync(join(ROOT, "infrastructure/relay/wrangler.jsonc"), "utf8");
+  const MAIN = '"main": "src/index.ts"';
+  if (relayConfig.split(MAIN).length !== 2) {
+    fail(`infrastructure/relay/wrangler.jsonc no longer says ${MAIN} once, where this reads it`);
+  }
+  mkdirSync(join(ROOT, project), { recursive: true });
+  writeFileSync(join(ROOT, config), relayConfig.replace(MAIN, '"main": "../../src/index.ts"'));
   undo.push(async () => {
-    // Each on its own, and none of them the run's verdict: one that will not go is named.
-    for (const path of mine()) await discard(path);
+    // Not the run's verdict: a folder that will not go is named.
+    await discard(join(ROOT, project));
   });
   // And on the way out by any other road ({@link atExit}): the same, without waiting. Best
   // effort — workerd may still be letting go of a file, and a directory left behind is ignored
   // by git and by the lint, where a process left behind holds a port.
   atExit.push(() => {
-    for (const path of mine()) {
-      rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    }
+    rmSync(join(ROOT, project), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const d1 = (...args: string[]) => {
@@ -304,16 +322,27 @@ export async function startRelay(pageOrigin: string) {
   const log: RelayLog[] = [];
   /** Whatever it said that was not a request line or its banner — an exception, a warning. */
   const said: string[] = [];
+  /** Its last lines, whatever they were, for a wait that never ended to quote ({@link quoteRelay}). */
+  const tail: string[] = [];
+  relayTail = tail;
   let ready!: () => void;
   let failed!: (error: Error) => void;
   const listening = new Promise<void>((found, lost) => ((ready = found), (failed = lost)));
   let pending = "";
+  // `SYNC_SMOKE_RELAY_LOG=<file>`: everything wrangler and workerd print, kept whole — with
+  // `WRANGLER_LOG=debug`, the dev proxy's pauses and reloads too.
+  const keep = process.env.SYNC_SMOKE_RELAY_LOG;
   const hear = (chunk: Buffer) => {
+    if (keep) appendFileSync(keep, chunk);
     pending += chunk;
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() ?? "";
     for (const line of lines) {
-      const request = /\[wrangler:info\] ([A-Z]+) (\S+) (\d{3}) (?:.*\((\d+)ms\))?/.exec(line);
+      if (line.trim() !== "") tail.push(`${new Date().toISOString().slice(11, 23)} ${line.trim()}`);
+      if (tail.length > 12) tail.shift();
+      const request = /\[wrangler(?:-\w+)?:info\] ([A-Z]+) (\S+) (\d{3}) (?:.*\((\d+)ms\))?/.exec(
+        line,
+      );
       if (request) {
         log.push({
           method: request[1],
@@ -323,7 +352,7 @@ export async function startRelay(pageOrigin: string) {
           // What wrangler prints after the status, when it prints it: the answer's own time.
           ms: request[4] === undefined ? null : Number(request[4]),
         });
-      } else if (/\[wrangler:info\] Ready on https:\/\/127\.0\.0\.1:/.test(line)) {
+      } else if (/\[wrangler(?:-\w+)?:info\] Ready on https:\/\/127\.0\.0\.1:/.test(line)) {
         ready();
       } else if (/\[ERROR\]|Uncaught|exception/i.test(line)) {
         said.push(line.trim());
@@ -388,13 +417,19 @@ export async function device(
   // Before the page exists: a card file that is to be kept on its way is held from the first
   // ask. `releaseCards` lets it — and every later ask for it — through.
   const releaseCards = own.holdCards ? hosts.hold(CARDS_FILE) : () => undefined;
-  const page = await openPage(
+  const opened = await openPage(
     browser,
     `${origin}/settings`,
     hosts.check,
     policy,
     viewport(browser, width, height),
   );
+  // Every wait on the page says, when it never ends, what `trouble` finds.
+  const page = {
+    ...opened,
+    until: <T = unknown>(what: string, expression: string, withinMs?: number) =>
+      opened.until<T>(what, expression, withinMs, trouble),
+  };
   // The page's own requests and their failures; the engine's are its Worker's, switched on by
   // the harness as the Worker starts.
   await browser.send("Network.enable", {}, page.sessionId);
@@ -412,6 +447,81 @@ export async function device(
     if (answer.refused !== undefined) fail(`${name}: ${command} was refused: ${answer.refused}`);
     return answer.value;
   };
+  /** Every event of this kind the browser reported for this device's targets, in order. */
+  const events = <M extends EventName>(method: M) =>
+    browser.heard.filter(
+      (message): message is Extract<ProtocolEvent, { method: M }> => message.method === method,
+    );
+  /**
+   * What this device can say about a wait that never ended: every request its targets saw fail,
+   * each with the browser's own reason — the `net::ERR_…` the engine's log flattens into "error
+   * sending request" — what its engine logged, and what an alert on its page says.
+   */
+  const trouble = async () => {
+    const failed = events("Network.loadingFailed")
+      .filter((event) => !event.params.canceled)
+      .map((event) => {
+        const url = events("Network.requestWillBeSent").find(
+          (sent) =>
+            sent.sessionId === event.sessionId && sent.params.requestId === event.params.requestId,
+        )?.params.request;
+        const cors = event.params.corsErrorStatus?.corsError;
+        return (
+          `${url?.method ?? "?"} ${url?.url ?? event.params.requestId}: ${event.params.errorText}` +
+          (cors ? ` (CORS ${cors})` : "")
+        );
+      });
+    const logged = await engine("error_log_list", { limit: 50 }).then(
+      (rows) => rows.map((row) => `${row.operation}: ${row.message}`),
+      (error) => [`(could not be read: ${error.message})`],
+    );
+    const alert = await page.evaluate<string | null>(`${ALERT} ?? null`).catch(() => null);
+    // Each socket this device made, and what it heard: whether a frame the relay sent arrived.
+    const sockets = policy.sockets.map((made) => {
+      const mine = <M extends EventName>(method: M) =>
+        events(method).filter(
+          (event) =>
+            event.sessionId === made.sessionId &&
+            (event.params as { requestId?: string }).requestId === made.requestId,
+        );
+      const heard = mine("Network.webSocketFrameReceived").map(
+        (frame) =>
+          `${frame.params.response.payloadData.slice(0, 40)} at ${frame.params.timestamp.toFixed(1)}`,
+      );
+      const closed = mine("Network.webSocketClosed").length > 0 ? "closed" : "open";
+      return `${shape(new URL(made.url).pathname)} ${closed}, heard [${heard.join(", ")}]`;
+    });
+    // Each request to the relay the browser sent and never finished or failed, and where the
+    // interception left it: a request that hangs leaves a loop `connecting` with nothing logged.
+    const ended = new Set(
+      [...events("Network.loadingFinished"), ...events("Network.loadingFailed")].map(
+        (event) => `${event.sessionId} ${event.params.requestId}`,
+      ),
+    );
+    const now = Date.now();
+    const hanging = events("Network.requestWillBeSent")
+      .filter(
+        (sent) =>
+          sent.params.request.url.startsWith(`${relay.base}/`) &&
+          !ended.has(`${sent.sessionId} ${sent.params.requestId}`),
+      )
+      .map((sent) => {
+        const { method, url } = sent.params.request;
+        const held = hosts.passed.filter((entry) => entry.method === method && entry.url === url);
+        const continued = held.at(-1)?.continued ?? "never paused";
+        return (
+          `${method} ${shape(new URL(url).pathname)} for ` +
+          `${Math.round((now - sent.params.wallTime * 1000) / 1000)} s (continued: ${continued})`
+        );
+      });
+    return (
+      ` Requests that failed: ${failed.join("; ") || "none"}. Logged: ${logged.join("; ") || "nothing"}.` +
+      ` Unanswered: ${hanging.join("; ") || "none"}.` +
+      ` Sockets: ${sockets.join("; ") || "none"}.` +
+      quoteRelay() +
+      (alert ? ` The page's alert: ${alert}` : "")
+    );
+  };
   /** Poll the engine until `done(answer)`; answers the answer. */
   const engineUntil = async <M extends keyof EngineResults>(
     what: string,
@@ -424,15 +534,13 @@ export async function device(
       const answer = await engine(command);
       if (done(answer)) return answer;
       if (performance.now() > stop) {
-        fail(`${name}: ${what} — never happened. ${command} answers ${JSON.stringify(answer)}`);
+        fail(
+          `${name}: ${what} — never happened. ${command} answers ${JSON.stringify(answer)}.` +
+            (await trouble()),
+        );
       }
     }
   };
-  /** Every event of this kind the browser reported for this device's targets, in order. */
-  const events = <M extends EventName>(method: M) =>
-    browser.heard.filter(
-      (message): message is Extract<ProtocolEvent, { method: M }> => message.method === method,
-    );
   /** What the page was told about live sync since it started listening (`listenToSync`). */
   const told = () => page.evaluate<Tellings>("window.__sync");
 
@@ -556,6 +664,7 @@ export async function device(
     problems,
     engine,
     engineUntil,
+    trouble,
     events,
     told,
     go,

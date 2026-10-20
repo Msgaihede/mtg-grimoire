@@ -2590,9 +2590,10 @@ describe("flipping a tile", () => {
 /**
  * Issue #1111 — a tile is keyed by its slot, and what the caller hangs on it must not be.
  *
- * Typing "0" over a copy's "10" saves on that keystroke and removes the copy, and the next card
- * moves up into the same slot. A stepper keyed by the slot would still be focused and still read
- * "0", and the next digit would be a write to a card the reader never touched.
+ * Typing "0" over a copy's "10" and pressing Enter saves it and removes the copy, and the next
+ * card moves up into the same slot. A stepper keyed by the slot would still be focused and still
+ * read "0", and the next number typed and entered would be a write to a card the reader never
+ * touched. (A typed number is sent on Enter or blur since issue #1110, not on each keystroke.)
  */
 describe("a slot that changes card", () => {
   const base = {
@@ -2618,7 +2619,7 @@ describe("a slot that changes card", () => {
 
     const boltBox = screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt" });
     await user.tripleClick(boltBox);
-    await user.keyboard("0");
+    await user.keyboard("0{Enter}");
     expect(onSetQuantity).toHaveBeenLastCalledWith("a", 0);
 
     // The zero removed the copy; the dragon now sits in the bolt's slot.
@@ -2628,7 +2629,7 @@ describe("a slot that changes card", () => {
     expect(dragonBox).not.toHaveFocus();
 
     onSetQuantity.mockClear();
-    await user.keyboard("5");
+    await user.keyboard("5{Enter}");
     expect(onSetQuantity).not.toHaveBeenCalled();
   });
 });

@@ -488,6 +488,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     written and run on one Windows machine, and its first run on a runner is the pull request
     that added it**: whether wrangler's self-signed TLS, workerd and two Chromes fit a runner's
     ten minutes is that run's to say.
+  - **The walk is run again, up to five walks in all, when a browser's network service dies under it** (issue #1296,
+    2026-10-20). From runner image 20261018 (Google Chrome 155.0.8059.39) the walk failed about
+    one run in five, at a different step each time — a pairing, a removal or a departure that
+    never landed. The relay was well; one browser had lost every request it had in flight at
+    once (a held fixture download beside a relay `POST`) and then never reached the relay again.
+    Chrome's stderr says `Network service crashed or was terminated`, and every minidump of the
+    reproduction (Chrome for Testing 155.0.8059.39) says
+    `DevTools: Duplicate request ID`: DevTools' request interception, which the smokes need,
+    refuses a CORS pre-flight that shares its request's id, and kills the network service.
+    Only the relay's requests are pre-flighted. 155.0.8059.84 exempts pre-flights from that
+    check, and twenty-odd walks on it left no dump. `scripts/web-smoke/fault.ts` holds the
+    measurement; the harness stops at the next wait on that line and the sync smoke walks again
+    from nothing — a faulted walk ends at its fault, so five fit the ten minutes — while every
+    other failure stays final and a fifth fault fails saying it was the browser's. Five, because
+    the fault met about one walk in four, alone or two side by side: three walks would still
+    leave a run red a few times in a hundred. Removing the race outright would mean answering
+    the fixture hosts from a local TLS server instead of DevTools' interception; the retry is
+    the bridge until the runner image carries 155.0.8059.84 or later.
   - **`infrastructure/relay/**` routes to `frontend`, `rust` and `web`** since the same step — out of the
     fail-safe, which ran `core` and `storybook` for it: `frontend` tests it, Rust tests read
     three of its files as text, and `web` is the one job that runs it.
