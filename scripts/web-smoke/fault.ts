@@ -43,8 +43,11 @@
 //
 // It stops at the next wait and says so, in place of a minute's wait for something that cannot
 // happen ({@link BrowserFault}). A run that asks for it ({@link attempts}) then runs the whole walk
-// again from nothing — new relay, new browsers, new profiles — **once**, and only for this: any
-// other failure is final, and a second fault is a failure that says it is the browser's.
+// again from nothing — new relay, new browsers, new profiles — **a bounded number of times, and
+// only for this**: any other failure is final at once, and a fault on the last walk is a failure
+// that says it is the browser's. The sync walk takes three: under load the fault met one walk in
+// five to one in three in the reproduction, which a single second walk would still leave red a
+// few runs in a hundred.
 
 /** What Chrome writes, on any host, when its network service died under it. */
 export const NETWORK_SERVICE_DIED = "Network service crashed or was terminated";

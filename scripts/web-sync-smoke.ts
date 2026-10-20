@@ -74,14 +74,15 @@
 // **The relay, the devices, the claim and the pairing are `web-smoke/sync-harness.ts`'s**, so
 // that `web-sync-pull.ts` — the measurement of one large `pull` — means the same things by them.
 //
-// **A walk whose browser broke under it is walked again, once** (issue #1296). Chrome
+// **A walk whose browser broke under it is walked again, at most twice** (issue #1296). Chrome
 // 155.0.8059.39 — CI's from runner image 20261018 — kills its own network service now and then
 // while DevTools intercepts requests and a CORS pre-flight goes out, and this is the one run that
 // sends pre-flights: every request to the relay carries one. The device whose browser it was then
 // fails at whatever step it had reached, which is how this walk came to fail one run in five at a
 // different step each time. `web-smoke/fault.ts` has the measurement and the upstream change that
 // ends it. The harness stops a walk the moment a browser says so and runs it again from nothing;
-// a second fault fails, saying it was the browser's, and every other failure is final at once.
+// a third fault fails, saying it was the browser's, and every other failure is final at once.
+// A faulted walk ends at its fault, so three fit the CI step's ten minutes.
 
 import {
   ALERT,
@@ -717,4 +718,4 @@ async function main() {
   for (const dev of both) await dev.close();
 }
 
-await runAs("web-sync-smoke", DEADLINE_MS, main, 2);
+await runAs("web-sync-smoke", DEADLINE_MS, main, 3);

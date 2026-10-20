@@ -488,7 +488,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     written and run on one Windows machine, and its first run on a runner is the pull request
     that added it**: whether wrangler's self-signed TLS, workerd and two Chromes fit a runner's
     ten minutes is that run's to say.
-  - **The walk is run again once when a browser's network service dies under it** (issue #1296,
+  - **The walk is run again, at most twice, when a browser's network service dies under it** (issue #1296,
     2026-10-20). From runner image 20261018 (Google Chrome 155.0.8059.39) the walk failed about
     one run in five, at a different step each time — a pairing, a removal or a departure that
     never landed. The relay was well; one browser had lost every request it had in flight at
@@ -499,9 +499,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     refuses a CORS pre-flight that shares its request's id, and kills the network service.
     Only the relay's requests are pre-flighted. 155.0.8059.84 exempts pre-flights from that
     check, and twenty-odd walks on it left no dump. `scripts/web-smoke/fault.ts` holds the
-    measurement; the harness stops at the next wait on that line and the sync smoke walks once
-    more from nothing — the ten minutes hold two walks at their 240 s bound — while every other
-    failure stays final and a second fault fails saying it was the browser's.
+    measurement; the harness stops at the next wait on that line and the sync smoke walks again
+    from nothing — a faulted walk ends at its fault, so three fit the ten minutes — while every
+    other failure stays final and a third fault fails saying it was the browser's. One more walk
+    would not do: under load the fault met one walk in five to one in three.
   - **`infrastructure/relay/**` routes to `frontend`, `rust` and `web`** since the same step — out of the
     fail-safe, which ran `core` and `storybook` for it: `frontend` tests it, Rust tests read
     three of its files as text, and `web` is the one job that runs it.

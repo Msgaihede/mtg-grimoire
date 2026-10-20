@@ -13,7 +13,15 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -181,48 +189,42 @@ function stopTree(child: ChildProcess) {
  * wrangler's own process id, which workerd is a child of, and the port its DevTools inspector
  * listens on.
  *
- * **The state directory is under `infrastructure/relay/.wrangler/` and is named relatively.** wrangler 4.146 on
+ * **The run's folder is under `infrastructure/relay/.wrangler/` and is named relatively.** wrangler 4.146 on
  * Windows turns an absolute `--persist-to` into `./C:\…` and its D1 then answers "internal
  * error" (measured 2026-10-04); a relative path works on every host. `.wrangler/` is ignored by
- * git everywhere, and the directory is removed when the run ends.
+ * git everywhere, and the folder is removed when the run ends.
  */
 export async function startRelay(pageOrigin: string) {
   const script = wranglerScript();
-  const config = "infrastructure/relay/wrangler.jsonc";
-  const persist = `infrastructure/relay/.wrangler/sync-smoke-${process.pid}`;
+  // **A project of its own for this run's wrangler**: a copy of the relay's `wrangler.jsonc` in
+  // `infrastructure/relay/.wrangler/sync-smoke-<pid>/`, its `main` pointed back at the relay's
+  // source, and the D1's state beside it. wrangler keeps what it builds — the bundle it watches
+  // and serves — under its project's own `.wrangler/tmp/`, so this run's is inside that folder
+  // and nobody else's is. Two runs in one checkout used to share `infrastructure/relay/.wrangler/tmp/`,
+  // and the one that ended removed the other's bundle under a wrangler still watching it, which
+  // rebuilt, failed ("Could not resolve …/middleware-loader.entry.ts") and held every request to
+  // its relay unanswered (measured 2026-10-20). The folder goes when the run ends — and with it
+  // what a wrangler stopped as Windows stops a process tree leaves behind.
+  const project = `infrastructure/relay/.wrangler/sync-smoke-${process.pid}`;
+  const config = `${project}/wrangler.jsonc`;
+  const persist = `${project}/state`;
   const env = { ...process.env, WRANGLER_SEND_METRICS: "false", NO_COLOR: "1", FORCE_COLOR: "0" };
-  // What wrangler keeps beside the Worker while it runs: the bundle it built, in `tmp/`. A
-  // wrangler told to stop removes its own; one stopped as Windows stops a process tree does
-  // not, so what this run's wrangler made there is this run's, and goes.
-  //
-  // **What it made is read once, when it says it is ready**, and not at the end as "whatever
-  // is there that was not there before". A second run in the same checkout makes its own
-  // bundle meanwhile, and the end-of-run reading removed that one too — under a wrangler still
-  // watching it, which then rebuilt, failed ("Could not resolve …/middleware-loader.entry.ts")
-  // and held every request to its relay unanswered (measured 2026-10-20: two loops side by
-  // side, a run in four failing at a different step each time). A run that never got as far
-  // as ready falls back to the end-of-run reading: nothing of another run's can be newer.
-  const scratch = join(ROOT, "infrastructure/relay/.wrangler/tmp");
-  const entries = () => (existsSync(scratch) ? readdirSync(scratch) : []);
-  const before = new Set(entries());
-  let made: string[] | null = null;
-  const mine = () => [
-    join(ROOT, persist),
-    ...(made ?? entries().filter((entry) => !before.has(entry))).map((entry) =>
-      join(scratch, entry),
-    ),
-  ];
+  const relayConfig = readFileSync(join(ROOT, "infrastructure/relay/wrangler.jsonc"), "utf8");
+  const MAIN = '"main": "src/index.ts"';
+  if (relayConfig.split(MAIN).length !== 2) {
+    fail(`infrastructure/relay/wrangler.jsonc no longer says ${MAIN} once, where this reads it`);
+  }
+  mkdirSync(join(ROOT, project), { recursive: true });
+  writeFileSync(join(ROOT, config), relayConfig.replace(MAIN, '"main": "../../src/index.ts"'));
   undo.push(async () => {
-    // Each on its own, and none of them the run's verdict: one that will not go is named.
-    for (const path of mine()) await discard(path);
+    // Not the run's verdict: a folder that will not go is named.
+    await discard(join(ROOT, project));
   });
   // And on the way out by any other road ({@link atExit}): the same, without waiting. Best
   // effort — workerd may still be letting go of a file, and a directory left behind is ignored
   // by git and by the lint, where a process left behind holds a port.
   atExit.push(() => {
-    for (const path of mine()) {
-      rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    }
+    rmSync(join(ROOT, project), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   const d1 = (...args: string[]) => {
@@ -364,7 +366,6 @@ export async function startRelay(pageOrigin: string) {
   );
   setTimeout(() => failed(new Error("the local relay never said it was ready")), 90_000).unref();
   await listening;
-  made = entries().filter((entry) => !before.has(entry));
   return { port, log, said, pid: child.pid, inspector };
 }
 
