@@ -17,10 +17,19 @@ it, and the copy is the wrong shape anyway if it is taken mid-write.
 
 ```powershell
 $src = "D:\Code\mtg-grimoire\target\debug\data"
-$dst = "target\debug\data"
+$here = (Get-Location).Path
+if ($here -notmatch '\\\.claude\\worktrees\\[^\\]+\\?$') { throw "Run this from a worktree's root under .claude\worktrees\, not $here" }
+$dst = Join-Path $here "target\debug\data"
+if ([IO.Path]::GetFullPath($dst).TrimEnd('\') -eq [IO.Path]::GetFullPath($src).TrimEnd('\')) { throw "`$dst is `$src - refusing to delete the main checkout's data" }
 Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue   # never merge onto an old one
 Copy-Item $src $dst -Recurse
 ```
+
+**The two `throw`s are the recipe, not decoration.** `$dst` is relative to wherever the shell
+stands and `Remove-Item` runs before the copy, so the same lines run from the main checkout
+resolve `$dst` to `$src` and delete the real decks and collection, then fail to copy. Run it
+from the worktree's root (`D:\Code\mtg-grimoire\.claude\worktrees\<name>`), never a
+subfolder, and never drop the guards to make it go.
 
 **`$src` is the main checkout's data folder**, which has been `target\debug\data` since it took
 the 2026-10-08 layout (seen there 2026-10-11; `src-tauri\target` is gone). `$dst` is beside this
@@ -30,7 +39,7 @@ Only the folder is ever copied: a cargo build tree does not survive being moved 
 moved tree failed with `failed to read plugin permissions`).
 
 **`Remove-Item` first is not tidiness.** Copying `mtg.db` on top of a folder that already
-has one leaves the *old* `mtg.db-wal` and `mtg.db-shm` beside the new file — a journal
+has one leaves the _old_ `mtg.db-wal` and `mtg.db-shm` beside the new file — a journal
 belonging to a different database — and SQLite either refuses to open it or replays the
 wrong pages over it.
 
@@ -46,9 +55,13 @@ Read freely; write to a deck you made yourself.
 ```powershell
 pwsh -NoProfile -File .claude\skills\running-the-app\lock.ps1 release app
 Get-Process mtg-grimoire -ErrorAction SilentlyContinue        # must be empty
-Remove-Item "target\debug\data" -Recurse -Force
+$here = (Get-Location).Path
+if ($here -notmatch '\\\.claude\\worktrees\\[^\\]+\\?$') { throw "Run this from a worktree's root under .claude\worktrees\, not $here" }
+Remove-Item (Join-Path $here "target\debug\data") -Recurse -Force
 ```
+
+The same guard, for the same reason: from the main checkout this line deletes the real data.
 
 Delete it after the last live pass, not at the end of the branch: the next pass copies it
 back in seconds. `target/cache` is the other thing to delete when the work is done (the skill's
-*Finish*); `target` itself goes when the worktree does.
+_Finish_); `target` itself goes when the worktree does.
