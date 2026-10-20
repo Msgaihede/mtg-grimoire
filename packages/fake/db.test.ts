@@ -11889,6 +11889,47 @@ describe("the third deck kind", () => {
   });
 
   /**
+   * **Issue #1113: a Ctrl+Z of the switch takes the group row with the kind**, both ways. Undoing
+   * the way out of Virtual drops the group the press made, or the next switch to Regular would make
+   * a second; undoing the way in gives a Regular deck a group to hold copies again, empty.
+   */
+  it("settles the group with the kind on an undo and a redo of the switch", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, virtualOnly: true })] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { virtualOnly: false } });
+    const out = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+
+    h.deck_undo_apply({ deckId: 1, auditId: out });
+    expect(groupOf(db, 1)).toBeUndefined();
+    h.deck_redo_apply({ deckId: 1, auditId: out });
+    expect(groupOf(db, 1)).toBeDefined();
+    h.deck_undo_apply({ deckId: 1, auditId: out });
+    h.deck_update({ id: 1, patch: { virtualOnly: false } });
+    expect(db.collectionFolders.filter((f) => f.deckId === 1)).toHaveLength(1);
+
+    h.deck_update({ id: 1, patch: { virtualOnly: true } });
+    const back = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_undo_apply({ deckId: 1, auditId: back });
+    expect(copiesIn(db, groupOf(db, 1)!.id)).toBe(0);
+  });
+
+  /** And an undo back to Virtual over a group the reader filed copies into since is retired,
+   *  `deck_undo::group_can_go`'s refusal, rather than scattering the copies. */
+  it("retires an undo back to virtual once the group holds copies", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, virtualOnly: true })] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { virtualOnly: false } });
+    const out = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    db.collectionEntries.push(
+      entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupOf(db, 1)!.id }),
+    );
+
+    expect(() => h.deck_undo_apply({ deckId: 1, auditId: out })).toThrow(/taken off the undo list/);
+    expect(db.decks[0].virtualOnly).toBe(false);
+    expect(copiesIn(db, groupOf(db, 1)!.id)).toBe(2);
+  });
+
+  /**
    * **The contrast that gives this rule its meaning.** Two decks, one store, one press each: the
    * theory switch moves the whole live list into the plan, and the kind switch moves nothing at
    * all. Without the second deck in the assertion, "no row moved" is a sentence a broken

@@ -159,15 +159,18 @@ const DECK_FIELDS: &[&str] = &[
     // these two booleans that names no kind at all. The two are on this list together or the
     // journal can produce a deck nothing can read.
     //
-    // **Undoing the flag puts the column back and nothing else, and nothing here claims
-    // otherwise.** Becoming virtual also files the deck's copies into `Recently removed` and
-    // deletes its `collection_folders` group; a step writes `decks` and `deck_cards` and no
-    // third table, so a Ctrl+Z restores the *kind* and leaves both of those where the press put
-    // them. That is the same standing `collection_alloc`'s two moves have — they record a
-    // history row and file no step at all — and it is the honest one here: an undo that rebuilt
-    // the group would have to decide which copies in a shared holding area had come from this
-    // deck, which nothing records. The way back is a second press of the switch, which makes
-    // the group again, and `Recently removed` is where the cards are waiting.
+    // **Undoing the flag puts the column and the group row back, and never the copies.**
+    // Becoming virtual also files the deck's copies into `Recently removed` and deletes its
+    // `collection_folders` group; ceasing to be makes the group again, empty. `apply` settles
+    // the group row with the column (`deck::settle_deck_group`, issue #1113) — the column alone
+    // left a deck undone to Virtual still holding a group the next switch to Regular collided
+    // with, and one undone to Regular with no group to hold anything. The **copies** stay where
+    // the press put them, the standing `collection_alloc`'s two moves have — they record a
+    // history row and file no step at all — and the honest one here: an undo that refilled the
+    // group would have to decide which copies in a shared holding area had come from this deck,
+    // which nothing records. `Recently removed` is where the cards are waiting. And a step back
+    // to Virtual over a group the reader has filed copies into since is refused (`group_can_go`)
+    // rather than scattering them.
     "virtual_only",
     "archived",
     "separate_x_group",
@@ -1455,6 +1458,13 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                     )
                     .map_err(|e| e.to_string())?;
                 }
+                // The kind's group row with the kind (issue #1113): the column alone left a deck
+                // put back to Virtual with a group the next switch to Regular collided with, and
+                // one put back to Regular with none to hold its copies. After the loop, so a
+                // step that also renames the deck names the group after the name it lands on.
+                if fields.contains_key("virtual_only") {
+                    crate::deck::settle_deck_group(tx, deck_id)?;
+                }
             }
             Op::Tokens {
                 restore,
@@ -1610,6 +1620,7 @@ fn plan(
     if !holds(tx, deck_id, backward, &changed, default_moved)?
         || !deletes_hold(tx, deck_id, forward, backward)?
         || !carriers_free(tx, deck_id, forward)?
+        || !group_can_go(tx, deck_id, &ahead, &changed)?
     {
         return Ok(None);
     }
@@ -1652,6 +1663,25 @@ fn plan(
         });
     }
     Ok(Some(ops))
+}
+
+/// May a step that moves `virtual_only` to true take the deck's group away?
+///
+/// Only while the group is empty. [`crate::deck::settle_deck_group`] drops the group when a step
+/// puts a deck back to Virtual, and a group holding copies is cardboard the reader filed into
+/// the deck since the press — the deck has moved on, which is this function's `None` and not an
+/// error, and neither the step nor the journal knows where those copies should go instead.
+fn group_can_go(
+    tx: &Connection,
+    deck_id: i64,
+    ahead: &serde_json::Map<String, Value>,
+    changed: &BTreeSet<&str>,
+) -> Result<bool, String> {
+    let to_virtual = changed.contains("virtual_only")
+        && ahead
+            .get("virtual_only")
+            .is_some_and(|v| same_value(v, &json!(1)));
+    Ok(!to_virtual || !crate::deck::deck_group_holds_copies(tx, deck_id)?)
 }
 
 /// Every [`Op::Deck`] column one side of a step names, merged — and refused by name when one is
@@ -4142,6 +4172,123 @@ mod tests {
 
         redo(&conn, id, audit_id).unwrap();
         assert_eq!(kind(&conn), (0, 1), "and forward again");
+    }
+
+    /// Whether the deck has its collection group — the row a kind change makes or deletes.
+    fn has_group(conn: &Connection, deck_id: i64) -> bool {
+        crate::deck::deck_group(conn, deck_id).unwrap().is_some()
+    }
+
+    fn set_virtual(conn: &Connection, deck_id: i64, virtual_only: bool) -> Result<(), String> {
+        crate::deck::update_deck(
+            conn,
+            deck_id,
+            &crate::deck::DeckPatch {
+                virtual_only: Some(virtual_only),
+                ..Default::default()
+            },
+        )
+        .map(|_| ())
+    }
+
+    /// **Issue #1113, direction A.** A switch to Regular makes the group; its Ctrl+Z has to take
+    /// the group away with the kind, or the next switch to Regular inserts a second group for the
+    /// deck and fails `idx_collection_folder_deck` — on that press and every one after it.
+    #[test]
+    fn undoing_a_switch_to_regular_takes_the_group_with_it() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        set_virtual(&conn, id, true).unwrap();
+        assert!(!has_group(&conn, id));
+
+        set_virtual(&conn, id, false).unwrap();
+        assert!(has_group(&conn, id), "the press makes the group");
+        let audit_id = next_undo(&conn, id).unwrap().unwrap();
+
+        undo(&conn, id).unwrap();
+        assert!(!has_group(&conn, id), "and its undo takes it back");
+
+        redo(&conn, id, audit_id).unwrap();
+        assert!(has_group(&conn, id), "and the redo makes it again");
+
+        undo(&conn, id).unwrap();
+        set_virtual(&conn, id, false).expect("switching to Regular again is not wedged");
+        assert!(has_group(&conn, id));
+    }
+
+    /// **Issue #1113, direction B.** A switch to Virtual files the copies away and deletes the
+    /// group; its Ctrl+Z puts back a Regular deck, which needs a group to hold anything at all —
+    /// empty, because which copies in `Recently removed` were this deck's is recorded nowhere.
+    #[test]
+    fn undoing_a_switch_to_virtual_gives_the_deck_its_group_again() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        assert!(has_group(&conn, id));
+
+        set_virtual(&conn, id, true).unwrap();
+        assert!(!has_group(&conn, id));
+        let audit_id = next_undo(&conn, id).unwrap().unwrap();
+
+        undo(&conn, id).unwrap();
+        assert!(has_group(&conn, id), "a Regular deck can hold copies again");
+        let entry = crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-lea".to_owned(),
+                finish: "nonfoil".to_owned(),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let group = crate::deck::deck_group(&conn, id).unwrap().unwrap();
+        crate::collection_folders::refile_entry(&conn, entry, Some(group))
+            .expect("and filing a copy into it works without a second press");
+        crate::collection_folders::refile_entry(&conn, entry, None)
+            .expect("taken back out, so the redo has an empty group to drop");
+
+        redo(&conn, id, audit_id).unwrap();
+        assert!(!has_group(&conn, id), "and the redo drops it again");
+    }
+
+    /// A step back to Virtual over a group the reader has **filed copies into since** is refused
+    /// and retired: dropping the group would scatter those copies to the collection's root, and
+    /// nothing records where else they belong.
+    #[test]
+    fn an_undo_back_to_virtual_refuses_a_group_holding_copies() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        set_virtual(&conn, id, true).unwrap();
+        set_virtual(&conn, id, false).unwrap();
+        let entry = crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-lea".to_owned(),
+                finish: "nonfoil".to_owned(),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let group = crate::deck::deck_group(&conn, id).unwrap().unwrap();
+        crate::collection_folders::refile_entry(&conn, entry, Some(group)).unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        let still: (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT d.virtual_only, e.folder_id FROM decks d, collection_entries e
+                  WHERE d.id = ?1 AND e.id = ?2",
+                params![id, entry],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            still,
+            (0, Some(group)),
+            "the deck and its copies are as they were"
+        );
     }
 
     /// The half `drive_cases` cannot show: undoing an import sweeps the labels it **invented**
