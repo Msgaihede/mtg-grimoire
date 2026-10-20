@@ -530,6 +530,39 @@ pub struct Verdict {
 pub const PANIC_ERROR: &str = "the detector panicked on this frame — see the log for the assertion";
 /// What a frame's `error` starts with when its JPEG could not be decoded.
 pub const DECODE_ERROR_PREFIX: &str = "decode: ";
+/// The widest or tallest frame, or detail frame, the scanner decodes. A 4K camera's whole frame
+/// is 3840 px and the page sends its detail at 2560 at most (`useScanLoop`'s `DETAIL_LONG_EDGE`).
+pub const MAX_FRAME_SIDE: u32 = 8192;
+/// The most pixels a frame decodes to — 24 MP, 72 MB as RGB. With [`MAX_FRAME_SIDE`] alone a
+/// grayscale 8192×8192 JPEG would decode to 64 MB and triple to 192 MB on its way to RGB, and
+/// WASM linear memory never gives that back (issue #1137).
+pub const MAX_FRAME_PIXELS: u64 = 24_000_000;
+/// How many times the frame's width a detail frame may be. The page sends a ~960 px frame and a
+/// detail of at most 2560; anything far past that is not the same picture at the camera's size.
+pub const MAX_DETAIL_SCALE: f32 = 6.0;
+
+/// Decode one frame's bytes, **as a JPEG and within bounds**, before any pixel is allocated.
+///
+/// `image::load_from_memory` would take PNG and WebP too, guessed from the bytes, with nothing
+/// but `image`'s 512 MiB allocation cap between a header and the decode. Every host sends a JPEG
+/// — the page's `toBlob("image/jpeg")`, the capture button, the synthetic frames — so this takes
+/// only that, and refuses a header past [`MAX_FRAME_SIDE`] or [`MAX_FRAME_PIXELS`] before
+/// decoding it. Enforced here so no host has to remember to.
+pub fn decode_frame(bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    use image::ImageDecoder;
+    let mut decoder =
+        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_FRAME_SIDE);
+    limits.max_image_height = Some(MAX_FRAME_SIDE);
+    limits.max_alloc = Some(MAX_FRAME_PIXELS * 3);
+    decoder.set_limits(limits).map_err(|e| e.to_string())?;
+    let (w, h) = decoder.dimensions();
+    if u64::from(w) * u64::from(h) > MAX_FRAME_PIXELS {
+        return Err(format!("a {w}×{h} frame is past the scanner's {MAX_FRAME_PIXELS} pixels"));
+    }
+    image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())
+}
 /// What a frame's `error` says when the Exact resolve failed on it.
 pub const RESOLVE_FAILED_ERROR: &str = "the Exact resolve failed on this card — see the log";
 
@@ -784,10 +817,10 @@ impl FramePixels<'_> {
     /// would read a card that is not there. Falling back to the detection frame costs
     /// resolution, never correctness.
     fn from_detail(&self, bytes: &[u8], warped: crate::detect::Quad) -> Option<CardPixels> {
-        let img = image::load_from_memory(bytes).ok()?.into_rgb8();
+        let img = decode_frame(bytes).ok()?.into_rgb8();
         let (fw, fh) = (self.frame.width().max(1) as f32, self.frame.height().max(1) as f32);
         let (kx, ky) = (img.width() as f32 / fw, img.height() as f32 / fh);
-        if kx < 1.0 || (kx - ky).abs() > 0.02 * kx {
+        if !(1.0..=MAX_DETAIL_SCALE).contains(&kx) || (kx - ky).abs() > 0.02 * kx {
             return None;
         }
         let q = crate::detect::Quad { corners: warped.corners.map(|(x, y)| (x * kx, y * ky)) };
@@ -1582,7 +1615,7 @@ impl Session {
         }
         let matcher = self.reference.is_some();
         let decode_started = Stopwatch::start();
-        let source = match image::load_from_memory(jpeg) {
+        let source = match decode_frame(jpeg) {
             Ok(i) => i,
             Err(e) => {
                 return Verdict::failed(
@@ -4829,15 +4862,52 @@ mod tests {
         }
     }
 
-    /// A frame and a detail image of it for [`FramePixels`], `k` times the size, as PNG bytes.
+    /// A frame and a detail image of it for [`FramePixels`], `k` times the size, as JPEG bytes.
     fn frame_and_detail(k: u32) -> (RgbImage, Vec<u8>) {
         let frame = RgbImage::from_fn(120, 90, |x, y| image::Rgb([(x * 2) as u8, (y * 2) as u8, 90]));
         let big = image::imageops::resize(&frame, 120 * k, 90 * k, image::imageops::FilterType::Triangle);
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgb8(big)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .expect("png");
-        (frame, png)
+        (frame, encoded(&big, image::ImageFormat::Jpeg))
+    }
+
+    /// `img` as bytes of `format` — JPEG at quality 95, so a detail survives to within resampling.
+    fn encoded(img: &RgbImage, format: image::ImageFormat) -> Vec<u8> {
+        let mut out = Vec::new();
+        if format == image::ImageFormat::Jpeg {
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95)
+                .encode_image(img)
+                .expect("jpeg");
+        } else {
+            image::DynamicImage::ImageRgb8(img.clone())
+                .write_to(&mut std::io::Cursor::new(&mut out), format)
+                .expect("encode");
+        }
+        out
+    }
+
+    /// A small JPEG whose header claims `w`×`h`: the SOF0 segment's size fields rewritten, so a
+    /// decoder that trusted the header would allocate for it.
+    fn jpeg_claiming(w: u16, h: u16) -> Vec<u8> {
+        let mut bytes = encoded(&RgbImage::new(16, 16), image::ImageFormat::Jpeg);
+        let sof = bytes.windows(2).position(|m| m == [0xFF, 0xC0]).expect("a baseline JPEG has SOF0");
+        bytes[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+        bytes[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn only_a_jpeg_within_bounds_is_decoded() {
+        assert_eq!(decode_frame(&blank_jpeg()).map(|i| i.width() > 0).ok(), Some(true));
+        let png = encoded(&RgbImage::new(16, 16), image::ImageFormat::Png);
+        assert!(decode_frame(&png).is_err(), "a PNG was decoded");
+        // Refused on the header alone: past a side, and within both sides but past the pixels.
+        assert!(decode_frame(&jpeg_claiming(9000, 16)).is_err(), "a 9000 px side was decoded");
+        assert!(decode_frame(&jpeg_claiming(8000, 8000)).is_err(), "64 MP was decoded");
+        // And a session reports either as the frame's decode failure.
+        let mut s = Session::new(Some(labelled()), None, 5);
+        for bytes in [png, jpeg_claiming(8000, 8000)] {
+            let v = s.frame(&bytes, &FrameOptions::default());
+            assert!(v.failure().is_some_and(|e| e.starts_with(DECODE_ERROR_PREFIX)), "{v:?}");
+        }
     }
 
     fn pixels_for<'a>(frame: &'a RgbImage, detail: Option<&'a [u8]>) -> FramePixels<'a> {
@@ -4875,14 +4945,15 @@ mod tests {
     fn a_detail_that_cannot_be_the_same_frame_is_refused_for_the_frame_itself() {
         let (frame, _) = frame_and_detail(1);
         // Another aspect: some other picture, so the quad would land on a card that is not there.
-        let other = {
-            let mut png = Vec::new();
-            image::DynamicImage::ImageRgb8(RgbImage::new(240, 240))
-                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-                .expect("png");
-            png
-        };
-        for bytes in [other.as_slice(), b"not a jpeg".as_slice()] {
+        let other = encoded(&RgbImage::new(240, 240), image::ImageFormat::Jpeg);
+        // The same frame, but as a PNG: not what any host sends.
+        let png = encoded(
+            &image::imageops::resize(&frame, 240, 180, image::imageops::FilterType::Triangle),
+            image::ImageFormat::Png,
+        );
+        // The same frame, but far past the size a detail is sent at.
+        let (_, huge) = frame_and_detail(7);
+        for bytes in [other.as_slice(), png.as_slice(), huge.as_slice(), b"not a jpeg".as_slice()] {
             let p = pixels_for(&frame, Some(bytes));
             let got = p.get().expect("the frame is still there to read from");
             assert_eq!(got.image().dimensions(), (120, 90), "read from a refused detail");
