@@ -142,7 +142,7 @@ function isPlaneswalkerCard(card: CardFacts): boolean {
   return typeLine !== null && hasCardType(typeLine, "Planeswalker");
 }
 
-function isInstantOrSorcery(card: CardFacts): boolean {
+function isInstantOrSorcery(card: CardIdentity): boolean {
   const { typeLine } = frontFace(card);
   if (typeLine === null) return false;
   return hasCardType(typeLine, "Instant") || hasCardType(typeLine, "Sorcery");
@@ -322,7 +322,7 @@ const RULES: Record<CommanderRule, RuleDefinition> = {
     everUncommon: false,
   },
   // The signature spell is a zone rule, not an eligibility one — an instant in this zone is
-  // the second half of the pair, and `validateCommanderZone` treats it as such.
+  // the second half of the pair, and `commandZoneIneligibility` treats it as such.
   oathbreaker: {
     noun: "oathbreaker",
     nounPhrase: "an oathbreaker",
@@ -455,6 +455,29 @@ export function commanderIneligibility(
   }
 
   return `${card.name} is not a legal ${def.noun} in ${format}: ${def.nounPhrase} must be ${def.requirement}.`;
+}
+
+/**
+ * Why this card cannot sit in **this rule's command zone**, or `null` if it can — which is
+ * {@link commanderIneligibility} everywhere but Oathbreaker.
+ *
+ * Oathbreaker's zone holds two kinds of card: the oathbreaker, which that function judges, and
+ * the signature spell, which it refuses ("an oathbreaker must be a planeswalker") and which is
+ * nonetheless the zone's second half. An instant or sorcery is therefore accepted here and
+ * nowhere else. Whether the spell fits its oathbreaker's identity, and how many spells the zone
+ * holds, are questions about the zone rather than the card — `oathbreakerZoneIssues` asks them.
+ *
+ * **The one predicate for "may this card go in the zone"**: `oathbreakerZoneIssues` judges each
+ * zone card by it, and `deckCardRules.ts`' `zoneClaims` greys **Set as commander** by it, so a
+ * card the row refuses is a card the panel refuses and the other way round (issue #1161).
+ */
+export function commandZoneIneligibility(
+  card: CardIdentity,
+  rule: CommanderRule,
+  spec: FormatSpec,
+): string | null {
+  if (rule === "oathbreaker" && isInstantOrSorcery(card)) return null;
+  return commanderIneligibility(card, rule, spec);
 }
 
 // -----------------------------------------------------------------------------------------
@@ -703,8 +726,9 @@ export function validateCommanderZone(zone: CardFacts[], spec: FormatSpec): Vali
  * two confident wrong sentences about a real deck. CR 702.124 does the pairing here exactly as
  * it does for commanders; a mixed or partnerless pair still errors.
  *
- * The signature spell is not judged by {@link commanderIneligibility} — an instant is not a
- * planeswalker and never will be. Anything that is neither is.
+ * Each card is judged by {@link commandZoneIneligibility}, which passes the oathbreaker and the
+ * signature spell alike — an instant is not a planeswalker and never will be. Anything that is
+ * neither is refused in the oathbreaker's words.
  */
 function oathbreakerZoneIssues(zone: CardFacts[], spec: FormatSpec): ValidationIssue[] {
   const format = spec.displayName;
@@ -721,8 +745,7 @@ function oathbreakerZoneIssues(zone: CardFacts[], spec: FormatSpec): ValidationI
   const walkers = zone.filter(isPlaneswalkerCard);
   const spells = zone.filter(isInstantOrSorcery);
   for (const card of zone) {
-    if (walkers.includes(card) || spells.includes(card)) continue;
-    const why = commanderIneligibility(card, "oathbreaker", spec);
+    const why = commandZoneIneligibility(card, "oathbreaker", spec);
     if (why !== null) issues.push(error("commander-eligibility", why, [card.cardId]));
   }
 

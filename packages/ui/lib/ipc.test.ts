@@ -938,8 +938,9 @@ describe("ipc argument names match the Rust command signatures", () => {
       { deckId: 9, variant: "live" },
       { deckId: 11, variant: "live" },
     ];
-    await ipc.playtestStart(4, "live", opponents, "hard", 99);
+    await ipc.playtestStart(21, 4, "live", opponents, "hard", 99);
     expect(invoke).toHaveBeenLastCalledWith("playtest_start", {
+      game: 21,
       deckId: 4,
       variant: "live",
       opponents,
@@ -947,25 +948,28 @@ describe("ipc argument names match the Rust command signatures", () => {
       seed: 99,
     });
     // No opponents is the goldfish: the same command, an empty list.
-    await ipc.playtestStart(4, "theory", [], "medium", 7);
+    await ipc.playtestStart(22, 4, "theory", [], "medium", 7);
     expect(invoke).toHaveBeenLastCalledWith("playtest_start", {
+      game: 22,
       deckId: 4,
       variant: "theory",
       opponents: [],
       difficulty: "medium",
       seed: 7,
     });
-    await ipc.playtestAct({ type: "setSandbox", on: true });
+    await ipc.playtestAct(22, { type: "setSandbox", on: true });
     expect(invoke).toHaveBeenLastCalledWith("playtest_act", {
+      game: 22,
       action: { type: "setSandbox", on: true },
     });
-    await ipc.playtestAct({ type: "block", blocks: [{ blocker: 3, attacker: 8 }] });
+    await ipc.playtestAct(22, { type: "block", blocks: [{ blocker: 3, attacker: 8 }] });
     expect(invoke).toHaveBeenLastCalledWith("playtest_act", {
+      game: 22,
       action: { type: "block", blocks: [{ blocker: 3, attacker: 8 }] },
     });
     invoke.mockResolvedValue(undefined);
-    await ipc.playtestEnd();
-    expect(invoke).toHaveBeenLastCalledWith("playtest_end");
+    await ipc.playtestEnd(22);
+    expect(invoke).toHaveBeenLastCalledWith("playtest_end", { game: 22 });
     invoke.mockResolvedValue({ cards: 0, unsupported: [] });
     await ipc.playtestSupport(9, "theory");
     expect(invoke).toHaveBeenLastCalledWith("playtest_support", { deckId: 9, variant: "theory" });
@@ -974,10 +978,12 @@ describe("ipc argument names match the Rust command signatures", () => {
       expect(playtestRs, `\`${command}\` declares no \`${param}\``).toMatch(
         new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
       );
-    for (const param of ["deck_id", "variant", "opponents", "difficulty", "seed"]) {
+    for (const param of ["game", "deck_id", "variant", "opponents", "difficulty", "seed"]) {
       declares("playtest_start", param);
     }
+    declares("playtest_act", "game");
     declares("playtest_act", "action");
+    declares("playtest_end", "game");
     declares("playtest_support", "deck_id");
     declares("playtest_support", "variant");
     for (const registered of [

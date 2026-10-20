@@ -693,6 +693,9 @@ export const WishlistTable = memo(function WishlistTable({
   const table = (
     <VirtualTable
       rows={rows}
+      // The wish, so a quantity box being typed in never outlives the wish it was typed against
+      // — issue #1111, and `rowKey`'s own note.
+      rowKey={(row) => (isBand(row) ? bandKey(row) : row.id)}
       columns={overBands(
         withFolder(
           columnsFor({

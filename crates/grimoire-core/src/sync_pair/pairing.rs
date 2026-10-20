@@ -158,6 +158,11 @@ const ALREADY_USED: &str = "That pairing code has already been used.";
 const NOT_A_RESPONSE: &str = "That response is not a pairing response.";
 const NOT_A_KEY: &str = "That pairing key is unreadable.";
 
+/// What a device already in one group says to an invite into another — at [`accept`], before
+/// anything reaches the relay, and again at [`complete`] as the backstop.
+const IN_ANOTHER_GROUP: &str =
+    "This device is already in a different pairing group. Leave that one first.";
+
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -215,6 +220,14 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
 /// **Posts before it keeps anything**, the same shape [`confirm`] uses one step further on: if
 /// the post fails — the code was answered already, or the relay could not be reached — nothing
 /// local exists to half-undo, and a reader whose paste failed can simply try again.
+///
+/// **A device already in a different group is refused here, before the post**, and not only at
+/// [`complete`]. Once the join blob is on the relay the initiator's [`confirm`] files this device
+/// on its roster and publishes it in the manifest; a refusal at `complete` then comes too late
+/// and leaves the initiator a ghost device that holds a roster slot and is sealed a key on every
+/// rotation (issue #1118). The invite carries the group the initiator will seal — its own, or
+/// the one it will found under that very id — so the comparison is exact. A device that
+/// connected Patreon first holds a group of one (`ensure_group`) and is refused the same way.
 pub async fn accept(
     db: &impl Store,
     pending: &mut Option<Pending>,
@@ -222,6 +235,11 @@ pub async fn accept(
 ) -> Result<Handshake, String> {
     let me = db.with(|conn| identity::ensure(conn).map_err(err))?;
     let inv = Invite::decode(code).map_err(err)?;
+    if let Some(current) = db.with(|conn| identity::group(conn).map_err(err))? {
+        if from_hex16(&current.group_id) != Some(inv.group_id) {
+            return Err(IN_ANOTHER_GROUP.to_owned());
+        }
+    }
     let pair_key = crypto::pair_key(
         &me.keypair.secret,
         &inv.public_key,
@@ -322,6 +340,12 @@ pub fn respond(
 /// What a device with no name of its own is filed as.
 const DEFAULT_PEER_NAME: &str = "Paired device";
 
+/// [`confirm`]'s answer when its `/keys` check finds this device was removed from its group on
+/// another device. The check has already left the group, so pressing again would found a new one.
+pub const REMOVED_BEFORE_CONFIRM: &str = "This device was removed from its pairing group on \
+     another device, so it has no group to share. Pair the new device from one that is still in \
+     the group, or press again to start a new group here.";
+
 /// The initiator confirms the digits matched: the group key is sealed and posted to the relay,
 /// and only once that succeeds does the joiner go on the roster.
 ///
@@ -332,6 +356,8 @@ const DEFAULT_PEER_NAME: &str = "Paired device";
 /// carry a group this device cannot yet prove it minted (nothing to seal at all). See the module
 /// doc's opening paragraphs for why the blob crosses this way at all.
 ///
+/// 0. [`client::check_keys`] — bring this device up to the relay's epoch first, or refuse if a
+///    rotation it never heard about took it off the group. See the comment at the call.
 /// 1. [`identity::room_for`] — the device cap, refused before anything moves.
 /// 2. Seal the group key **at the current epoch** and POST it to `/p/{rv}/offer`. **If this
 ///    fails, nothing has changed locally and the reader can press again** — the candidate group
@@ -369,8 +395,27 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     };
     let rv = p.rv.clone();
     let peer_name = p.peer_name.clone();
+    let invited_into = p.group_id;
     // `p`'s borrow ends here — everything above is copied or cloned out of it, and everything
     // below reaches `pending` fresh, which is what lets the final line take it mutably again.
+
+    // **The relay's epoch before this device's own** (issue #1114). A rotation rings only the
+    // sockets it closes, so a device that stayed can sit at an old epoch for hours; sealing that
+    // epoch hands the joiner a key the relay has moved past, and the joiner's first `/keys`
+    // reads the newer manifest — which does not name it — as its removal notice. So the group is
+    // caught up here, where a sync trip would catch it up, and the seal below reads the epoch
+    // the relay stands on. Adopting also sweeps the roster to the newest manifest, which is what
+    // makes `room_for` below count the devices that are really there.
+    //
+    // **A failed check is not a refusal**, because pairing must not need a membership: a group
+    // nobody has connected Patreon for answers `/keys` with a 401, and it has never rotated, so
+    // there is no newer epoch to be behind. An unreachable relay fails the post below anyway.
+    // `Current` covers a device in no group too — it makes no request at all.
+    if let Ok(check) = client::check_keys(db).await {
+        if check.outcome == client::KeyOutcome::Removed {
+            return Err(REMOVED_BEFORE_CONFIRM.to_owned());
+        }
+    }
 
     // **The sixth device is refused here, before a group is minted or a row written** — spec
     // §4.3. The relay is the fence and this is the message: `/token` refuses the sixth device a
@@ -385,6 +430,9 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     // for `identity::group` to read, so the values `identity::create_group` would mint are
     // reproduced here instead of minted by calling it, because that call also *writes* them, and
     // a write ahead of the post is exactly the ordering step 2's doc above exists to rule out.
+    // **The id is the one [`begin`] minted and the invite carried**, never a fresh one: it is what
+    // the joiner's [`accept`] compared its own group against, so the invite has to name the group
+    // this founds.
     //
     // **Read before the request and written back behind it**, which is safe for one reason:
     // only a sync operation moves a group, and this one holds the lane from here to the commit.
@@ -393,7 +441,7 @@ pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<S
     let group = match existing {
         Some(g) => g,
         None => identity::Group {
-            group_id: hex16(&crypto::random_bytes::<16>()),
+            group_id: hex16(&invited_into),
             epoch: 0,
             group_key: crypto::random_bytes::<32>(),
         },
@@ -514,12 +562,11 @@ pub fn complete(
     // **A device already in a group may only rejoin the one it is in.** Joining a second group
     // overwrites the key this device is already syncing under, and nothing here can get it
     // back — a re-pair after a revocation carries the same group id and is what this allows.
+    // [`accept`] refuses the same case before the initiator commits anything; this is what
+    // still catches a device that entered a group between its `accept` and this call.
     if let Some(current) = identity::group(conn).map_err(err)? {
         if current.group_id != group_id {
-            return Err(
-                "This device is already in a different pairing group. Leave that one first."
-                    .to_owned(),
-            );
+            return Err(IN_ANOTHER_GROUP.to_owned());
         }
     }
 
@@ -794,6 +841,24 @@ const COULD_NOT_COLLECT: &str =
 const JOIN_NOT_PUBLISHED: &str = "Your other devices have not heard about a device paired here \
      yet, so nothing was removed. Sync, then try again.";
 
+/// What `sync_device_revoke` says when the relay's manifest names a device this one has never
+/// been told about (issue #1115).
+///
+/// **This device's roster is partial**: it learned of a join only by adopting an epoch, and
+/// `identity::adopt_epoch` never inserts the row — so it holds no key to seal the new group key
+/// to, and a manifest from here would leave that device off. Off the manifest is removed, so
+/// pressing Remove here would remove two devices, one of them a device nobody chose. The device
+/// that paired the others knows every one of them.
+const ROSTER_NOT_WHOLE: &str = "This device has not been told about every device in your group, \
+     so removing one from here would drop a device it has never heard of too. Nothing was \
+     removed. Remove it from the device you paired the others on.";
+
+/// What `sync_device_revoke` says when the relay could not be asked which devices are in the
+/// group — [`ROSTER_NOT_WHOLE`]'s question, unanswered. The transport's sentence is appended, as
+/// it is to [`COULD_NOT_COLLECT`].
+const COULD_NOT_CHECK: &str =
+    "Could not ask the relay which devices are in your group, so nothing was removed.";
+
 /// Remove a device, in the four steps whose **order is the whole of the fix**.
 ///
 /// 1. **Refuse a group with no membership.** Spec §2.4's fourth refusal, and it comes before
@@ -811,7 +876,11 @@ const JOIN_NOT_PUBLISHED: &str = "Your other devices have not heard about a devi
 /// 3. **Plan the rotation, which writes nothing** ([`identity::plan_rotation_by`]), and publish it
 ///    ([`client::post_rotation`]). It steps the epoch by [`client::removal_step`] — two once the
 ///    relay has advertised it, which is the authenticated removal marker every adopting device
-///    reads (`identity::REMOVAL_STEP`), and one against a relay that has not.
+///    reads (`identity::REMOVAL_STEP`), and one against a relay that has not. **Between the two,
+///    the relay's manifest is asked whether the plan names everybody it knows but the device
+///    being removed** ([`client::drops_only`]), and a plan that does not is refused
+///    ([`ROSTER_NOT_WHOLE`], issue #1115): this device's roster is partial, and the manifest it
+///    would publish removes a device nobody chose as well.
 /// 4. **Commit only on a 2xx** ([`identity::commit_rotation`]).
 ///
 /// **`identity::revoke_device` is gone and steps 3 and 4 are what replaced it.** It rotated
@@ -841,6 +910,13 @@ pub async fn remove_device(db: &impl Store, device_id: &str) -> Result<(), Strin
         // the `+1` its `/rotate` accepts, and once it has, it cannot talk this device back down.
         identity::plan_rotation_by(conn, device_id, client::removal_step(conn))
     })?;
+    // **Nobody off the manifest but the device being removed** — issue #1115. Refused rather
+    // than mended: the relay's ids carry no public key, so there is nothing to seal a blob to.
+    match client::drops_only(db, &plan, client::Dropping::Peer(device_id)).await {
+        Ok(true) => {}
+        Ok(false) => return Err(ROSTER_NOT_WHOLE.to_owned()),
+        Err(e) => return Err(format!("{COULD_NOT_CHECK} {e}")),
+    }
     client::post_rotation(db, &plan).await?;
     // **Planned before the request and committed behind it, against the same roster**: a device
     // joins or leaves only under the lane this removal holds.
@@ -853,7 +929,11 @@ pub async fn remove_device(db: &impl Store, device_id: &str) -> Result<(), Strin
 /// 1. [`identity::plan_departure_by`], which writes nothing, names everyone *but* this device, and
 ///    steps the epoch as a removal does ([`client::removal_step`]).
 /// 2. [`client::post_rotation`], **best effort**. A 500, a timeout, a plane — none of them is a
-///    reason a reader cannot leave.
+///    reason a reader cannot leave. **And only when the plan names everybody the relay knows but
+///    this device** ([`client::drops_only`], asked first): a device holding a partial roster —
+///    one that learned of a join only by adopting an epoch — would otherwise publish a manifest
+///    that leaves the joined device off, and evict it on its way out (issue #1115). Not asked, or
+///    not answered, is not published.
 /// 3. [`identity::leave_group`] **and** [`entitlement::clear`], unconditionally.
 ///
 /// **Step 3 running whatever step 2 answered is the whole of "leaving is always possible"**, and
@@ -903,8 +983,15 @@ async fn leave_group_now(db: &impl Store) -> Result<(), String> {
         }
         Ok(identity::plan_departure_by(conn, client::removal_step(conn)).ok())
     })?;
+    // **Published only when it leaves nobody off but this device** — issue #1115. A device that
+    // learned of a join only by adopting an epoch holds no row for the joined device, so its plan
+    // omits it, and a departure published from here would take that device out with this one.
+    // What declining costs is the courtesy again, never the departure: the others go on listing
+    // this device until somebody removes it from a device that knows the whole group.
     if let Some(plan) = plan {
-        let _ = client::post_rotation(db, &plan).await;
+        if client::drops_only(db, &plan, client::Dropping::ThisDevice).await == Ok(true) {
+            let _ = client::post_rotation(db, &plan).await;
+        }
     }
 
     // **One stretch: the group and the grant go together**, so nothing reads a device that has
@@ -1314,6 +1401,154 @@ mod tests {
         );
     }
 
+    /// The initiator of issue #1114's scenario: in a group with a peer that will play the remover
+    /// (whose keypair is answered, so a test can seal a rotation as it would) and an old device,
+    /// `"old-phone"`, that the remover is about to drop. Pointed at `relay`.
+    fn behind_a_removal(relay: &FakeRelay) -> (Connection, identity::Identity, crypto::Keypair) {
+        let a = db();
+        relay.point(&a);
+        let me = identity::ensure(&a).unwrap();
+        identity::create_group(&a, &me).unwrap();
+        let remover = crypto::keypair();
+        identity::add_device(&a, "dev-remover", &remover.public, "Desk").unwrap();
+        identity::add_device(&a, "old-phone", &[8u8; 32], "Old phone").unwrap();
+        (a, me, remover)
+    }
+
+    /// Open the sealed key `confirm` handed back exactly as `complete` would, and answer the
+    /// epoch it carries.
+    fn sealed_epoch(sealed: &SealedKey, joiner: &Option<Pending>) -> i64 {
+        let pair_key = joiner.as_ref().unwrap().pair_key.unwrap();
+        let blob = crate::sync_pair::invite::blob_decode(&sealed.sealed_key).unwrap();
+        let split = blob.iter().position(|byte| *byte == 0).unwrap();
+        let plain = crypto::open(&pair_key, &blob[..split], &blob[split + 1..]).unwrap();
+        let mut parts = plain.splitn(3, |byte| *byte == 0);
+        parts.next();
+        String::from_utf8_lossy(parts.next().unwrap())
+            .parse()
+            .unwrap()
+    }
+
+    /// ⚠ **An initiator behind the relay's epoch catches up before it seals** (issue #1114).
+    ///
+    /// Another device removed `old-phone`, and the rotation rang nobody who stayed, so A still
+    /// stands on the old epoch when it pairs a new phone. Sealed there, the new phone's first
+    /// `/keys` read the newer manifest — which does not name it — as its removal notice, and A's
+    /// next trip swept it off A's roster too. Pairing "succeeded" and the phone was thrown out.
+    ///
+    /// **What makes it red**: dropping the `check_keys` at the top of `confirm` — the sealed
+    /// epoch is the old one and `old-phone` is still on the roster.
+    #[tokio::test]
+    async fn confirm_catches_up_to_the_relays_epoch_before_it_seals() {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+
+        let relay = FakeRelay::start().await;
+        let (a, me, remover) = behind_a_removal(&relay);
+        let before = identity::group(&a).unwrap().unwrap();
+        let new_key = [42u8; 32];
+        let blob = crypto::wrap_group_key(
+            &remover.secret,
+            &me.keypair.public,
+            &before.group_id,
+            &me.device_id,
+            before.epoch + 1,
+            &new_key,
+        )
+        .unwrap();
+        relay.server.mock(|when, then| {
+            when.method(GET)
+                .path(format!("/g/{}/keys", before.group_id));
+            then.status(200).json_body(serde_json::json!({
+                "epoch": before.epoch + 1,
+                "blob": URL_SAFE_NO_PAD.encode(&blob),
+                "devices": [me.device_id.clone(), "dev-remover"],
+            }));
+        });
+
+        let d = db();
+        relay.point(&d);
+        let (mut pa, mut pd) = (None, None);
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&d, &mut pd, &offer.code).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
+        let sealed = confirm(&a, &mut pa).await.expect("paired");
+
+        assert_eq!(
+            sealed_epoch(&sealed, &pd),
+            before.epoch + 1,
+            "the new device was handed an epoch the relay has moved past"
+        );
+        let after = identity::group(&a).unwrap().unwrap();
+        assert_eq!(after.epoch, before.epoch + 1);
+        assert_eq!(after.group_key, new_key);
+        let d_id = identity::ensure(&d).unwrap().device_id;
+        let mut ids: Vec<String> = identity::roster(&a)
+            .unwrap()
+            .into_iter()
+            .map(|dev| dev.device_id)
+            .collect();
+        ids.sort();
+        let mut want = vec![me.device_id.clone(), "dev-remover".to_owned(), d_id];
+        want.sort();
+        assert_eq!(
+            ids, want,
+            "the roster was not swept to the relay's manifest before the join"
+        );
+
+        // ...and the new device, completing, stands on the relay's epoch.
+        complete(&d, &mut pd, &sealed.sealed_key).unwrap();
+        assert_eq!(identity::group(&d).unwrap().unwrap(), after);
+    }
+
+    /// **An initiator the relay has taken off its group refuses, and hands nothing over.**
+    ///
+    /// The `/keys` check reads the removal notice and leaves the group; sealing on would hand the
+    /// new device a group that has already dropped the one inviting it. Red if `confirm` ignores
+    /// `Removed` — the offer slot fills and the joiner is filed on a roster.
+    #[tokio::test]
+    async fn confirm_refuses_once_the_relay_has_removed_this_device() {
+        let relay = FakeRelay::start().await;
+        let (a, me, _remover) = behind_a_removal(&relay);
+        let before = identity::group(&a).unwrap().unwrap();
+        relay.server.mock(|when, then| {
+            when.method(GET)
+                .path(format!("/g/{}/keys", before.group_id));
+            then.status(200).json_body(serde_json::json!({
+                "epoch": before.epoch + 1,
+                "blob": serde_json::Value::Null,
+                "devices": ["dev-remover"],
+            }));
+        });
+
+        let d = db();
+        relay.point(&d);
+        let (mut pa, mut pd) = (None, None);
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&d, &mut pd, &offer.code).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
+        let refused = confirm(&a, &mut pa)
+            .await
+            .expect_err("a removed device sealed its old group for a new one");
+
+        assert_eq!(refused, REMOVED_BEFORE_CONFIRM);
+        let rv = pa.as_ref().unwrap().rv.clone();
+        assert!(relay.blob(&rv, "offer").is_none(), "a key was handed over");
+        assert!(identity::group(&a).unwrap().is_none(), "the group was kept");
+        assert!(
+            !identity::roster(&a)
+                .unwrap()
+                .iter()
+                .any(|dev| dev.device_id != me.device_id),
+            "the joiner was filed anyway"
+        );
+        assert!(!pa.as_ref().unwrap().spent);
+    }
+
     /// A whole pairing, two databases, a fake relay standing in for the rendezvous. Both ends
     /// must end up holding the same group key, and the six digits both readers were shown must
     /// have matched.
@@ -1677,8 +1912,14 @@ mod tests {
     /// point: joining group two overwrites the key this device is syncing group one under, and
     /// nothing here can get that key back. A re-pair after a revocation carries the *same*
     /// group id and is allowed by the same check.
+    /// **A device already in a group is refused at `accept`, before its answer reaches the
+    /// relay** — issue #1118. Refusing only at `complete` came after the initiator's `confirm`
+    /// had already filed the joiner on its roster: a ghost device holding a slot.
+    ///
+    /// **What makes it red**: dropping the group check from `accept`. The join slot then fills,
+    /// C's `confirm` succeeds and C's roster names B.
     #[tokio::test]
-    async fn joining_a_second_group_is_refused_and_the_first_key_survives() {
+    async fn joining_a_second_group_is_refused_at_accept_and_leaves_no_ghost() {
         let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
@@ -1697,22 +1938,114 @@ mod tests {
         poll(&b, &mut pb, crate::platform::clock::now_ms())
             .await
             .unwrap();
-        let joined = crate::sync_pair::identity::group(&b).unwrap().unwrap();
+        let joined = identity::group(&b).unwrap().unwrap();
 
-        // C runs a perfectly good pairing at B, into a group of its own.
+        // C offers B a group of its own.
         let c_offer = begin(&c, &mut pc).unwrap();
-        accept(&b, &mut pb, &c_offer.code).await.unwrap();
-        poll(&c, &mut pc, crate::platform::clock::now_ms())
+        let c_inv = Invite::decode(&c_offer.code).unwrap();
+        assert_eq!(
+            accept(&b, &mut pb, &c_offer.code).await.unwrap_err(),
+            IN_ANOTHER_GROUP
+        );
+        assert!(
+            relay
+                .blob(&crypto::rendezvous_id(&c_inv.token), "join")
+                .is_none(),
+            "nothing was posted for C to read"
+        );
+
+        // C never hears an answer, so it has nothing to confirm and nobody to file.
+        let progress = poll(&c, &mut pc, crate::platform::clock::now_ms())
             .await
             .unwrap();
-        let sealed_c = confirm(&c, &mut pc).await.unwrap();
+        assert_eq!(progress.stage, STAGE_WAITING);
+        assert!(confirm(&c, &mut pc).await.is_err());
+        assert!(identity::group(&c).unwrap().is_none());
+        assert!(identity::roster(&c).unwrap().is_empty());
+        assert_eq!(identity::group(&b).unwrap().unwrap(), joined);
+    }
 
-        assert!(complete(&b, &mut pb, &sealed_c.sealed_key).is_err());
+    /// **The issue's own case**: a phone that connected Patreon first holds a group of one
+    /// (`ensure_group`), and the desktop's invite — into a group the desktop founds at `confirm` —
+    /// is refused at `accept`.
+    #[tokio::test]
+    async fn a_device_that_connected_first_is_refused_at_accept() {
+        let relay = FakeRelay::start().await;
+        let (desktop, phone) = (db(), db());
+        relay.point(&desktop);
+        relay.point(&phone);
+        commands::ensure_group(&phone).unwrap();
+        let (mut pd, mut pp) = (None, None);
+
+        let offer = begin(&desktop, &mut pd).unwrap();
         assert_eq!(
-            crate::sync_pair::identity::group(&b).unwrap().unwrap(),
-            joined,
-            "B kept the key it was already syncing under"
+            accept(&phone, &mut pp, &offer.code).await.unwrap_err(),
+            IN_ANOTHER_GROUP
         );
+        assert!(pp.is_none(), "a refused accept keeps nothing");
+    }
+
+    /// **A re-pair into the group this device is already in is still accepted** — the check
+    /// compares ids, not the mere presence of a group.
+    #[tokio::test]
+    async fn a_device_may_accept_an_invite_into_its_own_group() {
+        let relay = FakeRelay::start().await;
+        let (a, b) = (db(), db());
+        let (mut pa, mut pb) = (None, None);
+        pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
+        poll(&b, &mut pb, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
+
+        let again = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &again.code).await.unwrap();
+    }
+
+    /// **A founding `confirm` founds the group the invite named**, which is what makes the
+    /// comparison in `accept` exact.
+    #[tokio::test]
+    async fn a_founding_confirm_writes_the_group_the_invite_named() {
+        let relay = FakeRelay::start().await;
+        let (a, b) = (db(), db());
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
+        let offer = begin(&a, &mut pa).unwrap();
+        let inv = Invite::decode(&offer.code).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
+        confirm(&a, &mut pa).await.unwrap();
+
+        let group = identity::group(&a).unwrap().unwrap();
+        assert_eq!(from_hex16(&group.group_id), Some(inv.group_id));
+    }
+
+    /// **`complete` is still the backstop**: a device that entered a group *after* its `accept`
+    /// is refused there, and keeps the key it holds.
+    #[tokio::test]
+    async fn completing_into_a_second_group_is_refused_and_the_first_key_survives() {
+        let relay = FakeRelay::start().await;
+        let (a, b) = (db(), db());
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
+
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        in_a_group_with_key(&b, [7u8; 32]);
+        let held = identity::group(&b).unwrap().unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
+        let sealed = confirm(&a, &mut pa).await.unwrap();
+
+        assert_eq!(
+            complete(&b, &mut pb, &sealed.sealed_key).unwrap_err(),
+            IN_ANOTHER_GROUP
+        );
+        assert_eq!(identity::group(&b).unwrap().unwrap(), held);
     }
 
     /// A device already in a group invites into *that* group, rather than minting a second one
@@ -1921,6 +2254,17 @@ mod tests {
         });
     }
 
+    /// A `/keys` naming `devices` at the device's own epoch and nothing else — what a departure,
+    /// which makes no round trip, reads before it may publish ([`client::drops_only`]).
+    fn relay_names(server: &httpmock::MockServer, group: &str, devices: &[&str]) {
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(200).json_body(serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": devices,
+            }));
+        });
+    }
+
     /// ⚠ **A removal waits while a join paired here is still unpublished.** The other devices do
     /// not know that device yet, so a manifest dropping it drops nobody *they* know — and each
     /// would keep the superseded keys the removed device holds. The round trip in front of the
@@ -2113,6 +2457,128 @@ mod tests {
         assert!(!keys.contains_key("deadbeef"));
     }
 
+    /// The round trip's three mocks with a `/keys` that names `devices` at the device's own
+    /// epoch — so the trip itself sees nothing to adopt and the manifest is read by the
+    /// superset check alone.
+    fn round_trip_naming(server: &httpmock::MockServer, group: &str, devices: &[&str]) {
+        round_trip_answering(
+            server,
+            group,
+            serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": devices, "removalStep": 2,
+            }),
+        );
+    }
+
+    /// ⚠ **Issue #1115: a removal from a partial roster is refused, and nothing moves.**
+    ///
+    /// The desktop paired the phone and then the laptop; the phone adopted the join's epoch, and
+    /// `adopt_epoch` never inserts, so its roster is {desktop, phone} while the relay's manifest
+    /// names the laptop too. A removal of the desktop planned here seals a key to the phone alone
+    /// — and the laptop, off that manifest, reads itself removed on its next `check_keys`.
+    ///
+    /// **What makes it red**: `remove_device` publishing without asking the relay's manifest,
+    /// which is how it shipped.
+    #[tokio::test]
+    async fn a_removal_from_a_partial_roster_is_refused() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        round_trip_naming(&server, &group, &[&me.device_id, "deadbeef", "laptop"]);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 2 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let refused = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("a removal published a manifest without a device the relay names");
+
+        assert_eq!(refused, ROSTER_NOT_WHOLE);
+        rotate.assert_calls(0);
+        assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+        assert_eq!(identity::roster(&conn).unwrap().len(), 2);
+    }
+
+    /// ...and one whose plan names everybody the relay knows **but the device being removed**
+    /// goes out — the removed device on the relay's manifest is the ordinary case, not a partial
+    /// roster. Red if the check compares the manifest whole, which would refuse every removal.
+    #[tokio::test]
+    async fn a_removal_may_drop_the_device_it_removes_and_nobody_else() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        round_trip_naming(&server, &group, &[&me.device_id, "deadbeef"]);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 2 }));
+        });
+
+        remove_device(&conn, "deadbeef").await.expect("removed");
+
+        rotate.assert();
+        assert_eq!(
+            identity::roster(&conn)
+                .unwrap()
+                .into_iter()
+                .map(|d| d.device_id)
+                .collect::<Vec<_>>(),
+            vec![me.device_id]
+        );
+    }
+
+    /// **A removal the relay's manifest cannot be read for is refused**, in its own sentence: the
+    /// question that decides whether it would evict somebody else went unanswered. The trip in
+    /// front of it is answered its `/keys` once, and every later `/keys` fails — a relay that
+    /// went away between the trip and the check.
+    #[tokio::test]
+    async fn a_removal_is_refused_when_the_manifest_cannot_be_read() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        let answered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let once = answered.clone();
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys")).is_true(
+                move |_: &httpmock::prelude::HttpMockRequest| {
+                    !once.swap(true, std::sync::atomic::Ordering::SeqCst)
+                },
+            );
+            then.status(200).json_body(serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": [],
+            }));
+        });
+        let keys = server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(500).body("nope");
+        });
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/pull"));
+            then.status(200)
+                .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+        });
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/ack"));
+            then.status(204);
+        });
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let refused = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("a removal went out without its manifest check");
+
+        assert!(refused.starts_with(COULD_NOT_CHECK), "{refused}");
+        assert!(answered.load(std::sync::atomic::Ordering::SeqCst));
+        keys.assert_calls(1);
+        rotate.assert_calls(0);
+        assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+    }
+
     /// **A group with no membership is refused before anything moves** — spec §2.4's fourth
     /// refusal, and *before* the round trip rather than after it.
     ///
@@ -2156,7 +2622,8 @@ mod tests {
     #[tokio::test]
     async fn leaving_clears_the_group_even_when_the_relay_refuses() {
         let server = MockServer::start_async().await;
-        let (conn, _me, group) = removable(&server, true);
+        let (conn, me, group) = removable(&server, true);
+        relay_names(&server, &group, &[&me.device_id, "deadbeef"]);
         let rotate = server.mock(|when, then| {
             when.method(POST).path(format!("/g/{group}/rotate"));
             then.status(500).body("nope");
@@ -2247,6 +2714,7 @@ mod tests {
     async fn leaving_clears_the_group_when_the_relay_accepts() {
         let server = MockServer::start_async().await;
         let (conn, me, group) = removable(&server, true);
+        relay_names(&server, &group, &[&me.device_id, "deadbeef"]);
         let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
         let recorder = seen.clone();
         let rotate = server.mock(|when, then| {
@@ -2278,6 +2746,58 @@ mod tests {
         );
         assert!(identity::group(&conn).unwrap().is_none());
         assert_eq!(identity::roster(&conn).unwrap().len(), 0);
+    }
+
+    /// ⚠ **Issue #1115: a departure from a partial roster publishes nothing, and still leaves.**
+    ///
+    /// The phone adopted the join that brought the laptop in, so its roster is {desktop, phone}
+    /// while the relay names all three. Its departure plan seals a key to the desktop alone; a
+    /// manifest of {desktop} would take the laptop out with the phone, and the laptop's next
+    /// `check_keys` would read `blob: null` and leave a group nobody removed it from.
+    ///
+    /// **What makes it red**: `leave_group_now` publishing without asking the relay's manifest,
+    /// which is how it shipped — or putting the local clear behind that answer.
+    #[tokio::test]
+    async fn leaving_from_a_partial_roster_publishes_nothing_and_still_leaves() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        relay_names(&server, &group, &[&me.device_id, "deadbeef", "laptop"]);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+
+        leave_group_now(&conn)
+            .await
+            .expect("a partial roster is not a reason a reader cannot leave");
+
+        rotate.assert_calls(0);
+        assert!(identity::group(&conn).unwrap().is_none());
+        assert_eq!(identity::roster(&conn).unwrap().len(), 0);
+        assert!(!entitlement::membership_ended(&conn));
+    }
+
+    /// ...and one whose relay cannot be asked publishes nothing either: not answered is not
+    /// published, and the departure stands.
+    #[tokio::test]
+    async fn leaving_publishes_nothing_when_the_manifest_cannot_be_read() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(500).body("nope");
+        });
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+
+        leave_group_now(&conn).await.expect("left");
+
+        rotate.assert_calls(0);
+        assert!(identity::group(&conn).unwrap().is_none());
     }
 
     /// **A departure steps like a removal once the relay has advertised it** — to every device
@@ -2776,6 +3296,7 @@ mod tests {
     async fn leaving_waits_out_an_operation_in_flight_where_a_press_is_told_busy() {
         let server = MockServer::start_async().await;
         let (state, group) = in_a_group_on_the_lane("leaving-waits-for-the-lane", &server);
+        relay_names(&server, &group, &["deadbeef"]);
         let rotate = server.mock(|when, then| {
             when.method(POST).path(format!("/g/{group}/rotate"));
             then.status(200).body("{}");

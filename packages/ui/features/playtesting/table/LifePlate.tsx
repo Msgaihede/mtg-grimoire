@@ -8,12 +8,11 @@ import { cn } from "@/lib/utils";
 /**
  * How long the plate waits after the last change before it tells the game.
  *
- * **`QuantityStepper` reports every keystroke**, so typing "37" into the box would otherwise be
- * two actions — life set to 3, then to 37 — and two lines in the log, the first of them a lie
- * ("The opponent took 37, down to 3"). Waiting for the reader to stop is also what makes seven
- * presses of `−` one hit rather than seven: the log reads "The opponent took 7, down to 12",
- * which is how a reader says it. Blur and Enter commit at once, so leaving the box never strands
- * a number that was not sent.
+ * **`QuantityStepper` reports every press of `−` and `+`**, so seven presses would otherwise be
+ * seven hits and seven lines in the log. Waiting for the reader to stop is what makes them one:
+ * the log reads "The opponent took 7, down to 12", which is how a reader says it. A *typed*
+ * number needs no waiting — the stepper holds it as a draft and reports it once, on Enter or
+ * blur (issue #1110) — and goes through the same wait only so that the two cannot interleave.
  */
 const SETTLE_MS = 400;
 

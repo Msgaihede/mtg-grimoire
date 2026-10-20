@@ -51,6 +51,10 @@ export interface TagQuerySurface {
   removeTagChip?: (slug: string, namespace: TagNamespace) => void;
   toggleTagChipMode?: (slug: string, namespace: TagNamespace) => void;
   replaceTagToken?: (token: TagToken, value: string) => void;
+  /** Why the typed tags could not be looked up at all, or `null` — `useCardSearch`'s
+   *  `tagLookupFailure`. The wall is held empty while it is set, so the row says why. */
+  tagLookupFailure?: string | null;
+  retryTagLookup?: () => void;
   /** The typed predicates — `cmc>=3`, `t:goblin`, and an `or` as one chip,
    *  `t:goblin or t:elf`. Optional for the same reason the tag fields are: a surface with no
    *  query parsing at all answers none of them. */
@@ -60,8 +64,12 @@ export interface TagQuerySurface {
 }
 
 export function TagQueryRow({ search }: { search: TagQuerySurface }) {
-  const { tagChips = [], tagNotFound = [], predicateChips = [] } = search;
-  const empty = tagChips.length === 0 && tagNotFound.length === 0 && predicateChips.length === 0;
+  const { tagChips = [], tagNotFound = [], predicateChips = [], tagLookupFailure = null } = search;
+  const empty =
+    tagChips.length === 0 &&
+    tagNotFound.length === 0 &&
+    predicateChips.length === 0 &&
+    tagLookupFailure === null;
   if (empty) return null;
   return (
     <div className="flex flex-col gap-1.5">
@@ -84,6 +92,12 @@ export function TagQueryRow({ search }: { search: TagQuerySurface }) {
           // No weight floor. The syntax has no keyword for one — Scryfall has none to borrow —
           // and a control here that the query language cannot express would be a setting the
           // reader could not write down.
+        />
+      )}
+      {tagLookupFailure !== null && (
+        <TagLookupFailedNote
+          reason={tagLookupFailure}
+          onRetry={() => search.retryTagLookup?.()}
         />
       )}
       {tagNotFound.map((token) => (
@@ -216,6 +230,31 @@ function TypedChip({
         <X className="size-3.5" aria-hidden="true" />
       </button>
     </span>
+  );
+}
+
+/**
+ * The tag lookup itself was refused — not a name it could not find, but no answer at all
+ * (issue #1165).
+ *
+ * The wall is held empty rather than run without the tags (`useCardSearch`'s `tagQueryBlocked`),
+ * and an empty wall with nothing beside it reads as "no cards match", so this says why, with the
+ * backend's own sentence, and offers the one thing the reader can do about it. `role="alert"`
+ * rather than the unknown note's `status`: this is a failure, and it is drawn in the failure's
+ * colour the result summaries use.
+ */
+function TagLookupFailedNote({ reason, onRetry }: { reason: string; onRetry: () => void }) {
+  return (
+    <p role="alert" className="flex flex-wrap items-center gap-1.5 text-sm text-destructive">
+      <span>Couldn't look up the tags in the search box — {reason}</span>
+      <button
+        type="button"
+        className={cn(FILTER_CONTROL, FILTER_FOCUS, "h-7 px-2 text-accent")}
+        onClick={onRetry}
+      >
+        Try again
+      </button>
+    </p>
   );
 }
 

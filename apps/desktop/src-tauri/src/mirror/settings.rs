@@ -395,7 +395,14 @@ pub async fn mirror_rebuild(
 /// sitting in front of the window watching it. If the connection cannot be opened the pass
 /// falls back to the shared one rather than refusing: a slow rebuild is better than a button
 /// that does nothing, and the reader asked for this explicitly.
+///
+/// **One pass at a time** — [`AppState::mirror_pass`] is held from before the connection is
+/// chosen until the pass is recorded, and the thread's pass holds the same lock. A press that
+/// lands mid-pass waits for the thread to finish, then reads the rows afresh; two passes
+/// interleaved would each write the manifest the other's prune contradicts. Taken before the
+/// fallback's `db_read` and never after it, so the wait on the thread queues no search.
 pub fn rebuild_now(state: &AppState) -> Result<crate::mirror::run::PassReport, String> {
+    let _one_pass = crate::sync::lock_plain(&state.mirror_pass);
     let own = crate::db::open_read(&state.data_dir).ok();
     let outcome = {
         let shared = own.is_none().then(|| crate::sync::lock_db_read(state));
@@ -410,8 +417,10 @@ pub fn rebuild_now(state: &AppState) -> Result<crate::mirror::run::PassReport, S
         let mut cache = crate::mirror::run::DigestCache::default();
         crate::mirror::run::run_pass(conn, &root, crate::mirror::run::Dirty::ALL, &mut cache)
     };
-    // After any lock has gone, and before the answer: the panel polls `mirror_status` the
-    // moment this resolves, so a stamp written any later is a stamp it can miss.
+    // After the read lock has gone, and before the answer: the panel polls `mirror_status` the
+    // moment this resolves, so a stamp written any later is a stamp it can miss. Still inside
+    // `mirror_pass`, so the stamps land in the order the passes ran — a thread pass recorded
+    // after this one would put the older report back on the panel.
     crate::mirror::watch::record(state, &outcome);
     outcome
 }

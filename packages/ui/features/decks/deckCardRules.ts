@@ -12,7 +12,7 @@
  */
 import { parseFinishes } from "@/lib/finish";
 import type { DeckCard, DeckCategory, DeckFinish, FormatSpec } from "@/lib/ipc";
-import { commanderIneligibility } from "./validation/commanders";
+import { commandZoneIneligibility } from "./validation/commanders";
 import { companionIssues } from "./validation/companions";
 
 /**
@@ -103,10 +103,16 @@ export interface ZoneClaim {
  * refused where the card cannot fill it.
  *
  * The presence test is the format's (`requiresCommander` / `allowsCompanion`), so neither ever
- * appears in Standard or Modern; the eligibility test is `validation/`'s, so a card this offers is
- * a card the validation panel will accept. A looser rule here would offer a card the panel then
- * refuses, which is the one thing the deck surface must never do — the importer's commander step
- * is fenced by the same function for the same reason.
+ * appears in Standard or Modern; the eligibility test is `validation/`'s
+ * `commandZoneIneligibility`, the very predicate the panel judges each zone card by, so a card
+ * this offers is a card the validation panel will accept **and a card it refuses is one the panel
+ * refuses**. A looser rule here would offer a card the panel then refuses; a stricter one greys a
+ * card the panel takes, which is how an Oathbreaker deck's signature spell came to be refused
+ * here while a drag into the same pile validated clean (issue #1161).
+ *
+ * The importer's commander step asks the narrower `commanderIneligibility` on purpose: it picks
+ * the oathbreaker, not the zone, and the signature spell is a choice among every instant and
+ * sorcery in the list — see `commanderChoice` in `transfer/import/destinations/deck.ts`.
  *
  * A zone the deck has no category for is **absent** rather than refused: the write is a move into
  * that category, so with no category there is nothing to move into, and an item that exists only
@@ -140,7 +146,7 @@ export function zoneClaims(
       refusal:
         card.categoryId === commander.id
           ? ALREADY_HERE
-          : commanderIneligibility(card, spec.commanderRule, spec),
+          : commandZoneIneligibility(card, spec.commanderRule, spec),
     });
   }
 

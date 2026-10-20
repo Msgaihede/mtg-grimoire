@@ -74,6 +74,43 @@ describe("zoneClaims", () => {
     expect(zoneClaims(reigning, PILES, [], spec("commander"))[0].refusal).toBe(ALREADY_HERE);
   });
 
+  /**
+   * Issue #1161. Oathbreaker's command zone holds a planeswalker **and** a signature spell, and the
+   * panel accepts both there. The row asked the oathbreaker's own rule alone, so Lightning Bolt
+   * was greyed with "an oathbreaker must be a planeswalker" while a drag onto the pile validated
+   * clean — a row refusing what the panel accepts.
+   */
+  it("offers a signature spell as an Oathbreaker deck's commander", () => {
+    const oathbreaker = spec("oathbreaker");
+    expect(zoneClaims(bolt(), PILES, [], oathbreaker)[0].refusal).toBeNull();
+    const sorcery = card({ name: "Time Wipe", typeLine: "Sorcery", quantity: 1 });
+    expect(zoneClaims(sorcery, PILES, [], oathbreaker)[0].refusal).toBeNull();
+    const nahiri = card({
+      name: "Nahiri, the Lithomancer",
+      typeLine: "Legendary Planeswalker — Nahiri",
+      quantity: 1,
+    });
+    expect(zoneClaims(nahiri, PILES, [], oathbreaker)[0].refusal).toBeNull();
+  });
+
+  it("still refuses an Oathbreaker card that is neither planeswalker nor spell", () => {
+    const kenrith = card({
+      name: "Kenrith, the Returned King",
+      typeLine: "Legendary Creature — Human Noble",
+      power: "5",
+      toughness: "5",
+      quantity: 1,
+    });
+    expect(zoneClaims(kenrith, PILES, [], spec("oathbreaker"))[0].refusal).toBe(
+      "Kenrith, the Returned King is not a legal oathbreaker in Oathbreaker: an oathbreaker " +
+        "must be a planeswalker.",
+    );
+  });
+
+  it("keeps the signature-spell pass to Oathbreaker", () => {
+    expect(zoneClaims(bolt(), PILES, [], spec("commander"))[0].refusal).toEqual(expect.any(String));
+  });
+
   it("refuses a card with no companion ability as a companion", () => {
     const companion = zoneClaims(bolt(), PILES, [bolt()], spec("commander")).find(
       (c) => c.zone === "companion",

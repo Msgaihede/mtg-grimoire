@@ -97,6 +97,18 @@ a static asset request is free and unlimited even on the free plan, and that is 
 that goes viral off the account's 100,000-request/day budget. Adding a route for the bundle would
 undo it.
 
+**Every page `GET /s/{id}` answers is sent under one Content-Security-Policy** (issue #1153):
+the shell, and the 404 and 410 pages beside it. A snapshot is its publisher's document — the
+upload checks the gzip magic and nothing else — so its `img` fields could name any host, and every
+stranger the link reaches would ask it. Two fences stand there: the viewer draws a picture only
+from `https://cards.scryfall.io/` (`packages/ui/lib/shareSnapshot.ts`, `shareImage`), and the
+policy's `img-src` names that host and `data:` alone, whatever the bundle does. `script-src` and
+`connect-src` are `'self'`, `frame-ancestors` is `'none'`; `style-src` allows inline because the
+bundle installs its stylesheet as a `<style>` (`apps/share/main.tsx`). `src/page.ts`'s
+`CONTENT_SECURITY_POLICY` carries the argument for each directive. The pages and the snapshot
+also carry `X-Content-Type-Options: nosniff`, and the pages a `Referrer-Policy` that sends
+Scryfall this origin and never the path — the path is the capability.
+
 ## The blob, and the two-step
 
 `POST` writes the metadata row with `object_key` **NULL**; `PUT` stores the bytes in R2 and only
@@ -159,12 +171,17 @@ page strangers open.
 `src/lapse.ts` is a **daily cron on this Worker**, `30 3 * * *`. It reads `entitlements` — the
 relay's table, in the D1 database the two Workers share — and writes `shares.state`: a group whose
 subject is `dead` has its **live** shares darkened to `lapsed`, and a group whose subject is
-`active` or in `grace` has its **lapsed** shares lit again.
+`active`, or in `grace` with a `grace_until` that has not passed, has its **lapsed** shares lit
+again.
 
 **It reads the stored `status` and does not re-run `decide`.** `infrastructure/relay/src/claim.ts`'s `reconcile`
 is what moves a subject through `active → grace → dead` against Patreon; a second opinion here
 would be one account with two answers to when a membership ended. `grace` **serves** — a declined
-card is a failed payment Patreon retries, not a cancellation the reader chose.
+card is a failed payment Patreon retries, not a cancellation the reader chose — **but only inside
+its window**: the pass reads `grace_until` as the relay's `settle` does, because the row says
+`grace` until the relay's cron next reaches it, and `/token` has refused the reader since the
+deadline. Until issue #1117 a stored `grace` served on its status alone, so a row the cron could
+not settle kept its links live for ever.
 
 **`revoked` is never touched.** The reader's own press is terminal and the cron's flip is
 reversible, which is the whole reason `state` is a state rather than a `revoked_at` stamp. The

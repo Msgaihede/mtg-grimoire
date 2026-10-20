@@ -76,6 +76,12 @@ function useGoTo(): (target: QuickTarget) => void {
  * by index, because the groups answer at different speeds — a deck lit while the collection's rows
  * arrive above-or-below it stays the deck the reader is looking at.
  *
+ * **Enter on the first row waits for the answer to what was typed** (issue #1166). While the
+ * search is busy, the first row can be the previous text's — the debounce has not fired yet, or a
+ * list still shows its `keepPreviousData` answer — so an Enter pressed straight after typing is
+ * held and spent on the first row once the search settles. A row the reader lit themselves (an
+ * arrow or the pointer, after the last keystroke) opens at once: they chose it, stale or not.
+ *
  * **`Ctrl+K` from anywhere** puts the caret here (except under a modal, which owns the keyboard),
  * and Escape hands it back to wherever it was. The panel is drawn inside the title bar, so it
  * rides that row's `LAYER.caption` over every page.
@@ -90,16 +96,27 @@ export function QuickSearch() {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [activeKey, setActiveKey] = useState<string | null>(null);
+  /**
+   * An Enter pressed while the first row may still be the previous text's — see the doc above —
+   * as the press it will make once the search settles. A ref rather than state, because nothing
+   * draws it; a function rather than a flag, because the effect that spends it would otherwise
+   * call `choose` directly, which `react-hooks/set-state-in-effect` refuses (`choose` closes the
+   * panel). The press runs once per Enter, after an answer arrives — not the render cascade the
+   * rule guards against.
+   */
+  const heldEnter = useRef<((item: QuickItem | undefined) => void) | null>(null);
   const goTo = useGoTo();
 
   const { groups, busy } = useQuickSearch(text, open);
   const items = groups.flatMap((g) => g.items);
-  const active = items.find((item) => item.key === activeKey) ?? items[0];
+  const lit = items.find((item) => item.key === activeKey);
+  const active = lit ?? items[0];
 
   const close = (restore: boolean) => {
     setOpen(false);
     setText("");
     setActiveKey(null);
+    heldEnter.current = null;
     const back = returnRef.current;
     returnRef.current = null;
     if (restore && back !== null && back.isConnected) back.focus();
@@ -112,6 +129,14 @@ export function QuickSearch() {
   };
 
   useDismissOnEscape({ layer: "inner", enabled: open, onDismiss: () => close(true) });
+
+  // The held Enter, spent on the render the search settles in — its rows are the typed text's.
+  useEffect(() => {
+    const press = heldEnter.current;
+    if (busy || press === null) return;
+    heldEnter.current = null;
+    press(active);
+  }, [busy, active]);
 
   // Bound here rather than in `AppShell`'s handler, because the field is the whole of what the
   // chord does and it lives here. Not guarded by `isTextField`, for `Ctrl+1…9`'s reason: the chord
@@ -149,11 +174,16 @@ export function QuickSearch() {
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
-      if (active !== undefined) choose(active);
+      if (busy && lit === undefined) {
+        heldEnter.current = (item) => {
+          if (item !== undefined) choose(item);
+        };
+      } else if (active !== undefined) choose(active);
       return;
     }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
+    heldEnter.current = null;
     if (!open) {
       setOpen(true);
       return;
@@ -179,6 +209,7 @@ export function QuickSearch() {
         if (!rootRef.current?.contains(e.relatedTarget)) {
           setOpen(false);
           setActiveKey(null);
+          heldEnter.current = null;
         }
       }}
     >
@@ -205,6 +236,7 @@ export function QuickSearch() {
         onChange={(e) => {
           setText(e.target.value);
           setActiveKey(null);
+          heldEnter.current = null;
           setOpen(true);
         }}
         onKeyDown={onKeyDown}

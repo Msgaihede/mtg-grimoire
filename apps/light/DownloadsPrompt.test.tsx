@@ -1,12 +1,28 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import { DownloadsPrompt, megabytes, type DownloadsStatus } from "./DownloadsPrompt";
+import { useHeldDownloads } from "./heldDownloads";
+
+/** What a face sees of the hold: the offer the phone's Search and Settings draw. */
+function Offer() {
+  const { held, offer } = useHeldDownloads();
+  return held ? (
+    <button type="button" onClick={offer}>
+      Download card data…
+    </button>
+  ) : null;
+}
+
+function comeBack(state: DocumentVisibilityState) {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
 
 const HELD: DownloadsStatus = {
   held: true,
@@ -30,6 +46,9 @@ function answer(status: DownloadsStatus | Error) {
 // returns the mock — the bare arrow ended every test here by calling `invoke()` with nothing.
 beforeEach(() => {
   invoke.mockReset();
+});
+afterEach(() => {
+  Reflect.deleteProperty(document, "visibilityState");
 });
 
 describe("the mobile-data prompt", () => {
@@ -69,6 +88,71 @@ describe("the mobile-data prompt", () => {
 
     expect(invoke).toHaveBeenCalledWith("light_downloads_start", { always: true });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps an offer after Not now, and the offer asks the host again", async () => {
+    answer(HELD);
+    render(
+      <DownloadsPrompt>
+        <Offer />
+      </DownloadsPrompt>,
+    );
+    await screen.findByRole("dialog");
+    await userEvent.click(screen.getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    invoke.mockClear();
+    await userEvent.click(screen.getByRole("button", { name: "Download card data…" }));
+    expect(invoke).toHaveBeenCalledWith("light_downloads");
+    await screen.findByRole("dialog", { name: "Download on mobile data?" });
+  });
+
+  it("asks again when the app comes back to the front, and opens if still held", async () => {
+    answer(HELD);
+    render(<DownloadsPrompt />);
+    await screen.findByRole("dialog");
+    await userEvent.click(screen.getByRole("button", { name: "Not now" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    invoke.mockClear();
+    comeBack("hidden");
+    expect(invoke).not.toHaveBeenCalled();
+    comeBack("visible");
+    expect(invoke).toHaveBeenCalledWith("light_downloads");
+    await screen.findByRole("dialog");
+  });
+
+  it("drops the offer when the host let the hold go — back on Wi-Fi", async () => {
+    answer(HELD);
+    render(
+      <DownloadsPrompt>
+        <Offer />
+      </DownloadsPrompt>,
+    );
+    await screen.findByRole("dialog");
+    await userEvent.click(screen.getByRole("button", { name: "Not now" }));
+
+    answer({ held: false, metered: false, due: [] });
+    comeBack("visible");
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Download card data…" })).toBeNull(),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("drops the offer once Download has started what was held", async () => {
+    answer(HELD);
+    render(
+      <DownloadsPrompt>
+        <Offer />
+      </DownloadsPrompt>,
+    );
+    await screen.findByRole("dialog");
+    await userEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    expect(invoke).toHaveBeenCalledWith("light_downloads_start", { always: false });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("button", { name: "Download card data…" })).toBeNull();
   });
 
   it("draws nothing on a host that is not holding anything", async () => {
