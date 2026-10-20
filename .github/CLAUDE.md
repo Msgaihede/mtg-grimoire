@@ -79,6 +79,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
 ## `release.yml` — Automated Releases
 
 - **Single chained workflow**: Release creation, the three hosts' builds, and publishing run in one file conditioned on `release_created`.
+- **Every release job checks out the tagged commit** (`ref: ${{ needs.release-please.outputs.sha }}`), never `github.sha` (#1197): the `release` group is shared by every push to `main`, so a replaced pending run or a failed release-please step lets a later push's run create the release on a newer commit. `release-please` fails a release whose `sha` is empty (an empty `ref` falls back to `github.sha`); `publish` reads the notes at that `sha` too.
 - **The release rule — the three hosts ship from one tag**: one core means one user schema per commit, sync stamps every op with the sender's,
   and an older build holds a newer op until it updates. A host that ships ahead strands the others, so:
   - `build` (desktop matrix), `android` (the APK and the bundle, as `ci.yml` builds them), `web` (`web:wasm`, `web:build`, `web:smoke`) and `share` (`pnpm share:build`, the share viewer) all build at the tag and hold no secret.
@@ -99,7 +100,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
 - **Release notes are written between releases, from pull requests** (2026-10-11): two jobs run on a push that cut **no** release (`release_created != 'true'`), and nothing `needs` them.
   - `changelog-write` (`environment: changelog`, `OPENROUTER_API_KEY`) installs nothing and runs `node scripts/changelog/cli.ts next`: every pull request since the last tag, one request to Claude Haiku 5.5 through OpenRouter, the answer checked and rendered by code. No key, no release branch, or the released version still on it → nothing written, green.
   - `changelog-commit` (`contents: write`, no key, no checkout) puts the file on the release branch as `changelog/<version>.md` through the contents API. The file is written again whenever `main` moves.
-  - `publish` sets the release body from `changelog/<version>.md` at the run's commit before it flips the draft. A missing file keeps release-please's notes and still publishes. **No model is called on a release.**
+  - `publish` sets the release body from `changelog/<version>.md` at the tagged commit before it flips the draft. A missing file keeps release-please's notes and still publishes. **No model is called on a release.**
   - A lasting correction goes in the pull request's description. A published note is corrected in its file, then `node scripts/changelog/cli.ts push <version>`. `CHANGELOG.md` stays release-please's raw log.
 - **The release is announced on Discord once it is published** (2026-10-11): `announce` needs `release-please` and `publish`, and nothing needs it — a failure turns a run red whose release is already out, and a re-run posts again.
   - `environment: discord`, `DISCORD_WEBHOOK_URL`, `contents: read`; installs nothing. One step reads the published body (`gh release view`, the run's token, never the webhook); the next, the only one the webhook reaches, runs `node scripts/changelog/discord.ts notes.md`. No webhook → nothing posted, said in the summary, green.
