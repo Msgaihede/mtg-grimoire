@@ -386,11 +386,16 @@ export function formatExport(
       // MTGO's own export omits the printing entirely — it resolves a name against whatever
       // copies a player owns rather than pinning one, so naming a set here would be a promise
       // this format was never in a position to keep. `SB:` is a one-line override rather than a
-      // heading, which is exactly how the importer reads it back.
+      // heading, which is exactly how the importer reads it back. **The commander is `SB:` too**
+      // (issue #1180): MTGO has no command zone in a list, and a Commander deck there is the 99
+      // with the commander in the sideboard — unprefixed, it is a 100th main-deck card.
       text = rows
         .map((card) => {
           const section = sectionOf(card);
-          const prefix = section === "Sideboard" || section === "Companion" ? "SB: " : "";
+          const prefix =
+            section === "Sideboard" || section === "Companion" || section === "Commander"
+              ? "SB: "
+              : "";
           return prefix + line(card);
         })
         .join("\n");

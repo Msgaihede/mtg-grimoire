@@ -805,6 +805,19 @@ describe("fold discriminators", () => {
     );
   });
 
+  it("writes the commander as an MTGO SB: line, the zone MTGO's Commander decks keep it in (issue #1180)", () => {
+    const commander = card({
+      name: "Bruna, Light of Alabaster",
+      categoryName: "Commander",
+      categoryKind: "commander",
+    });
+    const main = card({ name: "Sol Ring" });
+
+    expect(formatExport([commander, main], "mtgo", defaultFields("mtgo", DECK))).toBe(
+      "SB: 1 Bruna, Light of Alabaster\n1 Sol Ring\n",
+    );
+  });
+
   it("folds a foil and a regular copy in one category for Arena, which has no finish channel, and keeps them apart in Moxfield, which has one", () => {
     const regular = card({ name: "Lightning Bolt", setCode: "LEA", collectorNumber: "161" });
     const foil = card({
