@@ -4771,6 +4771,21 @@ purpose:**
   a grid from then. On the desktop that removes `take_due` calls that answer `false` and pings
   into a socket that is probably dead.
 
+**A group nobody has connected is waited out, not retried (issue #1120, 2026-10-20).** *Pair
+first, connect later* is supported, and until somebody presses Connect the relay refuses that
+group's every key check with a 401 — it holds no manifest and no `group_auth` for it. `in_a_group`
+was the loop's only gate and `lapsed` answers `false` for a device no status was ever stored on,
+so every rung of the reconnect ladder (60–120 s) made a `/keys` and a `/token`, wrote two
+`error_log` rows and said `offline`, for as long as the group stayed unclaimed. Now a trip whose
+key check answers `client::UNRECOGNISED_GROUP` on a device `entitlement::never_entitled` — no
+refresh secret and no status, so neither door has ever minted for it — writes no row (neither the
+key check's `keys` nor the loop's `live`), says `off`, dials nothing, and asks again after
+`UNCLAIMED_POLL`, ten minutes. A local look every `IDLE_POLL` ends the wait sooner when this
+device presses Connect, a *Sync now* the group door answered writes a status, or the device leaves
+the group; a launch asks at once. The same 401 on a device that has been entitled is still both
+rows — it is the migration the sentence names, or a device behind more rotations than the relay
+keeps.
+
 **Android runs it** (`apps/light/src-tauri`): its `open` registers `live::WriteWake` as the state's
 one write observer and its `start` spawns the loop after `startup::settle`. **It has no push on
 the way out** — the process ends by `_exit` or by the system's kill, neither a hook a request

@@ -574,8 +574,9 @@ describe("the light host offers no membership", () => {
     const tail = literal("LAPSED_TAIL");
     expect(tail).toBe("; the membership has ended");
     expect(coreSyncClient).toContain(`the relay answered 401 to {what}${tail}`);
-    // The key check's 401 has no const in the core: the host matches its opening words, and
-    // the sentence that follows them there still tells a reader to reconnect Patreon.
+    // The key check's 401 (`client::UNRECOGNISED_GROUP` in the core): the host matches its
+    // opening words, and the sentence that follows them there still tells a reader to reconnect
+    // Patreon.
     const head = literal("KEY_CHECK_HEAD");
     expect(head).toBe("the relay did not recognise this device's group key.");
     expect(coreSyncClient).toContain(`"${head} If your devices synced \\`);
