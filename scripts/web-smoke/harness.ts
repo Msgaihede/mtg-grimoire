@@ -16,7 +16,7 @@
 // debugging address when it starts.
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -612,7 +612,16 @@ async function launch(profile: string, extra: string[] = []) {
   let heard = "";
   return new Promise<{ address: string; kill: () => boolean; pid: number | undefined }>(
     (found, lost) => {
+      // `SMOKE_BROWSER_LOG=<file>`: everything each browser prints, under its process id — where
+      // Chrome says its network service crashed, which no DevTools event reports.
+      const keep = process.env.SMOKE_BROWSER_LOG;
       child.stderr.on("data", (chunk) => {
+        if (keep) {
+          const lines = String(chunk)
+            .split(/\r?\n/)
+            .filter((line) => line !== "");
+          appendFileSync(keep, lines.map((line) => `[${child.pid}] ${line}\n`).join(""));
+        }
         heard += chunk;
         const hit = /DevTools listening on (ws:\/\/\S+)/.exec(heard);
         if (hit) found({ address: hit[1], kill, pid: child.pid });
