@@ -22,14 +22,13 @@ export const queryClient = new QueryClient({
  * it is a number that goes on saying what it said before the press for half a minute:
  *
  * - `["collection"]` — the list, the summary, the folder census and the per-folder subtotals.
- * - `["wishlist"]` — **not for a figure a wish derives from the binder**: a wish has read nothing
- *   out of `collection_entries` since 2026-09-08 (`wishlist.rs`'s `WishRow` says what it used to
- *   carry), which is why `useDataReset`'s collection clear leaves this root out. It is here
- *   because two of this set's writers take a wish with them — the deck editor's quick add
- *   (`deck_quick_add.rs`) and its record-the-missing press (`deck_missing.rs`) each fulfil a
- *   matching wish in the same transaction, lowering its quantity or deleting it — so the
- *   shopping list's own rows move. A writer here that takes no wish pays one refetch of a page
- *   that cannot have changed, which is the price of the set being one set.
+ * - `["wishlist"]` — twice over. A wish reports what the binder already holds of it
+ *   (`WishRow.ownedExact`, `ownedOther` and `ownedPlaces`, issues #988 and #1055), all read out
+ *   of `collection_entries`, so any write here moves those figures — which is why
+ *   `useDataReset`'s collection clear names this root too (issue #1179). And two of this set's
+ *   writers take a wish with them — the deck editor's quick add (`deck_quick_add.rs`) and its
+ *   record-the-missing press (`deck_missing.rs`) each fulfil a matching wish in the same
+ *   transaction, lowering its quantity or deleting it — so the shopping list's own rows move.
  * - `["cards", "search"]` — `CardSummary.ownedQuantity`, the Owned badge on the very tile the
  *   reader pressed. **Fire this set through `@/lib/searchMarks`' `invalidateOwnedWrite`**, which
  *   patches that badge into the loaded pages rather than refetching every one of them (issue

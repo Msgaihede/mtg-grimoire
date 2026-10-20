@@ -62,7 +62,7 @@ function invalidate(client: QueryClient, roots: readonly QueryKey[]): void {
 }
 
 /**
- * Emptying the collection makes four roots wrong, and only one of them is obvious.
+ * Emptying the collection makes five roots wrong, and only one of them is obvious.
  *
  * * `["collection"]` — the table itself and its summary.
  * * `["cards"]` — the search wall. `CardSummary.ownedQuantity` and the facet response's
@@ -75,23 +75,22 @@ function invalidate(client: QueryClient, roots: readonly QueryKey[]): void {
  *   a wipe empties both by construction. Since schema v25 there is no claim ledger to delete: a
  *   copy is in a deck because its row is filed there, so clearing the collection is what takes it
  *   out.
- *
- * **`["wishlist"]` was the fifth and is deliberately not here any more.** It was on the list
- * because a wish counted the copies that already filled it (`WishRow.ownedQuantity`), so a wipe
- * sent every one of those figures to zero. The wishlist reads nothing out of `collection_entries`
- * now — it is the reader's own list, kept by hand — so a collection clear leaves every row on
- * that page saying exactly what it said before, and refetching it would be work for a figure
- * that cannot have moved.
+ * * `["wishlist"]` — a wish reports what the collection already holds of it: `WishRow.ownedExact`,
+ *   `ownedOther` (issue #988) and `ownedPlaces`, the folders those copies sit in (issue #1055).
+ *   All three are read out of `collection_entries`, so a wipe sends every one of them to zero.
+ *   It was left out for a while, when a wish read nothing from the binder (2026-09-08), and the
+ *   absence outlived the reason: the Wishlist went on drawing `Own` chips for copies that were
+ *   gone for `lib/query.ts`'s 30 s (issue #1179).
  *
  * Not `["sets"]`, whose `staleTime` is `Infinity` and which only a sync can change.
  */
-const COLLECTION_ROOTS = [["collection"], ["cards"], ["card"], ["decks"]];
+const COLLECTION_ROOTS = [["collection"], ["wishlist"], ["cards"], ["card"], ["decks"]];
 
 /** The wishlist's own table, plus the two surfaces that draw a `wishlisted` flag per card. */
 const WISHLIST_ROOTS = [["wishlist"], ["cards"], ["card"]];
 
 /**
- * The decks, and the collection with them.
+ * The decks, and the collection and the wishlist with them.
  *
  * **The second root is schema v25's, and the sentence it replaces is now false.** This read
  * *"a deck holds an allocation against a collection row, and nothing the collection page or the
@@ -102,13 +101,19 @@ const WISHLIST_ROOTS = [["wishlist"], ["cards"], ["card"]];
  * gone. `lib/query.ts` caches 30 s, so leaving that root out is a ghost row rather than a slow
  * refresh.
  *
+ * **The third is the managed wishlists'** (issue #1179). Deleting a deck fires
+ * `managed_wishlist`'s `mw_deck_del` trigger, and `with_write`'s settle then drops every managed
+ * folder the decks owned, with their wishes — so a Wishlist opened inside the 30 s went on
+ * drawing those folders, and a write to one failed against a row that was gone. The same press
+ * moves `WishRow.ownedPlaces` too: the copies a deck's group held are in `Recently removed` now,
+ * no longer held by a deck.
+ *
  * **The two card roots stay out, and that absence is still worth stating.** A copy that changes
  * folder is a copy the reader still owns — no quantity moves, and `CardSummary.ownedQuantity`
  * is a sum over quantities, finish-blind and folder-blind — so the search wall cannot read
- * differently afterwards. (The wishlist could not either, and no longer for this reason: it
- * reads nothing out of `collection_entries` at all.)
+ * differently afterwards.
  */
-const DECK_ROOTS = [["decks"], ["collection"]];
+const DECK_ROOTS = [["decks"], ["collection"], ["wishlist"]];
 
 /**
  * The combo feed's one root, and it is a root rather than a list of leaves on purpose.
