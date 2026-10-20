@@ -2845,11 +2845,21 @@ before any of them.
   that `refresh_selected_if_due` now uses too) and the card sync's throttle, with each measured
   size beside it. A due card check may cost a few hundred bytes — the file has not rotated — and
   is listed anyway, because Scryfall rotates it daily.
-- **The prompt is `apps/light/DownloadsPrompt.tsx`, mounted by `LightApp` above both faces.** It asks
-  `light_downloads` once and draws only when the host says it is holding: the desktop binary under
+- **The prompt is `apps/light/DownloadsPrompt.tsx`, mounted by `LightApp` around both faces.** It asks
+  `light_downloads` and draws only when the host says it is holding: the desktop binary under
   `mobile:tauri` and the Storybook fake have no such command, and a refusal is nothing to ask. Not
-  now is the first button and Escape and the scrim are Not now too; it sends nothing, and the next
-  launch asks again. Sizes are decimal megabytes rounded up, prefixed *about*.
+  now is the first button and Escape and the scrim are Not now too; it sends nothing. Sizes are
+  decimal megabytes rounded up, prefixed *about*.
+- **Not now is not final** (issue #1155). `MainActivity` moves the task to the back rather than
+  finishing it, so reopening the app resumes the same process and "the next launch" may be days
+  away. So the prompt asks `light_downloads` again on every `visibilitychange` to visible, and **the
+  host looks at the link on each ask while it holds** (`downloads::recheck`, JNI on the blocking
+  pool): an unmetered link lets the hold go and starts the downloads, once, and the answer is
+  `held: false`; a metered one opens the prompt again. While the host holds, the prompt provides
+  `apps/light/heldDownloads.ts`' context to the faces, and the phone's empty Search (`NoCards`, the
+  Search page and a deck's *Add cards*) and the top of its Settings draw a *Download card data…*
+  press that asks again and opens the prompt. The desktop face draws no offer of its own; its
+  re-ask on resume still holds.
 
 **Measured, 2026-10-03, on Linux**: the core's `downloads` tests (a first launch owes cards, combos
 and both tag files; a feed-backed marketplace adds its price list at its own size; a card check

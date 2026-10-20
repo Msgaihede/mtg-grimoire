@@ -284,7 +284,7 @@ fn start(app: &tauri::AppHandle) {
     spawn_upkeep(&state);
 
     // **Whether the launch's downloads wait — decided before the page is told it may mount.** The
-    // prompt asks `light_downloads` once, as it mounts; decided after `settle`, a question landing
+    // prompt asks `light_downloads` first as it mounts; decided after `settle`, a question landing
     // first reads `held: false`, the hold comes down after it, and a metered first run sits with
     // no cards and no prompt (found in review, 2026-10-03). Nothing starts until after `settle`.
     let start_downloads = downloads::decide(

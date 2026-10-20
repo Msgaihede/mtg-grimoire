@@ -36,14 +36,16 @@ export function LightApp({ gate }: { gate: boolean }) {
 
   return (
     <>
-      {/* Keyed by the face: a face that failed must not take the other one down with it. */}
-      <FaceBoundary key={face}>
-        <Suspense fallback={<BootScreen status={{ state: "loading" }} />}>
-          {face === "desktop" ? <DesktopFace /> : <PhoneApp />}
-        </Suspense>
-      </FaceBoundary>
-      {/* Above both faces and outside the boundary, so a crossing neither re-asks nor drops it. */}
-      <DownloadsPrompt />
+      {/* Around both faces and outside the boundary, so a crossing neither re-asks nor drops it;
+          around rather than beside, so a face can offer the prompt again while the host holds. */}
+      <DownloadsPrompt>
+        {/* Keyed by the face: a face that failed must not take the other one down with it. */}
+        <FaceBoundary key={face}>
+          <Suspense fallback={<BootScreen status={{ state: "loading" }} />}>
+            {face === "desktop" ? <DesktopFace /> : <PhoneApp />}
+          </Suspense>
+        </FaceBoundary>
+      </DownloadsPrompt>
       {/* A newer build the host is holding back: the same arrangement, on a rung under every
           dialog, so it is drawn along the bottom of a page and never over a question. */}
       <UpdateNotice />
