@@ -783,6 +783,29 @@ fn lapsed(conn: &Connection, what: &str) -> String {
 // The group key
 // ---------------------------------------------------------------------------------------
 
+/// What a `/keys` check answers when the relay refuses this device's group auth — a 401.
+///
+/// **The commonest cause is named first, and it is a migration rather than a fault.** A group
+/// claimed before the relay stored group keys has an entitlement with no manifest row and a NULL
+/// `group_auth`: `seedGroup` runs only from `/claim`, so nothing else has ever registered one.
+/// **The relay cannot fill it in on its own** — `relay_auth` is derived from the group key, which
+/// it never sees and must never see — so the repair has to be a press on a device. Reconnecting
+/// Patreon re-claims the same group (`row.group_id == group` passes) and seeds the manifest.
+/// Measured on the real pair 2026-08-30: a paid-up, paired device at epoch 2 failed here on its
+/// first press, and no test could have found it — every relay suite starts from a group claimed
+/// under the new code, so a group claimed *before* it is a state the fixtures cannot spell.
+///
+/// **Named so the live loop can act on it without matching a sentence** (issue #1120), as
+/// [`entitlement::STALE_GROUP_AUTH`] is named for this module: on a device that is also
+/// [`entitlement::never_entitled`] it is a group nobody has connected yet, and the loop waits
+/// quietly rather than failing a socket over it. The wording is a reader's and may be reworded;
+/// the comparison is against this constant.
+pub const UNRECOGNISED_GROUP: &str = "the relay did not recognise this device's group key. If \
+     your devices synced together before today, reconnect Patreon once on the device you \
+     connected it on - that registers the group with the relay again. Otherwise this group has \
+     no membership connected to it yet, or this device has been offline across more key changes \
+     than the relay keeps.";
+
 /// What a `/keys` check found, and what [`round_trip`] does about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyOutcome {
@@ -952,27 +975,21 @@ async fn fetch_key_page_at(
                 return Ok(None);
             }
         }
-        let message = if status == 401 {
-            // **The commonest cause is named first, and it is a migration rather than a
-            // fault.** A group claimed before the relay stored group keys has an entitlement
-            // with no manifest row and a NULL `group_auth`: `seedGroup` runs only from
-            // `/claim`, so nothing else has ever registered one. **The relay cannot fill it
-            // in on its own** — `relay_auth` is derived from the group key, which it never
-            // sees and must never see — so the repair has to be a press on a device.
-            // Reconnecting Patreon re-claims the same group (`row.group_id == group`
-            // passes) and seeds the manifest. Measured on the real pair 2026-08-30: a
-            // paid-up, paired device at epoch 2 failed here on its first press, and no test
-            // could have found it — every relay suite starts from a group claimed under the
-            // new code, so a group claimed *before* it is a state the fixtures cannot spell.
-            "the relay did not recognise this device's group key. If your devices synced \
-             together before today, reconnect Patreon once on the device you connected it on \
-             - that registers the group with the relay again. Otherwise this group has no \
-             membership connected to it yet, or this device has been offline across more key \
-             changes than the relay keeps."
-                .to_owned()
-        } else {
-            format!("the relay answered {status} to a key check")
-        };
+        if status == 401 {
+            // **No row for a group nobody has connected** (issue #1120): a device the relay has
+            // never minted for, refused here, is *pair first, connect later* — a supported
+            // state, and one the live loop asks after on a long poll. A row per ask filled the
+            // Errors panel for as long as the group went unclaimed. Every other 401 here is
+            // still one, the device that pressed Connect's above all: see the sentence's doc.
+            if !db
+                .with(|conn| Ok(entitlement::never_entitled(conn)))
+                .unwrap_or(false)
+            {
+                say(db, "keys", Kind::Http, UNRECOGNISED_GROUP, Some(&url));
+            }
+            return Err(UNRECOGNISED_GROUP.to_owned());
+        }
+        let message = format!("the relay answered {status} to a key check");
         say(db, "keys", Kind::Http, &message, Some(&url));
         return Err(message);
     }
