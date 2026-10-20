@@ -1071,8 +1071,11 @@ it("steps the row an add made rather than adding again, when a press is queued b
   renderModal("c1");
   await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(0));
 
-  // Typed, so the field writes per keystroke: "1", then "12".
-  await userEvent.type(screen.getByRole("spinbutton"), "{selectall}12");
+  // Typed and entered twice: "1" sends the add, and "12" is queued behind it while it is out. (A
+  // typed number is sent on Enter or blur since issue #1110, not on each keystroke.)
+  await userEvent.type(screen.getByRole("spinbutton"), "{selectall}1{Enter}");
+  await userEvent.clear(screen.getByRole("spinbutton"));
+  await userEvent.type(screen.getByRole("spinbutton"), "12{Enter}");
   expect(screen.getByRole("spinbutton")).toHaveValue(12);
 
   await backend.open();
