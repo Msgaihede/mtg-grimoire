@@ -558,6 +558,12 @@ const RUNS: Record<string, string[][]> = {
       'has CLOUDFLARE_API_TOKEN "$HAS_TOKEN"',
       'has CLOUDFLARE_ACCOUNT_ID "$HAS_ACCOUNT"',
       'if [ -z "$missing" ]; then',
+      'if [ "$RELAY_DEPLOYED" != true ] || [ "$SHARE_DEPLOYED" != true ] || [ "$SCAN_DEPLOYED" != true ]; then',
+      'echo "The web app\'s token is set and the other three Workers were not all deployed (relay: $RELAY_DEPLOYED, share: $SHARE_DEPLOYED, scan: $SCAN_DEPLOYED)." >&2',
+      'echo "A page ahead of the relay asks it without its half, so nothing was deployed and the release stays a draft." >&2',
+      "echo \"Set CLOUDFLARE_INFRA_API_TOKEN, or deploy $TAG by hand — docs/reference/ci-and-releases.md, 'What only the owner can do'.\" >&2",
+      "exit 1",
+      "fi",
       'echo "present=true" >> "$GITHUB_OUTPUT"',
       "exit 0",
       "fi",
@@ -731,6 +737,7 @@ describe("release.yml", () => {
       "build",
       "android-sign",
       "web",
+      "relay-deploy",
       "share-deploy",
       "scan-deploy",
     ]);
@@ -1014,6 +1021,39 @@ describe("release.yml", () => {
       }
     },
   );
+
+  // **The web app goes live only behind the other three** (issue #1198). With no infra token
+  // they end green having deployed nothing, so each says whether it deployed, and `web-deploy`
+  // holding its own token fails on any of them that did not — before anything is downloaded or
+  // deployed, so the release stays a draft rather than a page ahead of its relay.
+  it.each(["relay-deploy", "share-deploy", "scan-deploy"])(
+    "%s says whether it deployed, from its token step",
+    (name) => {
+      expect(jobs[name]).toMatch(
+        /^ {4}outputs:\n {6}deployed: \$\{\{ steps\.token\.outputs\.present \}\}$/m,
+      );
+    },
+  );
+
+  it("web-deploy refuses to deploy, its token in hand, unless the other three deployed", () => {
+    const ask = stepsOf(jobs["web-deploy"])[1];
+    for (const [env, job] of [
+      ["RELAY_DEPLOYED", "relay-deploy"],
+      ["SHARE_DEPLOYED", "share-deploy"],
+      ["SCAN_DEPLOYED", "scan-deploy"],
+    ]) {
+      expect(ask).toContain(`${env}: \${{ needs.${job}.outputs.deployed }}`);
+      expect(needsOf(jobs["web-deploy"])).toContain(job);
+    }
+    const lines = runsOf(ask)[0];
+    const at = (line: string) => lines.indexOf(line);
+    const check =
+      'if [ "$RELAY_DEPLOYED" != true ] || [ "$SHARE_DEPLOYED" != true ] || [ "$SCAN_DEPLOYED" != true ]; then';
+    // Inside "both values are set", and before `present=true` is ever written.
+    expect(at(check)).toBe(at('if [ -z "$missing" ]; then') + 1);
+    expect(lines[at(check) + 4]).toBe("exit 1");
+    expect(at('echo "present=true" >> "$GITHUB_OUTPUT"')).toBeGreaterThan(at(check) + 4);
+  });
 
   it("builds the share viewer at the tag, as every pull request does, and hands it on", () => {
     const share = stepsOf(jobs.share);

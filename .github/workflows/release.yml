@@ -656,6 +656,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
+    # What `web-deploy` asks before anything else: did this job put the relay on its address.
+    outputs:
+      deployed: ${{ steps.token.outputs.present }}
     permissions:
       contents: read
     steps:
@@ -770,6 +773,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
+    # What `web-deploy` asks before anything else: did this job put the share Worker on its address.
+    outputs:
+      deployed: ${{ steps.token.outputs.present }}
     permissions:
       contents: read
     steps:
@@ -907,6 +913,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
+    # What `web-deploy` asks before anything else: did this job put the scan inbox on its address.
+    outputs:
+      deployed: ${{ steps.token.outputs.present }}
     permissions:
       contents: read
     steps:
@@ -1026,12 +1035,18 @@ jobs:
   # what that leaves: the address serves the previous deploy until somebody deploys this tag by
   # hand. With one of the two values and not the other, it fails.
   #
+  # **With its token and the other three not deployed, it fails** (issue #1198): each of them
+  # says whether it deployed (`deployed`, its token step's `present`), and a missing
+  # `CLOUDFLARE_INFRA_API_TOKEN` ends them green having deployed nothing. Deploying this one
+  # then would put a page live ahead of the relay it asks, and `publish` would call the
+  # release done; failing here deploys nothing and leaves the release a draft.
+  #
   # **`environment: release`**, for `android-sign`'s reason: the token is handed only to a job
   # that names the environment, and from `main` alone once the owner has restricted the
   # environment to it (step 0 of "What only the owner can do"); until then, from any branch.
   web-deploy:
     name: web (deploy)
-    needs: [release-please, build, android-sign, web, share-deploy, scan-deploy]
+    needs: [release-please, build, android-sign, web, relay-deploy, share-deploy, scan-deploy]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1053,6 +1068,9 @@ jobs:
           HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
           HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
           TAG: ${{ needs.release-please.outputs.tag_name }}
+          RELAY_DEPLOYED: ${{ needs.relay-deploy.outputs.deployed }}
+          SHARE_DEPLOYED: ${{ needs.share-deploy.outputs.deployed }}
+          SCAN_DEPLOYED: ${{ needs.scan-deploy.outputs.deployed }}
         run: |
           set -euo pipefail
           missing=""
@@ -1061,6 +1079,12 @@ jobs:
           has CLOUDFLARE_API_TOKEN "$HAS_TOKEN"
           has CLOUDFLARE_ACCOUNT_ID "$HAS_ACCOUNT"
           if [ -z "$missing" ]; then
+            if [ "$RELAY_DEPLOYED" != true ] || [ "$SHARE_DEPLOYED" != true ] || [ "$SCAN_DEPLOYED" != true ]; then
+              echo "The web app's token is set and the other three Workers were not all deployed (relay: $RELAY_DEPLOYED, share: $SHARE_DEPLOYED, scan: $SCAN_DEPLOYED)." >&2
+              echo "A page ahead of the relay asks it without its half, so nothing was deployed and the release stays a draft." >&2
+              echo "Set CLOUDFLARE_INFRA_API_TOKEN, or deploy $TAG by hand — docs/reference/ci-and-releases.md, 'What only the owner can do'." >&2
+              exit 1
+            fi
             echo "present=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi

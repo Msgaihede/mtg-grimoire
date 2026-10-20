@@ -881,6 +881,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     without the other; these two do not, because the account id is already in the environment
     for `web-deploy`, so asking for both would fail every release until the new token existed.
     (`scripts/release-rule.test.ts`: *asks for the token alone, and does nothing without it*.)
+  - **`web-deploy` does not go live ahead of them (2026-10-20, issue #1198).** Each of the three
+    infra jobs has a `deployed` output (its token step's `present`). `web-deploy` needs all three
+    and, holding its own token, fails in its first step when any did not deploy: nothing is
+    deployed, `play-upload` and `publish` do not run, and the release stays a draft. Before,
+    a missing `CLOUDFLARE_INFRA_API_TOKEN` shipped a green release whose page asked a relay
+    without its half, the only signal a summary line. The way out is the token set and the
+    run's jobs run again, or the four Workers deployed from the tag by hand and the draft
+    published (*What only the owner can do*). (`scripts/release-rule.test.ts`: *web-deploy
+    refuses to deploy, its token in hand, unless the other three deployed*.)
   - **The scan inbox is the fourth Worker a release deploys (2026-10-11, the same day; the
     owner's decision, with the card scanner's Send — #890).** `scan-deploy` puts
     `infrastructure/scan-worker/` on `https://scans.mtg-grimoire.app` — a Custom Domain from its
