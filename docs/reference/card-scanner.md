@@ -2372,7 +2372,18 @@ frame later is a card that has moved. The page sends one only on the frame after
 from the video a second time. **A detail header that cannot split the body is refused**, not
 defaulted — not a number, zero, or reaching the end of the body — because a mis-split hands the
 decoder half a JPEG as the frame. The crate refuses a detail of its own accord too, falling back to
-the frame, when it is smaller than the frame or of another aspect.
+the frame, when it is smaller than the frame, more than `MAX_DETAIL_SCALE` (6×) its width, or of
+another aspect.
+
+**Both images decode as JPEG and within bounds, or not at all** (issue #1137, 2026-10-20).
+`session::decode_frame` is the crate's one decoder for a frame and a detail: JPEG only (PNG and
+WebP, which `image::load_from_memory` would have guessed from the bytes, are refused), at most
+`MAX_FRAME_SIDE` (8192 px) a side and `MAX_FRAME_PIXELS` (24 MP) in all, judged from the header
+before a pixel is allocated. A refused frame is a `decode:` failure like any other undecodable
+JPEG; a refused detail falls back to the frame. Enforced in the crate so the desktop's
+`scanner_frame`, the web Worker and the light host need no checks of their own — WASM linear
+memory never shrinks, so a 13k×13k grayscale frame tripled to RGB would have stayed in the
+Worker for good.
 
 **The two headers fail differently, and the asymmetry is the point.** A malformed or absent
 `x-scanner-options` falls back to `FrameOptions::default()` — a defaulted slider costs one frame
