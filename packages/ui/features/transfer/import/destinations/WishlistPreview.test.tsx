@@ -109,4 +109,19 @@ describe("WishlistPreview", () => {
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(useBulkUndo.getState().offers.wishlist).toBeNull();
   });
+
+  it("lists a line that folded into an earlier wish", () => {
+    mount("1 Sol Ring\n1 Lightning Bolt\n2 Sol Ring\n");
+
+    expect(
+      screen.getByText("1 line duplicated an earlier wish and was merged into it"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("line 3 → line 1 · Sol Ring")).toBeInTheDocument();
+  });
+
+  it("says nothing about folds when every line is its own wish", () => {
+    mount("1 Sol Ring\n1 Lightning Bolt\n");
+
+    expect(screen.queryByText(/merged into it/)).toBeNull();
+  });
 });
