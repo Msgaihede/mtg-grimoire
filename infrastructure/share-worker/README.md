@@ -97,6 +97,18 @@ a static asset request is free and unlimited even on the free plan, and that is 
 that goes viral off the account's 100,000-request/day budget. Adding a route for the bundle would
 undo it.
 
+**Every page `GET /s/{id}` answers is sent under one Content-Security-Policy** (issue #1153):
+the shell, and the 404 and 410 pages beside it. A snapshot is its publisher's document — the
+upload checks the gzip magic and nothing else — so its `img` fields could name any host, and every
+stranger the link reaches would ask it. Two fences stand there: the viewer draws a picture only
+from `https://cards.scryfall.io/` (`packages/ui/lib/shareSnapshot.ts`, `shareImage`), and the
+policy's `img-src` names that host and `data:` alone, whatever the bundle does. `script-src` and
+`connect-src` are `'self'`, `frame-ancestors` is `'none'`; `style-src` allows inline because the
+bundle installs its stylesheet as a `<style>` (`apps/share/main.tsx`). `src/page.ts`'s
+`CONTENT_SECURITY_POLICY` carries the argument for each directive. The pages and the snapshot
+also carry `X-Content-Type-Options: nosniff`, and the pages a `Referrer-Policy` that sends
+Scryfall this origin and never the path — the path is the capability.
+
 ## The blob, and the two-step
 
 `POST` writes the metadata row with `object_key` **NULL**; `PUT` stores the bytes in R2 and only

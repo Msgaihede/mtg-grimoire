@@ -324,6 +324,9 @@ export async function handleSnapshot(
       "content-type": "application/json",
       "content-encoding": "gzip",
       "cache-control": "public, max-age=31536000, immutable",
+      // The body is a publisher's document (this file checks its magic and nothing else), so a
+      // browser is told it is the JSON it is labelled and never asked to guess (issue #1153).
+      "x-content-type-options": "nosniff",
     },
   });
 

@@ -77,6 +77,23 @@ describe("a shared deck on the public page", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
+  it("draws no picture from a host the publisher chose, in stacks or in the grid (issue #1153)", async () => {
+    const user = userEvent.setup();
+    const s = snapshot();
+    s.cards[0].img = "https://tracker.example/?c=0";
+    const { container } = mount(s);
+    const sources = () => Array.from(container.querySelectorAll("img"), (img) => img.src);
+
+    expect(sources().length).toBeGreaterThan(0);
+    expect(sources().every((src) => src.startsWith("https://cards.scryfall.io/"))).toBe(true);
+    // Still drawn — as the named frame a card with no picture gets.
+    expect(screen.getAllByText(s.cards[0].n).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Grid" }));
+    expect(sources().length).toBeGreaterThan(0);
+    expect(sources().every((src) => src.startsWith("https://cards.scryfall.io/"))).toBe(true);
+  });
+
   it("is still a binder when the snapshot carries no deck half", () => {
     const s = snapshot();
     delete s.deck;
