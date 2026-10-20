@@ -566,6 +566,11 @@ fn watch(state: &AppState) {
 /// stopped being updated. Caught, it is an ordinary failure with an ordinary backoff.
 /// `AssertUnwindSafe` is honest here rather than a silencer: the one thing a panic can leave
 /// half-written is `cache`, and a stale or missing entry there costs a `stat` and a rewrite.
+///
+/// **[`AppState::mirror_pass`] is held from the root's read to the record**, as
+/// [`settings::rebuild_now`] holds it: a `Rebuild now` pressed mid-pass waits for this one
+/// rather than racing it to `.mirror-manifest`, which is how a pruned deck's files were
+/// orphaned (issue #1149). Taken outside `catch_unwind`, so a caught panic never poisons it.
 fn pass(
     state: &AppState,
     conn: &Connection,
@@ -573,6 +578,7 @@ fn pass(
     cache: &mut DigestCache,
     failures: u32,
 ) -> u32 {
+    let _one_pass = crate::sync::lock_plain(&state.mirror_pass);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let root = settings::root(conn, &state.data_dir);
         crate::mirror::run::run_pass(conn, &root, dirty, cache)
@@ -676,6 +682,7 @@ mod tests {
             )),
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
+            mirror_pass: std::sync::Mutex::new(()),
             changes: Default::default(),
         }
     }
@@ -1476,6 +1483,32 @@ mod tests {
             "the panel's numbers must be the ones this press produced"
         );
         assert!(last.last_run_at.is_some(), "and stamped with when it ran");
+    }
+
+    /// Issue #1149. A rebuild pressed while the thread's pass holds the folder waits for it,
+    /// rather than racing it to `.mirror-manifest` — the race that orphaned a pruned deck's
+    /// files. The test thread stands in for the mirror thread by holding the same lock.
+    #[test]
+    fn a_rebuild_waits_for_the_pass_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        {
+            let conn = crate::sync::lock_db(&state);
+            settings::set_root(&conn, &dir.path().join("mirror")).unwrap();
+        }
+        let in_flight = crate::sync::lock_plain(&state.mirror_pass);
+        std::thread::scope(|s| {
+            let rebuild = s.spawn(|| settings::rebuild_now(&state));
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(!rebuild.is_finished(), "the rebuild must wait its turn");
+            assert!(
+                !dir.path().join("mirror").exists(),
+                "and write nothing while it waits"
+            );
+            drop(in_flight);
+            rebuild.join().unwrap().unwrap();
+        });
+        assert!(dir.path().join("mirror").exists(), "then run in full");
     }
 
     /// The debounce is the reader-facing number and the tick is how finely it is measured; a

@@ -64,6 +64,15 @@ pub struct AppState {
     /// that may not survive a restart, and a count read back after one would be a claim about
     /// a disk nobody has looked at since. See [`crate::mirror::watch::LastPass`].
     pub mirror_status: Mutex<crate::mirror::watch::LastPass>,
+    /// Held across every mirror pass, so only one writes the folder at a time.
+    ///
+    /// Two writers of it are possible — the thread's [`crate::mirror::watch`] pass and the
+    /// panel's `Rebuild now` ([`crate::mirror::settings::rebuild_now`]) — and each reads
+    /// `.mirror-manifest` at its start and writes it at its end. Run together, the last manifest
+    /// written wins: a deck the rebuild pruned and the thread re-put is named by neither, and
+    /// its files are orphaned for good. Separate from [`AppState::mirror_status`], which the
+    /// panel polls and so must never be held for the seconds a pass takes.
+    pub mirror_pass: Mutex<()>,
     /// Which user tables have been written since the other windows were last told — see
     /// [`crate::changes`]. An `Arc` for [`AppState::mirror`]'s reason: the update hook on `db`
     /// holds a clone of it for the life of the process, as a second observer.

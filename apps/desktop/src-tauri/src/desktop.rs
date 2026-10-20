@@ -1399,6 +1399,7 @@ fn init_state(
         core: Arc::new(core),
         mirror,
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
+        mirror_pass: Mutex::new(()),
         changes,
     })
 }
