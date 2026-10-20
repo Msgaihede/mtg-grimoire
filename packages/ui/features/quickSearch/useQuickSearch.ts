@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
-import { recentCardsKey } from "@/features/home/keys";
+import { quickSearchRecentCardsKey } from "@/features/home/keys";
 import { DEBOUNCE_MS, searchTerms } from "@/features/search/useCardSearch";
 import { panelsOf } from "@/features/settings/nav";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
@@ -111,9 +111,10 @@ export function useQuickSearch(
     placeholderData: keepPreviousData,
   });
   // Typed, the corpus's own search — one row per card, QuickAdd's request. Untyped, the cards the
-  // reader opened last, under the home widget's key so the card modal's record refreshes both.
+  // reader opened last, under the recently viewed root so the card modal's record refreshes this
+  // and the home widget alike — but in an entry of its own, since the two cache different shapes.
   const corpus = useQuery({
-    queryKey: typed ? ["quickSearch", "cards", debounced] : recentCardsKey(GROUP_LIMIT),
+    queryKey: typed ? ["quickSearch", "cards", debounced] : quickSearchRecentCardsKey(GROUP_LIMIT),
     queryFn: async () =>
       typed
         ? {

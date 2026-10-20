@@ -263,6 +263,21 @@ export const RECENT_CARDS_ROOT: QueryKey = ["recentCards"];
 export const recentCardsKey = (limit: number): QueryKey => ["recentCards", "list", limit];
 
 /**
+ * The quick search's untyped All cards group — `ipc.recentCards(limit)` too, but cached as the
+ * panel's `{ text, cards }` answer rather than the widget's bare `RecentCard[]`, so it needs an
+ * entry of its own. Under {@link RECENT_CARDS_ROOT} for the same reason as {@link recentCardsKey}:
+ * the recorder's one invalidation refreshes both readers. **The segment, not the limit, is what
+ * keeps the two apart** — keyed `["recentCards", "list", limit]`, the panel's six and the widget's
+ * eight would share one entry (and hand each reader the other's shape) the day either limit moved
+ * onto the other (#1170).
+ */
+export const quickSearchRecentCardsKey = (limit: number): QueryKey => [
+  "recentCards",
+  "quickSearch",
+  limit,
+];
+
+/**
  * Every sticky note — `ipc.stickyNotes`, the whole table in its stored order.
  *
  * **A root of its own**, for the reason the module doc argues above: nothing else reads

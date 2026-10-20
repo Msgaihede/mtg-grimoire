@@ -35,6 +35,7 @@ import {
   priceHistoryKey,
   priceMoversKey,
   RECENT_CARDS_ROOT,
+  quickSearchRecentCardsKey,
   recentCardsKey,
   scannerTrayCountKey,
   setCompletionKey,
@@ -147,6 +148,19 @@ describe("shape", () => {
     expect(RECENT_CARDS_ROOT).toEqual(["recentCards"]);
     expect(recentCardsKey(8)).toEqual(["recentCards", "list", 8]);
     expect(recentCardsKey(8).slice(0, RECENT_CARDS_ROOT.length)).toEqual(RECENT_CARDS_ROOT);
+  });
+
+  // The quick search reads the same command but caches `{ text, cards }`, not `RecentCard[]`. It
+  // has to sit under the same root (one invalidation, both readers) and never share an entry with
+  // the strip, whatever either limit is — so the segment, not the limit, keeps them apart (#1170).
+  it("files the quick search's recent cards under the same root, apart from the strip at any limit", () => {
+    expect(quickSearchRecentCardsKey(6)).toEqual(["recentCards", "quickSearch", 6]);
+    expect(quickSearchRecentCardsKey(6).slice(0, RECENT_CARDS_ROOT.length)).toEqual(
+      RECENT_CARDS_ROOT,
+    );
+    for (const limit of [6, 8, 24]) {
+      expect(quickSearchRecentCardsKey(limit)).not.toEqual(recentCardsKey(limit));
+    }
   });
 
   // A root of its own, and the shortest key in the file: `sticky_notes` is read by nothing else,
