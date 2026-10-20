@@ -292,6 +292,14 @@ hand card the engine would foretell now, `castable` on a graveyard or exile card
 `foretold` on a foretold card in exile — each read off the legal actions once per view, and never
 set in a replay frame. An opponent's face-down exiled cards are not in their seat's `exile` at all.
 
+**An opponent's face-down card is nameless everywhere it is described** (issue #1142): a morph or
+a manifest on their battlefield, a face-down spell on the stack, a hideaway or foretold card in
+exile. One check, `session.rs`' `concealed` (face down, and neither owned nor controlled by the
+reader, CR 708.5), keeps its name and its printing out of the table's `GameCard` (only phase's
+face-down characteristics, `cardId` `null`), the stack, a prompt's card and a trigger's cause,
+and the log's `cast` and `moved` (`name` `null`: "The opponent cast a face-down spell", "The
+opponent's face-down card was exiled"). The reader's own face-down cards are theirs to look at.
+
 **`activate`** takes every legal action of a permanent's: an ability, equip, crew, station,
 saddle, transform, turn face up. These are found by the source field in the action's data
 (`names_source`). Mana abilities are not on the list, since a cast pays its own mana.
