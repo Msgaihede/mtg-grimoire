@@ -2140,6 +2140,42 @@ describe("undo and redo", () => {
 
     expect(db.deckUndo).toHaveLength(0);
   });
+
+  /**
+   * Issue #1188: `deck_undo` CASCADEs from `decks`, and ids are max+1, so a deck deleted and
+   * made again comes back under the same id with audits under the same ids. A step the delete
+   * left behind sorted first and undid the new deck into the old one.
+   */
+  it("takes a deleted deck's steps with it, so a deck reusing its id undoes only its own", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    const gone = h.deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    h.deck_update({ id: gone.id, patch: { name: "Red Deck Wins" } });
+    h.deck_delete({ id: gone.id });
+    expect(db.deckUndo.some((s) => s.deckId === gone.id)).toBe(false);
+
+    const again = h.deck_create({ deck: { name: "Elves", formatKey: "modern" } });
+    expect(again.id).toBe(gone.id);
+    h.deck_update({ id: again.id, patch: { name: "Elfball" } });
+    h.deck_undo_apply({
+      deckId: again.id,
+      auditId: h.deck_undo_state({ deckId: again.id, redoId: null }).undo!.id,
+    });
+
+    expect(db.decks.find((d) => d.id === again.id)?.name).toBe("Elves");
+  });
+
+  /** `apply_reversal`'s backstop: a step whose history row is not this deck's never reverses. */
+  it("refuses a step whose history row is not the deck's", () => {
+    const db = makeDeckDb({ decks: [deck()] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { name: "Renamed" } });
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    db.deckAudit = db.deckAudit.filter((a) => a.id !== undo);
+
+    expect(() => h.deck_undo_apply({ deckId: 1, auditId: undo })).toThrow(/edited since/);
+    expect(db.decks[0].name).toBe("Renamed");
+  });
 });
 
 describe("card detail", () => {

@@ -20853,6 +20853,10 @@ export function writeHandlers(db: FakeDb) {
       // it was first typed in must not take it off the others wearing it. Only `reset_decks`,
       // which is every deck at once, sweeps the table.
       db.deckAudit = db.deckAudit.filter((a) => a.deckId !== args.id);
+      // `deck_undo` CASCADEs from both `decks` and `deck_audit`, so the steps go too. Left behind,
+      // a recreated deck reusing this id (and its audits reusing these ids — {@link nextId} is
+      // max+1) would undo into the deleted deck's snapshot (issue #1188).
+      db.deckUndo = db.deckUndo.filter((s) => s.deckId !== args.id);
       // The deck's managed wishlist goes with it — `mw_deck_del`, then `settle_deck` over a deck
       // that is not there: the `Tokens` subfolder's wishes, the subfolder, the folder's wishes and
       // the folder, in that order, so no wish surfaces at the root.
@@ -27915,7 +27919,7 @@ function undoHandlers(db: FakeDb) {
       refuseIfBusy(db);
       const cursor = nextUndo(db, args.deckId);
       if (!cursor) throw refuse("There is nothing left to undo in this deck.");
-      if (cursor.auditId !== args.auditId) {
+      if (cursor.auditId !== args.auditId || !auditOfDeck(db, cursor.auditId, args.deckId)) {
         throw refuse(
           "That is not the most recent change any more — the deck has been edited since. " +
             "Open the history to see what happened.",
@@ -27945,7 +27949,10 @@ function undoHandlers(db: FakeDb) {
       }
       // Only the change undone last — `deck_undo::next_redo`. The fake keeps whole-deck
       // snapshots and makes no content check; the order is the half a story can reach.
-      if (nextRedo(db, args.deckId)?.auditId !== args.auditId) {
+      if (
+        nextRedo(db, args.deckId)?.auditId !== args.auditId ||
+        !auditOfDeck(db, args.auditId, args.deckId)
+      ) {
         throw refuse(
           "That is not the most recent change any more — the deck has been edited since. " +
             "Open the history to see what happened.",
@@ -27973,6 +27980,12 @@ function nextRedo(db: FakeDb, deckId: number): FakeDeckUndo | undefined {
   return [...db.deckUndo]
     .filter((s) => s.deckId === deckId && s.undoneAt !== null && s.auditId > cursor)
     .sort((a, b) => (b.undoneAt ?? 0) - (a.undoneAt ?? 0) || a.auditId - b.auditId)[0];
+}
+
+/** `apply_reversal`'s last check: the step's history row is there and is this deck's. A step
+ *  whose audit row went with its deck must never reverse into whatever deck took the id. */
+function auditOfDeck(db: FakeDb, auditId: number, deckId: number): boolean {
+  return db.deckAudit.some((a) => a.id === auditId && a.deckId === deckId);
 }
 
 function auditById(db: FakeDb, id: number): DeckAuditEntry | undefined {
