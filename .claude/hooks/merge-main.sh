@@ -2,8 +2,8 @@
 # Keep a Claude worktree close to origin/main, so a PR never ends in a 300-commit merge.
 #
 # Wired to two events in .claude/settings.json:
-#   PostToolUse / Bash    - fires after `git commit`, the one moment the tree is clean
-#   SessionStart          - catches a worktree that has sat idle for days
+#   PostToolUse / Bash|PowerShell - fires after `git commit`, the one moment the tree is clean
+#   SessionStart                  - catches a worktree that has sat idle for days
 #
 # On a conflict the merge is left IN PROGRESS, with markers in the tree, and Claude is told
 # to resolve it before carrying on - resolving while the conflict is still small is the whole
@@ -20,9 +20,9 @@ FETCH_THROTTLE_SECONDS=120
 payload=""
 if [ ! -t 0 ]; then payload="$(cat 2>/dev/null || true)"; fi
 
-# The command string of a Bash hook payload - tool_input.command, never tool_response, which
-# is the tool's output and holds whatever a `cat` or `grep` printed. Without jq: everything up
-# to "tool_input" is dropped, so the first unescaped "command" key left is tool_input's own (a
+# The command string of a Bash or PowerShell hook payload - tool_input.command, never
+# tool_response, which is the tool's output and holds whatever a `cat` or `grep` printed.
+# Without jq: everything up to "tool_input" is dropped, so the first unescaped "command" key left is tool_input's own (a
 # "command" inside any string value is escaped as \"command\" and cannot match).
 bash_command() {
   local rest="${1#*\"tool_input\"}" re='"command"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
@@ -41,7 +41,8 @@ runs_git_commit() {
   printf '%s\n' "$1" | grep -qE "${sep}${git}${opt}[[:space:]]+commit([[:space:]]|$)"
 }
 
-# PostToolUse fires on every Bash call. A commit is the only one that leaves a clean tree.
+# PostToolUse fires on every Bash and PowerShell call. A commit is the only one that leaves a
+# clean tree.
 if [ "$trigger" = "commit" ]; then
   cmd="$(bash_command "$payload")" || exit 0
   runs_git_commit "$cmd" || exit 0
