@@ -73,6 +73,16 @@
 //
 // **The relay, the devices, the claim and the pairing are `web-smoke/sync-harness.ts`'s**, so
 // that `web-sync-pull.ts` — the measurement of one large `pull` — means the same things by them.
+//
+// **A walk whose browser broke under it is walked again, up to five walks in all** (issue #1296). Chrome
+// 155.0.8059.39 — CI's from runner image 20261018 — kills its own network service now and then
+// while DevTools intercepts requests and a CORS pre-flight goes out, and this is the one run that
+// sends pre-flights: every request to the relay carries one. The device whose browser it was then
+// fails at whatever step it had reached, which is how this walk came to fail on CI so often, at a
+// different step each time. `web-smoke/fault.ts` has the measurement, why five, and the upstream
+// change that ends it. The harness stops a walk the moment a browser says so and runs it again
+// from nothing; a fifth fault fails, saying it was the browser's, and every other failure is
+// final at once.
 
 import {
   ALERT,
@@ -343,6 +353,10 @@ async function main() {
   const relaunched = Date.now();
   await second.relaunch();
   const wished = first.wish(RELAUNCH_WISH).then(() => first.closeCard());
+  // Handled here as well as awaited below: a walk that stops in between — on a browser's fault,
+  // which is walked again — must not leave this to reject unheard, where the process's own
+  // handler would end the next walk with it.
+  wished.catch(() => undefined);
   // Asked over and over from the moment the new document is up, and each answer timed: the
   // engine has one thread, so how long a read waits is how long the ingest — or a trip — kept
   // it. `live` and the end of the ingest are each when a read first said so.
@@ -360,7 +374,7 @@ async function main() {
     if (performance.now() > stop) {
       fail(
         `${second.name} relaunched paired and never settled: it reads ${live}, and its card ` +
-          `sync ${JSON.stringify(status)}`,
+          `sync ${JSON.stringify(status)}.${await second.trouble()}`,
       );
     }
     await pause(50);
@@ -424,7 +438,8 @@ async function main() {
       }; ` +
       `${reader.name} reads ${await reader.engine("sync_live_state")}, was told ` +
       `${JSON.stringify((await reader.told()).applied.slice(mark))}, and its engine's wishlist holds ` +
-      `${JSON.stringify(await reader.engine("wishlist_summary", { marketplace: "tcgplayer" }))}.`;
+      `${JSON.stringify(await reader.engine("wishlist_summary", { marketplace: "tcgplayer" }))}.` +
+      `${reader.name}:${await reader.trouble()}`;
     const drawn = await seen(
       reader,
       `its wishlist drew ${card}, written on ${writer.name}`,
@@ -703,4 +718,4 @@ async function main() {
   for (const dev of both) await dev.close();
 }
 
-await runAs("web-sync-smoke", DEADLINE_MS, main);
+await runAs("web-sync-smoke", DEADLINE_MS, main, 5);
