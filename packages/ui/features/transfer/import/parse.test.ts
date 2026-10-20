@@ -114,6 +114,30 @@ describe("parseDecklist", () => {
     expect(out.lines.map((l) => l.name)).toEqual(["Llanowar Elves", "Lightning Bolt", "Duress"]);
   });
 
+  it("ends the About block on a counted line rather than swallowing it", () => {
+    // Issue #1177: with no `Deck` heading the block used to run on until `Sideboard`, so the
+    // main deck vanished — one line, zero issues.
+    const out = parseDecklist("About\nName Burn\n4 Lightning Bolt\nSideboard\n2 Duress");
+    expect(out.suggestedName).toBe("Burn");
+    expect(out.issues).toEqual([]);
+    expect(out.lines.map((l) => [l.quantity, l.name, l.section])).toEqual([
+      [4, "Lightning Bolt", "deck"],
+      [2, "Duress", "sideboard"],
+    ]);
+  });
+
+  it("reads a stray line in the About block like any other line instead of dropping it", () => {
+    // A bare name is one copy everywhere else in a list, so it is one here too — the preview
+    // then shows it, resolved or not, rather than the block eating it.
+    const out = parseDecklist("About\nName Burn\nSol Ring\nDeck\n4 Lightning Bolt");
+    expect(out.suggestedName).toBe("Burn");
+    expect(out.issues).toEqual([]);
+    expect(out.lines.map((l) => [l.quantity, l.name])).toEqual([
+      [1, "Sol Ring"],
+      [4, "Lightning Bolt"],
+    ]);
+  });
+
   it("strips a foil marker and a trailing hashtag off the name", () => {
     const out = parseDecklist("1 Sol Ring *F*\n1 Shock [Foil]\n1 Bolt #Removal");
     expect(out.lines.map((l) => l.name)).toEqual(["Sol Ring", "Shock", "Bolt"]);

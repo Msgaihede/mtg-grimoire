@@ -1152,12 +1152,20 @@ export function parseDecklist(text: string): ParsedList {
       continue;
     }
     if (inAbout) {
+      // The block holds `Name …` lines and nothing else, so only those are consumed: any other
+      // line ends it and is read below like every other line (issue #1177). Swallowing until a
+      // heading would silently drop `About` / `Name Burn` / `4 Lightning Bolt`'s whole main deck
+      // when the export has no `Deck` line — and nothing in this parser is ever dropped silently.
+      //
       // The first `Name` wins, so the answer does not depend on how much was pasted after it.
       // Arena writes exactly one; a second is malformed input, and last-wins would let a
       // second list appended to the first quietly rename the deck.
       const named = /^name\s+(.+)$/i.exec(trimmed);
-      if (named && suggestedName === null) suggestedName = named[1].trim();
-      continue;
+      if (named) {
+        if (suggestedName === null) suggestedName = named[1].trim();
+        continue;
+      }
+      inAbout = false;
     }
 
     // MTGO's `SB:` is a **one-line** override, not a heading. It travels on the line it marks
