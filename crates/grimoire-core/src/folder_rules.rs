@@ -647,7 +647,10 @@ fn breaks(rules: &[FolderRule], scope: Scope, price: &str, params: &mut Params) 
 /// whose oracle card has no printing here) is a row the app knows nothing about, and so it
 /// breaks nothing — not even a finish rule it could be read against. On the wishlist `c` is
 /// the printing the wall shows (`wishlist::priced_wishes`), so a price rule is judged on the
-/// figure on screen.
+/// figure on screen. In the collection an entry is priced as a held copy
+/// ([`crate::sorting::held_price_expr`]), the figure the collection page, its price filter and
+/// the folder summaries show — a default `nonfoil` on a foil-only printing is that finish's
+/// price, not no price (issue #1123).
 pub fn conflicts(
     conn: &Connection,
     scope: Scope,
@@ -683,7 +686,7 @@ pub fn conflicts(
     }
 
     let price = match scope {
-        Scope::Collection => crate::sorting::price_expr(marketplace, ENTRY_FINISH),
+        Scope::Collection => crate::sorting::held_price_expr(marketplace, ENTRY_FINISH),
         Scope::Wishlist => crate::sorting::row_price_expr(marketplace, WISH_PREFERRED_FINISH),
     };
     let from = match scope {
@@ -763,6 +766,8 @@ mod tests {
         full_art: bool,
         released: Option<&'static str>,
         usd: Option<&'static str>,
+        usd_foil: Option<&'static str>,
+        finishes: Option<&'static str>,
     }
 
     const BOLT: Printing = Printing {
@@ -777,16 +782,26 @@ mod tests {
         full_art: false,
         released: Some("1993-08-05"),
         usd: Some("1.00"),
+        usd_foil: None,
+        finishes: Some(r#"["nonfoil"]"#),
     };
 
     fn print(conn: &Connection, p: &Printing) {
         let types: Vec<String> = p.types.iter().map(|t| t.to_string()).collect();
+        let mut prices = serde_json::Map::new();
+        if let Some(usd) = p.usd {
+            prices.insert("usd".into(), usd.into());
+        }
+        if let Some(foil) = p.usd_foil {
+            prices.insert("usd_foil".into(), foil.into());
+        }
+        let prices = (!prices.is_empty()).then(|| serde_json::Value::Object(prices).to_string());
         conn.execute(
             "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout, raw,
                                 cmc, colors, type_mask, rarity, border_color, full_art,
-                                released_at, prices)
+                                released_at, prices, finishes)
              VALUES (?1, ?2, 'A card', ?3, '1', 'en', 'normal', '{}',
-                     ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                     ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 p.id,
                 p.oracle,
@@ -798,7 +813,8 @@ mod tests {
                 p.border,
                 p.full_art,
                 p.released,
-                p.usd.map(|usd| format!(r#"{{"usd":"{usd}"}}"#)),
+                prices,
+                p.finishes,
             ],
         )
         .unwrap();
@@ -1085,6 +1101,42 @@ mod tests {
                 max: None
             },
             BOLT
+        ));
+    }
+
+    /// **A held copy is priced as the collection page prices it** (issue #1123): a default
+    /// `nonfoil` copy of a printing sold only in foil is that foil's price, not no price, so a
+    /// "price ≤ $5" binder outlines it rather than passing it as unpriced.
+    #[test]
+    fn a_price_rule_reads_a_default_nonfoil_copy_of_a_foil_only_printing_at_its_foil_price() {
+        let surge = Printing {
+            usd: None,
+            usd_foil: Some("47.97"),
+            finishes: Some(r#"["foil"]"#),
+            ..BOLT
+        };
+        let five_or_less = || FolderRule::Price {
+            min: None,
+            max: Some(5.0),
+        };
+        assert!(breaks(five_or_less(), surge.clone()));
+        assert!(breaks_in_binder(five_or_less(), &surge, "foil", "NM"));
+        assert!(!breaks(
+            FolderRule::Price {
+                min: Some(40.0),
+                max: None
+            },
+            surge
+        ));
+        // A printing that is sold in nonfoil and not quoted in it stays unpriced.
+        assert!(!breaks(
+            five_or_less(),
+            Printing {
+                usd: None,
+                usd_foil: Some("47.97"),
+                finishes: Some(r#"["nonfoil","foil"]"#),
+                ..BOLT
+            }
         ));
     }
 
