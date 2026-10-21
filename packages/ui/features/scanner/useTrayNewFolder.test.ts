@@ -95,7 +95,9 @@ describe("useTrayNewFolder", () => {
       made = await result.current.newFolder.create("x");
     });
     expect(made).toBe(false);
-    expect(result.current.newFolder.error).toBe("A folder needs a name.");
+    // The refusal reaches the hook a render after `mutateAsync` rejects: React Query notifies its
+    // observers in a batch of its own, which `act` may return before.
+    await waitFor(() => expect(result.current.newFolder.error).toBe("A folder needs a name."));
     expect(result.current.stored).toBeNull();
 
     act(() => result.current.newFolder.reset());
