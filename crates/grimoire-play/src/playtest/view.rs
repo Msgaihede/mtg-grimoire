@@ -104,6 +104,9 @@ pub struct PlaytestView {
     /// never attacks or blocks, and that — like the reader — cannot lose (its `dead_on` says when
     /// it would have). The game is never `Over`.
     pub goldfish: bool,
+    /// A Commander game's commander damage at which a player loses (CR 704.6c): 21. `None` in a
+    /// game without a commander, where commander damage is not counted.
+    pub commander_damage_lethal: Option<u32>,
     /// The reader's last action can be taken back (`PlaytestAction::Undo`), with all the opponent
     /// did after it. Never in a replay frame.
     pub can_undo: bool,
@@ -169,6 +172,10 @@ pub struct PlaytestSeat {
     pub exile: Vec<GameCard>,
     /// This seat's commanders while they are in the command zone.
     pub command: Vec<GameCard>,
+    /// This seat's emblems (CR 114), oldest first: in the command zone for the rest of the game,
+    /// and never a card in it. Never the session's own — the goldfish's rules emblems, the
+    /// sandbox's free cast's.
+    pub emblems: Vec<PlaytestEmblem>,
     pub library: u32,
     /// The reader's library, **top first**, for the library menu's look and search; empty for the
     /// opponent.
@@ -177,10 +184,46 @@ pub struct PlaytestSeat {
     pub mana_open: u32,
     /// The same open mana by type, and what is floating in the pool (`crate::view::ManaTable`).
     pub mana: ManaTable,
-    /// The goldfish's, which cannot lose: the reader's own turn, from 1, on which this player's
-    /// life first reached 0 or less — the board's "dead on your turn 5" — and `None` again once it
-    /// is back above 0. Always `None` for a player who can lose.
+    /// The commander damage this player has been dealt (CR 903.10a): one entry a commander, so a
+    /// pair of partners is two, in the order the engine first counted them. Only combat damage
+    /// counts, and only once a commander has dealt some; empty outside a Commander game.
+    pub commander_damage: Vec<PlaytestCommanderDamage>,
+    /// The goldfish's, which cannot lose: the reader's own turn, from 1, on which this player
+    /// first would have lost — their life at 0 or less, or one commander's damage to them at the
+    /// view's `commander_damage_lethal` — the board's "dead on your turn 5", and `None` again once
+    /// neither holds. Always `None` for a player who can lose.
     pub dead_on: Option<u32>,
+}
+
+/// An emblem (CR 114): neither a card nor a permanent, it cannot be removed, and its abilities
+/// work from the command zone for the rest of the game (CR 114.4). The engine applies them; the
+/// board only shows them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestEmblem {
+    pub id: u64,
+    /// The card that made it — `Sorin, Lord of Innistrad` — as it was when it did. `None` for an
+    /// emblem the engine made with no card behind it.
+    pub source: Option<String>,
+    /// The printing to draw it by: the emblem the deck keeps for its source among its Tokens &
+    /// Emblems. `None` when it keeps none, and the board draws its words.
+    pub card_id: Option<String>,
+    /// Its abilities' words, as the engine gives them, one a row.
+    pub text: Vec<String>,
+}
+
+/// One commander's combat damage to one player over the game (CR 903.10a). At the view's
+/// `commander_damage_lethal` the player loses (CR 704.6c), unless something says they can't.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestCommanderDamage {
+    /// The commander's id: the card the table shows wherever it is now.
+    pub id: u64,
+    pub name: String,
+    pub card_id: Option<String>,
+    /// Whose commander it is.
+    pub player: PlaytestPlayer,
+    pub damage: u32,
 }
 
 /// The creatures in combat: each attacker and what it attacks, and each block.
@@ -299,6 +342,9 @@ pub struct PlaytestPick {
     /// `GameCard.power` (Slaughter the Strong's "total power 4 or less", issue #1079). `None` for
     /// a pick bounded by its count alone.
     pub power_cap: Option<i32>,
+    /// Where the cards lie, when they all lie in one place — the graveyard a cast is offered
+    /// from (issue #1329). `None` for cards from several places, or from the stack.
+    pub zone: Option<Place>,
 }
 
 /// What picking a card does, so the page can say it.
@@ -323,6 +369,8 @@ pub enum PlaytestPickPurpose {
     Choose,
     /// The picked permanents are kept; the rest are sacrificed.
     Keep,
+    /// The picked card is cast — "you may cast a spell from among them" (issue #1329).
+    Cast,
 }
 
 /// A step the reader asked the game to stop at, on whose turn: the reader's own, or an
@@ -623,10 +671,25 @@ pub enum PlaytestHappened {
         amount: i32,
         total: i32,
     },
+    /// A commander dealt combat damage to a player (CR 903.10a): `seat` is the player dealt it,
+    /// `total` all that commander has dealt them this game. At the view's
+    /// `commander_damage_lethal` they lose, unless something says they can't.
+    CommanderDamage {
+        source: String,
+        source_id: u64,
+        seat: PlaytestPlayer,
+        amount: u32,
+        total: u32,
+    },
     TokensCreated {
         seat: PlaytestPlayer,
         name: String,
         count: u32,
+    },
+    /// A player got an emblem (CR 114.1); `source` is the card that made it, as `PlaytestEmblem`'s.
+    Emblem {
+        seat: PlaytestPlayer,
+        source: Option<String>,
     },
     /// The reader put a card somewhere by hand; `seat` is whose card it is.
     Put {

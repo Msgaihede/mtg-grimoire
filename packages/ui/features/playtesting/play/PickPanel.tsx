@@ -12,6 +12,7 @@ import {
   hasRoom,
   pickCounter,
   pickedPower,
+  pickOffer,
   pickTitle,
   pickZones,
   togglePick,
@@ -33,6 +34,10 @@ import { OptionChips } from "./PromptPanel";
  * in it, so it covers nothing it needs, and "Look at the table" folds it away for a reader who
  * wants to see what is in play before they decide. The prompt's plain answers, when it has any,
  * are behind "Other answers"; "Let the engine choose" and Cancel are as on the prompt panel.
+ *
+ * **An optional cast asks first** (issue #1329): "you may cast a spell from your graveyard" opens
+ * as its question alone — "Cast a spell from your graveyard?" — and only "Choose a card" shows the
+ * cards; "Don’t cast" declines it there and then, by picking none.
  */
 export function PickPanel({
   prompt,
@@ -55,6 +60,8 @@ export function PickPanel({
   className?: string;
 }): JSX.Element {
   const { pick } = prompt;
+  const offer = pickOffer(pick);
+  const [accepted, setAccepted] = useState(offer === null);
   const [picked, setPicked] = useState<number[]>([]);
   const [folded, setFolded] = useState(false);
   const [others, setOthers] = useState(false);
@@ -67,6 +74,70 @@ export function PickPanel({
   };
   const power = pickedPower(picked, powerOf);
   const ready = canConfirm(pick, picked.length, power) && !disabled;
+
+  const cancel = prompt.cancellable && (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onAct({ type: "cancel" })}
+      className={cn(SMALL_BUTTON, "border-border text-text hover:border-accent")}
+    >
+      Cancel
+    </button>
+  );
+  const auto = (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onAct({ type: "auto" })}
+      className={cn(SMALL_BUTTON, "border-border text-text hover:border-accent")}
+    >
+      Let the engine choose
+    </button>
+  );
+
+  if (offer !== null && !accepted) {
+    return (
+      <section
+        aria-label={offer.question}
+        className={cn(
+          "flex flex-col overflow-hidden rounded-xl border border-accent bg-surface shadow-lg",
+          LAYER.raised,
+          className,
+        )}
+      >
+        <header className="flex flex-none items-center gap-2 py-1.5 pr-1.5 pl-3">
+          <h2 className="m-0 flex-none text-[14px] font-semibold">{offer.question}</h2>
+          {prompt.source !== null && (
+            <span className="min-w-0 truncate text-xs text-dim">{prompt.source}</span>
+          )}
+          <span className="ml-auto flex flex-none flex-wrap items-center justify-end gap-1.5">
+            {cancel}
+            {auto}
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onAct({ type: "pickCards", ids: [] })}
+              className={cn(SMALL_BUTTON, "border-border text-text hover:border-accent")}
+            >
+              {offer.no}
+            </button>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => setAccepted(true)}
+              className={cn(
+                SMALL_BUTTON,
+                "border-accent font-semibold text-accent hover:bg-accent hover:text-accent-fg",
+              )}
+            >
+              {offer.yes}
+            </button>
+          </span>
+        </header>
+      </section>
+    );
+  }
 
   const tile = (ref: PlaytestCardRef) => {
     const card = cardOfRef(ref, table);
@@ -200,24 +271,8 @@ export function PickPanel({
             Other answers
           </button>
         )}
-        {prompt.cancellable && (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onAct({ type: "cancel" })}
-            className={cn(SMALL_BUTTON, "border-border text-text hover:border-accent")}
-          >
-            Cancel
-          </button>
-        )}
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => onAct({ type: "auto" })}
-          className={cn(SMALL_BUTTON, "border-border text-text hover:border-accent")}
-        >
-          Let the engine choose
-        </button>
+        {cancel}
+        {auto}
         <button
           type="button"
           aria-disabled={!ready}

@@ -1021,6 +1021,7 @@ describe("ipc argument names match the Rust command signatures", () => {
       ["GameLane", "Lane"],
       ["GamePlace", "Place"],
       ["GameSeat", "Seat"],
+      ["GameEffectKind", "EffectKind"],
     ]) {
       const union = ipcSource.slice(ipcSource.indexOf(`export type ${ts} =`));
       const words = [...union.slice(0, union.indexOf(";\n")).matchAll(/"(\w+)"/g)].map((m) => m[1]);
@@ -7181,6 +7182,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       GameLane: { enum: "Lane", in: "grimoire-play/src/view.rs" },
       GamePlace: { enum: "Place", in: "grimoire-play/src/view.rs" },
       GameSeat: { enum: "Seat", in: "grimoire-play/src/view.rs" },
+      GameEffectKind: { enum: "EffectKind", in: "grimoire-play/src/view.rs" },
       TagPhase: { consts: ["PHASES"], in: "grimoire-core/src/tags/mod.rs" },
       TradeSide: { consts: ["SIDES"], in: "grimoire-core/src/trade.rs" },
       TradeStatus: { consts: ["STATUSES"], in: "grimoire-core/src/trade.rs" },

@@ -7,7 +7,8 @@
  * it, so every width here is a function of the box `Battlefield` measures.
  *
  * Two lanes, front to back the way a table is laid out: **creatures toward the opponent**, and
- * behind them **one row with the lands on the left and every other permanent on the right**. A
+ * behind them **one row with the lands on the left and every other permanent on the right**, and
+ * the seat's emblems at the row's right end, past its artifacts and Equipment (issue #1333). A
  * lane is always one row: the cards size down until every pile fits across the table — solved,
  * not searched, since a pile's width is linear in its card's.
  */
@@ -76,8 +77,9 @@ export interface ZoneSize {
 }
 
 /**
- * One pile: the cards of one name that look the same — same tapped state, same counters — and
- * so are drawn as one card with the rest edged under it. The ids are the engine's, in table order.
+ * One pile: the cards of one name that look the same — same tapped state, same counters, same
+ * power and toughness (the changed-stats chip, issue #1332), same effects (issue #1327) — and so
+ * are drawn as one card with the rest edged under it. The ids are the engine's, in table order.
  */
 export interface Pile {
   /** Stable within one view: the first card's id. */
@@ -93,10 +95,23 @@ export interface Pile {
   attached: GameCard[];
 }
 
-/** What makes two cards one pile: the picture, the name, the state and the counters. */
+/**
+ * What makes two cards one pile: the picture, the name, the state, the counters, the P/T and the
+ * effects on it — a Bear under Giant Growth is not its untouched twin (issue #1327).
+ */
 function pileKey(c: GameCard): string {
   const counters = c.counters.map((k) => `${k.kind}=${k.count}`).join(",");
-  return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, c.isToken ? "t" : ""].join("|");
+  const pt = `${c.power ?? ""}/${c.toughness ?? ""}`;
+  const effects = c.effects.length === 0 ? "" : JSON.stringify(c.effects);
+  return [
+    c.cardId ?? "",
+    c.name,
+    c.tapped ? 1 : 0,
+    counters,
+    pt,
+    c.isToken ? "t" : "",
+    effects,
+  ].join("|");
 }
 
 /**
@@ -166,8 +181,9 @@ export function pileHeight(pile: Pile, w: number): number {
 
 /**
  * The card width that fits every pile of a row across `row` px, no wider than `max` and no taller
- * than the lane allows. What is fixed — the gaps, each pile's edges, the back row's divider —
- * comes off the top; what is left is shared out by how many card-widths the row holds.
+ * than the lane allows. What is fixed — the gaps, each pile's edges, the back row's dividers —
+ * comes off the top; what is left is shared out by how many card-widths the row holds. `extra`
+ * is that many single upright cards sharing the row with the piles: the back row's emblems.
  */
 export function fitWidth(
   piles: readonly Pile[],
@@ -176,12 +192,14 @@ export function fitWidth(
     laneHeight,
     fixed = 0,
     max,
-  }: { row: number; laneHeight: number; fixed?: number; max: number },
+    extra = 0,
+  }: { row: number; laneHeight: number; fixed?: number; max: number; extra?: number },
 ): number {
-  if (piles.length === 0) return max;
-  const widths = piles.reduce((n, p) => n + (p.tapped ? TAPPED : 1), 0);
+  const count = piles.length + extra;
+  if (count === 0) return max;
+  const widths = piles.reduce((n, p) => n + (p.tapped ? TAPPED : 1), 0) + extra;
   const edges = piles.reduce((n, p) => n + underOf(p) * PILE, 0);
-  const room = row - fixed - edges - GAP * (piles.length - 1);
+  const room = row - fixed - edges - GAP * (count - 1);
   // The pile with the most attachments is the tallest.
   const most = piles.reduce((n, p) => Math.max(n, p.attached.length), 0);
   return Math.max(
@@ -206,7 +224,7 @@ export interface TableLayout {
   lands: Pile[];
   others: Pile[];
   creatureWidth: number;
-  /** Lands and the other permanents share one card size, as they share one row. */
+  /** Lands, the other permanents and the emblems share one card size, as they share one row. */
   backWidth: number;
 }
 
@@ -267,18 +285,25 @@ export function attachmentsOf(
   return { lanes: battlefield.filter((c) => !rides(c)), attached };
 }
 
+/**
+ * The table's lanes and their card sizes. `emblems` is how many emblems the seat has: each is one
+ * upright card at the back row's far end, behind a divider of its own.
+ */
 export function layoutTable(
   battlefield: readonly GameCard[],
   { width, height }: { width: number; height: number },
   apart?: PileApart,
   across?: Across,
+  emblems = 0,
 ): TableLayout {
   const { lanes, attached } = attachmentsOf(battlefield, across);
   const creatures = pilesOf(lanes, "creature", apart, attached);
   const lands = pilesOf(lanes, "land", apart, attached);
   const others = pilesOf(lanes, "other", apart, attached);
   const laneHeight = Math.max(0, height / 2);
-  const both = lands.length > 0 && others.length > 0;
+  const dividers =
+    (lands.length > 0 && others.length > 0 ? 1 : 0) +
+    (emblems > 0 && lands.length + others.length > 0 ? 1 : 0);
   return {
     creatures,
     lands,
@@ -287,8 +312,9 @@ export function layoutTable(
     backWidth: fitWidth([...lands, ...others], {
       row: width,
       laneHeight,
-      fixed: both ? SPLIT : 0,
+      fixed: dividers * SPLIT,
       max: BACK_MAX,
+      extra: emblems,
     }),
   };
 }
@@ -349,4 +375,32 @@ export function arrangeHand(was: readonly number[], cards: readonly GameCard[]):
   const kept = was.filter((id) => here.has(id));
   const held = new Set(kept);
   return [...kept, ...cards.filter((c) => !held.has(c.id)).map((c) => c.id)];
+}
+
+/**
+ * Which slot of a held hand of `count` a card let go at `x` takes — `x` in the row's own pixels
+ * from its left edge (`handRow`). The slot whose card's middle is nearest the pointer, so a card
+ * dropped over another card takes that card's place.
+ */
+export function handSlotAt(x: number, count: number): number {
+  const { lefts } = handRow(count);
+  let slot = 0;
+  for (let i = 1; i < lefts.length; i++) {
+    if (Math.abs(lefts[i] + HAND_CARD_W / 2 - x) < Math.abs(lefts[slot] + HAND_CARD_W / 2 - x)) {
+      slot = i;
+    }
+  }
+  return slot;
+}
+
+/**
+ * The held order with `id` taken out and put back at `slot` (issue #1330): the reader reordering
+ * their own hand, which is theirs to arrange at any moment of the game and asks the engine
+ * nothing. A slot past either end is the end; an id not held leaves the order as it was.
+ */
+export function moveInHand(order: readonly number[], id: number, slot: number): number[] {
+  if (!order.includes(id)) return [...order];
+  const rest = order.filter((held) => held !== id);
+  const at = Math.max(0, Math.min(slot, rest.length));
+  return [...rest.slice(0, at), id, ...rest.slice(at)];
 }

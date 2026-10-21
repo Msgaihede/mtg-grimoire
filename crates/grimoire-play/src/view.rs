@@ -1,4 +1,4 @@
-//! The table's shared pieces on the wire: a card, its lane and counters, the places a card can be
+//! The table's shared pieces on the wire: a card, its lane, counters and effects, the places a card can be
 //! put, a side of the table, the opening hand's mulligan, a token on offer and a seat's mana. The
 //! game itself — its view, its actions and what they did — is `playtest/view.rs`, which builds on
 //! these. Mirrored by hand in `packages/ui/lib/ipc/table.ts`, held field for field by
@@ -63,9 +63,17 @@ pub struct GameCard {
     pub is_commander: bool,
     pub tapped: bool,
     pub counters: Vec<CardCounter>,
+    /// The continuous effects changing it now (CR 613), one per source and kind: what changed
+    /// and which card it is from — the board's chips beside the counters (issue #1327).
+    pub effects: Vec<CardEffect>,
     /// The engine's current P/T — counters, statics and all (CR 613). `None` for a non-creature.
     pub power: Option<i32>,
     pub toughness: Option<i32>,
+    /// The printed (copiable) P/T, before counters and effects (CR 208.4b, 707.2) — what the board
+    /// measures `power` and `toughness` against to mark a change. `None` for a non-creature, and
+    /// for a creature with no printed P/T (an animated land).
+    pub base_power: Option<i32>,
+    pub base_toughness: Option<i32>,
     /// What casting it from the command zone costs on top of its mana cost, in generic mana
     /// (CR 903.8). 0 for anything but a commander.
     pub tax: u32,
@@ -106,6 +114,62 @@ pub struct CardCounter {
     /// The counter as a reader names it: `+1/+1`, `-1/-1`, `loyalty`, `charge`.
     pub kind: String,
     pub count: u32,
+}
+
+/// One source's continuous effect on a card, in one of CR 613's layers: Clavileño making an
+/// attacking Vampire a Demon is a `Type` effect with `gained: ["Demon"]`, and the dies trigger it
+/// grants is an `Ability` effect with that trigger's text in `abilities` (issue #1327).
+///
+/// Read off phase's own attribution (`GameState::attribution`), which records each modification
+/// the layers applied to the object. A permanent's own static abilities on itself are its printed
+/// self (CR 113.3c) and are left out; a resolved spell's or ability's effect is kept whoever's it
+/// is, the card's own included.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardEffect {
+    pub kind: EffectKind,
+    /// The card the effect is from, by name: a static ability's permanent, or the spell or
+    /// ability's source as the engine noted it when the effect began (it may since have moved).
+    pub source: String,
+    /// What it gives, as the engine names it: types, subtypes and supertypes; colors; keywords;
+    /// the basic land type it makes a land.
+    pub gained: Vec<String>,
+    /// What it takes away, named the same way.
+    pub lost: Vec<String>,
+    /// It takes away all the card's abilities (CR 613.1f — Humility, Turn to Frog).
+    pub loses_abilities: bool,
+    /// The rules text of each ability it grants that is not a keyword, as phase writes it — `~`
+    /// for the card itself: "When ~ dies, draw a card." Empty when the engine has no text for it.
+    pub abilities: Vec<String>,
+    /// `ModifyPt`: what it adds to power and toughness (+3/+3 is 3 and 3). `SetPt`: what it sets
+    /// them to. `None` for an axis it leaves alone or works out as the game goes (+X/+X).
+    pub power: Option<i32>,
+    pub toughness: Option<i32>,
+}
+
+/// Which of a card's characteristics an effect changes: CR 613.1's layers, with layer 7's P/T
+/// effects told apart by what they do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EffectKind {
+    /// Layer 1: it is a copy of something (CR 707).
+    Copy,
+    /// Layer 2: someone else controls it.
+    Control,
+    /// Layer 3: its text is changed.
+    Text,
+    /// Layer 4: its card types, subtypes or supertypes.
+    Type,
+    /// Layer 5: its colors.
+    Color,
+    /// Layer 6: abilities it gains or loses.
+    Ability,
+    /// Layer 7a–b: its power and toughness are set.
+    SetPt,
+    /// Layer 7c: its power and toughness are raised or lowered.
+    ModifyPt,
+    /// Layer 7d: its power and toughness are switched.
+    SwitchPt,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

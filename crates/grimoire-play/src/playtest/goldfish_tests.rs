@@ -4,7 +4,7 @@
 
 use crate::cards::{CardFacts, FaceFacts};
 use crate::on_engine_stack;
-use crate::view::{GameCard, Lane, ManaByType, Place};
+use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, Place};
 
 use super::session::Playtest;
 use super::view::{
@@ -178,7 +178,7 @@ fn a_new_game_waits_on_the_opening_hand_with_the_commander_in_the_command_zone()
     assert_eq!(lands, 60);
 
     // The goldfish: one seat, 40 life, seven cards kept from a library of lands, and nothing
-    // to show — its rules emblems are never in its command zone.
+    // to show — its rules emblems are never in its command zone, nor among its emblems.
     assert_eq!(view.opponents.len(), 1);
     let goldfish = &view.opponents[0];
     assert_eq!(goldfish.player, FISH);
@@ -187,6 +187,7 @@ fn a_new_game_waits_on_the_opening_hand_with_the_commander_in_the_command_zone()
     assert_eq!(goldfish.library, 193);
     assert!(goldfish.hand.is_empty() && goldfish.library_cards.is_empty());
     assert!(goldfish.command.is_empty() && goldfish.battlefield.is_empty());
+    assert!(goldfish.emblems.is_empty() && view.you.emblems.is_empty());
     assert_eq!(goldfish.dead_on, None);
 }
 
@@ -641,9 +642,45 @@ fn counters_change_power_and_toughness() {
             .clone()
     });
     assert_eq!((creature.power, creature.toughness), (Some(4), Some(4)));
+    // The printed P/T stays beside it, for the board's changed-stats chip (issue #1332).
+    assert_eq!(
+        (creature.base_power, creature.base_toughness),
+        (Some(2), Some(2))
+    );
     assert_eq!(creature.counters.len(), 1);
     assert_eq!(creature.counters[0].count, 2);
     assert_eq!(creature.counters[0].kind, "+1/+1");
+}
+
+/// Issue #1332: a `*/*` creature's base is what its own ability makes it, not phase's printed 0,
+/// so the board does not mark one at its own count as pumped.
+#[test]
+fn a_star_creatures_base_is_its_own_count() {
+    let elder = engine(|| {
+        let mut cards = deck();
+        let bears = cards
+            .iter_mut()
+            .find(|c| c.name == "Grizzly Bears")
+            .unwrap();
+        *bears = card(
+            "Dungrove Elder",
+            Some("{2}{G}"),
+            "Creature — Treefolk",
+            "Hexproof\nDungrove Elder's power and toughness are each equal to the number of Forests you control.",
+            Some(("*", "*")),
+            13,
+        );
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Dungrove Elder");
+        find(&game.view().you.battlefield, "Dungrove Elder")
+            .unwrap()
+            .clone()
+    });
+    assert_eq!((elder.power, elder.toughness), (Some(2), Some(2)));
+    assert_eq!((elder.base_power, elder.base_toughness), (Some(2), Some(2)));
 }
 
 /// Issue #991: a token the deck keeps is offered and drawn in the printing the reader set for it,
@@ -795,6 +832,7 @@ fn a_spell_with_one_target_is_cast_at_it() {
     }));
     let bear = find(&step.view.you.battlefield, "Grizzly Bears").unwrap();
     assert_eq!((bear.power, bear.toughness), (Some(5), Some(5)));
+    assert_eq!((bear.base_power, bear.base_toughness), (Some(2), Some(2)));
     assert!(find(&step.view.you.graveyard, "Giant Growth").is_some());
 }
 
@@ -1279,8 +1317,159 @@ fn a_free_cast_that_asks_is_cancelled_with_its_emblem() {
         "the emblem is there while the cast asks"
     );
     assert_eq!(cancelled, emblems, "and gone with the cast");
+    assert!(
+        asked.view.you.emblems.is_empty(),
+        "the board's own emblem, never the game's to show"
+    );
     assert_eq!(back.view.stage, Stage::Main);
     assert!(find(&back.view.you.hand, "Giant Growth").is_some());
+}
+
+/// Two partners, each an 11/11 for {G}: two commanders, so two counts of commander damage.
+fn partners() -> Vec<CardFacts> {
+    let partner = |name: &str| {
+        let mut c = card(
+            name,
+            Some("{G}"),
+            "Legendary Creature — Giant",
+            "Partner",
+            Some(("11", "11")),
+            1,
+        );
+        c.commander = true;
+        c.keywords = vec!["Partner".into()];
+        c
+    };
+    let mut cards = deck();
+    cards.retain(|c| !c.commander);
+    cards.extend([partner("Ulda, the Mountain"), partner("Brann, the Hill")]);
+    cards
+}
+
+/// The reader's commanders out of the command zone by hand, a turn cycle on, and the attack step
+/// of the reader's next turn: the ids of the two, Ulda first.
+fn partners_ready(game: &mut Playtest) -> (u64, u64) {
+    let id = |game: &Playtest, name: &str| {
+        find(&game.view().you.command, name)
+            .unwrap_or_else(|| panic!("{name} in the command zone"))
+            .id
+    };
+    let (ulda, brann) = (id(game, "Ulda, the Mountain"), id(game, "Brann, the Hill"));
+    for id in [ulda, brann] {
+        game.act(A::Move {
+            id,
+            to: Place::Battlefield,
+        })
+        .expect("out of the command zone");
+    }
+    let on = |game: &Playtest, name: &str| {
+        find(&game.view().you.battlefield, name)
+            .unwrap_or_else(|| panic!("{name} on the battlefield"))
+            .id
+    };
+    (on(game, "Ulda, the Mountain"), on(game, "Brann, the Hill"))
+}
+
+/// Attack the goldfish with `ids` on the reader's next turn, a discard to hand size on the way
+/// answered by the engine.
+fn attack_fish(game: &mut Playtest, ids: &[u64]) -> PlaytestStep {
+    let mut step = game.act(A::EndTurn).expect("a turn cycle");
+    while step.view.stage == Stage::Prompt {
+        step = game.act(A::Auto).expect("the engine's answer");
+    }
+    assert_eq!(step.view.stage, Stage::Main);
+    let asked = game.act(A::Pass).expect("to combat");
+    assert_eq!(asked.view.stage, Stage::Attack);
+    game.act(A::Attack {
+        attacks: ids
+            .iter()
+            .map(|&attacker| PlaytestAttackPair {
+                attacker,
+                target: None,
+                player: None,
+            })
+            .collect(),
+    })
+    .expect("attack")
+}
+
+/// Issue #1336: commander damage is counted per commander (CR 903.10a), so two partners hitting
+/// for 11 each are two counts of 11 and no loss, and the 21st from one of them is the goldfish's
+/// death (CR 704.6c) with its life still above 0. Undo takes the count back with the game.
+#[test]
+fn commander_damage_is_counted_per_commander_and_21_from_one_kills_the_goldfish() {
+    let (both, again, undone) = engine(|| {
+        let (mut game, _) = fish(&partners(), 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        let (ulda, brann) = partners_ready(&mut game);
+        let both = attack_fish(&mut game, &[ulda, brann]);
+        let again = attack_fish(&mut game, &[ulda]);
+        let undone = game.act(A::Undo).expect("undo the attack");
+        (both, again, undone)
+    });
+    let view = &both.view;
+    assert_eq!(view.commander_damage_lethal, Some(21));
+    let fish = &view.opponents[0];
+    assert_eq!(fish.life, 18);
+    let dealt: Vec<(&str, PlaytestPlayer, u32)> = fish
+        .commander_damage
+        .iter()
+        .map(|c| (c.name.as_str(), c.player, c.damage))
+        .collect();
+    assert_eq!(dealt.len(), 2, "one count a commander: {dealt:?}");
+    assert!(dealt.contains(&("Ulda, the Mountain", YOU, 11)));
+    assert!(dealt.contains(&("Brann, the Hill", YOU, 11)));
+    assert!(fish.commander_damage.iter().all(|c| c.card_id.is_some()));
+    assert!(view.you.commander_damage.is_empty());
+    assert_eq!(fish.dead_on, None, "22 in all, but no 21 from one");
+    for source in ["Ulda, the Mountain", "Brann, the Hill"] {
+        assert!(
+            both.happened.iter().any(|h| matches!(
+                h,
+                H::CommanderDamage { source: s, seat: FISH, amount: 11, total: 11, .. }
+                    if s == source
+            )),
+            "{source}: {:?}",
+            both.happened
+        );
+    }
+
+    let fish = &again.view.opponents[0];
+    assert_eq!(fish.life, 7, "still alive by its life");
+    let ulda = fish
+        .commander_damage
+        .iter()
+        .find(|c| c.name == "Ulda, the Mountain")
+        .unwrap();
+    assert_eq!(ulda.damage, 22);
+    assert_eq!(fish.dead_on, Some(3), "dead on the reader's third turn");
+    assert!(!fish.out, "the goldfish never loses");
+    assert_eq!(again.view.stage, Stage::Main);
+    assert!(again.happened.iter().any(|h| matches!(
+        h,
+        H::CommanderDamage {
+            seat: FISH,
+            amount: 11,
+            total: 22,
+            ..
+        }
+    )));
+
+    let fish = &undone.view.opponents[0];
+    assert_eq!(fish.dead_on, None);
+    assert!(fish.commander_damage.iter().all(|c| c.damage == 11));
+}
+
+/// A game without a commander counts no commander damage at all.
+#[test]
+fn a_game_without_a_commander_has_no_commander_damage_lethal() {
+    let view = engine(|| {
+        let mut cards = deck();
+        cards.retain(|c| !c.commander);
+        fish(&cards, 7).1.view
+    });
+    assert_eq!(view.commander_damage_lethal, None);
+    assert!(view.opponents[0].commander_damage.is_empty());
 }
 
 /// A foretell deck (issue #1077): Islands and Behold the Multiverse, the card the issue names.
@@ -1547,4 +1736,454 @@ fn a_commander_cast_by_its_back_face_is_still_the_commander() {
     assert_eq!(back.view.you.command.len(), 1);
     assert!(back.view.you.command[0].is_commander);
     assert_eq!(back.view.you.command[0].tax, 2);
+}
+
+fn sorin() -> CardFacts {
+    let mut sorin = card(
+        "Sorin, Lord of Innistrad",
+        Some("{2}{W}{B}"),
+        "Legendary Planeswalker — Sorin",
+        "+1: Create a 1/1 black Vampire creature token with lifelink.\n−3: You get an emblem with \"Creatures you control get +1/+0.\"\n−7: Destroy up to three target creatures and/or other planeswalkers. Return each card put into a graveyard this way to the battlefield under your control.",
+        None,
+        1,
+    );
+    sorin.loyalty = Some("3".into());
+    sorin
+}
+
+/// Pass until the stack is empty: the reader's own ability resolves, the goldfish answering
+/// nothing. How many passes it took, for undo.
+fn resolve(game: &mut Playtest, mut step: PlaytestStep) -> (PlaytestStep, usize) {
+    let mut passes = 0;
+    while !step.view.stack.is_empty() {
+        assert!(
+            passes < 8,
+            "the stack never resolved: {:?}",
+            step.view.stack
+        );
+        step = game.act(A::Pass).expect("pass");
+        passes += 1;
+    }
+    (step, passes)
+}
+
+/// Issue #1333: a planeswalker's emblem is on the reader's seat — drawn by the deck's own emblem
+/// printing, with its words — its effect is applied, and it stays for the rest of the game:
+/// through the opponent's turn, though the planeswalker that made it died paying for it, and
+/// through undo and redo. A planeswalker put down by hand enters with its loyalty, so its
+/// ability can be paid for at all.
+#[test]
+fn a_planeswalkers_emblem_is_shown_applied_and_kept_for_the_rest_of_the_game() {
+    let (put, made, next_turn, undone, redone) = engine(|| {
+        let mut cards = deck();
+        cards.push(sorin());
+        let tokens = [crate::tokens::TokenFacts {
+            oracle_id: "oracle-sorin-emblem".into(),
+            name: "Sorin, Lord of Innistrad Emblem".into(),
+            card_id: "deck-sorin-emblem".into(),
+            sources: vec!["Sorin, Lord of Innistrad".into()],
+        }];
+        let (mut game, _) =
+            Playtest::new(&cards, &tokens, &[], 7, Difficulty::default()).expect("a game starts");
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Grizzly Bears");
+        let walker = put_down(&mut game, "Sorin, Lord of Innistrad");
+        let put = game.view();
+        let asked = game.act(A::Activate { id: walker }).expect("activate");
+        let prompt = asked.view.prompt.expect("which ability");
+        // The −3 is Sorin's second ability; the +1 is the first.
+        let minus = prompt
+            .options
+            .iter()
+            .find(|o| o.number == Some(1))
+            .unwrap_or_else(|| panic!("the −3 is offered: {prompt:?}"))
+            .index;
+        let chosen = game.act(A::Choose { index: minus }).expect("the −3");
+        let mut happened = chosen.happened.clone();
+        let (made, passes) = resolve(&mut game, chosen);
+        happened.extend(made.happened.clone());
+        // Drawing for Sorin filled the hand, so the cleanup asks for a discard: the engine's
+        // AI answers it.
+        let mut next_turn = game
+            .act(A::EndTurn)
+            .expect("to the goldfish's turn and back");
+        // The −3 chosen, the passes it took to resolve, and the turn ended.
+        let mut actions = passes + 2;
+        while next_turn.view.stage == Stage::Prompt {
+            next_turn = game.act(A::Auto).expect("discard to hand size");
+            actions += 1;
+        }
+        for _ in 0..actions {
+            game.act(A::Undo).expect("undo");
+        }
+        let undone = game.view();
+        let mut redone = None;
+        for _ in 0..actions {
+            redone = Some(game.act(A::Redo).expect("redo").view);
+        }
+        (
+            put,
+            (made.view, happened),
+            next_turn,
+            undone,
+            redone.unwrap(),
+        )
+    });
+
+    let walker = find(&put.you.battlefield, "Sorin, Lord of Innistrad").expect("put down");
+    assert_eq!(
+        walker
+            .counters
+            .iter()
+            .find(|c| c.kind == "loyalty")
+            .map(|c| c.count),
+        Some(3),
+        "a planeswalker put down by hand enters with its loyalty: {:?}",
+        walker.counters
+    );
+    assert!(put.you.emblems.is_empty());
+
+    let (view, happened) = made;
+    assert_eq!(view.you.emblems.len(), 1, "{:?}", view.you.emblems);
+    let emblem = &view.you.emblems[0];
+    assert_eq!(emblem.source.as_deref(), Some("Sorin, Lord of Innistrad"));
+    assert_eq!(emblem.card_id.as_deref(), Some("deck-sorin-emblem"));
+    assert!(
+        emblem.text.iter().any(|t| t.contains("+1/+0")),
+        "its words: {emblem:?}"
+    );
+    assert!(
+        find(&view.you.battlefield, "Sorin, Lord of Innistrad").is_none(),
+        "Sorin paid its last loyalty for it"
+    );
+    assert!(
+        happened.iter().any(|h| matches!(
+            h,
+            H::Emblem { seat: YOU, source: Some(s) } if s == "Sorin, Lord of Innistrad"
+        )),
+        "{happened:?}"
+    );
+    let bears = find(&view.you.battlefield, "Grizzly Bears").expect("the bear");
+    assert_eq!(
+        (bears.power, bears.toughness),
+        (Some(3), Some(2)),
+        "the emblem's +1/+0"
+    );
+    assert!(
+        bears
+            .effects
+            .iter()
+            .any(|e| e.source == "Sorin, Lord of Innistrad Emblem" && e.power == Some(1)),
+        "the bear's effect names the emblem: {:?}",
+        bears.effects
+    );
+    assert!(
+        view.opponents[0].emblems.is_empty(),
+        "the goldfish's rules emblems are not the game's"
+    );
+
+    let later = &next_turn.view;
+    assert_eq!(later.active, YOU, "the reader's next turn");
+    assert!(later.turn > view.turn);
+    assert_eq!(
+        later.you.emblems, view.you.emblems,
+        "for the rest of the game"
+    );
+    let bears = find(&later.you.battlefield, "Grizzly Bears").expect("the bear");
+    assert_eq!(bears.power, Some(3), "and still applied");
+
+    assert!(undone.you.emblems.is_empty(), "undo takes the emblem back");
+    let bears = find(&undone.you.battlefield, "Grizzly Bears").expect("the bear");
+    assert_eq!(bears.power, Some(2));
+    assert_eq!(
+        redone.you.emblems, later.you.emblems,
+        "and redo brings it again"
+    );
+}
+
+/// Issue #1333: a global effect — an anthem's static — is applied to every creature it reaches,
+/// the ones that come after it too, and lasts from turn to turn.
+#[test]
+fn an_anthem_put_down_by_hand_reaches_every_creature_from_turn_to_turn() {
+    let (now, later) = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Glorious Anthem",
+            Some("{1}{W}{W}"),
+            "Enchantment",
+            "Creatures you control get +1/+1.",
+            None,
+            1,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Grizzly Bears");
+        put_down(&mut game, "Glorious Anthem");
+        put_down(&mut game, "Llanowar Elves");
+        let now = game.view();
+        (now, game.act(A::EndTurn).expect("a turn later").view)
+    });
+    for view in [&now, &later] {
+        let bears = find(&view.you.battlefield, "Grizzly Bears").expect("the bear");
+        assert_eq!((bears.power, bears.toughness), (Some(3), Some(3)));
+        let elves = find(&view.you.battlefield, "Llanowar Elves").expect("the elf");
+        assert_eq!((elves.power, elves.toughness), (Some(2), Some(2)));
+        assert!(
+            view.you.emblems.is_empty(),
+            "an anthem is a permanent, not an emblem"
+        );
+    }
+}
+
+/// Issue #1327: each continuous effect on a card comes with it, by kind and source — a resolved
+/// spell's (Giant Growth's +3/+3) and a permanent's static (an anthem's +1/+1 and trample) alike —
+/// and a permanent's static on itself is its printed self, never an effect on it.
+#[test]
+fn a_card_carries_each_effect_on_it_with_its_source() {
+    let mut cards = deck();
+    cards.push(card(
+        "Banner Marshal",
+        Some("{1}{G}"),
+        "Creature — Human Soldier",
+        "Creatures you control get +1/+1 and have trample.",
+        Some(("2", "2")),
+        8,
+    ));
+    let (grown, marshal, bears) = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let growth = in_hand(&mut game, "Giant Growth");
+        let grown = game.act(A::Play { id: growth }).unwrap().view;
+        let grown = find(&grown.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .clone();
+        put_down(&mut game, "Banner Marshal");
+        let view = game.view();
+        let on = |name: &str| find(&view.you.battlefield, name).unwrap().clone();
+        (grown, on("Banner Marshal"), on("Grizzly Bears"))
+    });
+    assert_eq!(
+        grown.effects,
+        vec![CardEffect {
+            kind: EffectKind::ModifyPt,
+            source: "Giant Growth".into(),
+            gained: vec![],
+            lost: vec![],
+            loses_abilities: false,
+            abilities: vec![],
+            power: Some(3),
+            toughness: Some(3),
+        }],
+    );
+    let from = |card: &GameCard, kind: EffectKind, source: &str| {
+        card.effects
+            .iter()
+            .find(|e| e.kind == kind && e.source == source)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {kind:?} from {source} on {card:?}"))
+    };
+    let anthem = from(&bears, EffectKind::ModifyPt, "Banner Marshal");
+    assert_eq!((anthem.power, anthem.toughness), (Some(1), Some(1)));
+    let trample = from(&bears, EffectKind::Ability, "Banner Marshal");
+    assert_eq!(trample.gained, vec!["Trample".to_string()]);
+    assert!(
+        bears.effects.iter().any(|e| e.source == "Giant Growth"),
+        "the growth lasts the turn: {bears:?}",
+    );
+    assert_eq!(
+        marshal.effects,
+        vec![],
+        "its own static is its printed self"
+    );
+    assert_eq!((marshal.power, marshal.toughness), (Some(3), Some(3)));
+}
+
+/// Issue #1327's card: an effect that makes a creature a Demon and grants it a dies trigger is
+/// two effects from one source — the type it gained, and the trigger's own text.
+#[test]
+fn a_type_and_a_granted_trigger_are_told_with_their_source() {
+    let mut cards = deck();
+    cards.push(card(
+        "Demonic Pact Rite",
+        Some("{G}"),
+        "Instant",
+        "Until end of turn, target creature becomes a Demon in addition to its other types and gains \"When this creature dies, draw a card.\"",
+        None,
+        8,
+    ));
+    let bear = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let rite = in_hand(&mut game, "Demonic Pact Rite");
+        let view = game.act(A::Play { id: rite }).unwrap().view;
+        find(&view.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .clone()
+    });
+    let kinds: Vec<_> = bear
+        .effects
+        .iter()
+        .map(|e| (e.kind, e.source.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (EffectKind::Type, "Demonic Pact Rite"),
+            (EffectKind::Ability, "Demonic Pact Rite"),
+        ],
+        "{bear:?}",
+    );
+    assert_eq!(bear.effects[0].gained, vec!["Demon".to_string()]);
+    assert!(bear.type_line.contains("Demon"), "{}", bear.type_line);
+    assert_eq!(bear.effects[1].abilities.len(), 1, "{bear:?}");
+    assert!(
+        bear.effects[1].abilities[0].to_lowercase().contains("dies"),
+        "{:?}",
+        bear.effects[1].abilities,
+    );
+}
+
+/// Issue #1328: a "you may" in an ability the reader activated asks with the ability's words, so
+/// the board can say what is being agreed to — not the card's name alone.
+#[test]
+fn a_may_in_an_activated_ability_asks_with_its_words() {
+    let step = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Wishing Stone",
+            Some("{1}"),
+            "Artifact",
+            "{1}, {T}: You may draw a card.",
+            None,
+            1,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        for _ in 0..2 {
+            put_down(&mut game, "Forest");
+        }
+        let stone = put_down(&mut game, "Wishing Stone");
+        let mut step = game.act(A::Activate { id: stone }).expect("activate");
+        for _ in 0..4 {
+            if step.view.prompt.is_some() {
+                break;
+            }
+            step = game.act(A::Pass).expect("pass");
+        }
+        step
+    });
+    let prompt = step.view.prompt.as_ref().expect("the may is asked");
+    assert_eq!(prompt.kind, "OptionalEffectChoice", "{:?}", step.happened);
+    assert_eq!(prompt.source.as_deref(), Some("Wishing Stone"));
+    assert!(
+        prompt
+            .source_text
+            .as_deref()
+            .is_some_and(|t| t.to_lowercase().contains("draw a card")),
+        "the question names its ability's words: {prompt:?}"
+    );
+}
+
+/// A game whose library holds Invoke Calamity, cheap for the test, and one instant to cast with
+/// it — moved to the graveyard by hand, so the free-cast window offers the graveyard alone.
+fn calamity() -> (Playtest, u64, u64) {
+    let mut cards: Vec<CardFacts> = deck()
+        .into_iter()
+        .filter(|c| c.name != "Giant Growth")
+        .collect();
+    cards.push(card(
+        "Invoke Calamity",
+        Some("{G}"),
+        "Instant",
+        "You may cast up to two instant and/or sorcery spells with total mana value 6 or less from your graveyard and/or hand without paying their mana costs. If those spells would be put into your graveyard, exile them instead. Exile Invoke Calamity.",
+        None,
+        1,
+    ));
+    cards.push(card(
+        "Quick Study",
+        Some("{G}"),
+        "Instant",
+        "Draw a card.",
+        None,
+        1,
+    ));
+    let (mut game, _) = fish(&cards, 7);
+    game.act(A::Keep { bottom: vec![] }).unwrap();
+    let forest = in_hand(&mut game, "Forest");
+    game.act(A::Play { id: forest }).unwrap();
+    let study = in_hand(&mut game, "Quick Study");
+    game.act(A::Move {
+        id: study,
+        to: Place::Graveyard,
+    })
+    .expect("into the graveyard");
+    let invoke = in_hand(&mut game, "Invoke Calamity");
+    (game, invoke, study)
+}
+
+/// "You may cast … from your graveyard" is a pick of the cards it may cast (issue #1329): one
+/// card or none, where the cards lie, so the board can ask whether to cast before it shows them.
+/// Picking none declines, and nothing is cast.
+#[test]
+fn an_optional_cast_from_the_graveyard_is_a_pick_that_may_be_declined() {
+    let (asked, declined, study) = engine(|| {
+        let (mut game, invoke, study) = calamity();
+        let asked = game.act(A::Play { id: invoke }).unwrap();
+        let declined = game.act(A::PickCards { ids: vec![] }).unwrap();
+        (asked, declined, study)
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    let prompt = asked.view.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "CastOffer");
+    let pick = prompt.pick.as_ref().expect("asked as a pick");
+    assert_eq!(pick.purpose, PlaytestPickPurpose::Cast);
+    assert_eq!((pick.min, pick.max), (0, 1), "one card, or none");
+    assert_eq!(pick.eligible, vec![study]);
+    assert_eq!(pick.zone, Some(Place::Graveyard));
+    assert!(
+        prompt
+            .options
+            .iter()
+            .any(|o| o.cards.iter().any(|c| c.id == study)),
+        "the engine's own answers name the card they cast"
+    );
+
+    assert_eq!(declined.view.stage, Stage::Main, "{:?}", declined.happened);
+    assert!(find(&declined.view.you.graveyard, "Quick Study").is_some());
+    assert!(find(&declined.view.you.exile, "Invoke Calamity").is_some());
+    assert!(!declined.happened.contains(&H::Cast {
+        seat: YOU,
+        name: Some("Quick Study".into()),
+    }));
+}
+
+/// Picking the card casts it from the graveyard, free, and exiles it as it resolves.
+#[test]
+fn an_optional_cast_from_the_graveyard_casts_the_card_picked() {
+    let cast = engine(|| {
+        let (mut game, invoke, study) = calamity();
+        game.act(A::Play { id: invoke }).unwrap();
+        let mut step = game.act(A::PickCards { ids: vec![study] }).unwrap();
+        let mut happened = step.happened.clone();
+        // The window may be offered again with nothing left in it to cast; close it.
+        while step.view.stage == Stage::Prompt {
+            step = game.act(A::PickCards { ids: vec![] }).unwrap();
+            happened.extend(step.happened.clone());
+        }
+        (step, happened)
+    });
+    let (step, happened) = cast;
+    assert_eq!(step.view.stage, Stage::Main, "{happened:?}");
+    assert!(happened.contains(&H::Cast {
+        seat: YOU,
+        name: Some("Quick Study".into()),
+    }));
+    assert!(find(&step.view.you.graveyard, "Quick Study").is_none());
+    assert!(find(&step.view.you.exile, "Quick Study").is_some());
 }

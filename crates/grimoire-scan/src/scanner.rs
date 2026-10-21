@@ -465,6 +465,7 @@ mod tests {
                 },
                 finishes: vec!["nonfoil".into(), "foil".into()],
                 promo: false,
+                token: false,
             })
             .collect()
     }

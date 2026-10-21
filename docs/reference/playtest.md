@@ -117,6 +117,24 @@ step stop. A block or a question still stops it. `view.endingTurn` says it is ru
 **Commander.** A commander on any side makes the game a Commander game: 40 life, the command
 zone, tax and 21 commander damage. Without one, the format is phase's `freeform` at 20 life.
 
+**Commander damage** (issue #1336) is phase's to count and phase's to rule on. Its combat damage
+step adds each commander's combat damage to a player to `GameState.commander_damage`, one entry a
+commander and player (CR 903.10a), so a pair of partners is two counts, never one; its
+state-based actions put a player out at 21 from any one of them (CR 704.6c), unless something says
+they can't lose (CR 104.3b). The session only reads it:
+
+- `PlaytestSeat.commanderDamage` is what each player has been dealt, one `PlaytestCommanderDamage`
+  a commander (its id, name, printing, owner and count), and `PlaytestView.commanderDamageLethal`
+  is phase's threshold, 21, or `null` outside a Commander game.
+- `commanderDamage` is the fact (`tell`, from phase's `CombatDamageDealtToPlayer`, the commanders
+  among its sources being those phase counts): the commander, the player dealt it, the amount and
+  the count it reached. The log says "Kenrith has dealt Opponent 2 21 commander damage".
+- A player put out by it is told as any loss is: `eliminated` at a table of four, `gameOver` in a
+  duel. Their life may still be well above 0.
+- The goldfish cannot lose, so 21 from one commander is a death `deadOn` counts, as its life at 0
+  is (`mark_dead`).
+- Undo restores it with the rest of `GameState`.
+
 **The first turn's start is told by the session.** phase begins turn 1 inside `start_game`, before
 the hands are kept, and that event is never returned. The keep inserts `turnBegan` for turn 1, so
 the log opens on the right turn. While the hands are being decided, the view's `turn` is 0, even
@@ -241,6 +259,8 @@ phase's:
 | `MultiTargetSelection`                           | `targets` | Are the targets                                             | `min_targets` to `max_targets`                      |
 | `KeepWithinTotalPowerChoice`                     | `keep`    | Are kept; the rest are sacrificed                           | any, their total power at most `powerCap`           |
 | `KeepExactPermanentsChoice`                      | `keep`    | Are kept; the rest are sacrificed                           | `required_count`                                    |
+| `EffectZoneChoice` of `CastFromZone`             | `cast`    | Is cast                                                     | `min_count` to `count`, or `count`                  |
+| `CastOffer`'s `FreeCastWindow`                   | `cast`    | Is cast; none closes the window                             | one, or none                                        |
 
 A keep within a total power (Slaughter the Strong, Destined Confrontation — issue #1079) is bounded
 by power as well as count: `powerCap` is the cap, each creature counts its current power
@@ -248,6 +268,17 @@ by power as well as count: `powerCap` is the cap, each creature counts its curre
 `legal_actions` for it are two canned sets (keep none, and its greedy keep), which before the pick
 showed as two identical "Choose kept creatures" chips; they stay under "Other answers", each naming
 the creatures it keeps (`option_of` reads `kept`).
+
+**An optional cast is asked whether before which** (issue #1329). "You may cast a spell from
+among them" — a cast picked as the ability resolves (`EffectZoneChoice` of `CastFromZone`), or a
+free-cast window over a graveyard, a hand or the cards exiled this way (Invoke Calamity's
+`FreeCastWindow`, answered `FreeCastWindowChoice` with one card or none) — is a pick of purpose
+`cast`. Each pick says where its cards lie when they all lie in one place (`zone`), so a cast
+with none to be picked (`min` 0) opens on the board as its question alone: "Cast a spell from your
+graveyard?", with "Choose a card", which shows the cards, and "Don't cast", which picks none
+and so declines (`pick.ts`' `pickOffer`). A cast that must be made shows its cards at once.
+The engine's own answers to a free-cast window name the card each casts (`option_of` reads
+`selection`), under "Other answers".
 
 The session checks the count, the power cap, that each card is eligible and that none is picked
 twice. The engine
@@ -321,8 +352,14 @@ which the engine permits for the reader's seat (`debug_permitted`) and never for
 - **On,** they are taken in the reader's main phase only, where nothing is half done, on the
   reader's own cards anywhere and on **any card the table shows**: an opponent's battlefield,
   graveyard, exile and command zone (`editable`). **Never an opponent's hand or library**, which
-  the reader may not see: "That card is in a zone you cannot see." The goldfish's emblems are out
-  of reach too.
+  the reader may not see: "That card is in a zone you cannot see." Every emblem is out of reach
+  too: no move, tap or counter takes one (CR 114.5 — it is not a card).
+
+**A permanent put onto the battlefield by hand enters with its intrinsic counters** (issue #1333):
+a planeswalker its loyalty and a battle its defense (CR 306.5b, 310.4b), phase's own
+`intrinsic_etb_counters` added after the move (`enter_with_counters`). phase's debug move is inert
+and left them off, so a planeswalker put down had 0 loyalty and could never pay for a loyalty
+ability — its emblem's among them. Counters only: a put still fires no enter trigger.
 
 The AI may well notice: it reads the state as it is. Tokens wear each deck's own printings, every
 seat's ([goldfish.md](goldfish.md#the-table), _A token wears the deck's printing_). The hybrid model
@@ -407,7 +444,7 @@ empties the slot only if it holds that name — even `Busy`. So a board that lea
 mid-turn ends its game then, and the turn's answer drops it; a new board's deal is never
 overwritten by the old board's late answer; and a late action or end from a board that has gone, or
 from another window's, never touches a newer game. On the page the name is drawn like the seed,
-fresh per deal (`usePlaytestGame`), and an action still queued when its deal is put away is not
+fresh per deal (`play/heldGame.ts`), and an action still queued when its deal is put away is not
 sent. All four commands are on
 `command_table::DESKTOP_ONLY`. The goldfish board's own three (`goldfish_start`, `goldfish_act`,
 `goldfish_end`) and its slot were removed on 2026-10-17, when its game became this one; the
@@ -415,7 +452,7 @@ desktop's `facts` and `token_facts` live in `playtest/mod.rs` now.
 
 **The view is sent, never the state.** The whole `GameState` is hundreds of kilobytes. The view is
 what a board draws: each zone's cards, the lives, the mana open, the library, and the tokens the
-deck makes. The page sends actions one at a time, in order (`usePlaytestGame`'s serial queue), so
+deck makes. The page sends actions one at a time, in order (`HeldGame`'s serial queue), so
 each is read against the view it was made from.
 
 **The wire** is `playtest/view.rs` ↔ `packages/ui/lib/ipc/playtest.ts`, built on the table's
@@ -444,6 +481,7 @@ each of the AI's actions. They become the log's facts:
 | `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
 | `LifeChanged`                            | `life`: the change and the total after it                                                            |
 | `TokenCreated`                           | `tokensCreated`, with consecutive tokens of one name counted together                                |
+| `EffectResolved` of a `CreateEmblem`     | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)        |
 
 A sandbox action's events are not told. The action's own fact says what the reader did.
 
@@ -475,35 +513,71 @@ named by the face it shows, so every face of a card of several faces is read as 
 printing, and a commander on its back face is still the commander — its tax, its tile, its way back
 to the command zone.
 
+**Emblems are on the wire, the game's and only the game's** (issue #1333, 2026-10-21). Each
+`PlaytestSeat` carries `emblems`, every emblem in the command zone that seat controls (CR 114.2),
+oldest first: a `PlaytestEmblem` with its `source` (the card that made it, from phase's
+`emblem_source`, so a planeswalker that died paying for it is still named), its abilities' words
+(`text`, phase's descriptions of its statics, triggers and abilities) and a `cardId` — the emblem
+the deck keeps for that source among its Tokens & Emblems (`DeckTokens::emblem_of`: `<source>
+Emblem` by name, else the one emblem naming the source among the cards making it). The session's
+own emblems are never listed: the goldfish's two `rules` and the sandbox's `free` cast's are the
+board's machinery, not the game. Before this an emblem was in no list at all — `command` keeps
+commanders only — so a planeswalker's emblem worked but could not be seen. **phase applies
+them**: an emblem's statics and triggers work from the command zone (`create_emblem::grant_emblem`,
+CR 114.4), and the session only reads them. An emblem is in the `GameState`, so a `Moment` keeps
+it, and undo and redo take it back and bring it again like anything else. A card's effect from an emblem (its
+`effects`, issue #1327) names the emblem as Scryfall does, `<source> Emblem`, never the object's
+bare "Emblem".
+
 ## The setup page
 
-`packages/ui/features/playtesting/PlaytestSetup.tsx`, under the Playtesting rail entry. It has one
-`Dropdown` per seat, listing the decks that are not archived, with the format as the hint. A deck
-with a plan offers a Theory / Actual pair, in the editor's order. Difficulty is a five-button group,
-from "Very easy" to "Very hard", and starts on Medium. Start is `aria-disabled` until both decks are
-picked. The same deck on both sides is allowed, and labelled "A mirror match." The last picks are
-kept for the window's life in `viewMemory("playtesting.setup")`, never in storage.
+`packages/ui/features/playtesting/PlaytestSetup.tsx`, under the Playtesting rail entry: a game
+lobby (redesigned 2026-10-21 from the "Playtest Lobby Redesign" canvas, option A). Two halves:
 
-**The table** is a three-button group: "Goldfish", "1 opponent" (the default) or "3 opponents".
-Three opponents show three dropdowns, "Opponent 1's deck" to "Opponent 3's", and Start waits for
-all four decks. Any deck may sit in any seat, twice over. **"Goldfish"** hides every opponent's
-seat and the difficulty: the goldfish is no deck and plays at no skill, so Start waits for the
-reader's deck alone, and the board opens against it with the sandbox on, exactly as the deck
-editor's "Goldfish this deck" does. The seats a table hides keep their picks.
+- **The wall, on the left** — the reader's decks drawn and walked exactly as the Decks page draws
+  them, with every managing hand taken off. The tiles are `DeckPickTile`, `DeckFolderPickCard` and
+  `ParentDeckFolderPickCard`: the gallery's `DeckTile`, `FolderCard` and `ParentDeckFolderCard`
+  faces (`DeckTile.tsx`, `FolderCard.tsx`) with no menu, drag, rename, tray or Create. The grid
+  tracks and each deck's colour band and bracket pill are `features/decks/deckWall.ts`'
+  (`wallStyle`, `useDeckWallMarks`), shared with the gallery; the order is the gallery's
+  remembered sort, the zoom its `cardZoom.deckGallery`. Folders are walked by their cards, the
+  "Up one level" tile and a path over the wall (`Folder path`). **Typing a name or pressing a
+  format searches every deck**, folders left out (the gallery narrows the drawer on screen
+  instead): the reader is looking for one deck to play. Archived decks are left off.
+- **The table, on the right** — **Gamemode** (three tiles: "Goldfish", "Duel", the default, and
+  "Four-player", each drawn as its table), **Seats** (one row per player: "You", then "Opponent"
+  or "Opponent 1" to "Opponent 3"), **AI skill** (five segments, "Very easy" to "Very hard",
+  starting on Medium) and **Start game**.
+
+**One seat is always the one being picked for** — `aria-pressed`, ringed in accent, and named over
+the wall ("Picking for Opponent 2"). A deck pressed on the wall sits there, and the next empty seat
+round the table is up; pressing a seat makes it the one picked for, so a seated deck is swapped by
+pressing its seat and then a deck. A seat's ✕ empties it. A seated deck's tile wears a ring and a
+plate per seat it is in ("You", "Opp 2"). A deck with a plan seats with the editor's Theory | Actual
+switch, Theory first. Start is `aria-disabled` until every seat the gamemode plays has a deck, and
+the line under it says which seat is missing one. Any deck may sit in any seat, twice over; a duel
+of one deck is labelled "A mirror match." The last picks — gamemode, all four seats, skill — are
+kept for the window's life in `viewMemory("playtesting.setup")`, never in storage; the wall's
+folder and filter are the page's own state.
+
+**"Goldfish"** takes every opponent's seat and the skill away: the goldfish is no deck and plays at
+no skill, so Start waits for the reader's deck alone, and the board opens against it with the
+sandbox on, exactly as the deck editor's "Goldfish this deck" does. The seats a gamemode does not
+play keep their picks.
 
 ### What the engine plays of a deck (issue #1078)
 
 phase's parser reads most cards whole. A card it reads only in part is still dealt and played, as
 a body with a cost and a type, but the parts it could not read do nothing. So the setup page marks
-each deck before it is picked:
+each deck — as marks, with the sentence as the mark's name and hint rather than printed:
 
-- **In the deck lists**, each row has a glyph for the list the deck is first dealt from: a green
-  `CircleCheck` when every card is played whole, a gold `TriangleAlert` when some are played only
-  in part (a caution, not the red of a broken rule: the deck still plays). The row's tooltip is
-  the sentence, and the glyph rides on the closed trigger with the picked deck.
-- **Under each seat**, the picked deck's verdict in the list picked there ("The rules engine plays
-  23 of 24 cards in full; 1 card is played only in part."), and a fold that lists those cards,
-  each with its copies and what phase leaves out of it.
+- **On the wall**, a tile whose deck has cards played only in part (in the list it is first dealt
+  from) wears a gold `TriangleAlert` and the count in its art's top-right corner — a caution, not
+  the red of a broken rule: the deck still plays. A deck played whole wears nothing there.
+- **On each seat**, the seated deck's verdict in the list picked there: a green `CircleCheck`, or
+  the `TriangleAlert` and count as a button whose name is the sentence ("The rules engine plays 23
+  of 24 cards in full; 1 card is played only in part.") and which opens, under the seat, the cards
+  with their copies and what phase leaves out of each. A check that failed is a dim `CircleHelp`.
 
 **The verdict is phase's own.** `grimoire-play`'s `support.rs` parses each face exactly as a game
 does (`cards::parsed_faces`, `build_oracle_face`) and asks `engine::game::coverage::card_face_gaps`,
@@ -529,14 +603,30 @@ label says "played only in part", and the preview names each gap with `gapWords`
 card is its shown face's name, so its marks follow the face; it is fixed for the game, so not in a
 `Moment`.
 
+**Each card carries the effects on it, with their sources** (issue #1327). `table.rs`'
+`effects_on` reads phase's own attribution (`GameState::attribution`) — every
+`ContinuousModification` the last layers pass applied to the object, by the static or the
+resolved effect it came from — into `GameCard.effects`: one `CardEffect` per source and kind
+(CR 613's layer, layer 7 split into set, modify and switch), in layer order, with what the engine
+names of it: the types, colors and keywords gained or lost, whether it strips every ability, the
+text of each ability it grants (phase's, `~` for the card itself), and the P/T it adds or sets
+(`null` for an axis worked out in play). A permanent's own statics on itself are its printed self
+(CR 113.3c) and are left out, as phase's own board leaves them; a resolved spell's or ability's
+effect is kept even from the card itself. Facts only: `table/effects.ts` writes them —
+`+3/+3 · Giant Growth`, `+Demon · Clavileño`, `+Dies trigger · Clavileño` on chips under the
+counters at the card's top left (three at most, the rest counted in one more), and each in full,
+a granted ability's text quoted with the card's name for `~`, in the card's label and under the
+preview. A card under an effect is never piled with its untouched twin. The attribution is
+rebuilt with every layers pass and lives in the `GameState`, so undo and replay frames carry it.
+
 ## The board
 
 `packages/ui/features/playtesting/play/`. **One board for every game on a deck**: whatever it draws
 for an AI game it draws for a goldfish game, and a change to it is a change to both. `PlaytestPage`
 covers the window below the caption at `LAYER.stage`, a rung between `header` and `popup`, so the
 board's own menus and dialogs open over it. `PlaytestBoard` is presentational: a view in, actions
-out, no `ipc`, which is what its stories stand on. `usePlaytestGame` is the serial queue that wires
-it to the engine. The pieces it is drawn with are the table's ([goldfish.md](goldfish.md#the-table)).
+out, no `ipc`, which is what its stories stand on. `usePlaytestGame` wires it to the engine,
+through the `HeldGame` that holds the serial queue (`play/heldGame.ts`). The pieces it is drawn with are the table's ([goldfish.md](goldfish.md#the-table)).
 
 **Opened from two places** (`returnTo`). The Playtesting page's setup opens it with `"setup"`, and
 the deck editor's "Goldfish this deck" through `features/playtesting/GoldfishPage.tsx`, a thin
@@ -547,6 +637,22 @@ back ("Back to setup", "Back to the deck"), and the undo chords' scope (`playtes
 is the Decks view's third state: the store's `goldfish` names the open deck and variant, `App.tsx`
 draws the board in the editor's place, and every navigation clears it, so coming back to a deck
 finds the editor.
+
+**The Playtesting page's game outlives the page** (issue #1322, 2026-10-21). A view change
+unmounts the page and its board, so the game's life is not the board's: it is a `HeldGame`
+(`play/heldGame.ts`) — the queue, the host's name for the game, the generations, the view and the
+log book — which `usePlaytestGame` only shows. The page keeps it in `viewMemory("playtest")`
+(`keptGame.ts`, window-lifetime, never storage) and opens on it again: the same board and log, and
+an AI turn that was still being played when the reader left lands in the kept game meanwhile, taken
+whole (every beat logged in order, nothing popped). A board that leaves mid-replay shows the replay
+to its end first. **Only the reader ends it**: the way back (the button, Escape, the game menu's)
+and New game ask first while the game is underway (`EndGameDialog` — "End this game?", Keep
+playing / End game); a game the engine has ended (`over`), or one still being dealt, is left at
+once. The goldfish keeps its own rule, a game held for the board's life: `usePlaytestGame` with no
+held game deals one on mount and ends it on unmount. **The host holds one game**, so "Goldfish this
+deck" asks before dealing over a kept game that is underway ("End your Playtesting game?"; Keep it
+goes back to the deck with nothing dealt), and puts away a kept game that is over without asking. A
+restart opens the setup page; the host's old game is dropped by the next deal.
 
 **The goldfish is drawn in the duel layout** (the owner's choice of 2026-10-17), exactly as a single
 AI opponent is: its band with its face-down hand count, its plate, its zone columns and its empty
@@ -595,9 +701,18 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
   the reader's side, command over exile is on the left and graveyard over library on the right.
 - **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the
   zone columns, top first, with whose each is; an ability says its words and its cause in its
-  tooltip. It covers no table.
+  tooltip. It covers no table. Its label reads "Stack", and "Respond?" in gold only at a stop
+  with the reader's own spell on top, which no stop leaves today.
+- **The respond question** (issue #1334): with an opponent's spell or ability on top of the stack
+  and the reader holding priority (`respond`), a panel up to 600 px wide stands at the top centre,
+  over the opponent's table, just under their band. It draws the item at 120 × 168 (pointable, for
+  the preview), "The opponent cast" or "The opponent's ability" ("Opponent 2's" at a four-player
+  table), "Respond to <name>?" at 22 px, an ability's words and cause, and what it targets
+  ("Targeting Tarmogoyf and you"). Its one button, "Let it resolve", is `pass`; it is not modal,
+  and the stage buttons stay as they are. A step's stop with the stack empty asks nothing there.
 - **The prompt** docks at the bottom over the hand, at most 640 × 104, and the reader's plate moves
-  to the edge while it is up. **The picker** sits centred over the middle, up to 820 px wide.
+  to the edge while it is up. A question about an ability ("Do you want to…?") shows the ability's
+  words beside its answers, two lines at most and whole in the tooltip (issue #1328). **The picker** sits centred over the middle, up to 820 px wide.
 
 **The middle line** is a turn tracker: Beginning · Main 1 · Combat · Main 2 · End, the current
 phase lit in the active seat's colour, and a caption that names the step, such as "Turn 6 ·
@@ -608,7 +723,10 @@ always in sight. The top band has no room for it, since the opponent's plate gro
 The game menu has the same switch as a "Sandbox" radio row.
 
 **The plates.** The active seat's plate has a gold glow, and poison shows as a chip when it is
-above 0.
+above 0. Beside it, one chip a commander that has dealt the player combat damage (`PlateFrame`'s
+`CommanderDamageMark`, issue #1336): the commander's art in a circle (a crown for a face-down one)
+and the count, its name and "of 21" in the tooltip. At `commanderDamageLethal` the chip turns red
+(`data-lethal`).
 
 **Combat is drawn.** Arrows run from each attacker to what it attacks (the plate for a player, the
 card for a planeswalker or battle) and from each blocker to its attacker. The reader's attacks are
@@ -640,7 +758,7 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | `main`, first main phase  | To combat (`pass`)                                                                                                                 | End turn (`endTurn`)  |
 | `main`, second main phase | End turn (`pass`)                                                                                                                  |                       |
-| `respond`                 | Pass (`pass`)                                                                                                                      | Pass turn (`endTurn`) |
+| `respond`                 | Pass (`pass`; also the respond question's "Let it resolve")                                                                        | Pass turn (`endTurn`) |
 | `attack`                  | Attack with N, or No attack                                                                                                        |                       |
 | `block`                   | Confirm blocks, or No blocks                                                                                                       |                       |
 | busy                      | A spinner and "Opponent is thinking…" ("Playing on…" against the goldfish; "Passing turn…" while `endTurn` runs)                   |                       |
@@ -662,7 +780,25 @@ facts are found as a run of `step.happened`, and the end takes the rest.
   zone, and "Activate ability" heads a battlefield card's menu. In `respond`, the hand and the
   abilities are playable as in the main phase; the sandbox is not.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
-  read-only. They are never dragged, and their table takes no drops (`refuse`).
+  read-only. They are never dragged, and their table takes no zone drops (`refuse`) — only the
+  rules' aims below.
+- **Drag beside every click** (issue #1335, `play/aim.ts`). A card carried onto a card or a plate
+  makes the same picks and sends the same actions as the clicks; nothing new reaches the engine.
+  The reader's cards the rules let them pick up (`canCarry`) are draggable with the sandbox off
+  too: the attackers and blockers in their steps, and with priority every permanent but a land.
+  A card that would take the drop is ringed solid gold while a card is over it.
+  - **Attack:** an attacker let go on an opponent's plate, their felt or any card on their table
+    attacks that player; on a planeswalker or battle it may attack, attacks it. Carried back onto
+    the reader's table, it is taken off.
+  - **Block:** a blocker let go on an attacker it may block blocks it; carried back, it is taken
+    off.
+  - **Play, equip, target:** with priority (`main`, `respond`), a card from the hand or the command
+    zone let go on a card on any table or on a plate is played, and a permanent activated, with
+    that card or player kept as its target (`useAimFollowThrough`). The target question that
+    follows is answered with it when it offers it; a question before it (which ability, how to
+    cast) is the reader's, and a target it does not offer leaves the prompt open for them. A
+    refusal, or a play that asked no target, forgets the aim. A land from the hand let go on a card
+    falls through to the table and is played, as before.
 - **Attack:** a click toggles a creature that can only attack the opponent. A creature with
   planeswalkers or battles to choose from attacks the player by default (else its first target)
   and waits to be aimed. While it waits, its targets light up (the opponent's plate too, when it
@@ -691,7 +827,8 @@ board (2026-10-13) rather than being copied; since 2026-10-17 this board is the 
 For a seat that is not the reader's, and for the sandbox:
 
 - `Battlefield`: `flipped`, `readOnly`, `marks` (attack, block or chosen, with a badge), `pick`,
-  `onActivate`, and `dense` (tighter padding).
+  `onActivate`, `dense` (tighter padding), and `carry` and `aim` (the rules' drags, issue #1335).
+- `PlateFrame`: `aim`, the player as a drop target. `tableDrag.ts`' `useAimTarget` registers one.
 - `LifePlate`: `compact`, a one-row plate 38 px tall; `readOnly`, the number as plain text with the
   sandbox off.
 - `layoutTable` and `pilesOf`: an `apart` key, so an attacking creature does not join a pile with
@@ -718,5 +855,4 @@ The views these pieces take are narrowed to `Pick<…>`s of the fields they read
 - **A difficulty per opponent.** Every AI seat plays at the one difficulty.
 - **Two opponents, five or six.** phase seats up to six; the setup page offers the goldfish, a duel
   or four players. `Playtest::new` takes none to three.
-- **Commander damage on the board.** The rules count it (21 loses), but no plate shows it yet.
 - **Watching the AIs play on** after the reader is out.

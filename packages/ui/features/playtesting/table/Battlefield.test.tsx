@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { GameCard } from "@/lib/ipc";
+import type { GameCard, PlaytestEmblem } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { LAYER } from "@/lib/layers";
 import { Battlefield, tableCardWidth } from "./Battlefield";
 
 let next = 1;
@@ -18,8 +19,11 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     isCommander: false,
     tapped: false,
     counters: [],
+    effects: [],
     power: null,
     toughness: null,
+    basePower: null,
+    baseToughness: null,
     tax: 0,
     attachedTo: null,
     foretold: false,
@@ -31,7 +35,15 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
 }
 
 function creature(name: string, over: Partial<GameCard> = {}): GameCard {
-  return card(name, { lane: "creature", isLand: false, power: 2, toughness: 2, ...over });
+  return card(name, {
+    lane: "creature",
+    isLand: false,
+    power: 2,
+    toughness: 2,
+    basePower: 2,
+    baseToughness: 2,
+    ...over,
+  });
 }
 
 function setup(
@@ -40,10 +52,19 @@ function setup(
     sandbox = true,
     readOnly = false,
     onActivate,
-  }: { sandbox?: boolean; readOnly?: boolean; onActivate?: (id: number) => void } = {},
+    emblems,
+    flipped = false,
+  }: {
+    sandbox?: boolean;
+    readOnly?: boolean;
+    onActivate?: (id: number) => void;
+    emblems?: PlaytestEmblem[];
+    flipped?: boolean;
+  } = {},
 ) {
   const onAct = vi.fn();
   const onPoint = vi.fn();
+  const onPointEmblem = vi.fn();
   const onUnpoint = vi.fn();
   render(
     <ContextMenuProvider>
@@ -56,10 +77,23 @@ function setup(
         onDrop={vi.fn()}
         onPoint={onPoint}
         onUnpoint={onUnpoint}
+        emblems={emblems}
+        onPointEmblem={onPointEmblem}
+        flipped={flipped}
       />
     </ContextMenuProvider>,
   );
-  return { onAct, onPoint, onUnpoint };
+  return { onAct, onPoint, onPointEmblem, onUnpoint };
+}
+
+function emblem(over: Partial<PlaytestEmblem> = {}): PlaytestEmblem {
+  return {
+    id: next++,
+    source: "Sorin, Lord of Innistrad",
+    cardId: null,
+    text: ["Creatures you control get +1/+0."],
+    ...over,
+  };
 }
 
 const menuRows = () => screen.queryAllByRole("menuitem").map((r) => r.textContent);
@@ -122,6 +156,82 @@ describe("Battlefield", () => {
     expect(screen.getByText("+2/+2")).toBeInTheDocument();
     expect(screen.getByText("3 loyalty")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Tataru Taru, +2/+2" })).toBeInTheDocument();
+  });
+
+  it("chips each effect on a card with its source, and names them in full (issue #1327)", () => {
+    setup([
+      creature("Vampire Cleric", {
+        effects: [
+          {
+            kind: "type",
+            source: "Clavileño",
+            gained: ["Demon"],
+            lost: [],
+            losesAbilities: false,
+            abilities: [],
+            power: null,
+            toughness: null,
+          },
+          {
+            kind: "ability",
+            source: "Clavileño",
+            gained: [],
+            lost: [],
+            losesAbilities: false,
+            abilities: ["When ~ dies, draw a card."],
+            power: null,
+            toughness: null,
+          },
+        ],
+      }),
+    ]);
+    expect(screen.getByText("+Demon · Clavileño")).toBeInTheDocument();
+    expect(screen.getByText("+Dies trigger · Clavileño")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name:
+          "Vampire Cleric, +Demon from Clavileño; " +
+          "+Dies trigger from Clavileño: “When Vampire Cleric dies, draw a card.”",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts the effects past the third in one more chip", () => {
+    const pump = (source: string) => ({
+      kind: "modifyPt" as const,
+      source,
+      gained: [],
+      lost: [],
+      losesAbilities: false,
+      abilities: [],
+      power: 1,
+      toughness: 1,
+    });
+    setup([creature("Bear", { effects: ["A", "B", "C", "D"].map(pump) })]);
+    expect(document.querySelectorAll("[data-effect]")).toHaveLength(2);
+    expect(screen.getByText("+2 more")).toBeInTheDocument();
+  });
+
+  it("draws a changed creature's P/T in a chip, each stat coloured by which way it moved", () => {
+    setup([
+      creature("Tataru Taru", { power: 4, toughness: 1, counters: [] }),
+      creature("Grizzly Bears"),
+    ]);
+    const chips = screen.getAllByTestId("stats-chip");
+    expect(chips).toHaveLength(1);
+    const [power, slash, toughness] = Array.from(chips[0].children);
+    expect([power.textContent, slash.textContent, toughness.textContent]).toEqual(["4", "/", "1"]);
+    expect(power).toHaveClass("text-ok");
+    expect(toughness).toHaveClass("text-destructive");
+    expect(screen.getByRole("button", { name: "Tataru Taru, 4/1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Grizzly Bears" })).toBeInTheDocument();
+  });
+
+  it("colours a stat that stayed as printed white beside one that moved", () => {
+    setup([creature("Tataru Taru", { power: 2, toughness: 4 })]);
+    const [power, , toughness] = Array.from(screen.getByTestId("stats-chip").children);
+    expect(power).toHaveClass("text-white");
+    expect(toughness).toHaveClass("text-ok");
   });
 
   it("says a token is one", () => {
@@ -193,6 +303,28 @@ describe("Battlefield", () => {
     );
   });
 
+  it("lifts an attachment over the card it is tucked under while it is pointed at (issue #1331)", () => {
+    const bear = creature("Grizzly Bears");
+    const sword = card("Bonesplitter", { lane: "other", isLand: false, attachedTo: bear.id });
+    const aura = card("Rancor", { lane: "other", isLand: false, attachedTo: bear.id });
+    setup([bear, sword, aura]);
+    const edge = (name: string) =>
+      screen.getByRole("button", { name: `${name}, attached to Grizzly Bears` });
+
+    expect(edge("Bonesplitter")).not.toHaveClass(LAYER.raised);
+    fireEvent.mouseEnter(edge("Bonesplitter"));
+    expect(edge("Bonesplitter")).toHaveClass(LAYER.raised);
+    expect(edge("Rancor")).not.toHaveClass(LAYER.raised);
+
+    fireEvent.mouseLeave(edge("Bonesplitter"));
+    fireEvent.mouseEnter(edge("Rancor"));
+    expect(edge("Bonesplitter")).not.toHaveClass(LAYER.raised);
+    expect(edge("Rancor")).toHaveClass(LAYER.raised);
+
+    fireEvent.mouseLeave(edge("Rancor"));
+    expect(edge("Rancor")).not.toHaveClass(LAYER.raised);
+  });
+
   it("activates an Equipment's ability from its edge under the creature", async () => {
     const bear = creature("Grizzly Bears");
     const sword = card("Bonesplitter", { lane: "other", isLand: false, attachedTo: bear.id });
@@ -204,6 +336,52 @@ describe("Battlefield", () => {
     await screen.findByRole("menu");
     fireEvent.click(screen.getByRole("menuitem", { name: "Activate ability" }));
     expect(onActivate).toHaveBeenCalledWith(sword.id);
+  });
+
+  it("stands an emblem at the back row's right end, past the artifacts (issue #1333)", () => {
+    const sorin = emblem();
+    setup([card("Forest"), card("Bonesplitter", { lane: "other", isLand: false })], {
+      emblems: [sorin],
+    });
+    const back = screen.getByRole("region", { name: "Lands and other permanents" });
+    const rows = [...back.children].map((r) => r.getAttribute("aria-label"));
+    expect(rows).toEqual(["Lands", "Artifacts, enchantments and other permanents", "Emblems"]);
+    const tile = within(back).getByRole("img", {
+      name: "Emblem from Sorin, Lord of Innistrad — Creatures you control get +1/+0.",
+    });
+    // Its words on the tile itself, since the deck keeps no printing of it.
+    expect(tile).toHaveTextContent("Creatures you control get +1/+0.");
+    // Not a card: nothing to press, carry or tap.
+    expect(within(back).getAllByRole("button")).toHaveLength(2);
+  });
+
+  it("draws an emblem the deck keeps a printing of by it, and previews it as loose", () => {
+    const sorin = emblem({ cardId: "p-sorin-emblem" });
+    const { onPointEmblem, onPoint } = setup([], { emblems: [sorin] });
+    // A table with only an emblem on it is not an empty one.
+    expect(screen.queryByText("Drag a card here to play it")).not.toBeInTheDocument();
+    const tile = screen.getByRole("img", { name: /^Emblem from Sorin/ });
+    expect(tile.querySelector("img")).not.toBeNull();
+    fireEvent.mouseEnter(tile);
+    expect(onPointEmblem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ids: [sorin.id],
+        line: "Emblem from Sorin, Lord of Innistrad — Creatures you control get +1/+0.",
+        card: expect.objectContaining({ id: sorin.id, cardId: "p-sorin-emblem" }),
+      }),
+    );
+    expect(onPoint).not.toHaveBeenCalled();
+  });
+
+  it("puts the far side's emblems at its back row's other end", () => {
+    setup([card("Forest"), card("Sol Ring", { lane: "other", isLand: false })], {
+      emblems: [emblem()],
+      flipped: true,
+      readOnly: true,
+    });
+    const back = screen.getByRole("region", { name: "Lands and other permanents" });
+    const rows = [...back.children].map((r) => r.getAttribute("aria-label"));
+    expect(rows).toEqual(["Emblems", "Artifacts, enchantments and other permanents", "Lands"]);
   });
 
   it("offers an empty table as somewhere to play a card", () => {

@@ -378,7 +378,7 @@ describe("TradeScanDialog", () => {
     expect(within(panel).queryByRole("region", { name: "Match" })).toBeNull();
     // The scanner's own controls are all still there.
     expect(within(panel).getByRole("group", { name: "Scan mode" })).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Start scanning" })).toBeInTheDocument();
     // And the stored switch was not written by merely opening here.
     expect(ipc.setScannerPrefs).not.toHaveBeenCalled();
   });
@@ -421,8 +421,9 @@ describe("TradeScanDialog", () => {
       }),
     );
     const { onClose } = mount({ tray: [] });
-    await dialog();
-    // The camera is open and its first frame is out.
+    const panel = await dialog();
+    // The scanner opens stopped (issue #1317); started, the camera is open and its first frame out.
+    await userEvent.click(await within(panel).findByRole("button", { name: "Start scanning" }));
     await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
     expect(stop).not.toHaveBeenCalled();
     await userEvent.keyboard("{Escape}");

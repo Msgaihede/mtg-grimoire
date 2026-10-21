@@ -157,6 +157,15 @@ export interface FakeCard {
   artist: string | null;
   illustrationId: string | null;
   releasedAt: string;
+  /**
+   * `cards.image_updated_at` — when Scryfall last replaced this printing's images, an ISO
+   * timestamp — or absent.
+   *
+   * **Optional, and absent on every generated row**: `scripts/gen-storybook-cards.ts` does not
+   * write it, and the one reader that needs it is the `waiting` world's unreleased printings
+   * (`seeds.ts`' `upcomingCards`), which set it themselves. Absent reads as the column's NULL.
+   */
+  imageUpdatedAt?: string | null;
   imageStatus: string | null;
   promo: boolean;
   /**

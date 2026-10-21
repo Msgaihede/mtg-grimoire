@@ -261,8 +261,8 @@ never replay frames of their own: there is nothing to watch, so the board says "
 the engine runs its turn. **The reader can attack it**, and its life drops by the rules.
 
 **Dead on your turn N.** The goldfish's seat carries `deadOn` (`dead_on`): the reader's own turn
-(phase's `turns_taken`) on which its life first reached 0 or less, `null` again once it is back
-above 0. It is the one count of the reader's turns alone; everything else counts the game's turns,
+(phase's `turns_taken`) on which it first would have lost — its life at 0 or less, or 21 combat
+damage from one of the reader's commanders (issue #1336) — `null` again once neither holds. It is the one count of the reader's turns alone; everything else counts the game's turns,
 both seats'. It is part of undo's moment (`Checkpoint`), so an undo past the killing blow brings
 the goldfish back to life. The plate reads "Dead on your turn 5", highlighted with a gold
 edge, and the game goes on until the reader deals another. A goldfish the rules bring to 0 is told
@@ -313,6 +313,13 @@ drags (`tableDrag.ts`), the landing pop (`landing.ts`), the playmats (`playmats.
 Each speaks `PlaytestAction`. `PlaytestBoard` arranges them ([playtest.md](playtest.md#the-board));
 the design below is theirs, wherever they are placed.
 
+**Emblems stand at the back row's far end** (issue #1333): past the other permanents — the
+artifacts and Equipment — behind a dashed divider of their own, on the reader's side the right and
+on the far side the left, upright at the row's card size (`layoutTable`'s `emblems`, which the
+row's width is shared with). An emblem the deck keeps a printing of is drawn by it; any other is a
+tile with "Emblem", its source and its words. Nothing carries, taps or menus one, and pointing at
+one opens the preview with its words as the caption (a `loose` point, since no zone lists it).
+
 **Cards are drawn as big as the table allows.** A lane's card size is capped high (260 px for a
 creature, 220 for the back row) so a table of a few cards fills its lanes, and the lane's height
 and the row's width shrink it as the table fills.
@@ -331,6 +338,13 @@ its neighbours. Its button never moves, only its face does, and while it is up t
 into is part of the button. So a lift cannot take the card out from under the pointer, and the
 card drops back the moment the pointer leaves it. The kept hand is held lands first, the same order
 the opening hand shows. After that, a card drawn or returned goes on the right (`arrangeHand`).
+
+**The reader reorders their own hand at any moment of the game** (issue #1330): a card dragged
+within the hand takes the slot it is let go over (`handSlotAt`, the card whose middle is nearest the
+pointer), and Shift+← / Shift+→ on a focused card moves it one place (`moveInHand`). The order is
+the board's alone (`HandFan`'s held order) — a hand's order means nothing to the rules — so it asks
+the engine nothing, needs no sandbox, and works on the opponent's turn, in a prompt or while the
+engine is busy. A card played leaves the rest in the reader's order; one drawn goes on the right.
 
 **The preview follows the pointer.** It opens beside the cursor once the pointer has rested on a
 card for half a second, and it moves with the pointer, kept inside the board. It closes the moment
@@ -377,9 +391,17 @@ the opponent's Grizzly Bears into their graveyard").
 **The table is laid out by the rules, not by where a card is let go.** Creatures are in front.
 Behind them, lands are on the left and every other permanent on the right. Each lane is one row,
 and its card size is solved so every pile fits (`layout.ts`). Cards of one name that look the same
-— same printing, same tapped state, same counters — are one pile: the cards themselves stacked,
-each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip on the
-pile's bottom edge for the count (issue #1001).
+— same printing, same tapped state, same counters, same effects, same P/T — are one pile: the cards
+themselves stacked, each edged 5 px up and to the right of the one above it, five drawn at most,
+and a ×N chip on the pile's bottom edge for the count (issue #1001).
+
+**A creature whose P/T has changed wears it in a chip over its printed box** (issue #1332):
+`Inspect.tsx`' `StatsChip`, bottom right of the card on the table and in the preview. Both stats
+are always drawn, each coloured by which way it moved from `GameCard.base_power` /
+`base_toughness` — green up, red down, white unchanged — and a creature as printed has no chip.
+The base is phase's printed (copiable) P/T, except for a `*/*` whose characteristic-defining
+ability sets it (CR 604.3; phase prints those as 0): its base is that ability's own value
+(`table.rs`' `base_pt`), so a Tarmogoyf at its own count is not marked as pumped.
 
 **An attachment is tucked under the card it is attached to** (issue #1073), the way MTG Arena and
 a real table show it. `GameCard.attached_to` is the host's object id, read from phase's

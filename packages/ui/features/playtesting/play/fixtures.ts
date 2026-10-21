@@ -14,6 +14,7 @@
 import type {
   GameCard,
   PlaytestAction,
+  PlaytestCommanderDamage,
   PlaytestHappened,
   PlaytestPick,
   PlaytestPlayer,
@@ -54,13 +55,24 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     graveyard: [],
     exile: [],
     command: [],
+    emblems: [],
     library: 0,
     libraryCards: [],
     manaOpen: 0,
     mana: manaTable(),
+    commanderDamage: [],
     deadOn: null,
     ...over,
   };
+}
+
+/** `commander`'s combat damage to a seat over the game, as the engine counts it. */
+function dealtBy(
+  commander: GameCard,
+  player: PlaytestPlayer,
+  damage: number,
+): PlaytestCommanderDamage {
+  return { id: commander.id, name: commander.name, cardId: commander.cardId, player, damage };
 }
 
 function library(n: number): GameCard[] {
@@ -156,6 +168,7 @@ export function turnFive(): TurnFive {
     endingTurn: false,
     sandbox: false,
     goldfish: false,
+    commanderDamageLethal: null,
     canUndo: false,
     canRedo: false,
   };
@@ -178,6 +191,42 @@ export function withAttachments(): TurnFive {
     gear("Pacifism", "Enchantment — Aura", t.ragavan),
   ];
   t.view.opponents = [opponent];
+  return t;
+}
+
+/**
+ * Turn 5 with emblems (issue #1333): the reader's Bonesplitter beside their emblem from Sorin,
+ * Lord of Innistrad — drawn as a tile of its words, as for a deck that keeps no printing of it —
+ * and the opponent's emblem from Chandra, at their back row's far end.
+ */
+export function withEmblems(): TurnFive {
+  const t = turnFive();
+  const [opponent] = t.view.opponents;
+  t.view.you.battlefield = [
+    ...t.view.you.battlefield,
+    gameCard("Bonesplitter", { typeLine: "Artifact — Equipment", lane: "other", isToken: false }),
+  ];
+  t.view.you.emblems = [
+    {
+      id: 9001,
+      source: "Sorin, Lord of Innistrad",
+      cardId: null,
+      text: ["Creatures you control get +1/+0."],
+    },
+  ];
+  t.view.opponents = [
+    {
+      ...opponent,
+      emblems: [
+        {
+          id: 9002,
+          source: "Chandra, Torch of Defiance",
+          cardId: null,
+          text: ["Whenever you cast a spell, this emblem deals 5 damage to any target."],
+        },
+      ],
+    },
+  ];
   return t;
 }
 
@@ -359,6 +408,40 @@ export function castChoicePrompt(): TurnFive {
           },
         ],
         cancellable: true,
+        pick: null,
+        keyword: null,
+      },
+    },
+  };
+}
+
+/** Windbrisk Heights' activated "you may" (issue #1328): a yes or a no, the ability's words
+ *  beside them. */
+export function optionalEffectPrompt(): TurnFive {
+  const t = turnFive();
+  const answer = (index: number, yes: boolean) => ({
+    index,
+    kind: "DecideOptionalEffect",
+    cards: [],
+    players: [],
+    number: null,
+    yes,
+    label: null,
+  });
+  return {
+    ...t,
+    view: {
+      ...t.view,
+      stage: "prompt",
+      prompt: {
+        kind: "OptionalEffectChoice",
+        source: "Windbrisk Heights",
+        sourceText:
+          "{W}, {T}: You may play the exiled card without paying its mana cost if you attacked " +
+          "with three or more creatures this turn.",
+        cause: null,
+        options: [answer(0, false), answer(1, true)],
+        cancellable: false,
         pick: null,
         keyword: null,
       },
@@ -567,6 +650,7 @@ export function scryPick(): TurnFive {
     max: 3,
     ordered: true,
     powerCap: null,
+    zone: "libraryTop",
   });
 }
 
@@ -588,6 +672,7 @@ export function discardPick(): TurnFive {
     max: 2,
     ordered: false,
     powerCap: null,
+    zone: "hand",
   });
 }
 
@@ -613,6 +698,32 @@ export function keepPick(): TurnFive {
     max: cards.length,
     ordered: false,
     powerCap: 4,
+    zone: "battlefield",
+  });
+}
+
+/**
+ * "You may cast an instant or sorcery spell from your graveyard" (issue #1329): one card of the
+ * reader's graveyard, or none — asked whether before which.
+ */
+export function castPick(): TurnFive {
+  const t = turnFive();
+  const cards = t.view.you.graveyard.map((c) => ({
+    id: c.id,
+    name: c.name,
+    cardId: c.cardId,
+    text: null,
+    cause: null,
+  }));
+  return pickPrompt(t, "CastOffer", "Invoke Calamity", {
+    purpose: "cast",
+    cards,
+    eligible: cards.map((c) => c.id),
+    min: 0,
+    max: 1,
+    ordered: false,
+    powerCap: null,
+    zone: "graveyard",
   });
 }
 
@@ -735,19 +846,25 @@ export interface FourPlayer {
  * Turn 13 at a four-player Commander table (issue #994), the reader's first main phase: Opponent
  * 1 is the turn-5 Boros deck, Opponent 2 sits behind Thrasios and Tymna with three poison, and
  * Opponent 3 is out — their permanents gone with them (CR 800.4a), their commander and graveyard
- * still to be looked at.
+ * still to be looked at. Commander damage (issue #1336): Kenrith has dealt Opponent 2 14 and
+ * Opponent 3 the 21 that put them out, and the reader has taken 6 from Thrasios and 4 from Tymna —
+ * two counts for the two partners, never one of 10.
  */
 export function fourPlayer(): FourPlayer {
   const t = turnFive();
   const lurrus = gameCard("Lurrus of the Dream-Den", { power: 3, toughness: 2 });
   const kenrith = gameCard("Kenrith, the Returned King", { isCommander: true });
+  const thrasios = gameCard("Thrasios, Triton Hero", { isCommander: true });
+  const tymna = gameCard("Tymna the Weaver", { isCommander: true });
   const view: PlaytestView = {
     ...t.view,
     turn: 13,
+    commanderDamageLethal: 21,
     you: {
       ...t.view.you,
       life: 33,
       battlefield: [kenrith, ...t.view.you.battlefield],
+      commanderDamage: [dealtBy(thrasios, "opponent2", 6), dealtBy(tymna, "opponent2", 4)],
     },
     opponents: [
       {
@@ -758,6 +875,7 @@ export function fourPlayer(): FourPlayer {
       seat("opponent2", {
         life: 31,
         poison: 3,
+        commanderDamage: [dealtBy(kenrith, "you", 14)],
         handCount: 6,
         battlefield: [
           lurrus,
@@ -768,16 +886,14 @@ export function fourPlayer(): FourPlayer {
           gameCard("Island"),
         ],
         graveyard: [gameCard("Counterspell")],
-        command: [
-          gameCard("Thrasios, Triton Hero", { isCommander: true }),
-          gameCard("Tymna the Weaver", { isCommander: true }),
-        ],
+        command: [thrasios, tymna],
         library: 71,
         manaOpen: 2,
       }),
       seat("opponent3", {
         out: true,
-        life: 0,
+        life: 12,
+        commanderDamage: [dealtBy(kenrith, "you", 21)],
         graveyard: [gameCard("Swords to Plowshares"), gameCard("Dismember")],
         command: [gameCard("Bruna, the Fading Light", { isCommander: true })],
         library: 64,
@@ -899,6 +1015,23 @@ export function goldfishTurn({ extraLands = 0 }: { extraLands?: number } = {}): 
 export function goldfishDead(): PlaytestView {
   const view = goldfishTurn();
   return { ...view, opponents: [{ ...view.opponents[0], life: 0, deadOn: 8 }] };
+}
+
+/**
+ * The goldfish dead to commander damage since the reader's eighth turn: Kenrith has dealt it 21,
+ * its life still at 12. It cannot lose, so its plate says when it would have, and the count is red.
+ */
+export function goldfishCommanderDead(): PlaytestView {
+  const view = goldfishTurn();
+  const kenrith = view.you.battlefield.find((c) => c.isCommander);
+  if (kenrith === undefined) throw new Error("the turn-nine table has its commander out");
+  return {
+    ...view,
+    commanderDamageLethal: 21,
+    opponents: [
+      { ...view.opponents[0], deadOn: 8, commanderDamage: [dealtBy(kenrith, "you", 21)] },
+    ],
+  };
 }
 
 /** The goldfish game's opening hand: two mulligans in, the first free, one card to bottom. */

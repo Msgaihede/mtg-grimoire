@@ -1,6 +1,10 @@
 //! What a reader can narrow a scan to: sets, a release-date range, and whether promos count.
 //! Nothing else.
 //!
+//! **Tokens are not a filter.** A session leaves them out whatever the filters say until it is
+//! told to admit them ([`crate::session::Session::set_tokens`], issue #1323), and folds that into
+//! the mask it builds from these ([`crate::reference::Reference::mask_without_tokens`]).
+//!
 //! **Language is deliberately absent**, not merely unimplemented — see the design's decision 7
 //! (`docs/superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md` §3). The bundle
 //! holds one printing per card, English wherever English exists, so a language filter would

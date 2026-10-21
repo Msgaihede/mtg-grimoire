@@ -24,6 +24,7 @@ import {
   UNKNOWN_FINISH,
 } from "@grimoire/ui/features/scanner/reader/trayFinish";
 import { ADD_CARD_LABEL } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
+import { useHeadLanded } from "@grimoire/ui/features/scanner/reader/useHeadLanded";
 import { useTrayPrices } from "@grimoire/ui/features/scanner/reader/useTrayPrices";
 import { plural } from "@grimoire/ui/lib/counts";
 import { parseFinishes } from "@grimoire/ui/lib/finish";
@@ -89,6 +90,32 @@ type Asking = { key: string; page: "finish" | "printing" } | null;
  */
 const HAND_BACK_MS = 400;
 
+/** The nearest box above `el` that scrolls — the page's one scroller, or a wide page's column. */
+function scrollerOf(el: HTMLElement): HTMLElement | null {
+  for (let box = el.parentElement; box !== null; box = box.parentElement) {
+    const { overflowY } = getComputedStyle(box);
+    if (overflowY === "auto" || overflowY === "scroll") return box;
+  }
+  return null;
+}
+
+/**
+ * Bring the tray's heading back into view once a card lands (issue #1320) — **only when the reader
+ * has scrolled past it**, never down to it.
+ *
+ * The tray scrolls with the page, under the camera on a narrow phone, so its top is often below
+ * the fold while a reader is scanning; taking the page down to it there would scroll away the
+ * camera the next card is held under. Scrolled into the rows, the newest card is above them, and
+ * that is the one scroll a landing makes. jsdom has no `scrollIntoView`, hence the optional call.
+ */
+function revealTrayTop(section: HTMLElement) {
+  const scroller = scrollerOf(section);
+  if (scroller === null) return;
+  if (section.getBoundingClientRect().top >= scroller.getBoundingClientRect().top) return;
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  section.scrollIntoView?.({ block: "start", behavior: reduce ? "auto" : "smooth" });
+}
+
 /**
  * The review tray on the phone: every card the scanner has taken, newest first, as rows a thumb
  * can work.
@@ -119,7 +146,8 @@ const HAND_BACK_MS = 400;
  * which at 44px a control does not fit under a 156px tile; so the phone draws the list and leaves
  * the stored `trayLayout` — the desktop's, in the same row of prefs — unread and unwritten.
  *
- * **It scrolls with the page**, not in a box of its own: the page's footer is what stays put.
+ * **It scrolls with the page**, not in a box of its own: the page's footer is what stays put. A
+ * card that lands brings its heading back when the reader has scrolled past it ({@link revealTrayTop}).
  */
 export function Tray({
   rows,
@@ -145,7 +173,11 @@ export function Tray({
   onAddCard?: (opener: HTMLElement) => void;
 }) {
   const titleId = useId();
+  const sectionRef = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  useHeadLanded(rows, () => {
+    if (sectionRef.current !== null) revealTrayTop(sectionRef.current);
+  });
   const copies = totalCopies(rows);
   const waiting = unresolvedCount(rows);
   const deciding = rows.some(needsDecision);
@@ -226,7 +258,7 @@ export function Tray({
   };
 
   return (
-    <section aria-labelledby={titleId} className="flex flex-col">
+    <section ref={sectionRef} aria-labelledby={titleId} className="flex flex-col">
       <header className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1">
         {/* The name is spelled, not computed: the title and its count are two elements a gap
             apart, which the name algorithm fuses into `Scanned cards3`. */}

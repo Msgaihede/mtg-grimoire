@@ -133,6 +133,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   under the uncovered pair. So it is the **group step** that puts them in the cheap class, not
   the "is the sort's column in the index" split above — the two rules agree on these two keys
   only because both columns happen to be in the index as well.
+- **`imageUpdated` joined it on 2026-10-21 (issue #1214), and is the other kind** — it orders by
+  `c.image_updated_at` and is in `REPRESENTATIVE_SORTS`, so collapsed it runs **after the join**,
+  in the `set`/`rarity` class. Not measured: no aggregate is the representative's own image date
+  the way `max(c.released_at)` is its release date — images are replaced printing by printing, so
+  the group's newest scan can belong to a printing the row does not show — and sorting by one
+  would order rows by a timestamp they do not carry. Its one standing caller is the Coming soon
+  widget's set press, which always narrows to a single set, so the join it pays for is that set's
+  (the "~40 ms as soon as anything narrows" case), not the corpus's. Picked unfiltered from the
+  filter bar it costs what a `set` press does.
 
   **These figures do not belong in the table above and must not be compared to its numbers row
   by row.** The SQL was rebuilt from `search.rs` by hand — the same `collapse_rep`, the same

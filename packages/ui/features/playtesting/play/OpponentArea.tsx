@@ -4,7 +4,7 @@ import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { Battlefield, type CardMark, type TablePick } from "../table/Battlefield";
-import type { TableDrag } from "../table/tableDrag";
+import type { DropAim, TableAim, TableDrag } from "../table/tableDrag";
 import type { Across, ZoneSize } from "../table/layout";
 import { LifePlate } from "../table/LifePlate";
 import type { Pointed, ZoneLook } from "../table/types";
@@ -24,7 +24,7 @@ export const AREA_ZONE: ZoneSize = { width: 40, height: 56, compact: true };
  * third of the width, so three stand side by side above the middle line in turn order.
  *
  * **The duel's pieces, each with a smaller size**: the compact `LifePlate` in a `PlateFrame` (the
- * turn's gold glow, poison), their zones from `OpponentZones` at {@link AREA_ZONE} — the hand a
+ * turn's gold glow, poison, commander damage), their zones from `OpponentZones` at {@link AREA_ZONE} — the hand a
  * face-down tile with its count among them, since an area has no edge of its own to hang a hand
  * from — and the `Battlefield` flipped, read-only and dense, the creature lane nearest the middle
  * line as on a duel's table. `data-plate` and `data-table` carry the player's own name, so the
@@ -34,7 +34,8 @@ export const AREA_ZONE: ZoneSize = { width: 40, height: 56, compact: true };
  * for the preview, the graveyard and exile open read-only, and a click picks only when the rules
  * ask for one (`pick`). With the sandbox's moves working (`sandbox`) a permanent has the
  * sandbox's card menu — tap, counters, a token copy, a move to its owner's zones — and with the
- * sandbox on (`steppers`) the plate has a life stepper; nothing of theirs is ever dragged.
+ * sandbox on (`steppers`) the plate has a life stepper; nothing of theirs is ever dragged — but
+ * the reader's cards are carried onto theirs, and onto the plate, to attack or aim (`aim`).
  * **A player who is out** (`seat.out`) stays drawn, dimmed, with "Out" across their table: the
  * others play on, and what they left behind is still worth a look.
  */
@@ -42,6 +43,7 @@ export function OpponentArea({
   seat,
   deckName,
   opponents,
+  lethal,
   active,
   won,
   sandbox,
@@ -51,10 +53,13 @@ export function OpponentArea({
   across,
   aimable,
   onAim,
+  aim,
+  plateAim,
   onLife,
   onAct,
   onDrop,
   onPoint,
+  onPointEmblem,
   onUnpoint,
   onLook,
   className,
@@ -63,6 +68,8 @@ export function OpponentArea({
   deckName: string;
   /** How many opponents the game has, for the names. */
   opponents: number;
+  /** The commander damage that loses the game; `null` outside a Commander game. */
+  lethal: number | null;
   /** It is this player's turn. */
   active: boolean;
   /** This player won the game. */
@@ -79,10 +86,16 @@ export function OpponentArea({
   /** The reader's attacker waiting to be aimed can attack this player: the plate is a target. */
   aimable: boolean;
   onAim: () => void;
+  /** Where on this player's table a carried card may be let go for the rules (`Battlefield`'s). */
+  aim?: TableAim;
+  /** The player as a drop target: attacked, or aimed at (`PlateFrame`'s). */
+  plateAim?: DropAim;
   onLife: (life: number) => void;
   onAct: (action: PlaytestAction) => void;
   onDrop: (drag: TableDrag, to: GamePlace) => void;
   onPoint: (pointed: Pointed) => void;
+  /** Point at one of their emblems (`Battlefield`'s). */
+  onPointEmblem?: (pointed: Pointed) => void;
   onUnpoint: () => void;
   onLook: (look: ZoneLook) => void;
   className?: string;
@@ -100,7 +113,10 @@ export function OpponentArea({
           seat={seat.player}
           active={active}
           poison={seat.poison}
+          commanderDamage={seat.commanderDamage}
+          lethal={lethal}
           compact
+          aim={plateAim}
           className="max-w-full min-w-0"
         >
           <LifePlate
@@ -167,6 +183,8 @@ export function OpponentArea({
           <Battlefield
             label={`${playerPossessive(seat.player, opponents)} battlefield`}
             cards={seat.battlefield}
+            emblems={seat.emblems}
+            onPointEmblem={onPointEmblem}
             sandbox={sandbox && !seat.out}
             onAct={onAct}
             onDrop={onDrop}
@@ -178,6 +196,7 @@ export function OpponentArea({
             marks={marks}
             pick={pick}
             across={across}
+            aim={seat.out ? undefined : aim}
             className="h-full w-full"
           />
         </div>

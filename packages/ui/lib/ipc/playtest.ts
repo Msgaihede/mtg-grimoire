@@ -32,9 +32,18 @@ export type PlaytestStage =
 /** Where the turn is, coarse. */
 export type PlaytestPhase = "beginning" | "main1" | "combat" | "main2" | "ending";
 
-/** What picking a card does: kept on top (scry, surveil), discarded, found, kept, revealed… */
+/** What picking a card does: kept on top (scry, surveil), discarded, found, kept, revealed, cast… */
 export type PlaytestPickPurpose =
-  "scry" | "surveil" | "discard" | "search" | "dig" | "reveal" | "targets" | "choose" | "keep";
+  | "scry"
+  | "surveil"
+  | "discard"
+  | "search"
+  | "dig"
+  | "reveal"
+  | "targets"
+  | "choose"
+  | "keep"
+  | "cast";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -108,6 +117,11 @@ export interface PlaytestView {
    * have). The game is never `over`.
    */
   goldfish: boolean;
+  /**
+   * A Commander game's commander damage at which a player loses (CR 704.6c): 21. `null` in a game
+   * without a commander, where commander damage is not counted.
+   */
+  commanderDamageLethal: number | null;
   /** The reader's last action can be taken back (`undo`), with all the opponent did after it.
    *  Never in a replay frame. */
   canUndo: boolean;
@@ -135,6 +149,12 @@ export interface PlaytestSeat {
   graveyard: GameCard[];
   exile: GameCard[];
   command: GameCard[];
+  /**
+   * This seat's emblems (CR 114), oldest first: in the command zone for the rest of the game, and
+   * never a card in it. Never the session's own — the goldfish's rules emblems, the sandbox's free
+   * cast's.
+   */
+  emblems: PlaytestEmblem[];
   library: number;
   /** The reader's library, top first; empty for the opponent. */
   libraryCards: GameCard[];
@@ -142,11 +162,47 @@ export interface PlaytestSeat {
   /** The same open mana by type, and what is floating in the pool. */
   mana: ManaTable;
   /**
+   * The commander damage this player has been dealt (CR 903.10a): one entry a commander, so a
+   * pair of partners is two. Only combat damage counts, and only once a commander has dealt some;
+   * empty outside a Commander game.
+   */
+  commanderDamage: PlaytestCommanderDamage[];
+  /**
    * The goldfish's, which cannot lose: the reader's own turn (counted from 1) on which this
-   * player's life first reached 0 or less — "dead on your turn 5" — and `null` again once it is
-   * back above 0. Always `null` for a player who can lose.
+   * player first would have lost — their life at 0 or less, or one commander's damage to them at
+   * the view's `commanderDamageLethal` — "dead on your turn 5", and `null` again once neither
+   * holds. Always `null` for a player who can lose.
    */
   deadOn: number | null;
+}
+
+/**
+ * An emblem (CR 114): neither a card nor a permanent, it cannot be removed, and its abilities work
+ * from the command zone for the rest of the game. The engine applies them; the board shows them.
+ */
+export interface PlaytestEmblem {
+  id: number;
+  /** The card that made it, as it was when it did; `null` for one with no card behind it. */
+  source: string | null;
+  /** The emblem the deck keeps for its source among its Tokens & Emblems; `null` when it keeps
+   *  none, and the board draws its words. */
+  cardId: string | null;
+  /** Its abilities' words, as the engine gives them, one a row. */
+  text: string[];
+}
+
+/**
+ * One commander's combat damage to one player over the game. At the view's
+ * `commanderDamageLethal` the player loses (CR 704.6c), unless something says they can't.
+ */
+export interface PlaytestCommanderDamage {
+  /** The commander's id: the card the table shows wherever it is now. */
+  id: number;
+  name: string;
+  cardId: string | null;
+  /** Whose commander it is. */
+  player: PlaytestPlayer;
+  damage: number;
 }
 
 export interface PlaytestCombat {
@@ -236,6 +292,11 @@ export interface PlaytestPick {
    * power 4 or less", issue #1079); `null` for a pick bounded by its count alone.
    */
   powerCap: number | null;
+  /**
+   * Where the cards lie, when they all lie in one place — the graveyard a cast is offered from
+   * (issue #1329). `null` for cards from several places.
+   */
+  zone: GamePlace | null;
 }
 
 export interface PlaytestOption {
@@ -358,7 +419,21 @@ export type PlaytestHappened =
       amount: number;
     }
   | { type: "life"; seat: PlaytestPlayer; amount: number; total: number }
+  /**
+   * A commander dealt combat damage to a player: `seat` is the player dealt it, `total` all that
+   * commander has dealt them this game.
+   */
+  | {
+      type: "commanderDamage";
+      source: string;
+      sourceId: number;
+      seat: PlaytestPlayer;
+      amount: number;
+      total: number;
+    }
   | { type: "tokensCreated"; seat: PlaytestPlayer; name: string; count: number }
+  /** A player got an emblem; `source` is the card that made it. */
+  | { type: "emblem"; seat: PlaytestPlayer; source: string | null }
   /** The reader put a card somewhere by hand; `seat` is whose card it is. */
   | { type: "put"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
   | { type: "tapped"; seat: PlaytestPlayer; name: string; count: number; tapped: boolean }

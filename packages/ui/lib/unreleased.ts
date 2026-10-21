@@ -28,16 +28,51 @@ export function isUnreleased(releasedAt: string | null, today: string = localDay
 }
 
 /**
- * What an unreleased printing is marked with: its set code and its release date, `null` for a
- * printing that is out. Upper-case code, as the table's Set column and the chin print it.
+ * What an unreleased printing is marked with — {@link unreleasedStamp}'s answer, and the shape
+ * `CardArt`'s `unreleased` prop and `CardGrid`'s takes.
+ */
+export interface UnreleasedStamp {
+  /** The set code, upper-case. */
+  set: string;
+  /** The release date, `YYYY-MM-DD`. */
+  date: string;
+  /**
+   * The day Scryfall last replaced the printing's images, `YYYY-MM-DD` in UTC — or absent when
+   * the corpus has none (issue #1214). A preview's picture is swapped as better scans arrive, so
+   * this is how fresh the one on the tile is; the chip prints it above the release date.
+   */
+  imageUpdated?: string;
+}
+
+/**
+ * What an unreleased printing is marked with: its set code, its release date and, when the
+ * corpus has one, the day its image was last updated — `null` for a printing that is out.
+ * Upper-case code, as the table's Set column and the chin print it.
  */
 export function unreleasedStamp(
   setCode: string,
   releasedAt: string | null,
   today: string = localDay(),
-): { set: string; date: string } | null {
+  imageUpdatedAt: string | null = null,
+): UnreleasedStamp | null {
   if (releasedAt === null || !isUnreleased(releasedAt, today)) return null;
-  return { set: setCode.toUpperCase(), date: releasedAt };
+  const stamp = { set: setCode.toUpperCase(), date: releasedAt };
+  const day = imageUpdatedDay(imageUpdatedAt);
+  return day === null ? stamp : { ...stamp, imageUpdated: day };
+}
+
+/**
+ * The calendar day of Scryfall's `image_updated_at` — `2026-07-21T16:44:09Z` → `2026-07-21` —
+ * or `null` for no timestamp or one that is not ISO.
+ *
+ * **The UTC day, by slicing rather than by a formatter**: the timestamp is Scryfall's, written
+ * in UTC, and the release date beside it is a UTC calendar date too, so the two lines of the chip
+ * are read on one calendar. A local-zone formatter would print the day before for an evening scan
+ * west of Greenwich.
+ */
+export function imageUpdatedDay(imageUpdatedAt: string | null | undefined): string | null {
+  if (!imageUpdatedAt || !/^\d{4}-\d{2}-\d{2}/.test(imageUpdatedAt)) return null;
+  return imageUpdatedAt.slice(0, 10);
 }
 
 /** The words a chip stands for, for a tooltip or a screen reader. */
@@ -48,4 +83,9 @@ export function unreleasedLabel(releasedAt: string): string {
 /** The words on the card's own chip — short enough for a 0.5× tile's bottom-left corner. */
 export function releaseChipLabel(releasedAt: string): string {
   return `Releases ${releasedAt}`;
+}
+
+/** The line the chip draws above {@link releaseChipLabel} when the image's day is known. */
+export function imageUpdatedChipLabel(day: string): string {
+  return `Image updated ${day}`;
 }
