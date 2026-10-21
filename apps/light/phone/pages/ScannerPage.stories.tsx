@@ -346,6 +346,6 @@ export const OpenElsewhere: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText(SCANNER_OPEN_ELSEWHERE)).toBeInTheDocument();
     await expect(canvas.queryByRole("region", { name: "Scanned cards" })).toBeNull();
-    await expect(canvas.queryByRole("button", { name: "Stop scanning" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^(Start|Stop) scanning$/ })).toBeNull();
   },
 };

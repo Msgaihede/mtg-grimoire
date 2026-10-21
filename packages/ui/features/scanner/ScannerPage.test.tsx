@@ -157,6 +157,11 @@ function mount() {
   );
 }
 
+/** The press the view waits for before it reads anything: it opens stopped (issue #1317). */
+async function start() {
+  fireEvent.click(await screen.findByRole("button", { name: "Start scanning" }));
+}
+
 /** The camera, answered. A refusal is the state most of these tests want the video box in. */
 function mediaDevices(getUserMedia: () => Promise<MediaStream>) {
   Object.defineProperty(navigator, "mediaDevices", { value: { getUserMedia }, configurable: true });
@@ -381,6 +386,30 @@ describe("ScannerPage", () => {
     expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
   });
 
+  it("opens stopped, with the camera live, and reads nothing until Start scanning is pressed", async () => {
+    const restore = shimVideo();
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({ getTracks: () => [{ stop: () => {} }] } as unknown as MediaStream),
+    );
+    mediaDevices(getUserMedia);
+    paced();
+    try {
+      mount();
+      const press = await screen.findByRole("button", { name: "Start scanning" });
+      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(ipc.scannerFrame).not.toHaveBeenCalled();
+      fireEvent.click(press);
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(SCANNING_STOPPED)).toBeNull();
+      expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
   it("pauses recognition with the camera and tray still available, and resumes only when asked", async () => {
     const restore = shimVideo();
     const stop = vi.fn();
@@ -393,12 +422,11 @@ describe("ScannerPage", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
       await user.click(screen.getByRole("button", { name: "Stop scanning" }));
       expect(stop).not.toHaveBeenCalled();
-      expect(
-        screen.getByText("Scanning stopped. Press Start scanning to resume."),
-      ).toBeInTheDocument();
+      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
       expect(tray()).toHaveTextContent(TRAY_ROWS[0].name);
       await new Promise((resolve) => setTimeout(resolve, 50));
       const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
@@ -452,6 +480,7 @@ describe("ScannerPage", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
       const opener = within(tray()).getByRole("button", { name: "Add card…" });
       await user.click(opener);
@@ -515,6 +544,7 @@ describe("ScannerPage", () => {
     paced();
     try {
       mount();
+      await start();
       await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
       await user.click(screen.getByRole("button", { name: "Stop scanning" }));
       await act(async () => opened({ getTracks: () => [{ stop }] } as unknown as MediaStream));
@@ -583,6 +613,7 @@ describe("ScannerPage", () => {
     frames(VERDICTS.noCard);
     try {
       const { container } = mount();
+      await start();
       await waitFor(() => expect(strip(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""));
     } finally {
       restore();
@@ -603,6 +634,7 @@ describe("ScannerPage", () => {
     frames(VERDICTS.noCard);
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
       const [, options] = vi.mocked(ipc.scannerFrame).mock.calls[0] ?? [];
       expect(options?.previews).toBe(developer);
@@ -662,6 +694,7 @@ describe("ScannerPage", () => {
     refused();
     vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
     const { container } = mount();
+    await start();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
     await waitFor(() =>
       expect(strip(container)).toHaveTextContent("the scanner state is poisoned"),
@@ -677,6 +710,7 @@ describe("ScannerPage", () => {
     frames(VERDICTS.decided);
     try {
       mount();
+      await start();
       // The Match panel's this-frame line naming the card is the tell that the verdict has
       // landed — its head row went to the strip above the camera, which every reader sees.
       const match = await screen.findByRole("region", { name: "Match" });
@@ -715,6 +749,7 @@ describe("ScannerPage", () => {
     frames(VERDICTS.voting, VERDICTS.decided, VERDICTS.decided, VERDICTS.decided);
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(5));
       const rows = within(tray()).getAllByRole("listitem");
       expect(rows).toHaveLength(1);
@@ -748,6 +783,7 @@ describe("ScannerPage", () => {
     frames(VERDICTS.voting, VERDICTS.decided);
     try {
       const { container } = mount();
+      await start();
       await waitFor(() => expect(videoBox(container)).toHaveTextContent("Added to scanned cards"));
       expect(videoBox(container)).toHaveTextContent("Storm of Saruman");
       expect(videoBox(container)).toHaveTextContent("LTR · 72 · Nonfoil");
@@ -809,6 +845,7 @@ describe("ScannerPage", () => {
     frames(VERDICTS.voting, VERDICTS.decided);
     try {
       mount();
+      await start();
       await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
       await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
       const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
@@ -834,6 +871,7 @@ describe("ScannerPage", () => {
     frames(VERDICTS.voting, unread);
     try {
       mount();
+      await start();
       await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
       expect(
         within(tray()).getByRole("button", { name: "Add 0 to collection · 1 needs a finish" }),
@@ -942,6 +980,7 @@ describe("ScannerPage", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
       await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
       await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
@@ -1024,6 +1063,7 @@ describe("ScannerPage", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
       await user.click(await within(tray()).findByRole("button", { name: "Add 3 to collection" }));
       await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
@@ -1168,6 +1208,7 @@ describe("ScannerPage", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
       await user.click(await within(tray()).findByRole("button", { name: "Clear all…" }));
       const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
@@ -1297,6 +1338,7 @@ describe("ScannerPage", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(1));
       expect(vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1].mode).toBe("fast");
 
@@ -1321,6 +1363,7 @@ describe("ScannerPage", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(1));
       expect(vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1].mode).toBe("fast");
 
@@ -1455,6 +1498,7 @@ describe("ScannerPage sending a scan", () => {
     const user = userEvent.setup();
     try {
       const { container } = mount();
+      await start();
       await screen.findByText(/No OCR models\. Put/);
       // All seven answered: the eighth is on the wire, and stays there.
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
@@ -1569,6 +1613,7 @@ describe("ScannerPage sending a scan", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
       // Enough of a scan to send: a few frames more than the fewest.
       await waitFor(() =>
@@ -1621,6 +1666,7 @@ describe("ScannerPage sending a scan", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
       expect(screen.getByRole("button", { name: "Send scan…" })).toBeInTheDocument();
 
@@ -1654,6 +1700,7 @@ describe("ScannerPage sending a scan", () => {
     const user = userEvent.setup();
     try {
       const { container } = mount();
+      await start();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
       expect(strip(container)).toHaveTextContent("");
 
@@ -1689,6 +1736,7 @@ describe("ScannerPage sending a scan", () => {
     const user = userEvent.setup();
     try {
       const { container } = mount();
+      await start();
       await waitFor(() => expect(strip(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""));
 
       await user.click(screen.getByRole("button", { name: "Send scan…" }));
@@ -1740,6 +1788,7 @@ describe("ScannerPage sending a scan", () => {
     const user = userEvent.setup();
     try {
       mount();
+      await start();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
       await waitFor(() =>
         expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8),
@@ -1792,6 +1841,7 @@ describe("ScannerPage sending a scan", () => {
     const user = userEvent.setup();
     try {
       const { container } = mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
 
@@ -1862,6 +1912,7 @@ describe("ScannerPage sending a scan", () => {
       vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
       paced();
       const view = mount();
+      await start();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
       return view;
     }
@@ -2058,6 +2109,7 @@ describe("ScannerPage in a minimized window", () => {
     paced();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
       act(() => parkedStore.set({ paused: true, released: false }));
       // One frame may already have been on the wire; nothing goes out after it.
@@ -2083,6 +2135,7 @@ describe("ScannerPage in a minimized window", () => {
     paced();
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
       act(() => parkedStore.set({ paused: true, released: true }));
       await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
@@ -2235,6 +2288,7 @@ describe("ScannerPage with another window holding the scanner", () => {
       .mockImplementation(() => new Promise(() => {}));
     try {
       mount();
+      await start();
       await waitFor(() => expect(ipc.scannerElsewhere).toHaveBeenCalledTimes(2));
     } finally {
       restore();
@@ -2360,6 +2414,7 @@ describe("ScannerPage with a destination", () => {
     const user = userEvent.setup();
     try {
       mountOver(destination);
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
       // A live camera, a running scanner and a supporter's device (the file's default answer,
       // asked and in) — where the Scanner view draws *Send scan…*. Over a trade it is not
@@ -2477,6 +2532,7 @@ describe("ScannerPage with a destination", () => {
     const { destination } = destinationOf();
     try {
       mountOver(destination);
+      await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
       const sent = vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1];
       expect(sent?.previews).toBe(false);

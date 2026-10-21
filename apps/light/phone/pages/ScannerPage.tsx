@@ -139,8 +139,9 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { prefs, update, inForce, filterError, loaded, unavailable, resync } = useScannerPrefs();
-  // Session-only, the desktop's: a deliberate Stop survives the page being hidden and shown.
-  const [scanning, setScanning] = useState(true);
+  // The desktop's: stopped until Start scanning is pressed (issue #1317), and session-only — a
+  // Start or Stop survives the page being hidden and shown.
+  const [scanning, setScanning] = useState(false);
   const parked = usePageParked();
   // `undefined` until the prefs are in, which holds the camera shut; and again once the page has
   // been hidden past its grace — its tracks are stopped, and coming back asks afresh.

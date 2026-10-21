@@ -3930,7 +3930,8 @@ match — Try better lighting or clear the filters.* · *N printings — Pick a 
   names is not a settled card.
 
 **Start scanning / Stop scanning on the top row controls recognition** (issue #774). The view
-starts scanning as before. Stop pauses the frame pump while keeping the camera preview live and
+opens stopped (issue #1317): the camera comes on, and nothing is read until the reader presses
+Start scanning. Stop pauses the frame pump while keeping the camera preview live and
 the review tray available; Start resumes on the same stream. This session-only choice survives
 minimize/restore, and changing cameras while stopped does not restart recognition. A frame still
 being encoded when Stop is pressed is discarded, and an in-flight answer cannot add to the tray.

@@ -101,8 +101,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // The developer panels are the Scanner view's own; a destination's host draws none of them, and
   // asks the engine for none of the previews they alone show.
   const developer = destination === undefined && prefs.developer;
-  // Session-only: a deliberate Stop survives minimize/restore, but a new visit starts as before.
-  const [scanning, setScanning] = useState(true);
+  // **Stopped until the reader presses Start scanning** (issue #1317): opening the view turns the
+  // camera on, not recognition. Session-only: a Start or Stop survives minimize/restore, and a new
+  // visit starts stopped again.
+  const [scanning, setScanning] = useState(false);
   // **A minimized window stands down** (issue #556): the pump pauses at once, and the camera and
   // the heartbeat go after a grace, so the light goes out and the lease lapses for another window.
   // WebView2 reports a minimized page as visible, so the page could not see this on its own.
