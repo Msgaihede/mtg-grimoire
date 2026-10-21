@@ -55,8 +55,8 @@ GPU = "L4"
 # What each training container gets unless the launch says otherwise (see the module doc).
 TRAIN_CPU = 16.0
 TRAIN_MEMORY_GIB = 24
-REFRESH_CPU = 4.0
-REFRESH_MEMORY_GIB = 4
+REFRESH_CPU = budget.REFRESH_CPU  # in `budget.py`: its rate is part of the run's reserve
+REFRESH_MEMORY_GIB = budget.REFRESH_MEMORY_GIB
 PIPELINE_CPU = 0.25
 PIPELINE_MEMORY_GIB = 0.5
 # Below these the run is a failure and is not delivered — well under what the shipped files
@@ -108,9 +108,11 @@ class Guard:
     """A stage's spend, held to its share for the whole life of its container — copying the
     dataset as much as training — by a thread that adds the container's seconds to the stage's
     ledger every `tick_s` and stops whatever is running once the share is spent. Volumes v2 commits
-    in the background every few seconds, so the ledger reaches the Volume without a commit here."""
+    in the background every few seconds, so the ledger reaches the Volume without a commit here.
+    What it can let past a share is `budget.OVERRUN_S`, which the shares set aside: keep the tick
+    and the kill timeout in `budget.py`."""
 
-    def __init__(self, ledger: budget.Ledger, tick_s: float = 30.0):
+    def __init__(self, ledger: budget.Ledger, tick_s: float = budget.GUARD_TICK_S):
         self.ledger = ledger
         self.tick_s = tick_s
         self.proc: subprocess.Popen | None = None
@@ -145,7 +147,7 @@ class Guard:
             return
         proc.send_signal(signal.SIGTERM)
         try:
-            proc.wait(timeout=60)
+            proc.wait(timeout=budget.KILL_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             proc.kill()
 
@@ -179,10 +181,12 @@ class Guard:
         return rows
 
 
-def _stage_local_copy() -> Path:
+def _stage_local_copy(stop: threading.Event) -> Path:
     """The dataset on the container's own disk: the trainers read every scan once an epoch, and
     a local disk answers that faster than a network volume. ~11 GB; sharded folders copied in
-    parallel. Kept for the container's life, so a resumed trainer in the same container skips it."""
+    parallel. Kept for the container's life, so a resumed trainer in the same container skips it.
+    The watchdog has no process to stop during the copy, so the copy watches `stop` itself: a share
+    spent mid-copy ends it within the shards already in flight, not ~5 minutes later."""
     marker = LOCAL_DATA / ".copied"
     if marker.exists():
         return LOCAL_DATA
@@ -193,10 +197,13 @@ def _stage_local_copy() -> Path:
     shards = sorted(p for p in (DATA / "normal").iterdir() if p.is_dir())
 
     def copy(shard: Path):
-        shutil.copytree(shard, LOCAL_DATA / "normal" / shard.name, dirs_exist_ok=True)
+        if not stop.is_set():
+            shutil.copytree(shard, LOCAL_DATA / "normal" / shard.name, dirs_exist_ok=True)
 
     with ThreadPoolExecutor(32) as pool:
         list(pool.map(copy, shards))
+    if stop.is_set():
+        return LOCAL_DATA  # incomplete, and unmarked: the caller's check stops the stage
     marker.write_text(_now(), encoding="utf-8")
     print(json.dumps({"copied": len(shards), "seconds": round(time.monotonic() - started)}), flush=True)
     return LOCAL_DATA
@@ -229,7 +236,7 @@ def _train(stage: str, run: str, cpu: float, memory_gib: float, limit_usd: float
     out = run_dir / stage
     ledger = budget.Ledger(run_dir, stage, budget.rate_per_s(GPU, cpu, memory_gib), limit_usd)
     with Guard(ledger) as guard:
-        data = _stage_local_copy()
+        data = _stage_local_copy(guard.over)
         guard.check()
         rows = guard.run(cmd_for(data, out), out / "train.out")
         guard.run(export_for(data, out), out / "export.out")
@@ -377,8 +384,8 @@ def pipeline(run: str, detector: bool = True, cpu: float = TRAIN_CPU, memory_gib
     run_dir = RUNS / run
     if (run_dir / "DONE.json").exists():
         return _read_json(run_dir / "DONE.json")
-    share = budget.shares(budget_usd, detector)
     rate = budget.rate_per_s(GPU, cpu, memory_gib)
+    share = budget.shares(budget_usd, detector, rate)
     info = _read_json(run_dir / "run.json") or {
         "run": run, "git_sha": git_sha, "started_at": _now(), "detector": detector, "smoke": smoke,
         "resources": {"gpu": GPU, "cpu": cpu, "memory_gib": memory_gib},

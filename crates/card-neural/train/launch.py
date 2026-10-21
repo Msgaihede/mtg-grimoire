@@ -39,8 +39,8 @@ def main() -> None:
     if not RUN_NAME.match(args.run):
         sys.exit(f"--run {args.run!r} is not YYYY-MM or YYYY-MM-DD-HHMM")
     # Refuses a budget over the hard limit, or one that leaves nothing to train with.
-    shares = budget.shares(args.budget_usd, not args.no_detector)
     rate = budget.rate_per_s("L4", args.cpu, args.memory_gib)
+    shares = budget.shares(args.budget_usd, not args.no_detector, rate)
     if not 1 <= args.cpu <= 64 or not 4 <= args.memory_gib <= 256:
         sys.exit("--cpu must be 1–64 physical cores and --memory-gib 4–256")
 

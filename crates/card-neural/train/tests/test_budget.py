@@ -8,43 +8,66 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import budget  # noqa: E402
 
 
+# The default training container: an L4, 16 physical cores, 24 GiB.
+RATE = budget.rate_per_s("L4", 16, 24)
+
+
+def worst_case_usd(s: dict, rate: float) -> float:
+    """What a run can spend at most: every guarded stage its share and the most a watchdog can let
+    past it, and the orchestrator its set amount."""
+    trainings = [k for k in s if k not in ("refresh", "pipeline")]
+    return (s["pipeline"]
+            + s["refresh"] + budget.overrun_usd(budget.REFRESH_RATE)
+            + sum(s[k] + budget.overrun_usd(rate) for k in trainings))
+
+
 class Shares(unittest.TestCase):
     def test_the_hard_limit_is_the_owners_ten_dollars(self):
         self.assertEqual(budget.HARD_LIMIT_USD, 10.0)
 
-    def test_six_stages_share_the_whole_budget(self):
-        s = budget.shares(10.0, True)
+    def test_six_stages_share_the_budget_less_the_watchdogs_reserve(self):
+        s = budget.shares(10.0, True, RATE)
         self.assertEqual(set(s), {"refresh", "pipeline", "embedder", "detector", "symbol", "band"})
-        self.assertAlmostEqual(sum(s.values()), 10.0, places=6)
+        reserve = budget.overrun_usd(budget.REFRESH_RATE) + 4 * budget.overrun_usd(RATE)
+        self.assertAlmostEqual(sum(s.values()) + reserve, 10.0, places=6)
         self.assertGreater(s["symbol"], 0)
         self.assertGreater(s["band"], 0)
 
-    def test_a_run_never_shares_out_more_than_the_hard_limit(self):
-        for detector in (True, False):
-            s = budget.shares(budget.HARD_LIMIT_USD, detector)
-            self.assertAlmostEqual(sum(s.values()), budget.HARD_LIMIT_USD, places=6)
+    def test_the_overrun_is_a_retry_admitted_under_its_share_then_a_tick_and_a_kill(self):
+        self.assertEqual(budget.OVERRUN_S, budget.START_OVERHEAD_S + budget.GUARD_TICK_S + budget.KILL_TIMEOUT_S)
+        self.assertAlmostEqual(budget.overrun_usd(RATE), budget.OVERRUN_S * RATE)
+
+    def test_a_run_never_spends_more_than_the_hard_limit_even_when_every_watchdog_overruns(self):
+        # The default container, the smallest a launch allows and the largest.
+        for rate in (RATE, budget.rate_per_s("L4", 1, 4), budget.rate_per_s("L4", 64, 256)):
+            for detector in (True, False):
+                s = budget.shares(budget.HARD_LIMIT_USD, detector, rate)
+                self.assertLessEqual(worst_case_usd(s, rate), budget.HARD_LIMIT_USD + 1e-9, (rate, detector))
+                self.assertAlmostEqual(worst_case_usd(s, rate), budget.HARD_LIMIT_USD, places=6)
         with self.assertRaises(ValueError):
-            budget.shares(10.01, True)
+            budget.shares(10.01, True, RATE)
         with self.assertRaises(ValueError):
-            budget.shares(budget.REFRESH_USD + budget.PIPELINE_USD, True)
+            budget.shares(budget.REFRESH_USD + budget.PIPELINE_USD, True, RATE)
 
     def test_without_the_detector_the_other_three_trainings_share_what_is_left(self):
-        s = budget.shares(10.0, False)
+        s = budget.shares(10.0, False, RATE)
         self.assertEqual(set(s), {"refresh", "pipeline", "embedder", "symbol", "band"})
-        self.assertAlmostEqual(s["embedder"] + s["symbol"] + s["band"], 10.0 - budget.REFRESH_USD - budget.PIPELINE_USD)
+        reserve = budget.overrun_usd(budget.REFRESH_RATE) + 3 * budget.overrun_usd(RATE)
+        self.assertAlmostEqual(s["embedder"] + s["symbol"] + s["band"],
+                               10.0 - budget.REFRESH_USD - budget.PIPELINE_USD - reserve)
 
     def test_each_training_is_shared_its_estimate_and_a_margin(self):
         # 16 cores, 24 GiB, an L4: $1.75 an hour. The four trainings' estimates come to ~$8.30 of the
-        # $9.65 left after the refresh and the orchestrator, so each gets its estimate plus ~16 %.
-        rate = budget.rate_per_s("L4", 16, 24)
-        self.assertAlmostEqual(rate * 3600, 0.799 + 16 * 0.04716 + 24 * 0.007992, places=2)
-        s = budget.shares(10.0, True)
+        # ~$9.23 left after the refresh, the orchestrator and the watchdogs' reserve, so each gets
+        # its estimate plus ~11 %.
+        self.assertAlmostEqual(RATE * 3600, 0.799 + 16 * 0.04716 + 24 * 0.007992, places=2)
+        s = budget.shares(10.0, True, RATE)
         estimated = sum(budget.ESTIMATE_USD.values()) + budget.REFRESH_USD + budget.PIPELINE_USD
         self.assertLessEqual(estimated, 9.0, "the owner's ~$9 a run")
         for stage, usd in budget.ESTIMATE_USD.items():
             self.assertGreater(s[stage], 1.1 * usd, stage)
-            hours = usd / (rate * 3600)
-            self.assertGreater(budget.max_seconds(s[stage], rate), hours * 3600, stage)
+            hours = usd / (RATE * 3600)
+            self.assertGreater(budget.max_seconds(s[stage], RATE), hours * 3600, stage)
         # The embedder and the detector keep the ratio their measured estimates had.
         self.assertAlmostEqual(s["embedder"] / (s["embedder"] + s["detector"]), 0.46, delta=0.02)
 
@@ -52,7 +75,7 @@ class Shares(unittest.TestCase):
 class LedgerTest(unittest.TestCase):
     def test_spend_carries_across_attempts_and_a_spent_stage_refuses_to_start(self):
         with tempfile.TemporaryDirectory() as d:
-            rate = budget.rate_per_s("L4", 16, 24)
+            rate = RATE
             ledger = budget.Ledger(Path(d), "embedder", rate, limit_usd=1.0)
             first = ledger.start()
             self.assertEqual(first["attempts"], 1)

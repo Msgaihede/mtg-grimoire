@@ -298,12 +298,26 @@ through a longer cosine schedule; a 12- or 14-epoch run anneals by its own last 
 should land there or a little above. That is an inference, not a measurement on the readers'
 scans — which is why every delivery is replayed before it merges.
 
-**The shares** (`budget.shares`): the refresh's $0.25 and the orchestrator's $0.10 are set aside,
-and the trainings share the remaining $9.65 in proportion to their estimates (`ESTIMATE_USD`):
-each gets its estimate × 1.16 — embedder $2.34 (78 min of container time), detector $2.71
-(91 min), symbol $2.23 (75 min), band $2.37 (80 min). The six shares sum to the budget, and the
-embedder and detector keep their old 46 : 54. A margin of 16 % is thin: a stage that runs past
-its share is stopped and the run fails, undelivered. If the first runs show Modal's cores slower
+**The watchdogs' reserve.** A share is the limit a stage's ledger holds it to, and the watchdog
+can let a stage spend past it, once: a retry admitted just under its share is charged its 2-minute
+start, the watchdog sees the share gone only at its next 30-second tick, and the command it stops
+has 60 seconds to exit, seconds no ledger records — `budget.OVERRUN_S`, 210 s
+(`START_OVERHEAD_S` + `GUARD_TICK_S` + `KILL_TIMEOUT_S`). At $0.000485 a second that is $0.10 a
+training and $0.01 for the refresh (4 cores, no GPU): **$0.42 is set aside** at the defaults
+(`budget.overrun_usd`), so the shares and every stage's worst overrun together come to the
+budget and never past it (`tests/test_budget.py` holds that at 1, 16 and 64 cores). The copy of
+the dataset watches the watchdog too, so a share spent mid-copy stops it.
+
+**The shares** (`budget.shares`): the refresh's $0.25, the orchestrator's $0.10 and the reserve's
+$0.42 are set aside, and the trainings share the remaining $9.23 in proportion to their estimates
+(`ESTIMATE_USD`): each gets its estimate × 1.11 — embedder $2.24 (75 min of container time),
+detector $2.59 (87 min), symbol $2.14 (71 min), band $2.27 (76 min), every one above its estimate's
+minutes in the table, so no epochs were cut for the reserve. The six shares and the reserve sum to
+the budget, and the embedder and detector keep their old 46 : 54. A margin of 11 % is thin: a
+stage that runs past its share is stopped and the run fails, undelivered. Two things the reserve
+does not cover: the orchestrator has no watchdog (its $0.10 is ~6 hours of a quarter core, longer
+than any run's three attempts a stage), and a container preempted between two ticks takes up to
+30 unrecorded seconds with it, each time. If the first runs show Modal's cores slower
 than the owner's, re-measure and re-share — or give the containers more cores (`cpu`): a
 CPU-bound training's time falls about as its cores rise while the per-second rate rises less (the
 GPU's part does not grow), though that is the arithmetic, not a measurement.
