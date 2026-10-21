@@ -86,6 +86,10 @@ export function TradePage(): JSX.Element {
   const [picked, setPicked] = useState<number | null>(null);
   const [departed, setDeparted] = useState<Departed | null>(null);
   const [creating, setCreating] = useState(false);
+  /** Where the shown trade draws its page bar — a callback ref's element, so `TradeView` is
+   *  handed it the render after the slot mounts. */
+  const [barSlot, setBarSlot] = useState<HTMLDivElement | null>(null);
+  const pageRef = useRef<HTMLElement>(null);
   /** The trade the caret is owed to once it is drawn: one just created, or just copied. */
   const [landing, setLanding] = useState<number | null>(null);
   /** Counts the presses that owe the caret to New trade. See the effect below. */
@@ -169,48 +173,64 @@ export function TradePage(): JSX.Element {
   const empty = list.data !== undefined && trades.length === 0;
 
   return (
-    <section className="flex h-full min-h-[30rem] gap-5">
+    // Named for the trade on screen, so the region that names a trade holds its bar — its title,
+    // rename field and actions — now that the bar spans the page above the trade list.
+    // `tabIndex={-1}`: it is where the caret lands when a pressed control leaves (`landOn`).
+    <section
+      ref={pageRef}
+      aria-label={shown?.name}
+      tabIndex={-1}
+      className="flex h-full min-h-[30rem] flex-col gap-3 outline-none"
+    >
       <h2 className="sr-only">Trade</h2>
-      {trades.length > 0 && (
-        <TradesPane
-          trades={trades}
-          selectedId={picked}
-          onSelect={(id) => {
-            setPicked(id);
-            // A press here is the reader choosing where to be, and the caret stays on it: whatever
-            // was owed to a trade still on its way is let go.
-            setLanding(null);
-          }}
-          onNew={() => setCreating(true)}
-          newRef={newRef}
-        />
+      {/* **The page bar, across the whole page** (the owner's note, 2026-10-21): above the trade
+          list as well as the trade, rather than in the trade's column. With a trade on screen it
+          is the trade's own bar (`Trade › <name>`, its rename field and its actions), drawn by
+          `TradeView` into this slot through a portal so all of that stays the view's; without
+          one — loading, refused or no trades at all — it is the view's name alone, a `div` under
+          the `sr-only` `<h2>` above. */}
+      {shown !== null ? (
+        <div ref={setBarSlot} className="shrink-0" />
+      ) : (
+        <PageBar title="Trade" titleAs="div" />
       )}
-      {shown !== null && (
-        <TradeView
-          // Keyed, so a rename half typed, a scope chosen or a refusal shown on one trade does not
-          // follow the reader to the next.
-          key={shown.id}
-          trade={shown}
-          land={shown.id === landing}
-          onLanded={() => setLanding(null)}
-          onSelect={open}
-          onDeleted={() => {
-            leave(shown.id);
-            setNewFocus((n) => n + 1);
-          }}
-        />
-      )}
-      {/* **Always mounted, and swapped into**: a live region that arrived together with its own
-          sentence would announce nothing, and a read that fails with a trade on screen is exactly
-          that arrival. Beside a trade it is empty and off the page; without one it is the column
-          where the trade would be. */}
-      <div className={shown !== null ? "sr-only" : "flex min-w-0 flex-1 flex-col"}>
-        {/* **The page bar while there is no trade list** (the owner's note, 2026-10-21): with
-            trades, a trade's own bar names the page (`Trade › …`, `TradeView`); with none —
-            loading, refused or empty — this column is the whole page and would otherwise have no
-            heading at all. A `div` title, under the `sr-only` `<h2>` above. */}
-        {shown === null && trades.length === 0 && <PageBar title="Trade" titleAs="div" />}
-        <div className={shown !== null ? undefined : "grid min-h-0 flex-1 place-items-center"}>
+      <div className="flex min-h-0 flex-1 gap-5">
+        {trades.length > 0 && (
+          <TradesPane
+            trades={trades}
+            selectedId={picked}
+            onSelect={(id) => {
+              setPicked(id);
+              // A press here is the reader choosing where to be, and the caret stays on it: whatever
+              // was owed to a trade still on its way is let go.
+              setLanding(null);
+            }}
+            onNew={() => setCreating(true)}
+            newRef={newRef}
+          />
+        )}
+        {shown !== null && (
+          <TradeView
+            // Keyed, so a rename half typed, a scope chosen or a refusal shown on one trade does not
+            // follow the reader to the next.
+            key={shown.id}
+            trade={shown}
+            land={shown.id === landing}
+            onLanded={() => setLanding(null)}
+            onSelect={open}
+            onDeleted={() => {
+              leave(shown.id);
+              setNewFocus((n) => n + 1);
+            }}
+            barSlot={barSlot}
+            landOn={pageRef}
+          />
+        )}
+        {/* **Always mounted, and swapped into**: a live region that arrived together with its own
+            sentence would announce nothing, and a read that fails with a trade on screen is exactly
+            that arrival. Beside a trade it is empty and off the page; without one it is the column
+            where the trade would be. */}
+        <div className={shown !== null ? "sr-only" : "grid min-w-0 flex-1 place-items-center"}>
           <div className="flex max-w-md flex-col items-center gap-4 text-center">
             <p
               role="status"
@@ -222,8 +242,8 @@ export function TradePage(): JSX.Element {
               <>
                 <p className="font-heading text-xl font-semibold">No trades yet</p>
                 <p className="text-sm leading-relaxed text-dim">
-                  A trade is two piles of cards and the difference between them. Put what you give
-                  on one side and what they give on the other, and the page keeps the balance in the
+                  A trade is two piles of cards and the difference between them. Put what you give on
+                  one side and what they give on the other, and the page keeps the balance in the
                   prices you choose.
                 </p>
                 <button

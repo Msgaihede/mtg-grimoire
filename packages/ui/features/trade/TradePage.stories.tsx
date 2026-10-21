@@ -276,7 +276,10 @@ export const Empty: Story = {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create trade" }));
 
     const section = await canvas.findByRole("region", { name: "Trade 1" });
-    await expect(within(section).getByText("Even trade")).toBeVisible();
+    // The balance's, not the list's: the trade's region is the page since its bar spans the
+    // trade list too, and the list's row for this trade says "Even trade" as well.
+    const balance = within(section).getByRole("region", { name: "Balance" });
+    await expect(within(balance).getByText("Even trade")).toBeVisible();
     await expect(within(section).getAllByText(/^Nothing on this side yet\./)).toHaveLength(2);
   },
 };

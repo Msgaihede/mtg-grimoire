@@ -309,224 +309,229 @@ export function SettingsPage({ update }: { update: Update }) {
        `sm:`/`md:`/`lg:` outside `AppShell`, and none is needed — plain flex puts the rail above
        the pane when there is no room beside it, and the rail's own container query is what
        changes its shape when that happens. */
-    <div ref={root} className="mx-auto flex max-w-4xl flex-wrap items-start gap-8 py-2">
+    <div className="flex flex-col gap-2">
       {/* **The page bar** ("Page & Section Headings", approved 2026-10-21): `Settings ›` and the
           section on screen — the rail's lit group, or `Search` while a query is typed (a query
-          outranks the group, `nav.ts`'s rule). `basis-full`, so it spans the wrapping row above
-          the rail and the pane. The crumb is words, not a button: Settings has no page of its own
-          above its sections.
+          outranks the group, `nav.ts`'s rule). The crumb is words, not a button: Settings has no
+          page of its own above its sections.
+
+          **Across the whole page, outside the `max-w-4xl` column below** (the owner's note,
+          2026-10-21): the column's measure is for the panels' prose, and a heading held to it
+          read as the column's rather than the page's — every other page's bar runs edge to edge.
 
           **A `div` title, not a heading.** Every panel below carries its own `<h2>`
           (`SettingsSection`) and the shell's `<h1>` already says Settings; a heading here would
           put the panels a level under a section name that changes with every press on the rail. */}
       <PageBar
-        // The row's `gap-8` is a rail-to-pane gap; under the bar it is half that. `-mt-2` takes
-        // back the row's `py-2` above it, so the title stands where every other page's does.
-        className="-mt-2 -mb-4 basis-full"
         trail={[{ label: "Settings" }]}
         titleAs="div"
         title={searching(query) ? "Search" : GROUPS[group].label}
       />
-      <SettingsNav
-        group={group}
-        onGroup={pickGroup}
-        query={query}
-        onQuery={setQuery}
-        badges={badges}
-        groups={groups}
-      />
 
-      {/* **`flex-[999_1_480px]`, and the 999 is load-bearing rather than a joke.** The rail runs
-          a container query off its **own inline size** to decide whether it is standing beside
-          the pane or wrapped above it. That only reads cleanly while the rail sits at its 232px
-          basis whenever both are on one line — so the pane has to absorb effectively all of the
-          free space. The design's 3-against-1 would put the rail at ~302px on a wide window and
-          ~232px when wrapped-and-full-width is not in play either, and the query could not tell
-          the two states apart. This is the first thing a reviewer will want to change back. */}
-      <div className="flex min-w-0 flex-[999_1_480px] flex-col gap-8">
-        {/* **The edition decides which Updates this is.** The full edition's installs itself; the
-            light edition's hosts have no updater, and draw the version and the notes the build
-            carries instead (`VersionPanel`, which the phone face draws too). */}
-        {shown("updates") &&
-          (edition.updater ? (
-            <UpdatePanel update={update} history={history} windows={windows} />
-          ) : (
-            <VersionPanel />
-          ))}
+      {/* `w-full`: a flex item in the column above shrinks to its content under `mx-auto`, and
+          the rail's container query then reads a squeezed box and folds into its tab strip. */}
+      <div ref={root} className="mx-auto flex w-full max-w-4xl flex-wrap items-start gap-8 py-2">
+        <SettingsNav
+          group={group}
+          onGroup={pickGroup}
+          query={query}
+          onQuery={setQuery}
+          badges={badges}
+          groups={groups}
+        />
 
-        {/* **The only panel under `Card data`, and it was the first of two.** `CombosPanel` sat
-            directly under this one on the argument that it was the same kind of thing — both
-            optional bulk feeds from a third party that the app works entirely without — and that
-            argument is what put the two of them under one rail entry. The combo feed downloads by
-            itself now and has no panel; the entry stays, because it names the question rather than
-            the panel that happens to answer it. `nav.ts` has the whole of that reasoning. */}
-        {shown("prices") && <MarketplacePanel marketplace={marketplace} />}
+        {/* **`flex-[999_1_480px]`, and the 999 is load-bearing rather than a joke.** The rail runs
+            a container query off its **own inline size** to decide whether it is standing beside
+            the pane or wrapped above it. That only reads cleanly while the rail sits at its 232px
+            basis whenever both are on one line — so the pane has to absorb effectively all of the
+            free space. The design's 3-against-1 would put the rail at ~302px on a wide window and
+            ~232px when wrapped-and-full-width is not in play either, and the query could not tell
+            the two states apart. This is the first thing a reviewer will want to change back. */}
+        <div className="flex min-w-0 flex-[999_1_480px] flex-col gap-8">
+          {/* **The edition decides which Updates this is.** The full edition's installs itself; the
+              light edition's hosts have no updater, and draw the version and the notes the build
+              carries instead (`VersionPanel`, which the phone face draws too). */}
+          {shown("updates") &&
+            (edition.updater ? (
+              <UpdatePanel update={update} history={history} windows={windows} />
+            ) : (
+              <VersionPanel />
+            ))}
 
-        {/* **First in `Sync`, and still in the group that throws nothing away.** Removing a device
-            is the sharpest press on this panel and it is not a clear: the copies, the decks and
-            the wishlist are untouched, and what changes is which other machine can read what
-            comes next. It reaches the backend itself — `BackupPanel`'s rule, and its reason
-            exactly: nothing else in the window reads `sync_pairing_status`.
+          {/* **The only panel under `Card data`, and it was the first of two.** `CombosPanel` sat
+              directly under this one on the argument that it was the same kind of thing — both
+              optional bulk feeds from a third party that the app works entirely without — and that
+              argument is what put the two of them under one rail entry. The combo feed downloads by
+              itself now and has no panel; the entry stays, because it names the question rather than
+              the panel that happens to answer it. `nav.ts` has the whole of that reasoning. */}
+          {shown("prices") && <MarketplacePanel marketplace={marketplace} />}
 
-            What used to be here as well was an argument about sitting *below* the hidden-tags
-            undo on one long scroll. That argument has moved to the rail, where `Tags` and `Sync`
-            are two entries a reader picks between rather than two stops on a journey down a
-            page. */}
-        {shown("sync") && <SyncPanel />}
+          {/* **First in `Sync`, and still in the group that throws nothing away.** Removing a device
+              is the sharpest press on this panel and it is not a clear: the copies, the decks and
+              the wishlist are untouched, and what changes is which other machine can read what
+              comes next. It reaches the backend itself — `BackupPanel`'s rule, and its reason
+              exactly: nothing else in the window reads `sync_pairing_status`.
 
-        {/* **Directly under Sync, because it is what sync asks of a reader.** The rows here are
-            the two outcomes §7.4 surfaces — a row another device deleted while this one was still
-            editing it, a folder move that would have made a loop — plus every printing the card
-            reconciler flagged long before a relay existed. One column, one queue. That adjacency
-            is the whole reason the two share a rail entry, and the `Sync` badge counts *these*
-            rows: it is what is waiting, drawn on the entry rather than only on the panel.
+              What used to be here as well was an argument about sitting *below* the hidden-tags
+              undo on one long scroll. That argument has moved to the rail, where `Tags` and `Sync`
+              are two entries a reader picks between rather than two stops on a journey down a
+              page. */}
+          {shown("sync") && <SyncPanel />}
 
-            Still in the group that throws nothing away, and that is a judgement rather than an
-            oversight: *Looks fine* deletes a sentence and touches no card, no deck and no copy.
-            It used to have to stay above the error log, on the grounds that a reader who has just
-            synced is looking for this and not for a fault list; with `Errors` an entry of its own
-            that is the rail's job now and no longer an ordering constraint here. It reaches the
-            backend itself — `BackupPanel`'s rule, and `SyncPanel`'s reason directly above it. */}
-        {shown("review") && <ReviewPanel />}
+          {/* **Directly under Sync, because it is what sync asks of a reader.** The rows here are
+              the two outcomes §7.4 surfaces — a row another device deleted while this one was still
+              editing it, a folder move that would have made a loop — plus every printing the card
+              reconciler flagged long before a relay existed. One column, one queue. That adjacency
+              is the whole reason the two share a rail entry, and the `Sync` badge counts *these*
+              rows: it is what is waiting, drawn on the entry rather than only on the panel.
 
-        {/* The page's one *undo*, and the only panel in `Tags`. The argument that used to sit here
-            was about distance — the rail's live line tells a reader who has just hidden a tag that
-            Settings is where it comes back, and the shorter the scroll to that list, the fewer of
-            them give up on the way. That argument is now **won by the rail** rather than by this
-            panel's position: `Tags` is one press from anywhere in Settings and from the sentence
-            that sent them here, which is shorter than any scroll could be. Worth keeping because
-            it is the reason this panel exists at all. */}
-        {shown("hidden-tags") && <HiddenTagsPanel hidden={hidden} />}
+              Still in the group that throws nothing away, and that is a judgement rather than an
+              oversight: *Looks fine* deletes a sentence and touches no card, no deck and no copy.
+              It used to have to stay above the error log, on the grounds that a reader who has just
+              synced is looking for this and not for a fault list; with `Errors` an entry of its own
+              that is the rail's job now and no longer an ordering constraint here. It reaches the
+              backend itself — `BackupPanel`'s rule, and `SyncPanel`'s reason directly above it. */}
+          {shown("review") && <ReviewPanel />}
 
-        {/* **First in `Appearance`, and the panel that made that group about more than marks.**
-            Which view the app opens on is not a mark a reader puts on a card, so the entry's
-            question had to widen to hold it — `nav.ts`'s `GROUPS` doc carries that argument, and
-            the two panels below are unmoved by it. It is first because it is the cheapest press
-            on the group: a change here costs one launch's landing, where the two below recolour
-            a mark on every deck and delete a label app-wide.
+          {/* The page's one *undo*, and the only panel in `Tags`. The argument that used to sit here
+              was about distance — the rail's live line tells a reader who has just hidden a tag that
+              Settings is where it comes back, and the shorter the scroll to that list, the fewer of
+              them give up on the way. That argument is now **won by the rail** rather than by this
+              panel's position: `Tags` is one press from anywhere in Settings and from the sentence
+              that sent them here, which is shorter than any scroll could be. Worth keeping because
+              it is the reason this panel exists at all. */}
+          {shown("hidden-tags") && <HiddenTagsPanel hidden={hidden} />}
 
-            It reaches the backend itself, which is `BackupPanel`'s rule and `TheoryMarksPanel`'s
-            reason directly below: `useStartView` reads the one `["startView"]` cache entry
-            `AppShell` already filled at launch, so a hook here would be a second reader of one
-            cached answer and threading it down would buy a prop. */}
-        {shown("start-view") && <StartViewPanel />}
+          {/* **First in `Appearance`, and the panel that made that group about more than marks.**
+              Which view the app opens on is not a mark a reader puts on a card, so the entry's
+              question had to widen to hold it — `nav.ts`'s `GROUPS` doc carries that argument, and
+              the two panels below are unmoved by it. It is first because it is the cheapest press
+              on the group: a change here costs one launch's landing, where the two below recolour
+              a mark on every deck and delete a label app-wide.
 
-        {/* **Second in `Appearance`, and that group is not a section of `Tags`** — the argument is
-            `nav.ts`'s and it is a vocabulary one: a *tag* here is one of Scryfall's two tagger
-            datasets, and the coloured mark a reader puts on a deck card is a *label*. Putting the
-            two words on one rail entry would teach a reader they mean the same thing.
+              It reaches the backend itself, which is `BackupPanel`'s rule and `TheoryMarksPanel`'s
+              reason directly below: `useStartView` reads the one `["startView"]` cache entry
+              `AppShell` already filled at launch, so a hook here would be a second reader of one
+              cached answer and threading it down would buy a prop. */}
+          {shown("start-view") && <StartViewPanel />}
 
-            It reaches the backend itself, which is `BackupPanel`'s rule and its reason exactly:
-            `useMarkColors` is one TanStack entry with `staleTime: Infinity` that `AppShell`
-            already holds for `useMarkColorVars`, so a hook here would be a second reader of one
-            cached answer rather than a second channel — and threading it down would buy a prop. */}
-        {shown("theory-marks") && <TheoryMarksPanel />}
+          {/* **Second in `Appearance`, and that group is not a section of `Tags`** — the argument is
+              `nav.ts`'s and it is a vocabulary one: a *tag* here is one of Scryfall's two tagger
+              datasets, and the coloured mark a reader puts on a deck card is a *label*. Putting the
+              two words on one rail entry would teach a reader they mean the same thing.
 
-        {/* **Third in `Appearance`, and it is the deck editor's Labels dialog with the deck taken
-            out.** That dialog draws two sections — the labels *this deck's list is wearing*, whose
-            destructive control takes a label off those cards, and every other label, whose
-            destructive control deletes it app-wide. Settings has no deck and therefore no first
-            section: what a reader manages here is the list itself. The dialog is untouched.
+              It reaches the backend itself, which is `BackupPanel`'s rule and its reason exactly:
+              `useMarkColors` is one TanStack entry with `staleTime: Infinity` that `AppShell`
+              already holds for `useMarkColorVars`, so a hook here would be a second reader of one
+              cached answer rather than a second channel — and threading it down would buy a prop. */}
+          {shown("theory-marks") && <TheoryMarksPanel />}
 
-            **Below the mark colours rather than above them**, because that is the order the two
-            answer in: the theory marks are the app's own vocabulary and a reader meets them
-            without asking, where a label is a thing they invented and may have none of.
+          {/* **Third in `Appearance`, and it is the deck editor's Labels dialog with the deck taken
+              out.** That dialog draws two sections — the labels *this deck's list is wearing*, whose
+              destructive control takes a label off those cards, and every other label, whose
+              destructive control deletes it app-wide. Settings has no deck and therefore no first
+              section: what a reader manages here is the list itself. The dialog is untouched.
 
-            It reaches the backend itself, which is `BackupPanel`'s rule and `TheoryMarksPanel`'s
-            reason directly above: `deck_label_all` is one `["decks"]`-rooted cache entry the deck
-            dialogs already read, so a hook here would be a second reader of one cached answer and
-            threading it down would buy a prop. */}
-        {shown("labels") && <LabelsPanel />}
+              **Below the mark colours rather than above them**, because that is the order the two
+              answer in: the theory marks are the app's own vocabulary and a reader meets them
+              without asking, where a label is a thing they invented and may have none of.
 
-        {/* **The two facts that reached the reader at exactly one place each, and that place was a
-            hover tooltip** on the ribbon's status line — `ChromeStatus.tsx` names the folder and
-            `:97–98` appends the failure count. A phone has no hover, and 9a's touch census found
-            by grep that there was no second door to either. This is that second door and not a
-            move: the tooltip stays exactly as it was, so a pointer reader loses nothing.
+              It reaches the backend itself, which is `BackupPanel`'s rule and `TheoryMarksPanel`'s
+              reason directly above: `deck_label_all` is one `["decks"]`-rooted cache entry the deck
+              dialogs already read, so a hook here would be a second reader of one cached answer and
+              threading it down would buy a prop. */}
+          {shown("labels") && <LabelsPanel />}
 
-            **Here rather than inside `Local cache` below**, which was the other candidate. The
-            count's own sentence blames the *folder* — read-only, or full — and Clear cache's text
-            says in as many words that the collection and the decks kept in that folder
-            are **not** what it sweeps; a path printed under that heading would read as the cache's
-            own directory rather than as the place everything lives. It is **first in `Storage and
-            data`**, above `Backup` and `Local cache`, because those two are the group's other
-            panels about that folder and this one is what names it. It presses nothing at all, so
-            the "ordered by what a press costs" rule leaves it free to sit wherever it reads best.
+          {/* **The two facts that reached the reader at exactly one place each, and that place was a
+              hover tooltip** on the ribbon's status line — `ChromeStatus.tsx` names the folder and
+              `:97–98` appends the failure count. A phone has no hover, and 9a's touch census found
+              by grep that there was no second door to either. This is that second door and not a
+              move: the tooltip stays exactly as it was, so a pointer reader loses nothing.
 
-            What did not survive the regrouping is the other half of that placement — *directly
-            below the error log*, because a failed image **fetch** is a row in that log while a
-            failed image **write** is this line. Those two are now in different groups, so the
-            pairing only happens when a reader searches; `nav.ts` keeps them one apart in the
-            global order, which is the most that arrangement can still buy. */}
-        {shown("data-folder") && (
-          <SettingsSection id="data-folder" title="Data folder">
-            <p className="text-sm text-dim">
-              Where the app stores your card database, collection, decks and cached images.
-            </p>
-            {/* `break-all` because a Windows path has nothing to break at and this pane is ~632px
-                on a desk and ~350px on a phone — the surface this whole plan is for. */}
-            <p className="break-all font-mono text-sm">
-              {folder.data?.dataDir ?? "Unknown"}
-            </p>
-            {/* Plain text when there is something to report rather than the destructive red, which
-                is `ErrorLogPanel`'s tone and its reason: every affected image still displays — the
-                bytes were in hand when the write failed — so nothing on screen is broken. Dim when
-                the answer is "none", because a settled question should not draw the eye. */}
-            <p
-              className={cn("text-sm", folder.data?.imageStoreFailures ? "text-text" : "text-dim")}
-            >
-              {imageFailureLine(folder.data?.imageStoreFailures)}
-            </p>
-          </SettingsSection>
-        )}
+              **Here rather than inside `Local cache` below**, which was the other candidate. The
+              count's own sentence blames the *folder* — read-only, or full — and Clear cache's text
+              says in as many words that the collection and the decks kept in that folder
+              are **not** what it sweeps; a path printed under that heading would read as the cache's
+              own directory rather than as the place everything lives. It is **first in `Storage and
+              data`**, above `Backup` and `Local cache`, because those two are the group's other
+              panels about that folder and this one is what names it. It presses nothing at all, so
+              the "ordered by what a press costs" rule leaves it free to sit wherever it reads best.
 
-        {/* Beside the cache because the two are this group's only panels about the folder on disk
-            — one says what is kept there and the other what can be swept out of it. Above it
-            rather than below for the ordering rule, which is what survives the regrouping intact:
-            the mirror deletes nothing a reader owns, and Clear cache does. */}
-        {shown("backup") && <BackupPanel />}
+              What did not survive the regrouping is the other half of that placement — *directly
+              below the error log*, because a failed image **fetch** is a row in that log while a
+              failed image **write** is this line. Those two are now in different groups, so the
+              pairing only happens when a reader searches; `nav.ts` keeps them one apart in the
+              global order, which is the most that arrangement can still buy. */}
+          {shown("data-folder") && (
+            <SettingsSection id="data-folder" title="Data folder">
+              <p className="text-sm text-dim">
+                Where the app stores your card database, collection, decks and cached images.
+              </p>
+              {/* `break-all` because a Windows path has nothing to break at and this pane is ~632px
+                  on a desk and ~350px on a phone — the surface this whole plan is for. */}
+              <p className="break-all font-mono text-sm">
+                {folder.data?.dataDir ?? "Unknown"}
+              </p>
+              {/* Plain text when there is something to report rather than the destructive red, which
+                  is `ErrorLogPanel`'s tone and its reason: every affected image still displays — the
+                  bytes were in hand when the write failed — so nothing on screen is broken. Dim when
+                  the answer is "none", because a settled question should not draw the eye. */}
+              <p
+                className={cn("text-sm", folder.data?.imageStoreFailures ? "text-text" : "text-dim")}
+              >
+                {imageFailureLine(folder.data?.imageStoreFailures)}
+              </p>
+            </SettingsSection>
+          )}
 
-        {shown("cache") && <CachePanel cache={cache} />}
+          {/* Beside the cache because the two are this group's only panels about the folder on disk
+              — one says what is kept there and the other what can be swept out of it. Above it
+              rather than below for the ordering rule, which is what survives the regrouping intact:
+              the mirror deletes nothing a reader owns, and Clear cache does. */}
+          {shown("backup") && <BackupPanel />}
 
-        {shown("errors") && <ErrorLogPanel log={log} />}
+          {shown("cache") && <CachePanel cache={cache} />}
 
-        {/* **What used to stand here is the `Not here yet` block, and it has left the page for the
-            rail.** One dim heading over one sentence was cheap at the foot of a scroll and is not
-            cheap as a thirteenth panel a group would have to hold; the sentence itself — import is
-            still the dialog's alone — is the rail's now, where it reads as a note about the whole
-            of Settings rather than as a section of one group.
+          {shown("errors") && <ErrorLogPanel log={log} />}
 
-            The record that block carried is worth keeping, because each line of it was a thing
-            that stopped being missing. **Export** left the list when the mirror landed — `Backup`
-            above writes every deck, the collection and the wishlist in all seven formats,
-            continuously, which is more than the line ever promised. **Sync behaviour** left it
-            when the relay landed: an address, what is waiting and a press that makes a round trip
-            are all in the `Sync` group. **The data folder** left it on 2026-08-29, when the
-            section above got a home of its own and a phone reader finally had a way to that fact
-            at all. A "coming later" line for something a reader can reach in one press is the kind
-            of rot neither CI job can see, which is why the list has been pruned three times. */}
+          {/* **What used to stand here is the `Not here yet` block, and it has left the page for the
+              rail.** One dim heading over one sentence was cheap at the foot of a scroll and is not
+              cheap as a thirteenth panel a group would have to hold; the sentence itself — import is
+              still the dialog's alone — is the rail's now, where it reads as a note about the whole
+              of Settings rather than as a section of one group.
 
-        {/* **Last in `Storage and data`, and with no rail entry of its own — deliberately.**
-            Everything above is a setting; these three empty the app for good. Distance is the only
-            thing standing between a reader who came for something else and the button that deletes
-            their collection — the typed word inside the dialog is the second fence, not the first.
-            A rail entry would have turned that distance into one press from every visit to
-            Settings, so `nav.ts` files these under the group whose data they empty and keeps the
-            distance *inside* the pane, where it has always been. */}
-        {shown("danger") && <DangerZonePanel danger={danger} />}
+              The record that block carried is worth keeping, because each line of it was a thing
+              that stopped being missing. **Export** left the list when the mirror landed — `Backup`
+              above writes every deck, the collection and the wishlist in all seven formats,
+              continuously, which is more than the line ever promised. **Sync behaviour** left it
+              when the relay landed: an address, what is waiting and a press that makes a round trip
+              are all in the `Sync` group. **The data folder** left it on 2026-08-29, when the
+              section above got a home of its own and a phone reader finally had a way to that fact
+              at all. A "coming later" line for something a reader can reach in one press is the kind
+              of rot neither CI job can see, which is why the list has been pruned three times. */}
 
-        {/* Only reachable while searching: a group is never empty, so `visiblePanels` can only
-            answer nothing when a query matched nothing. Dim and one line, because a search that
-            found nothing is not a failure — the box above is still full of the words that did
-            not match, which is the whole of what the reader needs in order to try again. */}
-        {visible.length === 0 && (
-          <p className="text-sm text-dim">No matching settings.</p>
-        )}
+          {/* **Last in `Storage and data`, and with no rail entry of its own — deliberately.**
+              Everything above is a setting; these three empty the app for good. Distance is the only
+              thing standing between a reader who came for something else and the button that deletes
+              their collection — the typed word inside the dialog is the second fence, not the first.
+              A rail entry would have turned that distance into one press from every visit to
+              Settings, so `nav.ts` files these under the group whose data they empty and keeps the
+              distance *inside* the pane, where it has always been. */}
+          {shown("danger") && <DangerZonePanel danger={danger} />}
 
-        {/* The foot of the pane on every edition: one policy covers every host. */}
-        <p>
-          <PrivacyLink />
-        </p>
+          {/* Only reachable while searching: a group is never empty, so `visiblePanels` can only
+              answer nothing when a query matched nothing. Dim and one line, because a search that
+              found nothing is not a failure — the box above is still full of the words that did
+              not match, which is the whole of what the reader needs in order to try again. */}
+          {visible.length === 0 && (
+            <p className="text-sm text-dim">No matching settings.</p>
+          )}
+
+          {/* The foot of the pane on every edition: one policy covers every host. */}
+          <p>
+            <PrivacyLink />
+          </p>
+        </div>
       </div>
     </div>
   );

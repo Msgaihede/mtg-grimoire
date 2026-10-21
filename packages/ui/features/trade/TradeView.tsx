@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -94,6 +95,8 @@ export function TradeView({
   onLanded,
   onSelect,
   onDeleted,
+  barSlot,
+  landOn,
 }: {
   trade: Trade;
   /** Take the caret on mount: this trade is the answer to a press whose own control is gone. */
@@ -104,6 +107,20 @@ export function TradeView({
   onSelect: (id: number) => void;
   /** This trade is gone. The page picks what to show instead. */
   onDeleted: () => void;
+  /**
+   * Where the trade's page bar is drawn: the desktop page's slot above the trade list and this
+   * view together (the owner's note, 2026-10-21 — the heading spans the page), `null` while
+   * that slot has not mounted yet, and absent where there is no slot — the phone's trade page —
+   * and the bar is then this section's first row. A portal, so the bar stays this view's: its
+   * rename field, pencil and actions keep their state, refs and handlers here.
+   */
+  barSlot?: HTMLElement | null;
+  /**
+   * What takes the caret when this view lands — the trade's region. The desktop page's section
+   * when it draws the bar (`barSlot`), since that section is the region named for the trade;
+   * absent, this view's own section.
+   */
+  landOn?: RefObject<HTMLElement | null>;
 }): JSX.Element {
   const tip = useTooltip();
   const client = useQueryClient();
@@ -148,14 +165,14 @@ export function TradeView({
   };
 
   /** See the component's note: the pressed button is about to leave the page. */
-  const land = () => sectionRef.current?.focus({ preventScroll: true });
+  const land = () => (landOn?.current ?? sectionRef.current)?.focus({ preventScroll: true });
 
   // Once, as the trade is first drawn. The debt is the page's and is read only here: the view is
   // keyed by its trade, so "on mount" is "when this trade took the place of whatever was shown".
-  const landing = useRef({ owed: landOnMount, onLanded });
+  const landing = useRef({ owed: landOnMount, onLanded, target: landOn });
   useEffect(() => {
     if (!landing.current.owed) return;
-    sectionRef.current?.focus({ preventScroll: true });
+    (landing.current.target?.current ?? sectionRef.current)?.focus({ preventScroll: true });
     landing.current.onLanded?.();
   }, []);
 
@@ -253,130 +270,140 @@ export function TradeView({
     ];
   };
 
-  return (
-    <section
-      ref={sectionRef}
-      aria-label={trade.name}
-      tabIndex={-1}
-      className="flex min-h-0 min-w-0 flex-1 flex-col gap-3.5 outline-none"
-    >
-      {/* **The page bar** ("Page & Section Headings", option A, 2026-10-21): a trade is a sub-page
-          of the Trade view, so the trail is `Trade ›` and the trade's own name is the title — an
-          `<h3>` under the view's `sr-only` `<h2>`, the level it always had. **The crumb is words,
-          not a button**: the trades are `TradesPane`, the column beside this one, not a page to go
-          back to — a `Trade` button here would go nowhere the reader is not already looking.
+  /* **The page bar** ("Page & Section Headings", option A, 2026-10-21): a trade is a sub-page
+     of the Trade view, so the trail is `Trade ›` and the trade's own name is the title — an
+     `<h3>` under the view's `sr-only` `<h2>`, the level it always had. **The crumb is words,
+     not a button**: the trades are `TradesPane`, the column under the bar beside this view,
+     not a page to go back to — a `Trade` button here would go nowhere the reader is not
+     already looking.
 
-          The rename field takes the title's place (`titleAs="div"`, `titleGrows`: the field is a
-          control, it carries its own name, and it takes the row's spare width). The pencil and the
-          header line ride in the slot after the title; the actions take the right end. */}
-      <PageBar
-        trail={[{ label: "Trade" }]}
-        titleAs={renaming ? "div" : "h3"}
-        titleGrows={renaming}
-        title={
-          renaming ? (
-            <RenameField
-              initial={trade.name}
-              onSubmit={rename}
-              onCancel={() => setRenaming(false)}
-            />
-          ) : (
-            <span
-              className="block min-w-0 truncate"
-              {...tip(trade.name, { whenClipped: true, describes: false })}
-            >
-              {trade.name}
-            </span>
-          )
-        }
-        figures={
-          editable && !renaming ? (
-            <button
-              ref={renameRef}
-              type="button"
-              aria-label="Rename trade"
-              onClick={() => setRenaming(true)}
-              // Pulled in against the name it renames, to the 8px it stood at before the bar:
-              // the bar's `gap-x-5` is the space between a title and its meta, and a pencil that
-              // far out reads as a control of the row.
-              className={cn(TRADE_BARE_BUTTON, "-ml-3 self-center")}
-              {...tip("Rename", { describes: false })}
-            >
-              <Pencil className="size-[0.9375rem]" aria-hidden="true" />
-            </button>
-          ) : undefined
-        }
-        // The header line is a sentence, not a count, and in the pane beside the trade list it is
-        // wider than the room left — so it gives way (the meta box truncates) and says the rest on
-        // hover. The tooltip is on a box of its own that clips itself: `whenClipped` asks the
-        // element it is bound to, and the bar's own span is not ours to bind.
-        meta={
+     The rename field takes the title's place (`titleAs="div"`, `titleGrows`: the field is a
+     control, it carries its own name, and it takes the row's spare width). The pencil and the
+     header line ride in the slot after the title; the actions take the right end.
+
+     Built here and drawn through {@link barSlot}, so on the desktop it spans the page — above
+     the trade list as well as this view — while staying this view's own. */
+  const bar = (
+    <PageBar
+      trail={[{ label: "Trade" }]}
+      titleAs={renaming ? "div" : "h3"}
+      titleGrows={renaming}
+      title={
+        renaming ? (
+          <RenameField
+            initial={trade.name}
+            onSubmit={rename}
+            onCancel={() => setRenaming(false)}
+          />
+        ) : (
           <span
-            className="block truncate"
-            {...tip(headerLine(trade), { whenClipped: true, describes: false })}
+            className="block min-w-0 truncate"
+            {...tip(trade.name, { whenClipped: true, describes: false })}
           >
-            {headerLine(trade)}
+            {trade.name}
           </span>
-        }
-        actions={
-          <>
-            {!editable && (
-              <>
-                <button
-                  type="button"
-                  aria-disabled={busy || undefined}
-                  onClick={duplicate}
-                  className={TRADE_BUTTON}
-                >
-                  <Copy className="size-4" aria-hidden="true" />
-                  Duplicate
-                </button>
-                <button
-                  type="button"
-                  aria-disabled={busy || undefined}
-                  onClick={() => run("reopen the trade", () => writes.reopen(trade.id).then(land))}
-                  className={TRADE_BUTTON}
-                >
-                  <RotateCcw className="size-4" aria-hidden="true" />
-                  Reopen
-                </button>
-              </>
-            )}
-            {/* `aria-haspopup` and no `aria-expanded`: the open state is `ContextMenuProvider`'s,
-                and a static `false` here would be wrong for exactly as long as the menu is up. */}
-            <button
-              ref={moreRef}
-              type="button"
-              aria-label="More actions"
-              aria-haspopup="menu"
-              onClick={menuClick(menu)}
-              className={TRADE_ICON_BUTTON}
-              {...tip("More actions", { describes: false })}
-            >
-              <MoreHorizontal className="size-[1.125rem]" aria-hidden="true" />
-            </button>
-            {editable && (
+        )
+      }
+      figures={
+        editable && !renaming ? (
+          <button
+            ref={renameRef}
+            type="button"
+            aria-label="Rename trade"
+            onClick={() => setRenaming(true)}
+            // Pulled in against the name it renames, to the 8px it stood at before the bar:
+            // the bar's `gap-x-5` is the space between a title and its meta, and a pencil that
+            // far out reads as a control of the row.
+            className={cn(TRADE_BARE_BUTTON, "-ml-3 self-center")}
+            {...tip("Rename", { describes: false })}
+          >
+            <Pencil className="size-[0.9375rem]" aria-hidden="true" />
+          </button>
+        ) : undefined
+      }
+      // The header line is a sentence, not a count, and in the pane beside the trade list it is
+      // wider than the room left — so it gives way (the meta box truncates) and says the rest on
+      // hover. The tooltip is on a box of its own that clips itself: `whenClipped` asks the
+      // element it is bound to, and the bar's own span is not ours to bind.
+      meta={
+        <span
+          className="block truncate"
+          {...tip(headerLine(trade), { whenClipped: true, describes: false })}
+        >
+          {headerLine(trade)}
+        </span>
+      }
+      actions={
+        <>
+          {!editable && (
+            <>
               <button
                 type="button"
                 aria-disabled={busy || undefined}
-                onClick={() =>
-                  // Archiving puts the trade away — a receipt, as every archive in the app has.
-                  run("archive the trade", () =>
-                    writes.archive(trade.id).then(() => {
-                      notify.success(`Archived “${trade.name}”`);
-                      land();
-                    }),
-                  )
-                }
+                onClick={duplicate}
                 className={TRADE_BUTTON}
               >
-                <Archive className="size-4" aria-hidden="true" />
-                Archive
+                <Copy className="size-4" aria-hidden="true" />
+                Duplicate
               </button>
-            )}
-          </>
-        }
-      />
+              <button
+                type="button"
+                aria-disabled={busy || undefined}
+                onClick={() => run("reopen the trade", () => writes.reopen(trade.id).then(land))}
+                className={TRADE_BUTTON}
+              >
+                <RotateCcw className="size-4" aria-hidden="true" />
+                Reopen
+              </button>
+            </>
+          )}
+          {/* `aria-haspopup` and no `aria-expanded`: the open state is `ContextMenuProvider`'s,
+              and a static `false` here would be wrong for exactly as long as the menu is up. */}
+          <button
+            ref={moreRef}
+            type="button"
+            aria-label="More actions"
+            aria-haspopup="menu"
+            onClick={menuClick(menu)}
+            className={TRADE_ICON_BUTTON}
+            {...tip("More actions", { describes: false })}
+          >
+            <MoreHorizontal className="size-[1.125rem]" aria-hidden="true" />
+          </button>
+          {editable && (
+            <button
+              type="button"
+              aria-disabled={busy || undefined}
+              onClick={() =>
+                // Archiving puts the trade away — a receipt, as every archive in the app has.
+                run("archive the trade", () =>
+                  writes.archive(trade.id).then(() => {
+                    notify.success(`Archived “${trade.name}”`);
+                    land();
+                  }),
+                )
+              }
+              className={TRADE_BUTTON}
+            >
+              <Archive className="size-4" aria-hidden="true" />
+              Archive
+            </button>
+          )}
+        </>
+      }
+    />
+  );
+
+  return (
+    <section
+      ref={sectionRef}
+      // The trade's region where this view draws its own bar (the phone); on the desktop the
+      // page's section is, because the bar it names is drawn there (`barSlot`).
+      aria-label={barSlot === undefined ? trade.name : undefined}
+      tabIndex={-1}
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-3.5 outline-none"
+    >
+      {barSlot === undefined ? bar : barSlot !== null && createPortal(bar, barSlot)}
       {/* Under the bar rather than in it: a refusal is a sentence the reader has to be able to read
           whole, and the bar's row truncates. */}
       {failure !== null && (
