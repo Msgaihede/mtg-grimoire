@@ -110,6 +110,7 @@ function found(name: string): CardSummary {
     priceHigh: 1.5,
     gameChanger: false,
     releasedAt: null,
+    imageUpdatedAt: null,
   };
 }
 
