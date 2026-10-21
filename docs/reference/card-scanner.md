@@ -2661,6 +2661,7 @@ the next generated write is one editor away.
 | `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints — or the reader's camera by `deviceId: { exact }`, falling back to the default when that camera has gone — one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. It opens nothing while its `deviceId` is `undefined`, which is how the page holds the camera shut until the stored choice has loaded. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives. `useCameraDevices` lists the `videoinput`s for the picker, re-read on `devicechange` and once a camera is live, because a browser names no camera before one is granted |
 | `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar, and *Reset evidence* beside it |
 | `reader/AddedToast.tsx` | The card laid over the camera for 2.2 s each time the tray takes one |
+| `reader/useLandedPrice.ts` | That card's price at the tray's marketplace, or the span across a pick's candidates |
 | `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (**with a `catch` of its own** — a throwing `drawImage`/`toBlob` outside one rejects `pump()` and freezes the loop with `error` still `null`), and the two **kept reads** below |
 | `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
 | `ScannerPanels.tsx` | Pure. The whole column from `{ status, verdict, options, … }` |
@@ -3748,8 +3749,24 @@ every committed frame (Fast: the tracker's printing, `resolved`, no choices; Exa
 first choice, its outcome and its choices) and `null` on an Exact commit no resolve made. Since the
 final review it also carries `replaces_previous` (*Exact*, above), which the tray reads to replace
 its newest row instead of adding one.
-`useScanLoop` takes the first `decision_seq` after the camera goes live as a baseline and calls
-`onDecision` only for a number that differs on a frame carrying a decision.
+`useScanLoop` calls `onDecision` only for a number that differs on a frame carrying a decision.
+
+**A pump that starts resets the session before its first frame** (#1318, 2026-10-21). Until then
+the loop took the first `decision_seq` after the camera went live as a baseline, and the session
+went on from whatever it held when the last pump stopped — a Stop, a view switch, a minimized
+window, *Send scan…*'s dialog and *Add card…*'s each stop one. A card laid down in that gap was
+never seen arriving: no empty frame went past the session, so Fast and Exact weighed it as a swap
+under the old card's frozen decision (late, and never while its hash churned), and a card decided
+on the stream's very first frame — Neural decides on one clear frame — was taken for the baseline
+and not added. Now `scanner_reset` runs first, awaited behind any frame still on the wire, and
+every decision of the stream is news, its first frame's included. **Except the card that was
+standing when the last stream stopped**: the identity (oracle, else printing) of the last decision
+a taken verdict carried, kept in window-lifetime module memory (`viewMemory`) so a remounted view
+reads it too, and dropped by any taken frame with no quad. The stream's first decision naming it is
+that card still lying on the mat, already in the tray, and is not passed on; a frame with no card
+before it makes it a card of its own, and a Reset press clears it. A second copy of one card
+swapped in while the pump was stopped cannot be told from the first. A start whose reset is refused
+says so and falls back to the baseline.
 
 **And not for one that moves again within `DECISION_GAP_FRAMES` (3) frames** (#735, 2026-10-01).
 The session can decide one physical card twice in a row: the watch calls a card changed on two
@@ -3826,6 +3843,15 @@ out of order, and folding into a row they scrolled past would move a number nobo
 **ambiguous** decision becomes a row carrying every candidate as small cards to press, wearing the
 first provisionally; the camera keeps running while it waits, and *More printings…* opens the app's
 all-printings dialog with a `pick` that hands the printing back.
+
+**A card that lands takes the tray back to its top** (issue #1320) — newest first means a reader
+scrolled forty cards down would otherwise see nothing of the card just scanned. A landing is
+`tray.ts`'s `headLanded`: a head row whose key and `addedAt` the rows before did not have, so a new
+row, a bump, a second opinion and a card added by hand all count, and a pick, a finish, a quantity
+or a removal never does. Both trays hear it through `reader/useHeadLanded.ts`, never on their first
+render. `TrayPanel` scrolls **its own scroller only** to 0, as the walk does, so the camera beside
+it stays put; the phone's `Tray` scrolls with the page, under the camera on a narrow phone, so it
+brings its heading back **only when the reader has scrolled past it**, never down to it.
 
 **A decision that `replaces_previous` replaces the newest row instead of adding one** — but only when
 that row is the same oracle card, both ids known, or the same printing when both Oracle IDs are
@@ -3962,6 +3988,14 @@ first two candidates fanned for a card waiting on a pick. It is drawn from the t
 once in the same colour as it lands. **It is `aria-hidden`**: the strip above says the same thing,
 and two live regions announcing one landing is noise. Its motion is `motion.ts`'s `landed` preset;
 the tick's draw has its own `useReducedMotion` opt-out, because `pathLength` is not a positional key.
+
+**It closes its bottom line with a price** (issue #1321, `reader/useLandedPrice.ts`): the filed
+card's figure in its finish, or — for a card waiting on a pick — the span across its candidates
+(`$0.25 – $12.00`, one figure when the ends meet), each by `trayRowPrice`'s rule and with an
+unquoted candidate left out of the span. It is quoted at the tray's marketplace (a trade's while the
+tray files onto one) through the tray's own query (`trayPricesQuery`, under `["cards", "prices"]`),
+so it is the figure the row beneath will show. Nothing is drawn until the read answers, and no
+previous landing's figure is kept while it is in flight; an em dash means nothing was quoted.
 
 ### Scan history — Archive and the History dialog (issue #989, 2026-10-14)
 

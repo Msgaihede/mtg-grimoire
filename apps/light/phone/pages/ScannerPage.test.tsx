@@ -866,8 +866,10 @@ describe("the phone's Scanner page", () => {
     // before it asks the session, and a frame that never answers would hold it for ever.
     const { seen } = mount({ over: () => ({ scanner_frame: pile(1, "looking").frame }) });
     await waitFor(() => expect(trayRows()).toHaveLength(1), SETTLE);
+    // The pump's start reset the session once already (issue #1318); the press is one more.
+    const started = seen.resets;
     await userEvent.click(screen.getByRole("button", { name: "Reset evidence" }));
-    await waitFor(() => expect(seen.resets).toBe(1), SETTLE);
+    await waitFor(() => expect(seen.resets).toBe(started + 1), SETTLE);
     // The card it had already taken stays in the tray.
     expect(trayRows()).toEqual([["Urza's Saga", "1"]]);
   });
@@ -1368,6 +1370,7 @@ describe("sending a scan from the Scanner page", () => {
     );
 
     // The reader narrows the scan, and the session takes it — which is when it is stored.
+    const resets = seen.resets;
     await narrowTo("2020-01-01");
     await waitFor(
       () =>
@@ -1389,7 +1392,8 @@ describe("sending a scan from the Scanner page", () => {
     expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
     // The line goes on naming the card: this was the run's break, not the evidence's.
     expect(statusLine()).toHaveTextContent("Plains");
-    expect(seen.resets).toBe(0);
+    // No reset: the pump's starts reset the session, and a change of filters is none of them.
+    expect(seen.resets).toBe(resets);
   });
 
   /**

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { GameCard } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { LAYER } from "@/lib/layers";
 import { Battlefield, tableCardWidth } from "./Battlefield";
 
 let next = 1;
@@ -191,6 +192,28 @@ describe("Battlefield", () => {
     expect(onPoint).toHaveBeenCalledWith(
       expect.objectContaining({ ids: [sword.id], line: "Bonesplitter, attached to Grizzly Bears" }),
     );
+  });
+
+  it("lifts an attachment over the card it is tucked under while it is pointed at (issue #1331)", () => {
+    const bear = creature("Grizzly Bears");
+    const sword = card("Bonesplitter", { lane: "other", isLand: false, attachedTo: bear.id });
+    const aura = card("Rancor", { lane: "other", isLand: false, attachedTo: bear.id });
+    setup([bear, sword, aura]);
+    const edge = (name: string) =>
+      screen.getByRole("button", { name: `${name}, attached to Grizzly Bears` });
+
+    expect(edge("Bonesplitter")).not.toHaveClass(LAYER.raised);
+    fireEvent.mouseEnter(edge("Bonesplitter"));
+    expect(edge("Bonesplitter")).toHaveClass(LAYER.raised);
+    expect(edge("Rancor")).not.toHaveClass(LAYER.raised);
+
+    fireEvent.mouseLeave(edge("Bonesplitter"));
+    fireEvent.mouseEnter(edge("Rancor"));
+    expect(edge("Bonesplitter")).not.toHaveClass(LAYER.raised);
+    expect(edge("Rancor")).toHaveClass(LAYER.raised);
+
+    fireEvent.mouseLeave(edge("Rancor"));
+    expect(edge("Rancor")).not.toHaveClass(LAYER.raised);
   });
 
   it("activates an Equipment's ability from its edge under the creature", async () => {

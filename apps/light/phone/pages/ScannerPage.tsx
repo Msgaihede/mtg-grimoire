@@ -7,6 +7,7 @@ import { AddedToast } from "@grimoire/ui/features/scanner/reader/AddedToast";
 import { SCANNING_STOPPED } from "@grimoire/ui/features/scanner/reader/readerText";
 import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
 import { withoutCommitted } from "@grimoire/ui/features/scanner/reader/trayCommit";
+import { useLandedPrice } from "@grimoire/ui/features/scanner/reader/useLandedPrice";
 import {
   DEFAULT_DETAIL_WAIT_MS,
   DEFAULT_SCANNER_OPTIONS,
@@ -156,6 +157,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     tray,
     prefs.finish,
   );
+  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
+  const landedPrice = useLandedPrice(scanning ? landed : null, destination?.marketplace);
 
   // The crate's defaults, in the reader's mode, and never with previews.
   // *Add card…* (issue #978) — the desktop page's: the scanner pauses while the search is open,
@@ -361,7 +364,11 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               note={cameraNote}
               unavailable={unavailable}
             >
-              <AddedToast card={scanning ? landed : null} onDone={clearLanded} />
+              <AddedToast
+                card={scanning ? landed : null}
+                onDone={clearLanded}
+                price={landedPrice}
+              />
             </CameraBox>
             {/* The scanner's files, where this install owes them. When a download lands the
                 engine's session is a new one: it is given the reader's filters again, and what

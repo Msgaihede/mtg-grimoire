@@ -23,6 +23,7 @@ import {
   respondStep,
   targetPrompt,
   turnFive,
+  withAttachments,
 } from "./fixtures";
 import { PlaytestBoard, zoneSize } from "./PlaytestBoard";
 
@@ -328,13 +329,28 @@ describe("PlaytestBoard's aimed attacks", () => {
 });
 
 describe("PlaytestBoard's respond stage", () => {
-  it("passes on Space, passes the turn on the second button, and calls out the stack", () => {
+  it("passes on Space, passes the turn on the second button, and asks about the opponent's spell", () => {
     const { onAct } = setup(respondStep().view);
-    expect(screen.getByText("Respond?")).toBeInTheDocument();
+    const asked = screen.getByRole("region", { name: "Respond to Lightning Bolt?" });
+    expect(within(asked).getByText("Targeting")).toBeInTheDocument();
+    // The question is asked over the opponent's table, so the stack's column only says "Stack".
+    expect(screen.queryByText("Respond?")).not.toBeInTheDocument();
+    fireEvent.click(within(asked).getByRole("button", { name: /Let it resolve/ }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "pass" });
     fireEvent.keyDown(window, { key: " " });
     expect(onAct).toHaveBeenLastCalledWith({ type: "pass" });
     fireEvent.click(screen.getByRole("button", { name: "Pass turn" }));
     expect(onAct).toHaveBeenLastCalledWith({ type: "endTurn" });
+  });
+
+  it("asks about nothing on the stack at a step's stop with the stack empty", () => {
+    setup({ ...respondStep().view, stack: [] });
+    expect(screen.queryByRole("region", { name: /^Respond to/ })).not.toBeInTheDocument();
+  });
+
+  it("holds the question's answer while the engine is busy", () => {
+    setup(respondStep().view, { busy: true });
+    expect(screen.getByRole("button", { name: /Let it resolve/ })).toBeDisabled();
   });
 
   it("says it is passing the turn while the engine plays it out", () => {
@@ -669,6 +685,40 @@ describe("PlaytestBoard's inspect preview", () => {
 
     fireEvent.mouseLeave(ring);
     expect(preview()).not.toBeInTheDocument();
+  });
+
+  // Issue #1331: an attachment's edge is a card of its own to rest on, whichever table it is
+  // drawn on — the reader's Aura under the opponent's creature is still the reader's card.
+  it.each([
+    ["an Equipment under the reader's creature", yours, "Bonesplitter, attached to Tarmogoyf"],
+    [
+      "the reader's Aura on the opponent's table",
+      theirs,
+      "Pacifism, attached to Ragavan, Nimble Pilferer",
+    ],
+  ])("opens on %s, and closes when the pointer leaves it", (_what, table, name) => {
+    setup(withAttachments().view);
+    const edge = within(table()).getByRole("button", { name });
+
+    fireEvent.mouseEnter(edge);
+    rest(INSPECT_DELAY);
+    expect(preview()).toHaveTextContent(name);
+
+    fireEvent.mouseLeave(edge);
+    expect(preview()).not.toBeInTheDocument();
+  });
+
+  it("taps the reader's Aura on the opponent's table with T, its controller's key", () => {
+    const { view } = withAttachments();
+    const { onAct } = setup(sandboxed(view));
+    const edge = within(theirs()).getByRole("button", {
+      name: "Pacifism, attached to Ragavan, Nimble Pilferer",
+    });
+    const pacifism = view.you.battlefield.find((c) => c.name === "Pacifism")!;
+
+    fireEvent.mouseEnter(edge);
+    fireEvent.keyDown(window, { key: "t" });
+    expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [pacifism.id], tapped: true });
   });
 
   it("stays open while the pointer moves over the card it shows", () => {

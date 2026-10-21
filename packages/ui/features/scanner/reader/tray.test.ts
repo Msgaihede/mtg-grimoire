@@ -4,6 +4,7 @@ import {
   addDecision,
   addPicked,
   commitPlan,
+  headLanded,
   importItems,
   NO_FINISHED_ROWS,
   needsDecision,
@@ -536,6 +537,52 @@ describe("tray", () => {
       expect(nextDecisionKey([known], null)).toBeNull();
       expect(nextDecisionKey([known], "known")).toBeNull();
       expect(nextDecisionKey([], null)).toBeNull();
+    });
+  });
+
+  describe("a landing, for the tray's scroll to its top (issue #1320)", () => {
+    const first = addDecision([], resolved, { finish: "nonfoil" }, 1, "first").rows;
+
+    it("lands a new row, a second copy, a second opinion and a card added by hand", () => {
+      const scanned = addDecision(first, fastBolt, { finish: "nonfoil" }, 2, "bolt").rows;
+      expect(headLanded(first, scanned)).toBe(true);
+      // The same printing again bumps the head — the same key, a fresh stamp.
+      const bumped = addDecision(scanned, fastBolt, { finish: "nonfoil" }, 3, "spare").rows;
+      expect(bumped[0].key).toBe("bolt");
+      expect(headLanded(scanned, bumped)).toBe(true);
+      const reread = addDecision(
+        scanned,
+        { ...ambiguous, replaces_previous: true },
+        { finish: "nonfoil" },
+        4,
+        "spare",
+      ).rows;
+      expect(reread[0].key).toBe("bolt");
+      expect(headLanded(scanned, reread)).toBe(true);
+      const picked = addPicked(
+        first,
+        {
+          cardId: "hand",
+          oracleId: null,
+          name: "Hand-picked",
+          setCode: "lea",
+          collectorNumber: "1",
+        },
+        "nonfoil",
+        5,
+        "hand",
+      ).rows;
+      expect(headLanded(first, picked)).toBe(true);
+    });
+
+    it("lands nothing for an edit, a removal of the head, an empty tray or the same rows", () => {
+      const rows = addDecision(first, fastBolt, { finish: "nonfoil" }, 2, "bolt").rows;
+      expect(headLanded(rows, setQuantity(rows, "bolt", 3))).toBe(false);
+      expect(headLanded(rows, setFinish(rows, "bolt", "foil"))).toBe(false);
+      // The row the head uncovers was already there, with its own stamp.
+      expect(headLanded(rows, removeRow(rows, "bolt"))).toBe(false);
+      expect(headLanded(rows, [])).toBe(false);
+      expect(headLanded(rows, rows)).toBe(false);
     });
   });
 

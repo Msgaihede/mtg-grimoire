@@ -5,8 +5,11 @@
  * finish, built by the crate's one `price_expr`; which of the three a tray row is, is this
  * module's. It is the row's finish and nothing else, with one arm for a finish not settled yet.
  */
-import type { FinishPrices, PrintingPrices, ScannerTrayRow } from "@/lib/ipc";
+import type { FinishPrices, PrintingPrices, ScannerTrayFinish, ScannerTrayRow } from "@/lib/ipc";
 import { FINISHES } from "@/lib/finish";
+import type { Currency } from "@/lib/marketplace";
+import { formatPrice } from "@/lib/prices";
+import type { LandedCard } from "./AddedToast";
 import { isKnownFinish } from "./trayFinish";
 
 /** The answer of `printing_prices`, keyed by printing id. */
@@ -43,11 +46,65 @@ export function trayPriceIds(rows: readonly ScannerTrayRow[]): string[] {
  *   has not landed. The caller tells those two apart, not this.
  */
 export function trayRowPrice(row: ScannerTrayRow, prices: TrayPriceMap): number | null {
-  const quoted = prices.get(row.cardId);
+  return printingPrice(row.cardId, row.finish, prices);
+}
+
+/** {@link trayRowPrice}'s rule for one printing in one tray finish — the row's, or a candidate's. */
+function printingPrice(
+  cardId: string,
+  finish: ScannerTrayFinish,
+  prices: TrayPriceMap,
+): number | null {
+  const quoted = prices.get(cardId);
   if (quoted === undefined) return null;
-  if (isKnownFinish(row.finish)) return quoted[row.finish];
-  for (const finish of FINISHES) {
-    if (quoted[finish] !== null) return quoted[finish];
+  if (isKnownFinish(finish)) return quoted[finish];
+  for (const chained of FINISHES) {
+    if (quoted[chained] !== null) return quoted[chained];
   }
   return null;
+}
+
+/** The cheapest and the dearest figure a landing could be — one figure twice for a settled card. */
+export interface PriceSpan {
+  low: number;
+  high: number;
+}
+
+/**
+ * The printings the scan popup (`AddedToast`) prices — the card it filed, or every candidate of a
+ * landing still waiting on a pick (issue #1321). Sorted, so the key is the tray's own when the
+ * tray holds just this one card.
+ *
+ * **Unlike {@link trayPriceIds}, a waiting landing asks about its candidates**: the popup quotes
+ * no single figure for it, only the span the pick will land in — which is what the reader weighs
+ * when deciding whether a pick is worth the bother.
+ */
+export function landedPriceIds(card: LandedCard): string[] {
+  const ids = card.kind === "pick" ? card.choices.map((choice) => choice.cardId) : [card.cardId];
+  return [...new Set(ids)].sort();
+}
+
+/**
+ * What the scan popup quotes: the filed card's figure, or the span across a pick's candidates —
+ * each in the landing's finish, by {@link trayRowPrice}'s rule. A candidate the marketplace does
+ * not quote is left out of the span rather than read as free; `null` when nothing is quoted.
+ */
+export function landedPrice(card: LandedCard, prices: TrayPriceMap): PriceSpan | null {
+  let span: PriceSpan | null = null;
+  for (const cardId of landedPriceIds(card)) {
+    const price = printingPrice(cardId, card.finish, prices);
+    if (price === null) continue;
+    span =
+      span === null
+        ? { low: price, high: price }
+        : { low: Math.min(span.low, price), high: Math.max(span.high, price) };
+  }
+  return span;
+}
+
+/** `$1.50`, or `$0.25 – $12.00` for a span whose ends differ. */
+export function formatPriceSpan(span: PriceSpan, currency: Currency): string {
+  return span.low === span.high
+    ? formatPrice(span.low, currency)
+    : `${formatPrice(span.low, currency)} – ${formatPrice(span.high, currency)}`;
 }
