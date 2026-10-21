@@ -17,6 +17,7 @@ import { ScanBar } from "./reader/ScanBar";
 import { setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
 import { withoutCommitted } from "./reader/trayCommit";
 import { TrayPanel } from "./reader/TrayPanel";
+import { useLandedPrice } from "./reader/useLandedPrice";
 import { ScannerAssets } from "./ScannerAssets";
 import { ScannerPanels } from "./ScannerPanels";
 import {
@@ -101,8 +102,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // The developer panels are the Scanner view's own; a destination's host draws none of them, and
   // asks the engine for none of the previews they alone show.
   const developer = destination === undefined && prefs.developer;
-  // Session-only: a deliberate Stop survives minimize/restore, but a new visit starts as before.
-  const [scanning, setScanning] = useState(true);
+  // **Stopped until the reader presses Start scanning** (issue #1317): opening the view turns the
+  // camera on, not recognition. Session-only: a Start or Stop survives minimize/restore, and a new
+  // visit starts stopped again.
+  const [scanning, setScanning] = useState(false);
   // **A minimized window stands down** (issue #556): the pump pauses at once, and the camera and
   // the heartbeat go after a grace, so the light goes out and the lease lapses for another window.
   // WebView2 reports a minimized page as visible, so the page could not see this on its own.
@@ -157,6 +160,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     tray,
     prefs.finish,
   );
+  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
+  const landedPrice = useLandedPrice(scanning ? landed : null, destination?.marketplace);
 
   /**
    * *Send scan…*'s dialog is open (issue #977). Mirrors `submit.run !== null`, which the pump
@@ -508,7 +513,11 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
               <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
               <Overlay videoRef={videoRef} verdict={scanning ? loop.verdict : null} />
-              <AddedToast card={scanning ? landed : null} onDone={clearLanded} />
+              <AddedToast
+                card={scanning ? landed : null}
+                onDone={clearLanded}
+                price={landedPrice}
+              />
               {!scanning && (
                 <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
                   {SCANNING_STOPPED}

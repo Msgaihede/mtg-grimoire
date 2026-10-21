@@ -299,6 +299,9 @@ pub struct PlaytestPick {
     /// `GameCard.power` (Slaughter the Strong's "total power 4 or less", issue #1079). `None` for
     /// a pick bounded by its count alone.
     pub power_cap: Option<i32>,
+    /// Where the cards lie, when they all lie in one place — the graveyard a cast is offered
+    /// from (issue #1329). `None` for cards from several places, or from the stack.
+    pub zone: Option<Place>,
 }
 
 /// What picking a card does, so the page can say it.
@@ -323,6 +326,8 @@ pub enum PlaytestPickPurpose {
     Choose,
     /// The picked permanents are kept; the rest are sacrificed.
     Keep,
+    /// The picked card is cast — "you may cast a spell from among them" (issue #1329).
+    Cast,
 }
 
 /// A step the reader asked the game to stop at, on whose turn: the reader's own, or an

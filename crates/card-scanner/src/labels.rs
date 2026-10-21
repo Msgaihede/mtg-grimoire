@@ -1,10 +1,10 @@
 //! The labels, as bytes — for a host that has a session and no database to read them from.
 //!
-//! [`Reference::load_labels`] reads ten columns of every row of `corpus.db`'s `cards` and
+//! [`Reference::load_labels`] reads twelve columns of every row of `corpus.db`'s `cards` and
 //! attaches each as a [`Label`]. A browser's scanner runs in a Worker of its own, on a module
 //! of this crate alone (`crates/grimoire-scan`, the light app's step 7.5): the corpus is the
 //! engine's, in another Worker, behind the one connection its storage permits. So the engine
-//! reads the same ten columns, writes them down here ([`Encoder`], [`read_page`]), and hands
+//! reads the same twelve columns, writes them down here ([`Encoder`], [`read_page`]), and hands
 //! the bytes across; the scanner's module reads them back ([`decode`]) and attaches them
 //! ([`attach`]) through the same two calls `load_labels` makes, in the same order.
 //!
@@ -12,7 +12,7 @@
 //! it is the one this exists to avoid. [`Row`], [`Encoder`], [`decode`] and [`attach`] are
 //! plain code; only [`read_page`], which reads a connection, is behind `corpus`.
 //!
-//! ## The layout — version 2
+//! ## The layout — version 3
 //!
 //! ```text
 //! "MTGL"                      4 bytes
@@ -31,11 +31,13 @@
 //!     name, set, number,      five varints, each a place in its own table
 //!       language, released
 //!     finishes                varint n, then n varints, each a place in the finish table
-//!     promo                   1 byte: 0, or 1 for a printing the corpus marks a promo
+//!     flags                   1 byte: [`PROMO`] for a printing the corpus marks a promo,
+//!                               [`TOKEN`] for a token or an emblem ([`is_token`]); no other bit
 //! ```
 //!
-//! Version 1 had no promo byte. Both ends of a hand-over are one build, so a version 1 file is
-//! never met and is refused like any other.
+//! Version 1 had no promo byte; version 2's last byte was the promo alone, 0 or 1, and version 3
+//! made it the flags, for the tokens a session leaves out (issue #1323). Both ends of a hand-over
+//! are one build, so an older file is never met and is refused like any other.
 //!
 //! A varint is LEB128, least significant group first, ten bytes at most. Nothing follows the
 //! last row.
@@ -68,7 +70,12 @@ use std::collections::HashMap;
 /// The first four bytes of a labels file.
 pub const MAGIC: [u8; 4] = *b"MTGL";
 /// The layout above. A number is never reused, as the bundle's is not.
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 3;
+
+/// A row's flags: the corpus marks the printing a promo.
+pub const PROMO: u8 = 1;
+/// A row's flags: the printing is a token or an emblem.
+pub const TOKEN: u8 = 2;
 
 /// The string tables, in the order the file holds them.
 const NAME: usize = 0;
@@ -84,8 +91,7 @@ const ORACLE: usize = 0;
 const ILLUSTRATION: usize = 1;
 const ID_TABLES: [&str; 2] = ["oracle", "illustration"];
 
-/// The fewest bytes a row can be: its id, two absent ids, five places, no finishes and its promo
-/// byte.
+/// The fewest bytes a row can be: its id, two absent ids, five places, no finishes and its flags.
 const MIN_ROW: usize = ID_LEN + 2 + 5 + 1 + 1;
 
 /// One printing, as `corpus.db` has it: what [`Reference::load_labels`] reads from one row.
@@ -100,23 +106,55 @@ pub struct Row {
     /// The corpus marks it a promo (Scryfall's `promo`). See
     /// [`crate::filters::ScanFilters::exclude_promos`].
     pub promo: bool,
+    /// A token or an emblem ([`is_token`]) — what a session leaves out unless it admits tokens
+    /// ([`crate::session::Session::set_tokens`]).
+    pub token: bool,
 }
 
 impl Row {
-    /// Attach this printing to `reference` — **the three calls `load_labels` makes, in its
+    /// Attach this printing to `reference` — **the four calls `load_labels` makes, in its
     /// order**, so a reference built from a labels file is built by the code a reference built
     /// from the corpus is.
     pub fn attach(self, reference: &mut Reference) {
         reference.set_finishes(self.id, self.finishes);
         reference.set_promo(self.id, self.promo);
+        reference.set_token(self.id, self.token);
         reference.add_label(self.id, self.oracle, self.illustration, self.label);
     }
 }
 
-/// The ten columns a label is read from, in the order [`Row::from_sql`] reads them.
+/// The layouts that make a printing a token or an emblem by themselves.
+const TOKEN_LAYOUTS: [&str; 3] = ["token", "double_faced_token", "emblem"];
+/// The layouts a token can wear without being one — a real card wears them too — so the type line
+/// says which.
+const TWO_SIDED_LAYOUTS: [&str; 2] = ["flip", "reversible_card"];
+/// What a token's or an emblem's type line, or one ` // ` face of it, begins with.
+const TOKEN_LINE_WORDS: [&str; 2] = ["Token", "Emblem"];
+
+/// **Is a printing a token or an emblem**, from its corpus `layout` and `type_line`?
+///
+/// The engine's rule (`grimoire_core::deck_tokens::is_token_printing`), spelled again here because
+/// this crate sits below the engine; a test there holds the two to the same answers. A `token`,
+/// `double_faced_token` or `emblem` layout is one by itself — the helper cards filed under those
+/// layouts (The Monarch, Day // Night) included, which no reader sorting a collection wants
+/// answered either; a `flip` or `reversible_card` printing is one when a face of its type line
+/// begins `Token` or `Emblem` (the Role tokens, Mechtitan), and the real cards those two layouts
+/// hold are not.
+pub fn is_token(layout: &str, type_line: Option<&str>) -> bool {
+    if TOKEN_LAYOUTS.contains(&layout) {
+        return true;
+    }
+    TWO_SIDED_LAYOUTS.contains(&layout)
+        && type_line.is_some_and(|line| {
+            line.split(" // ")
+                .any(|face| TOKEN_LINE_WORDS.iter().any(|word| face.starts_with(word)))
+        })
+}
+
+/// The twelve columns a label is read from, in the order [`Row::from_sql`] reads them.
 #[cfg(feature = "corpus")]
 pub const COLUMNS: &str = "id, illustration_id, name, set_code, collector_number, lang, \
-                           released_at, oracle_id, finishes, promo";
+                           released_at, oracle_id, finishes, promo, layout, type_line";
 
 #[cfg(feature = "corpus")]
 impl Row {
@@ -136,6 +174,8 @@ impl Row {
         let oracle: Option<String> = r.get(at + 7)?;
         let finishes: Option<String> = r.get(at + 8)?;
         let promo: Option<i64> = r.get(at + 9)?;
+        let layout: Option<String> = r.get(at + 10)?;
+        let type_line: Option<String> = r.get(at + 11)?;
         let Some(id) = crate::index::parse_uuid(&id) else { return Ok(None) };
         Ok(Some(Row {
             id,
@@ -144,6 +184,7 @@ impl Row {
             label,
             finishes: crate::reference::parse_finishes(finishes.as_deref().unwrap_or("")),
             promo: promo.is_some_and(|p| p != 0),
+            token: layout.is_some_and(|l| is_token(&l, type_line.as_deref())),
         }))
     }
 }
@@ -279,7 +320,8 @@ impl Encoder {
             let at = self.strings[FINISH].place(finish);
             put_varint(&mut self.rows, at);
         }
-        self.rows.push(u8::from(row.promo));
+        let flag = |on: bool, bit: u8| if on { bit } else { 0 };
+        self.rows.push(flag(row.promo, PROMO) | flag(row.token, TOKEN));
     }
 
     /// The file. Built in one allocation of its exact size.
@@ -434,6 +476,7 @@ struct Parts<'a> {
     /// At the first finish.
     finishes_at: Cursor<'a>,
     promo: bool,
+    token: bool,
 }
 
 impl<'a> Labels<'a> {
@@ -490,12 +533,12 @@ impl<'a> Labels<'a> {
             self.word(FINISH, at)?;
         }
         let before = *at;
-        let promo = match at.take(1, "a row's promo byte")?[0] {
-            0 => false,
-            1 => true,
-            _ => return Err(before.damaged("a promo byte that is neither 0 nor 1")),
-        };
-        Ok(Parts { id, oracle, illustration, words, finishes, finishes_at, promo })
+        let flags = at.take(1, "a row's flags")?[0];
+        if flags & !(PROMO | TOKEN) != 0 {
+            return Err(before.damaged("a flag this build does not know"));
+        }
+        let (promo, token) = (flags & PROMO != 0, flags & TOKEN != 0);
+        Ok(Parts { id, oracle, illustration, words, finishes, finishes_at, promo, token })
     }
 
     fn row(&self, p: &Parts<'a>) -> Row {
@@ -517,6 +560,7 @@ impl<'a> Labels<'a> {
             },
             finishes,
             promo: p.promo,
+            token: p.token,
         }
     }
 }
@@ -618,6 +662,7 @@ mod tests {
             },
             finishes: finishes.iter().map(|f| f.to_string()).collect(),
             promo: false,
+            token: false,
         }
     }
 
@@ -625,10 +670,14 @@ mod tests {
         Row { promo: true, ..row }
     }
 
+    fn token(row: Row) -> Row {
+        Row { token: true, ..row }
+    }
+
     /// Rows that between them use every shape a row has: an id with and without an oracle and
     /// an illustration, a shared oracle, a shared illustration, a split name, a name outside
     /// ASCII, an empty release date, no finishes and all three, a set and number two languages
-    /// share, a promo, and one printing pushed twice.
+    /// share, a promo, a token, and one printing pushed twice.
     fn rows() -> Vec<Row> {
         vec![
             row(1, Some(10), Some(50), "Forest", "blb", "280", "en", "2024-08-02", &["nonfoil", "foil"]),
@@ -639,6 +688,7 @@ mod tests {
             row(6, Some(30), Some(52), "Lim-Dûl's Vault", "all", "107★", "en", "1996-06-10", &["nonfoil", "foil", "etched"]),
             row(7, Some(40), Some(53), "Memory Lapse // Memory Lapse", "astx", "66", "en", "2021-04-23", &["nonfoil"]),
             promo(row(8, Some(41), Some(53), "Memory Lapse", "sld", "2142", "en", "2025-12-01", &["foil"])),
+            token(row(9, Some(42), Some(54), "Ornithopter", "tdmu", "3", "en", "2022-09-09", &["nonfoil"])),
             row(1, Some(10), Some(50), "Forest", "blb", "280", "en", "2024-08-02", &["nonfoil", "foil"]),
         ]
     }
@@ -663,7 +713,7 @@ mod tests {
         let labels = decode(&bytes).expect("decode");
         assert_eq!(labels.len(), rows.len());
         assert_eq!(labels.rows().collect::<Vec<_>>(), rows);
-        // Each word once: nine rows name seven names, and "Forest" is there once.
+        // Each word once: ten rows name eight names, and "Forest" is there once.
         assert_eq!(bytes.windows(6).filter(|w| w == b"Forest").count(), 1);
     }
 
@@ -686,11 +736,12 @@ mod tests {
         let mut through = bare();
         assert_eq!(attach(&mut through, &encoded(&rows)), Ok(rows.len()));
         assert_eq!(through.snapshot(), direct.snapshot());
-        // And the snapshot is of something: eight printings, one pushed twice.
-        assert_eq!(through.label_count(), 8);
+        // And the snapshot is of something: nine printings, one pushed twice.
+        assert_eq!(through.label_count(), 9);
         assert_eq!(through.finishes_of(&id(6)), ["nonfoil", "foil", "etched"]);
         assert_eq!(through.lookup_by_name("memory lapse"), Some((id(8), 0)));
         assert!(through.is_promo(&id(8)) && !through.is_promo(&id(7)));
+        assert!(through.is_token(&id(9)) && !through.is_token(&id(8)));
     }
 
     #[test]
@@ -703,7 +754,7 @@ mod tests {
         newer[4] = VERSION + 1;
         let refused = decode(&newer).err().expect("a version this build does not read");
         assert_eq!(refused, LabelsError::BadVersion { found: VERSION + 1, expected: VERSION });
-        assert_eq!(refused.to_string(), "labels format version 3, but this build understands 2");
+        assert_eq!(refused.to_string(), "labels format version 4, but this build understands 3");
         let mut longer = bytes.clone();
         longer.push(0);
         assert!(matches!(decode(&longer), Err(LabelsError::Damaged { .. })), "a byte too many");
@@ -740,12 +791,12 @@ mod tests {
         }
         // The row count is the sixth byte here. One more row than there is runs off the end;
         // one fewer leaves a row behind the last.
-        assert_eq!(bytes[5], 9);
+        assert_eq!(bytes[5], 10);
         let mut more = bytes.clone();
-        more[5] = 10;
+        more[5] = 11;
         assert!(matches!(decode(&more), Err(LabelsError::Truncated { .. })));
         let mut fewer = bytes.clone();
-        fewer[5] = 8;
+        fewer[5] = 9;
         assert!(matches!(decode(&fewer), Err(LabelsError::Damaged { .. })));
     }
 
@@ -787,7 +838,7 @@ mod tests {
     fn a_place_outside_its_table_is_refused() {
         let bytes = encoded(&[row(1, None, None, "Forest", "blb", "280", "en", "", &[])]);
         // The row is the last 25 bytes: an id, two absent ids, five places, no finishes, and
-        // the promo byte.
+        // the flags.
         let body = bytes.len() - MIN_ROW;
         for (offset, what) in [(ID_LEN, "id"), (ID_LEN + 2, "string"), (ID_LEN + 6, "string")] {
             let mut bad = bytes.clone();
@@ -798,21 +849,44 @@ mod tests {
     }
 
     #[test]
-    fn a_promo_byte_is_0_or_1_and_nothing_else() {
-        let plain = encoded(&[row(1, None, None, "Forest", "blb", "280", "en", "", &[])]);
-        let promoted = encoded(&[promo(row(1, None, None, "Forest", "blb", "280", "en", "", &[]))]);
-        assert_eq!(plain.last(), Some(&0));
-        assert_eq!(promoted.last(), Some(&1));
-        assert!(!decode(&plain).expect("decode").rows().next().expect("a row").promo);
-        assert!(decode(&promoted).expect("decode").rows().next().expect("a row").promo);
-        let mut bad = plain.clone();
-        *bad.last_mut().expect("a byte") = 2;
+    fn the_flags_are_the_promo_and_the_token_and_nothing_else() {
+        let forest = || row(1, None, None, "Forest", "blb", "280", "en", "", &[]);
+        for (r, byte) in [
+            (forest(), 0),
+            (promo(forest()), PROMO),
+            (token(forest()), TOKEN),
+            (promo(token(forest())), PROMO | TOKEN),
+        ] {
+            let bytes = encoded(std::slice::from_ref(&r));
+            assert_eq!(bytes.last(), Some(&byte));
+            let back = decode(&bytes).expect("decode").rows().next().expect("a row");
+            assert_eq!((back.promo, back.token), (r.promo, r.token));
+        }
+        let mut bad = encoded(&[forest()]);
+        *bad.last_mut().expect("a byte") = 4;
         let at = bad.len() - 1;
         let refused = decode(&bad).err().expect("refused");
-        assert_eq!(
-            refused,
-            LabelsError::Damaged { what: "a promo byte that is neither 0 nor 1", at }
-        );
+        assert_eq!(refused, LabelsError::Damaged { what: "a flag this build does not know", at });
+    }
+
+    #[test]
+    fn a_token_is_its_layout_or_a_two_sided_card_whose_face_is_one() {
+        for layout in ["token", "double_faced_token", "emblem"] {
+            assert!(is_token(layout, None), "{layout}");
+            assert!(is_token(layout, Some("Card")), "a helper filed as a {layout}");
+        }
+        // The Role tokens and Mechtitan, and the real cards the same two layouts hold.
+        let role = "Token Enchantment — Aura Role // Token Enchantment — Aura Role";
+        assert!(is_token("flip", Some(role)));
+        let mechtitan = "Legendary Artifact Creature — Construct // Token Legendary Artifact Creature";
+        assert!(is_token("reversible_card", Some(mechtitan)));
+        let monk = "Legendary Creature — Human Monk // Legendary Creature — Spirit";
+        assert!(!is_token("flip", Some(monk)));
+        assert!(!is_token("reversible_card", Some("Basic Land — Forest // Basic Land — Forest")));
+        assert!(!is_token("flip", None));
+        // An ordinary card is no token whatever its type line says of one.
+        assert!(!is_token("normal", Some("Token Creature — Soldier")));
+        assert!(!is_token("transform", Some("Creature — Human // Creature — Werewolf")));
     }
 
     // ---- Against the corpus -------------------------------------------------------------------
@@ -826,7 +900,8 @@ mod tests {
             "CREATE TABLE cards (id TEXT PRIMARY KEY, oracle_id TEXT, name TEXT, lang TEXT,
                                  released_at TEXT, set_code TEXT, collector_number TEXT,
                                  oracle_text TEXT, finishes TEXT, illustration_id TEXT,
-                                 promo INTEGER NOT NULL DEFAULT 0)",
+                                 promo INTEGER NOT NULL DEFAULT 0,
+                                 layout TEXT NOT NULL DEFAULT 'normal', type_line TEXT)",
         )
         .expect("schema");
         for c in cards {
@@ -873,6 +948,12 @@ mod tests {
         ]);
         // A promo: the column is an integer, and every other row keeps its default of 0.
         conn.execute("UPDATE cards SET promo = 1 WHERE id = ?1", [G]).expect("promo");
+        // A token, by its layout.
+        conn.execute(
+            "UPDATE cards SET layout = 'token', type_line = 'Token Land — Forest' WHERE id = ?1",
+            [B],
+        )
+        .expect("token");
         conn
     }
 
@@ -925,6 +1006,8 @@ mod tests {
         assert_eq!(r.lookup_by_name("vantress visions"), Some((d, 0)));
         let g = crate::index::parse_uuid("0001f1ef-b957-4a55-b47f-14839cdbab6f").expect("id");
         assert!(r.is_promo(&g) && !r.is_promo(&c));
+        let b = crate::index::parse_uuid("0000579f-7b35-4ed3-b44c-db2a538066fe").expect("id");
+        assert!(r.is_token(&b) && !r.is_token(&c));
     }
 
     /// The whole of a real corpus, for the figures and for the promise at its real size:

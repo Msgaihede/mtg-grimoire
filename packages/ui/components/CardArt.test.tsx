@@ -35,6 +35,20 @@ describe("CardArt", () => {
     expect(container.querySelector("svg")).toBeNull();
   });
 
+  /** Issue #1214: the day the preview's picture last changed, on a line above the release date. */
+  it("puts the image's day above the release date when the stamp carries one", () => {
+    const { container } = mount(
+      <CardArt
+        cardId="dragon"
+        name="Spoiled Dragon"
+        unreleased={{ set: "TLA", date: "2026-11-14", imageUpdated: "2026-10-09" }}
+      />,
+    );
+    const chip = container.querySelector("[data-unreleased-chip]");
+    const lines = [...(chip?.children ?? [])].map((line) => line.textContent);
+    expect(lines).toEqual(["Image updated 2026-10-09", "Releases 2026-11-14"]);
+  });
+
   it("draws no chip without one", () => {
     const { container } = mount(<CardArt cardId="bolt" name="Lightning Bolt" />);
     expect(container.querySelector("[data-unreleased-chip]")).toBeNull();

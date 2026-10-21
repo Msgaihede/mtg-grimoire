@@ -331,6 +331,15 @@ pub struct CardSummary {
     /// reprinted in a set not out yet is represented by that reprint ([`collapse_rep`] takes
     /// the latest release), and the stamp is then true of the picture it is drawn on.
     pub released_at: Option<String>,
+    /// When Scryfall last replaced this printing's images — `cards.image_updated_at` verbatim, an
+    /// ISO timestamp (`2026-07-21T16:44:09Z`), or `None` where the corpus has none.
+    ///
+    /// Here so an unreleased row can say how fresh its preview is (issue #1214): a spoiler's
+    /// picture is swapped as better scans arrive, and the wall prints this date above the
+    /// release date. It is also what the `imageUpdated` sort orders by. Collapsed, it is the
+    /// representative's own, for [`Self::released_at`]'s reason — the picture it dates is the
+    /// one the tile shows.
+    pub image_updated_at: Option<String>,
     /// Copies the collection holds of **this printing**, across every finish and
     /// condition. `0` rather than `Option`: "you own none of these" is a fact, not an
     /// absence, and a badge that has to distinguish `null` from `0` is a badge with a bug
@@ -566,8 +575,8 @@ fn non_card_rank(alias: &str) -> String {
 /// SQLite's (NULLs first ascending, last descending): a reader reversing a sort expects the
 /// rows reversed, not the holes moved.
 ///
-/// **`manaValue` and `released` have no column of their own to press, and are reached from
-/// the filter bar's sort picker instead** — exactly as the collection's `added` and `price`
+/// **`manaValue`, `released` and `imageUpdated` have no column of their own to press, and are
+/// reached from the filter bar's sort picker instead** — exactly as the collection's `added` and `price`
 /// keys are. That is why they are not "dead code an order nothing can reach", which is what
 /// this paragraph said about `released` while the table's headers were the only way to ask
 /// for an order at all. A picker key still has to be here: [`crate::sorting::order_by`]
@@ -607,6 +616,11 @@ const SEARCH_SORTS: &[crate::sorting::SortColumn] = &[
         key: "released",
         asc: "c.released_at ASC NULLS LAST",
         desc: "c.released_at DESC NULLS LAST",
+    },
+    crate::sorting::SortColumn {
+        key: "imageUpdated",
+        asc: "c.image_updated_at ASC NULLS LAST",
+        desc: "c.image_updated_at DESC NULLS LAST",
     },
 ];
 
@@ -749,7 +763,13 @@ const SEARCH_SORTS_JOINED: &[crate::sorting::SortColumn] = &[
 /// Naming one costs the whole 37 553-group join before the limit: 600–620 ms on a completely
 /// unfiltered browse against 108 ms for the group-step orders, and ~40 ms as soon as any text
 /// narrows the set (measured 2026-08-11).
-const REPRESENTATIVE_SORTS: [&str; 3] = ["set", "rarity", "type"];
+///
+/// **`imageUpdated` is here, unlike `released`** (issue #1214). Images are replaced printing by
+/// printing — a reprint's new scan says nothing about the old one's — so no aggregate is the
+/// representative's own date the way `max(c.released_at)` is, and the row would sort by a
+/// timestamp it does not show. Its caller is the Coming soon widget's set press, which always
+/// narrows to one set, so the join it pays for is that set's and not the corpus's.
+const REPRESENTATIVE_SORTS: [&str; 4] = ["set", "rarity", "type", "imageUpdated"];
 
 /// The denominator statement, for one `FROM` and one `WHERE`.
 ///
@@ -1108,7 +1128,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                     -- **both** branches — the two share one row mapping, so every column
                     -- either branch adds goes in both, at the same index, and the three
                     -- collapse-only aggregates stay last of all.
-                    c.game_changer, c.released_at,
+                    c.game_changer, c.released_at, c.image_updated_at,
                     {marks},
                     g.printings, g.lo, g.hi
              FROM g JOIN cards c ON c.id = g.rep
@@ -1122,6 +1142,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
                     c.oracle_id, c.finishes, c.promo_types, c.game_changer, c.released_at,
+                    c.image_updated_at,
                     {marks}
              FROM {from_sql} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
         )
@@ -1142,7 +1163,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     // added to both ahead of the aggregates moves this, and a number left behind reads the
     // wrong column as a price, which is an `InvalidColumnType` at best and a wrong number at
     // worst.
-    const COLLAPSE_COL: usize = 17;
+    const COLLAPSE_COL: usize = 18;
 
     let mut items = Vec::new();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -1168,8 +1189,9 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                 .map_err(|e| e.to_string())?
                 .unwrap_or(false),
             released_at: row.get(14).map_err(|e| e.to_string())?,
-            owned_quantity: row.get(15).map_err(|e| e.to_string())?,
-            wishlisted: row.get(16).map_err(|e| e.to_string())?,
+            image_updated_at: row.get(15).map_err(|e| e.to_string())?,
+            owned_quantity: row.get(16).map_err(|e| e.to_string())?,
+            wishlisted: row.get(17).map_err(|e| e.to_string())?,
             // Uncollapsed, a row is a printing: it stands for one, and the "range" is its own
             // price. Collapsed, the three ride on the group step's aggregates.
             printings: if collapse {
@@ -2031,7 +2053,7 @@ mod tests {
         // Every single-column order, and a two-key one — which is the case a multi-key
         // sort adds and the one where a missing tiebreak would be easiest to miss, because
         // the second key makes the order *look* more determined than it is.
-        let orders: [(&str, Vec<crate::sorting::SortTerm>); 8] = [
+        let orders: [(&str, Vec<crate::sorting::SortTerm>); 9] = [
             ("name", vec![term("name", "asc")]),
             ("set", vec![term("set", "desc")]),
             ("type", vec![term("type", "asc")]),
@@ -2043,6 +2065,7 @@ mod tests {
             // the tie this test is about.
             ("manaValue", vec![term("manaValue", "asc")]),
             ("released", vec![term("released", "desc")]),
+            ("imageUpdated", vec![term("imageUpdated", "desc")]),
             (
                 "rarity+price",
                 vec![term("rarity", "asc"), term("price", "desc")],
@@ -2099,6 +2122,7 @@ mod tests {
                 promo_types: Some(r#"["surgefoil"]"#.into()),
                 game_changer: true,
                 released_at: Some("1993-08-05".into()),
+                image_updated_at: Some("2026-07-21T16:44:09Z".into()),
                 owned_quantity: 0,
                 wishlisted: false,
                 printings: 1,
@@ -2122,6 +2146,7 @@ mod tests {
                     "promoTypes": "[\"surgefoil\"]",
                     "gameChanger": true,
                     "releasedAt": "1993-08-05",
+                    "imageUpdatedAt": "2026-07-21T16:44:09Z",
                     "ownedQuantity": 0, "wishlisted": false,
                     "printings": 1,
                     "priceLow": 400.5, "priceHigh": 400.5
@@ -3434,7 +3459,7 @@ mod tests {
         assert_eq!(rarities, ["rare", "uncommon", "common"]);
     }
 
-    /// Cards for the two picker-only orders: `(id, name, cmc, released_at)`.
+    /// Cards for the picker-only orders: `(id, name, cmc, released_at, image_updated_at)`.
     ///
     /// A set of its own so [`seeded`]'s three rows — none of which carries either column —
     /// cannot pad the answer, and names deliberately at odds with both orders, because
@@ -3442,18 +3467,20 @@ mod tests {
     /// fallback proves nothing.
     #[rustfmt::skip]
     fn seed_picker_orders(conn: &Connection) {
+        // The image dates run in no order the other two keys do, so a key that fell through to
+        // either of them — or to the name fallback — reads as a wrong answer here.
         let rows = [
-            ("q1", "Alpha",   Some(3.0), Some("2019-01-01")),
-            ("q2", "Bravo",   None,      None),
-            ("q3", "Charlie", Some(0.0), Some("1993-08-05")),
-            ("q4", "Delta",   Some(7.0), Some("2024-06-14")),
+            ("q1", "Alpha",   Some(3.0), Some("2019-01-01"), Some("2026-10-02T08:00:00Z")),
+            ("q2", "Bravo",   None,      None,               None),
+            ("q3", "Charlie", Some(0.0), Some("1993-08-05"), Some("2026-10-19T21:15:30Z")),
+            ("q4", "Delta",   Some(7.0), Some("2024-06-14"), Some("2026-10-19T09:00:00Z")),
         ];
-        for (id, name, cmc, released) in rows {
+        for (id, name, cmc, released, image) in rows {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,released_at,
-                                    is_paper,oracle_id,raw)
-                 VALUES (?1,?2,'zzz',?1,'en','normal',?3,?4,1,?1,'{}')",
-                rusqlite::params![id, name, cmc, released],
+                                    image_updated_at,is_paper,oracle_id,raw)
+                 VALUES (?1,?2,'zzz',?1,'en','normal',?3,?4,?5,1,?1,'{}')",
+                rusqlite::params![id, name, cmc, released, image],
             ).unwrap();
         }
     }
@@ -3510,6 +3537,98 @@ mod tests {
             picker_order(&conn, "released", "desc"),
             ["Delta", "Alpha", "Charlie", "Bravo"],
             "the rows reversed, not the hole moved"
+        );
+    }
+
+    /// `image_updated_at` is a full timestamp, so two images replaced on one day still order by
+    /// the hour — the case the Coming soon widget's set press exists for (issue #1214), where a
+    /// day of previews lands at once. An undated image sorts last both ways, as every hole does.
+    #[test]
+    fn image_updated_sorts_ascending_and_descending_with_nulls_last() {
+        let conn = seeded();
+        seed_picker_orders(&conn);
+        assert_eq!(
+            picker_order(&conn, "imageUpdated", "desc"),
+            ["Charlie", "Delta", "Alpha", "Bravo"],
+            "the evening's scan above the morning's, and the card with no image date last"
+        );
+        assert_eq!(
+            picker_order(&conn, "imageUpdated", "asc"),
+            ["Alpha", "Delta", "Charlie", "Bravo"],
+            "the rows reversed, not the hole moved"
+        );
+    }
+
+    /// A collapsed `imageUpdated` sort orders by **the representative's own date** — the one the
+    /// row carries — and not by an aggregate over the group. Images are replaced printing by
+    /// printing, so the group's newest scan can belong to a printing the row does not show.
+    #[test]
+    fn a_collapsed_image_updated_sort_orders_by_the_representative_it_shows() {
+        assert!(REPRESENTATIVE_SORTS.contains(&"imageUpdated"));
+        let conn = seeded();
+        // Two cards, two printings apiece in one set. `a`'s representative (the later release)
+        // has the *older* image; its other printing has the newest image of all, which
+        // `max(c.image_updated_at)` would have put first.
+        for (id, name, oracle, released, image) in [
+            (
+                "a-rep",
+                "Alpha",
+                "o-a",
+                "2026-11-14",
+                "2026-10-01T00:00:00Z",
+            ),
+            (
+                "a-old",
+                "Alpha",
+                "o-a",
+                "2026-11-01",
+                "2026-10-20T00:00:00Z",
+            ),
+            (
+                "b-rep",
+                "Bravo",
+                "o-b",
+                "2026-11-14",
+                "2026-10-10T00:00:00Z",
+            ),
+            (
+                "b-old",
+                "Bravo",
+                "o-b",
+                "2026-11-01",
+                "2026-09-01T00:00:00Z",
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,released_at,
+                                    image_updated_at,is_paper,oracle_id,raw)
+                 VALUES (?1,?2,'zzz',?1,'en','normal',?4,?5,1,?3,'{}')",
+                rusqlite::params![id, name, oracle, released, image],
+            )
+            .unwrap();
+        }
+        let r = run_search(
+            &conn,
+            &SearchRequest {
+                set_code: Some("zzz".into()),
+                collapse: Some(true),
+                sort: Some(vec![term("imageUpdated", "desc")]),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let rows: Vec<(&str, Option<&str>)> = r
+            .items
+            .iter()
+            .map(|c| (c.id.as_str(), c.image_updated_at.as_deref()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("b-rep", Some("2026-10-10T00:00:00Z")),
+                ("a-rep", Some("2026-10-01T00:00:00Z")),
+            ]
         );
     }
 

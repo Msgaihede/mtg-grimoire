@@ -366,6 +366,40 @@ export function castChoicePrompt(): TurnFive {
   };
 }
 
+/** Windbrisk Heights' activated "you may" (issue #1328): a yes or a no, the ability's words
+ *  beside them. */
+export function optionalEffectPrompt(): TurnFive {
+  const t = turnFive();
+  const answer = (index: number, yes: boolean) => ({
+    index,
+    kind: "DecideOptionalEffect",
+    cards: [],
+    players: [],
+    number: null,
+    yes,
+    label: null,
+  });
+  return {
+    ...t,
+    view: {
+      ...t.view,
+      stage: "prompt",
+      prompt: {
+        kind: "OptionalEffectChoice",
+        source: "Windbrisk Heights",
+        sourceText:
+          "{W}, {T}: You may play the exiled card without paying its mana cost if you attacked " +
+          "with three or more creatures this turn.",
+        cause: null,
+        options: [answer(0, false), answer(1, true)],
+        cancellable: false,
+        pick: null,
+        keyword: null,
+      },
+    },
+  };
+}
+
 /** The opponent's Lightning Bolt at the reader's face, under the reader's own Counterspell at the
  *  Bolt: an arrow from each to its target. */
 export function withStack(): TurnFive {
@@ -567,6 +601,7 @@ export function scryPick(): TurnFive {
     max: 3,
     ordered: true,
     powerCap: null,
+    zone: "libraryTop",
   });
 }
 
@@ -588,6 +623,7 @@ export function discardPick(): TurnFive {
     max: 2,
     ordered: false,
     powerCap: null,
+    zone: "hand",
   });
 }
 
@@ -613,6 +649,32 @@ export function keepPick(): TurnFive {
     max: cards.length,
     ordered: false,
     powerCap: 4,
+    zone: "battlefield",
+  });
+}
+
+/**
+ * "You may cast an instant or sorcery spell from your graveyard" (issue #1329): one card of the
+ * reader's graveyard, or none — asked whether before which.
+ */
+export function castPick(): TurnFive {
+  const t = turnFive();
+  const cards = t.view.you.graveyard.map((c) => ({
+    id: c.id,
+    name: c.name,
+    cardId: c.cardId,
+    text: null,
+    cause: null,
+  }));
+  return pickPrompt(t, "CastOffer", "Invoke Calamity", {
+    purpose: "cast",
+    cards,
+    eligible: cards.map((c) => c.id),
+    min: 0,
+    max: 1,
+    ordered: false,
+    powerCap: null,
+    zone: "graveyard",
   });
 }
 

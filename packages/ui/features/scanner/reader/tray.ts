@@ -367,6 +367,24 @@ export function nextDecisionKey(
 }
 
 /**
+ * Whether `next` has a card at its head that `before` did not — **a landing**: a scan, a second
+ * copy, a second opinion, or a card added by hand (issue #1320).
+ *
+ * **Read off the head row's key and `addedAt`, the stamp only a landing writes** — a new row is a
+ * new key, and a bump or a re-read keeps the key and refreshes the stamp. Every other writer leaves
+ * the stamp alone, so a pick, a finish or a quantity is no landing; and a head the reader removed
+ * or an Add took uncovers a row `before` already had, with its stamp, which is none either.
+ */
+export function headLanded(
+  before: readonly ScannerTrayRow[],
+  next: readonly ScannerTrayRow[],
+): boolean {
+  const head = next[0];
+  if (head === undefined) return false;
+  return !before.some((row) => row.key === head.key && row.addedAt === head.addedAt);
+}
+
+/**
  * The stored layout word as a layout. **Anything but `list` is the grid**, the Rust default: the
  * row stores the word verbatim, so a value an older or newer build wrote must still draw a tray.
  */
