@@ -20,6 +20,8 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     counters: [],
     power: null,
     toughness: null,
+    basePower: null,
+    baseToughness: null,
     tax: 0,
     attachedTo: null,
     foretold: false,
@@ -31,7 +33,15 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
 }
 
 function creature(name: string, over: Partial<GameCard> = {}): GameCard {
-  return card(name, { lane: "creature", isLand: false, power: 2, toughness: 2, ...over });
+  return card(name, {
+    lane: "creature",
+    isLand: false,
+    power: 2,
+    toughness: 2,
+    basePower: 2,
+    baseToughness: 2,
+    ...over,
+  });
 }
 
 function setup(
@@ -122,6 +132,28 @@ describe("Battlefield", () => {
     expect(screen.getByText("+2/+2")).toBeInTheDocument();
     expect(screen.getByText("3 loyalty")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Tataru Taru, +2/+2" })).toBeInTheDocument();
+  });
+
+  it("draws a changed creature's P/T in a chip, each stat coloured by which way it moved", () => {
+    setup([
+      creature("Tataru Taru", { power: 4, toughness: 1, counters: [] }),
+      creature("Grizzly Bears"),
+    ]);
+    const chips = screen.getAllByTestId("stats-chip");
+    expect(chips).toHaveLength(1);
+    const [power, slash, toughness] = Array.from(chips[0].children);
+    expect([power.textContent, slash.textContent, toughness.textContent]).toEqual(["4", "/", "1"]);
+    expect(power).toHaveClass("text-ok");
+    expect(toughness).toHaveClass("text-destructive");
+    expect(screen.getByRole("button", { name: "Tataru Taru, 4/1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Grizzly Bears" })).toBeInTheDocument();
+  });
+
+  it("colours a stat that stayed as printed white beside one that moved", () => {
+    setup([creature("Tataru Taru", { power: 2, toughness: 4 })]);
+    const [power, , toughness] = Array.from(screen.getByTestId("stats-chip").children);
+    expect(power).toHaveClass("text-white");
+    expect(toughness).toHaveClass("text-ok");
   });
 
   it("says a token is one", () => {

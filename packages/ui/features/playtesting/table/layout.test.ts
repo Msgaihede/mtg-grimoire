@@ -43,6 +43,8 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     counters: [],
     power: null,
     toughness: null,
+    basePower: null,
+    baseToughness: null,
     tax: 0,
     attachedTo: null,
     foretold: false,
@@ -70,6 +72,21 @@ describe("pilesOf", () => {
       ["Plains", 1, false],
     ]);
     expect(pilesOf(cards, "creature")).toHaveLength(2);
+  });
+
+  it("keeps two creatures of one name apart when their power and toughness differ", () => {
+    const piles = pilesOf(
+      [
+        card("Bear", { lane: "creature", power: 2, toughness: 2 }),
+        card("Bear", { lane: "creature", power: 5, toughness: 5 }),
+        card("Bear", { lane: "creature", power: 2, toughness: 2 }),
+      ],
+      "creature",
+    );
+    expect(piles.map((p) => [p.card.power, p.ids.length])).toEqual([
+      [2, 2],
+      [5, 1],
+    ]);
   });
 
   it("keeps two printings of one card apart, since they look different", () => {

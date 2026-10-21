@@ -11,7 +11,7 @@ import type { GameCard, GamePlace, PlaytestAction } from "@/lib/ipc";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { CardFace, counterLabel, pointerAt } from "./Inspect";
+import { CardFace, StatsChip, changedStats, counterLabel, pointerAt } from "./Inspect";
 import { tableDraggable, useTableDropTarget, type TableDrag } from "./tableDrag";
 import {
   ASPECT,
@@ -375,6 +375,7 @@ function PileView({
   const turn = Math.round(w * 0.2);
   const word = count > 1 ? `${count} ${plural(card.name)}` : card.name;
   const counters = card.counters.map(counterLabel).join(" · ");
+  const stats = changedStats(card);
   /** Carried off and tapped by a click: the reader's own card, with the sandbox's moves working. */
   const handled = sandbox && !readOnly;
 
@@ -469,6 +470,7 @@ function PileView({
           card.isToken ? "token" : null,
           card.gaps.length > 0 ? "played only in part" : null,
           counters === "" ? null : counters,
+          stats === null ? null : `${stats.power}/${stats.toughness}`,
           pile.attached.length > 0 ? `with ${pile.attached.map((a) => a.name).join(", ")}` : null,
           mark?.word ?? null,
         ]
@@ -526,6 +528,7 @@ function PileView({
             {counters}
           </span>
         )}
+        <StatsChip card={card} />
       </button>
       {count > 1 && (
         <span

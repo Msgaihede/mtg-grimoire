@@ -76,7 +76,8 @@ export interface ZoneSize {
 }
 
 /**
- * One pile: the cards of one name that look the same — same tapped state, same counters — and
+ * One pile: the cards of one name that look the same — same tapped state, same counters, same
+ * power and toughness (the changed-stats chip, issue #1332) — and
  * so are drawn as one card with the rest edged under it. The ids are the engine's, in table order.
  */
 export interface Pile {
@@ -93,10 +94,11 @@ export interface Pile {
   attached: GameCard[];
 }
 
-/** What makes two cards one pile: the picture, the name, the state and the counters. */
+/** What makes two cards one pile: the picture, the name, the state, the counters and the P/T. */
 function pileKey(c: GameCard): string {
   const counters = c.counters.map((k) => `${k.kind}=${k.count}`).join(",");
-  return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, c.isToken ? "t" : ""].join("|");
+  const pt = `${c.power ?? ""}/${c.toughness ?? ""}`;
+  return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, pt, c.isToken ? "t" : ""].join("|");
 }
 
 /**
