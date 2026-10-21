@@ -641,9 +641,45 @@ fn counters_change_power_and_toughness() {
             .clone()
     });
     assert_eq!((creature.power, creature.toughness), (Some(4), Some(4)));
+    // The printed P/T stays beside it, for the board's changed-stats chip (issue #1332).
+    assert_eq!(
+        (creature.base_power, creature.base_toughness),
+        (Some(2), Some(2))
+    );
     assert_eq!(creature.counters.len(), 1);
     assert_eq!(creature.counters[0].count, 2);
     assert_eq!(creature.counters[0].kind, "+1/+1");
+}
+
+/// Issue #1332: a `*/*` creature's base is what its own ability makes it, not phase's printed 0,
+/// so the board does not mark one at its own count as pumped.
+#[test]
+fn a_star_creatures_base_is_its_own_count() {
+    let elder = engine(|| {
+        let mut cards = deck();
+        let bears = cards
+            .iter_mut()
+            .find(|c| c.name == "Grizzly Bears")
+            .unwrap();
+        *bears = card(
+            "Dungrove Elder",
+            Some("{2}{G}"),
+            "Creature — Treefolk",
+            "Hexproof\nDungrove Elder's power and toughness are each equal to the number of Forests you control.",
+            Some(("*", "*")),
+            13,
+        );
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Dungrove Elder");
+        find(&game.view().you.battlefield, "Dungrove Elder")
+            .unwrap()
+            .clone()
+    });
+    assert_eq!((elder.power, elder.toughness), (Some(2), Some(2)));
+    assert_eq!((elder.base_power, elder.base_toughness), (Some(2), Some(2)));
 }
 
 /// Issue #991: a token the deck keeps is offered and drawn in the printing the reader set for it,
@@ -795,6 +831,7 @@ fn a_spell_with_one_target_is_cast_at_it() {
     }));
     let bear = find(&step.view.you.battlefield, "Grizzly Bears").unwrap();
     assert_eq!((bear.power, bear.toughness), (Some(5), Some(5)));
+    assert_eq!((bear.base_power, bear.base_toughness), (Some(2), Some(2)));
     assert!(find(&step.view.you.graveyard, "Giant Growth").is_some());
 }
 

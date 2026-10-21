@@ -286,8 +286,10 @@ reaching the browser. The game's history is the engine's — [playtest.md](playt
 has the design.
 
 The board's other keys are its own and not catalogued: Space presses the stage button (first main
-"To combat", second main "End turn"; the goldfish board's "Next turn" is gone), and T, G, E and H
-work only while the sandbox's moves do ([goldfish.md](goldfish.md#the-table)).
+"To combat", second main "End turn"; the goldfish board's "Next turn" is gone), T, G, E and H
+work only while the sandbox's moves do ([goldfish.md](goldfish.md#the-table)), and Shift+← /
+Shift+→ on a focused card in hand move it along the hand at any time (issue #1330). Not Alt+←,
+which is the browser's Back.
 
 ## `newWindow`
 

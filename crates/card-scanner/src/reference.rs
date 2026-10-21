@@ -224,6 +224,10 @@ pub struct Reference {
     /// the few rather than a flag on every label. What
     /// [`ScanFilters::exclude_promos`] reads, through [`Reference::mask_for`].
     promos: HashSet<[u8; ID_LEN]>,
+    /// The printings that are tokens or emblems ([`crate::labels::is_token`]), kept as the promos
+    /// are. What a session leaves out unless it is told to admit them
+    /// ([`Reference::mask_without_tokens`]).
+    tokens: HashSet<[u8; ID_LEN]>,
 }
 
 /// [`Reference::snapshot`]'s answer. Ordered maps, so two of them compare and print alike
@@ -239,6 +243,7 @@ pub(crate) struct Snapshot {
     by_set_number: std::collections::BTreeMap<(String, String), [u8; ID_LEN]>,
     finishes: std::collections::BTreeMap<[u8; ID_LEN], Vec<String>>,
     promos: std::collections::BTreeSet<[u8; ID_LEN]>,
+    tokens: std::collections::BTreeSet<[u8; ID_LEN]>,
 }
 
 /// The shortest read [`Reference::lookup_cards_masked`] will take as the start of a longer name.
@@ -274,6 +279,7 @@ impl Reference {
             finishes: HashMap::new(),
             finish_lists: Vec::new(),
             promos: HashSet::new(),
+            tokens: HashSet::new(),
         }
     }
 
@@ -324,6 +330,7 @@ impl Reference {
                 .map(|id| (*id, self.finishes_of(id).to_vec()))
                 .collect(),
             promos: self.promos.iter().copied().collect(),
+            tokens: self.tokens.iter().copied().collect(),
         }
     }
 
@@ -403,6 +410,22 @@ impl Reference {
         }
     }
 
+    /// Is this printing a token or an emblem, as [`crate::labels::is_token`] reads the corpus?
+    /// `false` for a printing the labels never named.
+    pub fn is_token(&self, printing: &[u8; ID_LEN]) -> bool {
+        self.tokens.contains(printing)
+    }
+
+    /// Record whether a printing is a token — [`Reference::load_labels`]' own, public for a
+    /// caller with no SQLite.
+    pub fn set_token(&mut self, printing: [u8; ID_LEN], token: bool) {
+        if token {
+            self.tokens.insert(printing);
+        } else {
+            self.tokens.remove(&printing);
+        }
+    }
+
     /// Attach one printing's label — the body of [`Reference::load_labels`], public so a
     /// caller with no SQLite (a test, the synthetic evaluation) can build a labelled reference.
     ///
@@ -477,6 +500,24 @@ impl Reference {
         }
         Mask::allow_only(
             self.labels.iter().filter(|(id, l)| f.permits(l, self.is_promo(id))).map(|(id, _)| *id),
+        )
+    }
+
+    /// The same, leaving out every token and emblem as well — the mask a session searches under
+    /// unless it admits tokens ([`crate::session::Session::set_tokens`]; issue #1323).
+    ///
+    /// **Empty filters are every printing but the tokens** ([`Mask::all_but`]), not a list of
+    /// the hundred thousand that are not tokens; with no token recorded that is [`Mask::all`],
+    /// and the unfiltered search keeps its fast path.
+    pub fn mask_without_tokens(&self, f: &ScanFilters) -> Mask {
+        if f.is_empty() {
+            return Mask::all_but(self.tokens.iter().copied());
+        }
+        Mask::allow_only(
+            self.labels
+                .iter()
+                .filter(|(id, l)| !self.is_token(id) && f.permits(l, self.is_promo(id)))
+                .map(|(id, _)| *id),
         )
     }
 
@@ -1673,6 +1714,41 @@ mod tests {
     }
 
     #[test]
+    fn leaving_out_the_tokens_leaves_out_the_tokens_and_every_tier_follows() {
+        // Issue #1323. The DMU Ornithopter is the token, and the corpus lists it first.
+        let mut r = labelled(&[
+            (1, 10, "Ornithopter", "tdmu", "22", "2022-09-09"),
+            (2, 20, "Ornithopter", "9ed", "305", "2005-07-29"),
+            (3, 30, "Shock", "m21", "159", "2020-07-03"),
+        ]);
+        // No token recorded is no restriction: the unfiltered search keeps its fast path.
+        assert!(r.mask_without_tokens(&ScanFilters::default()).is_unrestricted());
+        r.set_token(id(1), true);
+        assert!(r.is_token(&id(1)) && !r.is_token(&id(2)));
+
+        let all = r.mask_without_tokens(&ScanFilters::default());
+        assert!(!all.is_unrestricted() && all.len().is_none(), "every printing but one");
+        assert!(!all.permits(&id(1)) && all.permits(&id(2)) && all.permits(&id(3)));
+        assert_eq!(r.lookup_by_name_masked("ornithopter", &all), Some((id(20), 0)));
+        assert_eq!(r.lookup_collector_masked(&[("tdmu".into(), "22".into())], &all), None);
+        let matched = r.match_card(&img(1), &img(99), 3, &all);
+        assert!(matched.candidates.iter().all(|c| c.id != format_uuid(&id(1))));
+
+        // Under filters it is a list, the tokens off it.
+        let older = ScanFilters { released_to: Some("2023-01-01".into()), ..Default::default() };
+        let m = r.mask_without_tokens(&older);
+        assert_eq!(m.len(), Some(2));
+        assert!(!m.permits(&id(1)) && m.permits(&id(2)));
+        // Narrowed to the token's own set, nothing is left; `mask_for` still admits it.
+        assert_eq!(r.mask_without_tokens(&sets(&["tdmu"])).len(), Some(0));
+        assert!(r.mask_for(&sets(&["tdmu"])).permits(&id(1)));
+        assert!(r.mask_for(&ScanFilters::default()).permits(&id(1)));
+        // And a printing marked and then unmarked is no token.
+        r.set_token(id(1), false);
+        assert!(r.mask_without_tokens(&ScanFilters::default()).is_unrestricted());
+    }
+
+    #[test]
     fn oracle_id_of_has_no_fallback_where_oracle_for_does() {
         let mut r = three();
         r.add_label(
@@ -1710,7 +1786,8 @@ mod tests {
                 "CREATE TABLE cards (
                 id TEXT, illustration_id TEXT, name TEXT, set_code TEXT,
                 collector_number TEXT, lang TEXT, released_at TEXT, oracle_id TEXT,
-                finishes TEXT, layout TEXT, set_type TEXT, promo INTEGER NOT NULL DEFAULT 0
+                finishes TEXT, layout TEXT, set_type TEXT, promo INTEGER NOT NULL DEFAULT 0,
+                type_line TEXT
             )",
             )
             .unwrap();
@@ -1719,7 +1796,7 @@ mod tests {
             corpus
                 .execute(
                     "INSERT INTO cards VALUES (?1, NULL, ?2, ?3, ?4, 'en', '2025-01-01',
-                    NULL, '[\"nonfoil\"]', ?5, ?6, 0)",
+                    NULL, '[\"nonfoil\"]', ?5, ?6, 0, NULL)",
                     rusqlite::params![
                         format_uuid(&id(p)),
                         name,
@@ -1774,6 +1851,9 @@ mod tests {
         }
         let art = reference.mask_for(&sets(&["aset"]));
         assert_eq!(reference.lookup_by_name_masked("island", &art), Some((id(3), 0)));
+        // The token and the emblem are tokens by their layout; the art card and the trophy not.
+        let tokens: Vec<bool> = rows.iter().map(|(p, ..)| reference.is_token(&id(*p))).collect();
+        assert_eq!(tokens, [true, true, false, false]);
     }
 
     #[test]

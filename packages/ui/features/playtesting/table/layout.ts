@@ -76,7 +76,8 @@ export interface ZoneSize {
 }
 
 /**
- * One pile: the cards of one name that look the same — same tapped state, same counters — and
+ * One pile: the cards of one name that look the same — same tapped state, same counters, same
+ * power and toughness (the changed-stats chip, issue #1332) — and
  * so are drawn as one card with the rest edged under it. The ids are the engine's, in table order.
  */
 export interface Pile {
@@ -93,10 +94,11 @@ export interface Pile {
   attached: GameCard[];
 }
 
-/** What makes two cards one pile: the picture, the name, the state and the counters. */
+/** What makes two cards one pile: the picture, the name, the state, the counters and the P/T. */
 function pileKey(c: GameCard): string {
   const counters = c.counters.map((k) => `${k.kind}=${k.count}`).join(",");
-  return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, c.isToken ? "t" : ""].join("|");
+  const pt = `${c.power ?? ""}/${c.toughness ?? ""}`;
+  return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, pt, c.isToken ? "t" : ""].join("|");
 }
 
 /**
@@ -349,4 +351,32 @@ export function arrangeHand(was: readonly number[], cards: readonly GameCard[]):
   const kept = was.filter((id) => here.has(id));
   const held = new Set(kept);
   return [...kept, ...cards.filter((c) => !held.has(c.id)).map((c) => c.id)];
+}
+
+/**
+ * Which slot of a held hand of `count` a card let go at `x` takes — `x` in the row's own pixels
+ * from its left edge (`handRow`). The slot whose card's middle is nearest the pointer, so a card
+ * dropped over another card takes that card's place.
+ */
+export function handSlotAt(x: number, count: number): number {
+  const { lefts } = handRow(count);
+  let slot = 0;
+  for (let i = 1; i < lefts.length; i++) {
+    if (Math.abs(lefts[i] + HAND_CARD_W / 2 - x) < Math.abs(lefts[slot] + HAND_CARD_W / 2 - x)) {
+      slot = i;
+    }
+  }
+  return slot;
+}
+
+/**
+ * The held order with `id` taken out and put back at `slot` (issue #1330): the reader reordering
+ * their own hand, which is theirs to arrange at any moment of the game and asks the engine
+ * nothing. A slot past either end is the end; an id not held leaves the order as it was.
+ */
+export function moveInHand(order: readonly number[], id: number, slot: number): number[] {
+  if (!order.includes(id)) return [...order];
+  const rest = order.filter((held) => held !== id);
+  const at = Math.max(0, Math.min(slot, rest.length));
+  return [...rest.slice(0, at), id, ...rest.slice(at)];
 }
