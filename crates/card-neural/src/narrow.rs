@@ -10,7 +10,8 @@ use crate::gallery::Id;
 use crate::meta::EvidenceThresholds;
 
 /// One printing of the decided card, with the scores of its evidence. A printing the evidence
-/// gallery holds no row for has no symbol or band score: it is **unknown**, not a poor match.
+/// gallery holds no row for has no symbol or band score: it is **unknown**, not a poor match —
+/// and so is one whose scores do not add up to a finite number.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Candidate {
     pub printing: Id,
@@ -21,9 +22,14 @@ pub struct Candidate {
 }
 
 impl Candidate {
-    /// The score the rule ranks by; `None` when either piece of evidence is missing.
+    /// The score the rule ranks by; `None` when either piece of evidence is missing, or when
+    /// the sum is not a finite number. A NaN is not a score: `total_cmp` sorts a positive one
+    /// above every number, making the keep floor NaN and dropping every known candidate, and
+    /// a negative one (x86's default NaN) below every number, out of the choices while the
+    /// others decide. Unknown is what it is — kept, and blocking a decision.
     fn combined(&self, th: &EvidenceThresholds) -> Option<f32> {
         Some(self.whole + th.symbol_weight * self.symbol? + th.band_weight * self.band?)
+            .filter(|v| v.is_finite())
     }
 }
 
@@ -225,6 +231,44 @@ mod tests {
         let n = narrow(&[c(2, 0.7, None, None), c(1, 0.9, None, None)], &th());
         assert_eq!(n.decided, None);
         assert_eq!(n.choices, vec![id(2), id(1)]);
+    }
+
+    /// A NaN that `total_cmp` sorts first (a positive one) would set the floor to NaN and drop
+    /// every known candidate; one it sorts last (x86's default NaN is negative) would be left out
+    /// of the choices yet let the other two decide. Either way it is unknown.
+    #[test]
+    fn a_non_finite_score_is_unknown_whichever_sign_its_nan_has() {
+        for nan in [f32::NAN, -f32::NAN] {
+            for score in [nan, f32::INFINITY] {
+                let n = narrow(
+                    &[
+                        c(1, 0.7, Some(0.9), Some(0.9)),
+                        c(2, 0.7, Some(0.1), Some(0.1)),
+                        c(3, 0.7, Some(score), Some(0.5)),
+                        c(4, 0.7, None, Some(0.5)),
+                    ],
+                    &th(),
+                );
+                assert_eq!(n.decided, None, "{score:?} must not let the known decide");
+                assert_eq!(n.choices, vec![id(1), id(3), id(4)], "{score:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_nan_beside_one_known_candidate_still_blocks_a_decision() {
+        for nan in [f32::NAN, -f32::NAN] {
+            let n = narrow(
+                &[
+                    c(1, 0.7, Some(0.9), Some(0.9)),
+                    c(2, 0.7, Some(0.1), Some(0.1)),
+                    c(3, nan, Some(0.5), Some(0.5)),
+                ],
+                &th(),
+            );
+            assert_eq!(n.decided, None);
+            assert_eq!(n.choices, vec![id(1), id(3)]);
+        }
     }
 
     #[test]
