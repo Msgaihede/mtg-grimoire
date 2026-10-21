@@ -265,7 +265,8 @@ as one cast followed by phase's own `TargetSelection`. To the reader, the two re
 ## Casting, cancelling and the sandbox
 
 **`play`** takes the one legal `PlayLand` or `CastSpell` for that card, or asks which of several
-(`CastChoice`, below). Payment is phase's `Auto`, from untapped mana. When the rules allow none (no
+(`CastChoice`, below). Payment is phase's `Auto`: the pool first (mana the reader tapped by hand,
+below), then untapped mana. When the rules allow none (no
 land drop left, too little mana, nothing to target), what happens is the sandbox's:
 
 - **Sandbox off: it is refused with a sentence** that ends "Turn the sandbox on to put it down by
@@ -284,6 +285,20 @@ A card elsewhere than the hand or the command zone is cast when the rules offer 
 (a foretold card in exile, flashback in the graveyard); else it is activated rather than played,
 and in the sandbox one with nothing to activate is put onto the battlefield (a double-click on a
 graveyard's creature).
+
+**`tapForMana`** taps one of the reader's permanents for mana by the rules (CR 605.3a), **sandbox
+or not** (issue #1326, 2026-10-21): the reader picks which lands pay for the next spell rather than
+`Auto`. It is phase's own list for a board (`activatable_mana_actions_for_player`, which its
+land-tap reducer checks a tap against): a land's `TapLandForMana`, one per kind of mana it makes,
+and any other permanent's mana `ActivateAbility` (Sol Ring, a ready Llanowar Elves). One way is
+taken; several (Savannah's {G} or {W}) are the board's own `ManaChoice` prompt, each answer's
+`label` the mana it makes (`Green`); none is a refusal. **The mana floats in the pool** — the mana
+table's Pool row — and the next cast spends it before tapping anything else. Unspent, it empties as
+the step or phase ends (CR 500.4), as the rules have it; there is no mana burn. The reader keeps
+priority: nothing plays on after a tap, so a step they stopped at is not passed over. It is told as
+the reader's `tapped`, and undone like any action. `canTapForMana` is on each of the reader's
+battlefield cards the rules would tap now, read once per view like `castable`. It is not a sandbox
+action: it is a rules action, so the sandbox's gate does not touch it.
 
 **`foretell`** takes phase's `Foretell` special action for a hand card (CR 702.143a): {2} paid
 from untapped mana, the card exiled face down and foretold. It is refused, saying why, off the
@@ -425,7 +440,8 @@ shared types in `view.rs` ↔ `packages/ui/lib/ipc/table.ts`: `GameCard`, `Lane`
 `PlaytestPlayer`. The goldfish adds no type of its own, only fields (2026-10-17):
 `PlaytestView.sandbox`, `PlaytestView.goldfish`, `PlaytestSeat.deadOn`, and the action `setSandbox
 { on }`; and the sandbox's facts `put`, `tapped` and `counters` gained `seat`, since a card the
-reader moves by hand may be an opponent's. `ipc.test.ts` holds every struct field for field, every
+reader moves by hand may be an opponent's. Tapping for mana (issue #1326) added `GameCard.canTapForMana`
+and the action `tapForMana { id }`, and reuses the fact `tapped`. `ipc.test.ts` holds every struct field for field, every
 `PlaytestAction` and `PlaytestHappened` variant and field, and the string unions (`PlaytestStage`,
 `PlaytestPhase`, `Difficulty` and the rest).
 
@@ -651,7 +667,7 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 - **The sandbox decides most of what is offered.** The board works it out once (`edits`: the
   sandbox on, the reader's main phase, nothing with the engine) and hands it to every piece.
   - **Off:** no hand edits are drawn. A card's menu keeps only the rules' rows (Play, Foretell, Cast,
-    Activate ability), and a castable card in the graveyard or exile dialog its Cast; a click does not tap; T, G, E and H do nothing; the only drag is a play onto the
+    Activate ability, Tap for mana), and a castable card in the graveyard or exile dialog its Cast; a click taps only for mana; T, G, E and H do nothing; the only drag is a play onto the
     table; the library pile is disabled; a graveyard or exile opens read-only; and every life plate
     is read-only text (`LifePlate`'s `readOnly`). What is left is the rules'.
   - **On:** the reader's cards have the whole hand — moves, taps, counters, token copies, draws,
@@ -659,7 +675,10 @@ facts are found as a run of `step.happened`, and the end takes the rest.
     cards get a card menu** too (tap, counters, token copy, move), and their plates steppers. An
     opponent's card is never dragged, and their hand and library stay counts.
 - **Your cards:** a double-click or a drop on the table plays a card from the hand or the command
-  zone, and "Activate ability" heads a battlefield card's menu. In `respond`, the hand and the
+  zone, and "Activate ability" heads a battlefield card's menu. **A click on a permanent the rules
+  let tap for mana (`canTapForMana`) taps it for mana**, sandbox or not, and "Tap for mana" is on
+  its menu; with the sandbox on, the menu's plain Tap still only turns the card. A pile is split by
+  `canTapForMana` (`pileKey`), so a click never lands on a summoning-sick twin. In `respond`, the hand and the
   abilities are playable as in the main phase; the sandbox is not.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
   read-only. They are never dragged, and their table takes no drops (`refuse`).
@@ -711,7 +730,9 @@ The views these pieces take are narrowed to `Pick<…>`s of the fields they read
   they cannot respond to it themselves (a second spell on top of their first).
 - **Choosing who plays first.** It is the seed's coin flip against the AI, and the reader against
   the goldfish.
-- **Mana payment by hand.** Every cast is paid by phase's `Auto`.
+- **Choosing the payment inside a cast.** The reader taps sources for mana first (`tapForMana`),
+  and whatever the pool does not cover is paid by phase's `Auto`; the cast itself never stops for
+  a payment (`CastPaymentMode::Manual`).
 - **A split or a pile.** A search that splits its finds between zones, separate piles and
   distributions are still their generic options or `auto`.
 - **The light app.** Playtesting is not a destination there.

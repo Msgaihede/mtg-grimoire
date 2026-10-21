@@ -467,6 +467,14 @@ pub enum PlaytestAction {
     Foretell {
         id: u64,
     },
+    /// Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: the
+    /// reader picks which sources pay rather than the engine. The mana floats in their pool, and
+    /// the next cast spends it first, until the step or phase ends (CR 500.4). One way is taken;
+    /// several (a dual land's two colors) are a `ManaChoice` prompt; none is a refusal. The
+    /// reader keeps priority: nothing plays on after it.
+    TapForMana {
+        id: u64,
+    },
     /// Pass priority on to the next place the reader decides something: from the first main
     /// phase to combat, from the second to the opponent's turn.
     Pass,

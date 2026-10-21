@@ -93,10 +93,21 @@ export interface Pile {
   attached: GameCard[];
 }
 
-/** What makes two cards one pile: the picture, the name, the state and the counters. */
+/**
+ * What makes two cards one pile: the picture, the name, the state and the counters — and whether
+ * the rules let it tap for mana, so a click on a pile's top card always taps one that can (a
+ * summoning-sick Llanowar Elves is not its ready twin).
+ */
 function pileKey(c: GameCard): string {
   const counters = c.counters.map((k) => `${k.kind}=${k.count}`).join(",");
-  return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, c.isToken ? "t" : ""].join("|");
+  return [
+    c.cardId ?? "",
+    c.name,
+    c.tapped ? 1 : 0,
+    counters,
+    c.isToken ? "t" : "",
+    c.canTapForMana ? "m" : "",
+  ].join("|");
 }
 
 /**

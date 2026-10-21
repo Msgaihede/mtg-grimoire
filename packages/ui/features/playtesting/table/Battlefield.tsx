@@ -85,8 +85,10 @@ export interface BattlefieldProps {
   /**
    * The sandbox's moves work now (on, the reader's main phase, nothing out): a click taps, a pile
    * is carried off to anywhere, and the menu has every hand move. Off, a card is only clicked when
-   * the rules ask for it (`pick`), dragged nowhere, and its menu is `onActivate`'s row alone — and
-   * the table still takes a card played onto it from the hand or the command zone.
+   * the rules ask for it (`pick`) or to tap it for mana, dragged nowhere, and its menu is the
+   * rules' rows alone — and the table still takes a card played onto it from the hand or the
+   * command zone. Either way a click on a card the rules let tap for mana
+   * ({@link GameCard.canTapForMana}) taps it for mana (`tapForMana`) rather than only turning it.
    */
   sandbox: boolean;
   onAct: (action: PlaytestAction) => void;
@@ -377,6 +379,8 @@ function PileView({
   const counters = card.counters.map(counterLabel).join(" · ");
   /** Carried off and tapped by a click: the reader's own card, with the sandbox's moves working. */
   const handled = sandbox && !readOnly;
+  /** Tapped for mana by a click, by the rules: sandbox or not. */
+  const makesMana = !readOnly && card.canTapForMana && !tapped;
 
   useEffect(() => {
     const element = ref.current;
@@ -475,12 +479,14 @@ function PileView({
           .filter((part) => part !== null)
           .join(", ")}
         aria-pressed={picks ? mark !== undefined : undefined}
-        // Click taps the top card; Shift taps the pile — the artboard's help, and the sandbox's:
-        // with it off a click taps nothing. A card that can be picked is picked instead, and an
-        // opponent's card is tapped only through its menu, so a click meant as a look never
-        // turns it.
+        // A card the rules let tap for mana is tapped for it — the top card, sandbox or not, its
+        // mana into the pool (issue #1326). Otherwise click taps the top card and Shift the pile —
+        // the artboard's help, and the sandbox's: with it off a click taps nothing. A card that
+        // can be picked is picked instead, and an opponent's card is tapped only through its
+        // menu, so a click meant as a look never turns it.
         onClick={(e) => {
           if (onPick !== undefined) onPick(ids[0]);
+          else if (makesMana) onAct({ type: "tapForMana", id: ids[0] });
           else if (handled)
             onAct({ type: "tap", ids: e.shiftKey ? ids : [ids[0]], tapped: !tapped });
         }}
@@ -507,7 +513,7 @@ function PileView({
           "absolute cursor-pointer rounded-md p-0",
           "transition-[left,transform] duration-150 ease-out motion-reduce:transition-none",
           FOCUS,
-          !handled && !picks && "cursor-default",
+          !handled && !picks && !makesMana && "cursor-default",
           mark !== undefined ? MARK_RING[mark.tone] : picks && PICKABLE_RING,
         )}
         style={at(0, lift + under * PILE)}
@@ -576,6 +582,9 @@ function AttachedView({
   const ids = useMemo(() => [card.id], [card.id]);
   const counters = card.counters.map(counterLabel).join(" · ");
   const picks = onPick !== undefined;
+  // Tapped for mana by a click when it is the reader's to activate (`onActivate`): never another
+  // table's guest, never during a replay.
+  const makesMana = onActivate !== undefined && card.canTapForMana && !card.tapped;
 
   useEffect(() => {
     const element = ref.current;
@@ -607,6 +616,7 @@ function AttachedView({
       onClick={(e) => {
         e.stopPropagation();
         if (onPick !== undefined) onPick(card.id);
+        else if (makesMana) onAct({ type: "tapForMana", id: card.id });
         else if (handled) onAct({ type: "tap", ids, tapped: !card.tapped });
       }}
       onContextMenu={(e) => {

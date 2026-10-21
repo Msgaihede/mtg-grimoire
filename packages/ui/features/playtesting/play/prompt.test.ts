@@ -39,6 +39,18 @@ describe("promptTitle", () => {
 });
 
 describe("optionLabel", () => {
+  it("says the mana a source makes, and which ability when it says none (issue #1326)", () => {
+    const prompt = { kind: "ManaChoice" };
+    expect(promptTitle("ManaChoice")).toBe("Which mana?");
+    expect(optionLabel(option({ kind: "TapLandForMana", label: "Green" }), prompt)).toEqual({
+      text: "Add green mana",
+      hint: null,
+    });
+    expect(optionLabel(option({ kind: "ActivateAbility", number: 1 }), prompt).text).toBe(
+      "Ability 2",
+    );
+  });
+
   const target = { kind: "TargetSelection" };
 
   it("names a target by its card or its player", () => {

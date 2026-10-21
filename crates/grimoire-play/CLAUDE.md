@@ -61,6 +61,13 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   refused; on, hand edits are taken in the reader's main phase only, on the reader's cards and on
   any card the table shows (`editable`) — **never an opponent's hand or library**. Never check the
   sandbox action by action, and never let a hand edit reach the engine some other way.
+- **Tapping for mana is the rules', never the sandbox's** (`tap_for_mana`, issue #1326). It is
+  taken sandbox or not, wherever the reader has priority, from phase's own board list
+  (`activatable_mana_actions_for_player`) — never a list of this crate's, and never the
+  manual-selection list, which the land-tap reducer does not accept. The mana floats until a cast
+  spends it or the rules empty the pool (CR 500.4); nothing plays on after it (`make_mana`), so a
+  stop is not passed over. Never put it in `is_sandbox`, and never let the sandbox's `Tap` make
+  mana.
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
   `WaitingFor`'s hundred-odd variants. The one exception is `pick`: the few questions answered by
   a set of cards, whose fields give the count. `auto` must answer any prompt (phase-ai for the

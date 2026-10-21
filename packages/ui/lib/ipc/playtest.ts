@@ -301,6 +301,11 @@ export type PlaytestAction =
   /** Foretell a hand card (CR 702.143a): pay {2}, exile it face down, cast it on a later turn
    *  (a `play` of it in exile). Offered when its {@link GameCard.canForetell} says so. */
   | { type: "foretell"; id: number }
+  /** Tap one of the reader's permanents for mana by the rules (CR 605.3a), sandbox or not: its
+   *  mana floats in the pool, which the next cast spends first, until the step ends (CR 500.4).
+   *  Several kinds of mana are a `ManaChoice` prompt. Offered when its
+   *  {@link GameCard.canTapForMana} says so. */
+  | { type: "tapForMana"; id: number }
   | { type: "pass" }
   | { type: "endTurn" }
   | { type: "setStops"; stops: PlaytestStop[] }

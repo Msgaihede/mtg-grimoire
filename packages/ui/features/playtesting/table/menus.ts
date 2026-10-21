@@ -13,8 +13,8 @@
  * takes them only while the sandbox is on and only in the reader's main phase. So each builder
  * takes `sandbox` as the board works it out (on, the main phase, nothing with the engine) and,
  * off, offers only what the rules do: a hand card's Play (and its Foretell), a commander's Cast, a
- * foretold or flashback card's Cast, a permanent's Activate ability. A row the engine would only
- * refuse is not offered.
+ * foretold or flashback card's Cast, a permanent's Activate ability and its Tap for mana. A row
+ * the engine would only refuse is not offered.
  */
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import type { GameCard, GamePlace, PlaytestAction, PlaytestSeat, PlaytestView } from "@/lib/ipc";
@@ -53,9 +53,10 @@ function counted(card: GameCard, kind: string): number {
  * activates it.
  *
  * **`sandbox` off leaves only the rules' rows**: Play on a hand card, Cast on a commander, and
- * Activate ability on a permanent — and on a graveyard or exile card, or an opponent's permanent,
- * nothing at all (an empty menu, which the caller does not open). On, every hand move follows,
- * on whichever seat's card it is: the engine puts an opponent's card in its owner's zones.
+ * Activate ability and Tap for mana ({@link GameCard.canTapForMana}) on a permanent — and on a
+ * graveyard or exile card, or an opponent's permanent, nothing at all (an empty menu, which the
+ * caller does not open). On, every hand move follows, on whichever seat's card it is: the engine
+ * puts an opponent's card in its owner's zones.
  */
 export function cardMenu({
   card,
@@ -86,8 +87,12 @@ export function cardMenu({
       const items: MenuItem[] = [];
       if (onActivate !== undefined) {
         items.push(action("activate", "Activate ability", () => onActivate(id)));
-        if (sandbox) items.push({ kind: "separator", id: "sepActivate" });
       }
+      // The rules' tap, which makes the mana; the sandbox's Tap below only turns the card.
+      if (card.canTapForMana && !card.tapped) {
+        items.push(action("mana", "Tap for mana", () => onAct({ type: "tapForMana", id })));
+      }
+      if (sandbox && items.length > 0) items.push({ kind: "separator", id: "sepActivate" });
       if (!sandbox) return items;
       items.push(
         action("tap", `${tapWord}${pile ? " one" : ""}`, () =>
