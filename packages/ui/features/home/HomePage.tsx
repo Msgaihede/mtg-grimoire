@@ -85,6 +85,7 @@ import {
   type ReactNode,
 } from "react";
 import { Pencil, Plus, RotateCcw } from "lucide-react";
+import { PageBar } from "@/components/PageBar";
 import { FOCUS } from "@/lib/focus";
 import type { HomeLayout, HomeWidget } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -340,9 +341,8 @@ interface Gesture {
 /**
  * The home page.
  *
- * The title is the ribbon's — `NAV` names the view — so the `<h2>` here is `sr-only`, which is
- * `DecksPage`'s arrangement: a second visible "Home" under the ribbon's own would be
- * a subheading repeating its heading.
+ * The title is the page bar's `<h2>`, on the row the page's own controls stand in, as every
+ * other view's is since 2026-10-21.
  */
 export function HomePage(): ReactElement {
   const { layout, ready, update, reset } = useHomeLayout();
@@ -659,41 +659,48 @@ export function HomePage(): ReactElement {
 
   return (
     <section ref={sectionRef} className="flex min-h-full flex-col gap-3">
-      {/* Not drawn: the ribbon's own heading already names the view. */}
-      <h2 className="sr-only">Home</h2>
-
-      {/* The page's header row, not the ribbon's — the ribbon is for actions that mean the same
-          thing on every view, and rearranging this one means nothing anywhere else. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <p className="min-w-0 flex-1 text-sm text-dim">{editing ? CUSTOMIZE_HINT : null}</p>
-        {tray && (
+      {/* **The page bar** ("Page & Section Headings", 2026-10-21): the view's name, drawn — it
+          was `sr-only` while the app had no visible page header — on the row this page's own
+          controls already stood in. The ribbon is for actions that mean the same thing on every
+          view, and rearranging this one means nothing anywhere else, so they are this bar's. The
+          Customize hint takes the slot the other pages give their figures. */}
+      <PageBar
+        title="Home"
+        figures={
+          editing ? <p className="m-0 min-w-0 truncate text-sm text-dim">{CUSTOMIZE_HINT}</p> : null
+        }
+        actions={
           <>
+            {tray && (
+              <>
+                <button
+                  ref={addButton}
+                  type="button"
+                  onClick={() => setCatalogueOpen(true)}
+                  className={cn(HEADER_BUTTON, HEADER_ACCENT)}
+                >
+                  <Plus className={HEADER_ICON} aria-hidden="true" />
+                  Add widget
+                </button>
+                <button type="button" onClick={reset} className={cn(HEADER_BUTTON, HEADER_RESTING)}>
+                  <RotateCcw className={HEADER_ICON} aria-hidden="true" />
+                  Reset
+                </button>
+              </>
+            )}
             <button
-              ref={addButton}
+              ref={customizeButton}
               type="button"
-              onClick={() => setCatalogueOpen(true)}
-              className={cn(HEADER_BUTTON, HEADER_ACCENT)}
+              aria-pressed={editing}
+              onClick={() => setEditing((on) => !on)}
+              className={cn(HEADER_BUTTON, editing ? HEADER_ACCENT : HEADER_RESTING)}
             >
-              <Plus className={HEADER_ICON} aria-hidden="true" />
-              Add widget
-            </button>
-            <button type="button" onClick={reset} className={cn(HEADER_BUTTON, HEADER_RESTING)}>
-              <RotateCcw className={HEADER_ICON} aria-hidden="true" />
-              Reset
+              <Pencil className={HEADER_ICON} aria-hidden="true" />
+              {editing ? "Done" : "Customize"}
             </button>
           </>
-        )}
-        <button
-          ref={customizeButton}
-          type="button"
-          aria-pressed={editing}
-          onClick={() => setEditing((on) => !on)}
-          className={cn(HEADER_BUTTON, editing ? HEADER_ACCENT : HEADER_RESTING)}
-        >
-          <Pencil className={HEADER_ICON} aria-hidden="true" />
-          {editing ? "Done" : "Customize"}
-        </button>
-      </div>
+        }
+      />
 
       {/*
         **`ready` is what separates two pages that look identical.** Before the stored document

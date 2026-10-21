@@ -202,12 +202,13 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
        * deck's own drawer (`DecksPage` opens `folderOf` the deck `returnToDeckId` names), so the
        * gallery has no "the top level, please" to be told.
        *
-       * **The bar's `py-1.5` is load-bearing here rather than spacing.** This row is the **first
+       * **The `pt-5` below is load-bearing as well as spacing** — the bar itself has no top
+       * padding (`main`'s is the room above every other page's title). This row is the **first
        * child of the page scroller** — the `section` above is `overflow-y-auto` — and the name
        * field's focus ring is `outline-2 outline-offset-2`, so it stands **4px proud of the
        * field on every side**. With no padding the top of that ring would sit outside the
        * scroller's padding box, which clips there, and what is left of it would run into the
-       * shell's mana line above. Six pixels is the ring's four and two to spare, top and bottom.
+       * shell's mana line above. The ring needs four of the twenty.
        *
        * **Three lines since 2026-08-24, and this is the first of them**: what the deck is and
        * what can be done to it, then the ledger of what it adds up to, then the toolbar that
@@ -215,6 +216,13 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
        * gone — see {@link ACTIONS}.
        */}
       <PageBar
+        // `pt-5`: the 20px `main` puts above every other page's title, which this view's
+        // scroller sits flush against — and room for the focus ring, for the reason above.
+        // `ruled={false}`: the gold rule is drawn under the ledger, the heading's second line, by
+        // `DeckEditor` — so the page has one rule between its heading and its toolbar rather than
+        // the bar's and the ledger's.
+        className="pt-5"
+        ruled={false}
         trail={[{ label: "Decks", name: "Back to decks", onOpen: closeDeck, ref: backRef }]}
         titleAs="div"
         titleGrows

@@ -96,6 +96,9 @@ export function PageBar({
   figures,
   meta,
   actions,
+  toolbar,
+  children,
+  ruled = true,
   className,
 }: {
   /** The page on screen. A string almost always; a node where the title is a control. */
@@ -116,89 +119,163 @@ export function PageBar({
   meta?: ReactNode;
   /** The page's own actions. */
   actions?: ReactNode;
+  /**
+   * The page's own toolbar, when it has one and no figures row — Search's filter bar, the
+   * Scanner's controls. The title then sits at its left end instead of on a row of its own, and
+   * `figures`, `meta` and `actions` are not drawn.
+   */
+  toolbar?: ReactNode;
+  /** A second line that belongs to the heading — the deck editor's stats — drawn under the row
+   *  and above the rule, so the page has one rule rather than the bar's and its own. */
+  children?: ReactNode;
+  /**
+   * `false` draws no rule and no space for one: the page draws {@link PageRule} itself, under a
+   * line of its own that belongs to the heading — the deck editor's ledger, which is a sibling of
+   * its bar rather than a child because the bar's component is memoised and the ledger is not.
+   */
+  ruled?: boolean;
   className?: string;
+}) {
+  return (
+    // **No padding above, 12px below, and the row no taller than its controls** (owner's note,
+    // 2026-10-21): `main`'s own 20px is the space above the title, and the 12px under the row
+    // matches the gap most pages leave under the rule — a 52px row centred its title 16px further
+    // down and read as a gap above the heading that was not there below it.
+    <div className={cn("flex shrink-0 flex-col", className)}>
+      <div className={cn("flex min-w-0 flex-col gap-2", ruled && "pb-3")}>
+        {toolbar !== undefined ? (
+          // The title at the left end of the page's own toolbar, centred on its first 36px line —
+          // Search's filter row, the Scanner's controls — so naming the page costs no height.
+          <div className="flex min-w-0 items-start gap-x-5">
+            <div className="flex h-9 min-w-0 shrink-0 items-center">
+              <PageTitle
+                title={title}
+                titleAs={Title}
+                titleId={titleId}
+                titleGrows={titleGrows}
+                trail={trail}
+              />
+            </div>
+            <div className="min-w-0 flex-1">{toolbar}</div>
+          </div>
+        ) : (
+          <div className="flex min-h-9 min-w-0 flex-wrap items-center gap-x-5 gap-y-2">
+            <div className={cn("flex items-baseline gap-x-5", titleGrows ? "flex-1" : "min-w-0")}>
+              <PageTitle
+                title={title}
+                titleAs={Title}
+                titleId={titleId}
+                titleGrows={titleGrows}
+                trail={trail}
+              />
+              {figures}
+              {/* Shrinkable: a long meta line (a trade's "Opened … · prices · Saved as you go")
+                  truncates before the title does. */}
+              {meta != null && meta !== "" && (
+                <span className={cn(PAGE_META, "min-w-0 truncate")}>{meta}</span>
+              )}
+            </div>
+            {actions != null && (
+              // Not `shrink-0`: a block whose own content can wrap must be allowed to, or its
+              // max-content becomes a floor on the whole row — `FigureRow`'s 2026-09-08 defect.
+              <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+                {actions}
+              </div>
+            )}
+          </div>
+        )}
+        {children}
+      </div>
+      {/* The gold rule, in place of the hairline or gap that was under each page's top row. */}
+      {ruled && <PageRule />}
+    </div>
+  );
+}
+
+/**
+ * The trail and the Cinzel title — the bar's left end, on its own. Exported for a page whose
+ * toolbar draws its own row and so takes the title as that row's first item: Search's filter bar
+ * (`FilterBar`'s `lead`), where a title beside the row would narrow the box its one-line layout
+ * is measured on. Such a page draws {@link PageRule} under its row itself.
+ */
+export function PageTitle({
+  title,
+  titleAs: Title = "h2",
+  titleId,
+  titleGrows = false,
+  trail = [],
+}: {
+  title: ReactNode;
+  titleAs?: "h2" | "h3" | "div";
+  titleId?: string;
+  titleGrows?: boolean;
+  trail?: readonly PageCrumb[];
 }) {
   // Root, `…`, immediate parent: the two a reader most often wants, and the rest elided. A trail
   // of two is drawn whole — eliding one crumb to save one crumb is no saving.
   const shown: (PageCrumb | null)[] =
     trail.length > 2 ? [trail[0], null, trail[trail.length - 1]] : [...trail];
   return (
-    <div className={cn("flex shrink-0 flex-col", className)}>
-      <div className="flex min-h-13 min-w-0 flex-wrap items-center gap-x-5 gap-y-2 py-1.5">
-        <div className={cn("flex items-baseline gap-x-5", titleGrows ? "flex-1" : "min-w-0")}>
-          <div
-            className={cn(
-              "flex items-baseline gap-2 whitespace-nowrap",
-              titleGrows ? "flex-1" : "min-w-0",
-            )}
-          >
-            {shown.length > 0 && (
-              // A trail is navigation, so it is a landmark — named `Page trail` rather than
-              // `Breadcrumb`, so it never shares a name with a page's own folder trail (the
-              // collection's `Collection folders`, the wishlist's `Wishlist folders`).
-              <nav aria-label="Page trail" className="flex min-w-0 items-baseline gap-2">
-                {shown.map((crumb, i) => (
-                  <Fragment key={crumb === null ? "gap" : `${i}:${crumb.label}`}>
-                    {crumb === null ? (
-                      <span aria-hidden="true" className="text-[13px] text-dim">
-                        …
-                      </span>
-                    ) : crumb.onOpen === undefined ? (
-                      <span className="shrink-0 whitespace-nowrap text-[13px] text-dim">
-                        {crumb.label}
-                      </span>
-                    ) : (
-                      <button
-                        ref={crumb.ref}
-                        type="button"
-                        onClick={crumb.onOpen}
-                        aria-label={crumb.name}
-                        className={CRUMB}
-                      >
-                        {crumb.label}
-                      </button>
-                    )}
-                    <ChevronRight
-                      aria-hidden="true"
-                      className="size-3 shrink-0 self-center text-dim/60"
-                      strokeWidth={2}
-                    />
-                  </Fragment>
-                ))}
-              </nav>
-            )}
-            {/* Truncated only when it is words: a control in the title (the rename field) carries a
-                focus outline that an `overflow: hidden` here would clip. A growing title gives back
-                `PAGE_TITLE`'s `min-w-0` for `min-w-auto`, so no box between the field and the
-                wrapping row can be squeezed past the field's own floor. */}
-            <Title
-              id={titleId}
-              className={cn(
-                PAGE_TITLE,
-                typeof title === "string" && "truncate",
-                titleGrows && "flex min-w-auto flex-1",
+    <div
+      className={cn(
+        "flex items-baseline gap-2 whitespace-nowrap",
+        titleGrows ? "flex-1" : "min-w-0",
+      )}
+    >
+      {shown.length > 0 && (
+        // A trail is navigation, so it is a landmark — named `Page trail` rather than
+        // `Breadcrumb`, so it never shares a name with a page's own folder trail (the
+        // collection's `Collection folders`, the wishlist's `Wishlist folders`).
+        <nav aria-label="Page trail" className="flex min-w-0 items-baseline gap-2">
+          {shown.map((crumb, i) => (
+            <Fragment key={crumb === null ? "gap" : `${i}:${crumb.label}`}>
+              {crumb === null ? (
+                <span aria-hidden="true" className="text-[13px] text-dim">
+                  …
+                </span>
+              ) : crumb.onOpen === undefined ? (
+                <span className="shrink-0 whitespace-nowrap text-[13px] text-dim">
+                  {crumb.label}
+                </span>
+              ) : (
+                <button
+                  ref={crumb.ref}
+                  type="button"
+                  onClick={crumb.onOpen}
+                  aria-label={crumb.name}
+                  className={CRUMB}
+                >
+                  {crumb.label}
+                </button>
               )}
-            >
-              {title}
-            </Title>
-          </div>
-          {figures}
-          {/* Shrinkable: a long meta line (a trade's "Opened … · prices · Saved as you go")
-              truncates before the title does. */}
-          {meta != null && meta !== "" && (
-            <span className={cn(PAGE_META, "min-w-0 truncate")}>{meta}</span>
-          )}
-        </div>
-        {actions != null && (
-          // Not `shrink-0`: a block whose own content can wrap must be allowed to, or its
-          // max-content becomes a floor on the whole row — `FigureRow`'s 2026-09-08 defect.
-          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
-            {actions}
-          </div>
+              <ChevronRight
+                aria-hidden="true"
+                className="size-3 shrink-0 self-center text-dim/60"
+                strokeWidth={2}
+              />
+            </Fragment>
+          ))}
+        </nav>
+      )}
+      {/* Truncated only when it is words: a control in the title (the rename field) carries a
+          focus outline that an `overflow: hidden` here would clip. A growing title gives back
+          `PAGE_TITLE`'s `min-w-0` for `min-w-auto`, so no box between the field and the
+          wrapping row can be squeezed past the field's own floor. */}
+      <Title
+        id={titleId}
+        className={cn(
+          PAGE_TITLE,
+          typeof title === "string" && "truncate",
+          titleGrows && "flex min-w-auto flex-1",
         )}
-      </div>
-      {/* The gold rule, in place of the hairline or gap that was under each page's top row. */}
-      <div aria-hidden="true" className="gilt-rule" />
+      >
+        {title}
+      </Title>
     </div>
   );
+}
+
+/** The page bar's gold rule, for a page that draws its heading row itself ({@link PageTitle}). */
+export function PageRule() {
+  return <div aria-hidden="true" className="gilt-rule" />;
 }

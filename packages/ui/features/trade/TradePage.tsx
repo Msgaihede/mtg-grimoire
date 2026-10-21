@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { Plus } from "lucide-react";
+import { PageBar } from "@/components/PageBar";
 import { ipcError } from "@/lib/ipc";
 import type { Trade, TradeSummary } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -203,33 +204,40 @@ export function TradePage(): JSX.Element {
           sentence would announce nothing, and a read that fails with a trade on screen is exactly
           that arrival. Beside a trade it is empty and off the page; without one it is the column
           where the trade would be. */}
-      <div className={shown !== null ? "sr-only" : "grid min-w-0 flex-1 place-items-center"}>
-        <div className="flex max-w-md flex-col items-center gap-4 text-center">
-          <p
-            role="status"
-            className={cn("text-sm", failure !== null ? "text-destructive" : "text-dim")}
-          >
-            {shown !== null ? null : status}
-          </p>
-          {shown === null && empty && (
-            <>
-              <p className="font-heading text-xl font-semibold">No trades yet</p>
-              <p className="text-sm leading-relaxed text-dim">
-                A trade is two piles of cards and the difference between them. Put what you give on
-                one side and what they give on the other, and the page keeps the balance in the
-                prices you choose.
-              </p>
-              <button
-                ref={newRef}
-                type="button"
-                onClick={() => setCreating(true)}
-                className={TRADE_BUTTON_ACCENT}
-              >
-                <Plus className="size-4" aria-hidden="true" />
-                New trade
-              </button>
-            </>
-          )}
+      <div className={shown !== null ? "sr-only" : "flex min-w-0 flex-1 flex-col"}>
+        {/* **The page bar while there is no trade list** (the owner's note, 2026-10-21): with
+            trades, a trade's own bar names the page (`Trade › …`, `TradeView`); with none —
+            loading, refused or empty — this column is the whole page and would otherwise have no
+            heading at all. A `div` title, under the `sr-only` `<h2>` above. */}
+        {shown === null && trades.length === 0 && <PageBar title="Trade" titleAs="div" />}
+        <div className={shown !== null ? undefined : "grid min-h-0 flex-1 place-items-center"}>
+          <div className="flex max-w-md flex-col items-center gap-4 text-center">
+            <p
+              role="status"
+              className={cn("text-sm", failure !== null ? "text-destructive" : "text-dim")}
+            >
+              {shown !== null ? null : status}
+            </p>
+            {shown === null && empty && (
+              <>
+                <p className="font-heading text-xl font-semibold">No trades yet</p>
+                <p className="text-sm leading-relaxed text-dim">
+                  A trade is two piles of cards and the difference between them. Put what you give
+                  on one side and what they give on the other, and the page keeps the balance in the
+                  prices you choose.
+                </p>
+                <button
+                  ref={newRef}
+                  type="button"
+                  onClick={() => setCreating(true)}
+                  className={TRADE_BUTTON_ACCENT}
+                >
+                  <Plus className="size-4" aria-hidden="true" />
+                  New trade
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
       <NewTradeDialog

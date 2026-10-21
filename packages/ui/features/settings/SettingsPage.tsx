@@ -320,8 +320,9 @@ export function SettingsPage({ update }: { update: Update }) {
           (`SettingsSection`) and the shell's `<h1>` already says Settings; a heading here would
           put the panels a level under a section name that changes with every press on the rail. */}
       <PageBar
-        // The row's `gap-8` is a rail-to-pane gap; under the bar it is half that.
-        className="-mb-4 basis-full"
+        // The row's `gap-8` is a rail-to-pane gap; under the bar it is half that. `-mt-2` takes
+        // back the row's `py-2` above it, so the title stands where every other page's does.
+        className="-mt-2 -mb-4 basis-full"
         trail={[{ label: "Settings" }]}
         titleAs="div"
         title={searching(query) ? "Search" : GROUPS[group].label}

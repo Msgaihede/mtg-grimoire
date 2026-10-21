@@ -352,6 +352,7 @@ export function FilterBar<SortKey extends string>({
   layoutFor = "search",
   statesFilters = true,
   rootRef,
+  lead,
 }: {
   search: FilterSurface<SortKey>;
   /**
@@ -365,6 +366,14 @@ export function FilterBar<SortKey extends string>({
    * component with four boxes inside it.
    */
   rootRef?: Ref<HTMLDivElement>;
+  /**
+   * The row's first item, before the search box — the Search page's title (`PageTitle`), so the
+   * page is named without a row of its own. **Inside the row, not beside the bar**, because the
+   * row's one-line layout is measured on this box (`@min-[1500px]/fb`): a title beside it would
+   * narrow the box and drop the mana values to a second line, where inside it the search box,
+   * which is the row's one flexible item, gives up the width instead.
+   */
+  lead?: ReactNode;
   /** What this surface calls its search box, and the `id` stem its labels bind through — see
    *  {@link FilterLabels}. Defaults to {@link SEARCH_LABELS}. */
   labels?: FilterLabels;
@@ -510,6 +519,10 @@ export function FilterBar<SortKey extends string>({
       ref={rowRef}
       className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3"
     >
+      {lead !== undefined && (
+        <div className="order-[0] flex h-9 shrink-0 items-center">{lead}</div>
+      )}
+
       {/* The name is the surface's — see {@link FilterLabels}, and the two questions it keeps
           apart. */}
       <label htmlFor={`${labels.idStem}-text`} className="sr-only">
@@ -547,6 +560,9 @@ export function FilterBar<SortKey extends string>({
           FILTER_FOCUS,
           "order-[1] min-w-0 basis-full border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
           "@min-[640px]/fb:max-w-[min(34%,460px)] @min-[640px]/fb:flex-1 @min-[640px]/fb:basis-48",
+          // A title before it (`lead`) is width the one-line layout's 1500px did not count, so
+          // the box starts 32px narrower and still grows into whatever the line leaves.
+          lead !== undefined && "@min-[640px]/fb:basis-40",
         )}
       />
 

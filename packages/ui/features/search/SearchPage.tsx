@@ -6,7 +6,7 @@ import { FinishMark } from "@/components/FinishMark";
 import { GameChangerMark } from "@/components/GameChangerMark";
 import { ManaText } from "@/components/ManaText";
 import { OwnedBadge } from "@/components/OwnedBadge";
-import { PageBar } from "@/components/PageBar";
+import { PageRule, PageTitle } from "@/components/PageBar";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
@@ -316,9 +316,8 @@ const CARD_FLOOR = 192;
 const TABLE_FLOOR = 680;
 
 /**
- * Card search: the page bar with the count, a filter bar, every match in one scroll — and, since
- * issue #937, **tag search in a collapsible sidebar on the right**, where the separate Tagger page
- * used to be.
+ * Card search: a filter bar, every match in one scroll — and, since issue #937, **tag search in a
+ * collapsible sidebar on the right**, where the separate Tagger page used to be.
  *
  * The result list is virtualised because an unfiltered search matches the whole database
  * — ~117 k rows — and the page opens on exactly that.
@@ -514,21 +513,10 @@ export function SearchPage() {
         }
       />
 
-      {/* Not shown: the page bar below draws the view's name, and this heading is what names the
-          view for assistive tech, in the words it always had — so the bar's title is a `div`
-          (`AppShell`'s "a plain line where the page already has one"). */}
+      {/* Not shown: the page bar beside the filter row draws the view's name, and this heading
+          names the view for assistive tech in the words it always had — so the bar's title is a
+          `div` (`AppShell`'s "a plain line where the page already has one"). */}
       <h2 className="sr-only">Card search</h2>
-
-      {/* **The page bar** ("Page & Section Headings", option A, 2026-10-21): the view's name and
-          how many cards the filters let through, as mono meta (`ResultMeta`). Above the desk
-          rather than inside the page's column, so its gold rule runs the page's whole width, the
-          tag sidebar's included. No actions: the layout toggle is the filter row's corner, where
-          the other card walls keep it too. */}
-      <PageBar
-        title="Search"
-        titleAs="div"
-        meta={search.rows.length > 0 ? <ResultMeta search={search} /> : undefined}
-      />
 
       <div ref={deskRef} className={cn("flex gap-4", view === "table" && "min-h-0 flex-1")}>
         {/* `min-w-0`, or a long card name in the table pushes the column past its share and
@@ -554,7 +542,19 @@ export function SearchPage() {
 
           {/* `rootRef` hands the hook above the whole block — row, tray, stated filters — whose
               bottom edge is the quick bar's trigger. */}
-          <FilterBar search={search} rootRef={setFilterRow} />
+          {/* **The page bar, drawn by the filter row** ("Page & Section Headings", option A,
+              2026-10-21): the title as the row's first item (`lead`) and the gold rule under the
+              filter block, so naming the page costs no height — this view had no top row to give
+              the title, and a row of its own cost the wall 45px (the owner's note). The count
+              stays the result line's, where it always was. */}
+          <div className="flex flex-col gap-3">
+            <FilterBar
+              search={search}
+              rootRef={setFilterRow}
+              lead={<PageTitle title="Search" titleAs="div" />}
+            />
+            <PageRule />
+          </div>
 
           <Results search={search} />
         </div>
@@ -579,36 +579,6 @@ export function SearchPage() {
         </div>
       </div>
     </section>
-  );
-}
-
-/**
- * The page bar's count: `42 cards`, the numeral brighter than the word as a figure draws its value,
- * then `· searching…` or `· loading more…` while a page is in flight — `summaryOf`'s words for a
- * list with rows, which is the only time the bar is handed this. With no rows the result line is
- * drawn and says why, and a bar reading `0 cards` over "Card database is empty" would be the same
- * fact told twice and worse.
- *
- * `aria-hidden`, because it is a drawing of the result line and not a second statement: that line
- * is the live region a screen reader hears, `sr-only` while there are rows (`Results`), and this
- * one read out as well would be every count said twice. The numeral is its own element, which also
- * keeps `getByText("42 cards")` meaning that line.
- */
-function ResultMeta({ search }: { search: CardSearch }) {
-  const { query, total, totalIsCapped } = search;
-  const words = countOf(total, totalIsCapped);
-  const gap = words.indexOf(" ");
-  const busy = query.isFetchingNextPage
-    ? " · loading more…"
-    : query.isFetching
-      ? " · searching…"
-      : "";
-  return (
-    <span aria-hidden="true">
-      <span className="text-text">{words.slice(0, gap)}</span>
-      {words.slice(gap)}
-      {busy}
-    </span>
   );
 }
 
@@ -754,15 +724,11 @@ function Results({ search }: { search: CardSearch }) {
       {/* One live region, mounted for the life of the view: a region that appears together
           with its text announces nothing, because there was no change for a screen reader
           to notice. The rows stay outside it — a live region wrapped around a virtualised
-          list would read out every row that scrolls into the DOM.
-
-          **With rows it is a screen reader's only** (2026-10-21): the page bar draws the count
-          (`ResultMeta`), and drawn here as well it put `5,000+ cards` on the page twice. With none
-          it is the one thing on the page, drawn large where the wall would be. */}
+          list would read out every row that scrolls into the DOM. */}
       <p
         role="status"
         className={cn(
-          empty ? "py-16 text-center text-sm" : "sr-only",
+          empty ? "py-16 text-center text-sm" : "text-xs",
           empty && failure ? "text-destructive" : "text-dim",
         )}
       >

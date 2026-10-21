@@ -4,6 +4,7 @@ import { Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { FILTER_FOCUS } from "@/components/FilterChips";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { PageRule } from "@/components/PageBar";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
@@ -3478,6 +3479,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           bracket={bracket}
         />
       )}
+
+      {/* The page bar's gold rule, under the ledger rather than between it and the bar's row
+          (the owner's note, 2026-10-21: two rules one over the other read as a mistake). The
+          ledger is the heading's second line, so the heading ends here. */}
+      <PageRule />
     </>
   );
 
