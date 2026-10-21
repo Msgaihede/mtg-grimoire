@@ -17,6 +17,7 @@ import { ScanBar } from "./reader/ScanBar";
 import { setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
 import { withoutCommitted } from "./reader/trayCommit";
 import { TrayPanel } from "./reader/TrayPanel";
+import { useLandedPrice } from "./reader/useLandedPrice";
 import { ScannerAssets } from "./ScannerAssets";
 import { ScannerPanels } from "./ScannerPanels";
 import {
@@ -157,6 +158,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     tray,
     prefs.finish,
   );
+  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
+  const landedPrice = useLandedPrice(scanning ? landed : null, destination?.marketplace);
 
   /**
    * *Send scan…*'s dialog is open (issue #977). Mirrors `submit.run !== null`, which the pump
@@ -508,7 +511,11 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
               <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
               <Overlay videoRef={videoRef} verdict={scanning ? loop.verdict : null} />
-              <AddedToast card={scanning ? landed : null} onDone={clearLanded} />
+              <AddedToast
+                card={scanning ? landed : null}
+                onDone={clearLanded}
+                price={landedPrice}
+              />
               {!scanning && (
                 <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
                   {SCANNING_STOPPED}

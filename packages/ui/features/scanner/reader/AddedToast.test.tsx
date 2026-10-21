@@ -119,6 +119,24 @@ describe("AddedToast", () => {
     expect(pictures[1]).toContain("/grid/mt-2/0");
   });
 
+  it("closes the line with the price it is handed — one figure, or a pick's span", () => {
+    const { rerender } = render(
+      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} price="$4.00" />,
+    );
+    expect(screen.getByText("$4.00")).toHaveAttribute("data-landed-price");
+    expect(screen.getByText("LTR · 426 · Nonfoil")).toBeInTheDocument();
+
+    rerender(<AddedToast card={landedFrom(waiting, false, false)} onDone={vi.fn()} price="$0.25 – $1.50" />);
+    expect(screen.getByText("$0.25 – $1.50")).toBeInTheDocument();
+    expect(screen.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
+  });
+
+  /** Absent is "not answered yet" (`useLandedPrice`): no dash, no figure, no empty slot. */
+  it("draws no price slot while the price has not been answered", () => {
+    const { container } = render(<AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />);
+    expect(container.querySelector("[data-landed-price]")).toBeNull();
+  });
+
   it("draws one whole card for a settled landing", () => {
     const { container } = render(
       <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />,
