@@ -186,7 +186,7 @@ const CHROME_BUTTON = cn(
 
 /**
  * Which side of the board a pointed card is on — a zone of that player — or `loose`: a spell on
- * the stack, or a card an answer names that is on no table (a library being searched). A loose
+ * the stack, an emblem, or a card an answer names that is on no table (a library being searched). A loose
  * card is let go of only when the pointer leaves it.
  */
 type Side = PlaytestPlayer | "loose";
@@ -307,6 +307,9 @@ export function PlaytestBoard({
   // **It takes no argument, and must not grow one**: every card hands it to `onMouseLeave` as it
   // is, so a parameter here is filled with the mouse event.
   const unpoint = useCallback(() => setPointed(null), []);
+  /** An emblem, which is in no zone the view lists cards of: held as it is (`fresh`), and never
+   *  the board keys' to move. */
+  const pointLoose = useCallback((p: Pointed) => setPointed({ pointed: p, side: "loose" }), []);
   const pointCard = useCallback(
     (card: GameCard, e: MouseEvent) => {
       const side = seatHolding(view, card.id);
@@ -590,6 +593,7 @@ export function PlaytestBoard({
                   onAct={onAct}
                   onDrop={drop}
                   onPoint={pointThem[seat.player]}
+                  onPointEmblem={pointLoose}
                   onUnpoint={unpoint}
                   onLook={(l) => setLook({ look: l, side: seat.player })}
                 />
@@ -600,6 +604,8 @@ export function PlaytestBoard({
               <Battlefield
                 label="The opponent's battlefield"
                 cards={view.opponents[0].battlefield}
+                emblems={view.opponents[0].emblems}
+                onPointEmblem={pointLoose}
                 sandbox={edits}
                 onAct={onAct}
                 onDrop={drop}
@@ -628,6 +634,8 @@ export function PlaytestBoard({
             <Battlefield
               label="Your battlefield"
               cards={view.you.battlefield}
+              emblems={view.you.emblems}
+              onPointEmblem={pointLoose}
               sandbox={edits}
               onAct={onAct}
               onDrop={drop}

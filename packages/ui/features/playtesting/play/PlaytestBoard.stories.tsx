@@ -30,6 +30,7 @@ import {
   targetPrompt,
   turnFive,
   withAttachments,
+  withEmblems,
   withStack,
 } from "./fixtures";
 import { playtestLines } from "./log";
@@ -402,6 +403,23 @@ export const Attachments: Story = {
       within(theirs).getByRole("button", {
         name: "Pacifism, attached to Ragavan, Nimble Pilferer",
       }),
+    ).toBeVisible();
+  },
+};
+
+/** Issue #1333: each seat's emblems at the back row's far end, past the artifacts and Equipment —
+ *  the reader's on the right, the opponent's on their left. */
+export const Emblems: Story = {
+  args: { view: withEmblems().view },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const yours = canvas.getByRole("region", { name: "Your battlefield" });
+    const theirs = canvas.getByRole("region", { name: "The opponent's battlefield" });
+    await expect(
+      within(yours).getByRole("img", { name: /^Emblem from Sorin, Lord of Innistrad/ }),
+    ).toBeVisible();
+    await expect(
+      within(theirs).getByRole("img", { name: /^Emblem from Chandra, Torch of Defiance/ }),
     ).toBeVisible();
   },
 };

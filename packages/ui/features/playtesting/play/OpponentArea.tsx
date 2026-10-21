@@ -55,6 +55,7 @@ export function OpponentArea({
   onAct,
   onDrop,
   onPoint,
+  onPointEmblem,
   onUnpoint,
   onLook,
   className,
@@ -83,6 +84,8 @@ export function OpponentArea({
   onAct: (action: PlaytestAction) => void;
   onDrop: (drag: TableDrag, to: GamePlace) => void;
   onPoint: (pointed: Pointed) => void;
+  /** Point at one of their emblems (`Battlefield`'s). */
+  onPointEmblem?: (pointed: Pointed) => void;
   onUnpoint: () => void;
   onLook: (look: ZoneLook) => void;
   className?: string;
@@ -167,6 +170,8 @@ export function OpponentArea({
           <Battlefield
             label={`${playerPossessive(seat.player, opponents)} battlefield`}
             cards={seat.battlefield}
+            emblems={seat.emblems}
+            onPointEmblem={onPointEmblem}
             sandbox={sandbox && !seat.out}
             onAct={onAct}
             onDrop={onDrop}

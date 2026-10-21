@@ -256,6 +256,10 @@ export function playtestSentence(
         ? `Created ${what}`
         : `${playerName(h.seat, opponents)} created ${what}`;
     }
+    case "emblem": {
+      const what = h.source === null ? "an emblem" : `an emblem from ${h.source}`;
+      return h.seat === "you" ? `Got ${what}` : `${playerName(h.seat, opponents)} got ${what}`;
+    }
     case "chose":
       return `The rules engine chose for you: ${promptTitle(h.what)}`;
     case "eliminated":
@@ -310,6 +314,7 @@ export function playtestKind(h: PlaytestHappened): LogKind {
     case "life":
       return "life";
     case "tokensCreated":
+    case "emblem":
       return "token";
     case "chose":
       return "engine";

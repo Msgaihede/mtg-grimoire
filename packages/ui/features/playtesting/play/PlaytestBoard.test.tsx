@@ -23,6 +23,7 @@ import {
   respondStep,
   targetPrompt,
   turnFive,
+  withEmblems,
 } from "./fixtures";
 import { PlaytestBoard, zoneSize } from "./PlaytestBoard";
 
@@ -368,6 +369,30 @@ describe("PlaytestBoard's tracker", () => {
   });
 });
 
+describe("PlaytestBoard's emblems (issue #1333)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("draws each seat's emblems on its own table, and previews one with its words", () => {
+    setup(withEmblems().view);
+    const sorin = within(yours()).getByRole("img", {
+      name: "Emblem from Sorin, Lord of Innistrad — Creatures you control get +1/+0.",
+    });
+    expect(
+      within(theirs()).getByRole("img", { name: /^Emblem from Chandra, Torch of Defiance/ }),
+    ).toBeInTheDocument();
+    expect(within(theirs()).queryByRole("img", { name: /Sorin/ })).toBeNull();
+
+    fireEvent.mouseEnter(sorin);
+    act(() => vi.advanceTimersByTime(INSPECT_DELAY));
+    expect(screen.getByTestId("card-inspect")).toHaveTextContent(
+      "Emblem from Sorin, Lord of Innistrad — Creatures you control get +1/+0.",
+    );
+    fireEvent.mouseLeave(sorin);
+    expect(screen.queryByTestId("card-inspect")).not.toBeInTheDocument();
+  });
+});
+
 const FOUR = ["Boros Aggro", "Partners", "Mono-White"];
 
 describe("PlaytestBoard at a four-player table", () => {
@@ -385,6 +410,20 @@ describe("PlaytestBoard at a four-player table", () => {
     expect(document.querySelectorAll("[data-plate]")).toHaveLength(4);
     expect(screen.getByRole("img", { name: "Opponent 2's hand, 6 cards" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Opponent 2 · Partners" })).toBeInTheDocument();
+  });
+
+  it("draws an opponent's emblem on that opponent's own table", () => {
+    const { view } = fourPlayer();
+    const emblem = { id: 9100, source: "Nissa, Who Shakes the World", cardId: null, text: [] };
+    view.opponents = view.opponents.map((o) =>
+      o.player === "opponent2" ? { ...o, emblems: [emblem] } : o,
+    );
+    setup(view, { opponentNames: FOUR });
+    const table = screen.getByRole("region", { name: "Opponent 2's battlefield" });
+    expect(
+      within(table).getByRole("img", { name: "Emblem from Nissa, Who Shakes the World" }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByRole("img", { name: /^Emblem/ })).toHaveLength(1);
   });
 
   it("marks an opponent who is out", () => {
@@ -670,9 +709,9 @@ describe("PlaytestBoard's zone columns", () => {
     const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(1400);
     try {
       setup(turnFive().view);
-      expect(
-        screen.getByTestId("playtest-board").style.getPropertyValue("--table-x"),
-      ).toBe(`${zoneSize(1400).width + 24}px`);
+      expect(screen.getByTestId("playtest-board").style.getPropertyValue("--table-x")).toBe(
+        `${zoneSize(1400).width + 24}px`,
+      );
     } finally {
       height.mockRestore();
     }

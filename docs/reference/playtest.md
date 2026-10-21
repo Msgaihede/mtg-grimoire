@@ -321,8 +321,14 @@ which the engine permits for the reader's seat (`debug_permitted`) and never for
 - **On,** they are taken in the reader's main phase only, where nothing is half done, on the
   reader's own cards anywhere and on **any card the table shows**: an opponent's battlefield,
   graveyard, exile and command zone (`editable`). **Never an opponent's hand or library**, which
-  the reader may not see: "That card is in a zone you cannot see." The goldfish's emblems are out
-  of reach too.
+  the reader may not see: "That card is in a zone you cannot see." Every emblem is out of reach
+  too: no move, tap or counter takes one (CR 114.5 — it is not a card).
+
+**A permanent put onto the battlefield by hand enters with its intrinsic counters** (issue #1333):
+a planeswalker its loyalty and a battle its defense (CR 306.5b, 310.4b), phase's own
+`intrinsic_etb_counters` added after the move (`enter_with_counters`). phase's debug move is inert
+and left them off, so a planeswalker put down had 0 loyalty and could never pay for a loyalty
+ability — its emblem's among them. Counters only: a put still fires no enter trigger.
 
 The AI may well notice: it reads the state as it is. Tokens wear each deck's own printings, every
 seat's ([goldfish.md](goldfish.md#the-table), _A token wears the deck's printing_). The hybrid model
@@ -444,6 +450,7 @@ each of the AI's actions. They become the log's facts:
 | `DamageDealt` to a permanent             | `dealt`, naming the permanent by id and seat (damage to a player is its `LifeChanged`)               |
 | `LifeChanged`                            | `life`: the change and the total after it                                                            |
 | `TokenCreated`                           | `tokensCreated`, with consecutive tokens of one name counted together                                |
+| `EffectResolved` of a `CreateEmblem`     | `emblem`: whose it is and the card that made it, read off the new emblem itself (issue #1333)        |
 
 A sandbox action's events are not told. The action's own fact says what the reader did.
 
@@ -474,6 +481,20 @@ named by the face it shows, so every face of a card of several faces is read as 
 (`card_names`, issue #1144): a Pathway or a Bala Ged Recovery played as its back face keeps its
 printing, and a commander on its back face is still the commander — its tax, its tile, its way back
 to the command zone.
+
+**Emblems are on the wire, the game's and only the game's** (issue #1333, 2026-10-21). Each
+`PlaytestSeat` carries `emblems`, every emblem in the command zone that seat controls (CR 114.2),
+oldest first: a `PlaytestEmblem` with its `source` (the card that made it, from phase's
+`emblem_source`, so a planeswalker that died paying for it is still named), its abilities' words
+(`text`, phase's descriptions of its statics, triggers and abilities) and a `cardId` — the emblem
+the deck keeps for that source among its Tokens & Emblems (`DeckTokens::emblem_of`: `<source>
+Emblem` by name, else the one emblem naming the source among the cards making it). The session's
+own emblems are never listed: the goldfish's two `rules` and the sandbox's `free` cast's are the
+board's machinery, not the game. Before this an emblem was in no list at all — `command` keeps
+commanders only — so a planeswalker's emblem worked but could not be seen. **phase applies
+them**: an emblem's statics and triggers work from the command zone (`create_emblem::grant_emblem`,
+CR 114.4), and the session only reads them. An emblem is in the `GameState`, so a `Moment` keeps
+it, and undo and redo take it back and bring it again like anything else.
 
 ## The setup page
 

@@ -135,6 +135,12 @@ export interface PlaytestSeat {
   graveyard: GameCard[];
   exile: GameCard[];
   command: GameCard[];
+  /**
+   * This seat's emblems (CR 114), oldest first: in the command zone for the rest of the game, and
+   * never a card in it. Never the session's own — the goldfish's rules emblems, the sandbox's free
+   * cast's.
+   */
+  emblems: PlaytestEmblem[];
   library: number;
   /** The reader's library, top first; empty for the opponent. */
   libraryCards: GameCard[];
@@ -147,6 +153,21 @@ export interface PlaytestSeat {
    * back above 0. Always `null` for a player who can lose.
    */
   deadOn: number | null;
+}
+
+/**
+ * An emblem (CR 114): neither a card nor a permanent, it cannot be removed, and its abilities work
+ * from the command zone for the rest of the game. The engine applies them; the board shows them.
+ */
+export interface PlaytestEmblem {
+  id: number;
+  /** The card that made it, as it was when it did; `null` for one with no card behind it. */
+  source: string | null;
+  /** The emblem the deck keeps for its source among its Tokens & Emblems; `null` when it keeps
+   *  none, and the board draws its words. */
+  cardId: string | null;
+  /** Its abilities' words, as the engine gives them, one a row. */
+  text: string[];
 }
 
 export interface PlaytestCombat {
@@ -359,6 +380,8 @@ export type PlaytestHappened =
     }
   | { type: "life"; seat: PlaytestPlayer; amount: number; total: number }
   | { type: "tokensCreated"; seat: PlaytestPlayer; name: string; count: number }
+  /** A player got an emblem; `source` is the card that made it. */
+  | { type: "emblem"; seat: PlaytestPlayer; source: string | null }
   /** The reader put a card somewhere by hand; `seat` is whose card it is. */
   | { type: "put"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }
   | { type: "tapped"; seat: PlaytestPlayer; name: string; count: number; tapped: boolean }

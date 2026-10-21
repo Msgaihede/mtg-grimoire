@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type JSX,
 } from "react";
-import type { GameCard, GamePlace, PlaytestAction } from "@/lib/ipc";
+import type { GameCard, GamePlace, PlaytestAction, PlaytestEmblem } from "@/lib/ipc";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
@@ -17,6 +17,7 @@ import {
   ASPECT,
   BACK_MAX,
   GAP,
+  MARK,
   PILE,
   attachedPeek,
   layoutTable,
@@ -124,6 +125,15 @@ export interface BattlefieldProps {
    * these lanes. Without it, each table draws only its own cards' attachments.
    */
   across?: Across;
+  /**
+   * The seat's emblems (issue #1333), at the back row's far end past the artifacts and Equipment
+   * — the near side's right, the far side's left — one card each at the row's size. Not cards: no
+   * drag, no tap, no menu; pointing at one previews it through `onPointEmblem`.
+   */
+  emblems?: readonly PlaytestEmblem[];
+  /** Point at an emblem: its picture and words in the preview. Without it an emblem says its
+   *  words only to a screen reader and in its own tile. */
+  onPointEmblem?: (pointed: Pointed) => void;
 }
 
 /**
@@ -155,6 +165,8 @@ export function Battlefield({
   onActivate,
   dense = false,
   across,
+  emblems = NO_EMBLEMS,
+  onPointEmblem,
 }: BattlefieldProps): JSX.Element {
   const dropRef = useRef<HTMLElement | null>(null);
   const over = useTableDropTarget({
@@ -208,11 +220,13 @@ export function Battlefield({
         },
         apart,
         across,
+        emblems.length,
       ),
-    [cards, box, apart, across],
+    [cards, box, apart, across, emblems.length],
   );
   const { creatures, lands, others, creatureWidth, backWidth } = layout;
   const both = lands.length > 0 && others.length > 0;
+  const permanents = lands.length > 0 || others.length > 0;
   const own = useMemo(() => new Set(cards.map((c) => c.id)), [cards]);
   const row = cn(ROW, flipped && "items-start");
   const pile = (p: Pile, w: number) => (
@@ -242,8 +256,9 @@ export function Battlefield({
       <div className={row}>{creatures.map((p) => pile(p, creatureWidth))}</div>
     </section>
   );
-  // Lands from the left and every other permanent from the right — the other way round on the
-  // far side — one card size for the whole row, and the dashed divider wherever the two meet.
+  // Lands from the left and every other permanent from the right, then the emblems — the other
+  // way round on the far side — one card size for the whole row, and a dashed divider wherever
+  // two meet.
   const landRow = lands.length > 0 && (
     <div aria-label="Lands" className={cn(row, flipped && "ml-auto", flipped && both && DIVIDER)}>
       {lands.map((p) => pile(p, backWidth))}
@@ -257,6 +272,28 @@ export function Battlefield({
       {others.map((p) => pile(p, backWidth))}
     </div>
   );
+  // Past the other permanents, at the row's far end: on the near side the right, after the
+  // artifacts and Equipment, with the divider on its left; on the far side the left.
+  const emblemRow = emblems.length > 0 && (
+    <div
+      aria-label="Emblems"
+      className={cn(
+        row,
+        !flipped && others.length === 0 && "ml-auto",
+        permanents && (flipped ? DIVIDER_AFTER : DIVIDER),
+      )}
+    >
+      {emblems.map((e) => (
+        <EmblemView
+          key={e.id}
+          emblem={e}
+          w={backWidth}
+          onPoint={onPointEmblem}
+          onUnpoint={onUnpoint}
+        />
+      ))}
+    </div>
+  );
   const backLane = (
     <section
       aria-label="Lands and other permanents"
@@ -265,8 +302,9 @@ export function Battlefield({
         flipped && "items-start border-t-0 border-b pt-0 pb-3",
       )}
     >
-      {flipped ? otherRow : landRow}
-      {flipped ? landRow : otherRow}
+      {flipped ? emblemRow : landRow}
+      {otherRow}
+      {flipped ? landRow : emblemRow}
     </section>
   );
 
@@ -281,7 +319,7 @@ export function Battlefield({
         className,
       )}
     >
-      {cards.length === 0 ? (
+      {cards.length === 0 && emblems.length === 0 ? (
         <p className="pointer-events-none m-auto text-xs text-dim">
           {readOnly ? "Nothing on the battlefield" : "Drag a card here to play it"}
         </p>
@@ -305,6 +343,10 @@ export function Battlefield({
 const ROW = "flex flex-none flex-nowrap items-end gap-2.5";
 /** The back row's divider, on whichever of its two halves comes second. */
 const DIVIDER = "self-stretch border-l border-dashed border-border/60 pl-3.5";
+/** The same divider on the right of a row that comes first: the far side's emblems. */
+const DIVIDER_AFTER = "self-stretch border-r border-dashed border-border/60 pr-3.5";
+
+const NO_EMBLEMS: readonly PlaytestEmblem[] = [];
 
 /** How far an attacker is pushed toward the other side of the table. */
 const FORWARD = 14;
@@ -638,5 +680,95 @@ function AttachedView({
     >
       <CardFace card={card} />
     </button>
+  );
+}
+
+/** An emblem as the table's pieces draw a card: its printing, or a tile of its words. */
+export function emblemCard(emblem: PlaytestEmblem): GameCard {
+  return {
+    id: emblem.id,
+    cardId: emblem.cardId,
+    name: emblem.source === null ? "Emblem" : `${emblem.source} emblem`,
+    typeLine: "Emblem",
+    lane: "other",
+    manaValue: 0,
+    isLand: false,
+    isToken: false,
+    isCommander: false,
+    tapped: false,
+    counters: [],
+    power: null,
+    toughness: null,
+    tax: 0,
+    attachedTo: null,
+    foretold: false,
+    canForetell: false,
+    castable: false,
+    gaps: [],
+  };
+}
+
+/** What an emblem says, in a line: where it came from, then its words. */
+export function emblemLine(emblem: PlaytestEmblem): string {
+  const words = emblem.text.join(" ");
+  const what = emblem.source === null ? "Emblem" : `Emblem from ${emblem.source}`;
+  return words === "" ? what : `${what} — ${words}`;
+}
+
+/**
+ * One emblem on the back row: the deck's printing of it when the deck keeps one, and otherwise a
+ * tile with its source and words. It is not a card — nothing carries, taps or menus it — and it
+ * stays for the rest of the game, so it stands upright at the size of the row's cards.
+ */
+function EmblemView({
+  emblem,
+  w,
+  onPoint,
+  onUnpoint,
+}: {
+  emblem: PlaytestEmblem;
+  w: number;
+  onPoint: ((pointed: Pointed) => void) | undefined;
+  onUnpoint: () => void;
+}): JSX.Element {
+  const card = useMemo(() => emblemCard(emblem), [emblem]);
+  const line = emblemLine(emblem);
+  return (
+    <div
+      role="img"
+      aria-label={line}
+      data-emblem={emblem.id}
+      data-point={emblem.id}
+      onMouseEnter={(e) =>
+        onPoint?.({ card, ids: [emblem.id], place: "command", line, at: pointerAt(e) })
+      }
+      onMouseLeave={onUnpoint}
+      className="relative flex-none cursor-default"
+      // A pile's box keeps room under its card for the ×N marker (`MARK`); so does this one, so
+      // the emblem lines up with the cards beside it on the row's bottom edge.
+      style={{ width: w, height: Math.round(w * ASPECT) + MARK }}
+    >
+      {emblem.cardId !== null ? (
+        <span className="block" style={{ height: Math.round(w * ASPECT) }}>
+          <CardFace card={card} />
+        </span>
+      ) : (
+        <span
+          aria-hidden="true"
+          style={{ height: Math.round(w * ASPECT) }}
+          className="flex w-full flex-col gap-0.5 overflow-hidden rounded-md border border-accent/60 bg-surface p-1 text-left text-[10px] leading-tight text-text"
+        >
+          <span className="text-[9px] tracking-[0.08em] text-accent uppercase">Emblem</span>
+          {emblem.source !== null && (
+            <span className="line-clamp-2 font-semibold break-words">{emblem.source}</span>
+          )}
+          {emblem.text.map((t, i) => (
+            <span key={i} className="break-words text-dim">
+              {t}
+            </span>
+          ))}
+        </span>
+      )}
+    </div>
   );
 }
