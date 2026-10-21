@@ -30,6 +30,73 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.58.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.57.1...v0.58.0) (2026-10-21)
+
+
+### Features
+
+* **card-neural:** crop evidence networks and their printing galleries ([42de2f3](https://github.com/Msgaihede/mtg-grimoire/commit/42de2f355339050df75533a38ad286ad2c38469d))
+* **card-neural:** evidence thresholds and the narrowing rule ([4737ccf](https://github.com/Msgaihede/mtg-grimoire/commit/4737ccfa2720b5d1968ff863fd8f08a53d129ee1))
+* **card-neural:** keep each card's fingerprint and index looks by card ([a54ffbc](https://github.com/Msgaihede/mtg-grimoire/commit/a54ffbc2f3fe5031a737d53f3dc83dbeaec60eea))
+* **card-neural:** probe saves the evidence crops ([15dab69](https://github.com/Msgaihede/mtg-grimoire/commit/15dab69ad7cc80cb19830fcb1cfde11d4c42ba72))
+* **card-neural:** ship the set symbol and collector band networks ([2763b7b](https://github.com/Msgaihede/mtg-grimoire/commit/2763b7b89bf2ffe66660a97a7854ba7059b567e9))
+* **card-neural:** the monthly retraining remakes the evidence networks ([af2951d](https://github.com/Msgaihede/mtg-grimoire/commit/af2951d2ffaa5a81a6159650961b33286d8a0cbf))
+* **playtest:** ask before an optional cast opens its card picker ([8b253e9](https://github.com/Msgaihede/mtg-grimoire/commit/8b253e99164b622fe38fb99dd23faed1d4b5211b))
+* **playtest:** ask before an optional cast opens its card picker ([259ca42](https://github.com/Msgaihede/mtg-grimoire/commit/259ca42cf1ec0506be289736fe42200a09b38f99)), closes [#1329](https://github.com/Msgaihede/mtg-grimoire/issues/1329)
+* **playtesting:** ask about the opponent's spell large, over their table ([1191499](https://github.com/Msgaihede/mtg-grimoire/commit/11914996194e78b2eda749eb757b532f19443e44))
+* **playtesting:** ask about the opponent's spell large, over their table ([5164693](https://github.com/Msgaihede/mtg-grimoire/commit/51646930ab4e6a8932757336cf009b5b76f4cfb3)), closes [#1334](https://github.com/Msgaihede/mtg-grimoire/issues/1334)
+* **playtesting:** chip each effect on a card with its source ([34379ed](https://github.com/Msgaihede/mtg-grimoire/commit/34379edeafb848b9bb536f5fc7ef255022f7025b))
+* **playtesting:** chip each effect on a card with its source ([76e5e7e](https://github.com/Msgaihede/mtg-grimoire/commit/76e5e7ebecb7e9781465947686407be4f882f9d0)), closes [#1327](https://github.com/Msgaihede/mtg-grimoire/issues/1327)
+* **playtesting:** drag to attack, block, play, equip and target ([06e2160](https://github.com/Msgaihede/mtg-grimoire/commit/06e2160132b2cd5d1dcd8d759f8c76853d430edd))
+* **playtesting:** drag to attack, block, play, equip and target ([c377c61](https://github.com/Msgaihede/mtg-grimoire/commit/c377c61a3f2c067f7239d267c3dc2a09d91da289))
+* **playtesting:** redesign the setup page as a game lobby ([#1356](https://github.com/Msgaihede/mtg-grimoire/issues/1356)) ([319a9a6](https://github.com/Msgaihede/mtg-grimoire/commit/319a9a6fa6bcc8a407c166c0c75934bdd3c188dc))
+* **playtesting:** reorder your own hand at any time ([9f82de2](https://github.com/Msgaihede/mtg-grimoire/commit/9f82de2a1c3e745fa0b2bb36f48fa2936f5ccee6))
+* **playtesting:** reorder your own hand at any time ([43b419a](https://github.com/Msgaihede/mtg-grimoire/commit/43b419aa76c82a3661bc971189ec8f598250d8ba)), closes [#1330](https://github.com/Msgaihede/mtg-grimoire/issues/1330)
+* **playtest:** show changed power/toughness in a colour-coded chip ([42824a7](https://github.com/Msgaihede/mtg-grimoire/commit/42824a7ffe87146a72563a91c01947c3ea4f3a62))
+* **playtest:** show changed power/toughness in a colour-coded chip ([6086c81](https://github.com/Msgaihede/mtg-grimoire/commit/6086c8156d6d227f05c9a9e834d07a45ef4ad39b)), closes [#1332](https://github.com/Msgaihede/mtg-grimoire/issues/1332)
+* **playtest:** show the ability's words in the prompt panel ([675df06](https://github.com/Msgaihede/mtg-grimoire/commit/675df06c2390b5bee0ef0ce22d800beccad2002f))
+* **playtest:** show the ability's words in the prompt panel ([2b19dd4](https://github.com/Msgaihede/mtg-grimoire/commit/2b19dd49a5956538dd977aca32771dcd8797b056)), closes [#1328](https://github.com/Msgaihede/mtg-grimoire/issues/1328)
+* **playtest:** tap lands for mana by hand, sandbox or not ([82d2a67](https://github.com/Msgaihede/mtg-grimoire/commit/82d2a67c00d5e3e0a4695bfc81474ccf757ca29b))
+* **playtest:** tap lands for mana by hand, sandbox or not ([17c1cb3](https://github.com/Msgaihede/mtg-grimoire/commit/17c1cb3d38f812c0e74a212ca5fb727834495bcd))
+* **playtest:** track commander damage per commander and show it on the plates ([ef56ada](https://github.com/Msgaihede/mtg-grimoire/commit/ef56ada7725bec5d8b4902e79cdd1404e7970e12))
+* **playtest:** track commander damage per commander and show it on the plates ([85b7cac](https://github.com/Msgaihede/mtg-grimoire/commit/85b7cac8eb4ca0d6924847e1d38e95bb06320941)), closes [#1336](https://github.com/Msgaihede/mtg-grimoire/issues/1336)
+* **scanner:** create a new collection folder from the tray's folder picker ([c29ce19](https://github.com/Msgaihede/mtg-grimoire/commit/c29ce1987361f8874d016eeaa4b06993ca47681b))
+* **scanner:** create a new collection folder from the tray's folder picker ([3c0f9e0](https://github.com/Msgaihede/mtg-grimoire/commit/3c0f9e0d7444899df36956b55f0e010117324b28)), closes [#1357](https://github.com/Msgaihede/mtg-grimoire/issues/1357)
+* **scanner:** Neural narrows the printing on set symbol and collector band evidence ([1315482](https://github.com/Msgaihede/mtg-grimoire/commit/1315482bd3688f82f35c0e413e153a967d6fb63a))
+* **scanner:** replay counts settled printings and choices per decision ([5673169](https://github.com/Msgaihede/mtg-grimoire/commit/5673169b28bcb0251108742fdc5f3cc471fcf0c0))
+* **scanner:** set symbol and collector band evidence narrow Neural's printings ([f010173](https://github.com/Msgaihede/mtg-grimoire/commit/f0101736ed93061779ca60a0bc4abc9fd3afcb43))
+* **scanner:** show the price or price range on the scanned-card popup ([3ea8915](https://github.com/Msgaihede/mtg-grimoire/commit/3ea89158acee49f558bb2b5b75326a6bc3a2bb23))
+* **scanner:** show the price or price range on the scanned-card popup ([389b4e0](https://github.com/Msgaihede/mtg-grimoire/commit/389b4e0c8a1084377a25a20c776904346bbd3fc2)), closes [#1321](https://github.com/Msgaihede/mtg-grimoire/issues/1321)
+* **scanner:** the replay records the Neural evidence per decision ([f9f3e16](https://github.com/Msgaihede/mtg-grimoire/commit/f9f3e166c397e2fe865b8d669a3faa27c3447e8a))
+* **search:** add an Image updated sort and open Coming soon sets on it ([f8554ec](https://github.com/Msgaihede/mtg-grimoire/commit/f8554ece9bee474c6ab0d598b051678d0e9ed997))
+* **search:** add an Image updated sort and open Coming soon sets on it ([249b577](https://github.com/Msgaihede/mtg-grimoire/commit/249b577f26e775ac3904b83b67129948d82dccb2)), closes [#1214](https://github.com/Msgaihede/mtg-grimoire/issues/1214)
+* **web:** check and serve the Neural evidence files ([06fe51c](https://github.com/Msgaihede/mtg-grimoire/commit/06fe51c61b1133a818e140fc367b4cea530637d7))
+* **web:** fetch the Neural evidence files after the recogniser ([df45edc](https://github.com/Msgaihede/mtg-grimoire/commit/df45edc8b61cf842819fe69e3f3c291796eb4b81))
+
+
+### Bug Fixes
+
+* **card-neural:** a non-finite evidence score is unknown ([f409830](https://github.com/Msgaihede/mtg-grimoire/commit/f409830947ba4219d739b558854fd6f7fb722c2a))
+* **card-neural:** deliver the symbol and band networks together or not at all ([934d9db](https://github.com/Msgaihede/mtg-grimoire/commit/934d9db3062439f781b593cf0e9a0163cab43584))
+* **card-neural:** set the watchdogs' overrun aside from the training budget ([1d5d7e1](https://github.com/Msgaihede/mtg-grimoire/commit/1d5d7e160f6634daa26b061749d69c879a132dac))
+* **playtest:** give the emblem's table card canTapForMana ([4d1f7cd](https://github.com/Msgaihede/mtg-grimoire/commit/4d1f7cd6d74b60c7b9c9610a182c0e00b29cc114))
+* **playtesting:** keep the active game across page switches, and confirm before ending it ([32c1262](https://github.com/Msgaihede/mtg-grimoire/commit/32c12627b0c02675134928d8884841cf712aa77d))
+* **playtesting:** keep the active game across page switches, and confirm before ending it ([7d5fee3](https://github.com/Msgaihede/mtg-grimoire/commit/7d5fee3fcad84e428c0fe3aca82e9ffb2e0edb52)), closes [#1322](https://github.com/Msgaihede/mtg-grimoire/issues/1322)
+* **playtesting:** lift a hovered attachment over its card and preview it on any table ([616b42c](https://github.com/Msgaihede/mtg-grimoire/commit/616b42c2808bcee96a40494284de532756c89c6c))
+* **playtesting:** lift a hovered attachment over its card and preview it on any table ([4856731](https://github.com/Msgaihede/mtg-grimoire/commit/48567318ba34c1c3c653728cf646e1ffffa2c918)), closes [#1331](https://github.com/Msgaihede/mtg-grimoire/issues/1331)
+* **playtest:** show emblems on the table and let a hand-put planeswalker reach its emblem ([97e1ec9](https://github.com/Msgaihede/mtg-grimoire/commit/97e1ec9346a3ec10cdaf8f8e9ea393f3f2a3f5e7))
+* **playtest:** show emblems on the table and let a hand-put planeswalker reach its emblem ([1e4a583](https://github.com/Msgaihede/mtg-grimoire/commit/1e4a5832b70102ff46c615106264af2ef5759daf)), closes [#1333](https://github.com/Msgaihede/mtg-grimoire/issues/1333)
+* **scanner:** detect a card already in frame when scanning starts ([49b3e42](https://github.com/Msgaihede/mtg-grimoire/commit/49b3e420eb508a9ac19f0a45b3acaa432e6b4fc9))
+* **scanner:** detect a card already in frame when scanning starts ([da1e395](https://github.com/Msgaihede/mtg-grimoire/commit/da1e395639c1f51f41329056bba832fef1be1737)), closes [#1318](https://github.com/Msgaihede/mtg-grimoire/issues/1318)
+* **scanner:** leave tokens out of scanner matches by default ([6580aa2](https://github.com/Msgaihede/mtg-grimoire/commit/6580aa252d253e5ec7694d9aa98feacfef76ae1e))
+* **scanner:** leave tokens out of scanner matches by default ([55d3656](https://github.com/Msgaihede/mtg-grimoire/commit/55d3656fd005e3d4af39266aa4ae296b5bd32096)), closes [#1323](https://github.com/Msgaihede/mtg-grimoire/issues/1323)
+* **scanner:** Neural keeps only the evidence frames the agreement counts ([d39c319](https://github.com/Msgaihede/mtg-grimoire/commit/d39c31962ef4a2932f334c9cf64242d8c26d40cc))
+* **scanner:** open the scanner stopped until Start scanning is pressed ([22bdbb2](https://github.com/Msgaihede/mtg-grimoire/commit/22bdbb20686fff16be845ffba33243b7c26891f7))
+* **scanner:** open the scanner stopped until Start scanning is pressed ([18af096](https://github.com/Msgaihede/mtg-grimoire/commit/18af096bcf27685296afd65d827d97a60f779555)), closes [#1317](https://github.com/Msgaihede/mtg-grimoire/issues/1317)
+* **scanner:** scroll the tray to its top when a card lands ([3092e02](https://github.com/Msgaihede/mtg-grimoire/commit/3092e028f69c8ba00e4232819000329ee73e362b))
+* **scanner:** scroll the tray to its top when a card lands ([6ceb201](https://github.com/Msgaihede/mtg-grimoire/commit/6ceb20189ccb3922355195db6dfd9174ed22784c)), closes [#1320](https://github.com/Msgaihede/mtg-grimoire/issues/1320)
+* **web:** blame a hung evidence hand-over, not the frame queued behind it ([ab5bf9b](https://github.com/Msgaihede/mtg-grimoire/commit/ab5bf9bb2261b8a83905170ec85b37d31c687a1e))
+
 ## [0.57.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.57.0...v0.57.1) (2026-10-20)
 
 
