@@ -1803,6 +1803,7 @@ describe("ScannerPage sending a scan", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 
       // The reader narrows the scan, and the session takes it — which is when it is stored.
+      const resets = vi.mocked(ipc.scannerReset).mock.calls.length;
       await narrowTo(user, "2020-01-01");
       const taken = {
         sets: [],
@@ -1822,7 +1823,8 @@ describe("ScannerPage sending a scan", () => {
       expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
       // The strip goes on naming the card: this was the run's break, not the evidence's.
       expect(statusLine()).toHaveTextContent("Plains");
-      expect(ipc.scannerReset).not.toHaveBeenCalled();
+      // No reset: the pump's starts reset the session, and a change of filters is none of them.
+      expect(ipc.scannerReset).toHaveBeenCalledTimes(resets);
       expect(ipc.scannerSubmit).not.toHaveBeenCalled();
     } finally {
       restore();

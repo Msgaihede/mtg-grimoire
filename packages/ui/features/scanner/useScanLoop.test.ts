@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { READS, VERDICTS } from "./fixtures";
 import { RUN_MAX_AGE_MS, RUN_MAX_BYTES, RUN_MAX_FRAMES, runClock } from "./submit/run";
-import type { ScannerOptions, ScannerVerdict } from "./types";
+import type { ScannerDecision, ScannerOptions, ScannerVerdict } from "./types";
 import { useScanLoop, type GrabbedPair, type RunFrame } from "./useScanLoop";
 
 const scannerFrame =
@@ -33,6 +33,20 @@ const BYTES = new Uint8Array([0xff, 0xd8, 0xff]);
 /** The paired grab's two halves — distinct from {@link BYTES}, so a test can tell which grab ran. */
 const PAIR_FRAME = new Uint8Array([0xff, 0xd8, 0x01]);
 const PAIR_DETAIL = new Uint8Array([0xff, 0xd8, 0x02, 0x03]);
+/** Gates for the first `count` frames, answered when a test chooses; later frames park. */
+function framesGated(count: number) {
+  const gates = Array.from({ length: count }, () => deferred<ScannerVerdict>());
+  let n = 0;
+  scannerFrame.mockImplementation(() => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise);
+  return gates;
+}
+
+/** A decision naming another card than {@link VERDICTS.decided}'s. */
+const OTHER_CARD = {
+  ...VERDICTS.decided.decision!,
+  printing: "honored-hierarch-ori-17",
+  oracle_id: "honored-hierarch",
+};
 
 /** A video the loop is willing to read: `readyState` 2 is `HAVE_CURRENT_DATA`. */
 function readyVideo(): HTMLVideoElement {
@@ -351,8 +365,12 @@ describe("useScanLoop", () => {
     expect(result.current.lastOcr).toBeNull();
     expect(result.current.lastCollector).toBeNull();
     expect(result.current.lastResolution).toBeNull();
-    expect(onDecision).not.toHaveBeenCalled();
-    expect(scannerReset).not.toHaveBeenCalled();
+    // The first frame's card, decided on the stream's first frame — and nothing of the old one.
+    expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([
+      VERDICTS.exactResolved.decision_seq,
+    ]);
+    // The start's reset alone: clearing the reads is this side's, and asks the session nothing.
+    expect(scannerReset).toHaveBeenCalledTimes(1);
   });
 
   /** The reset must run after the old frame, and no old answer may revive its evidence. */
@@ -363,7 +381,8 @@ describe("useScanLoop", () => {
     const newCard = deferred<ScannerVerdict>();
     const resetGate = deferred<void>();
     const onDecision = vi.fn();
-    scannerReset.mockReturnValue(resetGate.promise);
+    // The pump's start resets at once; the press's waits on the gate.
+    scannerReset.mockResolvedValueOnce(undefined).mockReturnValue(resetGate.promise);
     scannerFrame
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(oldFrame.promise)
@@ -394,7 +413,7 @@ describe("useScanLoop", () => {
     expect(result.current.lastCollector).toBeNull();
     expect(result.current.lastResolution).toBeNull();
     await tick(100);
-    expect(scannerReset).not.toHaveBeenCalled();
+    expect(scannerReset).toHaveBeenCalledTimes(1);
     expect(scannerFrame).toHaveBeenCalledTimes(2);
 
     await act(async () =>
@@ -407,12 +426,13 @@ describe("useScanLoop", () => {
       }),
     );
     await tick();
-    expect(scannerReset).toHaveBeenCalledTimes(1);
+    expect(scannerReset).toHaveBeenCalledTimes(2);
     expect(result.current.verdict).toBeNull();
     expect(result.current.lastOcr).toBeNull();
     expect(result.current.lastCollector).toBeNull();
     expect(result.current.lastResolution).toBeNull();
-    expect(onDecision).not.toHaveBeenCalled();
+    // The first frame's card alone: the old frame's answer was thrown away.
+    expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([0]);
     await tick(100);
     expect(scannerFrame).toHaveBeenCalledTimes(2);
     expect(grabPair).not.toHaveBeenCalled();
@@ -427,7 +447,8 @@ describe("useScanLoop", () => {
     await act(async () => baseline.resolve({ ...VERDICTS.voting, decision_seq: 0 }));
     expect(result.current.verdict).toEqual(VERDICTS.voting);
     await act(async () => newCard.resolve({ ...VERDICTS.decided, decision_seq: 1 }));
-    expect(onDecision).toHaveBeenCalledExactlyOnceWith(VERDICTS.decided.decision, 1);
+    expect(onDecision).toHaveBeenCalledTimes(2);
+    expect(onDecision).toHaveBeenLastCalledWith(VERDICTS.decided.decision, 1);
   });
 
   it.each(["plain", "paired"] as const)(
@@ -437,7 +458,7 @@ describe("useScanLoop", () => {
       const frame = deferred<Uint8Array | null>();
       const pair = deferred<GrabbedPair | null>();
       const resetGate = deferred<void>();
-      scannerReset.mockReturnValue(resetGate.promise);
+      scannerReset.mockResolvedValueOnce(undefined).mockReturnValue(resetGate.promise);
       scannerFrame
         .mockReturnValueOnce(first.promise)
         .mockReturnValue(deferred<ScannerVerdict>().promise);
@@ -461,7 +482,7 @@ describe("useScanLoop", () => {
         pair.resolve({ frame: PAIR_FRAME, detail: PAIR_DETAIL });
       });
       await tick();
-      expect(scannerReset).toHaveBeenCalledTimes(1);
+      expect(scannerReset).toHaveBeenCalledTimes(2);
       expect(scannerFrame).toHaveBeenCalledTimes(sent);
       await tick(100);
       expect(scannerFrame).toHaveBeenCalledTimes(sent);
@@ -580,7 +601,7 @@ describe("useScanLoop", () => {
     await act(async () => {
       await result.current.reset();
     });
-    expect(scannerReset).toHaveBeenCalledTimes(1);
+    expect(scannerReset).toHaveBeenCalledTimes(2);
     expect(result.current.verdict).toBeNull();
     await tick(300);
     expect(grabPair).not.toHaveBeenCalled();
@@ -745,9 +766,10 @@ describe("useScanLoop", () => {
     // two frames after the first card by the old count, and one after the new baseline.
     rerender({ live: false });
     await tick(60);
+    // Another card than the first — that one, still lying there, would not be filed again.
     next = [
       { ...VERDICTS.voting, decision_seq: 1 },
-      { ...VERDICTS.decided, decision_seq: 2 },
+      { ...VERDICTS.decided, decision_seq: 2, decision: OTHER_CARD },
     ];
     last = { ...VERDICTS.voting, decision_seq: 2 };
     rerender({ live: true });
@@ -756,37 +778,179 @@ describe("useScanLoop", () => {
   });
 
   /**
-   * A card frozen from before a view switch is still frozen when the camera comes back, and its
-   * decision rides every committed frame — so the first number the loop sees is a baseline rather
-   * than news, or re-opening the Scanner would re-add the card already in the tray.
+   * **Issue #1318: a card already in front of the lens when scanning starts.** The session outlives
+   * the pump and never saw that card arrive, so the pump resets it first — and every decision of
+   * the new stream is news, its very first frame's too (Neural decides on one clear frame).
    */
-  it("does not call onDecision for the seq it saw when the camera started", async () => {
+  it("resets the session before a stream's first frame, and files a card decided on it", async () => {
+    const onDecision = vi.fn();
+    const gates = framesGated(2);
+    mount({ onDecision });
+    await tick();
+    expect(scannerReset).toHaveBeenCalledTimes(1);
+    expect(scannerReset.mock.invocationCallOrder[0]).toBeLessThan(
+      scannerFrame.mock.invocationCallOrder[0],
+    );
+    await act(async () => gates[0].resolve({ ...VERDICTS.decided, decision_seq: 4 }));
+    expect(onDecision).toHaveBeenCalledExactlyOnceWith(VERDICTS.decided.decision, 4);
+    // The decision rides the next frame too: the same number, so not a second card.
+    await act(async () => gates[1].resolve({ ...VERDICTS.decided, decision_seq: 4 }));
+    expect(onDecision).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the first frame back until the start's reset has answered", async () => {
+    const resetGate = deferred<void>();
+    scannerReset.mockReturnValueOnce(resetGate.promise);
+    scannerFrame.mockReturnValue(deferred<ScannerVerdict>().promise);
+    mount();
+    await tick(100);
+    expect(scannerReset).toHaveBeenCalledTimes(1);
+    expect(scannerFrame).not.toHaveBeenCalled();
+    await act(async () => resetGate.resolve(undefined));
+    await tick();
+    expect(scannerFrame).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A refused reset leaves the session holding what it held, so the stream's first number is a
+   * baseline again — a card frozen across the gap rides every committed frame of it — and the
+   * refusal is said, as a frame's would be.
+   */
+  it("takes the first number as a baseline when the start's reset is refused", async () => {
+    scannerReset.mockRejectedValueOnce("the scanner is open in another window");
     const onDecision = vi.fn();
     const frozen = { ...VERDICTS.decided, decision_seq: 4 };
-    scannerFrame.mockImplementation(() => answersIn(10, frozen));
-    const videoRef = { current: readyVideo() };
-    const grabFrame = vi.fn(async () => BYTES);
-    const { rerender } = renderHook(
-      ({ live }: { live: boolean }) =>
-        useScanLoop({
-          videoRef,
-          live,
-          ...KNOBS,
-          grabFrame,
-          onDecision,
-        }),
-      { initialProps: { live: true } },
-    );
-    await tick(100);
-    expect(scannerFrame.mock.calls.length).toBeGreaterThan(1);
+    const gates = framesGated(2);
+    const { result } = mount({ onDecision });
+    await tick();
+    expect(result.current.error).toBe("the scanner is open in another window");
+    await act(async () => gates[0].resolve(frozen));
+    await act(async () => gates[1].resolve(frozen));
     expect(onDecision).not.toHaveBeenCalled();
+    expect(result.current.error).toBeNull();
+  });
 
-    // …and the same holds for a camera that stops and starts again on the same frozen card.
-    rerender({ live: false });
-    await tick(60);
-    rerender({ live: true });
-    await tick(100);
-    expect(onDecision).not.toHaveBeenCalled();
+  describe("the card standing when the last stream stopped", () => {
+    /** A camera that can be stopped and started, over one `onDecision`. */
+    function restartable(onDecision: (decision: ScannerDecision, seq: number) => void) {
+      const videoRef = { current: readyVideo() };
+      const grabFrame = vi.fn(async () => BYTES);
+      return renderHook(
+        ({ live }: { live: boolean }) =>
+          useScanLoop({ videoRef, live, ...KNOBS, grabFrame, onDecision }),
+        { initialProps: { live: true } },
+      );
+    }
+    /** Plays `answers`, one each 10 ms, then holds the last of them. */
+    function plays(answers: ScannerVerdict[]) {
+      const queue = [...answers];
+      let last = answers[answers.length - 1];
+      scannerFrame.mockImplementation(() => {
+        last = queue.shift() ?? last;
+        return answersIn(10, last);
+      });
+    }
+
+    /**
+     * Closing a dialog, restoring the window or coming back to the view starts a pump over the
+     * card already in the tray. The session, reset, decides it again — and that decision is the
+     * card still lying there, not a second copy.
+     */
+    it("does not file it again when the session decides it afresh", async () => {
+      const onDecision = vi.fn();
+      plays([{ ...VERDICTS.voting, decision_seq: 0 }, VERDICTS.decided]);
+      const { rerender } = restartable(onDecision);
+      await tick(60);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1]);
+
+      rerender({ live: false });
+      await tick(60);
+      plays([
+        { ...VERDICTS.voting, decision_seq: 1 },
+        { ...VERDICTS.decided, decision_seq: 2 },
+      ]);
+      rerender({ live: true });
+      await tick(100);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1]);
+
+      // Only the stream's first decision: lifted and laid down again, the card is a card of its own.
+      plays([
+        { ...VERDICTS.noCard, decision_seq: 2 },
+        { ...VERDICTS.voting, decision_seq: 2 },
+        { ...VERDICTS.decided, decision_seq: 3 },
+      ]);
+      await tick(100);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1, 3]);
+    });
+
+    it("remembers it across a remount — the view the reader comes back to", async () => {
+      const onDecision = vi.fn();
+      plays([{ ...VERDICTS.voting, decision_seq: 0 }, VERDICTS.decided]);
+      const first = restartable(onDecision);
+      await tick(60);
+      expect(onDecision).toHaveBeenCalledTimes(1);
+      first.unmount();
+
+      plays([
+        { ...VERDICTS.voting, decision_seq: 1 },
+        { ...VERDICTS.decided, decision_seq: 2 },
+      ]);
+      restartable(onDecision);
+      await tick(100);
+      expect(onDecision).toHaveBeenCalledTimes(1);
+    });
+
+    it("files another card laid down while the camera was stopped", async () => {
+      const onDecision = vi.fn();
+      plays([{ ...VERDICTS.voting, decision_seq: 0 }, VERDICTS.decided]);
+      const { rerender } = restartable(onDecision);
+      await tick(60);
+      rerender({ live: false });
+      await tick(60);
+      plays([{ ...VERDICTS.decided, decision_seq: 2, decision: OTHER_CARD }]);
+      rerender({ live: true });
+      await tick(60);
+      expect(onDecision.mock.calls).toEqual([
+        [VERDICTS.decided.decision, 1],
+        [OTHER_CARD, 2],
+      ]);
+    });
+
+    it("files it again once a frame showed the lens empty before the stop", async () => {
+      const onDecision = vi.fn();
+      plays([
+        { ...VERDICTS.voting, decision_seq: 0 },
+        VERDICTS.decided,
+        { ...VERDICTS.noCard, decision_seq: 1 },
+      ]);
+      const { rerender } = restartable(onDecision);
+      await tick(60);
+      rerender({ live: false });
+      await tick(60);
+      plays([{ ...VERDICTS.decided, decision_seq: 2 }]);
+      rerender({ live: true });
+      await tick(60);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1, 2]);
+    });
+
+    it("files it again after a Reset press, which asked for the next decision to be news", async () => {
+      const onDecision = vi.fn();
+      plays([{ ...VERDICTS.voting, decision_seq: 0 }, VERDICTS.decided]);
+      const { result, rerender } = restartable(onDecision);
+      await tick(60);
+      rerender({ live: false });
+      await tick(60);
+      plays([
+        { ...VERDICTS.voting, decision_seq: 1 },
+        { ...VERDICTS.decided, decision_seq: 2 },
+      ]);
+      rerender({ live: true });
+      await act(async () => {
+        await result.current.reset();
+      });
+      await tick(100);
+      expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1, 2]);
+    });
   });
 
   /**
@@ -1405,7 +1569,7 @@ describe("the run useScanLoop keeps", () => {
       await vi.advanceTimersByTimeAsync(20);
       await reset;
     });
-    expect(scannerReset).toHaveBeenCalledTimes(1);
+    expect(scannerReset).toHaveBeenCalledTimes(2);
     // Nothing from before the reset came back with the frames sent after it.
     await tick(35);
     const after = numbers(result.current.recent());

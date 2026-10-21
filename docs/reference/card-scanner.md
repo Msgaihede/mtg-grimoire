@@ -3748,8 +3748,24 @@ every committed frame (Fast: the tracker's printing, `resolved`, no choices; Exa
 first choice, its outcome and its choices) and `null` on an Exact commit no resolve made. Since the
 final review it also carries `replaces_previous` (*Exact*, above), which the tray reads to replace
 its newest row instead of adding one.
-`useScanLoop` takes the first `decision_seq` after the camera goes live as a baseline and calls
-`onDecision` only for a number that differs on a frame carrying a decision.
+`useScanLoop` calls `onDecision` only for a number that differs on a frame carrying a decision.
+
+**A pump that starts resets the session before its first frame** (#1318, 2026-10-21). Until then
+the loop took the first `decision_seq` after the camera went live as a baseline, and the session
+went on from whatever it held when the last pump stopped — a Stop, a view switch, a minimized
+window, *Send scan…*'s dialog and *Add card…*'s each stop one. A card laid down in that gap was
+never seen arriving: no empty frame went past the session, so Fast and Exact weighed it as a swap
+under the old card's frozen decision (late, and never while its hash churned), and a card decided
+on the stream's very first frame — Neural decides on one clear frame — was taken for the baseline
+and not added. Now `scanner_reset` runs first, awaited behind any frame still on the wire, and
+every decision of the stream is news, its first frame's included. **Except the card that was
+standing when the last stream stopped**: the identity (oracle, else printing) of the last decision
+a taken verdict carried, kept in window-lifetime module memory (`viewMemory`) so a remounted view
+reads it too, and dropped by any taken frame with no quad. The stream's first decision naming it is
+that card still lying on the mat, already in the tray, and is not passed on; a frame with no card
+before it makes it a card of its own, and a Reset press clears it. A second copy of one card
+swapped in while the pump was stopped cannot be told from the first. A start whose reset is refused
+says so and falls back to the baseline.
 
 **And not for one that moves again within `DECISION_GAP_FRAMES` (3) frames** (#735, 2026-10-01).
 The session can decide one physical card twice in a row: the watch calls a card changed on two
