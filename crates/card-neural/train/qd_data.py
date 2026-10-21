@@ -124,9 +124,19 @@ def _shade(rng: random.Random, h: int, w: int) -> np.ndarray:
 
 def camera_view(img: np.ndarray, rng: random.Random, others: list[np.ndarray] = ()) -> np.ndarray:
     """One degraded query view of the card `img` (RGB, a Scryfall scan at any size)."""
+    return crop_from_quad(*camera_frame(img, rng, others))
+
+
+def camera_frame(img: np.ndarray, rng: random.Random, others: list[np.ndarray] = (),
+                 card_h_range: tuple[float, float] = (130, 340), slop=None) -> tuple[np.ndarray, np.ndarray]:
+    """The camera frame `camera_view` cuts its crop from, and the corners it cuts through (a
+    detector's, TL, TR, BR, BL in frame pixels). The evidence networks' views (ev_data.py) cut
+    their own regions from the same frame through the same corners, drawn nearer
+    (`card_h_range`, from full-size scans) and with a looser detector (`slop(quad, rng)` moves
+    the corners further). The defaults are the embedder's recipe and draw nothing extra."""
     # Card height in camera pixels: a 540–1080 p frame, near to far; at most the half-size scan's
     # own 340, so a query is never an upscaled scan.
-    card_h = rng.uniform(130, 340)
+    card_h = rng.uniform(*card_h_range)
     pad = rng.uniform(0.4, 0.9)
     H, W = int(card_h * (1 + pad)), int(card_h * 63 / 88 * (1 + pad * 1.6))
     canvas = _background(rng, H, W, list(others))
@@ -171,7 +181,8 @@ def camera_view(img: np.ndarray, rng: random.Random, others: list[np.ndarray] = 
     ok, enc = cv2.imencode(".jpg", cv2.cvtColor(out, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, rng.randint(35, 92)])
     out = cv2.cvtColor(cv2.imdecode(enc, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
     # Cut through the corners a detector would give: often the plastic's, never exactly the card's.
-    return crop_from_quad(out, scene.detector_quad(quad, outer, rng))
+    corners = scene.detector_quad(quad, outer, rng)
+    return out, (corners if slop is None else slop(corners, rng))
 
 
 class Looks:

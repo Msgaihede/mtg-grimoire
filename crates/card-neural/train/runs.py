@@ -1,6 +1,6 @@
-"""What the two trainers (qd_train.py, qd_detect_train.py) share about a run directory: the
-checkpoint they resume from, the random states it carries, the log they append to, and how many
-data workers they start.
+"""What the trainers (qd_train.py, qd_detect_train.py, ev_train.py) share about a run directory:
+the checkpoint they resume from, the random states it carries, the log they append to, and how
+many data workers they start.
 
 The pipeline's GPU containers are preemptible, and a preempted one is started again with the same
 arguments. So a trainer writes `checkpoint.pt` into its run directory at every save point — the

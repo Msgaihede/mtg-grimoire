@@ -28,7 +28,7 @@ RUN_NAME = re.compile(r"^\d{4}-\d{2}(-\d{2}-\d{4})?(-smoke)?$")
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True, help="YYYY-MM for the monthly run, YYYY-MM-DD-HHMM by hand")
-    ap.add_argument("--no-detector", action="store_true", help="retrain the embedder and gallery only")
+    ap.add_argument("--no-detector", action="store_true", help="keep the current detector; retrain the other three")
     ap.add_argument("--cpu", type=float, default=16.0, help="physical cores a training container gets")
     ap.add_argument("--memory-gib", type=float, default=24.0)
     ap.add_argument("--budget-usd", type=float, default=budget.HARD_LIMIT_USD)
@@ -60,7 +60,7 @@ def main() -> None:
         "shares_usd": {k: round(v, 2) for k, v in shares.items()},
         "training_hours_at_most": {
             k: round(budget.max_seconds(v, rate) / 3600, 2) for k, v in shares.items()
-            if k in ("embedder", "detector")
+            if k not in ("refresh", "pipeline")
         },
     }), flush=True)
 

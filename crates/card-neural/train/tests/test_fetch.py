@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scryfall_fetch import plan, read_urls, write_manifest  # noqa: E402
+from scryfall_fetch import plan, read_urls, select, write_manifest  # noqa: E402
 
 OLD = "https://cards.scryfall.io/normal/front/a/a/aa.jpg?1700000000"
 NEW = "https://cards.scryfall.io/normal/front/a/a/aa.jpg?1790000000"
@@ -50,6 +50,31 @@ class Plan(unittest.TestCase):
     def test_the_manifest_outranks_the_previous_index(self):
         todo, _ = plan([row("a", NEW)], fetched={"a": NEW}, on_disk={"a"}, previous={"a": OLD})
         self.assertEqual(todo, [])
+
+
+class IndexRows(unittest.TestCase):
+    """What the evidence networks' classes are made of (ev_data.py): the rarity (the symbol's
+    colour), and the set type, promo types and release date (the promo stamp)."""
+
+    CARD = {
+        "id": "c0ffee00-0000-4000-8000-000000000001", "oracle_id": "0ac1e000-0000-4000-8000-000000000002",
+        "name": "Lightning Bolt", "set": "pm11", "set_type": "promo", "collector_number": "149p",
+        "rarity": "common", "lang": "en", "layout": "normal", "games": ["paper"], "image_status": "highres_scan",
+        "promo": True, "promo_types": ["stamped", "promopack"], "released_at": "2010-07-16",
+        "image_uris": {"normal": "https://cards.scryfall.io/normal/front/c/0/c0ffee00.jpg?1"},
+    }
+
+    def test_a_row_carries_the_rarity_and_the_promo_fields(self):
+        (r,) = select([self.CARD])
+        self.assertEqual(r["rarity"], "common")
+        self.assertEqual(r["set_type"], "promo")
+        self.assertEqual(r["promo_types"], ["promopack", "stamped"])
+        self.assertEqual(r["released_at"], "2010-07-16")
+
+    def test_a_card_without_promo_types_has_an_empty_list(self):
+        card = {k: v for k, v in self.CARD.items() if k != "promo_types"}
+        (r,) = select([card])
+        self.assertEqual(r["promo_types"], [])
 
 
 class Manifest(unittest.TestCase):

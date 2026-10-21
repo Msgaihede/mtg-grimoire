@@ -9,6 +9,16 @@ import budget  # noqa: E402
 
 
 class Shares(unittest.TestCase):
+    def test_the_hard_limit_is_the_owners_ten_dollars(self):
+        self.assertEqual(budget.HARD_LIMIT_USD, 10.0)
+
+    def test_six_stages_share_the_whole_budget(self):
+        s = budget.shares(10.0, True)
+        self.assertEqual(set(s), {"refresh", "pipeline", "embedder", "detector", "symbol", "band"})
+        self.assertAlmostEqual(sum(s.values()), 10.0, places=6)
+        self.assertGreater(s["symbol"], 0)
+        self.assertGreater(s["band"], 0)
+
     def test_a_run_never_shares_out_more_than_the_hard_limit(self):
         for detector in (True, False):
             s = budget.shares(budget.HARD_LIMIT_USD, detector)
@@ -18,19 +28,25 @@ class Shares(unittest.TestCase):
         with self.assertRaises(ValueError):
             budget.shares(budget.REFRESH_USD + budget.PIPELINE_USD, True)
 
-    def test_without_the_detector_the_embedder_gets_what_is_left(self):
+    def test_without_the_detector_the_other_three_trainings_share_what_is_left(self):
         s = budget.shares(10.0, False)
-        self.assertNotIn("detector", s)
-        self.assertAlmostEqual(s["embedder"], 10.0 - budget.REFRESH_USD - budget.PIPELINE_USD)
+        self.assertEqual(set(s), {"refresh", "pipeline", "embedder", "symbol", "band"})
+        self.assertAlmostEqual(s["embedder"] + s["symbol"] + s["band"], 10.0 - budget.REFRESH_USD - budget.PIPELINE_USD)
 
-    def test_the_default_container_affords_well_over_the_estimated_training(self):
-        # 16 cores, 24 GiB, an L4: $1.75 an hour. Estimated ~1.0 h (embedder) and ~1.2 h
-        # (detector); the shares must leave room for Modal's cores being half as fast.
+    def test_each_training_is_shared_its_estimate_and_a_margin(self):
+        # 16 cores, 24 GiB, an L4: $1.75 an hour. The four trainings' estimates come to ~$8.30 of the
+        # $9.65 left after the refresh and the orchestrator, so each gets its estimate plus ~16 %.
         rate = budget.rate_per_s("L4", 16, 24)
         self.assertAlmostEqual(rate * 3600, 0.799 + 16 * 0.04716 + 24 * 0.007992, places=2)
         s = budget.shares(10.0, True)
-        self.assertGreater(budget.max_seconds(s["embedder"], rate), 2 * 1.0 * 3600)
-        self.assertGreater(budget.max_seconds(s["detector"], rate), 2 * 1.2 * 3600)
+        estimated = sum(budget.ESTIMATE_USD.values()) + budget.REFRESH_USD + budget.PIPELINE_USD
+        self.assertLessEqual(estimated, 9.0, "the owner's ~$9 a run")
+        for stage, usd in budget.ESTIMATE_USD.items():
+            self.assertGreater(s[stage], 1.1 * usd, stage)
+            hours = usd / (rate * 3600)
+            self.assertGreater(budget.max_seconds(s[stage], rate), hours * 3600, stage)
+        # The embedder and the detector keep the ratio their measured estimates had.
+        self.assertAlmostEqual(s["embedder"] / (s["embedder"] + s["detector"]), 0.46, delta=0.02)
 
 
 class LedgerTest(unittest.TestCase):

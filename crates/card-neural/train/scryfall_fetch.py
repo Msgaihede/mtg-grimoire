@@ -1,6 +1,7 @@
 """Every paper printing face's `normal` scan from Scryfall, fast, from the bulk data.
 
     python scryfall_fetch.py <out dir> [--workers 48] [--kind default_cards] [--limit N] [--reuse-bulk] [--prune]
+    python scryfall_fetch.py <out dir> --index-only     # rewrite index.jsonl from the bulk file on disk
 
 Writes into <out dir>:
   <kind>.jsonl.gz     the bulk file (one request to api.scryfall.com, the download from data.scryfall.io)
@@ -9,7 +10,9 @@ Writes into <out dir>:
                       named by the id's first two characters (a Modal Volume holds at most 262 144
                       files a directory)
   index.jsonl         one line per face: ids, name, set, number, language, illustration and the frame
-                      fields a "look" groups by (looks.py), and the scan's current URL
+                      fields a "look" groups by (looks.py), the scan's current URL, and what the
+                      evidence networks' classes are made of (ev_data.py): `rarity` (the set
+                      symbol's colour), `set_type`, `promo_types` and `released_at` (a promo's stamp)
   fetched.jsonl       one line per scan on disk: {id, url} — the URL it was fetched from
   fetch.json          the run: {fetched_at, faces, downloaded, refreshed, failed, bytes, ...}
   fetch.log           progress, retries, failures
@@ -23,7 +26,8 @@ Incremental, so it is re-run against the same folder every month: the bulk file 
 again when the API's `updated_at` moved (`--reuse-bulk` keeps the one on disk), a face with no
 scan is downloaded (`downloaded`), and a face whose image URL changed since its scan was fetched —
 Scryfall's URLs end `?<timestamp>`, which moves when the image is replaced — is downloaded again
-(`refreshed`). A scan with no record in fetched.jsonl (a dataset fetched before it, in the flat
+(`refreshed`); `--index-only` rewrites index.jsonl from the bulk file on disk and downloads
+nothing. A scan with no record in fetched.jsonl (a dataset fetched before it, in the flat
 `normal/<id>.jpg` layout) is taken as fetched from the URL the previous index.jsonl gave it, else
 from the current one. Files are written to a temporary name and renamed, so an interrupted run
 leaves no partial image, and fetched.jsonl is appended as each scan lands. Nothing is deleted
@@ -124,6 +128,7 @@ def select(cards: list[dict]):
                 "card_name": card.get("name"),
                 "set": card.get("set"),
                 "collector_number": card.get("collector_number"),
+                "rarity": card.get("rarity"),
                 "lang": card.get("lang"),
                 "layout": card.get("layout"),
                 "illustration_id": face.get("illustration_id") or card.get("illustration_id"),
@@ -133,6 +138,8 @@ def select(cards: list[dict]):
                 "frame_effects": sorted(card.get("frame_effects") or []),
                 "promo": card.get("promo", False),
                 "released_at": card.get("released_at"),
+                "set_type": card.get("set_type"),
+                "promo_types": sorted(card.get("promo_types") or []),
                 "url": uris["normal"],
             }
 
@@ -195,9 +202,13 @@ def main():
     ap.add_argument("--limit", type=int, help="only the first N faces (a smoke run)")
     ap.add_argument("--reuse-bulk", action="store_true", help="keep a bulk file on disk without asking the API")
     ap.add_argument("--prune", action="store_true", help="delete the sharded scans of faces no longer in the bulk file")
+    ap.add_argument("--index-only", action="store_true",
+                    help="rewrite index.jsonl from the bulk file already on disk and fetch nothing")
     args = ap.parse_args()
     if args.prune and args.limit:
         ap.error("--prune with --limit would delete every face past the limit")
+    if args.prune and args.index_only:
+        ap.error("--index-only fetches nothing and deletes nothing")
     out = Path(args.out)
     (out / "normal").mkdir(parents=True, exist_ok=True)
     logf = open(out / "fetch.log", "a", encoding="utf-8")
@@ -211,7 +222,7 @@ def main():
             logf.flush()
 
     started = time.time()
-    cards = read_cards(bulk(out, args.kind, log, args.reuse_bulk))
+    cards = read_cards(bulk(out, args.kind, log, args.reuse_bulk or args.index_only))
     rows = list(select(cards))
     if args.limit:
         rows = rows[: args.limit]
@@ -226,6 +237,9 @@ def main():
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     os.replace(tmp, out / "index.jsonl")
     write_manifest(out / MANIFEST, fetched)
+    if args.index_only:
+        log(f"{len(cards)} cards -> {len(rows)} faces; index.jsonl rewritten, nothing fetched")
+        return
     new = sum(why == "new" for _, why in todo)
     log(f"{len(cards)} cards -> {len(rows)} faces; {len(rows) - new} on disk ({len(adopt)} adopted), "
         f"{new} new and {len(todo) - new} changed to fetch with {args.workers} workers")

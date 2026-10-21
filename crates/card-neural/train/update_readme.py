@@ -1,19 +1,21 @@
 """Rewrite `crates/card-neural/models/README.md`'s table and `training.json` for a delivered run.
 
     python crates/card-neural/train/update_readme.py --models crates/card-neural/models \
-        --done DONE.json --gallery-json gallery.json
+        --done DONE.json --gallery-json gallery.json [--symbols-json symbols.json] [--bands-json bands.json]
 
-**The table is the web build's pin on the four files**: `packages/ui/lib/core/web/assets.ts`'
+**The table is the web build's pin on the eight files**: `packages/ui/lib/core/web/assets.ts`'
 `neuralTable` reads each row's bytes and `head8…tail8` sha256, and `apps/light/vite.config.ts`
 fails a build whose file differs from its row. So every row's numbers are read from the files on
-disk — all four, changed or not — never carried over from `DONE.json`. The table is laid out as
+disk — all eight, changed or not — never carried over from `DONE.json`. The table is laid out as
 Prettier lays out Markdown (each column padded to its widest cell, `bytes` right-aligned), so a
 later format pass moves nothing; the thousands separator is an ASCII space, as the table has
 always had and `neuralTable`'s pattern reads.
 
 `training.json`, beside the files, is what the current files scored when they were trained:
 `deliver.py` compares a new run against it in the pull request, and this rewrites it with the
-run it delivers. A network the run did not retrain (`--no-detector`) keeps its row and its record.
+run it delivers. A network the run did not retrain (`--no-detector`; the set symbol and collector
+band networks for a run made before the pipeline trained them) keeps its row and its record.
+`neural.json` is hand-kept: its thresholds are tuned on the readers' scans, never by a run.
 
 Standard library only: the delivery's build job runs it with no packages installed.
 """
@@ -25,7 +27,9 @@ import json
 import re
 from pathlib import Path
 
-FILES = ("detector.onnx", "embedder.onnx", "gallery.bin", "neural.json")
+FILES = ("detector.onnx", "embedder.onnx", "gallery.bin", "neural.json", "symbol.onnx", "band.onnx", "symbols.bin", "bands.bin")
+# The printing evidence's networks, each with its gallery (`<kind>s.bin`).
+EVIDENCE = ("symbol", "band")
 TRAINING_JSON = "training.json"
 README = "README.md"
 
@@ -132,17 +136,28 @@ def render_table(header: list[str], aligns: list[str | None], rows: list[list[st
     ]
 
 
-def describe(name: str, old: str, run: str, *, looks=None, epochs=None, steps=None) -> str:
-    """A changed file's description: its counts brought up to date, its provenance the run's."""
+def describe(name: str, old: str, run: str, *, looks=None, epochs=None, steps=None, classes=None) -> str:
+    """A changed network's description: its counts brought up to date, its provenance the run's."""
     text = ROW_PROVENANCE.sub("", old)
-    if name == "embedder.onnx":
-        if looks is not None:
-            text = re.sub(r"over [\d ]+ looks", f"over {group(looks)} looks", text)
-        if epochs is not None:
-            text = re.sub(r"\b\d+ epochs\b", f"{epochs} epochs", text)
+    if name == "embedder.onnx" and looks is not None:
+        text = re.sub(r"over [\d ]+ looks", f"over {group(looks)} looks", text)
+    if name == "symbol.onnx" and classes is not None:
+        text = re.sub(r"over [\d ]+ classes", f"over {group(classes)} classes", text)
+    if name == "band.onnx" and classes is not None:
+        text = re.sub(r"over [\d ]+ printing faces", f"over {group(classes)} printing faces", text)
+    if name in ("embedder.onnx", "symbol.onnx", "band.onnx") and epochs is not None:
+        text = re.sub(r"\b\d+ epochs\b", f"{epochs} epochs", text)
     if name == "detector.onnx" and steps is not None:
         text = re.sub(r"trained [\d ]+ steps", f"trained {group(steps)} steps", text)
     return f"{text} (training run `{run}`)"
+
+
+def recount(name: str, old: str, rows: int) -> str:
+    """A rebuilt evidence gallery's description, which says what it is rather than which run made
+    it: its count brought up to date — the printings `symbols.bin` covers, the rows of `bands.bin`."""
+    if name == "symbols.bin":
+        return re.sub(r"shows it \([\d ]+\)", f"shows it ({group(rows)})", old)
+    return re.sub(r"one row a printing face \([\d ]+\)", f"one row a printing face ({group(rows)})", old)
 
 
 # --- the run ----------------------------------------------------------------------------------
@@ -153,13 +168,26 @@ def looks_of(gallery_json: Path) -> int:
     return len(json.loads(gallery_json.read_text(encoding="utf-8"))["entries"])
 
 
+def covered(gallery_json: Path) -> int:
+    """How many printings an evidence gallery's rows cover between them."""
+    entries = json.loads(gallery_json.read_text(encoding="utf-8"))["entries"]
+    return len({c for e in entries for c in e.get("covers") or ()})
+
+
 def retrained(done: dict) -> list[str]:
-    """The networks a run trained and delivers: the embedder always, the detector unless the
-    run was launched with `--no-detector` (then `DONE.json` has no detector file)."""
+    """The networks a run trained and delivers: the embedder always; the detector unless the run
+    was launched with `--no-detector` (then `DONE.json` has no detector file); the set symbol and
+    collector band networks when the run trained them (every run since the pipeline did)."""
     files = done.get("files")
+    metrics = done.get("metrics") or {}
+    nets = ["embedder"]
     exported = files is None or "detector.onnx" in files
-    measured = (done.get("metrics") or {}).get("detector") is not None
-    return ["embedder", "detector"] if done.get("detector", True) and exported and measured else ["embedder"]
+    if done.get("detector", True) and exported and metrics.get("detector") is not None:
+        nets.append("detector")
+    for kind in EVIDENCE:
+        if metrics.get(kind) is not None and (files is None or f"{kind}.onnx" in files):
+            nets.append(kind)
+    return nets
 
 
 def provenance(done: dict, training: dict, looks: int) -> str:
@@ -181,6 +209,15 @@ def provenance(done: dict, training: dict, looks: int) -> str:
     else:
         kept = (training.get("detector") or {}).get("run", "an earlier run")
         parts.append(f"detector not retrained (still run `{kept}`'s)")
+    nets = retrained(done)
+    for kind in EVIDENCE:
+        if kind in nets:
+            m = metrics[kind]
+            parts.append(f"{kind} within-card top-1 {number(m.get('within_top1'))} after {number(m.get('epochs'))} "
+                         f"epochs, {number(m.get('classes'))} classes")
+    if not any(kind in nets for kind in EVIDENCE):
+        kept = [(training.get(kind) or {}).get("run", "an earlier run") for kind in EVIDENCE]
+        parts.append(f"symbol and band networks not retrained (still runs `{kept[0]}` and `{kept[1]}`)")
     spend = done.get("spend_usd")
     cost = f"${spend:.2f} on Modal" if isinstance(spend, (int, float)) else "spend not recorded"
     finished = (done.get("finished_at") or "")[:10] or "on an unrecorded date"
@@ -192,15 +229,19 @@ def provenance(done: dict, training: dict, looks: int) -> str:
     )
 
 
-def update_readme(text: str, models: Path, done: dict, training: dict, looks: int) -> str:
-    """The README with its four rows read from `models/` and the run's provenance line."""
+def update_readme(text: str, models: Path, done: dict, training: dict, looks: int,
+                  counts: dict[str, int] | None = None) -> str:
+    """The README with its eight rows read from `models/` and the run's provenance line. `counts`
+    is what the rebuilt evidence galleries hold (`symbols.bin`: printings covered, `bands.bin`:
+    rows)."""
     lines = text.split("\n")
     start, end = find_table(lines)
     header, aligns, rows = parse_table(lines[start:end])
     col = {name: header.index(name) for name in ("file", "bytes", "sha256", "what it is")}
     nets = retrained(done)
-    # The networks' rows name their run; `gallery.bin`'s says what it is, which a run does not change.
-    changed = {"embedder.onnx"} | ({"detector.onnx"} if "detector" in nets else set())
+    # The networks' rows name their run; a gallery's says what it is, which a run does not change.
+    changed = {f"{net}.onnx" for net in nets}
+    counts = counts or {}
     metrics = done.get("metrics") or {}
     by_name = {row[col["file"]].strip("`"): row for row in rows}
     missing = [name for name in FILES if name not in by_name]
@@ -217,9 +258,12 @@ def update_readme(text: str, models: Path, done: dict, training: dict, looks: in
                 row[col["what it is"]],
                 done["run"],
                 looks=looks,
-                epochs=(metrics.get("embedder") or {}).get("epochs"),
+                epochs=(metrics.get(name[: -len(".onnx")]) or {}).get("epochs"),
                 steps=(metrics.get("detector") or {}).get("steps"),
+                classes=(metrics.get(name[: -len(".onnx")]) or {}).get("classes"),
             )
+        elif name in counts:
+            row[col["what it is"]] = recount(name, row[col["what it is"]], counts[name])
     table = render_table(header, aligns, rows)
     line = provenance(done, training, looks)
     rest = lines[end:]
@@ -245,18 +289,28 @@ def update_training(training: dict, done: dict, looks: int) -> dict:
     out["embedder"] = {**common, "looks": looks, "metrics": metrics.get("embedder") or {}}
     if "detector" in retrained(done):
         out["detector"] = {**common, "metrics": metrics["detector"]}
+    for kind in EVIDENCE:
+        if kind in retrained(done):
+            out[kind] = {**common, "classes": metrics[kind].get("classes"), "metrics": metrics[kind]}
     out["last_run"] = {**common, "retrained": retrained(done), "spend_usd": done.get("spend_usd")}
     return out
 
 
-def update(models: Path, done: dict, gallery_json: Path) -> dict:
-    """Rewrite `models/README.md` and `models/training.json` in place; the new record back."""
+def update(models: Path, done: dict, gallery_json: Path, symbols_json: Path | None = None,
+           bands_json: Path | None = None) -> dict:
+    """Rewrite `models/README.md` and `models/training.json` in place; the new record back. The
+    evidence galleries' `json`s (the run's export) count what the rebuilt galleries hold."""
     training_path = models / TRAINING_JSON
     training = json.loads(training_path.read_text(encoding="utf-8"))
     looks = looks_of(gallery_json)
+    counts = {}
+    if symbols_json is not None:
+        counts["symbols.bin"] = covered(symbols_json)
+    if bands_json is not None:
+        counts["bands.bin"] = looks_of(bands_json)
     readme = models / README
     text = readme.read_text(encoding="utf-8")
-    readme.write_text(update_readme(text, models, done, training, looks), encoding="utf-8", newline="\n")
+    readme.write_text(update_readme(text, models, done, training, looks, counts), encoding="utf-8", newline="\n")
     new = update_training(training, done, looks)
     training_path.write_text(json.dumps(new, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     return new
@@ -264,12 +318,14 @@ def update(models: Path, done: dict, gallery_json: Path) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--models", type=Path, required=True, help="the folder: README.md, training.json and the four files")
+    ap.add_argument("--models", type=Path, required=True, help="the folder: README.md, training.json and the eight files")
     ap.add_argument("--done", type=Path, required=True, help="the run's DONE.json")
     ap.add_argument("--gallery-json", type=Path, required=True, help="the run's export gallery.json")
+    ap.add_argument("--symbols-json", type=Path, help="the run's export symbols.json, when it trained the symbol network")
+    ap.add_argument("--bands-json", type=Path, help="the run's export bands.json, when it trained the band network")
     args = ap.parse_args()
     done = json.loads(args.done.read_text(encoding="utf-8"))
-    update(args.models, done, args.gallery_json)
+    update(args.models, done, args.gallery_json, args.symbols_json, args.bands_json)
     print(f"rewrote {args.models / README} and {args.models / TRAINING_JSON} for run {done['run']}")
 
 

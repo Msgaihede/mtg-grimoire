@@ -31,7 +31,9 @@ For global repo workflow, style, and testing conventions, refer to:
   were tuned on the pair beside this recogniser. On the 124 readers' scans the Neural pass names
   the right printing on 87 and the wrong one on none, with 32 left a choice (77 / 0 / 42 without
   them); the thresholds are in-sample, and the owner chose `decideMargin` 0.20 knowing the
-  cross-validated estimate had 3 wrong printings. Their training is the lab's, not `train/`'s.
+  cross-validated estimate had 3 wrong printings. The lab trained them; the monthly pipeline
+  (`train/ev_*.py`) now remakes them with the other two networks, and a delivery never changes
+  `neural.json` — its thresholds, the evidence's too, are hand-kept.
 - **Only our own weights.** Never a file from quickdraw.cards (no licence) or any other model
   whose licence we have not read; the spike's comparison files live in the scanner lab, outside
   the repository.
@@ -69,7 +71,10 @@ without the features. `probe` runs the files on pictures:
   measured on the readers' scans, because `neural.json`'s thresholds were tuned on this pair.
 - Differences from the lab, and only these: scans sharded as `normal/<2>/<id>.jpg` (the flat
   layout still read), an incremental `scryfall_fetch.py`, a resumable `checkpoint.pt`
-  (preemptible GPUs), `--workers`/`--prefetch`, a final `{"done": true}` line, and
-  `qd_export.py --head-only`. Experiments (readers' crops, oracle, folds) stay in the lab.
+  (preemptible GPUs), `--workers`/`--prefetch`, a final `{"done": true}` line,
+  `qd_export.py --head-only`, the evidence exports' refusal of classes their run did not train
+  on (`classes_sha256`), and **the evidence networks' epochs, 12 and 14 against the shipped 16
+  and 20** — the owner's ~$9 a run for all four networks (`train/README.md`, "The budget").
+  Experiments (readers' crops, oracle, folds, the evidence's boxes and thresholds) stay in the lab.
 - `python -m unittest discover crates/card-neural/train/tests` — no GPU, no network; not part of
   `pnpm verify`.

@@ -61,23 +61,27 @@ By hand, from `train/`:
 
 ### The printing evidence
 
-`symbol.onnx`, `band.onnx` and their galleries are **the lab's alone**: the training scripts
-(`spike\train\ev_*.py`) are not in `train/`, and the monthly pipeline does not remake them. By
-hand, in the lab:
+`symbol.onnx`, `band.onnx` and their galleries were trained in the lab (runs `ev-symbol-3`, 16
+epochs, and `ev-band-2`, 20); their training is now `train/`'s `ev_*.py` too, and **the monthly
+pipeline remakes them with the other four** (the owner's choice, 2026-10-21), at 12 and 14 epochs
+to fit the run's budget (`../train/README.md`, "The budget"). By hand, from `train/`:
 
-1. **Train** each with `ev_train.py --kind symbol|band` (ArcFace, margin 0.3, on the same
-   Scryfall mirror; symbol 16 epochs at 64 repeats, ~74 min; band 20 epochs, ~82 min).
-2. **Export** with `ev_export.py <data> <run>\best.pt <out> --kind symbol|band`, which writes
+1. **Train** each with `ev_train.py <data> <run> --kind symbol|band` (ArcFace, margin 0.3, on the
+   same Scryfall mirror; symbol 12 epochs at 64 repeats, ~57 min on an RTX 4070 Ti; band 14
+   epochs, ~60 min).
+2. **Export** with `ev_export.py <data> <run>/best.pt <out> --kind symbol|band`, which writes
    `<kind>.onnx`, `<kind>s.matrix` (one row a class, the mean of its members' crops) and
    `<kind>s.json`, and the crop's `neural.json` entry as `<kind>.meta.json`.
 3. **Galleries**: `build-gallery --matrix <kind>s.matrix --gallery <kind>s.json --out <kind>s.bin`
    — the mean rows, not `<kind>s.head.matrix`.
-4. **Thresholds**: the replay with `--neural-evidence` and permissive thresholds, then the
-   grouped cross-validation over its decisions; the result goes in `neural.json`'s `evidence`.
+4. **Thresholds** stay the lab's: the replay with `--neural-evidence` and permissive thresholds,
+   then the grouped cross-validation over its decisions; the result goes in `neural.json`'s
+   `evidence`, by hand. A delivery never touches `neural.json`, and a retrained crop network can
+   shift its score scale — so its pull request is replayed on the readers' scans before it merges.
 
 A printing newer than the two galleries has no row in them, so the evidence cannot rule it out
 (`src/narrow.rs`): a card with such a printing among its candidates stays a choice of printings
-until the lab remakes the galleries.
+until the next monthly run remakes the galleries.
 
 **A new set** needs only a new gallery: its printings embedded by this embedder. A look the
 embedder was not trained on has no class weight; its row is the mean embedding of its scans,
