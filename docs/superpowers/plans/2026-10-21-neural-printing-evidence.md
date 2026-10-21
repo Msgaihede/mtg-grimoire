@@ -456,7 +456,7 @@ Behaviour: once `load_neural` has answered OK, `scanner.ts` starts `fetchNeuralE
 - [ ] **Step 1:** Write the docs.
 - [ ] **Step 2:** `pnpm verify` — PASS (one run; see the repo memory on never running two at once).
 - [ ] **Step 3:** Final replay on the 124 scans; compare with the **Baseline** section below: wrong ≤ baseline, resolved wrong printing ≤ baseline, ambiguous < 42, resolved right > baseline, `true_in_choices` + resolved right ≥ today's 118. Record the figures in the doc.
-- [ ] **Step 4: Owner's gate.** Ask the owner to run `pnpm scanner:corpus pull` (their R2 credentials) and the replay on the scans after 2026-10-15; the same floor must hold there. Do not open the PR for merge until they confirm.
+- [x] **Step 4: Owner's gate.** Ask the owner to run `pnpm scanner:corpus pull` (their R2 credentials) and the replay on the scans after 2026-10-15; the same floor must hold there. Do not open the PR for merge until they confirm. *(2026-10-21: the pull brought no scans after 2026-10-15; the owner waived the gate.)*
 - [ ] **Step 5: Commit** — `docs(scanner): Neural printing evidence`
 
 ---

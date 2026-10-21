@@ -3632,10 +3632,10 @@ placeholder order only, not a printing filed wrong**: it counts an ambiguous dec
 choice is the reader's, and the evidence reorders the choices. The tray never files `choices[0]`
 of an ambiguous decision — `rowFromDecision` (`packages/ui/features/scanner/reader/tray.ts`) only
 draws it as the row's provisional picture, and a row waiting for a pick stops the commit
-(`unresolvedCount`) until the reader picks. **It matches the figures above exactly.** The
-scans after 2026-10-15 are the honest test and are not in this mirror; they are the owner's to
-pull and replay (`pnpm scanner:corpus pull`), and the same floor — no wrong printing, no wrong
-card — must hold there before the evidence merges.
+(`unresolvedCount`) until the reader picks. **It matches the figures above exactly.** Scans
+received after 2026-10-15 would be the honest test, but on 2026-10-21 a `pnpm scanner:corpus
+pull` brought none, and the owner waived that gate. The first newer scans to arrive are
+the ones to replay against the same floor — no wrong printing, no wrong card.
 
 **Where the files come from.** They are in git (`crates/card-neural/models/`): **eight, in two
 sets**, the recogniser's four and the evidence's four. The desktop and Android builds compile them
