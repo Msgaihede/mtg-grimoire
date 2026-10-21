@@ -269,8 +269,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     checkout already fetched, and every upload is `gh` or tauri-action, each handed its token.
   - **Workflow-level `permissions: {}`** in `release.yml` and `scanner-bundle.yml`, with each job
     naming its own (`ci.yml` stays `contents: read`, which grants nothing to write).
-    `release-please` keeps `contents`/`issues`/`pull-requests: write`; `build` and `publish` get
-    `contents: write` alone — and from 2026-10-04 to 2026-10-07 so did `android-sign`, which
+    `release-please` keeps `contents`/`issues`/`pull-requests: write`; `publish` gets
+    `contents: write` alone, as did `build` until 2026-10-21 (*The build holds no token*, below),
+    when `attach` took its write — and from 2026-10-04 to 2026-10-07 so did `android-sign`, which
     uploaded the APK; since 2026-10-07 it uploads nothing to the release and gets
     `contents: read`, with `android`, `web`, `share`, `relay-deploy`, `share-deploy` and
     `web-deploy`: a deploy to Cloudflare needs nothing of GitHub's.
@@ -652,7 +653,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **A secret sits in a job that builds nothing.** This is the rule the removed `sign` job
     left behind (below), kept: a build leg runs every npm lifecycle script, every cargo build
     script and every Gradle plugin, and any of them can read a file or an environment. So
-    `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy` and `play-upload` run no root `pnpm install --frozen-lockfile`, no cargo and no Gradle — a checkout,
+    `attach`, `android-sign`, `relay-deploy`, `share-deploy`, `web-deploy` and `play-upload` run no root `pnpm install --frozen-lockfile`, no cargo and no Gradle — a checkout,
     an artifact download, and one tool each. **That is why the APK is re-signed rather than
     signed by Gradle**, which is what Tauri's signing guide describes (a `keystore.properties`
     Gradle reads): Gradle signs inside the build, so the keystore and its passwords would be on
@@ -1585,20 +1586,57 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   release-please's next run cannot find the previous release and replays the whole history
   into the changelog. `gh release upload`/`edit` **do** resolve a draft by tag even though no
   tag exists yet (measured 2026-08-09 — the draft's own URL is `untagged-<sha>`).
-- **There is no `sign` job, and there was one for a day.** `release.yml` gained a job on
+- **The build holds no token** (2026-10-21). `build` held `contents: write` and handed
+  tauri-action `GITHUB_TOKEN` so it could upload its bundles to the draft, which put a token that
+  can write releases in the environment of everything a desktop build runs: `beforeBuildCommand`
+  (`pnpm -w run build` — Vite, its plugins, tsc), every cargo build script in the lockfile, and
+  the action. Now:
+  - **`build` is `contents: read` with no token in any step.** tauri-action is given no
+    `releaseId` and no `tagName`, so it builds and uploads nothing (`src/index.ts` at the pinned
+    SHA); `pnpm scanner:assets` lost its `GH_TOKEN`, which the script never read (it fetches a
+    public release with `fetch`). A step collects the four bundles and the portable zip into
+    `desktop-out/` under their **dotted** names — what GitHub renames a space to on upload, and
+    the name the updater asks for `<name>.minisig` by — and fails a leg that built fewer than
+    two bundles (tauri-action ends green on none). They leave as `desktop-<os>`, seven days.
+  - **`attach`** (`needs: [release-please, build]`, `environment: release`, `contents: write`)
+    is `android-sign`'s shape: a checkout, `download-artifact` (`pattern: desktop-*`,
+    `merge-multiple`), a hold on exactly the five files for this version, a pinned Node with
+    caching off, `node scripts/update-signing.ts sign` on the portable zip and the NSIS setup
+    with `UPDATE_SIGNING_KEY` on that one step, and `gh release upload … --clobber` with the
+    token on that one step. **It fails without the key** — the one job here that holding a
+    secret does not skip — because a release attached unsigned is one every install with the
+    check refuses ([in-app-updates.md](in-app-updates.md)).
+  - **`relay-deploy`, `web-deploy` and `publish` need `attach` where they needed `build`**, so
+    a missing key stops a release before anything deploys, and the draft is never left with live
+    Workers ahead of it for that reason.
+  - **`scanner-bundle.yml` has the same split**: `build` reads, `publish` writes and builds
+    nothing ([card-scanner.md](card-scanner.md) §10).
+  - **Fences**: `scripts/actions-pinned.test.ts` refuses any job in any workflow that is granted
+    a write and sets up a toolchain, restores a cache, installs, or runs cargo, pnpm or
+    tauri-action; `scripts/release-rule.test.ts` holds `build`'s read grant and empty
+    environment, tauri-action's one input, `attach`'s steps line for line (`RUNS`) and its
+    secrets one step each, and the asset suffixes and trusted comments against `update.rs`.
+  - **Not run on GitHub yet.** What only a release can show: the two legs' artifacts merging
+    into one folder of five, `gh release upload` from a job that did not build the files
+    resolving the draft by tag (measured for `upload`/`edit` on 2026-08-09, from a build leg),
+    and the environment handing `attach` its key.
+- **There was a `sign` job for a day, and its work is `attach`'s now.** `release.yml` gained a job on
   2026-09-28 (`8a5568d6`) that minisign-signed the portable zip and the NSIS setup with the
   `UPDATE_SIGNING_KEY` repository secret, and `publish` needed it. The secret was never set, so
   v0.34.0's run failed at `sign` on 2026-09-29 and the release stayed a draft — fail-safe, as
   designed. Signing was removed the same day on the maintainer's decision, the updater's check
   with it; [in-app-updates.md](in-app-updates.md) has what the updater trusts now and why the
-  v0.34.0 draft must never be published. **If it comes back, the job's one structural rule still
-  holds**: the secret goes in a job of its own, never a build leg, because a build leg runs
-  tauri-action, rust-cache and every npm and cargo build script, any of which can read a secret
-  in the same job. **Update signing has not come back; the rule has been used twice since**
+  v0.34.0 draft must never be published. **Its one structural rule held while it was gone**: the
+  secret goes in a job of its own, never a build leg, because a build leg runs tauri-action,
+  rust-cache and every npm and cargo build script, any of which can read a secret in the same
+  job. **Update signing came back on 2026-10-21, in `attach`** (*The build holds no token*,
+  above), with the key in the `release` environment; before that the rule was used twice
   (2026-10-04): `android-sign` and `web-deploy` are each a job of their own for it — *The
   release rule*, above — and `relay-deploy`, `share-deploy` and `play-upload` since 2026-10-11. And what happened to v0.34.0 is why those **skip and say so**
   when their values are not set, where `sign` failed: a release held up by a key nobody had
-  made was one day's lesson already.
+  made was one day's lesson already. **`attach` fails, as `sign` did, and that is deliberate**:
+  this time the key was made by the owner and set in the environment before the change merged
+  (2026-10-21), and an unsigned desktop release is one no install with the check could take.
 - **release-please needs "Allow GitHub Actions to create and approve pull requests"**
   (`can_approve_pull_request_reviews: true`). It is one toggle covering both verbs, and with
   it off the run fails at the very last step — after parsing every commit, resolving the

@@ -1,13 +1,15 @@
-// The supply chain of the three workflows and the composite action, held to four rules — each one
-// a hole issue #545 found open on 2026-09-28, and each checkable from the files' text:
+// The supply chain of the workflows and the composite action, held to five rules — the first four
+// each a hole issue #545 found open on 2026-09-28, and all checkable from the files' text:
 //
 //   1. every `uses:` is local or a full commit SHA, the tag it was on in a trailing comment;
 //   2. every `actions/checkout` says `persist-credentials: false`;
 //   3. no workflow grants a write permission at the top level — a job names its own;
-//   4. Dependabot watches both places a pin can live.
+//   4. Dependabot watches both places a pin can live;
+//   5. a job granted any write builds nothing (2026-10-21): no toolchain, no cache, no install,
+//      no cargo and no Tauri build, so no build script or bundler plugin runs beside a token
+//      that can write. What a build made reaches such a job as an artifact.
 //
-// A fifth held the release's signing secret to one step of a `sign` job; that job was removed on
-// 2026-09-29 with update signing itself.
+// Which job holds which secret, and every line those jobs run, is `release-rule.test.ts`'s.
 //
 // A tag is whatever its owner last pushed, so `@v1` in `release.yml` ran code nobody here had read
 // beside a write token and a release in progress. The files are globbed, so a new workflow or a new
@@ -99,6 +101,54 @@ describe("every workflow and composite action", () => {
   );
 });
 
+/** A workflow's jobs, comment lines dropped, each from its key to the next job's. */
+function jobsOf(src: string) {
+  const body = code(src.slice(src.search(/^jobs:/m)));
+  const starts = [...body.matchAll(/^ {2}([a-z][a-z0-9-]*):[ \t]*$/gm)];
+  return starts.map((m, i) => ({
+    name: m[1],
+    text: body.slice(m.index, starts[i + 1]?.index ?? body.length),
+  }));
+}
+
+/** A job's own `permissions:` block, as text. */
+const permissionsOf = (job: string) => /^ {4}permissions:\n((?: {6}.*\n)*)/m.exec(job)?.[1] ?? "";
+
+/** What builds, installs or restores a cache: any of these in a job beside a write is refused. */
+const BUILDS =
+  /rust-toolchain|rust-cache|tauri-action|actions\/cache|setup-java|gradle|\bcargo\b|\bpnpm\b|\bnpm (?:ci|install|i)\b|\bnpx\b|^ {10}cache:/m;
+
+describe("every job granted a write", () => {
+  const writers = Object.entries(WORKFLOWS).flatMap(([path, src]) =>
+    jobsOf(src)
+      .filter((job) => /:\s*write\b/.test(permissionsOf(job.text)))
+      .map((job) => [`${path} ${job.name}`, job.text] as const),
+  );
+
+  it("is found", () => {
+    expect(writers.map(([name]) => name)).toEqual(
+      expect.arrayContaining([
+        "/.github/workflows/release.yml release-please",
+        "/.github/workflows/release.yml attach",
+        "/.github/workflows/release.yml publish",
+        "/.github/workflows/scanner-bundle.yml publish",
+      ]),
+    );
+  });
+
+  it.each(writers)("%s builds nothing", (_name, job) => {
+    expect(job).not.toMatch(BUILDS);
+  });
+
+  // The two jobs that build the release's own files, and that were granted the write until
+  // 2026-10-21, are not among them.
+  it("leaves out the jobs that build what is published", () => {
+    const names = writers.map(([name]) => name);
+    expect(names).not.toContain("/.github/workflows/release.yml build");
+    expect(names).not.toContain("/.github/workflows/scanner-bundle.yml build");
+  });
+});
+
 describe("the rules' own guards", () => {
   // A census that matched nothing would pass every assertion above.
   it("sees the checkouts and the pins it is about", () => {
@@ -116,6 +166,13 @@ describe("the rules' own guards", () => {
         "steps:\n  - uses: actions/checkout@x\n  - run: echo\n        persist-credentials: false\n",
       ),
     ).toEqual(["  - uses: actions/checkout@x"]);
+    // The write census reads a job's own block, and the build census sees a build.
+    expect(permissionsOf("  a:\n    permissions:\n      contents: write\n    steps:\n")).toBe(
+      "      contents: write\n",
+    );
+    expect(BUILDS.test("      - run: pnpm install --frozen-lockfile")).toBe(true);
+    expect(BUILDS.test("      - uses: ./.github/actions/rust-toolchain")).toBe(true);
+    expect(BUILDS.test("          node scripts/update-signing.ts sign x")).toBe(false);
   });
 });
 

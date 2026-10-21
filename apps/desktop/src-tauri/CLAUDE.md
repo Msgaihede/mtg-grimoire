@@ -78,6 +78,7 @@ The desktop manages two SQLite databases in the application data folder:
 - Secondary windows receive change notifications via `changes.rs`.
 - Commit hooks publish change masks (`MirrorMask`, `WindowChanges`) without blocking the main database transaction.
 - Portable updater (`src/update.rs`): executes atomic application binary replacement without requiring elevated installers.
+- **Every update is verified twice before anything is unpacked or run**: GitHub's `digest` (integrity), then a minisign signature against the compiled-in `SIGNING_PUBLIC_KEY` (key id `6C7487F8990F0A73`) with the trusted comment `mtg-grimoire <version> <portable|nsis>`. Both fail closed. Signed by `release.yml`'s `attach` job with `scripts/update-signing.ts`; key setup and rotation order: [`docs/reference/in-app-updates.md`](../../../docs/reference/in-app-updates.md).
 
 ### Tauri Capabilities (`capabilities/desktop.json`)
 - What the webview is granted, and nothing more: `core:default` (the one `:default` allowed), the opener pair `opener:allow-open-url` + `opener:allow-default-urls` (URLs only, no `allow-reveal-item-in-dir`), `clipboard-manager:allow-write-text` (write only, never read), the four window controls (`core:window:allow-minimize`, `-toggle-maximize`, `-close`, `-start-dragging`), the two `snap-layout:` bounds permissions, and the three `mcp-bridge:` permissions.

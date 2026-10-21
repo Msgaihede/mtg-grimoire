@@ -26,13 +26,17 @@ permissions: {}
 # build holds an op stamped newer until it updates. So a host that ships ahead of the others
 # strands them, and this file is where they are kept together:
 #
-#   release-please ─┬─ build (windows, linux) ─────────────┐
+#   release-please ─┬─ build (windows, linux) ── attach ───┐
 #                   ├─ android ── android-sign ────────────┤
 #                   ├─ web ────────────────────────────────┤
 #                   └─ share ──────────────────────────────┤
 #                                                          ▼
 #   relay-deploy ── share-deploy ── scan-deploy ── web-deploy ── play-upload ── publish ── announce
-#                              (publish also needs build and android-sign)
+#                              (publish also needs attach and android-sign)
+#
+# **No job that builds holds a write token or a secret** (2026-10-21). `build` reads; what it
+# built leaves as an artifact, and `attach` — which builds nothing — signs the two files the
+# in-app updater installs and puts the desktop's files on the draft.
 #
 # **Once it is published, the release is announced** (2026-10-11): `announce` posts its version,
 # address and notes to a Discord webhook, from an environment of its own (`discord`). Nothing
@@ -45,10 +49,11 @@ permissions: {}
 # model's key, from an environment of its own (`changelog`), and installs nothing either.
 # docs/superpowers/specs/2026-10-11-generated-release-notes-design.md has the design.
 #
-# The six jobs that hold a secret on a release — `android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy`, `play-upload` — build nothing, take what they
+# The seven jobs that hold a secret on a release — `attach`, `android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy`, `play-upload` — build nothing, take what they
 # hold from the `release` environment (one only `main` may use once the owner has restricted it —
 # docs/reference/ci-and-releases.md, "What only the owner can do", step 0; until then any
-# branch's workflow can), and each ends green and says so when its values are not set. **The
+# branch's workflow can), and each but `attach` ends green and says so when its values are not
+# set — `attach` fails, so a release is never published with updates no install would take. **The
 # Android host leaves this workflow as a signed bundle that `play-upload` puts on Google Play's
 # internal track; the owner promotes it from there**; nothing Android is attached to the release.
 # docs/reference/ci-and-releases.md, "The release rule", has the reasons and what only the
@@ -115,9 +120,13 @@ jobs:
     # Warm: ~25 min on Linux. A hung leg would hold the `release` concurrency group for six
     # hours, replacing every later push's changelog run while pending.
     timeout-minutes: 90
-    # Uploads to the draft: tauri-action's bundles, and the portable zip below.
+    # **Reads, and writes nothing to the repository.** This job runs every build tool in the
+    # tree — `beforeBuildCommand` (`pnpm -w run build`: Vite, its plugins, tsc), every cargo
+    # build script in the lockfile, tauri-action — so it holds no write token and no secret in
+    # any step. What it built leaves as the artifact `desktop-<os>`; `attach` below, which builds
+    # nothing, signs the two files the updater installs and puts all of it on the draft.
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -127,20 +136,8 @@ jobs:
           - os: ubuntu-22.04
             bundles: deb,appimage
     steps:
-      # `id` is real but undocumented in the action's README. If it ever stops being
-      # emitted, tauri-action would fall back to tag matching and could create a SECOND
-      # release. Fail loudly instead.
-      - name: Refuse to build without a release id
-        shell: bash
-        run: |
-          if [ -z "${{ needs.release-please.outputs.release_id }}" ]; then
-            echo "release-please emitted no release id; refusing to build."
-            exit 1
-          fi
-
       # `persist-credentials: false` everywhere: without it the token stays in `.git/config` for
-      # every later step to read, and nothing after a checkout here runs `git` against the remote
-      # — every upload is `gh` or tauri-action, each handed its token explicitly.
+      # every later step to read, and nothing after a checkout here runs `git` against the remote.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.release-please.outputs.sha }}
@@ -177,11 +174,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # The scanner's hash bundle and OCR models are embedded into the binary (build.rs sets
-      # cfg(scanner_assets)). A release without them cannot scan, so this fails the leg.
+      # cfg(scanner_assets)). A release without them cannot scan, so this fails the leg. The
+      # script fetches the public release's files with no token.
       - name: Scanner assets
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: pnpm scanner:assets
 
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
@@ -204,13 +200,12 @@ jobs:
       # what follows it (`--locked`) goes to cargo. pnpm passes it through untouched (measured
       # 2026-10-09: `pnpm tauri build --help --bundles nsis,msi -- --locked` ran the root script
       # with those arguments in that order).
+      # **No `releaseId`, no `tagName` and no token**: given neither, the action builds and
+      # uploads nothing (`src/index.ts` at the pinned SHA: "No releaseId or tagName provided,
+      # skipping all uploads"). It also ends green when it finds no bundle at all, so the step
+      # after it is what fails a leg that built nothing.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ needs.release-please.outputs.release_id }}
-          releaseDraft: true
-          uploadUpdaterJson: false
           args: --bundles ${{ matrix.bundles }} -- --locked
 
       # productName does not rename the binary in Tauri v2, so this really is the
@@ -223,18 +218,158 @@ jobs:
         env:
           VERSION: ${{ needs.release-please.outputs.version }}
         run: |
-          $zip = "mtg-grimoire-$env:VERSION-windows-x64-portable.zip"
-          Compress-Archive -Path target/release/mtg-grimoire.exe -DestinationPath $zip
-          "PORTABLE_ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+          New-Item -ItemType Directory -Force -Path desktop-out | Out-Null
+          Compress-Archive -Path target/release/mtg-grimoire.exe -DestinationPath "desktop-out/mtg-grimoire-$env:VERSION-windows-x64-portable.zip"
 
-      - name: Attach the portable zip to the draft release
-        if: matrix.os == 'windows-latest'
+      # **Under the names they will have on the release.** GitHub rewrites a space in an uploaded
+      # asset's name to a dot (`MTG Grimoire_…` → `MTG.Grimoire_…`), and the updater asks for
+      # `<asset name>.minisig` by that dotted name — so the files are dotted here, before
+      # anything is signed. The bundler's folders are `target/release/bundle/<kind>/`.
+      - name: Collect the bundles under their release names
+        shell: bash
+        env:
+          OS: ${{ matrix.os }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p desktop-out
+          if [ "$OS" = windows-latest ]; then
+            files=(target/release/bundle/nsis/*_x64-setup.exe target/release/bundle/msi/*.msi)
+          else
+            files=(target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage)
+          fi
+          [ "${#files[@]}" -eq 2 ] || { echo "expected two bundles from $OS, found ${#files[@]}: ${files[*]}" >&2; exit 1; }
+          for file in "${files[@]}"; do
+            name=$(basename "$file")
+            cp "$file" "desktop-out/${name// /.}"
+          done
+          ls -l desktop-out
+
+      # Handed to `attach`, and to no other job. Seven days: long enough to re-run `attach` once
+      # the owner has set a missing signing key.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-${{ matrix.os }}
+          path: desktop-out/
+          retention-days: 7
+          if-no-files-found: error
+
+  # **The desktop's files, signed and put on the draft, by a job that builds nothing** (2026-10-21).
+  # Until then `build` held `contents: write` and handed tauri-action the token, so every build
+  # tool and cargo build script in the tree ran beside a token that could write the release. Now
+  # `build` reads, and this job — `android-sign`'s shape — holds the two things that job must
+  # not: the write, and the update-signing key. It runs no pnpm, no cargo and no third-party
+  # action: a checkout for `scripts/update-signing.ts` (`node:crypto` and `node:fs`, no
+  # dependency), the two legs' artifacts, a pinned Node, and `gh`.
+  #
+  # **It signs the two files the in-app updater installs** — the portable zip and the NSIS setup
+  # — with the trusted comment `mtg-grimoire <version> <kind>`, under the names they will have on
+  # the release, so `<asset>.minisig` is the name the updater asks for. The updater
+  # (`apps/desktop/src-tauri/src/update.rs`) refuses either without a signature from the key
+  # compiled into it. The `.msi`, `.deb` and `.AppImage` are attached unsigned: nothing in the
+  # app installs them.
+  #
+  # **No key fails the job, unlike every other job here that holds a secret.** A release attached
+  # unsigned would be refused by every install that has the check, so it must never be
+  # published: the draft stays a draft, nothing deploys (every deploy needs this job), and the
+  # summary says what to set. That is what v0.34.0's `sign` job did on 2026-09-29, and it is
+  # still the right end — `UPDATE_SIGNING_KEY` is set before a release PR is merged, never after.
+  # docs/reference/in-app-updates.md has the key's setup and rotation.
+  #
+  # **What the signature proves**: the file went through this job with the `release`
+  # environment's key — not uploaded or replaced beside the pipeline. It does not prove the build
+  # leg that made the file was clean; this job signs what `build` handed it.
+  attach:
+    name: attach (sign and upload the desktop)
+    needs: [release-please, build]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    # Uploads to the draft, and nothing else.
+    permissions:
+      contents: write
+    steps:
+      # The signing script, at the tagged commit. Nothing is installed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+          persist-credentials: false
+
+      # Told whether the key is set, never what it is — as in `android-sign`.
+      - name: Is there a key to sign with
+        shell: bash
+        env:
+          HAS_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$HAS_KEY" = true ]; then
+            exit 0
+          fi
+          {
+            echo "### Desktop — not signed, not attached"
+            echo
+            echo "**This release stays a draft.** The \`release\` environment holds no \`UPDATE_SIGNING_KEY\`,"
+            echo "so the portable zip and the NSIS setup were not signed, and an install would refuse them."
+            echo "Nothing was attached and nothing was deployed. Set the key, then re-run this job and the"
+            echo "jobs after it: the desktop's artifacts are kept for seven days."
+            echo
+            echo "\`docs/reference/in-app-updates.md\`, *Setting up signing*, has the commands."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "UPDATE_SIGNING_KEY is not set in the release environment; refusing to attach unsigned updates." >&2
+          exit 1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: desktop-*
+          path: desktop
+          merge-multiple: true
+
+      # Exactly the five files a release carries, each named for this version — or the updater
+      # could be offered a file nobody signed, or the release could go out short.
+      - name: Hold the files to the release
+        shell: bash
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for want in "mtg-grimoire-${VERSION}-windows-x64-portable.zip" "*_${VERSION}_x64-setup.exe" "*_${VERSION}_*.msi" "*_${VERSION}_*.deb" "*_${VERSION}_*.AppImage"; do
+            found=(desktop/$want)
+            [ "${#found[@]}" -eq 1 ] || { echo "expected one desktop/$want, found ${#found[@]}" >&2; exit 1; }
+          done
+          all=(desktop/*)
+          [ "${#all[@]}" -eq 5 ] || { echo "expected five files in desktop/, found ${#all[@]}: ${all[*]}" >&2; exit 1; }
+          ls -l desktop
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+
+      # The only step the key reaches. The script refuses an empty or malformed key itself.
+      - name: Sign the two files the updater installs
+        shell: bash
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/update-signing.ts sign "desktop/mtg-grimoire-$VERSION-windows-x64-portable.zip" --trusted-comment "mtg-grimoire $VERSION portable"
+          node scripts/update-signing.ts sign desktop/*_"$VERSION"_x64-setup.exe --trusted-comment "mtg-grimoire $VERSION nsis"
+
+      # The only step the token reaches. `gh release upload` resolves a draft by its tag
+      # (docs/reference/ci-and-releases.md), and `--clobber` lets a re-run replace what a
+      # failed one left.
+      - name: Attach them to the draft release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          REPO: ${{ github.repository }}
         run: |
-          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
-            "$PORTABLE_ZIP" --clobber --repo "${{ github.repository }}"
+          set -euo pipefail
+          gh release upload "$TAG" desktop/* --clobber --repo "$REPO"
 
   # **The light app's Android build, at the tag** — `ci.yml`'s `android` job, step for step: the
   # same runner, JDK 21, NDK, toolchain action, cache key and `pnpm exec tauri android build`. It
@@ -665,7 +800,7 @@ jobs:
 
   # **The relay, deployed by a release** (the owner's decision, 2026-10-11: a release deploys
   # everything; it reverses 2026-10-04's "the relay is deployed by no job"). First of the four
-  # deploys, once every host has built at the tag: a page that asks a relay without its half
+  # deploys, once every host has built at the tag and the desktop's files are signed and attached: a page that asks a relay without its half
   # fails every request (docs/agent/EXTERNAL_SERVICES.md), and the share Worker verifies the
   # tokens this one mints.
   #
@@ -689,7 +824,7 @@ jobs:
   # line it runs.
   relay-deploy:
     name: relay (deploy)
-    needs: [release-please, build, android-sign, web, share]
+    needs: [release-please, attach, android-sign, web, share]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1087,7 +1222,7 @@ jobs:
   # environment to it (step 0 of "What only the owner can do"); until then, from any branch.
   web-deploy:
     name: web (deploy)
-    needs: [release-please, build, android-sign, web, relay-deploy, share-deploy, scan-deploy]
+    needs: [release-please, attach, android-sign, web, relay-deploy, share-deploy, scan-deploy]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1331,18 +1466,19 @@ jobs:
           IFS=. read -r major minor patch <<< "$VERSION"
           node scripts/android-release/play-upload.ts "aab-in/mtg-grimoire-$VERSION-android.aab" "$((major * 1000000 + minor * 1000 + patch))"
 
-  # **Publishes only when every host and every Worker is through.** `build` is the desktop's;
+  # **Publishes only when every host and every Worker is through.** `attach` is the desktop's:
+  # it ends green only with the five files signed where they must be and on the draft;
   # `android-sign` ends green with the bundle signed or with no key to sign it; `relay-deploy`,
   # `share-deploy`, `scan-deploy` and `web-deploy` each end green with their address serving
   # this tag or with no token to deploy it. `play-upload` ends green with the bundle on the internal track,
   # already there, or with nothing to upload it with. A failure in any of them — or in
-  # `android`, `web` or `share`, which those need — leaves the release a draft: a release that
+  # `build`, `android`, `web` or `share`, which those need — leaves the release a draft: a release that
   # publishes some hosts and not the rest is what the rule exists to prevent. ⚠️ **A draft left
   # by a failed deploy may have live Workers ahead of it** — whichever deploys ran before the
   # one that failed.
   publish:
     name: publish
-    needs: [release-please, build, android-sign, relay-deploy, share-deploy, scan-deploy, web-deploy, play-upload]
+    needs: [release-please, attach, android-sign, relay-deploy, share-deploy, scan-deploy, web-deploy, play-upload]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-22.04
     timeout-minutes: 10
@@ -1350,12 +1486,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      # The release goes public only once the desktop's assets are attached and the Android bundle
-      # is signed, or knowingly not signed because no key is set (it is an artifact, not a release
-      # asset), and then uploaded to Play's internal track, or knowingly not uploaded because no
-      # service account is set. A `sign` job sat
-      # between the two from 2026-09-28 to 2026-09-29 and was removed: there was no key to sign
-      # with. docs/reference/in-app-updates.md records what the updater trusts without it.
+      # The release goes public only once the desktop's assets are signed and attached, and the
+      # Android bundle is signed, or knowingly not signed because no key is set (it is an
+      # artifact, not a release asset), and then uploaded to Play's internal track, or knowingly
+      # not uploaded because no service account is set. Update signing ran in a `sign` job from
+      # 2026-09-28 to 2026-09-29 and came back in `attach` on 2026-10-21;
+      # docs/reference/in-app-updates.md has the record.
       # **The release's body is `changelog/<version>.md`, as it was merged.** `changelog-write`
       # wrote that file from this release's pull requests while the release PR was open, and the
       # owner read it there; no model is asked anything here. Read through the API at the commit

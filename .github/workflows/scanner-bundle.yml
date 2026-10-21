@@ -11,8 +11,12 @@ on:
     - cron: "17 4 * * 1" # weekly: actions/cache evicts entries unused for 7 days
 
 # Nothing at the workflow level and the grant on the one job that needs it, `release.yml`'s shape.
-# Actions are pinned by SHA and checkouts keep no token, for that file's reasons; every upload
-# below is `gh`, handed `GH_TOKEN` explicitly.
+# Actions are pinned by SHA and checkouts keep no token, for that file's reasons.
+#
+# **The job that builds reads; the job that writes builds nothing** (2026-10-21). `build` runs
+# cargo build scripts, the `build-hashes` and `eval` binaries and a model-fetch script, so it
+# holds `contents: read` and no token in any step, and hands the three files on as the artifact
+# `scanner-bundle`. `publish` downloads that artifact and runs `gh`, and nothing else.
 permissions: {}
 
 concurrency:
@@ -23,9 +27,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    # Creates the prerelease and uploads the bundle to it.
+    # Reads. `publish` below is the job that writes.
     permissions:
-      contents: write
+      contents: read
+    # The release `publish` writes to is named for the format version this job read.
+    outputs:
+      v: ${{ steps.fv.outputs.v }}
     defaults:
       run:
         # `bash -eo pipefail`, where a bare `run:` gets `bash -e`. Two steps pipe a download into
@@ -142,28 +149,6 @@ jobs:
         run: |
           echo "**Synthetic evaluation failed — see the log of the \`Synthetic evaluation\` step.** The bundle still goes on to the publish or dry-run step below; the evaluation reports and does not gate." >> "$GITHUB_STEP_SUMMARY"
 
-      # **Prerelease and not latest**, so nothing that asks GitHub for the latest release is ever
-      # handed a bundle — the in-app updater lists releases and drops prereleases.
-      #
-      # **What is compared is everything after the 32-byte header, never the whole file.**
-      # `build-hashes` stamps `built_at` from the clock, so two builds of identical hashes always
-      # differ in bytes 14..22; past the header are the entries, written in key order. A release
-      # missing any of the three assets is republished whatever the comparison says, or one
-      # failed upload would leave release builds without a model for good.
-      #
-      # **Only `main` publishes.** `workflow_dispatch` runs from any ref, and the tag names the
-      # format version rather than the code: a branch that changed the hashing without bumping
-      # `FORMAT_VERSION` would `--clobber` the bundle every later release embeds, from code
-      # nobody reviewed. A dispatch from anywhere else builds, caches and stops here. Its cache
-      # entry is scoped to its own branch and never restored on `main`. The schedule always
-      # runs on the default branch.
-      #
-      # **A bundle more than 1% smaller than the one published is refused, and the step fails.**
-      # `build-hashes` already fails a run that lost more than 0.5% of its fetches, but a bundle
-      # can shrink by other roads — a truncated or partial `default_cards`, a cache restored from
-      # a bad run — and every release embeds what this uploads. Entries are fixed-size past the
-      # 32-byte header: a 16-byte id and a 256-bit descriptor, 48 bytes. Scryfall withdraws a few
-      # printings in a normal week and adds a set; 1% of ~113 k is ~1 100 cards.
       - name: Dry run (not on main)
         if: github.ref != 'refs/heads/main'
         env:
@@ -171,12 +156,66 @@ jobs:
         run: |
           echo "Dry run — not on main (\`$REF\`). Built $(stat -c%s card-hashes.bin) bytes; nothing published." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish if changed
+      # Handed to `publish`, and to no other job: the three files the release carries. A day is
+      # enough — `publish` runs straight after this job, or a run is started again.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: github.ref == 'refs/heads/main'
+        with:
+          name: scanner-bundle
+          path: |
+            card-hashes.bin
+            models/text-detection.rten
+            models/text-recognition.rten
+          retention-days: 1
+          if-no-files-found: error
+
+  # **Prerelease and not latest**, so nothing that asks GitHub for the latest release is ever
+  # handed a bundle — the in-app updater lists releases and drops prereleases.
+  #
+  # **What is compared is everything after the 32-byte header, never the whole file.**
+  # `build-hashes` stamps `built_at` from the clock, so two builds of identical hashes always
+  # differ in bytes 14..22; past the header are the entries, written in key order. A release
+  # missing any of the three assets is republished whatever the comparison says, or one
+  # failed upload would leave release builds without a model for good.
+  #
+  # **Only `main` publishes.** `workflow_dispatch` runs from any ref, and the tag names the
+  # format version rather than the code: a branch that changed the hashing without bumping
+  # `FORMAT_VERSION` would `--clobber` the bundle every later release embeds, from code
+  # nobody reviewed. A dispatch from anywhere else builds, caches and stops here. Its cache
+  # entry is scoped to its own branch and never restored on `main`. The schedule always
+  # runs on the default branch.
+  #
+  # **A bundle more than 1% smaller than the one published is refused, and the step fails.**
+  # `build-hashes` already fails a run that lost more than 0.5% of its fetches, but a bundle
+  # can shrink by other roads — a truncated or partial `default_cards`, a cache restored from
+  # a bad run — and every release embeds what this uploads. Entries are fixed-size past the
+  # 32-byte header: a 16-byte id and a 256-bit descriptor, 48 bytes. Scryfall withdraws a few
+  # printings in a normal week and adds a set; 1% of ~113 k is ~1 100 cards.
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Creates the prerelease and uploads the bundle to it. No checkout, no install, no build:
+    # the artifact, then `gh` (on the runner image) with the token on the one step that uses it.
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: scanner-bundle
+          path: .
+
+      # No checkout, so `gh` is told the repository rather than reading it from `.git`.
+      - name: Publish if changed
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: scanner-bundle-v${{ steps.fv.outputs.v }}
-          VERSION: ${{ steps.fv.outputs.v }}
+          GH_REPO: ${{ github.repository }}
+          TAG: scanner-bundle-v${{ needs.build.outputs.v }}
+          VERSION: ${{ needs.build.outputs.v }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --prerelease --latest=false --title "Scanner bundle v$VERSION" \

@@ -37,6 +37,8 @@ import deployToolLock from "../infrastructure/wrangler/package-lock.json?raw";
 import appWorkerPackage from "../infrastructure/app-worker/package.json?raw";
 import workspaceYaml from "../pnpm-workspace.yaml?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
+import scannerBundleYml from "../.github/workflows/scanner-bundle.yml?raw";
+import updateRs from "../apps/desktop/src-tauri/src/update.rs?raw";
 import ciYml from "../.github/workflows/ci.yml?raw";
 import syncSmoke from "./web-sync-smoke.ts?raw";
 import smokeHarness from "./web-smoke/harness.ts?raw";
@@ -379,7 +381,11 @@ const WRANGLER = "node ../wrangler/node_modules/wrangler/bin/wrangler.js";
 /** Every secret each job may read, and it must read exactly these. */
 const MAY_READ: Record<string, string[]> = {
   "release-please": ["GITHUB_TOKEN"],
-  build: ["GITHUB_TOKEN"],
+  // **The build reads, and holds nothing**: every build tool and cargo build script in the tree
+  // runs in it, so no token and no secret is in any step's environment.
+  build: [],
+  // The write to the draft and the update-signing key, in a job that builds nothing.
+  attach: ["GITHUB_TOKEN", "UPDATE_SIGNING_KEY"],
   android: [],
   "android-sign": [...ANDROID_SECRETS],
   web: [],
@@ -438,13 +444,54 @@ const refuseOlder = (what: string) => [
   "fi",
 ];
 /**
- * **Every line the eight jobs that hold a secret run** (`android-sign`, `relay-deploy`,
+ * **Every line the nine jobs that hold a secret run** (`attach`, `android-sign`, `relay-deploy`,
  * `share-deploy`, `scan-deploy`, `web-deploy`, `play-upload` and `announce` on a release; `changelog-write` between releases), step by
  * step, as `runsOf` reads them: the whole of each `run:`, its summary's wording too. A line
  * changed in one of those steps is changed here in the same commit, and a line added to any of
  * them, whatever it starts, is a line this list does not have.
  */
 const RUNS: Record<string, string[][]> = {
+  attach: [
+    // Is there a key to sign with
+    [
+      "set -euo pipefail",
+      'if [ "$HAS_KEY" = true ]; then',
+      "exit 0",
+      "fi",
+      "{",
+      'echo "### Desktop — not signed, not attached"',
+      "echo",
+      'echo "**This release stays a draft.** The \\`release\\` environment holds no \\`UPDATE_SIGNING_KEY\\`,"',
+      'echo "so the portable zip and the NSIS setup were not signed, and an install would refuse them."',
+      'echo "Nothing was attached and nothing was deployed. Set the key, then re-run this job and the"',
+      'echo "jobs after it: the desktop\'s artifacts are kept for seven days."',
+      "echo",
+      'echo "\\`docs/reference/in-app-updates.md\\`, *Setting up signing*, has the commands."',
+      '} >> "$GITHUB_STEP_SUMMARY"',
+      'echo "UPDATE_SIGNING_KEY is not set in the release environment; refusing to attach unsigned updates." >&2',
+      "exit 1",
+    ],
+    // Hold the files to the release
+    [
+      "set -euo pipefail",
+      "shopt -s nullglob",
+      'for want in "mtg-grimoire-${VERSION}-windows-x64-portable.zip" "*_${VERSION}_x64-setup.exe" "*_${VERSION}_*.msi" "*_${VERSION}_*.deb" "*_${VERSION}_*.AppImage"; do',
+      "found=(desktop/$want)",
+      '[ "${#found[@]}" -eq 1 ] || { echo "expected one desktop/$want, found ${#found[@]}" >&2; exit 1; }',
+      "done",
+      "all=(desktop/*)",
+      '[ "${#all[@]}" -eq 5 ] || { echo "expected five files in desktop/, found ${#all[@]}: ${all[*]}" >&2; exit 1; }',
+      "ls -l desktop",
+    ],
+    // Sign the two files the updater installs
+    [
+      "set -euo pipefail",
+      'node scripts/update-signing.ts sign "desktop/mtg-grimoire-$VERSION-windows-x64-portable.zip" --trusted-comment "mtg-grimoire $VERSION portable"',
+      'node scripts/update-signing.ts sign desktop/*_"$VERSION"_x64-setup.exe --trusted-comment "mtg-grimoire $VERSION nsis"',
+    ],
+    // Attach them to the draft release
+    ["set -euo pipefail", 'gh release upload "$TAG" desktop/* --clobber --repo "$REPO"'],
+  ],
   "android-sign": [
     // Is there a key to sign with, and a fingerprint to hold it to
     [
@@ -716,10 +763,11 @@ const RUNS: Record<string, string[][]> = {
 describe("release.yml", () => {
   const jobs = jobsOf(releaseYml);
 
-  it("has the fifteen jobs, chained as the rule needs", () => {
+  it("has the sixteen jobs, chained as the rule needs", () => {
     expect(Object.keys(jobs)).toEqual([
       "release-please",
       "build",
+      "attach",
       "android",
       "android-sign",
       "web",
@@ -735,15 +783,17 @@ describe("release.yml", () => {
       "changelog-commit",
     ]);
     expect(needsOf(jobs.build)).toEqual(["release-please"]);
+    expect(needsOf(jobs.attach)).toEqual(["release-please", "build"]);
     expect(needsOf(jobs.android)).toEqual(["release-please"]);
     expect(needsOf(jobs["android-sign"])).toEqual(["release-please", "android"]);
     expect(needsOf(jobs.web)).toEqual(["release-please"]);
     expect(needsOf(jobs.share)).toEqual(["release-please"]);
     // A deploy is live the moment it returns, so the first of them goes after everything that
-    // can still fail to build…
+    // can still fail to build — and after the desktop's files are signed, which fails without
+    // the key…
     expect(needsOf(jobs["relay-deploy"])).toEqual([
       "release-please",
-      "build",
+      "attach",
       "android-sign",
       "web",
       "share",
@@ -755,7 +805,7 @@ describe("release.yml", () => {
     expect(needsOf(jobs["scan-deploy"])).toEqual(["release-please", "share-deploy"]);
     expect(needsOf(jobs["web-deploy"])).toEqual([
       "release-please",
-      "build",
+      "attach",
       "android-sign",
       "web",
       "relay-deploy",
@@ -767,7 +817,7 @@ describe("release.yml", () => {
     expect(needsOf(jobs["play-upload"])).toEqual(["release-please", "android-sign", "web-deploy"]);
     expect(needsOf(jobs.publish)).toEqual([
       "release-please",
-      "build",
+      "attach",
       "android-sign",
       "relay-deploy",
       "share-deploy",
@@ -882,11 +932,12 @@ describe("release.yml", () => {
   // **An environment's values, not the repository's.** A repository secret is handed to any
   // workflow on any branch of this repository; an environment's only to a job that names it,
   // from a branch the environment allows.
-  it("takes what it holds from an environment, in those eight jobs and no other", () => {
+  it("takes what it holds from an environment, in those nine jobs and no other", () => {
     const environments = Object.entries(jobs)
       .map(([name, job]) => [name, job.split("\n").filter((line) => /^\s*environment:/.test(line))])
       .filter(([, lines]) => lines.length > 0);
     expect(environments).toEqual([
+      ["attach", ["    environment: release"]],
       ["android-sign", ["    environment: release"]],
       ["relay-deploy", ["    environment: release"]],
       ["share-deploy", ["    environment: release"]],
@@ -904,6 +955,7 @@ describe("release.yml", () => {
   it.each([
     "release-please",
     "build",
+    "attach",
     "android",
     "android-sign",
     "web",
@@ -921,13 +973,14 @@ describe("release.yml", () => {
     expect(jobs[name]).toMatch(/^ {4}timeout-minutes: \d+$/m);
   });
 
-  // The rule the removed `sign` job left behind: a secret never sits in a build leg, because a
+  // The rule `sign` set on 2026-09-28 and `attach` keeps: a secret never sits in a build leg, because a
   // build leg runs every build tool and plugin, cargo build script, Gradle plugin and whatever
   // install script pnpm is told to allow, and any of them can read a file or an environment.
   // **Held as a list of everything the job may run**, to the letter: every line of every `run:`
   // (`RUNS`), so a second `npx`, a `node -e`, an `npm run`, a `curl | sh` — and a `./tools/sign`,
   // a `perl -e`, a `sudo`, which no list of programs names — is a line that is not on it.
   it.each([
+    ["attach", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["android-sign", ["actions/checkout", "actions/download-artifact", "actions/upload-artifact"]],
     ["relay-deploy", ["actions/checkout", "actions/setup-node"]],
     ["share-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
@@ -984,6 +1037,7 @@ describe("release.yml", () => {
   // pnpm up, installs with it or runs it: what they run is the list above, to the letter.
   // `jobsOf` has already dropped comment lines, so this reads what the job runs.
   it.each([
+    "attach",
     "android-sign",
     "relay-deploy",
     "share-deploy",
@@ -1464,6 +1518,87 @@ describe("release.yml", () => {
     expect(jobs.announce).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}steps:$/m);
   });
 
+  // **The desktop build holds no token** (2026-10-21): it runs `beforeBuildCommand`, Vite and its
+  // plugins, tsc and every cargo build script in the lockfile, and none of that is handed
+  // anything that can write. tauri-action is given no release to upload to, so it uploads
+  // nothing; what was built leaves as an artifact for `attach`.
+  it("builds the desktop with a read token and nothing in any step's environment", () => {
+    const build = jobs.build;
+    expect(build).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}strategy:$/m);
+    expect(build).not.toMatch(/: write\b/);
+    expect(secretRefs(build)).toEqual([]);
+    expect(build).not.toMatch(/GITHUB_TOKEN|GH_TOKEN|github\.token|\btoken:/);
+    expect(build).not.toMatch(/gh release|releaseId|tagName|releaseDraft/);
+    const action = stepsOf(build).find((step) => /^uses: tauri-apps\/tauri-action@/.test(step));
+    expect(action?.trimEnd().split("\n").slice(1)).toEqual([
+      "        with:",
+      "          args: --bundles ${{ matrix.bundles }} -- --locked",
+    ]);
+    const upload = stepsOf(build).at(-1);
+    expect(upload).toMatch(/^uses: actions\/upload-artifact@/);
+    expect(upload).toContain("name: desktop-${{ matrix.os }}");
+    expect(upload).toContain("path: desktop-out/");
+    expect(upload).toContain("if-no-files-found: error");
+    // Spaces become dots before anything is signed, as GitHub renames them on upload: the
+    // updater asks for `<asset name>.minisig` by the uploaded name.
+    expect(build).toContain('cp "$file" "desktop-out/${name// /.}"');
+    expect(build).toContain(
+      'Compress-Archive -Path target/release/mtg-grimoire.exe -DestinationPath "desktop-out/mtg-grimoire-$env:VERSION-windows-x64-portable.zip"',
+    );
+  });
+
+  // **Fails closed**, where every other job that holds a secret here ends green without it: an
+  // update attached unsigned is one every install refuses, so the release must stay a draft.
+  it("signs the two files the updater installs before it attaches anything, and stops without the key", () => {
+    const [checkout, ask, download, hold, node, sign, upload, ...rest] = stepsOf(jobs.attach);
+    expect(rest).toEqual([]);
+    expect(checkout).toMatch(/^uses: actions\/checkout@/);
+    expect(checkout).not.toMatch(/^ {8}(?:if|env):/m);
+    // Told whether the key is set, never what it is — and with none, a red job and a summary.
+    expect(ask.match(/secrets\.[A-Z0-9_]+/g)).toEqual(["secrets.UPDATE_SIGNING_KEY"]);
+    expect(ask).toContain("HAS_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}");
+    expect(runsOf(ask)[0].at(-1)).toBe("exit 1");
+    expect(ask).toMatch(/>> "\$GITHUB_STEP_SUMMARY"/);
+    // Every step runs whatever came before it: no `if:` lets a missing key through to a skip.
+    for (const step of stepsOf(jobs.attach)) expect(step).not.toMatch(/^ {8}if:/m);
+    expect(download).toMatch(/^uses: actions\/download-artifact@/);
+    expect(download).toContain("pattern: desktop-*");
+    expect(download).toContain("merge-multiple: true");
+    expect(hold).toContain("name: Hold the files to the release");
+    expect(node.trimEnd().split("\n").slice(1)).toEqual([
+      "        with:",
+      "          node-version-file: .nvmrc",
+      "          package-manager-cache: false",
+    ]);
+    // The key reaches the signing step alone, and the token the upload alone.
+    expect(secretsOf(sign)).toEqual(["UPDATE_SIGNING_KEY"]);
+    expect(sign).toContain("UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}");
+    expect(sign).not.toMatch(/GITHUB_TOKEN|GH_TOKEN/);
+    expect(upload).toContain("GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}");
+    expect(secretsOf(upload)).toEqual([]);
+    for (const step of [checkout, ask, download, hold, node]) {
+      expect(step).not.toMatch(/UPDATE_SIGNING_KEY: |GITHUB_TOKEN|GH_TOKEN/);
+    }
+    expect(jobs.attach).toMatch(/^ {4}permissions:\n {6}contents: write\n {4}steps:$/m);
+  });
+
+  // The names and the trusted comments `attach` signs with are what the updater looks for: a
+  // drift on either side is a release no install can take, found only by the first update.
+  it("signs under the names, and with the trusted comments, the updater asks for", () => {
+    expect(updateRs).toContain('"-windows-x64-portable.zip"');
+    expect(updateRs).toContain('"_x64-setup.exe"');
+    expect(updateRs).toContain('const SIGNATURE_SUFFIX: &str = ".minisig";');
+    expect(updateRs).toContain('const SIGNED_PRODUCT: &str = "mtg-grimoire";');
+    expect(updateRs).toContain('InstallKind::Portable => "portable"');
+    expect(updateRs).toContain('InstallKind::Nsis => "nsis"');
+    expect(updateRs).toContain('format!("{SIGNED_PRODUCT} {version} {kind}")');
+    const sign = runsOf(jobs.attach)[2];
+    expect(sign[1]).toMatch(
+      /-windows-x64-portable\.zip" --trusted-comment "mtg-grimoire \$VERSION portable"$/,
+    );
+    expect(sign[2]).toMatch(/_x64-setup\.exe --trusted-comment "mtg-grimoire \$VERSION nsis"$/);
+  });
+
   it("publishes last, and nothing else flips the draft", () => {
     const flips = Object.entries(jobs)
       .filter(([, job]) => /gh release edit/.test(job))
@@ -1929,5 +2064,33 @@ describe("the guards' own guards", () => {
   it("computes Tauri's versionCode", () => {
     expect(versionCode("0.40.0")).toBe(40_000);
     expect(versionCode("1.2.3")).toBe(1_002_003);
+  });
+});
+
+describe("scanner-bundle.yml", () => {
+  const jobs = jobsOf(scannerBundleYml);
+
+  // The release builds embed what this workflow publishes, so the job that writes the release
+  // is one that runs nothing it built: the cargo build scripts, `build-hashes`, `eval` and the
+  // model fetch all run in `build`, with a read token and no token in any step.
+  it("builds with a read token, and publishes from a job that builds nothing", () => {
+    expect(Object.keys(jobs)).toEqual(["build", "publish"]);
+    expect(jobs.build).toMatch(/^ {4}permissions:\n {6}contents: read$/m);
+    expect(jobs.build).not.toMatch(/: write\b|GH_TOKEN|GITHUB_TOKEN|github\.token|gh release/);
+    expect(secretRefs(jobs.build)).toEqual([]);
+    expect(jobs.build).toContain("name: scanner-bundle");
+
+    const publish = jobs.publish;
+    expect(needsOf(publish)).toEqual(["build"]);
+    expect(publish).toMatch(/^ {4}if: github\.ref == 'refs\/heads\/main'$/m);
+    expect(publish).toMatch(/^ {4}permissions:\n {6}contents: write$/m);
+    expect([...publish.matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1])).toEqual([
+      "actions/download-artifact",
+    ]);
+    expect(publish).not.toMatch(/cargo|pnpm|npm|node |rust|cache|checkout/);
+    expect(secretRefs(publish)).toEqual([]);
+    const holding = stepsOf(publish).filter((step) => /GH_TOKEN/.test(step));
+    expect(holding).toHaveLength(1);
+    expect(holding[0]).toContain("name: Publish if changed");
   });
 });
