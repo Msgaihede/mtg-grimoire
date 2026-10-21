@@ -234,6 +234,27 @@ describe("cardMenu", () => {
     expect(labels(on)).toEqual(["Cast", "Move to"]);
   });
 
+  it("offers Tap for mana on a permanent the rules let tap for it, sandbox or not", () => {
+    const onAct = vi.fn();
+    const forest = gameCard("Forest", { canTapForMana: true });
+    const base = { card: forest, ids: [forest.id], place: "battlefield" as const, onAct };
+    const off = cardMenu({ ...base, sandbox: false });
+    expect(labels(off)).toEqual(["Tap for mana"]);
+    act(off, "Tap for mana").onSelect();
+    expect(onAct).toHaveBeenCalledWith({ type: "tapForMana", id: forest.id });
+    expect(labels(cardMenu({ ...base, sandbox: true }))).toEqual([
+      "Tap for mana",
+      "Tap",
+      "Counters",
+      "Create a token copy",
+      "Move to",
+    ]);
+    // A tapped land, or one the rules would refuse, has no such row.
+    const tapped = gameCard("Forest", { canTapForMana: true, tapped: true });
+    expect(cardMenu({ ...base, card: tapped, sandbox: false })).toEqual([]);
+    expect(cardMenu({ ...base, card: gameCard("Forest"), sandbox: false })).toEqual([]);
+  });
+
   it("heads a permanent's sandbox rows with Activate ability when the reader may activate it", () => {
     const ring = gameCard("Sol Ring");
     const items = cardMenu({

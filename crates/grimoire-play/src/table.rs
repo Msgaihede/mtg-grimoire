@@ -77,6 +77,7 @@ pub(crate) fn game_card(
         // What the rules offer is the session's to say: it knows whose view this is.
         can_foretell: false,
         castable: false,
+        can_tap_for_mana: false,
         gaps,
     })
 }

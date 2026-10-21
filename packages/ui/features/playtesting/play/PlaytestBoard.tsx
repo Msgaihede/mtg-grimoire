@@ -106,7 +106,8 @@ import { RespondPrompt, respondingTo } from "./RespondPrompt";
  * stand beside each table's height.
  *
  * **The rules' handling is always there**: a double-click or a drag onto the table plays a card
- * from the hand or the command zone, a permanent's menu activates its abilities, and a click is a
+ * from the hand or the command zone, a permanent's menu activates its abilities, a click on a land
+ * (or any permanent the rules let tap for mana) taps it for mana into the pool, and a click is a
  * pick when the rules are asking for one (`combat.ts`): in the declare-attackers step a creature
  * that may attack is toggled as an attacker, in declare-blockers a blocker is picked and then the
  * attacker it blocks, and while the engine asks a question each answer that names one card on the
@@ -1300,13 +1301,17 @@ function PlaytestHelp({ sandbox, goldfish }: { sandbox: boolean; goldfish: boole
         </span>
       )}
       <span>When the engine asks, click a highlighted card or pick an answer in the panel.</span>
+      <span>
+        Click a land to tap it for mana: the mana waits in your pool for your next spell, until the
+        step ends.
+      </span>
       {sandbox ? (
         <>
           <span className="text-dim">
             The sandbox is on: in your main phase, drag any of your cards anywhere, click a
-            permanent to tap it (Shift-click taps the pile), right-click any card on the table for
-            counters, copies and moves, and set any life total. A card the rules cannot play is put
-            down unpaid.
+            permanent to tap it (Shift-click taps the pile; a land is tapped for mana), right-click
+            any card on the table for counters, copies and moves, and set any life total. A card the
+            rules cannot play is put down unpaid.
           </span>
           <span className="text-dim">
             Point at one of your cards and press T, G, E or H to tap it, bury it, exile it or return

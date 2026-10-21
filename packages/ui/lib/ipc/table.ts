@@ -99,6 +99,9 @@ export interface GameCard {
   /** The rules let the reader cast or play this graveyard or exile card now (foretold,
    *  flashback). */
   castable: boolean;
+  /** The rules let the reader tap this battlefield permanent for mana now (CR 605.3a): one of
+   *  theirs with a mana ability, a land's `{T}` above all — a `tapForMana`, sandbox or not. */
+  canTapForMana: boolean;
   /**
    * What the rules engine does not play of the face shown: phase's coverage labels, as
    * `DeckSupport`'s cards carry them (`gapWords` puts them in words). Empty for a face played in

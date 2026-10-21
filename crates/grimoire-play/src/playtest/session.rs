@@ -50,7 +50,7 @@ use engine::game::combat::AttackTarget;
 use engine::game::coverage::card_face_gaps;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
-use engine::game::mana_sources::max_mana_yield;
+use engine::game::mana_sources::{activatable_mana_actions_for_player, max_mana_yield};
 use engine::game::printed_cards::intrinsic_etb_counters;
 use engine::game::turn_control::authorized_submitters;
 use engine::game::{
@@ -127,6 +127,9 @@ const NOT_IN_GAME: &str = "That card is no longer where it was.";
 const NOT_NOW: &str = "Keep or mulligan the opening hand first.";
 const ALREADY_KEPT: &str = "The opening hand has already been kept.";
 const OVER: &str = "The game is over. Start a new one from the game menu.";
+/// The board's own question about which mana a source makes (`tap_for_mana`).
+const MANA_CHOICE: &str = "ManaChoice";
+const NO_MANA: &str = "That makes no mana right now.";
 const MAIN_ONLY: &str = "That can be done in your main phase, with nothing on the stack.";
 const SANDBOX_OFF: &str =
     "That changes the game by hand. Turn the sandbox on in the game menu to do it.";
@@ -163,6 +166,7 @@ struct Printing {
 struct Offers {
     foretell: HashSet<ObjectId>,
     cast: HashSet<ObjectId>,
+    mana: HashSet<ObjectId>,
 }
 
 /// A cast or an activation the engine is still asking the reader about, which `cancel` takes
@@ -805,9 +809,9 @@ impl Playtest {
         }
     }
 
-    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card, and
-    /// casting a card from the graveyard or exile. Nothing in a replay frame, or while the reader
-    /// does not have priority.
+    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card,
+    /// casting a card from the graveyard or exile, and tapping a permanent for mana. Nothing in a
+    /// replay frame, or while the reader does not have priority.
     fn offers(&self, watching: bool) -> Offers {
         let mut offers = Offers::default();
         if watching || !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
@@ -825,6 +829,7 @@ impl Playtest {
                 _ => {}
             }
         }
+        offers.mana = self.mana_ways().iter().filter_map(mana_source).collect();
         offers
     }
 
@@ -847,6 +852,9 @@ impl Playtest {
                         Some(Zone::Hand) => c.can_foretell = offers.foretell.contains(&id),
                         Some(Zone::Graveyard | Zone::Exile) => {
                             c.castable = offers.cast.contains(&id);
+                        }
+                        Some(Zone::Battlefield) => {
+                            c.can_tap_for_mana = offers.mana.contains(&id);
                         }
                         _ => {}
                     }
@@ -1669,6 +1677,10 @@ impl Playtest {
         if let Value::Object(fields) = &data {
             for (key, value) in fields {
                 match key.as_str() {
+                    // A mana ability's row: the type of mana it makes (`Green`, `Colorless`).
+                    "selection" if value.get("mana_type").is_some() => {
+                        label = value.get("mana_type").and_then(tag_of);
+                    }
                     // Cards, by id or list of ids.
                     "object_id" | "source_id" | "keep" | "target_id" | "equipment_id"
                     | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" | "kept"
@@ -1875,8 +1887,12 @@ impl Playtest {
                     .into_iter()
                     .nth(index as usize)
                     .ok_or("That answer is no longer on offer.")?;
-                if let Some(c) = choice {
-                    self.begin(c.source);
+                match choice {
+                    Some(c) if c.kind == MANA_CHOICE => {
+                        return self.make_mana(c.source, answer, out)
+                    }
+                    Some(c) => self.begin(c.source),
+                    None => {}
                 }
                 self.apply(YOU, answer, out)?;
                 self.advance(out)
@@ -1886,6 +1902,14 @@ impl Playtest {
                     return Err(NO_PROMPT.into());
                 }
                 let (what, answer) = match choice {
+                    // The board's own "which mana": the first, as the engine lists them.
+                    Some(c) if c.kind == MANA_CHOICE => {
+                        out.push(PlaytestHappened::Chose {
+                            what: c.kind.into(),
+                        });
+                        let answer = c.actions.into_iter().next().ok_or(NO_MANA)?;
+                        return self.make_mana(c.source, answer, out);
+                    }
                     // The board's own "which way": the first, as the engine lists them.
                     Some(c) => {
                         self.begin(c.source);
@@ -2027,6 +2051,7 @@ impl Playtest {
             PlaytestAction::Play { id } => self.play(ObjectId(id), out),
             PlaytestAction::Activate { id } => self.activate(ObjectId(id), out),
             PlaytestAction::Foretell { id } => self.foretell(ObjectId(id), out),
+            PlaytestAction::TapForMana { id } => self.tap_for_mana(ObjectId(id), out),
             PlaytestAction::Pass => {
                 self.apply(YOU, GameAction::PassPriority, out)?;
                 self.advance(out)
@@ -2193,6 +2218,73 @@ impl Playtest {
         self.take_one(ways, "AbilityChoice", name.clone(), out, || {
             format!("{name} has no ability you can activate right now.")
         })
+    }
+
+    /// The rules only, sandbox or not: one of the reader's permanents tapped for mana by its own
+    /// mana ability (CR 605.3a), so the reader picks the sources a cast is paid from rather than
+    /// phase's `Auto`. The mana floats in their pool, which a cast spends first, until the step or
+    /// phase ends and the rules empty it (CR 500.4). One way is taken; several (a dual land's two
+    /// colors, a creature's two mana abilities) are the board's `ManaChoice`; none is a refusal.
+    fn tap_for_mana(
+        &mut self,
+        id: ObjectId,
+        out: &mut Vec<PlaytestHappened>,
+    ) -> Result<(), String> {
+        let name = self.own(id)?.name.clone();
+        let mut ways: Vec<GameAction> = self
+            .mana_ways()
+            .into_iter()
+            .filter(|a| mana_source(a) == Some(id))
+            .collect();
+        match ways.len() {
+            0 => Err(format!("{name} can't make mana right now.")),
+            1 => self.make_mana(name, ways.remove(0), out),
+            _ => {
+                self.choice = Some(BoardChoice {
+                    kind: MANA_CHOICE,
+                    source: name,
+                    actions: ways,
+                });
+                Ok(())
+            }
+        }
+    }
+
+    /// Every mana ability the reader could activate now: phase's own list for a board to offer
+    /// (`activatable_mana_actions_for_player`, which its land-tap reducer checks against) — a
+    /// land's `TapLandForMana` for each kind of mana it makes, any other permanent's mana
+    /// `ActivateAbility`. Mana abilities are not in `legal_actions` (they are no decision to
+    /// auto-pass over), so `answers` never lists them.
+    fn mana_ways(&self) -> Vec<GameAction> {
+        if !matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == YOU) {
+            return Vec::new();
+        }
+        activatable_mana_actions_for_player(&self.state, YOU)
+    }
+
+    /// A mana ability activated: told as the reader's tap, its mana in their pool. Nothing plays
+    /// on and the reader keeps priority where they were, since `advance` would pass a stop they
+    /// were already stopped at. Only a question the ability itself asks (a cost to choose) is
+    /// played on to, and can be cancelled back to before the tap, as a cast can.
+    fn make_mana(
+        &mut self,
+        name: String,
+        action: GameAction,
+        out: &mut Vec<PlaytestHappened>,
+    ) -> Result<(), String> {
+        self.begin(name.clone());
+        out.push(PlaytestHappened::Tapped {
+            seat: PlaytestPlayer::You,
+            name,
+            count: 1,
+            tapped: true,
+        });
+        self.apply(YOU, action, out)?;
+        if matches!(self.state.waiting_for, WaitingFor::Priority { player } if player == YOU) {
+            self.pending = None;
+            return Ok(());
+        }
+        self.advance(out)
     }
 
     /// Every legal action `id` is the source of, but a play or a cast of it: its abilities, equip,
@@ -3139,6 +3231,15 @@ fn collect_refs(value: &Value, ids: &mut Vec<ObjectId>, players: &mut Vec<Playte
             }
         }
         _ => {}
+    }
+}
+
+/// The permanent a mana action of `mana_ways` taps or activates.
+fn mana_source(action: &GameAction) -> Option<ObjectId> {
+    match action {
+        GameAction::TapLandForMana { selection } => Some(selection.source.object_id),
+        GameAction::ActivateAbility { source_id, .. } => Some(*source_id),
+        _ => None,
     }
 }
 

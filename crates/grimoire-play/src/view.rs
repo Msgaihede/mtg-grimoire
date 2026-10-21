@@ -91,6 +91,10 @@ pub struct GameCard {
     /// exile, a flashback card from the graveyard. Only ever set on a graveyard or exile card,
     /// and only in a view the reader can act in.
     pub castable: bool,
+    /// The rules let the reader tap it for mana now (CR 605.3a): one of their permanents with a
+    /// mana ability they can activate, a land's `{T}` above all. Only ever set on a battlefield
+    /// card, and only in a view the reader can act in.
+    pub can_tap_for_mana: bool,
     /// What the engine does not play of the face it shows: phase's coverage labels
     /// (`card_face_gaps`, as `support.rs` sends them), empty for a face played in full and for a
     /// token. A card with any is still played, but the parts named do nothing, so the board marks

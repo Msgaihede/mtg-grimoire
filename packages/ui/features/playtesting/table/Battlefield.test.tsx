@@ -29,6 +29,7 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     foretold: false,
     canForetell: false,
     castable: false,
+    canTapForMana: false,
     gaps: [],
     ...over,
   };
@@ -409,10 +410,37 @@ describe("Battlefield with the sandbox off", () => {
     expect(onActivate).toHaveBeenCalledWith(ring.id);
   });
 
+  it("taps a land for mana on a click, sandbox or not (issue #1326)", () => {
+    const forest = card("Forest", { canTapForMana: true });
+    const { onAct } = setup([forest], { sandbox: false });
+    fireEvent.click(screen.getByRole("button", { name: "Forest" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "tapForMana", id: forest.id });
+  });
+
   it("opens no menu on a card with no ability to offer", () => {
     setup([card("Forest")], { sandbox: false, readOnly: true });
     fireEvent.contextMenu(screen.getByRole("button", { name: "Forest" }));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+describe("Battlefield with the sandbox on and a land that taps for mana", () => {
+  it("taps it for mana rather than only turning it, and keeps the menu's plain Tap", async () => {
+    const forest = card("Forest", { canTapForMana: true });
+    const { onAct } = setup([forest]);
+    const button = screen.getByRole("button", { name: "Forest" });
+    fireEvent.click(button);
+    expect(onAct).toHaveBeenLastCalledWith({ type: "tapForMana", id: forest.id });
+
+    fireEvent.contextMenu(button);
+    await screen.findByRole("menu");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Tap" }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "tap", ids: [forest.id], tapped: true });
+  });
+
+  it("does not pile a land that can tap for mana with one that cannot", () => {
+    setup([card("Forest", { canTapForMana: true }), card("Forest")]);
+    expect(screen.getAllByRole("button", { name: "Forest" })).toHaveLength(2);
   });
 });
 

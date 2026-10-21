@@ -54,6 +54,7 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     foretold: false,
     canForetell: false,
     castable: false,
+    canTapForMana: false,
     gaps: [],
     ...over,
   };

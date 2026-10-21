@@ -1024,6 +1024,155 @@ fn the_mana_table_counts_each_type_the_open_sources_could_make() {
     );
 }
 
+/// Issue #1326: the reader taps a land for mana by the rules, sandbox or not — the land they pick,
+/// not the engine. Its mana floats in the pool (the mana table's pool row) and the next cast
+/// spends it before tapping anything else; mana left unspent empties as the phase ends (CR
+/// 500.4), and an undo puts the land back untapped.
+#[test]
+fn a_land_tapped_for_mana_by_hand_floats_until_a_cast_spends_it() {
+    let (open, tapped, cast, floated, passed, undone, first, second) = engine(|| {
+        let mut game = kept();
+        let first = put_down(&mut game, "Forest");
+        let second = put_down(&mut game, "Forest");
+        let elf = in_hand(&mut game, "Llanowar Elves");
+        let open = game.act(A::SetSandbox { on: false }).unwrap().view;
+        let tapped = game.act(A::TapForMana { id: first }).unwrap();
+        let cast = game.act(A::Play { id: elf }).unwrap().view;
+        let floated = game.act(A::TapForMana { id: second }).unwrap().view;
+        let undone = game.act(A::Undo).unwrap().view;
+        game.act(A::TapForMana { id: second }).unwrap();
+        let passed = game.act(A::Pass).unwrap().view;
+        (open, tapped, cast, floated, passed, undone, first, second)
+    });
+    let card = |v: &PlaytestView, id: u64| {
+        v.you
+            .battlefield
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
+            .expect("on the battlefield")
+    };
+    assert!(!open.sandbox);
+    assert!(card(&open, first).can_tap_for_mana && card(&open, second).can_tap_for_mana);
+    assert!(
+        !open.opponents[0]
+            .battlefield
+            .iter()
+            .any(|c| c.can_tap_for_mana),
+        "only the reader's own sources are offered"
+    );
+
+    assert!(
+        tapped.happened.contains(&H::Tapped {
+            seat: YOU,
+            name: "Forest".into(),
+            count: 1,
+            tapped: true,
+        }),
+        "{:?}",
+        tapped.happened
+    );
+    let view = &tapped.view;
+    assert_eq!(view.stage, Stage::Main, "the reader keeps priority");
+    assert!(card(view, first).tapped && !card(view, first).can_tap_for_mana);
+    assert!(!card(view, second).tapped);
+    assert_eq!(
+        view.you.mana.floating.green, 1,
+        "the mana floats in the pool"
+    );
+    assert_eq!(view.you.mana.open.green, 1, "one Forest is still open");
+
+    assert!(find(&cast.you.battlefield, "Llanowar Elves").is_some());
+    assert_eq!(
+        cast.you.mana.floating,
+        ManaByType::default(),
+        "the cast spent the pool"
+    );
+    assert!(
+        !card(&cast, second).tapped,
+        "the cast paid from the pool, not the other Forest"
+    );
+
+    assert_eq!(floated.you.mana.floating.green, 1);
+    assert!(!card(&undone, second).tapped, "undo untaps it");
+    assert_eq!(undone.you.mana.floating, ManaByType::default());
+
+    assert_eq!(
+        passed.you.mana.floating,
+        ManaByType::default(),
+        "unspent mana empties as the phase ends (CR 500.4)"
+    );
+}
+
+/// A source that makes one of several kinds of mana asks which; a mana rock taps for its whole
+/// output; a card with no mana ability is refused, and a refusal changes nothing.
+#[test]
+fn a_source_of_several_kinds_of_mana_asks_which_and_a_rock_makes_its_whole_output() {
+    let deck = vec![
+        card("Savannah", None, "Land", "{T}: Add {G} or {W}.", None, 20),
+        card(
+            "Sol Ring",
+            Some("{1}"),
+            "Artifact",
+            "{T}: Add {C}{C}.",
+            None,
+            20,
+        ),
+        card(
+            "Grizzly Bears",
+            Some("{1}{G}"),
+            "Creature — Bear",
+            "",
+            Some(("2", "2")),
+            20,
+        ),
+    ];
+    let (asked, white, ring, refused) = engine(move || {
+        let (mut game, _) = fish(&deck, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        let savannah = put_down(&mut game, "Savannah");
+        let sol = put_down(&mut game, "Sol Ring");
+        let bear = put_down(&mut game, "Grizzly Bears");
+        game.act(A::SetSandbox { on: false }).unwrap();
+        let asked = game.act(A::TapForMana { id: savannah }).unwrap().view;
+        let index = asked
+            .prompt
+            .as_ref()
+            .and_then(|p| {
+                p.options
+                    .iter()
+                    .find(|o| o.label.as_deref() == Some("White"))
+            })
+            .map(|o| o.index)
+            .expect("a White answer");
+        let white = game.act(A::Choose { index }).unwrap().view;
+        let ring = game.act(A::TapForMana { id: sol }).unwrap().view;
+        let refused = game.act(A::TapForMana { id: bear }).unwrap_err();
+        (asked, white, ring, refused)
+    });
+    assert_eq!(asked.stage, Stage::Prompt);
+    let prompt = asked.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "ManaChoice");
+    assert_eq!(prompt.source.as_deref(), Some("Savannah"));
+    let mut labels: Vec<_> = prompt
+        .options
+        .iter()
+        .filter_map(|o| o.label.clone())
+        .collect();
+    labels.sort();
+    assert_eq!(labels, ["Green", "White"]);
+    assert!(
+        !find(&asked.you.battlefield, "Savannah").unwrap().tapped,
+        "asking taps nothing yet"
+    );
+
+    assert_eq!(white.stage, Stage::Main);
+    assert_eq!(white.you.mana.floating.white, 1);
+    assert!(find(&white.you.battlefield, "Savannah").unwrap().tapped);
+    assert_eq!(ring.you.mana.floating.colorless, 2);
+    assert!(refused.contains("can't make mana"), "{refused}");
+}
+
 #[test]
 fn a_life_total_the_rules_change_is_told_for_either_seat() {
     let step = engine(|| {

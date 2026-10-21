@@ -41,6 +41,7 @@ const TITLES: Record<string, string> = {
   SearchChoice: "Search your library",
   CastChoice: "How do you cast it?",
   AbilityChoice: "Which ability?",
+  ManaChoice: "Which mana?",
   ChooseXValue: "Choose X",
   NamedChoice: "Choose",
   OptionalCostChoice: "Pay the optional cost?",
@@ -175,6 +176,9 @@ export function optionLabel(
 ): OptionLabel {
   if (option.kind === "ChooseAlternativeCast")
     return { text: costText(option, prompt), hint: null };
+  // A mana ability's row says the mana it makes ("Add green mana"), else which ability it is.
+  if (prompt.kind === "ManaChoice" && option.label !== null)
+    return { text: `Add ${option.label.toLowerCase()} mana`, hint: null };
   if (prompt.kind === "OrderTriggers" && option.cards.length > 0) {
     const refs = optionCards(option, prompt);
     const [first, ...rest] = refs.map((ref) => abilityName(ref, refs, opponents));
@@ -215,7 +219,7 @@ function numberText(n: number | null, kind: string): string | null {
   if (n === null) return null;
   if (kind === "ChooseXValue") return `X = ${n}`;
   if (kind === "ModeChoice" || kind === "AbilityModeChoice") return `Mode ${n + 1}`;
-  if (kind === "AbilityChoice") return `Ability ${n + 1}`;
+  if (kind === "AbilityChoice" || kind === "ManaChoice") return `Ability ${n + 1}`;
   return String(n);
 }
 
@@ -316,6 +320,7 @@ export function cardOfRef(
       foretold: false,
       canForetell: false,
       castable: false,
+      canTapForMana: false,
       gaps: [],
     }
   );

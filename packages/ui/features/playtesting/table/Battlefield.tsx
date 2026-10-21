@@ -95,9 +95,11 @@ export interface BattlefieldProps {
   /**
    * The sandbox's moves work now (on, the reader's main phase, nothing out): a click taps, a pile
    * is carried off to anywhere, and the menu has every hand move. Off, a card is only clicked when
-   * the rules ask for it (`pick`), dragged only onto what the rules take (`carry`, `aim`), and its
-   * menu is `onActivate`'s row alone — and the table still takes a card played onto it from the
-   * hand or the command zone.
+   * the rules ask for it (`pick`) or to tap it for mana, dragged only onto what the rules take
+   * (`carry`, `aim`), and its menu is the rules' rows alone — and the table still takes a card
+   * played onto it from the hand or the command zone. Either way a click on a card the rules let
+   * tap for mana ({@link GameCard.canTapForMana}) taps it for mana (`tapForMana`) rather than only
+   * turning it.
    */
   sandbox: boolean;
   onAct: (action: PlaytestAction) => void;
@@ -454,6 +456,8 @@ function PileView({
   const stats = changedStats(card);
   /** Carried off and tapped by a click: the reader's own card, with the sandbox's moves working. */
   const handled = sandbox && !readOnly;
+  /** Tapped for mana by a click, by the rules: sandbox or not. */
+  const makesMana = !readOnly && card.canTapForMana && !tapped;
   /** Picked up at all: the sandbox's carry, or the rules' (`carry`) — an attack, a target. */
   const carried = !readOnly && (handled || (carry?.(card) ?? false));
   const aimed = useAimTarget({ ref: top, aim: aim?.card(ids[0]), overlay: true });
@@ -564,12 +568,14 @@ function PileView({
           .filter((part) => part !== null)
           .join(", ")}
         aria-pressed={picks ? mark !== undefined : undefined}
-        // Click taps the top card; Shift taps the pile — the artboard's help, and the sandbox's:
-        // with it off a click taps nothing. A card that can be picked is picked instead, and an
-        // opponent's card is tapped only through its menu, so a click meant as a look never
-        // turns it.
+        // A card the rules let tap for mana is tapped for it — the top card, sandbox or not, its
+        // mana into the pool (issue #1326). Otherwise click taps the top card and Shift the pile —
+        // the artboard's help, and the sandbox's: with it off a click taps nothing. A card that
+        // can be picked is picked instead, and an opponent's card is tapped only through its
+        // menu, so a click meant as a look never turns it.
         onClick={(e) => {
           if (onPick !== undefined) onPick(ids[0]);
+          else if (makesMana) onAct({ type: "tapForMana", id: ids[0] });
           else if (handled)
             onAct({ type: "tap", ids: e.shiftKey ? ids : [ids[0]], tapped: !tapped });
         }}
@@ -596,7 +602,7 @@ function PileView({
           "absolute cursor-pointer rounded-md p-0",
           "transition-[left,transform] duration-150 ease-out motion-reduce:transition-none",
           FOCUS,
-          !carried && !picks && "cursor-default",
+          !carried && !picks && !makesMana && "cursor-default",
           aimed
             ? MARK_RING.chosen
             : mark !== undefined
@@ -723,6 +729,9 @@ function AttachedView({
   const ids = useMemo(() => [card.id], [card.id]);
   const counters = card.counters.map(counterLabel).join(" · ");
   const picks = onPick !== undefined;
+  // Tapped for mana by a click when it is the reader's to activate (`onActivate`): never another
+  // table's guest, never during a replay.
+  const makesMana = onActivate !== undefined && card.canTapForMana && !card.tapped;
   const aimed = useAimTarget({ ref, aim, overlay: true });
 
   useEffect(() => {
@@ -755,6 +764,7 @@ function AttachedView({
       onClick={(e) => {
         e.stopPropagation();
         if (onPick !== undefined) onPick(card.id);
+        else if (makesMana) onAct({ type: "tapForMana", id: card.id });
         else if (handled) onAct({ type: "tap", ids, tapped: !card.tapped });
       }}
       onContextMenu={(e) => {
@@ -821,6 +831,7 @@ export function emblemCard(emblem: PlaytestEmblem): GameCard {
     foretold: false,
     canForetell: false,
     castable: false,
+    canTapForMana: false,
     gaps: [],
     effects: [],
   };
