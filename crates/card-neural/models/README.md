@@ -62,12 +62,12 @@ By hand, from `train/`:
 ### The printing evidence
 
 `symbol.onnx`, `band.onnx` and their galleries are **the lab's alone**: the training scripts
-(`spike	rain\ev_*.py`) are not in `train/`, and the monthly pipeline does not remake them. By
+(`spike\train\ev_*.py`) are not in `train/`, and the monthly pipeline does not remake them. By
 hand, in the lab:
 
 1. **Train** each with `ev_train.py --kind symbol|band` (ArcFace, margin 0.3, on the same
    Scryfall mirror; symbol 16 epochs at 64 repeats, ~74 min; band 20 epochs, ~82 min).
-2. **Export** with `ev_export.py <data> <run>est.pt <out> --kind symbol|band`, which writes
+2. **Export** with `ev_export.py <data> <run>\best.pt <out> --kind symbol|band`, which writes
    `<kind>.onnx`, `<kind>s.matrix` (one row a class, the mean of its members' crops) and
    `<kind>s.json`, and the crop's `neural.json` entry as `<kind>.meta.json`.
 3. **Galleries**: `build-gallery --matrix <kind>s.matrix --gallery <kind>s.json --out <kind>s.bin`

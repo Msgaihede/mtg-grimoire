@@ -15,9 +15,11 @@ import {
   buildIdOf,
   GLUE_FILE,
   isNavigation,
+  NEURAL_EVIDENCE_FILES,
   NEURAL_FILES,
   NEURAL_PREFIX,
   neuralContentType,
+  neuralEvidenceFault,
   neuralFault,
   neuralFileOf,
   neuralPath,
@@ -416,32 +418,42 @@ function webScanner(files: Built[], format: number): Plugin {
 }
 
 /**
- * `crates/card-neural/models/`: the Neural scanner's four files, **in git** (the owner's decision,
+ * `crates/card-neural/models/`: the Neural scanner's eight files, **in git** (the owner's decision,
  * 2026-10-20) — so a build needs no script to fetch them and no manifest to trust them by. Read
  * from where they are, and resolved against this file.
  */
 const NEURAL_DIR = fileURLToPath(new URL("../../crates/card-neural/models/", import.meta.url));
 
-/** The four as they are on disk: their bytes in a build, their lengths alone in dev. */
+/**
+ * The eight as they are on disk — the recogniser's four, then the printing evidence's four: their
+ * bytes in a build, their lengths alone in dev. **One list, so one set id and one length map**: the
+ * set is a hash of all eight and `VITE_NEURAL_BYTES` names all eight, which is how the page knows
+ * this build ships the evidence (`scanNeural.ts`' `shipsEvidence`).
+ */
 function neuralFiles(read: boolean): { name: string; size: number; bytes: Uint8Array }[] {
-  return NEURAL_FILES.filter((name) => existsSync(NEURAL_DIR + name)).map((name) => {
-    const bytes = read ? readFileSync(NEURAL_DIR + name) : new Uint8Array(0);
-    return { name, size: read ? bytes.length : statSync(NEURAL_DIR + name).size, bytes };
-  });
+  return [...NEURAL_FILES, ...NEURAL_EVIDENCE_FILES]
+    .filter((name) => existsSync(NEURAL_DIR + name))
+    .map((name) => {
+      const bytes = read ? readFileSync(NEURAL_DIR + name) : new Uint8Array(0);
+      return { name, size: read ? bytes.length : statSync(NEURAL_DIR + name).size, bytes };
+    });
 }
 
 /**
- * **The Neural scanner's four files, served and shipped** — `card-neural`'s detector, embedder,
+ * **The Neural scanner's eight files, served and shipped** — `card-neural`'s detector, embedder,
  * gallery and `neural.json`, which the page fetches from `/scanner-neural/<set>/` the first time a
- * Neural frame is due (`packages/ui/lib/core/web/scanNeural.ts`), and never before.
+ * Neural frame is due (`packages/ui/lib/core/web/scanNeural.ts`), and never before; and the
+ * printing evidence's four (the set symbol and collector band networks and their galleries),
+ * which it fetches after the recogniser has taken the first four.
  *
- * - **In dev**, `/scanner-neural/<any set>/<one of the four>` is answered from `models/` as it is
+ * - **In dev**, `/scanner-neural/<any set>/<one of the eight>` is answered from `models/` as it is
  *   at that moment, uncached; anything else there is a 404.
- * - **In a build**, the four are held to `models/README.md`'s table — each one's length and
- *   digest, and the host's 25 MiB a file (`assets.ts`' `neuralFault`) — and a set that fails it
- *   **fails the build**: the files are in git, so there is nothing to fetch and no developer's
- *   build that may go without them. Then each is emitted under `scanner-neural/<set>/`, where the
- *   set is a hash of the four and `_headers` keeps them a year. In no precache (`sw/shell.ts`).
+ * - **In a build**, the eight are held to `models/README.md`'s table — each one's length and
+ *   digest, and the host's 25 MiB a file (`assets.ts`' `neuralFault` and `neuralEvidenceFault`) —
+ *   and a set that fails it **fails the build**: the files are in git, so there is nothing to
+ *   fetch and no developer's build that may go without them. Then each is emitted under
+ *   `scanner-neural/<set>/`, where the set is a hash of the eight and `_headers` keeps them a
+ *   year. In no precache (`sw/shell.ts`).
  */
 function webNeural(set: string, files: { name: string; bytes: Uint8Array }[], building: boolean): Plugin {
   return {
@@ -456,7 +468,7 @@ function webNeural(set: string, files: { name: string; bytes: Uint8Array }[], bu
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.setHeader("Cache-Control", "no-store");
-          res.end("Not one of the Neural scanner's files: crates/card-neural/models/ has four.");
+          res.end("Not one of the Neural scanner's files: crates/card-neural/models/ has eight.");
           return;
         }
         res.statusCode = 200;
@@ -476,7 +488,8 @@ function webNeural(set: string, files: { name: string; bytes: Uint8Array }[], bu
       const readme = existsSync(`${NEURAL_DIR}README.md`)
         ? readFileSync(`${NEURAL_DIR}README.md`, "utf8")
         : "";
-      const fault = neuralFault(found, neuralTable(readme));
+      const table = neuralTable(readme);
+      const fault = neuralFault(found, table) ?? neuralEvidenceFault(found, table);
       if (fault !== null) this.error(`The Neural scanner's files cannot ship: ${fault}`);
     },
     generateBundle() {
@@ -602,7 +615,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
   const engineBuild = building ? buildIdOf(engine) : "dev";
   const scannerBuild = building ? buildIdOf(built.scanner) : "dev";
   const format = web ? scannerFormat() : 0;
-  // The Neural scanner's four files: read whole by a build, which ships them under a set of their
+  // The Neural scanner's eight files: read whole by a build, which ships them under a set of their
   // own bytes; measured only by a dev server, which serves them uncached from where they are.
   const neural = web ? neuralFiles(building) : [];
   const neuralSet = building ? buildIdOf(neural) : "dev";
