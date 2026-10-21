@@ -3561,6 +3561,33 @@ list; **no ablation has separated them**, and the one measurement there is point
 among the 48 runs with several candidates whose truth is one of them, the band alone ranks the
 truth first on 34 and the symbol alone on 29 (both together, 35).
 
+**What the evidence costs a Worker** (2026-10-21). The web build hands the four files to
+`grimoire-scan`'s `load_neural_evidence` after the recogniser, into a WASM heap that is never given
+back, so a trap on a later frame could be the evidence's and be blamed on the frame. Measured on
+the built `dist-wasm/scanner` module (`simd128`, the `wasm` profile) in **Node 24's V8 on the
+owner's desktop**, loaded through its own `initSync` and fed the readers' JPEG bytes — not in a
+browser (the built-in browser has no camera) and not on a phone: `load` with the
+`card-hashes-v5.bin` bundle (113 494 entries) and both OCR models, no labels; `load_neural` with
+the four recogniser files; ten readers' runs (every twelfth of the 124, 20 frames each), Neural
+options, `reset` between runs; a warm-up pass discarded; two runs of the whole, which agreed.
+
+| step | linear memory | time |
+| --- | ---: | ---: |
+| `load` | 42.1 MiB | 41 ms |
+| `load_neural` | 64.4 MiB | 39–40 ms |
+| 200 Neural frames, no evidence | 64.4 MiB | mean 43.7–44.8 ms, median 42–43, p90 59–60, max 102–109 |
+| `load_neural_evidence` | **90.3 MiB (+25.9)** | **48–49 ms** |
+| 400 Neural frames with the evidence | 90.3 MiB | mean 44.3–45.4 ms, median 42–43, p90 59–63, max 94–116 |
+
+The evidence costs **25.9 MiB** — its 20.6 MiB of files and ~5 MiB of the band index and the two
+networks' working space — and a frame no measurable time. Two of the ten runs that ended
+ambiguous (2 choices) without it ended resolved with it (whether on the reader's printing was
+not checked here; the replay above is the accuracy measure). Both figures are under the bar the review set
+(40 MiB, or a 2 s hand-over) for counting a trap after the evidence loaded against the evidence,
+so a trap is still the frame's: the next Worker gets the evidence again. A phone's V8 is
+slower than this desktop's, perhaps several times; 49 ms has room for that, and the 25.9 MiB
+does not change with the CPU.
+
 The rule (`narrow.rs`, run by `neural_mode::evidence_decision`) is, for the card the agreement
 decided:
 
