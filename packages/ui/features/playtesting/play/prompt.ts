@@ -305,6 +305,7 @@ export function cardOfRef(
       isCommander: false,
       tapped: false,
       counters: [],
+      effects: [],
       power: null,
       toughness: null,
       tax: 0,

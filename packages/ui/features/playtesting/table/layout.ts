@@ -76,8 +76,9 @@ export interface ZoneSize {
 }
 
 /**
- * One pile: the cards of one name that look the same — same tapped state, same counters — and
- * so are drawn as one card with the rest edged under it. The ids are the engine's, in table order.
+ * One pile: the cards of one name that look the same — same tapped state, counters and effects —
+ * and so are drawn as one card with the rest edged under it. The ids are the engine's, in table
+ * order.
  */
 export interface Pile {
   /** Stable within one view: the first card's id. */
@@ -93,10 +94,16 @@ export interface Pile {
   attached: GameCard[];
 }
 
-/** What makes two cards one pile: the picture, the name, the state and the counters. */
+/**
+ * What makes two cards one pile: the picture, the name, the state, the counters and the effects
+ * on it — a Bear under Giant Growth is not its untouched twin (issue #1327).
+ */
 function pileKey(c: GameCard): string {
   const counters = c.counters.map((k) => `${k.kind}=${k.count}`).join(",");
-  return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, c.isToken ? "t" : ""].join("|");
+  const effects = c.effects.length === 0 ? "" : JSON.stringify(c.effects);
+  return [c.cardId ?? "", c.name, c.tapped ? 1 : 0, counters, c.isToken ? "t" : "", effects].join(
+    "|",
+  );
 }
 
 /**

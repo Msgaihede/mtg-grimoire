@@ -377,7 +377,7 @@ the opponent's Grizzly Bears into their graveyard").
 **The table is laid out by the rules, not by where a card is let go.** Creatures are in front.
 Behind them, lands are on the left and every other permanent on the right. Each lane is one row,
 and its card size is solved so every pile fits (`layout.ts`). Cards of one name that look the same
-— same printing, same tapped state, same counters — are one pile: the cards themselves stacked,
+— same printing, same tapped state, same counters, same effects — are one pile: the cards themselves stacked,
 each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip on the
 pile's bottom edge for the count (issue #1001).
 

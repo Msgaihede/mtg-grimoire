@@ -18,6 +18,7 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     isCommander: false,
     tapped: false,
     counters: [],
+    effects: [],
     power: null,
     toughness: null,
     tax: 0,

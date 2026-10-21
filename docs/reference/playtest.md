@@ -529,6 +529,22 @@ label says "played only in part", and the preview names each gap with `gapWords`
 card is its shown face's name, so its marks follow the face; it is fixed for the game, so not in a
 `Moment`.
 
+**Each card carries the effects on it, with their sources** (issue #1327). `table.rs`'
+`effects_on` reads phase's own attribution (`GameState::attribution`) — every
+`ContinuousModification` the last layers pass applied to the object, by the static or the
+resolved effect it came from — into `GameCard.effects`: one `CardEffect` per source and kind
+(CR 613's layer, layer 7 split into set, modify and switch), in layer order, with what the engine
+names of it: the types, colors and keywords gained or lost, whether it strips every ability, the
+text of each ability it grants (phase's, `~` for the card itself), and the P/T it adds or sets
+(`null` for an axis worked out in play). A permanent's own statics on itself are its printed self
+(CR 113.3c) and are left out, as phase's own board leaves them; a resolved spell's or ability's
+effect is kept even from the card itself. Facts only: `table/effects.ts` writes them —
+`+3/+3 · Giant Growth`, `+Demon · Clavileño`, `+Dies trigger · Clavileño` on chips under the
+counters at the card's top left (three at most, the rest counted in one more), and each in full,
+a granted ability's text quoted with the card's name for `~`, in the card's label and under the
+preview. A card under an effect is never piled with its untouched twin. The attribution is
+rebuilt with every layers pass and lives in the `GameState`, so undo and replay frames carry it.
+
 ## The board
 
 `packages/ui/features/playtesting/play/`. **One board for every game on a deck**: whatever it draws

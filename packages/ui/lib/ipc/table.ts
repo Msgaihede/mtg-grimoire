@@ -1,5 +1,5 @@
 /**
- * The game table's shared pieces: a card, its lane and counters, a place a card can be put, a
+ * The game table's shared pieces: a card, its lane, counters and effects, a place a card can be put, a
  * seat, the opening hand's mulligan, a token on offer and a seat's mana — what every board on
  * phase.rs's rules engine (`crates/grimoire-play`, linked by the desktop host alone) draws a
  * table from. The game itself, its actions and its facts, is `./playtest.ts`.
@@ -19,6 +19,13 @@ export type GamePlace =
 
 /** A side of the table: the reader's, or the opponents' (a stop's side). */
 export type GameSeat = "you" | "opponent";
+
+/**
+ * Which of a card's characteristics an effect changes: CR 613.1's layers, layer 7's P/T effects
+ * told apart — set (7a–b), raised or lowered (7c), switched (7d).
+ */
+export type GameEffectKind =
+  "copy" | "control" | "text" | "type" | "color" | "ability" | "setPt" | "modifyPt" | "switchPt";
 
 /** A seat's mana by type (issue #1002). Every seat's, the reader's and each opponent's. */
 export interface ManaTable {
@@ -65,6 +72,11 @@ export interface GameCard {
   isCommander: boolean;
   tapped: boolean;
   counters: CardCounter[];
+  /**
+   * The continuous effects changing it now, one per source and kind — the board's chips beside
+   * the counters (issue #1327). A permanent's own statics on itself are not among them.
+   */
+  effects: CardEffect[];
   power: number | null;
   toughness: number | null;
   /** Commander tax in generic mana; 0 for anything else. */
@@ -93,6 +105,30 @@ export interface CardCounter {
   /** As a reader names it: `+1/+1`, `loyalty`, `charge`. */
   kind: string;
   count: number;
+}
+
+/**
+ * One source's continuous effect on a card (issue #1327): what it changes and which card it is
+ * from. Facts only — `effects.ts` (the playtesting table's) puts them in words.
+ */
+export interface CardEffect {
+  kind: GameEffectKind;
+  /** The card it is from, by name — the spell's or ability's source as the engine noted it. */
+  source: string;
+  /** What it gives, as the engine names it: types and subtypes, colors, keywords. */
+  gained: string[];
+  /** What it takes away, named the same way. */
+  lost: string[];
+  /** It takes away all the card's abilities (Humility, Turn to Frog). */
+  losesAbilities: boolean;
+  /** The text of each non-keyword ability it grants, `~` standing for the card itself. */
+  abilities: string[];
+  /**
+   * `modifyPt`: what it adds (+3/+3 is 3 and 3); `setPt`: what it sets. `null` for an axis it
+   * leaves alone or works out as the game goes (+X/+X).
+   */
+  power: number | null;
+  toughness: number | null;
 }
 
 export interface TokenOffer {
