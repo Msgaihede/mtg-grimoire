@@ -56,6 +56,7 @@ function printing(
     promoTypes: null,
     gameChanger: false,
     releasedAt: null,
+    imageUpdatedAt: null,
     ownedQuantity: 0,
     wishlisted: false,
     printings: 1,

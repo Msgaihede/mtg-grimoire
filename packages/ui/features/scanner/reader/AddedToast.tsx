@@ -106,6 +106,11 @@ export interface AddedToastProps {
   card: LandedCard | null;
   /** Called {@link LANDED_HOLD_MS} after each landing; the page answers by passing `null`. */
   onDone: () => void;
+  /**
+   * What the card costs, written out — one figure, or the span across a pick's candidates
+   * (`useLandedPrice`, issue #1321). Absent draws nothing: no read has answered yet.
+   */
+  price?: string;
 }
 
 /**
@@ -118,7 +123,7 @@ export interface AddedToastProps {
  * landing, and the page answers it by passing `null`, which is what lets the card leave through
  * its exit animation.
  */
-export function AddedToast({ card, onDone }: AddedToastProps) {
+export function AddedToast({ card, onDone, price }: AddedToastProps) {
   // Latched rather than a dependency, so a caller passing a fresh arrow each render does not
   // restart the hold on every render — only a new landing does.
   const done = useRef(onDone);
@@ -171,11 +176,20 @@ export function AddedToast({ card, onDone }: AddedToastProps) {
               <div className="flex min-w-0 flex-col gap-[5px]">
                 <Label card={card} />
                 <span className="max-w-80 truncate font-heading text-[22px] leading-tight">{card.name}</span>
-                {card.kind === "pick" ? (
-                  <span className="truncate text-xs text-dim">{pickLine(card.choices.length)}</span>
-                ) : (
-                  <span className="truncate font-mono text-xs text-dim">{printingLine(card)}</span>
-                )}
+                {/* The price closes the line and never truncates — the printing gives way to it,
+                    because the figure is what a glance is for here. */}
+                <span className="flex min-w-0 items-baseline gap-2 text-xs">
+                  {card.kind === "pick" ? (
+                    <span className="truncate text-dim">{pickLine(card.choices.length)}</span>
+                  ) : (
+                    <span className="truncate font-mono text-dim">{printingLine(card)}</span>
+                  )}
+                  {price !== undefined && (
+                    <span data-landed-price="" className="ml-auto shrink-0 font-mono text-text tabular-nums">
+                      {price}
+                    </span>
+                  )}
+                </span>
               </div>
             </motion.div>
           )}

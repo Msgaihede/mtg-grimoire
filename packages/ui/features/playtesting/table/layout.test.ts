@@ -19,8 +19,10 @@ import {
   attachmentsOf,
   fitWidth,
   handRow,
+  handSlotAt,
   landsFirst,
   layoutTable,
+  moveInHand,
   pileHeight,
   pileWidth,
   underOf,
@@ -43,6 +45,8 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     counters: [],
     power: null,
     toughness: null,
+    basePower: null,
+    baseToughness: null,
     tax: 0,
     attachedTo: null,
     foretold: false,
@@ -71,6 +75,21 @@ describe("pilesOf", () => {
       ["Plains", 1, false],
     ]);
     expect(pilesOf(cards, "creature")).toHaveLength(2);
+  });
+
+  it("keeps two creatures of one name apart when their power and toughness differ", () => {
+    const piles = pilesOf(
+      [
+        card("Bear", { lane: "creature", power: 2, toughness: 2 }),
+        card("Bear", { lane: "creature", power: 5, toughness: 5 }),
+        card("Bear", { lane: "creature", power: 2, toughness: 2 }),
+      ],
+      "creature",
+    );
+    expect(piles.map((p) => [p.card.power, p.ids.length])).toEqual([
+      [2, 2],
+      [5, 1],
+    ]);
   });
 
   it("keeps two printings of one card apart, since they look different", () => {
@@ -253,5 +272,43 @@ describe("arrangeHand", () => {
       forest.id,
       ponder.id,
     ]);
+  });
+});
+
+describe("handSlotAt", () => {
+  it("takes the slot whose card's middle is nearest the pointer", () => {
+    const row = handRow(5);
+    expect(handSlotAt(0, 5)).toBe(0);
+    expect(handSlotAt(row.lefts[3] + HAND_CARD_W / 2, 5)).toBe(3);
+    expect(handSlotAt(row.lefts[3] + HAND_CARD_W / 2 + 10, 5)).toBe(3);
+    expect(handSlotAt(row.width + 200, 5)).toBe(4);
+    expect(handSlotAt(-200, 5)).toBe(0);
+  });
+
+  it("reads an overlapping row by its narrower step", () => {
+    const row = handRow(12);
+    expect(handSlotAt(row.lefts[9] + HAND_CARD_W / 2, 12)).toBe(9);
+  });
+
+  it("has one slot for one card, and none to choose for none", () => {
+    expect(handSlotAt(500, 1)).toBe(0);
+    expect(handSlotAt(500, 0)).toBe(0);
+  });
+});
+
+describe("moveInHand", () => {
+  it("takes the card out and puts it back at the slot, the rest closing up", () => {
+    expect(moveInHand([1, 2, 3, 4], 1, 2)).toEqual([2, 3, 1, 4]);
+    expect(moveInHand([1, 2, 3, 4], 4, 0)).toEqual([4, 1, 2, 3]);
+    expect(moveInHand([1, 2, 3, 4], 2, 1)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("puts a slot past either end at that end", () => {
+    expect(moveInHand([1, 2, 3], 2, 9)).toEqual([1, 3, 2]);
+    expect(moveInHand([1, 2, 3], 2, -1)).toEqual([2, 1, 3]);
+  });
+
+  it("leaves the order as it was for a card not held", () => {
+    expect(moveInHand([1, 2, 3], 7, 0)).toEqual([1, 2, 3]);
   });
 });

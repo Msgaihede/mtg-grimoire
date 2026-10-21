@@ -332,6 +332,13 @@ into is part of the button. So a lift cannot take the card out from under the po
 card drops back the moment the pointer leaves it. The kept hand is held lands first, the same order
 the opening hand shows. After that, a card drawn or returned goes on the right (`arrangeHand`).
 
+**The reader reorders their own hand at any moment of the game** (issue #1330): a card dragged
+within the hand takes the slot it is let go over (`handSlotAt`, the card whose middle is nearest the
+pointer), and Shift+← / Shift+→ on a focused card moves it one place (`moveInHand`). The order is
+the board's alone (`HandFan`'s held order) — a hand's order means nothing to the rules — so it asks
+the engine nothing, needs no sandbox, and works on the opponent's turn, in a prompt or while the
+engine is busy. A card played leaves the rest in the reader's order; one drawn goes on the right.
+
 **The preview follows the pointer.** It opens beside the cursor once the pointer has rested on a
 card for half a second, and it moves with the pointer, kept inside the board. It closes the moment
 the pointer leaves the card, and the next card — or the same one again — is rested on anew. A card
@@ -377,9 +384,17 @@ the opponent's Grizzly Bears into their graveyard").
 **The table is laid out by the rules, not by where a card is let go.** Creatures are in front.
 Behind them, lands are on the left and every other permanent on the right. Each lane is one row,
 and its card size is solved so every pile fits (`layout.ts`). Cards of one name that look the same
-— same printing, same tapped state, same counters — are one pile: the cards themselves stacked,
-each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip on the
-pile's bottom edge for the count (issue #1001).
+— same printing, same tapped state, same counters, same P/T — are one pile: the cards themselves
+stacked, each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip
+on the pile's bottom edge for the count (issue #1001).
+
+**A creature whose P/T has changed wears it in a chip over its printed box** (issue #1332):
+`Inspect.tsx`' `StatsChip`, bottom right of the card on the table and in the preview. Both stats
+are always drawn, each coloured by which way it moved from `GameCard.base_power` /
+`base_toughness` — green up, red down, white unchanged — and a creature as printed has no chip.
+The base is phase's printed (copiable) P/T, except for a `*/*` whose characteristic-defining
+ability sets it (CR 604.3; phase prints those as 0): its base is that ability's own value
+(`table.rs`' `base_pt`), so a Tarmogoyf at its own count is not marked as pumped.
 
 **An attachment is tucked under the card it is attached to** (issue #1073), the way MTG Arena and
 a real table show it. `GameCard.attached_to` is the host's object id, read from phase's

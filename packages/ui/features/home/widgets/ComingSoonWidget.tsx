@@ -37,6 +37,11 @@
  * page it opens say one figure. The live pass read `461 seen` over a search of `285 cards` for one
  * set (2026-09-26), before the read stopped counting showcase and borderless printings as cards.
  *
+ * **The press also names the order: `Image updated`, newest first** (issue #1214). A set still
+ * being previewed is read for what was spoiled last, and Scryfall's `image_updated_at` is when a
+ * printing's picture last arrived — so the page opens on the newest previews rather than on the
+ * reader's last sort. The other set presses (the card modal's, the price history's) keep that sort.
+ *
  * ## The face is its own component
  *
  * {@link ComingSoonFace} draws an answer and {@link ComingSoonWidget} reads one. The workbench's
@@ -51,6 +56,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
 import { count } from "@/lib/counts";
+import { IMAGE_UPDATED_SORT } from "@/features/search/useCardSearch";
 import { ipc, ipcError, type UpcomingSet, type UpcomingSets } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 
@@ -265,7 +271,7 @@ export function ComingSoonFace({
                 name={set.name}
                 caption={tile ? short : caption}
                 hint={releaseHint(set)}
-                onPress={still ? undefined : () => showSetInSearch(set.code)}
+                onPress={still ? undefined : () => showSetInSearch(set.code, IMAGE_UPDATED_SORT)}
                 // The whole row in one string — a `gap` between the name and the caption computes
                 // to "Horizon TrekTRK · in 12 days" (`DecksWidget`'s row press, and the same reason).
                 pressLabel={still ? undefined : `${set.name} · ${caption}`}

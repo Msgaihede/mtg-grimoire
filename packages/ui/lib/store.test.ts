@@ -297,8 +297,26 @@ describe("the set Search was asked to show", () => {
     expect(s.selectedCardId).toBeNull();
     expect(s.pendingSearchSet).toBe("lea");
 
+    // No order named, so none handed over — the page keeps the reader's sort.
+    expect(s.pendingSearchSort).toBeNull();
+
     s.clearPendingSearchSet();
     expect(useAppStore.getState().pendingSearchSet).toBeNull();
+  });
+
+  /** Issue #1214: the Coming soon widget's press names the order too, and it is spent with the set. */
+  it("carries an order when the press names one, and spends it with the set", () => {
+    useAppStore.getState().showSetInSearch("trk", [{ key: "imageUpdated", dir: "desc" }]);
+    expect(useAppStore.getState().pendingSearchSort).toEqual([
+      { key: "imageUpdated", dir: "desc" },
+    ]);
+
+    useAppStore.getState().clearPendingSearchSet();
+    expect(useAppStore.getState().pendingSearchSort).toBeNull();
+
+    useAppStore.getState().showSetInSearch("trk", [{ key: "imageUpdated", dir: "desc" }]);
+    useAppStore.getState().setActiveView("decks");
+    expect(useAppStore.getState().pendingSearchSort).toBeNull();
   });
 
   it("is spent by a later view change, read or not", () => {

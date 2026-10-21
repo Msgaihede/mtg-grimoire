@@ -7,7 +7,15 @@ import { cn } from "@/lib/utils";
 import { DROP_GLOW } from "./Battlefield";
 import { CardFace, pointerAt } from "./Inspect";
 import { tableDraggable, useTableDropTarget, type TableDrag } from "./tableDrag";
-import { HAND_CARD_H, HAND_CARD_W, HAND_LIFT, arrangeHand, handRow } from "./layout";
+import {
+  HAND_CARD_H,
+  HAND_CARD_W,
+  HAND_LIFT,
+  arrangeHand,
+  handRow,
+  handSlotAt,
+  moveInHand,
+} from "./layout";
 import { cardMenu } from "./menus";
 import type { Pointed } from "./types";
 
@@ -19,7 +27,8 @@ export interface HandFanProps {
   /**
    * The sandbox's moves work now (on, the reader's main phase, nothing out): a card's menu moves
    * it anywhere and a drag puts it in any zone. Off, a card is played — double-clicked, dragged
-   * onto the table, or by its menu's one row — and goes nowhere else.
+   * onto the table, or by its menu's one row — and goes nowhere else. Either way it can be moved
+   * along the hand, which is the reader's own order.
    */
   sandbox: boolean;
   onAct: (action: PlaytestAction) => void;
@@ -36,7 +45,12 @@ export interface HandFanProps {
  * pulled up out of the row and drawn over its neighbours (`handRow`).
  *
  * **The order is the reader's, not the engine's** (`arrangeHand`): the kept hand is held lands
- * first, and a card drawn after that goes on the right.
+ * first, and a card drawn after that goes on the right. **The reader rearranges it at any moment of
+ * the game** (issue #1330) — a card dragged within the hand takes the slot it is let go over, and
+ * Shift+← / Shift+→ on a focused card moves it one place (`moveInHand`). A hand's order means
+ * nothing to the rules, so this asks the engine nothing and needs no sandbox: it holds on the
+ * opponent's turn, in a prompt and while the engine is busy, the way a real hand is fanned anew
+ * whenever its holder likes.
  *
  * **The band is the hand's drop target and takes no pointer itself.** It reaches past the row
  * either side and as high as a lifted card, so its empty corners lie over the back row of the
@@ -54,7 +68,7 @@ export function HandFan({
   pointedId,
 }: HandFanProps): JSX.Element {
   const ref = useRef<HTMLElement>(null);
-  const over = useTableDropTarget({ ref, place: "hand", onDrop, sandbox, overlay: true });
+  const rowRef = useRef<HTMLDivElement>(null);
 
   // The held order, carried from render to render: adjusted while rendering when the hand
   // changed, React's way to keep state that follows a prop without an effect.
@@ -67,6 +81,21 @@ export function HandFan({
   const held = arranged.flatMap((id) => byId.get(id) ?? []);
   const row = handRow(held.length);
 
+  /** A card of the hand let go over the hand takes the slot under the pointer; the board is still
+   *  told, so it lets go of the card the way it does for every drop. */
+  const dropped = (drag: TableDrag, to: GamePlace, at: { x: number; y: number }) => {
+    const box = rowRef.current?.getBoundingClientRect();
+    if (drag.from === "hand" && to === "hand" && box !== undefined) {
+      // In the row's own pixels, whatever the board is scaled by.
+      const scale = box.width > 0 ? box.width / row.width : 1;
+      setOrder(
+        moveInHand(arranged, drag.ids[0], handSlotAt((at.x - box.left) / scale, held.length)),
+      );
+    }
+    onDrop(drag, to);
+  };
+  const over = useTableDropTarget({ ref, place: "hand", onDrop: dropped, sandbox, overlay: true });
+
   return (
     <section
       ref={ref}
@@ -78,6 +107,7 @@ export function HandFan({
       style={{ width: row.width + 2 * BAND_REACH, height: row.height }}
     >
       <div
+        ref={rowRef}
         className="absolute top-0"
         style={{ left: BAND_REACH, width: row.width, height: row.height }}
       >
@@ -92,6 +122,7 @@ export function HandFan({
             onAct={onAct}
             onPoint={onPoint}
             onUnpoint={onUnpoint}
+            onShift={(by) => setOrder(moveInHand(arranged, card.id, i + by))}
           />
         ))}
       </div>
@@ -108,6 +139,7 @@ function HandCard({
   onAct,
   onPoint,
   onUnpoint,
+  onShift,
 }: {
   card: GameCard;
   left: number;
@@ -117,6 +149,8 @@ function HandCard({
   onAct: (action: PlaytestAction) => void;
   onPoint: (pointed: Pointed) => void;
   onUnpoint: () => void;
+  /** Move this card one place left (`-1`) or right (`1`) in the held order. */
+  onShift: (by: -1 | 1) => void;
 }): JSX.Element {
   const ref = useRef<HTMLButtonElement>(null);
   const { menu, menuKey } = useContextMenu();
@@ -130,13 +164,14 @@ function HandCard({
 
   const build = () => cardMenu({ card, ids: [id], place: "hand", sandbox, onAct });
   const openMenu = menu(build);
+  const openMenuKey = menuKey(build);
   const play = () => onAct({ type: "play", id });
 
   return (
     <button
       ref={ref}
       type="button"
-      aria-label={`${name}${card.gaps.length > 0 ? ", played only in part" : ""}. Drag to play, or double-click`}
+      aria-label={`${name}${card.gaps.length > 0 ? ", played only in part" : ""}. Drag to play, or double-click. Shift+arrow keys move it in your hand`}
       data-land={id}
       onDoubleClick={play}
       // A double-click is a mouse's gesture; Enter on the focused card is the keyboard's way to
@@ -149,7 +184,17 @@ function HandCard({
         onUnpoint();
         openMenu(e);
       }}
-      onKeyDown={menuKey(build)}
+      onKeyDown={(e) => {
+        // Shift+← / Shift+→ move the card along the hand; the focus stays on it, so it can be
+        // walked several places. Never Alt, which is the browser's Back.
+        const by = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+        if (by !== 0 && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+          e.preventDefault();
+          onShift(by);
+          return;
+        }
+        openMenuKey(e);
+      }}
       onMouseEnter={(e) =>
         onPoint({ card, ids: [id], place: "hand", line: `${name} · in hand`, at: pointerAt(e) })
       }

@@ -44,9 +44,10 @@ export const SCAN_MODES: readonly { id: ScanMode; label: string; hint: string }[
 
 /**
  * What the picture says while recognition is stopped — both Scanner surfaces', so the press it
- * names is the one each of them draws.
+ * names is the one each of them draws. A view opens stopped (issue #1317), so this is the first
+ * thing it says too: "begin", not "resume".
  */
-export const SCANNING_STOPPED = "Scanning stopped. Press Start scanning to resume.";
+export const SCANNING_STOPPED = "Scanning stopped. Press Start scanning to begin.";
 
 /**
  * Under the list of cameras, on both surfaces. **"Device", not "computer"**: the choice is a row

@@ -21,6 +21,7 @@ import {
   goldfishDead,
   goldfishOpeningHand,
   goldfishTurn,
+  castPick,
   keepPick,
   openingHand,
   playLocally,
@@ -360,7 +361,8 @@ export const Replay: Story = {
   render: (args) => <Replayed onAct={args.onAct} />,
 };
 
-/** The opponent's Lightning Bolt on the stack and the reader may respond: Pass, or Pass turn. */
+/** The opponent's Lightning Bolt on the stack and the reader may respond: asked about large over
+ *  their table (Let it resolve), with Pass and Pass turn at the foot. */
 export const Respond: Story = {
   args: { view: respondStep().view },
   play: async ({ canvasElement, args }) => {
@@ -419,6 +421,22 @@ export const DiscardPick: Story = {
 /** Keep creatures with total power 4 or less; one that would pass the cap is drawn dim. */
 export const KeepPick: Story = {
   args: { view: keepPick().view },
+};
+
+/**
+ * "You may cast a spell from your graveyard" (issue #1329): asked as a yes or a no first, and
+ * "Choose a card" shows the graveyard's cards to pick from.
+ */
+export const CastPick: Story = {
+  args: { view: castPick().view },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      canvas.getByRole("heading", { name: "Cast a spell from your graveyard?" }),
+    ).toBeVisible();
+    await userEvent.click(canvas.getByRole("button", { name: "Choose a card" }));
+    await expect(canvas.getByRole("heading", { name: "Choose up to 1 to cast" })).toBeVisible();
+  },
 };
 
 /** One deck in each of three opponents' seats. */

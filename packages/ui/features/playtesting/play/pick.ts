@@ -1,6 +1,6 @@
 /**
  * The multi-card picker's words and rules, with nothing drawn — a scry's, a surveil's, a discard's,
- * a search's (`PlaytestPrompt.pick`, answered by `pickCards`).
+ * a search's, a cast's (`PlaytestPrompt.pick`, answered by `pickCards`).
  *
  * **The engine sends the bounds, the board keeps to them**: `min` and `max` say how many may be
  * picked, `eligible` which, and `ordered` whether the order is the answer (a scry's or surveil's
@@ -8,8 +8,11 @@
  * rather than letting the reader send a set the engine will only refuse. A keep within a total
  * power (`powerCap`, issue #1079) is bounded by the picked creatures' power as well: a creature
  * that would pass the cap is not picked.
+ *
+ * **An optional cast is asked before it is picked** (issue #1329): "you may cast a spell from
+ * your graveyard" is a yes or a no first (`pickOffer`), and only a yes shows the cards.
  */
-import type { PlaytestPick } from "@/lib/ipc";
+import type { GamePlace, PlaytestPick } from "@/lib/ipc";
 
 /** "up to 3", "2", "1 to 3". */
 function bound(pick: Pick<PlaytestPick, "min" | "max">): string {
@@ -40,7 +43,46 @@ export function pickTitle(pick: PlaytestPick): string {
       return pick.powerCap === null
         ? `Keep ${bound(pick)}`
         : `Keep total power ${pick.powerCap} or less`;
+    case "cast":
+      return `Choose ${bound(pick)} to cast`;
   }
+}
+
+/** Where an offered cast is from, as its question says it. */
+const FROM: Partial<Record<GamePlace, string>> = {
+  graveyard: " from your graveyard",
+  exile: " from exile",
+  hand: " from your hand",
+  libraryTop: " from your library",
+  command: " from the command zone",
+};
+
+/** The question an optional cast asks before its cards are shown, and its two answers. */
+export interface PickOffer {
+  /** "Cast a spell from your graveyard?" */
+  question: string;
+  /** Shows the cards: "Choose a card". */
+  yes: string;
+  /** Picks none, which declines: "Don't cast". */
+  no: string;
+}
+
+/**
+ * The yes-or-no an optional cast is asked as first (issue #1329): a cast the reader may decline
+ * — none of its cards need be picked — is asked whether at all before which. `null` for any
+ * other pick, and for a cast that must be made.
+ */
+export function pickOffer(
+  pick: Pick<PlaytestPick, "purpose" | "min" | "max" | "zone">,
+): PickOffer | null {
+  if (pick.purpose !== "cast" || pick.min > 0) return null;
+  const one = pick.max === 1;
+  const from = pick.zone === null ? "" : (FROM[pick.zone] ?? "");
+  return {
+    question: `Cast ${one ? "a spell" : "spells"}${from}?`,
+    yes: one ? "Choose a card" : "Choose cards",
+    no: "Don’t cast",
+  };
 }
 
 /** The two zones a scry or surveil sorts into; `null` for a picker that is one row. */
@@ -91,6 +133,8 @@ export function confirmLabel(pick: PlaytestPick, n: number): string {
       return `Choose ${n}`;
     case "keep":
       return n === 0 ? "Sacrifice all" : `Keep ${n}`;
+    case "cast":
+      return n === 0 ? "Cast nothing" : n === 1 ? "Cast it" : `Cast ${n}`;
   }
 }
 

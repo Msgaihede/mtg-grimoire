@@ -108,6 +108,7 @@ const BOLT: CardSummary = {
   // `gameChanger: true` over this one.
   gameChanger: false,
   releasedAt: null,
+  imageUpdatedAt: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
@@ -134,6 +135,7 @@ const SPARSE: CardSummary = {
   // `cards.game_changer` as an `Option` and flattens a NULL to `false` before it crosses.
   gameChanger: false,
   releasedAt: null,
+  imageUpdatedAt: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,
@@ -1821,7 +1823,38 @@ describe("SearchPage — text handed over by the quick search", () => {
 
 describe("SearchPage — a set handed over by the card modal", () => {
   afterEach(() => {
-    useAppStore.setState({ pendingSearchSet: null });
+    useAppStore.setState({ pendingSearchSet: null, pendingSearchSort: null });
+  });
+
+  /** Issue #1214: the Coming soon widget's press opens the set newest image first. */
+  it("opens in the order the hand-off names, from the first request", async () => {
+    useAppStore.setState({
+      pendingSearchSet: "lea",
+      pendingSearchSort: [{ key: "imageUpdated", dir: "desc" }],
+    });
+    wrap(<SearchPage />);
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    for (const [req] of searchCards.mock.calls) {
+      expect(req).toMatchObject({ sets: ["lea"], sort: [{ key: "imageUpdated", dir: "desc" }] });
+    }
+    await waitFor(() => expect(useAppStore.getState().pendingSearchSort).toBeNull());
+  });
+
+  it("re-sorts a page already on screen when the press names an order", async () => {
+    wrap(<SearchPage />);
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() =>
+      useAppStore.getState().showSetInSearch("lea", [{ key: "imageUpdated", dir: "desc" }]),
+    );
+
+    await waitFor(() =>
+      expect(lastRequest()).toMatchObject({
+        sets: ["lea"],
+        sort: [{ key: "imageUpdated", dir: "desc" }],
+      }),
+    );
   });
 
   it("opens on that set alone, at Any card, and spends the hand-off", async () => {

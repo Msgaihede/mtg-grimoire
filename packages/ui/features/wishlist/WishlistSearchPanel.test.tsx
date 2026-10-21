@@ -71,6 +71,7 @@ const BOLT: CardSummary = {
   priceHigh: 400.5,
   gameChanger: false,
   releasedAt: null,
+  imageUpdatedAt: null,
 };
 
 const ORDERED: WishlistFolder = { rules: [], id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null };
