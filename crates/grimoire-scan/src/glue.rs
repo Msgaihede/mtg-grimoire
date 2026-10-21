@@ -1,4 +1,4 @@
-//! **The browser**: the seven `#[wasm_bindgen]` exports a dedicated Worker imports, and the one
+//! **The browser**: the eight `#[wasm_bindgen]` exports a dedicated Worker imports, and the one
 //! `thread_local` that is this module's whole memory.
 //!
 //! Compiled for `wasm32-unknown-unknown` and nowhere else (`lib.rs` gates the module), which
@@ -123,6 +123,25 @@ pub fn load_neural(
         Ok(mut held) => held
             .get_or_insert_with(Scanner::new)
             .load_neural(detector, embedder, gallery, meta),
+        Err(_) => Some(scanner::PANICKED.to_owned()),
+    })
+}
+
+/// `load_neural_evidence(symbol_net, band_net, symbols, bands): string | undefined` — give the
+/// session the Neural mode's printing evidence, which the page fetches once `load_neural` has
+/// answered. Answers nothing, or the crate's sentence ([`Scanner::load_neural_evidence`]) —
+/// `load_neural`'s shape, for its reason, and [`scanner::PANICKED`] after a panic.
+#[wasm_bindgen]
+pub fn load_neural_evidence(
+    symbol_net: Vec<u8>,
+    band_net: Vec<u8>,
+    symbols: Vec<u8>,
+    bands: Vec<u8>,
+) -> Option<String> {
+    SCANNER.with(|slot| match slot.try_borrow_mut() {
+        Ok(mut held) => held
+            .get_or_insert_with(Scanner::new)
+            .load_neural_evidence(symbol_net, band_net, symbols, bands),
         Err(_) => Some(scanner::PANICKED.to_owned()),
     })
 }

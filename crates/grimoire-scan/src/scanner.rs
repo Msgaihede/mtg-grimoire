@@ -5,8 +5,8 @@
 //! [`Scanner`] is one session and what a reload owes it. Four of its calls answer the JSON text
 //! an export hands back, each `{"ok": …}` or `{"err": "<sentence>"}` ([`ok`], [`err`]) — the
 //! web host's envelope (`grimoire_web::wire::answer`), written here rather than shared because
-//! this crate links none of the engine. The fifth, [`Scanner::load_neural`], answers the
-//! crate's refusal or nothing.
+//! this crate links none of the engine. The fifth and sixth, [`Scanner::load_neural`] and
+//! [`Scanner::load_neural_evidence`], answer the crate's refusal or nothing.
 //!
 //! **A verdict is serialised straight from the crate's type**, never through a
 //! `serde_json::Value`: a `Value` sorts an object's keys and widens every `f32` to an `f64`
@@ -17,6 +17,7 @@ use std::borrow::Cow;
 
 use card_scanner::filters::ScanFilters;
 use card_scanner::index::Bundle;
+use card_scanner::neural::evidence::EvidenceFiles;
 use card_scanner::neural::Files;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
@@ -272,6 +273,32 @@ impl Scanner {
             meta: Cow::Owned(meta),
         };
         self.session.load_neural(files).err()
+    }
+
+    /// Give the Neural mode its printing evidence — `card-neural`'s set symbol and collector
+    /// band networks and their two galleries, as the page fetched them **after**
+    /// [`Scanner::load_neural`] took the recogniser — and answer `None`, or the crate's sentence
+    /// when they would not load: before the recogniser, without an `evidence` section in its
+    /// `neural.json`, or files that are not them. **A refusal leaves the recogniser reading as
+    /// it did**, choosing among a look's printings without the evidence — the page logs it and
+    /// goes on.
+    ///
+    /// Handed over, never copied again, for [`Scanner::load_neural`]'s reason. Into the session
+    /// there is, and let go with it by the next [`Scanner::load`], as the recogniser is.
+    pub fn load_neural_evidence(
+        &mut self,
+        symbol_net: Vec<u8>,
+        band_net: Vec<u8>,
+        symbols: Vec<u8>,
+        bands: Vec<u8>,
+    ) -> Option<String> {
+        let files = EvidenceFiles {
+            symbol_net: Cow::Owned(symbol_net),
+            band_net: Cow::Owned(band_net),
+            symbols: Cow::Owned(symbols),
+            bands: Cow::Owned(bands),
+        };
+        self.session.load_neural_evidence(files).err()
     }
 
     /// Whether a Neural frame can be read: the session there is has its files.
@@ -1014,6 +1041,46 @@ mod tests {
                 "{what}: {sentence}"
             );
         }
+    }
+
+    /// Four buffers that are none of the evidence files, in `load_neural_evidence`'s order.
+    fn not_evidence() -> [Vec<u8>; 4] {
+        [
+            b"not a network".to_vec(),
+            b"not a network".to_vec(),
+            b"not a gallery".to_vec(),
+            b"not a gallery".to_vec(),
+        ]
+    }
+
+    fn load_neural_evidence(scanner: &mut Scanner, [s, b, y, n]: [Vec<u8>; 4]) -> Option<String> {
+        scanner.load_neural_evidence(s, b, y, n)
+    }
+
+    #[test]
+    fn evidence_that_would_not_load_is_the_crates_sentence_and_the_recogniser_reads_on() {
+        let _one_thread = card_scanner::host::inline();
+        let mut scanner = loaded();
+        // Before the recogniser: refused, and nothing loaded by it.
+        let refusal = load_neural_evidence(&mut scanner, not_evidence());
+        assert!(!refusal.expect("refused before the recogniser").is_empty());
+        assert!(!scanner.has_neural());
+
+        assert_eq!(load_neural(&mut scanner, neural_files()), None);
+        // After it: refused — files that are not the evidence, or a `neural.json` with no
+        // `evidence` section to read them by — and never a panic.
+        let refusal = load_neural_evidence(&mut scanner, not_evidence());
+        assert!(!refusal.expect("refused after the recogniser").is_empty());
+        // The recogniser stands: a Neural frame is read by its networks, as it was before.
+        assert!(scanner.has_neural());
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, NEURAL));
+        assert_eq!(verdict["mode"], "neural");
+        assert_ne!(
+            verdict["error"],
+            card_scanner::session::NEURAL_UNAVAILABLE_ERROR,
+            "{verdict}"
+        );
+        assert!(verdict["tracked"].is_object(), "{verdict}");
     }
 
     #[test]

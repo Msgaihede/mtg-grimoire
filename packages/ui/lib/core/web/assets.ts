@@ -119,6 +119,27 @@ export const NEURAL_FILES = [
 ] as const;
 export type NeuralFile = (typeof NEURAL_FILES)[number];
 
+/**
+ * **The printing evidence beside them**, in the order `load_neural_evidence` takes them —
+ * `card_neural::evidence`'s `SYMBOL_NET_FILE`, `BAND_NET_FILE`, `SYMBOLS_FILE` and `BANDS_FILE`,
+ * which `assets.test.ts` holds them to: the set symbol and collector band networks and their
+ * galleries. Served from the same folder under the same set, and fetched only once the
+ * recogniser has taken the four (`scanner.ts`) — a page without them reads as it did.
+ */
+export const NEURAL_EVIDENCE_FILES = [
+  "symbol.onnx",
+  "band.onnx",
+  "symbols.bin",
+  "bands.bin",
+] as const;
+export type NeuralEvidenceFile = (typeof NEURAL_EVIDENCE_FILES)[number];
+
+/** All eight, the recogniser's then the evidence's. */
+const ALL_NEURAL_FILES: readonly (NeuralFile | NeuralEvidenceFile)[] = [
+  ...NEURAL_FILES,
+  ...NEURAL_EVIDENCE_FILES,
+];
+
 /** One of the four as a build serves it. `set` is the four files' own id. */
 export function neuralPath(set: string, name: string): string {
   return `${NEURAL_PREFIX}${set}/${name}`;
@@ -130,13 +151,13 @@ export function isNeuralFile(path: string): boolean {
 }
 
 /**
- * The one of the four a request under `/scanner-neural/<any set>/` asks for, or `null` — what the
- * dev server reads `crates/card-neural/models/` by. Only the four names are files there: that
- * folder holds a README and nothing else is served from it.
+ * The one of the eight a request under `/scanner-neural/<any set>/` asks for, or `null` — what
+ * the dev server reads `crates/card-neural/models/` by. Only the eight names are files there:
+ * that folder holds a README and nothing else is served from it.
  */
-export function neuralFileOf(path: string): NeuralFile | null {
+export function neuralFileOf(path: string): NeuralFile | NeuralEvidenceFile | null {
   const name = /^\/scanner-neural\/[^/]+\/([^/]+)$/.exec(path)?.[1];
-  return NEURAL_FILES.find((file) => file === name) ?? null;
+  return ALL_NEURAL_FILES.find((file) => file === name) ?? null;
 }
 
 /** What each of the four is: `neural.json` is JSON, and the rest are bytes. */
@@ -169,17 +190,48 @@ export function neuralTable(readme: string): Map<string, NeuralRow> {
   return rows;
 }
 
+/** A file a web build found: its name, its length and its SHA-256 in hex. */
+export interface FoundFile {
+  name: string;
+  bytes: number;
+  sha256: string;
+}
+
 /**
  * Why the Neural files a web build found **cannot ship** — or `null`, when they can: all four
  * there, each under the host's {@link HOST_FILE_LIMIT}, and each the length and digest
  * `models/README.md` writes down for it. A file the table does not describe was changed without
  * it, and a page that loaded it would be running a model nobody measured.
+ *
+ * The recogniser's four alone: the evidence is held to the table by {@link neuralEvidenceFault}.
  */
 export function neuralFault(
-  files: readonly { name: string; bytes: number; sha256: string }[],
+  files: readonly FoundFile[],
   table: ReadonlyMap<string, NeuralRow>,
 ): string | null {
-  for (const name of NEURAL_FILES) {
+  return faultAmong(NEURAL_FILES, files, table);
+}
+
+/**
+ * {@link neuralFault} for the four evidence files ({@link NEURAL_EVIDENCE_FILES}): all four there,
+ * under the host's limit, and each as its row in `models/README.md` says. **A question of its
+ * own** so a build can ship the recogniser before the evidence exists — the page goes on
+ * without the evidence — and hold the evidence to the table once it does.
+ */
+export function neuralEvidenceFault(
+  files: readonly FoundFile[],
+  table: ReadonlyMap<string, NeuralRow>,
+): string | null {
+  return faultAmong(NEURAL_EVIDENCE_FILES, files, table);
+}
+
+/** The first of `names` that is missing from `files`, too large, or not as `table` says. */
+function faultAmong(
+  names: readonly string[],
+  files: readonly FoundFile[],
+  table: ReadonlyMap<string, NeuralRow>,
+): string | null {
+  for (const name of names) {
     const file = files.find((found) => found.name === name);
     if (file === undefined) return `crates/card-neural/models/ has no ${name}.`;
     if (file.bytes > HOST_FILE_LIMIT) {
@@ -202,10 +254,12 @@ export function neuralFault(
 }
 
 /**
- * The four files' lengths as a build hands them to the page (`VITE_NEURAL_BYTES`, JSON) — or none
+ * The eight files' lengths as a build hands them to the page (`VITE_NEURAL_BYTES`, JSON) — or none
  * for text that is not that. A file is held to its length as it arrives (`scanNeural.ts`).
  */
-export function neuralBytesOf(text: unknown): Partial<Record<NeuralFile, number>> {
+export function neuralBytesOf(
+  text: unknown,
+): Partial<Record<NeuralFile | NeuralEvidenceFile, number>> {
   let parsed: unknown;
   try {
     parsed = typeof text === "string" ? JSON.parse(text) : null;
@@ -213,8 +267,8 @@ export function neuralBytesOf(text: unknown): Partial<Record<NeuralFile, number>
     return {};
   }
   if (typeof parsed !== "object" || parsed === null) return {};
-  const lengths: Partial<Record<NeuralFile, number>> = {};
-  for (const name of NEURAL_FILES) {
+  const lengths: Partial<Record<NeuralFile | NeuralEvidenceFile, number>> = {};
+  for (const name of ALL_NEURAL_FILES) {
     const bytes = (parsed as Record<string, unknown>)[name];
     if (typeof bytes === "number" && Number.isSafeInteger(bytes) && bytes > 0)
       lengths[name] = bytes;

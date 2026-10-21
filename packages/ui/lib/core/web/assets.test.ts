@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import cardNeuralRs from "../../../../../crates/card-neural/src/lib.rs?raw";
+import cardNeuralEvidenceRs from "../../../../../crates/card-neural/src/evidence.rs?raw";
 import neuralReadme from "../../../../../crates/card-neural/models/README.md?raw";
 import { WEB_IMAGE_PREFIX } from "../../images";
 import {
@@ -8,10 +9,12 @@ import {
   isNavigation,
   isNeuralFile,
   isScannerFile,
+  NEURAL_EVIDENCE_FILES,
   NEURAL_FILES,
   NEURAL_PREFIX,
   neuralBytesOf,
   neuralContentType,
+  neuralEvidenceFault,
   neuralFault,
   neuralFileOf,
   neuralPath,
@@ -171,6 +174,16 @@ describe("where the Neural scanner's four files are served from", () => {
     );
   });
 
+  it("names the four evidence files as `card_neural::evidence` does, in `load_neural_evidence`'s order", () => {
+    const declared = (constant: string): string | undefined =>
+      new RegExp(`pub const ${constant}: &str = "([^"]+)";`).exec(cardNeuralEvidenceRs)?.[1];
+    expect(NEURAL_EVIDENCE_FILES).toEqual(
+      ["SYMBOL_NET_FILE", "BAND_NET_FILE", "SYMBOLS_FILE", "BANDS_FILE"].map(declared),
+    );
+    // Apart from the recogniser's four: the evidence is a set beside it, never in place of it.
+    for (const name of NEURAL_EVIDENCE_FILES) expect(NEURAL_FILES).not.toContain(name);
+  });
+
   it("puts the set in the path, so a new gallery is a new address", () => {
     expect(neuralPath("0123abcd", "gallery.bin")).toBe("/scanner-neural/0123abcd/gallery.bin");
     expect(neuralPath("one", "gallery.bin")).not.toBe(neuralPath("two", "gallery.bin"));
@@ -182,7 +195,8 @@ describe("where the Neural scanner's four files are served from", () => {
     expect(isNeuralFile("/scanner-neural/detector.onnx")).toBe(false);
     expect(isNeuralFile("/scanner-neural/a/b/detector.onnx")).toBe(false);
     expect(isNeuralFile("/scanner-assets/card-hashes.bin")).toBe(false);
-    for (const name of NEURAL_FILES) expect(neuralFileOf(neuralPath("dev", name))).toBe(name);
+    for (const name of [...NEURAL_FILES, ...NEURAL_EVIDENCE_FILES])
+      expect(neuralFileOf(neuralPath("dev", name))).toBe(name);
     for (const path of [
       "/scanner-neural/dev/README.md",
       "/scanner-neural/dev/../detector.onnx",
@@ -195,7 +209,7 @@ describe("where the Neural scanner's four files are served from", () => {
   });
 
   it("is in no precache, and nowhere a page", () => {
-    for (const name of NEURAL_FILES)
+    for (const name of [...NEURAL_FILES, ...NEURAL_EVIDENCE_FILES])
       expect(isScannerFile(neuralPath("ab12", name).slice(1)), name).toBe(true);
     expect(NOT_A_PLACE).toContain(NEURAL_PREFIX);
     expect(isNavigation("GET", "text/html", "/scanner-neural/ab12/gallery")).toBe(false);
@@ -205,7 +219,12 @@ describe("where the Neural scanner's four files are served from", () => {
 
   it("serves the constants as JSON and the rest as bytes", () => {
     expect(neuralContentType("neural.json")).toBe("application/json");
-    for (const name of ["detector.onnx", "embedder.onnx", "gallery.bin"]) {
+    for (const name of [
+      "detector.onnx",
+      "embedder.onnx",
+      "gallery.bin",
+      ...NEURAL_EVIDENCE_FILES,
+    ]) {
       expect(neuralContentType(name)).toBe("application/octet-stream");
     }
   });
@@ -255,10 +274,49 @@ describe("what a web build holds the Neural files to", () => {
     );
   });
 
-  it("hands the page the four lengths, and nothing it cannot read", () => {
-    expect(neuralBytesOf('{"detector.onnx":3,"gallery.bin":7,"README.md":9}')).toEqual({
+  /** The evidence files are not in git yet: their rows are this suite's own, built alike. */
+  const evidenceTable = new Map(
+    NEURAL_EVIDENCE_FILES.map((name, at) => [
+      name,
+      { bytes: 1_000 + at, head: `0000000${at}`, tail: `ffffff0${at}` },
+    ]),
+  );
+  const evidenceAsTabled = NEURAL_EVIDENCE_FILES.map((name) => {
+    const row = evidenceTable.get(name)!;
+    return { name, bytes: row.bytes, sha256: sha(row.head, row.tail) };
+  });
+
+  it("holds the four evidence files to the table apart, so the recogniser ships without them", () => {
+    // `neuralFault` asks after the recogniser's four alone: a build with no evidence ships.
+    expect(neuralFault(asTabled, table)).toBeNull();
+    expect(neuralEvidenceFault([...asTabled, ...evidenceAsTabled], evidenceTable)).toBeNull();
+    expect(neuralEvidenceFault(evidenceAsTabled, evidenceTable)).toBeNull();
+    expect(neuralEvidenceFault(evidenceAsTabled.slice(0, 3), evidenceTable)).toBe(
+      "crates/card-neural/models/ has no bands.bin.",
+    );
+    expect(neuralEvidenceFault(asTabled, table)).toBe(
+      "crates/card-neural/models/ has no symbol.onnx.",
+    );
+    expect(neuralEvidenceFault(evidenceAsTabled, new Map())).toBe(
+      "crates/card-neural/models/README.md has no row for symbol.onnx.",
+    );
+    const longer = evidenceAsTabled.map((file) =>
+      file.name === "symbols.bin" ? { ...file, bytes: file.bytes + 1 } : file,
+    );
+    expect(neuralEvidenceFault(longer, evidenceTable)).toMatch(/^symbols\.bin is 1003 bytes/);
+    const huge = evidenceAsTabled.map((file) =>
+      file.name === "band.onnx" ? { ...file, bytes: HOST_FILE_LIMIT + 1 } : file,
+    );
+    expect(neuralEvidenceFault(huge, evidenceTable)).toMatch(/over the host's 26214400 a file/);
+  });
+
+  it("hands the page the eight lengths, and nothing it cannot read", () => {
+    expect(
+      neuralBytesOf('{"detector.onnx":3,"gallery.bin":7,"bands.bin":11,"README.md":9}'),
+    ).toEqual({
       "detector.onnx": 3,
       "gallery.bin": 7,
+      "bands.bin": 11,
     });
     for (const text of [
       undefined,

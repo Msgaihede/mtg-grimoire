@@ -7,9 +7,10 @@
  * lib, the Worker's (`./scanWorker.ts`, `./scanSession.ts`) under `WebWorker`
  * (`packages/ui/tsconfig.web-worker.json`). So nothing here may name a global only one of the two has.
  *
- * The far end is `crates/grimoire-scan`: seven synchronous exports over one session, every string
- * of which is `{"ok": …}` or `{"err": "<sentence>"}` (`grimoire_scan.d.ts`) — but `load_neural`'s,
- * a refusal or nothing, which the Worker turns into the same two (`scanSession.ts`).
+ * The far end is `crates/grimoire-scan`: eight synchronous exports over one session, every string
+ * of which is `{"ok": …}` or `{"err": "<sentence>"}` (`grimoire_scan.d.ts`) — but `load_neural`'s
+ * and `load_neural_evidence`'s, a refusal or nothing, which the Worker turns into the same two
+ * (`scanSession.ts`).
  */
 
 /** What the module's `load` says it found — `Loaded` in `crates/grimoire-scan/src/scanner.rs`. */
@@ -52,6 +53,20 @@ export type ToScanner =
       embedder: Uint8Array;
       gallery: Uint8Array;
       meta: Uint8Array;
+    }
+  /**
+   * The Neural mode's printing evidence — the set symbol and collector band networks and their
+   * galleries — into the session whose recogniser has taken the four: posted once per Worker,
+   * in the background, after the `neural` hand-over has answered `ok` (`scanner.ts`). Answered
+   * as that one is.
+   */
+  | {
+      kind: "neural-evidence";
+      id: number;
+      symbolNet: Uint8Array;
+      bandNet: Uint8Array;
+      symbols: Uint8Array;
+      bands: Uint8Array;
     }
   /** One frame: a JPEG, the same frame at the camera's resolution or `null`, the options' JSON. */
   | { kind: "frame"; id: number; jpeg: Uint8Array; detail: Uint8Array | null; options: string }
@@ -131,6 +146,20 @@ export function neuralMessage(
   return {
     message: { kind: "neural", id, ...files },
     transfer: buffersOf([files.detector, files.embedder, files.gallery, files.meta]),
+  };
+}
+
+/**
+ * The message that hands the Worker the Neural mode's printing evidence. **Every array is handed
+ * over**, as {@link neuralMessage}'s are: the page fetched them for this post and keeps none.
+ */
+export function neuralEvidenceMessage(
+  id: number,
+  files: { symbolNet: Uint8Array; bandNet: Uint8Array; symbols: Uint8Array; bands: Uint8Array },
+): ScanOutgoing {
+  return {
+    message: { kind: "neural-evidence", id, ...files },
+    transfer: buffersOf([files.symbolNet, files.bandNet, files.symbols, files.bands]),
   };
 }
 

@@ -1,4 +1,9 @@
-import { neuralPath, SCANNER_ASSETS_PREFIX, type NeuralFile } from "./assets";
+import {
+  neuralPath,
+  SCANNER_ASSETS_PREFIX,
+  type NeuralEvidenceFile,
+  type NeuralFile,
+} from "./assets";
 import type { NeuralSource } from "./scanNeural";
 import type { Answered, ScanManifest, StoreEnv } from "./scanStore";
 import type { CacheLike, CachesLike } from "./sw/pictures";
@@ -91,11 +96,22 @@ export const NEURAL_TEST_FILES: Record<NeuralFile, Uint8Array> = {
   "neural.json": Uint8Array.from(new TextEncoder().encode('{"ranking":"aimed"}')),
 };
 
-/** The set those four are served under, and their lengths — what a build tells the page. */
+/** The Neural scanner's four evidence files as an origin serves them: small, each unlike the others. */
+export const NEURAL_EVIDENCE_TEST_FILES: Record<NeuralEvidenceFile, Uint8Array> = {
+  "symbol.onnx": Uint8Array.from({ length: 300 }, (_, i) => (i * 17) % 256),
+  "band.onnx": Uint8Array.from({ length: 350 }, (_, i) => (i * 19) % 256),
+  "symbols.bin": Uint8Array.from({ length: 450 }, (_, i) => (i * 23) % 256),
+  "bands.bin": Uint8Array.from({ length: 550 }, (_, i) => (i * 29) % 256),
+};
+
+/** The set those eight are served under, and their lengths — what a build tells the page. */
 export const NEURAL_SOURCE: NeuralSource = {
   set: "n3ur4l",
   bytes: Object.fromEntries(
-    Object.entries(NEURAL_TEST_FILES).map(([name, bytes]) => [name, bytes.byteLength]),
+    Object.entries({ ...NEURAL_TEST_FILES, ...NEURAL_EVIDENCE_TEST_FILES }).map(([name, bytes]) => [
+      name,
+      bytes.byteLength,
+    ]),
   ),
 };
 
@@ -129,7 +145,7 @@ export function answered(
 
 /**
  * A browser the test owns: a Cache Storage, a clock whose timers run when the test says, and an
- * origin answering the manifest, the three files and the Neural scanner's four — each of which a
+ * origin answering the manifest, the three files and the Neural scanner's eight — each of which a
  * test can replace. `asked` is every path fetched, and `modes` the cache mode each was asked with.
  */
 export function fakeBrowser(over: Partial<Record<string, () => Answered | Promise<Answered>>> = {}) {
@@ -148,7 +164,7 @@ export function fakeBrowser(over: Partial<Record<string, () => Answered | Promis
       ]),
     ),
     ...Object.fromEntries(
-      Object.entries(NEURAL_TEST_FILES).map(([name, bytes]) => [
+      Object.entries({ ...NEURAL_TEST_FILES, ...NEURAL_EVIDENCE_TEST_FILES }).map(([name, bytes]) => [
         neuralPath(NEURAL_SOURCE.set, name),
         () => answered(bytes, { type: "application/octet-stream" }),
       ]),

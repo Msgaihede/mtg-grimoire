@@ -7,6 +7,7 @@ import {
   isUnsupported,
   loadFactsOf,
   loadMessage,
+  neuralEvidenceMessage,
   neuralMessage,
   OPTIONS_HEADER,
   scanAnswerOf,
@@ -63,6 +64,18 @@ describe("the Neural files, as the message the scanner's Worker is sent", () => 
     const { message, transfer } = neuralMessage(9, { detector, embedder, gallery, meta });
     expect(message).toEqual({ kind: "neural", id: 9, detector, embedder, gallery, meta });
     expect(transfer).toEqual([detector.buffer, embedder.buffer, gallery.buffer, meta.buffer]);
+  });
+});
+
+describe("the Neural evidence files, as the message the scanner's Worker is sent", () => {
+  it("hands over all four buffers, in `load_neural_evidence`'s order, and copies none", () => {
+    const symbolNet = new Uint8Array([1, 2]);
+    const bandNet = new Uint8Array([3]);
+    const symbols = new Uint8Array([4, 5, 6]);
+    const bands = new Uint8Array([7]);
+    const { message, transfer } = neuralEvidenceMessage(10, { symbolNet, bandNet, symbols, bands });
+    expect(message).toEqual({ kind: "neural-evidence", id: 10, symbolNet, bandNet, symbols, bands });
+    expect(transfer).toEqual([symbolNet.buffer, bandNet.buffer, symbols.buffer, bands.buffer]);
   });
 });
 
