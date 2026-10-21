@@ -27,6 +27,7 @@ pub mod embed;
 pub mod frame;
 pub mod gallery;
 pub mod meta;
+pub mod narrow;
 pub mod scanner;
 pub mod session;
 
