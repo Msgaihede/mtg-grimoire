@@ -1287,8 +1287,14 @@ function fresh(
   view: PlaytestView | null,
 ): { pointed: Pointed; side: Side } | null {
   if (held === null || view === null) return null;
-  const { pointed, side } = held;
-  if (side === "loose") return held;
+  const { pointed } = held;
+  if (held.side === "loose") return held;
+  // **An attachment can be drawn on a table that is not its controller's** (`acrossTables`): the
+  // reader's Pacifism on an opponent's creature is pointed at from that opponent's table, and an
+  // opponent's Aura on the reader's creature from the reader's. So a permanent is looked for at
+  // the seat that holds it, and that seat is the side T / G / E / H act for (issue #1331).
+  const side =
+    pointed.place === "battlefield" ? (seatHolding(view, pointed.card.id) ?? held.side) : held.side;
   const seat = seatOfPlayer(view, side);
   if (seat === undefined) return null;
   const zone = zoneOf(seat, pointed.place);

@@ -23,6 +23,7 @@ import {
   respondStep,
   targetPrompt,
   turnFive,
+  withAttachments,
 } from "./fixtures";
 import { PlaytestBoard, zoneSize } from "./PlaytestBoard";
 
@@ -639,6 +640,40 @@ describe("PlaytestBoard's inspect preview", () => {
     expect(preview()).not.toBeInTheDocument();
   });
 
+  // Issue #1331: an attachment's edge is a card of its own to rest on, whichever table it is
+  // drawn on — the reader's Aura under the opponent's creature is still the reader's card.
+  it.each([
+    ["an Equipment under the reader's creature", yours, "Bonesplitter, attached to Tarmogoyf"],
+    [
+      "the reader's Aura on the opponent's table",
+      theirs,
+      "Pacifism, attached to Ragavan, Nimble Pilferer",
+    ],
+  ])("opens on %s, and closes when the pointer leaves it", (_what, table, name) => {
+    setup(withAttachments().view);
+    const edge = within(table()).getByRole("button", { name });
+
+    fireEvent.mouseEnter(edge);
+    rest(INSPECT_DELAY);
+    expect(preview()).toHaveTextContent(name);
+
+    fireEvent.mouseLeave(edge);
+    expect(preview()).not.toBeInTheDocument();
+  });
+
+  it("taps the reader's Aura on the opponent's table with T, its controller's key", () => {
+    const { view } = withAttachments();
+    const { onAct } = setup(sandboxed(view));
+    const edge = within(theirs()).getByRole("button", {
+      name: "Pacifism, attached to Ragavan, Nimble Pilferer",
+    });
+    const pacifism = view.you.battlefield.find((c) => c.name === "Pacifism")!;
+
+    fireEvent.mouseEnter(edge);
+    fireEvent.keyDown(window, { key: "t" });
+    expect(onAct).toHaveBeenCalledWith({ type: "tap", ids: [pacifism.id], tapped: true });
+  });
+
   it("stays open while the pointer moves over the card it shows", () => {
     setup(table([gameCard("Sol Ring")]), { opponentNames: GOLDFISH });
     const ring = within(yours()).getByRole("button", { name: "Sol Ring" });
@@ -670,9 +705,9 @@ describe("PlaytestBoard's zone columns", () => {
     const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(1400);
     try {
       setup(turnFive().view);
-      expect(
-        screen.getByTestId("playtest-board").style.getPropertyValue("--table-x"),
-      ).toBe(`${zoneSize(1400).width + 24}px`);
+      expect(screen.getByTestId("playtest-board").style.getPropertyValue("--table-x")).toBe(
+        `${zoneSize(1400).width + 24}px`,
+      );
     } finally {
       height.mockRestore();
     }

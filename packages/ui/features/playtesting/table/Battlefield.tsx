@@ -10,6 +10,7 @@ import {
 import type { GameCard, GamePlace, PlaytestAction } from "@/lib/ipc";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
+import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { CardFace, counterLabel, pointerAt } from "./Inspect";
 import { tableDraggable, useTableDropTarget, type TableDrag } from "./tableDrag";
@@ -362,6 +363,8 @@ function PileView({
   const ref = useRef<HTMLDivElement>(null);
   const top = useRef<HTMLButtonElement>(null);
   const { menu, menuKey } = useContextMenu();
+  /** The attachment the pointer is on, drawn over the card it is tucked under (issue #1331). */
+  const [lifted, setLifted] = useState<number | null>(null);
   const { card, ids, tapped } = pile;
   const hosts = pile.attached.length > 0;
   const count = ids.length;
@@ -421,7 +424,9 @@ function PileView({
     <div
       ref={ref}
       data-land={ids.join(" ")}
-      className={cn("relative flex-none", handled ? "cursor-grab" : "cursor-default")}
+      // `isolate`: a lifted attachment comes over its own card and competes with nothing else on
+      // the board — the inspect preview, the hand and the arrows stay above it.
+      className={cn("relative isolate flex-none", handled ? "cursor-grab" : "cursor-default")}
       style={{
         width: pileWidth(pile, w),
         height: pileHeight(pile, w),
@@ -429,7 +434,8 @@ function PileView({
       }}
     >
       {/* The attachments, farthest first, each a name bar higher — tucked under the card the way
-          an Aura or Equipment sits at a real table (issue #1073). */}
+          an Aura or Equipment sits at a real table (issue #1073). The one pointed at comes up
+          over the cards in front of it, whole, until the pointer leaves it (issue #1331). */}
       {pile.attached
         .map((a, i) => ({ a, i }))
         .reverse()
@@ -447,6 +453,8 @@ function PileView({
             mark={marks?.get(a.id)}
             onPick={pick?.ids.has(a.id) ? pick.onPick : undefined}
             onActivate={readOnly || !own.has(a.id) ? undefined : onActivate}
+            lifted={lifted === a.id}
+            onLift={setLifted}
           />
         ))}
       {/* The cards underneath, a few pixels up and to the right, the way cardboard sits. */}
@@ -544,6 +552,11 @@ function PileView({
  * One Aura or Equipment tucked under the card it is attached to: only its top edge shows, and
  * that edge is the card's own to point at, open the menu of, pick, tap and carry off — an
  * Equipment's equip ability is activated from here.
+ *
+ * **Pointed at, it comes up whole** (`lifted`, issue #1331): over the card it is tucked under
+ * and any attachment nearer that card, so the reader sees it on the table while its preview
+ * waits for the pointer to rest. It goes back the moment the pointer leaves it. Lifted from
+ * state rather than a `hover:` variant, `CardStack`'s way, so the class is `LAYER`'s own.
  */
 function AttachedView({
   card,
@@ -557,6 +570,8 @@ function AttachedView({
   mark,
   onPick,
   onActivate,
+  lifted,
+  onLift,
 }: {
   card: GameCard;
   host: GameCard;
@@ -570,6 +585,9 @@ function AttachedView({
   mark: CardMark | undefined;
   onPick: ((id: number) => void) | undefined;
   onActivate: ((id: number) => void) | undefined;
+  lifted: boolean;
+  /** Lifts the attachment by its id, or puts every one back (`null`). */
+  onLift: (id: number | null) => void;
 }): JSX.Element {
   const ref = useRef<HTMLButtonElement>(null);
   const { menu, menuKey } = useContextMenu();
@@ -616,19 +634,24 @@ function AttachedView({
         openMenu(e);
       }}
       onKeyDown={menuKey(build)}
-      onMouseEnter={(e) =>
+      onMouseEnter={(e) => {
+        onLift(card.id);
         onPoint({
           card,
           ids,
           place: "battlefield",
           line: `${card.name}, attached to ${host.name}`,
           at: pointerAt(e),
-        })
-      }
-      onMouseLeave={onUnpoint}
+        });
+      }}
+      onMouseLeave={() => {
+        onLift(null);
+        onUnpoint();
+      }}
       data-point={card.id}
       className={cn(
         "absolute rounded-md p-0",
+        lifted && LAYER.raised,
         "transition-[left,top,transform] duration-150 ease-out motion-reduce:transition-none",
         FOCUS,
         handled ? "cursor-grab" : picks ? "cursor-pointer" : "cursor-default",
