@@ -70,6 +70,7 @@ import { DeckDescriptionPanel, shownDescription } from "./DeckDescriptionPanel";
 // in checklist mode, and this file names only the band.
 import { DeckTodosPanel } from "./DeckTodosPanel";
 import { notedOracleIds } from "./deckNotes";
+import { useDeckFolders } from "./useDeckFolders";
 import { useDeckNotes } from "./useDeckNotes";
 import { useHiddenStacks } from "./useHiddenStacks";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
@@ -404,6 +405,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * What the header's Share control publishes (issue #1032) — held still on the two fields it
    * reads, because the header is memoised and a fresh target per render would redraw it.
    */
+  /**
+   * The drawers this deck is filed in, root first — the header's trail (`Decks › <drawers> ›`).
+   * Held still on the folder list and the one field it reads, because the header is memoised.
+   * Walked by `parentId` and bounded by the folder count, so a parent cycle the backend never
+   * writes cannot spin it; a folder the list does not carry ends the walk, which files the deck
+   * at the top level until the list catches up — `DecksPage`'s `folderOf` does the same.
+   */
+  const deckFolders = useDeckFolders().folders;
+  const folderId = row?.folderId ?? null;
+  const folderTrail = useMemo(() => {
+    const byId = new Map(deckFolders.map((folder) => [folder.id, folder]));
+    const trail: { id: number; name: string }[] = [];
+    for (let at = folderId, steps = 0; at !== null && steps < byId.size; steps += 1) {
+      const folder = byId.get(at);
+      if (folder === undefined) break;
+      trail.unshift({ id: folder.id, name: folder.name });
+      at = folder.parentId;
+    }
+    return trail;
+  }, [deckFolders, folderId]);
   const shareName = row?.name ?? null;
   const shareUid = row?.syncUid ?? null;
   const share = useMemo(
@@ -3440,6 +3461,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <DeckEditorHeader
         backRef={backRef}
         closeDeck={closeDeck}
+        folders={folderTrail}
         name={row?.name ?? null}
         renameDeck={renameDeck}
         theoryEnabled={theoryEnabled}

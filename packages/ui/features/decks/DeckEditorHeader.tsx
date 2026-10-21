@@ -11,11 +11,12 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FILTER_FOCUS } from "@/components/FilterChips";
-import { PageBar } from "@/components/PageBar";
+import { PageBar, type PageCrumb } from "@/components/PageBar";
 import { ShareFolderMenu, type ShareTarget } from "@/features/collection/ShareFolderMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import type { DeckVariant } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { layerMatches, type Layer } from "./DeckEditorLayers";
 import { DeckNameField } from "./DeckNameField";
@@ -133,11 +134,17 @@ export const SETTINGS_ICON_PX = 1100;
 export const TIGHT_HEADER_PX = 900;
 
 export interface DeckEditorHeaderProps {
-  /** The header's first control, the trail's `Decks` crumb — where the bar's ↥ puts the caret
-   *  back. */
+  /** The trail's last crumb — the drawer the deck is filed in, or `Decks` for a deck at the top
+   *  level — where the bar's ↥ puts the caret back. */
   backRef: RefObject<HTMLButtonElement | null>;
-  /** Close the deck: `Back to decks`, and Escape's floor beside it. */
+  /** Close the deck: the trail's last crumb, and Escape's floor beside it. */
   closeDeck: () => void;
+  /**
+   * The drawers the deck is filed in, **root first** — empty for a deck at the top level, and
+   * while the folder list has not answered. Held still by the editor (a `useMemo` on the list
+   * and the deck's `folderId`), because this header is memoised.
+   */
+  folders?: readonly { id: number; name: string }[];
   /** The deck's name, or `null` before `deck_get` has answered — the line is then the `Decks`
    *  crumb alone. */
   name: string | null;
@@ -163,6 +170,9 @@ export interface DeckEditorHeaderProps {
   share?: ShareTarget | null;
 }
 
+/** Stable identity for a deck at the top level, so the memoised header is not redrawn for it. */
+const NO_FOLDERS: readonly { id: number; name: string }[] = [];
+
 export const DeckEditorHeader = memo(function DeckEditorHeader({
   backRef,
   closeDeck,
@@ -178,8 +188,37 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
   settingsIcon,
   openGoldfish,
   share = null,
+  folders = NO_FOLDERS,
 }: DeckEditorHeaderProps) {
   const tip = useTooltip();
+  const showDeckFolder = useAppStore((s) => s.showDeckFolder);
+  const setActiveView = useAppStore((s) => s.setActiveView);
+  /**
+   * `Decks › <drawers> › <deck>` — the gallery's own trail, one level further down.
+   *
+   * **The last crumb is the close**, whatever it names: `closeDeck` lands the gallery in the
+   * deck's own drawer with the caret on its tile (`returnToDeckId`), which is exactly "back to
+   * this folder", so the drawer the deck is in keeps the `backRef` and Escape's meaning. A deck
+   * at the top level has no drawer, and then that crumb is `Decks`, named `Back to decks`.
+   *
+   * **The crumbs above it navigate rather than close.** `Decks` is the rail's own press —
+   * `setActiveView("decks")` from inside an editor closes it onto the top level, which is the
+   * hand-off this crumb needs and the store already makes — named `Back to all decks`, as the
+   * gallery's root crumb is. A drawer between is `showDeckFolder`, the quick search's way into a
+   * folder. A trail of three or more is the bar's to elide; the drawer the deck is in is always
+   * drawn.
+   */
+  const parent = folders.length > 0 ? folders[folders.length - 1] : undefined;
+  const trail: PageCrumb[] =
+    parent === undefined
+      ? [{ label: "Decks", name: "Back to decks", onOpen: closeDeck, ref: backRef }]
+      : [
+          { label: "Decks", name: "Back to all decks", onOpen: () => setActiveView("decks") },
+          ...folders
+            .slice(0, -1)
+            .map((folder) => ({ label: folder.name, onOpen: () => showDeckFolder(folder.id) })),
+          { label: parent.name, name: `Back to ${parent.name}`, onOpen: closeDeck, ref: backRef },
+        ];
   return (
     <>
       {/**
@@ -189,18 +228,12 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
        * the gold rule under it.
        *
        * **The way back is the crumb, not a chevron button.** The `‹ Decks` button became the
-       * trail's `Decks` and keeps everything it carried: {@link closeDeck}, shared with Escape's
+       * trail's last crumb ({@link trail}) and keeps everything it carried: {@link closeDeck}, shared with Escape's
        * `"navigation"` rung — one act, one function, so the key and the crumb can never come to
-       * mean different things — the `backRef` the bar's ↥ puts the caret back on, and the name
-       * `Back to decks`, so it is never a second button called `Decks` beside the rail's. The
+       * mean different things — the `backRef` the bar's ↥ puts the caret back on, and a `Back to …`
+       * name, so it is never a second button called `Decks` beside the rail's. The
        * word no longer drops at {@link TIGHT_HEADER_PX}, so it binds no tooltip either: a crumb
        * is a word or nothing.
-       *
-       * **No folder crumb yet.** The board's trail is `Decks › My Decks › <deck>`, and this
-       * header is handed neither the folder the deck is filed in nor its name. Nor could a
-       * `Decks` crumb beside one mean anything different from it: a close always lands in the
-       * deck's own drawer (`DecksPage` opens `folderOf` the deck `returnToDeckId` names), so the
-       * gallery has no "the top level, please" to be told.
        *
        * **The `pt-5` below is load-bearing as well as spacing** — the bar itself has no top
        * padding (`main`'s is the room above every other page's title). This row is the **first
@@ -223,7 +256,7 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
         // the bar's and the ledger's.
         className="pt-5"
         ruled={false}
-        trail={[{ label: "Decks", name: "Back to decks", onOpen: closeDeck, ref: backRef }]}
+        trail={trail}
         titleAs="div"
         titleGrows
         title={
