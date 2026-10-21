@@ -106,8 +106,9 @@ export function useTableDragging(): TableDrag | null {
  * a card let go there was played. Dropping a card to play it is a decision the pointer makes,
  * not the card's corner.
  *
- * **A zone catches its own cards too**, and does nothing with them. A card from the hand let go
- * over the hand asks nothing (`dropAction` is `null`), and a zone that refused it would leave the
+ * **A zone catches its own cards too**, and asks the game nothing for them. A card from the hand
+ * let go over the hand asks nothing (`dropAction` is `null`) — the hand reorders itself by where it
+ * was let go (`HandFan`, issue #1330) — and a zone that refused it would leave the
  * drop to whatever lies under it: the hand's band reaches up over the table's bottom edge, so a
  * card put back in the hand there was played. Caught, it is simply put back. Only a zone a card
  * could go to lights up for it, so the hand does not glow under a card carried out of it.
@@ -129,7 +130,8 @@ export function useTableDropTarget({
 }: {
   ref: RefObject<HTMLElement | null>;
   place: GamePlace;
-  onDrop: (drag: TableDrag, place: GamePlace) => void;
+  /** `at` is where the pointer let go, in the window's coordinates. */
+  onDrop: (drag: TableDrag, place: GamePlace, at: { x: number; y: number }) => void;
   sandbox: boolean;
   overlay?: boolean;
   pointerOnly?: boolean;
@@ -141,7 +143,7 @@ export function useTableDropTarget({
     read: readTableDrag,
     canDrop: (drag) =>
       !refuse && (drag.from === place || dropAction(drag, place, sandbox) !== null),
-    onDrop: (drag) => onDrop(drag, place),
+    onDrop: (drag, at) => onDrop(drag, place, at),
     overlay,
     pointerOnly,
   });

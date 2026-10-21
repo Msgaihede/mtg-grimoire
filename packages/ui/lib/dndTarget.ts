@@ -130,7 +130,9 @@ export function useDndDropTarget<T>({
   /** This feature's payload out of the library's untyped store, or `null` for everything else. */
   read: (data: Record<string, unknown>) => T | null;
   canDrop: (drop: T) => boolean;
-  onDrop: (drop: T) => void;
+  /** `at` is where the pointer let go, in the window's coordinates — for a target that places
+   *  what it took by where it was let go (the playtest board's hand reorders by it). */
+  onDrop: (drop: T, at: { x: number; y: number }) => void;
   /**
    * An overlay: this target wins the pointer against whatever it is drawn over, **and only when
    * the pointer is actually inside it**.
@@ -262,7 +264,7 @@ export function useDndDropTarget<T>({
         const released = operation.position.current;
         if (pointerOnly && !containsPointer(element.getBoundingClientRect(), released)) return;
         const drop = taken(operation.source);
-        if (drop !== null) latest.current.onDrop(drop);
+        if (drop !== null) latest.current.onDrop(drop, { x: released.x, y: released.y });
       }),
     ];
 

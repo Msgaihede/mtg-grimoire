@@ -332,6 +332,13 @@ into is part of the button. So a lift cannot take the card out from under the po
 card drops back the moment the pointer leaves it. The kept hand is held lands first, the same order
 the opening hand shows. After that, a card drawn or returned goes on the right (`arrangeHand`).
 
+**The reader reorders their own hand at any moment of the game** (issue #1330): a card dragged
+within the hand takes the slot it is let go over (`handSlotAt`, the card whose middle is nearest the
+pointer), and Shift+← / Shift+→ on a focused card moves it one place (`moveInHand`). The order is
+the board's alone (`HandFan`'s held order) — a hand's order means nothing to the rules — so it asks
+the engine nothing, needs no sandbox, and works on the opponent's turn, in a prompt or while the
+engine is busy. A card played leaves the rest in the reader's order; one drawn goes on the right.
+
 **The preview follows the pointer.** It opens beside the cursor once the pointer has rested on a
 card for half a second, and it moves with the pointer, kept inside the board. It closes the moment
 the pointer leaves the card, and the next card — or the same one again — is rested on anew. A card

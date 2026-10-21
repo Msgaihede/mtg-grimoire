@@ -113,7 +113,7 @@ export function useShelfDropTarget<T>(
     ref,
     read: card.read,
     canDrop: card.canDrop,
-    onDrop: card.onDrop,
+    onDrop: (drop) => card.onDrop(drop),
     armOnMount: true,
     // Over only while the pointer is inside this row, box or bar. Spec §6 names these targets and
     // nothing else: a card released on a shelf's tiles or on blank wall files nowhere, where the
@@ -158,7 +158,7 @@ export function useShelfStickyDropTarget<T>(card: ShelfCardDrop<T>): {
     ref,
     read: card.read,
     canDrop: card.canDrop,
-    onDrop: card.onDrop,
+    onDrop: (drop) => card.onDrop(drop),
     armOnMount: true,
     // Pointer-inside *and* the highest priority — see above. `pointerOnly` would be redundant
     // beside it: `overlay` already sets the same detector.
