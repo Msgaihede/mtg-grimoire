@@ -8,13 +8,23 @@
 //! 3. [`gallery`] — that vector's cosine search over every **look** (printings that photograph
 //!    alike), int8 rows with a scale each.
 //!
+//! That is the **card**; two more networks choose the **printing** of the card it decided, from
+//! two small crops of the same frame. They are a second set of files, loaded beside the first
+//! and optional to a host:
+//!
+//! 4. [`evidence`] — a set symbol network and a collector band network (each a
+//!    MobileNetV3-small body to a 64-d unit vector), and a gallery of reference vectors for
+//!    each, keyed by printing. Their crop boxes and thresholds are `neural.json`'s `evidence`
+//!    section ([`meta::EvidenceMeta`]).
+//! 5. [`narrow`] — the rule that turns a card's candidate printings and their three scores
+//!    (whole card, symbol, band) into one printing, or a short list of choices, best first.
+//!
 //! [`scanner::Recognizer`] reads one frame; [`session::Agreement`] agrees across frames. The
 //! design is quickdraw.cards', the weights and the gallery are ours, trained from Apache-2.0
 //! ImageNet checkpoints on Scryfall scans. `docs/reference/card-scanner.md` §10 *Neural* has the
 //! mode and the replay this crate's files scored on, the scanner lab's write-up (outside this
 //! repository, `E:\mtg-scanner\docs\neural-scanner.md`) the evidence and the training, and
-//! `models/README.md` where each
-//! file came from.
+//! `models/README.md` where each file came from.
 //!
 //! **What this crate may not do, because `card-scanner` runs it in a browser Worker**: read a
 //! clock, start a thread, or touch a file outside the `cli` feature. The caller times it, and

@@ -15,7 +15,8 @@
 //!
 //! - `quad` and `quad_raw`: the card the frame votes for, in the frame's pixels — one quad, as
 //!   there is no lock to smooth it. `lock` is `None`, `search` is `full`, and no detail is asked
-//!   for: no band is read.
+//!   for: no text is read, so no collector line and no finish mark. The collector band is looked
+//!   at all the same, as a picture, by the printing evidence below.
 //! - `match`: that card's best looks, each as its pictured printing, with **`normalized` =
 //!   (1 − cosine) / 2 and `distance` that times 256**, so a panel or the scan inbox reading 0–256
 //!   bits still holds; `margin` is the lead over the best other card × 128.

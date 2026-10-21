@@ -25,7 +25,7 @@ Eight synchronous functions (`src/glue.rs`). Every string answered is `{"ok": �
 | `memory_bytes()` | — | The module's linear memory in bytes (a high-water mark) |
 
 - **Strict export check**: `scripts/build-wasm.ts` fails the build if any of the eight is missing from the glue.
-- **The Neural files are handed over, never copied twice**: owned `Vec`s become `Cow::Owned`, the gallery is searched where it lies and `rten` keeps the networks' buffers. A Neural session costs about the 27 MB handed in, on top of the rest, until the Worker ends.
+- **The Neural files are handed over, never copied twice**: owned `Vec`s become `Cow::Owned`, the gallery is searched where it lies and `rten` keeps the networks' buffers. A Neural session costs about the 27 MB handed in, on top of the rest, until the Worker ends; the evidence's 21.6 MB, handed in the same way, comes on top of that.
 - **A verdict is serialised from the crate's type, never through a `serde_json::Value`**: a `Value` sorts keys and widens `f32` (`0.3` → `0.30000001192092896`), and the page must read what the desktop's `scanner_frame` hands its own.
 - **Rust supplies facts**: `load` says what loaded and what the crate said about what did not. No sentence here names a file, a download or a browser — those are the page's.
 - **The page's half** is `packages/ui/lib/core/web/`: `scanWorker.ts` loads this module by URL, `scanSession.ts` answers each message and calls a throwing export a trap, `scanner.ts` owns the Worker's life, composes `scanner_status` from `load`'s facts and fetches the Neural files on a Worker's first Neural frame (and their evidence after them, holding up no frame), `scanStore.ts` keeps the three files. `pnpm web:scanner-smoke` is the run that instantiates this module in a browser.
