@@ -662,7 +662,25 @@ facts are found as a run of `step.happened`, and the end takes the rest.
   zone, and "Activate ability" heads a battlefield card's menu. In `respond`, the hand and the
   abilities are playable as in the main phase; the sandbox is not.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
-  read-only. They are never dragged, and their table takes no drops (`refuse`).
+  read-only. They are never dragged, and their table takes no zone drops (`refuse`) — only the
+  rules' aims below.
+- **Drag beside every click** (issue #1335, `play/aim.ts`). A card carried onto a card or a plate
+  makes the same picks and sends the same actions as the clicks; nothing new reaches the engine.
+  The reader's cards the rules let them pick up (`canCarry`) are draggable with the sandbox off
+  too: the attackers and blockers in their steps, and with priority every permanent but a land.
+  A card that would take the drop is ringed solid gold while a card is over it.
+  - **Attack:** an attacker let go on an opponent's plate, their felt or any card on their table
+    attacks that player; on a planeswalker or battle it may attack, attacks it. Carried back onto
+    the reader's table, it is taken off.
+  - **Block:** a blocker let go on an attacker it may block blocks it; carried back, it is taken
+    off.
+  - **Play, equip, target:** with priority (`main`, `respond`), a card from the hand or the command
+    zone let go on a card on any table or on a plate is played, and a permanent activated, with
+    that card or player kept as its target (`useAimFollowThrough`). The target question that
+    follows is answered with it when it offers it; a question before it (which ability, how to
+    cast) is the reader's, and a target it does not offer leaves the prompt open for them. A
+    refusal, or a play that asked no target, forgets the aim. A land from the hand let go on a card
+    falls through to the table and is played, as before.
 - **Attack:** a click toggles a creature that can only attack the opponent. A creature with
   planeswalkers or battles to choose from attacks the player by default (else its first target)
   and waits to be aimed. While it waits, its targets light up (the opponent's plate too, when it
@@ -691,7 +709,8 @@ board (2026-10-13) rather than being copied; since 2026-10-17 this board is the 
 For a seat that is not the reader's, and for the sandbox:
 
 - `Battlefield`: `flipped`, `readOnly`, `marks` (attack, block or chosen, with a badge), `pick`,
-  `onActivate`, and `dense` (tighter padding).
+  `onActivate`, `dense` (tighter padding), and `carry` and `aim` (the rules' drags, issue #1335).
+- `PlateFrame`: `aim`, the player as a drop target. `tableDrag.ts`' `useAimTarget` registers one.
 - `LifePlate`: `compact`, a one-row plate 38 px tall; `readOnly`, the number as plain text with the
   sandbox off.
 - `layoutTable` and `pilesOf`: an `apart` key, so an attacking creature does not join a pile with

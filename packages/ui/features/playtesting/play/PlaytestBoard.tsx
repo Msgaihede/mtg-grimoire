@@ -35,7 +35,7 @@ import { gameMenu } from "../table/menus";
 import { OpeningHand } from "../table/OpeningHand";
 import { HelpPanel, LogPanel } from "../table/Panels";
 import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../table/ZonePile";
-import { dropAction, type TableDrag } from "../table/tableDrag";
+import { dropAction, type DropAim, type TableAim, type TableDrag } from "../table/tableDrag";
 import { useLandingOf } from "../table/landing";
 import { useUndoKeys } from "../undo";
 import { ASPECT, acrossTables, handRow, type ZoneSize } from "../table/layout";
@@ -54,6 +54,7 @@ import {
   toggleAttacker,
   type Picks,
 } from "./combat";
+import { aimDrop, canCarry, retractDrop, useAimFollowThrough, type AimAt } from "./aim";
 import { combatArrows, targetArrows } from "./arrows";
 import { BoardArrows } from "./BoardArrows";
 import { DamagePops } from "./DamagePops";
@@ -110,6 +111,13 @@ import { PromptPanel } from "./PromptPanel";
  * attacker it blocks, and while the engine asks a question each answer that names one card on the
  * table makes that card clickable. Picks are kept here until the stage button declares them, and
  * dropped whenever a new view arrives.
+ *
+ * **Every one of those clicks has a drag beside it** (`aim.ts`, issue #1335): an attacker carried
+ * onto an opponent's side or plate (or a planeswalker) attacks it, a blocker carried onto an
+ * attacker blocks it, either carried back onto the reader's table is taken off, and with priority
+ * a card from the hand or a permanent carried onto a card or a plate is played or activated with
+ * that card or player as its target — an Aura, a removal spell, an equip. The drag makes the same
+ * picks and sends the same actions as the clicks; nothing new reaches the engine.
  *
  * **The sandbox is the rest** (`view.sandbox`, toggled by the chip in the top band and the game
  * menu's row — off against the AI, on against the goldfish, at the start). Its moves change the
@@ -284,11 +292,59 @@ export function PlaytestBoard({
 
   const drop = useCallback(
     (drag: TableDrag, to: GamePlace) => {
+      // An attacker or a blocker carried back onto the reader's own table is taken off.
+      const back =
+        to === "battlefield" && view !== null && !locked ? retractDrop(view, picks, drag) : null;
+      if (back !== null) setPicks(() => back);
       const action = dropAction(drag, to, edits);
       if (action !== null) onAct(action);
       setPointed(null);
     },
-    [onAct, edits],
+    [onAct, edits, view, locked, picks, setPicks],
+  );
+
+  // **A card carried onto a card or a player** (`aim.ts`): the declare steps' picks, or a play or
+  // an activation whose target question is answered with the card or player it was let go on.
+  const follow = useAimFollowThrough(view, busy, replaying, act);
+  const aimOf = useCallback(
+    (drag: TableDrag, at: AimAt, felt = false) =>
+      view === null || locked ? null : aimDrop(view, picks, drag, at, felt),
+    [view, locked, picks],
+  );
+  const aimAt = useCallback(
+    (drag: TableDrag, at: AimAt, felt = false) => {
+      const out = aimOf(drag, at, felt);
+      if (out === null || view === null) return;
+      if (out.kind === "picks") {
+        setPicks(() => out.picks);
+        return;
+      }
+      follow(out.target, view);
+      act(out.action);
+    },
+    [aimOf, view, follow, act, setPicks],
+  );
+  /** Each player's table's aims — its cards, and an opponent's felt — and their plate's. */
+  const aims = useMemo(() => {
+    const target = (at: AimAt, felt = false): DropAim => ({
+      accepts: (drag) => aimOf(drag, at, felt) !== null,
+      onAim: (drag) => aimAt(drag, at, felt),
+    });
+    const tables = {} as Record<PlaytestPlayer, TableAim>;
+    const plates = {} as Record<PlaytestPlayer, DropAim>;
+    for (const player of ["you", ...OPPONENTS] as const) {
+      tables[player] = {
+        card: (id) => target(id),
+        table: player === "you" ? undefined : target(player, true),
+      };
+      plates[player] = target(player);
+    }
+    return { tables, plates };
+  }, [aimOf, aimAt]);
+  /** The reader's cards the rules let them pick up now: an attacker, a blocker, a permanent. */
+  const carry = useCallback(
+    (card: GameCard) => view !== null && !locked && canCarry(view, card),
+    [view, locked],
   );
 
   const pointYou = useCallback((p: Pointed) => setPointed({ pointed: p, side: "you" }), []);
@@ -584,6 +640,8 @@ export function PlaytestBoard({
                   marks={marks?.[seat.player]}
                   pick={theirPicks[seat.player]}
                   across={across[i + 1]}
+                  aim={aims.tables[seat.player]}
+                  plateAim={aims.plates[seat.player]}
                   aimable={aimable.includes(seat.player)}
                   onAim={() => setPicks((p) => aimAttacker(p, view, seat.player))}
                   onLife={(life) => act({ type: "setLife", seat: seat.player, life })}
@@ -611,6 +669,7 @@ export function PlaytestBoard({
                 marks={marks?.opponent}
                 pick={theirPick}
                 across={across[1]}
+                aim={aims.tables.opponent}
                 className="h-full w-full"
               />
             </div>
@@ -639,6 +698,8 @@ export function PlaytestBoard({
               pick={yourPick}
               onActivate={onActivate}
               across={across[0]}
+              carry={carry}
+              aim={aims.tables.you}
               className="h-full w-full"
             />
           </div>
@@ -727,6 +788,7 @@ export function PlaytestBoard({
               active={active === "opponent"}
               poison={opponent?.poison ?? 0}
               compact
+              aim={aims.plates.opponent}
               className="min-w-0"
             >
               <LifePlate
@@ -895,7 +957,12 @@ export function PlaytestBoard({
               : "12px",
         }}
       >
-        <PlateFrame seat="you" active={active === "you"} poison={you?.poison ?? 0}>
+        <PlateFrame
+          seat="you"
+          active={active === "you"}
+          poison={you?.poison ?? 0}
+          aim={aims.plates.you}
+        >
           <LifePlate
             seat="you"
             title={`You · ${deckName}`}
@@ -1191,15 +1258,18 @@ function PlaytestHelp({ sandbox, goldfish }: { sandbox: boolean; goldfish: boole
       <span>
         Double-click a card in hand, or drag it onto your battlefield, to play it by the rules.
       </span>
-      <span>Right-click a permanent to activate an ability.</span>
       <span>
-        To attack, click each creature that should (it moves forward, ringed red), then press
-        Attack.
+        Right-click a permanent to activate an ability. Or drag the card onto a card or a player to
+        play or activate it with that target: an Aura, a removal spell, an equip.
+      </span>
+      <span>
+        To attack, click each creature that should (it moves forward, ringed red), or drag it onto
+        the opponent or a planeswalker, then press Attack.
       </span>
       {!goldfish && (
         <span>
-          To block, click one of your creatures, then the attacker it blocks; both get a number.
-          Click a blocker again to take it off.
+          To block, click one of your creatures, then the attacker it blocks, or drag it onto the
+          attacker; both get a number. Click a blocker again, or drag it back, to take it off.
         </span>
       )}
       <span>When the engine asks, click a highlighted card or pick an answer in the panel.</span>

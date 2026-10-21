@@ -147,3 +147,48 @@ export function useTableDropTarget({
   });
   return !refuse && over && dragging !== null && dropAction(dragging, place, sandbox) !== null;
 }
+
+/**
+ * A card or a player a carried card can be let go on to make one of the rules' plays — an
+ * attack, a block, a target (`play/aim.ts`) — rather than a zone to move it to. The board says
+ * what each one takes; the pieces only register it.
+ */
+export interface DropAim {
+  accepts: (drag: TableDrag) => boolean;
+  onAim: (drag: TableDrag) => void;
+}
+
+/** A table's aims: each card on it, by id, and the felt between them (`table`), when it is one. */
+export interface TableAim {
+  card: (id: number) => DropAim;
+  table?: DropAim;
+}
+
+/**
+ * One aim registered on `ref`, lit (`true`) while a card it takes is over it. With no `aim` it
+ * takes nothing, so a piece can register one unconditionally.
+ *
+ * `overlay` for a card on a table — **it is drawn over the table's own target**, and has to win
+ * the pointer against it while the pointer is on the card and lose it everywhere else, which is
+ * exactly `useDndDropTarget`'s `overlay`. Anything else (a plate, a table's felt) is
+ * `pointerOnly`: a plate is small, and a card carried past it must not be caught by its corner.
+ */
+export function useAimTarget({
+  ref,
+  aim,
+  overlay = false,
+}: {
+  ref: RefObject<HTMLElement | null>;
+  aim: DropAim | undefined;
+  overlay?: boolean;
+}): boolean {
+  const { over } = useDndDropTarget({
+    ref,
+    read: readTableDrag,
+    canDrop: (drag) => aim?.accepts(drag) ?? false,
+    onDrop: (drag) => aim?.onAim(drag),
+    overlay,
+    pointerOnly: !overlay,
+  });
+  return over && aim !== undefined;
+}
