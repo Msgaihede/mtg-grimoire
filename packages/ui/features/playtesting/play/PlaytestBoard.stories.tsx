@@ -23,6 +23,7 @@ import {
   goldfishTurn,
   keepPick,
   openingHand,
+  optionalEffectPrompt,
   playLocally,
   replayStep,
   respondStep,
@@ -287,6 +288,12 @@ export const TargetPrompt: Story = {
 /** How to cast an adventurer. */
 export const CastChoice: Story = {
   args: { view: castChoicePrompt().view },
+};
+
+/** A "you may" in an activated ability: the ability's words beside the yes and the no, so the
+ *  reader knows what they agree to (issue #1328). */
+export const OptionalEffect: Story = {
+  args: { view: optionalEffectPrompt().view },
 };
 
 /** Two triggers at once: each answer is an order, said first-to-resolve first, with pictures. Two
