@@ -58,6 +58,11 @@
 //! printing reached the threshold. The reader was being denied an answer by the card being
 //! *too well known*.
 //!
+//! Pooling is across frames, not within one. The top-K is not deduplicated by card, and
+//! art-identical reprints tie, so a frame can list one card five times; summed, that card took
+//! five votes a frame and could out-vote the frame's own top-1 from just behind it (#1133).
+//! Within a frame each card keeps its best observation of each kind, and is seen once.
+//!
 //! It also matches what fast mode promises — a card now, its exact printing marked
 //! provisional — so the number that gates the commit is the number about the card.
 //!
@@ -92,7 +97,7 @@
 //! a vote is worth the same anywhere inside the gate, and the gate is what rejects noise.
 
 use crate::index::ID_LEN;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// How accumulated evidence becomes an answer. See the module doc for the two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -253,7 +258,7 @@ impl Default for TrackerOptions {
 /// widths behind and multiplied it by e^-10 — measured, thirty frames of a consistent hash
 /// match accumulated 0.0000 against a read's 101.33. The hash was not outvoted, it was
 /// annihilated, and on a card the reader had misread there was nothing left to correct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Evidence {
     /// A nearest neighbour in the bundle — what the card looks like.
     Appearance,
@@ -767,7 +772,18 @@ impl Tracker {
                 best_of_kind(Evidence::Name),
                 best_of_kind(Evidence::Collector),
             );
-            for o in usable {
+            // **One vote per card per kind per frame** (#1133). The top-K is not deduplicated
+            // by card, and art-identical reprints tie, so a card with five printings in the
+            // list used to collect five votes a frame: decided on its second frame with no
+            // rival, or out-voting a card that was top-1 on every frame by having four
+            // printings just behind it. Within a frame each (card, kind) keeps its best
+            // contribution and `seen` counts the card once; kinds still add, since a read and
+            // a look are different evidence. The printing folds the same way, per member.
+            // Ordered maps, so the sums land in the same order every run (#705).
+            let mut card_votes: BTreeMap<([u8; ID_LEN], Evidence), f32> = BTreeMap::new();
+            let mut member_votes: BTreeMap<([u8; ID_LEN], [u8; ID_LEN], Evidence), f32> =
+                BTreeMap::new();
+            for o in &usable {
                 let best_n = match o.kind {
                     Evidence::Appearance => best_app,
                     Evidence::Name => best_name,
@@ -791,16 +807,26 @@ impl Tracker {
                 let behind = (normalized - best_n).max(0.0);
                 let relative = (-behind / self.opts.relative_falloff.max(1e-4)).exp();
                 let base = if voting { relative } else { quality * relative };
-                *self.scores.entry(*key).or_insert(0.0) += base * o.weight.max(0.0);
-                *self.seen.entry(*key).or_insert(0) += 1;
+                let vote = card_votes.entry((*key, o.kind)).or_insert(0.0);
+                *vote = vote.max(base * o.weight.max(0.0));
                 // The printing accumulates separately, on its own weight — see
                 // `Observation::member_weight` for why one number cannot serve both.
-                let mw = base * o.member_weight.max(0.0);
-                if mw > 0.0 {
-                    *self.members.entry(*key).or_default().entry(*member).or_insert(0.0) += mw;
-                }
+                let mw = member_votes.entry((*key, *member, o.kind)).or_insert(0.0);
+                *mw = mw.max(base * o.member_weight.max(0.0));
                 let seen_best = self.best_n.entry(*key).or_insert(normalized);
                 *seen_best = seen_best.min(normalized);
+            }
+            for ((key, _), vote) in card_votes {
+                *self.scores.entry(key).or_insert(0.0) += vote;
+            }
+            for ((key, member, _), mw) in member_votes {
+                if mw > 0.0 {
+                    *self.members.entry(key).or_default().entry(member).or_insert(0.0) += mw;
+                }
+            }
+            let counted: BTreeSet<[u8; ID_LEN]> = usable.iter().map(|o| o.key).collect();
+            for key in counted {
+                *self.seen.entry(key).or_insert(0) += 1;
             }
             // Whatever is now negligible goes — decayed away under one rule, or a runner-up
             // ten falloff widths behind that entered at a millionth of a vote under the
@@ -1223,6 +1249,43 @@ mod tests {
         t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
         let r = t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
         assert_eq!(r.leader().expect("leader").best_member, id(20));
+    }
+
+    #[test]
+    fn a_frame_is_one_vote_however_many_reprints_it_lists() {
+        // **#1133.** Five art-identical printings of one card tie in the top-K. Each used to
+        // add a vote, so the card reached the bar of 8 on its second frame with no rival.
+        let mut t = Tracker::new(TrackerOptions::default());
+        let tied: Vec<Observation> =
+            (20..25).map(|m| Observation::appearance(id(1), id(m), 0.10)).collect();
+        for frame in 1..=7u32 {
+            let r = t.observe(&tied);
+            assert!(!r.committed, "decided on frame {frame} of five tied reprints");
+            let lead = r.leader().expect("leader");
+            assert!((lead.evidence - frame as f32).abs() < 1e-4, "votes {}", lead.evidence);
+            assert_eq!(lead.seen, frame, "a frame counted the card more than once");
+        }
+        assert!(t.observe(&tied).committed, "eight clean frames are the bar");
+    }
+
+    #[test]
+    fn reprints_just_behind_cannot_out_vote_the_top_card() {
+        // **#1133.** X is top-1 every frame with one printing; four printings of Y sit just
+        // behind it. Summed, Y took ~2.87 votes a frame to X's 1.0 and was decided.
+        let frame = [
+            Observation::appearance(id(1), id(1), 0.200),
+            Observation::appearance(id(2), id(20), 0.205),
+            Observation::appearance(id(2), id(21), 0.205),
+            Observation::appearance(id(2), id(22), 0.205),
+            Observation::appearance(id(2), id(23), 0.205),
+        ];
+        for rule in [CommitRule::Votes, CommitRule::Confidence] {
+            let mut t = Tracker::new(TrackerOptions { rule, ..Default::default() });
+            for _ in 0..20 {
+                let r = t.observe(&frame);
+                assert_eq!(r.leader().expect("leader").id, id(1), "{rule:?}");
+            }
+        }
     }
 
     #[test]

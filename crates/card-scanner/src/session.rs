@@ -30,7 +30,7 @@
 
 use crate::cardness::Cardness;
 use crate::detect::{
-    locate, locate_near, rectify_views, rgb_of, DetectError, DetectOptions, DetectTimings,
+    locate, locate_near, rectify_views, rectify_views_from, rgb_of, DetectError, DetectOptions, DetectTimings,
     DetectTrace, EdgeMethod, Located, QuadScore,
 };
 use crate::filters::ScanFilters;
@@ -38,7 +38,7 @@ use crate::hash::{hash, HashKind};
 use crate::host::{self, Stopwatch};
 use crate::index::{format_uuid, parse_uuid, Mask};
 use crate::lock::{LockState, QuadLock};
-use crate::reference::{Label, MatchReport, Reference};
+use crate::reference::{Label, MatchReport, Reference, ViewDescriptors};
 use crate::resolve::{BurstView, NoReaders};
 pub use crate::resolve::{ChoiceView, Outcome, ResolutionView, TierView};
 use crate::track::{CommitRule, Observation, Standing, Tracked, Tracker, TrackerOptions};
@@ -304,6 +304,8 @@ impl FrameOptions {
             // The same shape as the OCR tier, and for the same reason — an expensive tier
             // stands down when the cheap one has settled it.
             query_insets: if settled { Vec::new() } else { insets.to_vec() },
+            // Only a page with its pipeline panel open draws them (#1136).
+            trace_images: self.stages,
             ..Default::default()
         }
     }
@@ -530,6 +532,39 @@ pub struct Verdict {
 pub const PANIC_ERROR: &str = "the detector panicked on this frame — see the log for the assertion";
 /// What a frame's `error` starts with when its JPEG could not be decoded.
 pub const DECODE_ERROR_PREFIX: &str = "decode: ";
+/// The widest or tallest frame, or detail frame, the scanner decodes. A 4K camera's whole frame
+/// is 3840 px and the page sends its detail at 2560 at most (`useScanLoop`'s `DETAIL_LONG_EDGE`).
+pub const MAX_FRAME_SIDE: u32 = 8192;
+/// The most pixels a frame decodes to — 24 MP, 72 MB as RGB. With [`MAX_FRAME_SIDE`] alone a
+/// grayscale 8192×8192 JPEG would decode to 64 MB and triple to 192 MB on its way to RGB, and
+/// WASM linear memory never gives that back (issue #1137).
+pub const MAX_FRAME_PIXELS: u64 = 24_000_000;
+/// How many times the frame's width a detail frame may be. The page sends a ~960 px frame and a
+/// detail of at most 2560; anything far past that is not the same picture at the camera's size.
+pub const MAX_DETAIL_SCALE: f32 = 6.0;
+
+/// Decode one frame's bytes, **as a JPEG and within bounds**, before any pixel is allocated.
+///
+/// `image::load_from_memory` would take PNG and WebP too, guessed from the bytes, with nothing
+/// but `image`'s 512 MiB allocation cap between a header and the decode. Every host sends a JPEG
+/// — the page's `toBlob("image/jpeg")`, the capture button, the synthetic frames — so this takes
+/// only that, and refuses a header past [`MAX_FRAME_SIDE`] or [`MAX_FRAME_PIXELS`] before
+/// decoding it. Enforced here so no host has to remember to.
+pub fn decode_frame(bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    use image::ImageDecoder;
+    let mut decoder =
+        image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_FRAME_SIDE);
+    limits.max_image_height = Some(MAX_FRAME_SIDE);
+    limits.max_alloc = Some(MAX_FRAME_PIXELS * 3);
+    decoder.set_limits(limits).map_err(|e| e.to_string())?;
+    let (w, h) = decoder.dimensions();
+    if u64::from(w) * u64::from(h) > MAX_FRAME_PIXELS {
+        return Err(format!("a {w}×{h} frame is past the scanner's {MAX_FRAME_PIXELS} pixels"));
+    }
+    image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())
+}
 /// What a frame's `error` says when the Exact resolve failed on it.
 pub const RESOLVE_FAILED_ERROR: &str = "the Exact resolve failed on this card — see the log";
 
@@ -720,6 +755,8 @@ struct StoredView {
     cardness: f32,
     /// Which way up this frame's hash match won — the orientation the readers try first.
     rotated: bool,
+    /// What this frame's hash match computed, so the resolve does not hash it again (#1135).
+    descriptors: ViewDescriptors,
     /// The frame the readers warp this view's bands from — kept only while a resolve may still
     /// read it. See [`CardPixels`].
     pixels: Option<CardPixels>,
@@ -736,6 +773,7 @@ impl StoredView {
             cardness: self.cardness,
             rotated: self.rotated,
             pixels: self.pixels.as_ref(),
+            descriptors: Some(&self.descriptors),
         }
     }
 }
@@ -784,10 +822,10 @@ impl FramePixels<'_> {
     /// would read a card that is not there. Falling back to the detection frame costs
     /// resolution, never correctness.
     fn from_detail(&self, bytes: &[u8], warped: crate::detect::Quad) -> Option<CardPixels> {
-        let img = image::load_from_memory(bytes).ok()?.into_rgb8();
+        let img = decode_frame(bytes).ok()?.into_rgb8();
         let (fw, fh) = (self.frame.width().max(1) as f32, self.frame.height().max(1) as f32);
         let (kx, ky) = (img.width() as f32 / fw, img.height() as f32 / fh);
-        if kx < 1.0 || (kx - ky).abs() > 0.02 * kx {
+        if !(1.0..=MAX_DETAIL_SCALE).contains(&kx) || (kx - ky).abs() > 0.02 * kx {
             return None;
         }
         let q = crate::detect::Quad { corners: warped.corners.map(|(x, y)| (x * kx, y * ky)) };
@@ -1582,7 +1620,7 @@ impl Session {
         }
         let matcher = self.reference.is_some();
         let decode_started = Stopwatch::start();
-        let source = match image::load_from_memory(jpeg) {
+        let source = match decode_frame(jpeg) {
             Ok(i) => i,
             Err(e) => {
                 return Verdict::failed(
@@ -1637,8 +1675,16 @@ impl Session {
         if let (true, Some(held)) = (self.tracking, self.lock.trusted_quad()) {
             if self.windowed < FULL_SWEEP_EVERY {
                 let lock = self.lock.options();
+                // **While a reading is held, the window looks for the inner box** (issue
+                // #1134): the lock follows the card the reading implies, but the frame's contour
+                // is the box, and the reframe below reapplies the reading to it.
+                let expect = self
+                    .reframe_held
+                    .filter(|_| self.reframe.is_some())
+                    .and_then(|r| crate::reframe::inner(&held, r))
+                    .unwrap_or(held);
                 let near = each_method(&methods, |m| {
-                    locate_near(&source, &held, lock, &opts.detect_options(m, settled, &insets))
+                    locate_near(&source, &held, &expect, lock, &opts.detect_options(m, settled, &insets))
                 });
                 if near.iter().any(|(_, (result, _))| result.is_ok()) {
                     attempts = near;
@@ -1687,6 +1733,9 @@ impl Session {
         // plainly, or once the card is decided, nothing is asked: a held reading is applied as
         // geometry alone, so the quad the lock follows does not jump back to the inner box.
         let plain = std::mem::take(&mut self.reframe_plain) || settled;
+        // The quad as found, warped and hashed by the reframing — reused by the rectification
+        // and the match below when the frame keeps that quad (#1135).
+        let mut as_found: Option<crate::detect::Warped> = None;
         if let (Some(ro), Some(r), Some((_, d, _))) =
             (self.reframe, self.reference.as_deref(), best.as_mut())
         {
@@ -1711,7 +1760,16 @@ impl Session {
                 // sleeved and filtered to its own set, Hypnotic Specter LEB 113 was reframed off
                 // the card and named wrong. The survey the rules were set by searched them all;
                 // the frame's own match, below, still keeps to the mask.
-                crate::reframe::choose(&rgb, &d.quad, r, &Mask::all(), &ro, self.reframe_held)
+                let (found, kept) = crate::reframe::choose_keeping(
+                    &rgb,
+                    &d.quad,
+                    r,
+                    &Mask::all(),
+                    &ro,
+                    self.reframe_held,
+                );
+                as_found = kept.filter(|_| found.is_none());
+                found
             };
             self.reframe_held = found.map(|f| f.reading);
             if let Some(found) = found {
@@ -1779,7 +1837,7 @@ impl Session {
             };
             match relocked {
                 Some(views) => Some((views, true)),
-                None => rectify_views(&rgb, &d.quad, &o).map(|views| (views, false)),
+                None => rectify_views_from(&rgb, &d.quad, &o, as_found).map(|views| (views, false)),
             }
         });
         let rectify_ms = rectify_started.ms();
@@ -1828,11 +1886,11 @@ impl Session {
                     timings.total_ms += rectify_ms;
                     v.timings = Some(timings);
                     v.candidates_examined = Some(t.candidates.len());
-                    if opts.stages {
+                    if let Some(i) = &t.images {
                         v.stages = Some(Stages {
-                            binary: preview_uri(&t.binary, 300, 62),
-                            contours: preview_uri(&t.contours, 300, 62),
-                            quad: preview_uri(&t.quads, 300, 62),
+                            binary: preview_uri(&i.binary, 300, 62),
+                            contours: preview_uri(&i.contours, 300, 62),
+                            quad: preview_uri(&i.quads, 300, 62),
                         });
                     }
                 }
@@ -1875,6 +1933,7 @@ impl Session {
                         d.cardness.score,
                         settled,
                         Some(&pixels),
+                        Some(&views.descriptors),
                     );
                     v.detail = pixels.used.get();
                 } else if matcher {
@@ -1901,11 +1960,11 @@ impl Session {
                     v.rejected_cardness = t.candidates.first().and_then(|c| c.cardness);
                     v.timings = Some(t.timings);
                     v.candidates_examined = Some(t.candidates.len());
-                    if opts.stages {
+                    if let Some(i) = &t.images {
                         v.stages = Some(Stages {
-                            binary: preview_uri(&t.binary, 300, 62),
-                            contours: preview_uri(&t.contours, 300, 62),
-                            quad: preview_uri(&t.quads, 300, 62),
+                            binary: preview_uri(&i.binary, 300, 62),
+                            contours: preview_uri(&i.contours, 300, 62),
+                            quad: preview_uri(&i.quads, 300, 62),
                         });
                     }
                 }
@@ -1962,6 +2021,7 @@ impl Session {
         cardness: f32,
         mut settled: bool,
         pixels: Option<&FramePixels<'_>>,
+        known: Option<&ViewDescriptors>,
     ) -> Option<Tracked> {
         // A clone of the handle rather than a borrow of the field, so starting a resolve below —
         // or forgetting a card that changed, just below — can take `&mut self` while this frame
@@ -1988,7 +2048,7 @@ impl Session {
         views.extend(alternates.iter().map(|(a, b)| (a, b)));
         let gate = self.tracker.options().max_normalized;
         let (report, hold) =
-            r.match_views_held(&views, self.top, &self.mask, self.held_rotated, gate);
+            r.match_views_held(&views, known, self.top, &self.mask, self.held_rotated, gate);
         self.held_rotated = hold;
         // The next frame's reframing asks nothing if this one matched plainly. See `reframe_plain`.
         self.reframe_plain = self.reframe.is_some_and(|ro| {
@@ -2068,8 +2128,11 @@ impl Session {
                             .filter(|p| self.mask.permits(p))
                             .collect();
                         let only = Mask::allow_only(only);
+                        // The frame's own match hashed these views moments ago (#1135); only
+                        // the half a held orientation skipped is hashed here.
+                        let known = r.describe_views(&views, Some(&report.descriptors));
                         self.title_pick = r
-                            .match_views(&views, 1, &only)
+                            .match_descriptors(&known, 1, &only)
                             .candidates
                             .first()
                             .and_then(|c| parse_uuid(&c.id));
@@ -2107,6 +2170,7 @@ impl Session {
                     alternates: alternates.to_vec(),
                     cardness,
                     rotated: report.rotated,
+                    descriptors: report.descriptors.clone(),
                     pixels: pixels.filter(|_| readable).and_then(|p| p.get().cloned()),
                     detail: readable && pixels.is_some_and(|p| p.used.get().is_some()),
                 });
@@ -3064,6 +3128,7 @@ mod tests {
             alternates: Vec::new(),
             cardness: 0.5,
             rotated: false,
+            descriptors: ViewDescriptors::default(),
             pixels: None,
             detail: false,
         });
@@ -3103,6 +3168,7 @@ mod tests {
             alternates: Vec::new(),
             cardness: 0.5,
             rotated: false,
+            descriptors: ViewDescriptors::default(),
             pixels: None,
             detail: false,
         });
@@ -3561,7 +3627,7 @@ mod tests {
         let mut v =
             Verdict::failed(String::new(), FrameSize { w: 0, h: 0 }, 0.0, true, s.mode, s.decision_seq);
         s.poll_resolve(&mut v);
-        let t = s.match_locked(&mut v, card, card, &[], 0.5, settled, None);
+        let t = s.match_locked(&mut v, card, card, &[], 0.5, settled, None, None);
         s.conclude(&mut v, t.as_ref());
         v
     }
@@ -3632,13 +3698,20 @@ mod tests {
 
     #[test]
     fn the_card_the_hash_preferred_does_not_lift_a_resolved_decision() {
-        // **The case Exact exists for.** The hash leads with the other card — its two printings
-        // pool their votes — and the resolve decides card three. On every frame after, the hash
-        // goes on naming the other card: that is this card as the hash sees it, so the decision
-        // holds. It used to count ten of them as a card swapped in and lift the decision with the
-        // card still in the lens — Abandoned Air Temple on the replay, decided at frame 9 and
-        // lost at 18.
+        // **The case Exact exists for.** The hash leads with the other card and the resolve
+        // decides card three. On every frame after, the hash goes on naming the other card: that
+        // is this card as the hash sees it, so the decision holds. It used to count ten of them
+        // as a card swapped in and lift the decision with the card still in the lens — Abandoned
+        // Air Temple on the replay, decided at frame 9 and lost at 18.
+        //
+        // The hash leading with the other card used to come for free: its two printings summed
+        // their votes inside each frame, out-voting card three on card three's own frames. That
+        // was #1133, and with it fixed card three leads its own frames — so the override is put
+        // on the tracker the way a title read naming card three leaves it.
         let mut s = resolved_on_card_three();
+        s.tracker.reset();
+        s.tracker.observe(&[Observation::appearance(id(10), id(1), 0.0)]);
+        s.tracker.commit_to(id(20), id(3));
         for f in 0..40 {
             let v = locked_frame(&mut s, &card_image(1));
             assert!(v.decision.is_some(), "lost the decision on frame {f}");
@@ -4665,7 +4738,7 @@ mod tests {
                 s.mode,
                 s.decision_seq,
             );
-            let t = s.match_locked(&mut v, upright, rotated, &[], 0.5, settled, None);
+            let t = s.match_locked(&mut v, upright, rotated, &[], 0.5, settled, None, None);
             s.conclude(&mut v, t.as_ref());
             v.r#match.expect("a locked frame with a reference matches").hashes
         };
@@ -4754,6 +4827,34 @@ mod tests {
     }
 
     #[test]
+    fn a_held_reading_is_searched_for_in_its_window() {
+        // **Issue #1134.** While a reframe reading is held, the lock follows the card the
+        // reading implies and the frame shows only the inner box — here a little over half its
+        // area, which the window used to refuse as not what the lock holds, every frame.
+        let mut s = Session::new(None, None, 5);
+        let jpeg = card_jpeg(480.0);
+        let found = (0..3)
+            .filter_map(|_| s.frame(&jpeg, &FrameOptions::default()).quad_raw)
+            .last()
+            .map(|corners| crate::detect::Quad { corners })
+            .expect("the card is found");
+        let h = crate::reframe::hypotheses(&found)
+            .into_iter()
+            .find(|h| h.region == crate::reframe::UPPER.name && !h.flipped)
+            .expect("an upper reading");
+        assert!(h.card.area() / found.area() > s.lock.options().max_area_ratio);
+        s.lock.reset();
+        for _ in 0..s.lock.options().min_agree {
+            s.lock.observe(Some(h.card));
+        }
+        s.reframe_held = Some(h.reading());
+        s.windowed = 0;
+        let v = s.frame(&jpeg, &FrameOptions::default());
+        assert!(v.ok, "the frame lost the card: {:?}", v.error);
+        assert_eq!(v.search, Search::Window, "the window refused the box the reading implies");
+    }
+
+    #[test]
     fn a_card_that_left_its_window_is_found_by_the_sweep() {
         let mut s = Session::new(None, None, 5);
         for _ in 0..4 {
@@ -4829,15 +4930,52 @@ mod tests {
         }
     }
 
-    /// A frame and a detail image of it for [`FramePixels`], `k` times the size, as PNG bytes.
+    /// A frame and a detail image of it for [`FramePixels`], `k` times the size, as JPEG bytes.
     fn frame_and_detail(k: u32) -> (RgbImage, Vec<u8>) {
         let frame = RgbImage::from_fn(120, 90, |x, y| image::Rgb([(x * 2) as u8, (y * 2) as u8, 90]));
         let big = image::imageops::resize(&frame, 120 * k, 90 * k, image::imageops::FilterType::Triangle);
-        let mut png = Vec::new();
-        image::DynamicImage::ImageRgb8(big)
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .expect("png");
-        (frame, png)
+        (frame, encoded(&big, image::ImageFormat::Jpeg))
+    }
+
+    /// `img` as bytes of `format` — JPEG at quality 95, so a detail survives to within resampling.
+    fn encoded(img: &RgbImage, format: image::ImageFormat) -> Vec<u8> {
+        let mut out = Vec::new();
+        if format == image::ImageFormat::Jpeg {
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95)
+                .encode_image(img)
+                .expect("jpeg");
+        } else {
+            image::DynamicImage::ImageRgb8(img.clone())
+                .write_to(&mut std::io::Cursor::new(&mut out), format)
+                .expect("encode");
+        }
+        out
+    }
+
+    /// A small JPEG whose header claims `w`×`h`: the SOF0 segment's size fields rewritten, so a
+    /// decoder that trusted the header would allocate for it.
+    fn jpeg_claiming(w: u16, h: u16) -> Vec<u8> {
+        let mut bytes = encoded(&RgbImage::new(16, 16), image::ImageFormat::Jpeg);
+        let sof = bytes.windows(2).position(|m| m == [0xFF, 0xC0]).expect("a baseline JPEG has SOF0");
+        bytes[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+        bytes[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn only_a_jpeg_within_bounds_is_decoded() {
+        assert_eq!(decode_frame(&blank_jpeg()).map(|i| i.width() > 0).ok(), Some(true));
+        let png = encoded(&RgbImage::new(16, 16), image::ImageFormat::Png);
+        assert!(decode_frame(&png).is_err(), "a PNG was decoded");
+        // Refused on the header alone: past a side, and within both sides but past the pixels.
+        assert!(decode_frame(&jpeg_claiming(9000, 16)).is_err(), "a 9000 px side was decoded");
+        assert!(decode_frame(&jpeg_claiming(8000, 8000)).is_err(), "64 MP was decoded");
+        // And a session reports either as the frame's decode failure.
+        let mut s = Session::new(Some(labelled()), None, 5);
+        for bytes in [png, jpeg_claiming(8000, 8000)] {
+            let v = s.frame(&bytes, &FrameOptions::default());
+            assert!(v.failure().is_some_and(|e| e.starts_with(DECODE_ERROR_PREFIX)), "{v:?}");
+        }
     }
 
     fn pixels_for<'a>(frame: &'a RgbImage, detail: Option<&'a [u8]>) -> FramePixels<'a> {
@@ -4875,14 +5013,15 @@ mod tests {
     fn a_detail_that_cannot_be_the_same_frame_is_refused_for_the_frame_itself() {
         let (frame, _) = frame_and_detail(1);
         // Another aspect: some other picture, so the quad would land on a card that is not there.
-        let other = {
-            let mut png = Vec::new();
-            image::DynamicImage::ImageRgb8(RgbImage::new(240, 240))
-                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-                .expect("png");
-            png
-        };
-        for bytes in [other.as_slice(), b"not a jpeg".as_slice()] {
+        let other = encoded(&RgbImage::new(240, 240), image::ImageFormat::Jpeg);
+        // The same frame, but as a PNG: not what any host sends.
+        let png = encoded(
+            &image::imageops::resize(&frame, 240, 180, image::imageops::FilterType::Triangle),
+            image::ImageFormat::Png,
+        );
+        // The same frame, but far past the size a detail is sent at.
+        let (_, huge) = frame_and_detail(7);
+        for bytes in [other.as_slice(), png.as_slice(), huge.as_slice(), b"not a jpeg".as_slice()] {
             let p = pixels_for(&frame, Some(bytes));
             let got = p.get().expect("the frame is still there to read from");
             assert_eq!(got.image().dimensions(), (120, 90), "read from a refused detail");

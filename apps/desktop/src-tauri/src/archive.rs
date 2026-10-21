@@ -216,6 +216,21 @@ pub fn automatic_backup(
     result
 }
 
+/// The export's rows, read on a connection of its own, as `mirror::settings::rebuild_now` reads.
+///
+/// `dump` is one read transaction, so under WAL it is a consistent snapshot without the write
+/// lock: presses and sync keep writing while it reads. The shared read connection is only the
+/// fallback, and it is released with the snapshot, before any byte reaches the disk.
+fn snapshot(state: &AppState) -> Result<Value, String> {
+    let own = crate::db::open_read(&state.data_dir).ok();
+    let shared = own.is_none().then(|| crate::sync::lock_db_read(state));
+    let conn = own
+        .as_ref()
+        .or(shared.as_deref())
+        .expect("one or the other");
+    grimoire_core::archive::dump(conn)
+}
+
 /// Keep the newest [`AUTOMATIC_BACKUPS_KEPT`] `mtg-grimoire-{reason}-{ns}.zip` archives by
 /// stamp, and leave every other file in the folder alone — another reason's archives, the
 /// core's `user.v{N}.db` copies and the reader's own files. Pruning is best-effort: the new
@@ -261,8 +276,9 @@ pub async fn archive_export(
     };
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db(&state);
-        let data = grimoire_core::archive::dump(&conn)?;
+        let data = snapshot(&state)?;
+        // No connection is held past this point: deflating and syncing to a slow USB stick
+        // or network share must not make every write press answer BUSY (issue #1151).
         save_archive(&path, &data)
     })
     .await
@@ -304,7 +320,11 @@ pub async fn archive_import(
         // only after a successful restore, so an old handshake cannot reconnect this data.
         let mut pending = state.pairing.lock().await;
         let _lane = state.lane_for_press().await?;
-        crate::sync::with_write(&state, |conn| {
+        // `with_write_owned` and not bare `with_write` (issue #1146): a restore replaces
+        // `collection_entries` whole, and the facet index's `owned` bitset is built from it — a
+        // skipped rebuild left the Owned and Missing facets answering for the old collection
+        // until the next collection write or a restart. `collection_clear`'s reasoning.
+        crate::collection_source::with_write_owned(&state, |conn| {
             automatic_backup(conn, &state.data_dir, "before-restore")?;
             grimoire_core::archive::restore(conn, &data)
         })?;
@@ -442,6 +462,30 @@ mod tests {
             read_archive(&files[0]).unwrap(),
             grimoire_core::archive::dump(&conn).unwrap()
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The export's read: a read-only connection dumps the committed rows while the writer
+    /// sits inside a transaction of its own, so neither waits on the other.
+    #[test]
+    fn export_dumps_on_a_read_connection_while_a_write_is_open() {
+        let dir = crate::scratch::path("archive-read-snapshot");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let writer = crate::db::open_write(&dir).unwrap();
+        let before = grimoire_core::archive::dump(&writer).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        writer
+            .execute(
+                "INSERT INTO main.app_meta (key, value) VALUES ('archive_probe', 'uncommitted')",
+                [],
+            )
+            .unwrap();
+        let reader = crate::db::open_read(&dir).unwrap();
+        assert_eq!(grimoire_core::archive::dump(&reader).unwrap(), before);
+        writer.execute_batch("ROLLBACK").unwrap();
+        drop((reader, writer));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

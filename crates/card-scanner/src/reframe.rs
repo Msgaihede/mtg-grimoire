@@ -22,9 +22,9 @@
 //! borderless printings put the boxes elsewhere; a hypothesis that does not fit simply loses
 //! the match to one that does.
 
-use crate::detect::{rectify, Quad};
+use crate::detect::{rectify, Quad, Warped};
 use crate::index::Mask;
-use crate::reference::Reference;
+use crate::reference::{MatchReport, Reference};
 use image::RgbImage;
 use imageproc::geometric_transformations::Projection;
 
@@ -136,6 +136,28 @@ fn extrapolate(region: &Region, corners: [(f32, f32); 4]) -> Option<Quad> {
     card.iter().all(|(x, y)| x.is_finite() && y.is_finite()).then_some(Quad { corners: card })
 }
 
+/// The box `reading` takes a card to be: where its region lies in the frame, ordered as the
+/// detection [`hypotheses`] read it from was — the inverse of the hypothesis, so
+/// `inner(&h.card, h.reading())` is the quad `h` came from.
+///
+/// **For the locked window** ([`crate::detect::locate_near`]). While a reading is held, the lock
+/// follows the card the reading implies, but what the frame shows as a contour is still the
+/// inner box — the art is 38% of the card's area, the text block 31% — and a window that asks
+/// for something the size of the held card refuses every frame of it.
+///
+/// `None` for a region no reading names, or a card that maps no point finitely.
+pub fn inner(card: &Quad, reading: Reading) -> Option<Quad> {
+    let region = REGIONS.iter().find(|r| r.name == reading.region)?;
+    let (w, h) = CARD_MM;
+    let to_frame = Projection::from_control_points([(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)], card.corners)?;
+    let (x0, y0, x1, y1) = (region.x0 * w, region.y0 * h, region.x1 * w, region.y1 * h);
+    let [tl, tr, br, bl] = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|p| to_frame * p);
+    // `hypotheses` took the region's TL, TR, BR, BL as q1, q2, q3, q0 — or, flipped, as
+    // q3, q0, q1, q2 — so undo whichever it was.
+    let corners = if reading.flipped { [tr, br, bl, tl] } else { [bl, tl, tr, br] };
+    corners.iter().all(|(x, y)| x.is_finite() && y.is_finite()).then_some(Quad { corners })
+}
+
 /// Is enough of `card` in a `w`×`h` frame to be worth matching? Its centre must be in the frame
 /// and no corner further outside than a fifth of the frame: a card computed mostly off the edge
 /// rectifies to black, and black matches a dark card as well as anything.
@@ -164,7 +186,10 @@ pub struct Match {
 
 fn best_match(rgb: &RgbImage, quad: &Quad, r: &Reference, mask: &Mask) -> Option<Match> {
     let (a, b) = (rectify(rgb, quad)?, rectify(rgb, &quad.flipped())?);
-    let report = r.match_views(&[(&a, &b)], 10, mask);
+    match_of(&r.match_views(&[(&a, &b)], 10, mask), r)
+}
+
+fn match_of(report: &MatchReport, r: &Reference) -> Option<Match> {
     let oracle = |id: &str| crate::index::parse_uuid(id).map(|id| r.oracle_for(&id));
     let top = report.candidates.first()?;
     let rival = report
@@ -204,7 +229,44 @@ pub fn choose(
     opts: &Options,
     held: Option<Reading>,
 ) -> Option<Reframed> {
-    let card = best_match(rgb, quad, r, mask)?;
+    choose_keeping(rgb, quad, r, mask, opts, held).0
+}
+
+/// [`choose`], and the quad as found warped both ways up with the descriptors its match computed.
+///
+/// **What a frame that keeps the quad would otherwise make again** (#1135): reading the quad as
+/// the card warps and hashes exactly what [`crate::detect::rectify_views_from`] would then warp,
+/// and the frame's match hash. Handed on, the frame reuses both — the warps whenever the
+/// rectification starts from this quad, the descriptors whenever no trim then changed them.
+/// `None` when the quad admits no homography.
+pub fn choose_keeping(
+    rgb: &RgbImage,
+    quad: &Quad,
+    r: &Reference,
+    mask: &Mask,
+    opts: &Options,
+    held: Option<Reading>,
+) -> (Option<Reframed>, Option<Warped>) {
+    let Some((a, b)) = rectify(rgb, quad).zip(rectify(rgb, &quad.flipped())) else {
+        return (None, None);
+    };
+    let report = r.match_views(&[(&a, &b)], 10, mask);
+    let card = match_of(&report, r);
+    let found = Warped { quad: *quad, upright: a, flipped: b, descriptors: report.descriptors };
+    let Some(card) = card else { return (None, Some(found)) };
+    (reframe(rgb, quad, r, mask, opts, held, card), Some(found))
+}
+
+/// The rest of [`choose`], once the quad read as the card has matched as `card`.
+fn reframe(
+    rgb: &RgbImage,
+    quad: &Quad,
+    r: &Reference,
+    mask: &Mask,
+    opts: &Options,
+    held: Option<Reading>,
+    card: Match,
+) -> Option<Reframed> {
     let as_card = card.distance;
     let all = hypotheses(quad);
     let fits = |h: &Hypothesis| mostly_in_frame(&h.card, rgb.width(), rgb.height());
@@ -253,6 +315,24 @@ mod tests {
         let s = short_edge_first_from;
         let found = Quad { corners: [ring[s % 4], ring[(s + 1) % 4], ring[(s + 2) % 4], ring[(s + 3) % 4]] };
         (card, found)
+    }
+
+    #[test]
+    fn inner_undoes_every_hypothesis() {
+        for region in REGIONS {
+            for from in [1, 3] {
+                let (_, found) = card_and_box(&region, from);
+                for h in hypotheses(&found) {
+                    let back = inner(&h.card, h.reading()).expect("an inner box");
+                    for (a, b) in back.corners.iter().zip(&found.corners) {
+                        let off = (a.0 - b.0).hypot(a.1 - b.1);
+                        assert!(off < 0.05, "{}{}: a corner is {off:.3} px off", h.region, h.flipped);
+                    }
+                }
+            }
+        }
+        let card = card_and_box(&ART, 1).0;
+        assert!(inner(&card, Reading { region: "nowhere", flipped: false }).is_none());
     }
 
     fn worst_corner(a: &Quad, b: &Quad) -> f32 {

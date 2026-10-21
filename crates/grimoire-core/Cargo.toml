@@ -93,7 +93,8 @@ futures-util = { version = "0.3", features = ["sink"] }
 # `platform::http::Body::chunk` say so in its signature.
 bytes = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value`: the pull feed parser reads each row as text and folds it as the push one does.
+serde_json = { version = "1", features = ["raw_value"] }
 thiserror = "2"
 
 # HKDF-SHA256's hash. `src-tauri` names it too, for the user schema's derived uids and the

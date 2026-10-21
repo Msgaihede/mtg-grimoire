@@ -1313,13 +1313,18 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   the last of those is beside `theory_enabled` and never without it** — `update_deck` writes both
   columns whenever either is turned on, so a list carrying one and not the other would let Ctrl+Z
   put a deck's plan back while leaving it virtual, which is the `1/1` the pair exists to keep
-  out. **What an undo restores is the column and nothing else**, and nothing claims otherwise: a
-  step writes `decks` and `deck_cards` and no third table, so the copies filed into
-  `Recently removed` and the group that was deleted stay where the press put them. That is
-  `collection_alloc`'s two moves' own standing — they record a history row and file no step at
-  all — and it is the honest answer here, because a rebuild would have to decide which copies in
-  a shared holding area had come from this deck, which nothing records. The way back is a second
-  press of the switch, and the cards are waiting in `Recently removed`.
+  out. **What an undo restores is the column and the group row, never the copies** (issue
+  #1113). `Op::Deck` settles the deck's `collection_folders` group with the kind
+  (`deck::settle_deck_group`): undone to Regular, the deck gets its group back, empty; undone to
+  Virtual, the group the press made goes — and a step back to Virtual over a group the reader has
+  filed copies into since is refused (`deck_undo::group_can_go`) rather than scattering them.
+  Before that, the column alone left a deck undone to Virtual still holding a group, and every
+  later switch to Regular failed `idx_collection_folder_deck`; `update_deck`'s Regular arm now
+  makes a group only when there is none, so a database already in that state recovers on the next
+  press. The **copies** filed into `Recently removed` stay where the press put them — that is
+  `collection_alloc`'s two moves' own standing, they record a history row and file no step at
+  all — because a rebuild would have to decide which copies in a shared holding area had come
+  from this deck, which nothing records.
   **`duplicate_deck` carries it across**, on this list twice over: it is not a way of *reading* a
   deck but what the deck **is**, and its `DEFAULT 0` runs the failure the opposite way from the
   theory marks' — a copy that came back an ordinary deck would be *more* connected to the

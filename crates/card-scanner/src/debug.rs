@@ -76,7 +76,7 @@ pub fn write_detection(
     let preview = source.resize(900, 900, image::imageops::FilterType::Triangle);
     w.save(STAGE_INPUT, &preview.to_rgb8())?;
 
-    if let Some(t) = trace {
+    if let Some(t) = trace.and_then(|t| t.images.as_ref()) {
         w.save(STAGE_GRAY, &t.gray)?;
         w.save(STAGE_BINARY, &t.binary)?;
         w.save(STAGE_CONTOURS, &t.contours)?;

@@ -384,12 +384,15 @@ pub fn take_head(head: &mut Vec<u8>, decoded: &[u8]) {
 /// **A scrape and not a parse, because [`Elements`] never models the enclosing object**: it
 /// starts at the first `[`, so anything written beside the array — the file's own build stamp
 /// — is not something the framer can hand back. `None` for a document that omits the key,
-/// which is a real state rather than an error.
+/// which is a real state rather than an error — and `None` for a value that is not a string
+/// (`"created_at": null`), as the pull path's `as_str()` reads it, rather than the next quoted
+/// token in the document.
 pub fn scrape_string(head: &[u8], key: &str) -> Option<String> {
     let text = String::from_utf8_lossy(head);
     let rest = text.split_once(&format!("\"{key}\"")).map(|(_, r)| r)?;
-    // Past the colon and the opening quote of the value.
-    let rest = rest.split_once('"').map(|(_, r)| r)?;
+    // Past the colon; the value must open with a quote right after it.
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
     Some(rest.split('"').next()?.to_owned())
 }
 
@@ -769,5 +772,34 @@ mod tests {
         assert_eq!(io.kind(), std::io::ErrorKind::InvalidData);
         assert!(io.to_string().contains("element"), "{io}");
         assert!(io.to_string().contains("9000000"), "{io}");
+    }
+
+    /// The stamp is read past the colon and any whitespace around it.
+    #[test]
+    fn scrapes_a_string_value() {
+        let head = br#"{"meta": {"created_at" : "2026-08-11 21:07:02", "base_url": "https://x"}"#;
+        assert_eq!(
+            scrape_string(head, "created_at").as_deref(),
+            Some("2026-08-11 21:07:02")
+        );
+        assert_eq!(scrape_string(head, "missing"), None);
+    }
+
+    /// A null (or any non-string) value is no stamp — not the next quoted token in the
+    /// document, which here is the `base_url` key (issue #1132).
+    #[test]
+    fn a_non_string_value_scrapes_as_none() {
+        for head in [
+            &br#"{"meta":{"created_at":null,"base_url":"https://x"}"#[..],
+            br#"{"meta":{"created_at": 17,"base_url":"https://x"}"#,
+            br#"{"meta":{"created_at":{"at":"x"}}"#,
+        ] {
+            assert_eq!(
+                scrape_string(head, "created_at"),
+                None,
+                "{}",
+                String::from_utf8_lossy(head)
+            );
+        }
     }
 }

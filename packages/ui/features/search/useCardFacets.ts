@@ -30,12 +30,13 @@ import { facetsOrUndefined } from "./facets";
  * tooltip that can exceed the wall under it, and the fix — a per-deck bitset rebuilt on every
  * folder lock, move and deck-group write — buys a tooltip.
  *
- * **The other dimensions' counts read high only while Owned (`owned: true`) is pressed**, which
- * is the direction this row is built to fail in: `facets.ts` greys only what would change
- * nothing, so an over-read count offers an option that turns out thin. **Under Missing
- * (`owned: false`) they read low**: the facet base drops every card owned anywhere, while the
- * search keeps the ones whose only copies this deck cannot use — so a chip whose results are all
- * "owned elsewhere" counts 0 and is greyed although pressing it would return cards (#1129).
+ * **The other dimensions' counts read high while Owned (`owned: true`) is pressed**, which is
+ * the direction this row is built to fail in: `facets.ts` greys only what would change nothing,
+ * so an over-read count offers an option that turns out thin. **Missing (`owned: false`) would
+ * read low** — the facet base would drop every card owned anywhere, while the search keeps the
+ * ones whose only copies this deck cannot use, greying chips that would return cards (#1129) —
+ * so `useCardSearch.ts`'s `facetReq` leaves Missing off whenever the search names a deck, and
+ * those counts are taken over the unnarrowed corpus and read high too.
  */
 export type FacetRequest = Omit<
   SearchRequest,

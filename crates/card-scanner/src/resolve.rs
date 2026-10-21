@@ -14,7 +14,7 @@
 //! The design is `docs/superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md` §6.4.
 
 use crate::index::{format_uuid, parse_uuid, Mask, ID_LEN};
-use crate::reference::{Label, Reference};
+use crate::reference::{Label, Reference, ViewDescriptors};
 use image::RgbImage;
 use std::collections::{HashMap, HashSet};
 
@@ -140,6 +140,10 @@ pub struct BurstView<'a> {
     /// their bands out of. `None` reads them from `upright` and `flipped` instead. See
     /// [`crate::ocr::CardPixels`].
     pub pixels: Option<&'a crate::ocr::CardPixels>,
+    /// The descriptors this frame's own match computed, when the session kept them —
+    /// [`crate::reference::MatchReport::descriptors`]. The whole-card tier hashes only what they
+    /// lack (#1135); `None` hashes every framing.
+    pub descriptors: Option<&'a ViewDescriptors>,
 }
 
 impl BurstView<'_> {
@@ -333,7 +337,7 @@ fn resolve_once(
     //
     // **On a host with one thread they run in turn** — the search, the title, the collector line
     // ([`crate::host::join3`]) — which is the same three answers, one after another.
-    let (mut best, title_read, (collector_raw, pairs)) = crate::host::join3(
+    let ((mut best, described), title_read, (collector_raw, pairs)) = crate::host::join3(
         || whole_card(r, mask, burst, max_normalized),
         || order.iter().take(2).find_map(|v| readers.title(v)),
         // The first read that pairs anything; failing that, the first read's text, which the
@@ -538,13 +542,13 @@ fn resolve_once(
             .filter(|p| !best.contains_key(*p))
             .copied()
             .collect();
+        //
+        // **Against the descriptors the whole-card tier already holds** (#1135): the same views,
+        // so hashing them again would only repeat the burst's most expensive work.
         if !unscored.is_empty() {
             let only = Mask::allow_only(survivors.iter().copied());
-            for view in burst {
-                for c in r
-                    .match_views(&view.framings(), survivors.len(), &only)
-                    .candidates
-                {
+            for known in &described {
+                for c in r.match_descriptors(known, survivors.len(), &only).candidates {
                     if let Some(p) = parse_uuid(&c.id).filter(|p| unscored.contains(p)) {
                         keep_best(&mut best, p, c.normalized);
                     }
@@ -654,23 +658,30 @@ fn resolve_once(
 
 /// The best normalized distance each printing reached anywhere in the burst, inside the gate.
 /// Kept for every later tier: the re-rank orders on it and every choice reports it.
+///
+/// With it, every view's descriptors, every framing both ways up, for the re-rank to search
+/// again. **A view's own match already hashed most of them** ([`BurstView::descriptors`]), so
+/// only what it lacks is hashed here (#1135) — the other way up, on a frame that held one.
 fn whole_card(
     r: &Reference,
     mask: &Mask,
     burst: &[BurstView<'_>],
     max_normalized: f32,
-) -> HashMap<Id, f32> {
+) -> (HashMap<Id, f32>, Vec<ViewDescriptors>) {
     let mut best: HashMap<Id, f32> = HashMap::new();
+    let mut described = Vec::with_capacity(burst.len());
     for view in burst {
-        for c in r.match_views(&view.framings(), EXACT_TOP, mask).candidates {
+        let known = r.describe_views(&view.framings(), view.descriptors);
+        for c in r.match_descriptors(&known, EXACT_TOP, mask).candidates {
             if c.normalized <= max_normalized {
                 if let Some(p) = parse_uuid(&c.id) {
                     keep_best(&mut best, p, c.normalized);
                 }
             }
         }
+        described.push(known);
     }
-    best
+    (best, described)
 }
 
 fn tier(name: &str, survivors: usize, detail: impl Into<String>) -> TierView {
@@ -810,6 +821,7 @@ mod tests {
                 cardness,
                 rotated: false,
                 pixels: None,
+                descriptors: None,
             })
             .collect()
     }
@@ -887,11 +899,53 @@ mod tests {
             cardness,
             rotated: false,
             pixels,
+            descriptors: None,
         };
         let burst = [view(0.9, None), view(0.4, Some(&pixels)), view(0.7, None)];
         let readers = First(Mutex::new(Vec::new()));
         resolve(&r, &Mask::all(), &burst, &readers, GATE);
         assert_eq!(*readers.0.lock().expect("lock"), [0.4, 0.9], "pixels first, then card-likeness");
+    }
+
+    #[test]
+    fn a_burst_that_kept_its_descriptors_resolves_as_one_that_did_not() {
+        // #1135: the whole-card tier and the re-rank search what each frame's match hashed.
+        // Two printings of one card, the second nothing like the frame: the title brings it in
+        // unscored, so the re-rank searches the burst again.
+        let r = reference(&[
+            (1, 10, 5, "Dwarven Mauler", "hob", "95"),
+            (2, 10, 61, "Dwarven Mauler", "sld", "7"),
+            (3, 30, 3, "Dwarven Provisioner", "hob", "9"),
+        ]);
+        let (up, down) = (img(5), img(99));
+        let alternates = [(img(98), img(97))];
+        let (held, _) = r.match_views_held(
+            &[(&up, &down), (&alternates[0].0, &alternates[0].1)],
+            None,
+            EXACT_TOP,
+            &Mask::all(),
+            Some(false),
+            1.0,
+        );
+        assert_eq!(held.descriptors.count(), 2, "the frame held one way up");
+        let with = |descriptors| -> Vec<BurstView<'_>> {
+            burst(&up, &down)
+                .into_iter()
+                .map(|v| BurstView { alternates: &alternates, descriptors, ..v })
+                .collect()
+        };
+        let readers = reads(Some("dwarven mauler"), &[]);
+        let a = resolve(&r, &Mask::all(), &with(None), &readers, GATE);
+        let b = resolve(&r, &Mask::all(), &with(Some(&held.descriptors)), &readers, GATE);
+        let distances = |v: &ResolutionView| {
+            v.choices.iter().map(|c| (c.id.clone(), c.distance)).collect::<Vec<_>>()
+        };
+        assert_eq!(distances(&a), distances(&b));
+        assert_eq!(a.outcome, b.outcome);
+        let details = |v: &ResolutionView| v.tiers.iter().map(|t| t.detail.clone()).collect::<Vec<_>>();
+        assert_eq!(details(&a), details(&b));
+        assert_eq!(a.tiers[4].tier, "re_rank");
+        assert_ne!(a.tiers[4].detail, "nothing to rank", "the re-rank never searched");
     }
 
     /// Tight enough that only an exact image clears it: about five bits at 256.

@@ -1077,8 +1077,32 @@ averaged over the few frames before a decision. Every accuracy column of both Ex
 identical to the baseline in every stratum, and every Fast accuracy column but *printing ✓* is too — **basic lands
 included**, the stratum the chroma half exists for. Fast's printing figure read 75.6% before and
 74.4% after, two cards, and both are the evaluation's own noise: see the reproducibility note in
-§10. The resolve's own whole-card tier still hashes its burst both ways up, once per card; it
-reads its views from `StoredView`, not from the session's hold.
+§10. The resolve's own whole-card tier searches its burst both ways up, once per card — and since
+#1135 it hashes only the half each frame's hold skipped (below).
+
+### A descriptor is computed once (#1135)
+
+**Every match keeps what it hashed** — `MatchReport::descriptors`, a `ViewDescriptors` with a slot
+per framing and orientation, `None` where a held match did not hash — and the searches that came
+after it on the same views now start from that rather than hashing again:
+
+- **Exact's whole-card tier** completes each burst view's descriptors (`StoredView` keeps the
+  frame's, `Reference::describe_views` hashes only the missing half) and searches them with
+  `Reference::match_descriptors`. Before, it hashed 3 views × 5 framings × 2 ways up = 30, every one
+  of which the frames' own matches had already computed or half of.
+- **The re-rank** searches the descriptors the whole-card tier just completed when a title read
+  brings in unscored survivors — the foil rescue — where it hashed all 30 again.
+- **Fast's title pick** searches the frame's own descriptors, hashing only what a held orientation
+  skipped, where it hashed every framing both ways up moments after the frame's match had.
+- **The reframing's reading of the quad as found** (`reframe::choose_keeping`) hands its two warps
+  and its two descriptors on as a `detect::Warped`. A frame that keeps that quad rectifies from it
+  (`detect::rectify_views_from`) instead of warping it again, and its match searches the two
+  descriptors when the trim cut nothing — a trimmed card is other pixels and is hashed afresh.
+
+**A set is tied to the bundle that made it**: one of another kind or width is ignored rather than
+searched, since a descriptor of another width compares to nothing. Every answer is the same as
+before — a search over a complete set is the search over the views it came from, and the resolve
+tests prove the burst resolves identically with its descriptors or without.
 
 **The art section is built but not matched against.** Its hashes are of Scryfall's isolated art
 crop and a rectified photograph is a whole card; using it needs an art-window extractor, which
@@ -1538,6 +1562,15 @@ spread across its own reprints and no one printing reached the threshold. The re
 denied an answer by the card being *too well known*. Each observation carries a **key** to
 accumulate on and a **member** it names.
 
+**A frame is one vote per card, however many of its printings it lists** (#1133). The top-K is
+not deduplicated by card, and art-identical reprints tie, so pooling *within* a frame summed one
+card's reprints into several votes: five tied printings reached the bar of 8 on the second frame
+with no rival, and four printings of Y a bit behind a single-printing X took ~2.87 votes a frame
+to X's 1.0 and decided Y although X was top-1 on every frame. So within a frame each (card, kind)
+keeps its best contribution — kinds still add, a read and a look being different evidence — the
+printing folds the same way per member, and `seen` counts the card once. Pooling is across
+frames.
+
 **The printing accumulates too, with the same decay and hysteresis.** It used to be the single
 best frame each member had ever had, in a map that never decayed and never reverted, so one
 lucky frame captured the slot permanently: `Gandalf, Spark Starter` came up correctly as HOB
@@ -1751,6 +1784,7 @@ sees it laid down (§10 *A card laid on the last*). The replay gained Abandoned 
 | --- | --- |
 | Relative falloff | Took Reaper, top on every frame at 21.5%, held **30%** of the evidence against a 45% bar |
 | Group by oracle id | Esquire of the King led every frame and never committed — its reprints split its own vote |
+| One vote per card per frame | five tied reprints decided on their second frame; four reprints just behind out-voted the top-1 card (#1133) |
 | `commit_seen` counts frames | Oliphaunt, correct at **24.6%**, barred by an absolute evidence threshold it could never reach |
 | Printing decays and is sticky | `Gandalf, Spark Starter` latched to HOB 97 after one lucky frame, correct answer HOB 203 |
 | Per-kind ranking, and tier weights | a foil committing to **`Suplex`** while OCR read the title right on all 400 runs |
@@ -2362,7 +2396,18 @@ frame later is a card that has moved. The page sends one only on the frame after
 from the video a second time. **A detail header that cannot split the body is refused**, not
 defaulted — not a number, zero, or reaching the end of the body — because a mis-split hands the
 decoder half a JPEG as the frame. The crate refuses a detail of its own accord too, falling back to
-the frame, when it is smaller than the frame or of another aspect.
+the frame, when it is smaller than the frame, more than `MAX_DETAIL_SCALE` (6×) its width, or of
+another aspect.
+
+**Both images decode as JPEG and within bounds, or not at all** (issue #1137, 2026-10-20).
+`session::decode_frame` is the crate's one decoder for a frame and a detail: JPEG only (PNG and
+WebP, which `image::load_from_memory` would have guessed from the bytes, are refused), at most
+`MAX_FRAME_SIDE` (8192 px) a side and `MAX_FRAME_PIXELS` (24 MP) in all, judged from the header
+before a pixel is allocated. A refused frame is a `decode:` failure like any other undecodable
+JPEG; a refused detail falls back to the frame. Enforced in the crate so the desktop's
+`scanner_frame`, the web Worker and the light host need no checks of their own — WASM linear
+memory never shrinks, so a 13k×13k grayscale frame tripled to RGB would have stayed in the
+Worker for good.
 
 **The two headers fail differently, and the asymmetry is the point.** A malformed or absent
 `x-scanner-options` falls back to `FrameOptions::default()` — a defaulted slider costs one frame
@@ -2407,7 +2452,10 @@ header at each end, and the prose is what carries the rule to the next header so
 
 `scanner_capture` writes `live-<epoch>.jpg` and its `.json` sidecar into `data/scanner/scans/`,
 the same names and fields the debug server writes into `docs/scanner/scans/`, so a frame
-captured in the app can be copied into the repository's dataset unchanged.
+captured in the app can be copied into the repository's dataset unchanged. A capture never
+replaces one already there (issue #1131): the frame is created exclusively, and a second
+capture inside the same second takes `live-<epoch>-2.jpg`, then `-3`, and so on, its sidecar
+following the frame's name.
 
 ### One window scans at a time
 

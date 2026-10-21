@@ -266,6 +266,11 @@ fn base(
             b = b.and(u);
         }
     }
+    // `ix.owned` is "an entry anywhere in the collection" — the search's unscoped meaning. A
+    // deck-scoped search (`available_for_deck`) narrows `owned` to the copies that deck can use,
+    // so its Missing keeps cards owned only elsewhere, which `and_not` here would drop and count
+    // low. The deck builder therefore leaves `owned: false` off its facet request (#1129;
+    // `useCardSearch.ts`'s `facetReq`), and `owned: true` over this wider set reads high.
     if skip != Skip::Owned {
         match req.owned {
             Some(true) => b = b.and(&ix.owned),

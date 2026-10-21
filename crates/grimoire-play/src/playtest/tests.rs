@@ -6,6 +6,7 @@
 
 use engine::game::create_object;
 use engine::types::ability::{Effect, KeywordAction, ResolvedAbility, TargetRef};
+use engine::types::events::GameEvent;
 use engine::types::game_state::{StackEntry, StackEntryKind};
 use engine::types::identifiers::{CardId, ObjectId};
 use engine::types::zones::Zone;
@@ -15,7 +16,7 @@ use crate::cards::CardFacts;
 use crate::on_engine_stack;
 use crate::view::{GameCard, Lane, Place, Seat};
 
-use super::session::{stack_targets, OpponentDeck, Playtest};
+use super::session::{stack_targets, tell, OpponentDeck, Playtest};
 use super::view::{
     Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestBlockPair, PlaytestHappened as H,
     PlaytestPhase, PlaytestPickPurpose, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep,
@@ -387,7 +388,7 @@ fn a_creature_is_cast_from_untapped_mana_and_resolves_past_the_ai() {
     });
     assert!(step.happened.contains(&H::Cast {
         seat: PlaytestPlayer::You,
-        name: "Grizzly Bears".into()
+        name: Some("Grizzly Bears".into())
     }));
     assert_eq!(
         step.view.stage,
@@ -965,7 +966,7 @@ fn a_card_the_rules_refuse_is_cast_unpaid_only_in_the_sandbox() {
     assert!(find(&cast.view.you.battlefield, "Grizzly Bears").is_some());
     assert!(cast.happened.contains(&H::Cast {
         seat: PlaytestPlayer::You,
-        name: "Grizzly Bears".into(),
+        name: Some("Grizzly Bears".into()),
     }));
 }
 
@@ -1761,4 +1762,92 @@ fn an_equipment_names_the_creature_it_is_attached_to() {
     );
     assert_eq!(bear.attached_to, None);
     assert_eq!(bear.power, Some(4));
+}
+
+/// Issue #1142: an opponent's face-down permanent (a morph, a manifest) is on their battlefield
+/// with no name and no printing; the reader's own is theirs to look at.
+#[test]
+fn an_opponents_face_down_permanent_is_nameless_on_the_table() {
+    let (before, after, mine) = engine(|| {
+        let (mut game, _) = kept(2);
+        game.put_for_test(AI_SEAT, "Raging Goblin");
+        let before = game.view();
+        let id = game.face_down_for_test(AI_SEAT, "Raging Goblin");
+        let after = game.view().opponents[0]
+            .battlefield
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
+            .expect("still on the battlefield");
+        put_down(&mut game, "Grizzly Bears");
+        game.face_down_for_test(PlaytestPlayer::You, "Grizzly Bears");
+        (before, after, game.view())
+    });
+    let shown = find(&before.opponents[0].battlefield, "Raging Goblin").expect("face up");
+    assert_eq!(shown.card_id.as_deref(), Some("print-raging-goblin"));
+    assert_eq!(after.name, "", "a face-down card has no name to the reader");
+    assert_eq!(after.card_id, None, "nor a picture");
+    assert!(after.gaps.is_empty());
+    let bears = find(&mine.you.battlefield, "Grizzly Bears").expect("the reader's own, named");
+    assert_eq!(bears.card_id.as_deref(), Some("print-grizzly-bears"));
+}
+
+/// Issue #1142: an AI card exiled from its library face down (hideaway) is told with no name,
+/// and so is a spell it casts face down; the reader's own are named.
+#[test]
+fn an_opponents_card_exiled_face_down_is_told_without_its_name() {
+    let happened = engine(|| {
+        let mut state = GameState::new_two_player(7);
+        let mut exiled = |owner: PlayerId, name: &str, zone: Zone, face_down: bool| {
+            let id = create_object(&mut state, CardId(1), owner, name.into(), zone);
+            state.objects.get_mut(&id).unwrap().face_down = face_down;
+            id
+        };
+        let theirs = exiled(PlayerId(1), "Ugin's Nexus", Zone::Exile, true);
+        let seen = exiled(PlayerId(1), "Hill Giant", Zone::Exile, false);
+        let mine = exiled(PlayerId(0), "Grizzly Bears", Zone::Exile, true);
+        let morph = exiled(PlayerId(1), "Willbender", Zone::Stack, true);
+        let moved = |id: ObjectId| GameEvent::ZoneChanged {
+            object_id: id,
+            from: Some(Zone::Library),
+            to: Zone::Exile,
+            record: Box::new(state.objects[&id].snapshot_for_zone_change(
+                id,
+                Some(Zone::Library),
+                Zone::Exile,
+            )),
+        };
+        let events = vec![
+            moved(theirs),
+            moved(seen),
+            moved(mine),
+            GameEvent::SpellCast {
+                card_id: CardId(1),
+                controller: PlayerId(1),
+                object_id: morph,
+                cast_mana_value: Some(3),
+            },
+        ];
+        let mut out = Vec::new();
+        tell(&state, &events, &mut out);
+        out
+    });
+    let exiled = |seat, name: Option<&str>| H::Moved {
+        seat,
+        name: name.map(Into::into),
+        from: Place::LibraryTop,
+        to: Place::Exile,
+    };
+    assert_eq!(
+        happened,
+        vec![
+            exiled(PlaytestPlayer::Opponent, None),
+            exiled(PlaytestPlayer::Opponent, Some("Hill Giant")),
+            exiled(PlaytestPlayer::You, Some("Grizzly Bears")),
+            H::Cast {
+                seat: PlaytestPlayer::Opponent,
+                name: None,
+            },
+        ]
+    );
 }

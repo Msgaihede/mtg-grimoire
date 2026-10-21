@@ -19376,7 +19376,9 @@ export function writeHandlers(db: FakeDb) {
      *    list only. A card the deck merely *plans* is refused here with no theory fence of its
      *    own, and that is a statement rather than an omission: a plan holds no cards, so there is
      *    nothing for a group to hold on its behalf — {@link THEORY_HOLDS_NOTHING}'s reasoning
-     *    reached from the other end.
+     *    reached from the other end. Then the shortfall at the exact `(cardId, finish)`
+     *    (issue #1128) — {@link NOT_SHORT_OF_THAT} or {@link MORE_THAN_MISSING}, the batch
+     *    twin's fence and sentences, so a copy no deck row would be attributed is never filed.
      * 5. The group — {@link NO_DECK_GROUP}, because there is nowhere to put them.
      *
      * **The fold is {@link addEntry}'s and not a second one**, so a second quick add on the same
@@ -19442,6 +19444,16 @@ export function writeHandlers(db: FakeDb) {
       // none of is copies.
       if (deck.virtualOnly) throw refuse(VIRTUAL_HOLDS_NOTHING);
       if (!deckPlays(db, args.deckId, args.cardId)) throw refuse(NOT_IN_DECK);
+      // Issue #1128: held to the shortfall at the exact `(cardId, finish)`, as
+      // {@link deck_missing_to_collection} is — another printing, or more copies than the line is
+      // short of, would land in the group with no deck row attributed them, and the next
+      // printing swap's {@link releaseUnclaimedCopies} would sweep them to Recently removed.
+      const key = `${args.cardId}|${finish}`;
+      const shortRow = readHandlers(db)
+        .deck_missing_plan({ deckId: args.deckId })
+        .find((row) => entryKey(db, row.cardId, row.finish) === key);
+      if (!shortRow) throw refuse(NOT_SHORT_OF_THAT);
+      if (args.quantity > shortRow.short) throw refuse(MORE_THAN_MISSING);
       const group = deckGroup(db, args.deckId);
       if (!group) throw refuse(NO_DECK_GROUP);
 
@@ -20778,7 +20790,9 @@ export function writeHandlers(db: FakeDb) {
         );
         const group = deckGroup(db, deck.id);
         if (group) db.collectionFolders = db.collectionFolders.filter((f) => f !== group);
-      } else if (virtualOnly === false && before.virtualOnly) {
+      } else if (virtualOnly === false && before.virtualOnly && !deckGroup(db, deck.id)) {
+        // Only when there is none — `deck.rs`'s arm (issue #1113): a group an undone press left
+        // on a virtual deck must not become a second one.
         createDeckGroup(db, deck.id, deck.name);
       }
       deck.virtualOnly = virtualOnly ?? deck.virtualOnly;
@@ -28236,13 +28250,23 @@ function reverseDeck(
   const anywhere = () => true;
   const plans: ReversalPlan[] = [
     {
-      holds: fields.every((f) => VIEW_FIELDS.has(f) || sameValue(deck[f], leaving.deck[f])),
+      holds:
+        fields.every((f) => VIEW_FIELDS.has(f) || sameValue(deck[f], leaving.deck[f])) &&
+        // `deck_undo::group_can_go` (issue #1113): never back to Virtual over a group the reader
+        // has filed copies into since — dropping it would scatter them.
+        !(
+          fields.includes("virtualOnly") &&
+          target.deck.virtualOnly &&
+          groupHoldsCopies(db, deckId)
+        ),
       apply: () => {
         const restored = copyDeck(target.deck);
         const row = deck as unknown as Record<string, unknown>;
         for (const f of fields) row[f] = (restored as unknown as Record<string, unknown>)[f];
         // Undo is an edit like any other — `DECK_FIELDS` has no `updated_at` for this.
         deck.updatedAt = stamp(db);
+        // The kind's group row with the kind — `Op::Deck`'s `settle_deck_group` (issue #1113).
+        if (fields.includes("virtualOnly")) settleDeckGroup(db, deck);
       },
     },
     rowsPlan(
@@ -28311,6 +28335,26 @@ function reverseDeck(
   const notes = new Set(db.deckNotes.map((n) => n.id));
   db.deckNoteCards = db.deckNoteCards.filter((c) => notes.has(c.noteId));
   return true;
+}
+
+/**
+ * `deck::settle_deck_group` — the deck's group made to agree with its kind after a step put
+ * `virtualOnly` back (issue #1113): a Regular deck with none gets one, empty; a Virtual deck's
+ * empty group goes. A group holding copies is never dropped here — {@link reverseDeck}'s plan
+ * refuses that step before anything is written.
+ */
+function settleDeckGroup(db: FakeDb, deck: FakeDeck): void {
+  const group = deckGroup(db, deck.id);
+  if (!deck.virtualOnly && !group) createDeckGroup(db, deck.id, deck.name);
+  else if (deck.virtualOnly && group && !groupHoldsCopies(db, deck.id)) {
+    db.collectionFolders = db.collectionFolders.filter((f) => f !== group);
+  }
+}
+
+/** `deck::deck_group_holds_copies` — `false` for a deck with no group. */
+function groupHoldsCopies(db: FakeDb, deckId: number): boolean {
+  const group = deckGroup(db, deckId);
+  return group !== undefined && db.collectionEntries.some((e) => e.folderId === group.id);
 }
 
 /**

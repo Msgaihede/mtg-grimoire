@@ -180,6 +180,34 @@ describe("useDeckUndo", () => {
     await waitFor(() => expect(result.current.error).toContain("most recent change"));
   });
 
+  /** Issue #1156: a caller with no banner — the phone's receipt line — is told how it went. */
+  it("settles the async press with the refusal, after reporting it", async () => {
+    deckUndoApply.mockRejectedValue("That is not the most recent change any more.");
+    const { result } = renderHook(() => useDeckUndo(4), { wrapper });
+    await waitFor(() => expect(result.current.undo).not.toBeNull());
+
+    let pressed: Promise<void> | undefined;
+    act(() => {
+      pressed = result.current.runUndoAsync();
+    });
+
+    await expect(pressed).rejects.toBe("That is not the most recent change any more.");
+    await waitFor(() => expect(result.current.error).toContain("most recent change"));
+  });
+
+  it("settles the async press once the step is taken back", async () => {
+    const { result } = renderHook(() => useDeckUndo(4), { wrapper });
+    await waitFor(() => expect(result.current.undo).not.toBeNull());
+
+    let pressed: Promise<void> | undefined;
+    act(() => {
+      pressed = result.current.runUndoAsync();
+    });
+
+    await expect(pressed).resolves.toBeUndefined();
+    expect(deckUndoApply).toHaveBeenCalledWith(4, 7);
+  });
+
   /**
    * A redo that is refused can never work — the change is not undone any more, or another
    * window has moved the deck. Dropping it is what stops a button that fails every press.

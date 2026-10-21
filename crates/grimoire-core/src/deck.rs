@@ -2180,6 +2180,60 @@ fn create_deck_group(tx: &Connection, deck_id: i64, name: &str) -> Result<(), St
     Ok(())
 }
 
+/// Make the deck's group agree with its kind, inside the caller's transaction — the row
+/// [`update_deck`]'s kind change makes or deletes, for a write that has put `decks.virtual_only`
+/// back without it: [`crate::deck_undo`]'s `Op::Deck`, on an undo or a redo of that press
+/// (issue #1113).
+///
+/// * **Regular with no group** gets one, empty and named after the deck, which is what the press
+///   out of Virtual makes. The copies the press into Virtual filed into `Recently removed` stay
+///   there: which of a shared holding area's copies came from this deck is recorded nowhere.
+/// * **Virtual with a group** loses it — **only while it is empty**. A virtual deck holds no
+///   copies, and a group holding some is cardboard the reader filed since the press; deleting
+///   the row would scatter it to the root through `ON DELETE SET NULL`. That is refused in words
+///   here, and [`crate::deck_undo`]'s plan refuses the step before it gets this far.
+/// * Anything else already agrees and is left alone, so a step applied twice is still one group.
+pub(crate) fn settle_deck_group(tx: &Connection, deck_id: i64) -> Result<(), String> {
+    let (name, virtual_only): (String, bool) = tx
+        .query_row(
+            "SELECT name, virtual_only FROM decks WHERE id = ?1",
+            params![deck_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    match (virtual_only, deck_group(tx, deck_id)?) {
+        (false, None) => create_deck_group(tx, deck_id, &name),
+        (true, Some(group)) => {
+            if deck_group_holds_copies(tx, deck_id)? {
+                return Err(GROUP_NOT_EMPTY.to_owned());
+            }
+            tx.execute(
+                "DELETE FROM collection_folders WHERE id = ?1",
+                params![group],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// [`settle_deck_group`]'s refusal: a deck cannot go back to Virtual over copies filed into it.
+pub(crate) const GROUP_NOT_EMPTY: &str =
+    "This deck holds copies from your collection now, so it can't go back to being virtual.";
+
+/// Does the deck's group hold any collection rows? `false` for a deck with no group.
+pub(crate) fn deck_group_holds_copies(conn: &Connection, deck_id: i64) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM collection_entries e
+                         JOIN collection_folders f ON f.id = e.folder_id
+                        WHERE f.deck_id = ?1 AND f.kind = ?2)",
+        params![deck_id, DECK_GROUP_KIND],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Make a deck — **the whole of it, in one statement** — and give it its four predefined
 /// categories in the same transaction.
 ///
@@ -2902,7 +2956,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
             params![id, DECK_GROUP_KIND],
         )
         .map_err(|e| e.to_string())?;
-    } else if virtual_only == Some(false) && before.virtual_only {
+    } else if virtual_only == Some(false) && before.virtual_only && deck_group(&tx, id)?.is_none() {
+        // **Only when there is none** (issue #1113). A virtual deck should have no group, but
+        // one that was made Regular and then put back by a Ctrl+Z written before the journal
+        // settled the group could still carry it, and an unconditional INSERT there failed
+        // `idx_collection_folder_deck` on every later press — a deck wedged virtual for good.
         create_deck_group(&tx, id, name.as_deref().unwrap_or(&before.name))?;
     }
     let audit_id = record_deck_edit(
@@ -6082,17 +6140,25 @@ fn fill_unknown_power_toughness(conn: &Connection, rows: &mut [DeckCardRow]) -> 
 /// to command a deck. Everything else has no box, so NULL is not a gap in the data but the
 /// fact itself, and looking is a guaranteed miss.
 ///
-/// Matched against the **whole** type line, which is why a transform card is covered: `cards`
-/// stores the combined `"Land // Legendary Creature — Demon"`, so a back-face creature is
-/// found by the same substring. A **NULL** type line is treated as *could be* — an orphan has
-/// no type line and neither does a card row that arrived without one, and the conservative
-/// direction for an unknown is to look. One wasted lookup is cheaper than a commander refused.
+/// Matched against the **front face's** type line only — the text before the first ` // ` of
+/// the combined line `cards` stores — because that is the only face [`printed_power_toughness`]
+/// (and the ingest before it) ever reads a P/T from. Gating on the whole line let a back-face
+/// creature through (`"Land // Legendary Creature — Demon"`, a NEO Saga's `"Enchantment —
+/// Saga // Enchantment Creature — …"`): its blob was inflated and parsed on every deck open,
+/// found `(None, None)` on face 0, and was looked at again next time, for ever (issue #1127).
+/// A front-face creature with a non-creature back (`"Creature — Human // Land"`, an Adventure)
+/// is still looked at. A **NULL** type line is treated as *could be* — an orphan has no type
+/// line and neither does a card row that arrived without one, and the conservative direction
+/// for an unknown is to look. One wasted lookup is cheaper than a commander refused.
 fn may_have_a_power_toughness_box(type_line: Option<&str>) -> bool {
     match type_line {
         None => true,
-        Some(t) => ["Creature", "Vehicle", "Spacecraft"]
-            .iter()
-            .any(|k| t.contains(k)),
+        Some(t) => {
+            let front = t.split(" // ").next().unwrap_or(t);
+            ["Creature", "Vehicle", "Spacecraft"]
+                .iter()
+                .any(|k| front.contains(k))
+        }
     }
 }
 
@@ -15302,8 +15368,8 @@ mod tests {
     }
 
     /// The gate itself, over the type lines that decide it. `Vehicle` and `Spacecraft` are
-    /// on the list for CR 903.3's reason, and the combined type line of a transform card is
-    /// why a back-face creature needs no special case.
+    /// on the list for CR 903.3's reason, and only the front face of a combined type line
+    /// counts, because the front face is the only one a P/T is ever read from (issue #1127).
     #[test]
     fn only_a_type_line_that_could_print_a_power_toughness_box_is_worth_a_lookup() {
         for worth in [
@@ -15311,7 +15377,8 @@ mod tests {
             "Legendary Artifact — Vehicle",
             "Artifact — Spacecraft",
             "Land Creature — Forest Dryad",
-            "Land // Legendary Creature — Demon",
+            "Creature — Human Werewolf // Creature — Werewolf",
+            "Creature — Giant // Sorcery — Adventure",
         ] {
             assert!(may_have_a_power_toughness_box(Some(worth)), "{worth}");
         }
@@ -15322,6 +15389,9 @@ mod tests {
             "Enchantment — Aura",
             "Legendary Planeswalker — Jace",
             "Artifact — Equipment",
+            // A back-face creature: face 0 has no P/T, so the blob would be a guaranteed miss.
+            "Land // Legendary Creature — Demon",
+            "Enchantment — Saga // Enchantment Creature — Human Samurai",
         ] {
             assert!(!may_have_a_power_toughness_box(Some(not)), "{not}");
         }
@@ -16644,6 +16714,36 @@ mod tests {
             1,
             "one group, not two — the partial unique index would have said so loudly"
         );
+    }
+
+    /// **A virtual deck that somehow still has a group can be made Regular** (issue #1113).
+    /// Before the journal settled the group, a Ctrl+Z of a switch to Regular left exactly this
+    /// state on a reader's disk, and the unconditional INSERT answered "UNIQUE constraint failed"
+    /// to every later switch — and to turning Theory on, which forces Virtual off.
+    #[test]
+    fn ceasing_to_be_virtual_keeps_a_group_that_is_already_there() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &virtual_input("Arena Burn")).unwrap().id;
+        // The wedged state, by hand: virtual, with the group the undone press left behind.
+        create_deck_group(&conn, deck, "Arena Burn").unwrap();
+        let group = group_of(&conn, deck);
+
+        update_deck(
+            &conn,
+            deck,
+            &DeckPatch {
+                virtual_only: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("the switch is not wedged");
+
+        assert_eq!(
+            group_of(&conn, deck),
+            group,
+            "the group it had, not a second"
+        );
+        assert_eq!(count(&conn, "collection_folders WHERE kind = 'deck'"), 1);
     }
 
     /// The group is made under the name the deck is called **after** the patch, because the

@@ -232,6 +232,13 @@ pub struct DetectOptions {
     /// card-likeness, and the window's quad sat a mean 3.6% of the card's width from the full
     /// sweep's on the same frame.
     pub window_share: f32,
+    /// Draw the trace's images — [`DetectTrace::images`] — and keep every contour for them.
+    ///
+    /// **On for the CLI, off for the session unless a page asks for its stages** (#1136). The
+    /// images are a full-frame RGB conversion, two clones of it drawn on, a clone of the grey
+    /// image and a copy of every contour's points: about 6 MB at 1024 px, two to four times a
+    /// frame, for a session that reads only the trace's timings and candidates.
+    pub trace_images: bool,
 }
 
 impl Default for DetectOptions {
@@ -253,6 +260,7 @@ impl Default for DetectOptions {
             inset: 1.0,
             otsu_level: None,
             window_share: 1.0,
+            trace_images: true,
         }
     }
 }
@@ -345,6 +353,11 @@ impl Quad {
 
     /// The same quad, scaled about its centre. `f < 1` crops inward.
     pub fn scaled(&self, f: f32) -> Quad {
+        // Exactly itself at 1, which the arithmetic below is only to within a rounding — so a
+        // quad warped as found is recognised as the same quad scaled by an inset of 1.
+        if f == 1.0 {
+            return *self;
+        }
         let cx = self.corners.iter().map(|c| c.0).sum::<f32>() / 4.0;
         let cy = self.corners.iter().map(|c| c.1).sum::<f32>() / 4.0;
         Quad { corners: self.corners.map(|(x, y)| (cx + (x - cx) * f, cy + (y - cy) * f)) }
@@ -477,19 +490,24 @@ pub struct DetectTimings {
     pub total_ms: f32,
 }
 
-/// Every intermediate, kept for the debug artifacts. Cheap to produce and the reason the
-/// CLI is worth having.
+/// Every intermediate, kept for the debug artifacts and the reason the CLI is worth having.
 pub struct DetectTrace {
     pub timings: DetectTimings,
+    /// `None` unless [`DetectOptions::trace_images`] asked for them.
+    pub images: Option<TraceImages>,
+    pub candidates: Vec<ScoredQuad>,
+    pub method: EdgeMethod,
+    /// Scale from the working image back to the source.
+    pub scale: f32,
+}
+
+/// The pictures of one [`locate`], at the working scale.
+pub struct TraceImages {
     pub gray: GrayImage,
     /// Canny edges or the Otsu mask, whichever ran.
     pub binary: GrayImage,
     pub contours: RgbImage,
     pub quads: RgbImage,
-    pub candidates: Vec<ScoredQuad>,
-    pub method: EdgeMethod,
-    /// Scale from the working image back to the source.
-    pub scale: f32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -562,7 +580,7 @@ pub fn detect(
         t.timings.total_ms += rectify_ms;
         t
     });
-    let Some(Views { rectified, rectified_180, margin, alternates }) = views else {
+    let Some(Views { rectified, rectified_180, margin, alternates, .. }) = views else {
         return (Err(DetectError::Degenerate), trace);
     };
     (
@@ -858,13 +876,18 @@ pub fn locate(
         }
     }
 
-    let work_rgb = work.to_rgb8();
+    let images = opts.trace_images.then(|| {
+        let work_rgb = work.to_rgb8();
+        TraceImages {
+            gray,
+            binary: masks.swap_remove(0),
+            contours: draw_contours(&work_rgb, &all_contours),
+            quads: draw_quads(&work_rgb, &candidates),
+        }
+    });
     let trace = DetectTrace {
         timings,
-        gray: gray.clone(),
-        binary: masks.swap_remove(0),
-        contours: draw_contours(&work_rgb, &all_contours),
-        quads: draw_quads(&work_rgb, &candidates),
+        images,
         candidates: candidates.clone(),
         method: opts.method,
         scale,
@@ -1008,9 +1031,18 @@ impl Window {
 /// `max_area_ratio` of the held quad, and never below the full sweep's floor: **the window
 /// answers only with what the lock would accept, and anything else is a miss** — which the
 /// caller sends to the full sweep.
+///
+/// **`expect` is what that is measured against**, not always `held` (issue #1134). The window
+/// is drawn around `held`, the quad the lock follows; the areas are `expect`'s, the quad the
+/// detector should find inside it. The two differ while a reframe reading is held: the lock
+/// follows the card the reading implies, the frame's contour is still the inner box — 31% to
+/// 56% of that card — and measured against the card every frame of it was refused, so every
+/// locked frame paid for the window and then for the sweep. The caller passes the box the
+/// reading implies ([`crate::reframe::inner`]), and the held reading puts the card back.
 pub fn locate_near(
     source: &DynamicImage,
     held: &Quad,
+    expect: &Quad,
     lock: &crate::lock::LockOptions,
     opts: &DetectOptions,
 ) -> (Result<Located, DetectError>, Option<DetectTrace>) {
@@ -1035,8 +1067,8 @@ pub fn locate_near(
     .max(1);
     let (frame_area, window_area) = (sw as f32 * sh as f32, window.w as f32 * window.h as f32);
     let ratio = lock.max_area_ratio.max(1.0);
-    let min_area_frac = (held.area() / ratio / frame_area).max(opts.min_area_frac);
-    let max_area_frac = (held.area() * ratio / frame_area).min(opts.max_area_frac);
+    let min_area_frac = (expect.area() / ratio / frame_area).max(opts.min_area_frac);
+    let max_area_frac = (expect.area() * ratio / frame_area).min(opts.max_area_frac);
     let window_share = window_area / frame_area;
     // Split Otsu where the sweep would — the whole frame's working image, made exactly as
     // `locate` makes it, and no masks over it.
@@ -1264,7 +1296,9 @@ fn collect_candidates(
         if touches_border(&contour.points, ww, wh) {
             continue;
         }
-        all_contours.push(contour.points.clone());
+        if opts.trace_images {
+            all_contours.push(contour.points.clone());
+        }
         // The hull first, then the approximation. A raw contour of a real card has
         // concave excursions — a thumb, a sleeve lip, a shadow notch — and
         // Douglas-Peucker on that converges to five or six vertices however the epsilon
@@ -1556,13 +1590,47 @@ pub struct Views {
     pub rectified_180: RgbImage,
     pub margin: crate::trim::Margin,
     pub alternates: Vec<(RgbImage, RgbImage)>,
+    /// Descriptors of these views already computed, one slot per framing — the primary's,
+    /// when it is exactly a [`Warped`] the caller handed over and no trim changed it. Empty
+    /// otherwise. See [`rectify_views_from`].
+    pub descriptors: crate::reference::ViewDescriptors,
+}
+
+/// A quad already warped into the canonical card both ways up, untrimmed, and the descriptors
+/// a match computed of it — what [`crate::reframe::choose_keeping`] makes of the quad as found.
+#[derive(Debug, Clone)]
+pub struct Warped {
+    pub quad: Quad,
+    pub upright: RgbImage,
+    pub flipped: RgbImage,
+    pub descriptors: crate::reference::ViewDescriptors,
 }
 
 /// Warp `source_quad` — in **source** coordinates — into the canonical card, both ways up,
 /// at every framing `opts.query_insets` asks for.
 pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -> Option<Views> {
+    rectify_views_from(rgb, source_quad, opts, None)
+}
+
+/// [`rectify_views`], starting from `warped_already` when it is the primary framing's warp
+/// exactly.
+///
+/// **The reframing has already warped and hashed the quad as found** (#1135), and on a frame
+/// that keeps it, that is the primary framing at an inset of 1. Its warps are used rather than
+/// made again, and its descriptors are carried in [`Views::descriptors`] when the trim then
+/// cut nothing — a trimmed card is other pixels, and is hashed afresh.
+pub fn rectify_views_from(
+    rgb: &RgbImage,
+    source_quad: &Quad,
+    opts: &DetectOptions,
+    warped_already: Option<Warped>,
+) -> Option<Views> {
     let warped = source_quad.scaled(opts.inset);
-    let (rectified, rectified_180) = (rectify(rgb, &warped)?, rectify(rgb, &warped.flipped())?);
+    let reused = warped_already.filter(|w| w.quad == warped);
+    let (rectified, rectified_180, mut known) = match reused {
+        Some(w) => (w.upright, w.flipped, Some(w.descriptors)),
+        None => (rectify(rgb, &warped)?, rectify(rgb, &warped.flipped())?, None),
+    };
 
     // Measured once, on the upright image, and applied to both — see `Margin::rotated_180`.
     let margin = if opts.trim_margin {
@@ -1570,9 +1638,13 @@ pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -
     } else {
         crate::trim::Margin::default()
     };
-    let rectified_180 =
-        crate::trim::apply(&rectified_180, margin.rotated_180()).unwrap_or(rectified_180);
-    let rectified = crate::trim::apply(&rectified, margin).unwrap_or(rectified);
+    let trimmed_180 = crate::trim::apply(&rectified_180, margin.rotated_180());
+    let trimmed = crate::trim::apply(&rectified, margin);
+    if trimmed.is_some() || trimmed_180.is_some() {
+        known = None;
+    }
+    let rectified_180 = trimmed_180.unwrap_or(rectified_180);
+    let rectified = trimmed.unwrap_or(rectified);
 
     // The other framings. Each is a fresh warp from the source rather than a crop of the one
     // above: a crop would resample an already-resampled image, and going *outward* from it is
@@ -1581,7 +1653,7 @@ pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -
     // The trim is applied at the same measured margin rather than re-measured per framing.
     // Re-measuring would let each view cut a different amount, and the matcher would then be
     // choosing between framings that differ by two things at once.
-    let alternates = opts
+    let alternates: Vec<(RgbImage, RgbImage)> = opts
         .query_insets
         .iter()
         .filter_map(|f| {
@@ -1594,7 +1666,8 @@ pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -
         })
         .collect();
 
-    Some(Views { rectified, rectified_180, margin, alternates })
+    let descriptors = known.map(|k| k.with_views(1 + alternates.len())).unwrap_or_default();
+    Some(Views { rectified, rectified_180, margin, alternates, descriptors })
 }
 
 pub fn rectify_to(source: &RgbImage, quad: &Quad, w: u32, h: u32) -> Option<RgbImage> {
@@ -1854,6 +1927,43 @@ mod tests {
     }
 
     #[test]
+    fn a_quad_already_warped_is_not_warped_again() {
+        // #1135: the reframing warps and hashes the quad as found, and a frame that keeps it
+        // starts from that rather than repeating both.
+        use crate::hash::{hash_rgb, HashKind};
+        use crate::index::{BundleBuilder, Mask, Section};
+        let img = synth(800, 600, 300.0, 0.0).to_rgb8();
+        let quad = Quad { corners: [(250.0, 100.0), (550.0, 100.0), (550.0, 520.0), (250.0, 520.0)] };
+        let a = rectify(&img, &quad).expect("warps");
+        let b = rectify(&img, &quad.flipped()).expect("warps");
+        let mut bundle = BundleBuilder::new(HashKind::DHash, 256);
+        bundle.push(Section::Card, [1; 16], &hash_rgb(&a, HashKind::DHash, 256));
+        let r = crate::reference::Reference::new(bundle.finish(0));
+        let descriptors = r.match_views(&[(&a, &b)], 1, &Mask::all()).descriptors;
+        let warped = || Warped {
+            quad,
+            upright: a.clone(),
+            flipped: b.clone(),
+            descriptors: descriptors.clone(),
+        };
+
+        let opts = DetectOptions { trim_margin: false, ..Default::default() };
+        let alternates = opts.query_insets.len();
+        WARPS.with(|w| w.set(0));
+        let views = rectify_views_from(&img, &quad, &opts, Some(warped())).expect("warps");
+        assert_eq!(WARPS.with(|w| w.get()), 2 * alternates, "the primary was warped again");
+        assert_eq!(views.rectified, a);
+        assert_eq!(views.descriptors.views(), 1 + alternates);
+        assert_eq!(views.descriptors.count(), 2, "the primary's descriptors were not carried");
+
+        // Another quad: the warp is not the primary framing's, and nothing is reused.
+        WARPS.with(|w| w.set(0));
+        let views = rectify_views_from(&img, &quad.scaled(0.9), &opts, Some(warped())).expect("warps");
+        assert_eq!(WARPS.with(|w| w.get()), 2 * (1 + alternates));
+        assert_eq!(views.descriptors.count(), 0);
+    }
+
+    #[test]
     fn finds_an_axis_aligned_card() {
         let frame = synth(800, 600, 300.0, 0.0);
         for method in [EdgeMethod::Canny, EdgeMethod::Otsu] {
@@ -1867,6 +1977,25 @@ mod tests {
                 "{method:?} aspect {} is not a card",
                 d.score.aspect
             );
+        }
+    }
+
+    #[test]
+    fn trace_images_are_drawn_only_on_request_and_change_nothing_else() {
+        // #1136: the session skips the pictures, and must get the same answer without them.
+        let frame = synth(800, 600, 300.0, 0.0);
+        let rgb = rgb_of(&frame);
+        for method in [EdgeMethod::Canny, EdgeMethod::Otsu] {
+            let drawn = DetectOptions { method, ..Default::default() };
+            let bare = DetectOptions { trace_images: false, ..drawn.clone() };
+            let (a, ta) = locate(&frame, &rgb, &drawn);
+            let (b, tb) = locate(&frame, &rgb, &bare);
+            let (ta, tb) = (ta.expect("a trace"), tb.expect("a trace"));
+            assert!(ta.images.is_some(), "{method:?} drew no images when asked");
+            assert!(tb.images.is_none(), "{method:?} drew images nobody asked for");
+            assert_eq!(ta.candidates.len(), tb.candidates.len());
+            let (a, b) = (a.expect("a card"), b.expect("a card"));
+            assert_eq!(a.quad.corners, b.quad.corners, "{method:?} moved without its images");
         }
     }
 
@@ -2279,7 +2408,7 @@ mod tests {
                 let full = detect(&frame, &opts).0.expect("the full sweep finds the card");
                 // The lock's quad is smoothed and a few pixels behind, never exactly this frame's.
                 let held = Quad { corners: full.quad.corners.map(|(x, y)| (x + 12.0, y - 8.0)) };
-                let near = locate_near(&frame, &held, &crate::lock::LockOptions::default(), &opts)
+                let near = locate_near(&frame, &held, &held, &crate::lock::LockOptions::default(), &opts)
                     .0
                     .unwrap_or_else(|e| panic!("{method:?} lost a {card_w} px card: {e}"));
                 for (a, b) in near.quad.corners.iter().zip(full.quad.corners.iter()) {
@@ -2296,7 +2425,7 @@ mod tests {
         // had been picked up and put down elsewhere. The window must miss, so the caller sweeps.
         let frame = synth(1280, 720, 220.0, 0.0);
         let held = Quad { corners: [(60.0, 40.0), (160.0, 40.0), (160.0, 180.0), (60.0, 180.0)] };
-        assert!(locate_near(&frame, &held, &crate::lock::LockOptions::default(), &DetectOptions::default()).0.is_err());
+        assert!(locate_near(&frame, &held, &held, &crate::lock::LockOptions::default(), &DetectOptions::default()).0.is_err());
     }
 
     #[test]
@@ -2320,7 +2449,7 @@ mod tests {
         let lock = crate::lock::LockOptions::default();
         let opts = DetectOptions { method: EdgeMethod::Otsu, ..Default::default() };
         assert!(detect(&frame, &opts).0.is_ok(), "the small card is a card to the full sweep");
-        assert!(locate_near(&frame, &held, &lock, &opts).0.is_err());
+        assert!(locate_near(&frame, &held, &held, &lock, &opts).0.is_err());
     }
 
     #[test]

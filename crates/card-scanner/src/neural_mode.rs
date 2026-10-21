@@ -178,7 +178,7 @@ impl Session {
     #[cfg(feature = "neural")]
     fn neural_read(&mut self, jpeg: &[u8]) -> Verdict {
         let decode_started = Stopwatch::start();
-        let source = match image::load_from_memory(jpeg) {
+        let source = match super::decode_frame(jpeg) {
             Ok(i) => i,
             Err(e) => {
                 return self.neural_failed(
@@ -337,6 +337,7 @@ impl Session {
             // The read is the detector, the embedder and the search at once; it is timed whole.
             hash_ms: read_ms,
             search_ms: 0.0,
+            descriptors: Default::default(),
         });
         let quad = best.map(|b| b.quad.map(|p| (p.x, p.y)));
 

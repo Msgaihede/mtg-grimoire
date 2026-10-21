@@ -276,10 +276,7 @@ fn merge(
         .optional()?;
     let note = match &printing {
         Some(_) => None,
-        None => Some(format!(
-            "Scryfall merged this printing into {new_id}, which is not in the card database \
-             yet. It should arrive with the next card-data sync."
-        )),
+        None => Some(format!("{MERGED_NOTE_PREFIX}{new_id}{PENDING_NOTE_SUFFIX}")),
     };
     let (set_code, collector_number, lang) = match &printing {
         Some((s, c, l, _)) => (Some(s.as_str()), Some(c.as_str()), Some(l.as_str())),
@@ -288,13 +285,18 @@ fn merge(
     // `cards.oracle_id` is nullable, so this is `Option` twice over: no card row at all, or
     // a card row that has none. Either way there is nothing to refresh from.
     let oracle_id = printing.as_ref().and_then(|p| p.3.as_deref());
+    // `?6` is `note` in all three repoints below.
+    let review = format!(
+        "CASE WHEN needs_review IS NULL OR {} THEN ?6 ELSE needs_review END",
+        replaceable_flag()
+    );
 
     let ids: Vec<i64> = tx
         .prepare("SELECT id FROM collection_entries WHERE card_id = ?1")?
         .query_map(params![m.old_card_id], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     for id in ids {
-        // `needs_review` is written **unconditionally** here, and that is not an exception
+        // `needs_review` is overwritten here when it is ours, and that is not an exception
         // to first-message-wins: the rule governs the *flag writers* ([`flag_deleted`],
         // [`flag_unfoldable`]), which add a sentence to a row that stayed where it was. A
         // successful repoint has changed what the row points at, so whatever was said about
@@ -303,15 +305,22 @@ fn merge(
         // is in `cards` (there is nothing left to review), the "not here yet" sentence when
         // it is not. Leaving an old flag standing would park a repointed row behind a
         // complaint about an id it no longer holds.
+        //
+        // **This module's own sentences only** ([`replaceable_flag`]). A flag another writer
+        // put there — `sync_engine::apply::RESURRECTED`, a folder's cycle-break — is about the
+        // row, not its printing, and a repoint answers nothing it asked (issue #1122). It
+        // stands, and the "not here yet" note gives way to it as the flag writers' rule has it.
         let repointed = tx.execute(
-            "UPDATE OR IGNORE collection_entries
-                SET card_id = ?2,
-                    set_code = coalesce(?3, set_code),
-                    collector_number = coalesce(?4, collector_number),
-                    lang = coalesce(?5, lang),
-                    needs_review = ?6,
-                    updated_at = unixepoch()
-              WHERE id = ?1",
+            &format!(
+                "UPDATE OR IGNORE collection_entries
+                    SET card_id = ?2,
+                        set_code = coalesce(?3, set_code),
+                        collector_number = coalesce(?4, collector_number),
+                        lang = coalesce(?5, lang),
+                        needs_review = {review},
+                        updated_at = unixepoch()
+                  WHERE id = ?1"
+            ),
             params![id, new_id, set_code, collector_number, lang, note],
         )?;
         if repointed == 1 {
@@ -341,15 +350,17 @@ fn merge(
             // `cards.oracle_id`) would count the wrong copies against it. The collection has
             // no such column; the wishlist keeps one because an any-printing wish has no
             // card row to join to.
-            "UPDATE OR IGNORE wishlist_entries
-                SET card_id = ?2,
-                    oracle_id = coalesce(?7, oracle_id),
-                    set_code = coalesce(?3, set_code),
-                    collector_number = coalesce(?4, collector_number),
-                    lang = coalesce(?5, lang),
-                    needs_review = ?6,
-                    updated_at = unixepoch()
-              WHERE id = ?1",
+            &format!(
+                "UPDATE OR IGNORE wishlist_entries
+                    SET card_id = ?2,
+                        oracle_id = coalesce(?7, oracle_id),
+                        set_code = coalesce(?3, set_code),
+                        collector_number = coalesce(?4, collector_number),
+                        lang = coalesce(?5, lang),
+                        needs_review = {review},
+                        updated_at = unixepoch()
+                  WHERE id = ?1"
+            ),
             params![
                 id,
                 new_id,
@@ -392,14 +403,16 @@ fn merge(
         .collect::<rusqlite::Result<_>>()?;
     for id in deck_rows {
         let repointed = tx.execute(
-            "UPDATE OR IGNORE deck_cards
-                SET card_id = ?2,
-                    set_code = coalesce(?3, set_code),
-                    collector_number = coalesce(?4, collector_number),
-                    lang = coalesce(?5, lang),
-                    needs_review = ?6,
-                    updated_at = unixepoch()
-              WHERE id = ?1",
+            &format!(
+                "UPDATE OR IGNORE deck_cards
+                    SET card_id = ?2,
+                        set_code = coalesce(?3, set_code),
+                        collector_number = coalesce(?4, collector_number),
+                        lang = coalesce(?5, lang),
+                        needs_review = {review},
+                        updated_at = unixepoch()
+                  WHERE id = ?1"
+            ),
             params![id, new_id, set_code, collector_number, lang, note],
         )?;
         if repointed == 1 {
@@ -617,9 +630,8 @@ fn flag_unfoldable(
         params![
             id,
             format!(
-                "Scryfall merged this printing into {new_id}, but this entry could not be \
-                 moved there. It is unchanged — check it against your other entries for \
-                 that card."
+                "{MERGED_NOTE_PREFIX}{new_id}, but this entry could not be moved there. It is \
+                 unchanged — check it against your other entries for that card."
             )
         ],
     )
@@ -632,6 +644,35 @@ fn flag_unfoldable(
 /// the date. Changing this text means changing the `LIKE` pattern in the sweep with it;
 /// `a_delete_flag_outlives_a_card_that_is_still_in_the_database` is what fails if they part.
 const DELETED_NOTE_PREFIX: &str = "Scryfall removed this printing from its database on ";
+
+/// How both of [`merge`]'s sentences begin — the "not here yet" note and
+/// [`flag_unfoldable`]'s — with the new id after it.
+const MERGED_NOTE_PREFIX: &str = "Scryfall merged this printing into ";
+
+/// How [`merge`]'s "not here yet" note ends, after the new id. With [`MERGED_NOTE_PREFIX`] it
+/// is the one merge sentence [`sweep_orphans`] may clear: it asks the sweep's own question.
+const PENDING_NOTE_SUFFIX: &str =
+    ", which is not in the card database yet. It should arrive with the next card-data sync.";
+
+/// What [`sweep_orphans`] writes on a row whose printing does not resolve.
+const MISSING: &str = "This printing is not in the card database. It may have been removed by \
+     the last card-data sync, or it may return with the next one.";
+
+/// The SQL test for "`needs_review` holds one of this module's own sentences" — the only ones
+/// a successful repoint in [`merge`] may overwrite.
+///
+/// `needs_review` is not this module's alone: `sync_engine::apply` writes `RESURRECTED` and
+/// `CYCLE_BROKEN` into the same column, and a reader's flag says something about the row that
+/// no change of printing answers (issue #1122). Inlined as literals because the three repoints
+/// already number their parameters differently; none of the sentences holds a quote, which
+/// `the_reconcilers_sentences_inline_as_sql_literals` pins.
+fn replaceable_flag() -> String {
+    format!(
+        "(needs_review = '{MISSING}' \
+          OR needs_review LIKE '{DELETED_NOTE_PREFIX}%' \
+          OR needs_review LIKE '{MERGED_NOTE_PREFIX}%')"
+    )
+}
 
 /// Flag every row that referred to a discarded id. Returns how many were flagged.
 fn flag_deleted(tx: &rusqlite::Transaction<'_>, m: &Migration) -> rusqlite::Result<usize> {
@@ -671,9 +712,6 @@ pub fn sweep_orphans(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
 }
 
 fn sweep_orphans_within(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
-    const MISSING: &str =
-        "This printing is not in the card database. It may have been removed by the last \
-         card-data sync, or it may return with the next one.";
     let mut flagged = 0;
     let mut cleared = 0;
     for table in ["collection_entries", "wishlist_entries", "deck_cards"] {
@@ -693,21 +731,33 @@ fn sweep_orphans_within(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
         // printing that comes back — a bad bulk file, a re-added card — clears its own
         // flag, so a transient gap does not leave a permanent scar on the row.
         //
-        // Except a *delete* flag, which this must not touch. `/migrations` is polled after
-        // the sweep and before the bulk file that drops the card has rotated, so the window
-        // where a row is flagged "Scryfall removed this printing" while the card is still in
-        // `cards` is the ordinary case, not a rare one — and clearing it there would erase
-        // the warning for good, because the migration is already recorded and never
-        // reapplied. A text guard, deliberately: the honest fix is a reason column, and that
-        // belongs with the `needs_review` UI task that will have to render these anyway.
+        // **Only the flags that asked this question**: the sweep's own `MISSING`, and
+        // [`merge`]'s "not in the card database yet" note, which is the same sentence about a
+        // card that has not arrived. Every other flag stands, because a card being here
+        // answers nothing it said:
+        //
+        // * a *delete* flag. `/migrations` is polled after the sweep and before the bulk file
+        //   that drops the card has rotated, so a row flagged "Scryfall removed this printing"
+        //   while the card is still in `cards` is the ordinary case — and clearing it would
+        //   erase the warning for good, because the migration is recorded and never reapplied;
+        // * `sync_engine::apply`'s `RESURRECTED` and every other writer's sentence (issue
+        //   #1122). The sweep is uncaptured, so a flag it cleared would leave no trace at all;
+        // * a reader's own note, and [`flag_unfoldable`]'s, whose target exists by
+        //   construction.
+        //
+        // A text match, deliberately: the honest fix is a reason column, and that belongs
+        // with the `needs_review` UI task that will have to render these anyway.
         cleared += conn.execute(
             &format!(
                 "UPDATE {table} SET needs_review = NULL, updated_at = unixepoch()
-                  WHERE needs_review IS NOT NULL AND card_id IS NOT NULL
-                    AND needs_review NOT LIKE ?1
+                  WHERE (needs_review = ?1 OR needs_review LIKE ?2)
+                    AND card_id IS NOT NULL
                     AND EXISTS (SELECT 1 FROM cards WHERE cards.id = {table}.card_id)"
             ),
-            params![format!("{DELETED_NOTE_PREFIX}%")],
+            params![
+                MISSING,
+                format!("{MERGED_NOTE_PREFIX}%{PENDING_NOTE_SUFFIX}")
+            ],
         )?;
     }
     Ok((flagged, cleared))
@@ -2046,5 +2096,145 @@ mod tests {
             card, "new-id",
             "resolved a→b→new through the map, not through the sort"
         );
+    }
+
+    /// Issue #1122: the sweep clears what *it* asked, and nothing else. A row another device
+    /// deleted while this one edited it is kept and told so by `sync_engine::apply`; that
+    /// printing being in `cards` answers nothing the sentence said, and the sweep is
+    /// uncaptured, so a flag it cleared would be gone without a trace.
+    #[test]
+    fn the_sweep_leaves_another_writers_flag_alone_in_every_table() {
+        use crate::sync_engine::apply::RESURRECTED;
+        let conn = seeded();
+        let entry = own(&conn, "new-id", "foil", 1);
+        let wish: i64 = conn
+            .query_row(
+                "INSERT INTO wishlist_entries
+                    (oracle_id,card_id,name,quantity,created_at,updated_at)
+                 VALUES ('o1','new-id','Lightning Bolt',1,unixepoch(),unixepoch())
+                 RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let burn = deck(&conn, "Burn");
+        let main = category(&conn, burn, "main", "Main deck");
+        let listed = deck_card(&conn, burn, "new-id", main, 1);
+        for (table, id) in [
+            ("collection_entries", entry),
+            ("wishlist_entries", wish),
+            ("deck_cards", listed),
+        ] {
+            conn.execute(
+                &format!("UPDATE {table} SET needs_review = ?2 WHERE id = ?1"),
+                rusqlite::params![id, RESURRECTED],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            sweep_orphans(&conn).unwrap(),
+            (0, 0),
+            "a card being here answers nothing a sync flag said"
+        );
+        for (table, id) in [
+            ("collection_entries", entry),
+            ("wishlist_entries", wish),
+            ("deck_cards", listed),
+        ] {
+            let review: Option<String> = conn
+                .query_row(
+                    &format!("SELECT needs_review FROM {table} WHERE id = ?1"),
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(review.as_deref(), Some(RESURRECTED), "{table}");
+        }
+    }
+
+    /// The other half of the sweep's own question: a merge into a card that had not arrived
+    /// says so, and that note clears when the card lands — it asked what the sweep asks.
+    #[test]
+    fn a_pending_merge_note_clears_when_its_card_arrives() {
+        let mut conn = seeded();
+        let id = own(&conn, "old-id", "foil", 1);
+        apply(
+            &mut conn,
+            &[migration("m3", "merge", "old-id", Some("not-here-yet"))],
+        )
+        .unwrap();
+        assert_eq!(sweep_orphans(&conn).unwrap(), (0, 0), "already flagged");
+
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,raw)
+             VALUES ('not-here-yet','o1','Lightning Bolt','2ed','162','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(sweep_orphans(&conn).unwrap(), (0, 1));
+        let review: Option<String> = conn
+            .query_row(
+                "SELECT needs_review FROM collection_entries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(review, None);
+    }
+
+    /// Issue #1122's second half: a repoint replaces what this module said about the old
+    /// id, and leaves what another writer said about the row.
+    #[test]
+    fn a_repoint_keeps_another_writers_flag_and_replaces_its_own() {
+        use crate::sync_engine::apply::RESURRECTED;
+        let mut conn = seeded();
+        let kept = own(&conn, "old-id", "foil", 1);
+        let stale = own(&conn, "old-id", "nonfoil", 1);
+        conn.execute(
+            "UPDATE collection_entries SET needs_review = ?2 WHERE id = ?1",
+            rusqlite::params![kept, RESURRECTED],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collection_entries SET needs_review = ?2 WHERE id = ?1",
+            rusqlite::params![stale, MISSING],
+        )
+        .unwrap();
+
+        let stats = apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        assert_eq!(stats.repointed, 2);
+        let read = |id: i64| -> (String, Option<String>) {
+            conn.query_row(
+                "SELECT card_id, needs_review FROM collection_entries WHERE id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            read(kept),
+            ("new-id".to_owned(), Some(RESURRECTED.to_owned()))
+        );
+        assert_eq!(
+            read(stale),
+            ("new-id".to_owned(), None),
+            "the sweep's own complaint about the old id is answered"
+        );
+    }
+
+    /// [`replaceable_flag`] writes the sentences into SQL as literals.
+    #[test]
+    fn the_reconcilers_sentences_inline_as_sql_literals() {
+        for sentence in [MISSING, DELETED_NOTE_PREFIX, MERGED_NOTE_PREFIX] {
+            assert!(!sentence.contains('\''), "{sentence}");
+            assert!(!sentence.contains(['%', '_']), "{sentence}");
+        }
+        assert!(!PENDING_NOTE_SUFFIX.contains(['%', '_', '\'']));
     }
 }

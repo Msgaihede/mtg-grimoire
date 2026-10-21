@@ -7451,8 +7451,8 @@ describe("quick-adding bought copies into a deck", () => {
    */
   it("refuses a card the deck does not play, and a card it only plans", () => {
     const db = shortOfThree();
-    // A different **oracle** card, not a different printing: the fence is oracle-grained, so
-    // `BOLT_2X2` here would be let through and the test below is the one that says so.
+    // A different **oracle** card, not a different printing: `deckPlays` is oracle-grained, so
+    // `BOLT_2X2` here would pass it and hear the shortfall's sentence instead — see below.
     expect(() => quickAdd(db, { cardId: FOIL_ONLY.id })).toThrow(/does not play this card/);
 
     const planned = shortOfThree({
@@ -7467,20 +7467,26 @@ describe("quick-adding bought copies into a deck", () => {
   });
 
   /**
-   * **A different printing of the card the deck plays is not refused**, and that is the fence
-   * reading the oracle card rather than the printing \u2014 `deck::played_keys`' own reach, and
-   * unrelated to how much of it counts as owned since 2026-09-07's exact grain. It sits here
-   * rather than beside the refusal above because the two are one decision seen from both sides,
-   * and a handler comparing `card_id` strings passes the refusal test and fails this one.
+   * **A different printing of the card the deck plays passes {@link deckPlays} and is still
+   * refused** (issue #1128): the shortfall is per `(cardId, finish)`, as the batch twin's is. A
+   * copy of another printing, or one past the line's shortfall, is attributed to no deck row, and
+   * the next printing swap's sweep would take it out to Recently removed.
    */
-  it("lets a different printing of a card the deck plays through the fence", () => {
+  it("holds the press to the shortfall at its exact printing and finish", () => {
     const db = shortOfThree({
       deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 4 })],
       collectionEntries: [],
     });
-    expect(quickAdd(db, { quantity: 1 }).copies).toBe(1);
-    expect(db.collectionEntries).toHaveLength(1);
-    expect(db.collectionEntries[0]).toMatchObject({ cardId: BOLT.id, folderId: groupId(1) });
+    expect(() => quickAdd(db, { quantity: 1 })).toThrow(/not short of that printing/);
+    expect(db.collectionEntries).toEqual([]);
+
+    const short = shortOfThree();
+    expect(() => quickAdd(short, { quantity: 4 })).toThrow(/more copies than this deck is short/);
+    expect(() => quickAdd(short, { quantity: 1, finish: "foil" })).toThrow(
+      /not short of that printing/,
+    );
+    expect(copiesIn(short, groupId(1))).toBe(1);
+    expect(short.deckAudit).toEqual([]);
   });
 
   /** The three refusals that are about the press rather than about the card. The deck fence is
@@ -11886,6 +11892,47 @@ describe("the third deck kind", () => {
     expect(group).toMatchObject({ name: "Paper Ladder", parentId: null, locked: false });
     expect(copiesIn(db, group!.id)).toBe(0);
     expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+  });
+
+  /**
+   * **Issue #1113: a Ctrl+Z of the switch takes the group row with the kind**, both ways. Undoing
+   * the way out of Virtual drops the group the press made, or the next switch to Regular would make
+   * a second; undoing the way in gives a Regular deck a group to hold copies again, empty.
+   */
+  it("settles the group with the kind on an undo and a redo of the switch", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, virtualOnly: true })] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { virtualOnly: false } });
+    const out = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+
+    h.deck_undo_apply({ deckId: 1, auditId: out });
+    expect(groupOf(db, 1)).toBeUndefined();
+    h.deck_redo_apply({ deckId: 1, auditId: out });
+    expect(groupOf(db, 1)).toBeDefined();
+    h.deck_undo_apply({ deckId: 1, auditId: out });
+    h.deck_update({ id: 1, patch: { virtualOnly: false } });
+    expect(db.collectionFolders.filter((f) => f.deckId === 1)).toHaveLength(1);
+
+    h.deck_update({ id: 1, patch: { virtualOnly: true } });
+    const back = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    h.deck_undo_apply({ deckId: 1, auditId: back });
+    expect(copiesIn(db, groupOf(db, 1)!.id)).toBe(0);
+  });
+
+  /** And an undo back to Virtual over a group the reader filed copies into since is retired,
+   *  `deck_undo::group_can_go`'s refusal, rather than scattering the copies. */
+  it("retires an undo back to virtual once the group holds copies", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, virtualOnly: true })] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { virtualOnly: false } });
+    const out = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+    db.collectionEntries.push(
+      entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupOf(db, 1)!.id }),
+    );
+
+    expect(() => h.deck_undo_apply({ deckId: 1, auditId: out })).toThrow(/taken off the undo list/);
+    expect(db.decks[0].virtualOnly).toBe(false);
+    expect(copiesIn(db, groupOf(db, 1)!.id)).toBe(2);
   });
 
   /**

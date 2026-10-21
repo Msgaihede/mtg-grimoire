@@ -623,7 +623,7 @@ row above is a debug build answering, not a timing.
 
 - **`schema` reaches the filesystem in seven functions** — `remove_database_files`,
   `back_up_user_file`, `prune_user_backups`, `replace_unreadable_corpus`,
-  `corpus_is_readable`, `check_corpus` and `mark_corpus_damaged`. Each compiles for a browser and fails there when called. The I/O step's
+  `probe_corpus` (`corpus_is_readable` until issue #1125), `check_corpus` and `mark_corpus_damaged`. Each compiles for a browser and fails there when called. The I/O step's
   files interface inherits them.
 - **`db::lock_for` in a browser answers `BUSY` on its first contended attempt.** Right for one
   thread; whether one write connection in a Worker is the shape at all is step 3's.
@@ -2095,6 +2095,15 @@ Recently removed.`) and offers no `Undo`; and **the Storybook fake journals no c
 gap), so over the fake only the label, the bracket and the notes show `Undo`. Over the real core
 every one of them files a step. The phone draws no Redo; the hook's redo stack is cleared after each
 write, as its contract asks.
+
+**A pressed `Undo` holds the line until it answers** (issue #1156). It goes through the hook's
+`runUndoAsync`, the toolbar's own write with its settling handed back: taken back, the line goes;
+refused, the line stays and says so in the command's words (`Couldn't undo — That is not the most
+recent change any more — the deck has been edited since. …`, another device's sync or another
+window's write having filed a step first), in the destructive colour, with no `Undo` beside it. The
+desktop draws the same refusal in `DeckEditor`'s banner; the phone has no banner, and a line that
+went as it does on success let the reader believe the cards were back. The timer does not run while
+the undo is out. `lists/receipt.ts` holds its line and its timer the same way (issue #1157).
 
 **`Add cards`** is the page's foot, with `Deck settings` beside it — a bar rather than a floating
 button, because a button floating over the right edge would sit on the rows' own `⋯`. It opens the

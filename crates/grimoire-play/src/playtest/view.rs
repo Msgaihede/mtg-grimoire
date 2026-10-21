@@ -569,9 +569,11 @@ pub enum PlaytestHappened {
         seat: PlaytestPlayer,
         name: String,
     },
+    /// A spell cast. `name` is `None` for an opponent's spell cast face down (a morph, CR 708.4),
+    /// which only they may look at.
     Cast {
         seat: PlaytestPlayer,
-        name: String,
+        name: Option<String>,
     },
     Activated {
         seat: PlaytestPlayer,
@@ -583,10 +585,12 @@ pub enum PlaytestHappened {
         seat: PlaytestPlayer,
         name: Option<String>,
     },
-    /// A card the rules moved: a resolving spell, a dying creature, a discard, a mill.
+    /// A card the rules moved: a resolving spell, a dying creature, a discard, a mill. `name` is
+    /// `None` for an opponent's card that is face down where it went (a hideaway card, a
+    /// manifest).
     Moved {
         seat: PlaytestPlayer,
-        name: String,
+        name: Option<String>,
         from: Place,
         to: Place,
     },

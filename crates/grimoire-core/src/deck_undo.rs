@@ -159,15 +159,18 @@ const DECK_FIELDS: &[&str] = &[
     // these two booleans that names no kind at all. The two are on this list together or the
     // journal can produce a deck nothing can read.
     //
-    // **Undoing the flag puts the column back and nothing else, and nothing here claims
-    // otherwise.** Becoming virtual also files the deck's copies into `Recently removed` and
-    // deletes its `collection_folders` group; a step writes `decks` and `deck_cards` and no
-    // third table, so a Ctrl+Z restores the *kind* and leaves both of those where the press put
-    // them. That is the same standing `collection_alloc`'s two moves have — they record a
-    // history row and file no step at all — and it is the honest one here: an undo that rebuilt
-    // the group would have to decide which copies in a shared holding area had come from this
-    // deck, which nothing records. The way back is a second press of the switch, which makes
-    // the group again, and `Recently removed` is where the cards are waiting.
+    // **Undoing the flag puts the column and the group row back, and never the copies.**
+    // Becoming virtual also files the deck's copies into `Recently removed` and deletes its
+    // `collection_folders` group; ceasing to be makes the group again, empty. `apply` settles
+    // the group row with the column (`deck::settle_deck_group`, issue #1113) — the column alone
+    // left a deck undone to Virtual still holding a group the next switch to Regular collided
+    // with, and one undone to Regular with no group to hold anything. The **copies** stay where
+    // the press put them, the standing `collection_alloc`'s two moves have — they record a
+    // history row and file no step at all — and the honest one here: an undo that refilled the
+    // group would have to decide which copies in a shared holding area had come from this deck,
+    // which nothing records. `Recently removed` is where the cards are waiting. And a step back
+    // to Virtual over a group the reader has filed copies into since is refused (`group_can_go`)
+    // rather than scattering them.
     "virtual_only",
     "archived",
     "separate_x_group",
@@ -359,9 +362,9 @@ pub struct LabelRow {
 
 /// Which label one deck card wore.
 ///
-/// Addressed by its **cell** rather than by `deck_cards.id`, because a step is replayed after
-/// other steps may have deleted and reinserted that row — [`CardRow`] says why ids are not
-/// restored. The cell is stable across all of it.
+/// Addressed by its **cell and finish** rather than by `deck_cards.id`, because a step is
+/// replayed after other steps may have deleted and reinserted that row — [`CardRow`] says why ids
+/// are not restored. The cell is stable across all of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Carrier {
@@ -388,6 +391,43 @@ pub struct Carrier {
     /// put back.
     #[serde(alias = "tagId")]
     pub label_id: Option<i64>,
+    /// Which of the cell's rows wore it — `Some(None)` the regular copy, `Some(Some("foil"))` the
+    /// foil — since issue #1126.
+    ///
+    /// **A [`Cell`] names no finish on purpose, and a carrier must.** Since schema v18 a cell can
+    /// hold a regular row and a foil row, and `set_card_label` labels them independently. A
+    /// carrier without a finish relabelled the whole cell, so undoing "remove label Cut" off the
+    /// foil row also put Cut on the regular row beside it, which had never worn it.
+    ///
+    /// The outer `Option` is a step written before this field: `None` (absent from the JSON)
+    /// reads as the whole cell, which is what such a step meant, and is never written again —
+    /// [`carriers_where`] always records the row's finish. `null` is present, and is the regular
+    /// copy; [`present`] is what keeps serde from reading the two as one.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub finish: Option<Option<String>>,
+}
+
+/// A field that is in the JSON, `null` included — so `Option<Option<_>>`'s outer `None` is left
+/// to `#[serde(default)]`, for a field that is absent.
+fn present<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+/// `Carrier::finish` as the two binds every carrier statement takes: whether the step names no
+/// finish (the whole cell), and the finish it names. Matched by
+/// `(?a OR coalesce(finish, '') = coalesce(?b, ''))`.
+fn finish_binds(carrier: &Carrier) -> (bool, Option<&str>) {
+    match &carrier.finish {
+        None => (true, None),
+        Some(finish) => (false, finish.as_deref()),
+    }
 }
 
 /// One `deck_notes` row, as a step carries it — user schema v43.
@@ -1170,7 +1210,8 @@ fn carriers_where(
 ) -> Result<Vec<Carrier>, String> {
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT deck_id, variant, category_id, card_id FROM deck_cards WHERE {where_sql}"
+            "SELECT deck_id, variant, category_id, card_id, finish FROM deck_cards
+              WHERE {where_sql}"
         ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1181,6 +1222,7 @@ fn carriers_where(
                 category_id: r.get(2)?,
                 card_id: r.get(3)?,
                 label_id: Some(label_id),
+                finish: Some(r.get(4)?),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1346,17 +1388,22 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                 }
                 for carrier in carriers {
                     // The carrier's own deck, falling back to the step's for a step written
-                    // before v21 — see `Carrier::deck_id`.
+                    // before v21 — see `Carrier::deck_id`. Its own row of the cell, too, and
+                    // never the sibling finish's — see `Carrier::finish`.
+                    let (any_finish, finish) = finish_binds(carrier);
                     tx.execute(
                         "UPDATE deck_cards SET label_id = ?5, updated_at = unixepoch()
                           WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3
-                            AND card_id = ?4",
+                            AND card_id = ?4
+                            AND (?6 OR coalesce(finish, '') = coalesce(?7, ''))",
                         params![
                             carrier.deck_id.unwrap_or(deck_id),
                             carrier.variant,
                             remap.category(carrier.category_id),
                             carrier.card_id,
-                            remap.label(carrier.label_id)
+                            remap.label(carrier.label_id),
+                            any_finish,
+                            finish
                         ],
                     )
                     .map_err(|e| e.to_string())?;
@@ -1454,6 +1501,13 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                         params![deck_id, JsonParam(value)],
                     )
                     .map_err(|e| e.to_string())?;
+                }
+                // The kind's group row with the kind (issue #1113): the column alone left a deck
+                // put back to Virtual with a group the next switch to Regular collided with, and
+                // one put back to Regular with none to hold its copies. After the loop, so a
+                // step that also renames the deck names the group after the name it lands on.
+                if fields.contains_key("virtual_only") {
+                    crate::deck::settle_deck_group(tx, deck_id)?;
                 }
             }
             Op::Tokens {
@@ -1610,6 +1664,7 @@ fn plan(
     if !holds(tx, deck_id, backward, &changed, default_moved)?
         || !deletes_hold(tx, deck_id, forward, backward)?
         || !carriers_free(tx, deck_id, forward)?
+        || !group_can_go(tx, deck_id, &ahead, &changed)?
     {
         return Ok(None);
     }
@@ -1652,6 +1707,25 @@ fn plan(
         });
     }
     Ok(Some(ops))
+}
+
+/// May a step that moves `virtual_only` to true take the deck's group away?
+///
+/// Only while the group is empty. [`crate::deck::settle_deck_group`] drops the group when a step
+/// puts a deck back to Virtual, and a group holding copies is cardboard the reader filed into
+/// the deck since the press — the deck has moved on, which is this function's `None` and not an
+/// error, and neither the step nor the journal knows where those copies should go instead.
+fn group_can_go(
+    tx: &Connection,
+    deck_id: i64,
+    ahead: &serde_json::Map<String, Value>,
+    changed: &BTreeSet<&str>,
+) -> Result<bool, String> {
+    let to_virtual = changed.contains("virtual_only")
+        && ahead
+            .get("virtual_only")
+            .is_some_and(|v| same_value(v, &json!(1)));
+    Ok(!to_virtual || !crate::deck::deck_group_holds_copies(tx, deck_id)?)
 }
 
 /// Every [`Op::Deck`] column one side of a step names, merged — and refused by name when one is
@@ -1708,9 +1782,10 @@ fn same_value(a: &Value, b: &Value) -> bool {
 /// * **[`Op::Variant`]**: the same over the whole variant.
 /// * **[`Op::Categories`] / [`Op::Labels`] / [`Op::Notes`]**: every `restore` and `patch` row is
 ///   there (categories and notes in *this* deck) with the recorded columns; a note's attachment
-///   set is the recorded set; a carrier's cell still holds at least as many rows wearing the
-///   recorded label as the carriers name (a carrier names no finish, so a cell with a foil and a
-///   regular row wearing different labels has to be read as "at least"). The deck's default pile
+///   set is the recorded set; a carrier's row still wears the recorded label (counted as "at
+///   least as many rows as the carriers name", which a step written before `Carrier::finish`
+///   needs: it names a whole cell, and a cell's foil and regular rows can wear different
+///   labels). The deck's default pile
 ///   is compared only when the step moved it.
 /// * **[`Op::Deck`]**: the columns in `changed` — the ones the step moved — hold the recorded
 ///   values, [`VIEW_FIELDS`] excepted.
@@ -1908,10 +1983,18 @@ fn categories_hold<'a>(
     Ok(true)
 }
 
-/// Each carrier's cell still holds at least as many rows wearing the recorded label as the
-/// carriers name for it.
+/// Each carrier's row — or its whole cell, for a step written before `Carrier::finish` — still
+/// holds at least as many rows wearing the recorded label as the carriers name for it.
 fn carriers_hold(tx: &Connection, deck_id: i64, carriers: &[Carrier]) -> Result<bool, String> {
-    let mut wanted: HashMap<(i64, &str, i64, &str, Option<i64>), i64> = HashMap::new();
+    type Grain<'a> = (
+        i64,
+        &'a str,
+        i64,
+        &'a str,
+        (bool, Option<&'a str>),
+        Option<i64>,
+    );
+    let mut wanted: HashMap<Grain, i64> = HashMap::new();
     for c in carriers {
         *wanted
             .entry((
@@ -1919,17 +2002,19 @@ fn carriers_hold(tx: &Connection, deck_id: i64, carriers: &[Carrier]) -> Result<
                 c.variant.as_str(),
                 c.category_id,
                 c.card_id.as_str(),
+                finish_binds(c),
                 c.label_id,
             ))
             .or_default() += 1;
     }
-    for ((deck, variant, category, card, label), count) in wanted {
+    for ((deck, variant, category, card, (any_finish, finish), label), count) in wanted {
         let held: i64 = tx
             .query_row(
                 "SELECT count(*) FROM deck_cards
                   WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3 AND card_id = ?4
-                    AND label_id IS ?5",
-                params![deck, variant, category, card, label],
+                    AND label_id IS ?5
+                    AND (?6 OR coalesce(finish, '') = coalesce(?7, ''))",
+                params![deck, variant, category, card, label, any_finish, finish],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
@@ -2088,10 +2173,10 @@ fn deletes_hold(
     Ok(true)
 }
 
-/// May each labelling carrier in `forward` be written? Only over a cell whose rows are bare, or
-/// already wear the label the carrier names.
+/// May each labelling carrier in `forward` be written? Only over a row (a whole cell, for a step
+/// written before `Carrier::finish`) that is bare, or already wears the label the carrier names.
 ///
-/// A carrier's UPDATE labels every row of its cell, so applying one over a card labelled since by
+/// A carrier's UPDATE labels its row, so applying one over a card labelled since by
 /// a write that files no step replaces that label. This is the one check a label delete's undo
 /// gets: its redo side records no carriers — the delete's own SET NULL is what cleared them — so
 /// [`holds`] has nothing to compare, and it is the carriers being *applied* that can be asked.
@@ -2121,17 +2206,21 @@ fn carriers_free(tx: &Connection, deck_id: i64, forward: &[Op]) -> Result<bool, 
                     )
                     .map_err(|e| e.to_string())?;
             let own = (!handed_on).then_some(label);
+            let (any_finish, finish) = finish_binds(c);
             let clashing: i64 = tx
                 .query_row(
                     "SELECT count(*) FROM deck_cards
                       WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3 AND card_id = ?4
-                        AND label_id IS NOT NULL AND label_id IS NOT ?5",
+                        AND label_id IS NOT NULL AND label_id IS NOT ?5
+                        AND (?6 OR coalesce(finish, '') = coalesce(?7, ''))",
                     params![
                         c.deck_id.unwrap_or(deck_id),
                         c.variant,
                         c.category_id,
                         c.card_id,
-                        own
+                        own,
+                        any_finish,
+                        finish
                     ],
                     |r| r.get(0),
                 )
@@ -4144,6 +4233,123 @@ mod tests {
         assert_eq!(kind(&conn), (0, 1), "and forward again");
     }
 
+    /// Whether the deck has its collection group — the row a kind change makes or deletes.
+    fn has_group(conn: &Connection, deck_id: i64) -> bool {
+        crate::deck::deck_group(conn, deck_id).unwrap().is_some()
+    }
+
+    fn set_virtual(conn: &Connection, deck_id: i64, virtual_only: bool) -> Result<(), String> {
+        crate::deck::update_deck(
+            conn,
+            deck_id,
+            &crate::deck::DeckPatch {
+                virtual_only: Some(virtual_only),
+                ..Default::default()
+            },
+        )
+        .map(|_| ())
+    }
+
+    /// **Issue #1113, direction A.** A switch to Regular makes the group; its Ctrl+Z has to take
+    /// the group away with the kind, or the next switch to Regular inserts a second group for the
+    /// deck and fails `idx_collection_folder_deck` — on that press and every one after it.
+    #[test]
+    fn undoing_a_switch_to_regular_takes_the_group_with_it() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        set_virtual(&conn, id, true).unwrap();
+        assert!(!has_group(&conn, id));
+
+        set_virtual(&conn, id, false).unwrap();
+        assert!(has_group(&conn, id), "the press makes the group");
+        let audit_id = next_undo(&conn, id).unwrap().unwrap();
+
+        undo(&conn, id).unwrap();
+        assert!(!has_group(&conn, id), "and its undo takes it back");
+
+        redo(&conn, id, audit_id).unwrap();
+        assert!(has_group(&conn, id), "and the redo makes it again");
+
+        undo(&conn, id).unwrap();
+        set_virtual(&conn, id, false).expect("switching to Regular again is not wedged");
+        assert!(has_group(&conn, id));
+    }
+
+    /// **Issue #1113, direction B.** A switch to Virtual files the copies away and deletes the
+    /// group; its Ctrl+Z puts back a Regular deck, which needs a group to hold anything at all —
+    /// empty, because which copies in `Recently removed` were this deck's is recorded nowhere.
+    #[test]
+    fn undoing_a_switch_to_virtual_gives_the_deck_its_group_again() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        assert!(has_group(&conn, id));
+
+        set_virtual(&conn, id, true).unwrap();
+        assert!(!has_group(&conn, id));
+        let audit_id = next_undo(&conn, id).unwrap().unwrap();
+
+        undo(&conn, id).unwrap();
+        assert!(has_group(&conn, id), "a Regular deck can hold copies again");
+        let entry = crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-lea".to_owned(),
+                finish: "nonfoil".to_owned(),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let group = crate::deck::deck_group(&conn, id).unwrap().unwrap();
+        crate::collection_folders::refile_entry(&conn, entry, Some(group))
+            .expect("and filing a copy into it works without a second press");
+        crate::collection_folders::refile_entry(&conn, entry, None)
+            .expect("taken back out, so the redo has an empty group to drop");
+
+        redo(&conn, id, audit_id).unwrap();
+        assert!(!has_group(&conn, id), "and the redo drops it again");
+    }
+
+    /// A step back to Virtual over a group the reader has **filed copies into since** is refused
+    /// and retired: dropping the group would scatter those copies to the collection's root, and
+    /// nothing records where else they belong.
+    #[test]
+    fn an_undo_back_to_virtual_refuses_a_group_holding_copies() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        set_virtual(&conn, id, true).unwrap();
+        set_virtual(&conn, id, false).unwrap();
+        let entry = crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-lea".to_owned(),
+                finish: "nonfoil".to_owned(),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let group = crate::deck::deck_group(&conn, id).unwrap().unwrap();
+        crate::collection_folders::refile_entry(&conn, entry, Some(group)).unwrap();
+
+        assert_eq!(undo(&conn, id).unwrap_err(), RETIRED);
+        let still: (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT d.virtual_only, e.folder_id FROM decks d, collection_entries e
+                  WHERE d.id = ?1 AND e.id = ?2",
+                params![id, entry],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            still,
+            (0, Some(group)),
+            "the deck and its copies are as they were"
+        );
+    }
+
     /// The half `drive_cases` cannot show: undoing an import sweeps the labels it **invented**
     /// and leaves the reader's own alone.
     ///
@@ -5753,6 +5959,118 @@ mod tests {
             )
             .unwrap();
         assert_eq!(worn, Some(other));
+    }
+
+    /// The labels `bolt-m10`'s two rows in the live `Ramp` wear, regular first then foil.
+    fn bolt_labels(conn: &Connection, deck_id: i64) -> Vec<(Option<String>, Option<i64>)> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT finish, label_id FROM deck_cards
+                  WHERE deck_id = ?1 AND variant = 'live' AND card_id = 'bolt-m10'
+                  ORDER BY coalesce(finish, '')",
+            )
+            .unwrap();
+        stmt.query_map(params![deck_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    /// A regular `bolt-m10` with no label and a foil one wearing `label`, both in the live `Ramp`.
+    fn split_bolt(conn: &Connection, deck_id: i64, label: i64) {
+        let ramp = ramp(conn, deck_id);
+        crate::deck::add_card(conn, deck_id, "bolt-m10", Some(ramp), None, "live", None, 1)
+            .unwrap();
+        crate::deck::add_card(
+            conn,
+            deck_id,
+            "bolt-m10",
+            Some(ramp),
+            None,
+            "live",
+            Some("foil"),
+            1,
+        )
+        .unwrap();
+        crate::deck_meta::set_card_label(
+            conn,
+            deck_id,
+            "bolt-m10",
+            ramp,
+            "live",
+            Some("foil"),
+            Some(label),
+        )
+        .unwrap();
+    }
+
+    /// Issue #1126: a carrier names its finish, so undoing a label removal off a foil row puts
+    /// the label back on that row alone — never on the regular row beside it, which was bare.
+    #[test]
+    fn undoing_a_label_removal_relabels_only_the_finish_that_wore_it() {
+        let (conn, id) = fresh();
+        let label = label_id(&conn, id);
+        split_bolt(&conn, id, label);
+        let worn = vec![(None, None), (Some("foil".to_owned()), Some(label))];
+        assert_eq!(bolt_labels(&conn, id), worn);
+
+        crate::deck_meta::remove_label_from_deck(&conn, id, label, "live").unwrap();
+        let step = next_undo(&conn, id).unwrap().unwrap();
+        assert_eq!(
+            bolt_labels(&conn, id),
+            vec![(None, None), (Some("foil".to_owned()), None)]
+        );
+
+        undo(&conn, id).unwrap();
+        assert_eq!(bolt_labels(&conn, id), worn);
+
+        redo(&conn, id, step).unwrap();
+        assert_eq!(
+            bolt_labels(&conn, id),
+            vec![(None, None), (Some("foil".to_owned()), None)]
+        );
+    }
+
+    /// The same over a label delete, whose carriers are read app-wide.
+    #[test]
+    fn undoing_a_label_delete_relabels_only_the_finish_that_wore_it() {
+        let (conn, id) = fresh();
+        let label = label_id(&conn, id);
+        split_bolt(&conn, id, label);
+
+        crate::deck_meta::delete_label(&conn, Some(id), label).unwrap();
+        undo(&conn, id).unwrap();
+
+        let label = label_id(&conn, id);
+        assert_eq!(
+            bolt_labels(&conn, id),
+            vec![(None, None), (Some("foil".to_owned()), Some(label))]
+        );
+    }
+
+    /// A step written before `Carrier::finish` names no finish, and reads as the whole cell it
+    /// meant; one written since says `null` for the regular copy, which must not read the same.
+    #[test]
+    fn a_carrier_tells_a_missing_finish_from_the_regular_one() {
+        let read = |json: &str| serde_json::from_str::<Carrier>(json).unwrap().finish;
+        let cell = r#""variant":"live","categoryId":1,"cardId":"bolt-m10","labelId":2"#;
+        assert_eq!(read(&format!("{{{cell}}}")), None);
+        assert_eq!(read(&format!(r#"{{{cell},"finish":null}}"#)), Some(None));
+        assert_eq!(
+            read(&format!(r#"{{{cell},"finish":"foil"}}"#)),
+            Some(Some("foil".to_owned()))
+        );
+
+        let regular = Carrier {
+            deck_id: Some(1),
+            variant: "live".to_owned(),
+            category_id: 1,
+            card_id: "bolt-m10".to_owned(),
+            label_id: Some(2),
+            finish: Some(None),
+        };
+        let round = serde_json::to_string(&regular).unwrap();
+        assert_eq!(serde_json::from_str::<Carrier>(&round).unwrap(), regular);
     }
 
     /// `Op::Notes`: a note body another device synced is not overwritten by an undo of an edit

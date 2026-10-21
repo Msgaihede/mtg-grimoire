@@ -972,6 +972,7 @@ async fn trip(state: &Arc<State>, sched: &mut Scheduler) -> Option<String> {
     // `pulled`: a pull can delete rows here through the moot arm, and the conversions behind it
     // write rows, with nothing applied (`RelayOutcome::changed`).
     if let Ok(Some(o)) = outcome {
+        o.settle_owned(state);
         if o.changed || o.pushed > 0 {
             crate::events::emit(&*state.events, "sync:applied", &o);
         }
