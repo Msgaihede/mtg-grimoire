@@ -164,6 +164,37 @@ pub fn score(
     }
 }
 
+/// What a decision settled, for the two numbers the Neural printing work is read on: the
+/// floor (how often a *resolved* decision names another printing of the card) and the bar
+/// (how often it names the reader's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Settled {
+    /// Resolved, on the printing the reader named.
+    RightPrinting,
+    /// Resolved, on another printing of the reader's card.
+    WrongPrinting,
+    /// The decision offered several printings to pick from. Whatever it listed first is a
+    /// guess, not a settled printing, so it is neither right nor wrong here.
+    Ambiguous,
+    /// Another card decided on, no decision, or a run that could not be replayed.
+    Other,
+}
+
+/// `ambiguous` is whether the decision was offered as a choice. It outranks the score of a
+/// decision that was made: a right first choice among three is not a resolved right printing,
+/// and counting it as one would hide how often the scanner can only guess. Every ambiguous
+/// decision lands here, whatever its first choice scored, so the count of them is the one the
+/// replay has always printed as `ambiguous`.
+pub fn settled(score: Score, ambiguous: bool) -> Settled {
+    match (score, ambiguous) {
+        (Score::Printing | Score::Card | Score::Wrong, true) => Settled::Ambiguous,
+        (Score::Printing, false) => Settled::RightPrinting,
+        (Score::Card, false) => Settled::WrongPrinting,
+        _ => Settled::Other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +284,25 @@ mod tests {
         assert_eq!(score("p1", Some("o1"), Some("P1"), Some("o1")), Score::Printing);
         assert_eq!(score("p1", Some("o1"), Some("p2"), Some("o1")), Score::Card);
         assert_eq!(score("p1", Some("o1"), Some("p3"), Some("o9")), Score::Wrong);
+    }
+
+    #[test]
+    fn a_resolved_decision_settles_right_or_wrong_and_an_ambiguous_one_never_does() {
+        assert_eq!(settled(Score::Printing, false), Settled::RightPrinting);
+        assert_eq!(settled(Score::Card, false), Settled::WrongPrinting);
+        assert_eq!(
+            settled(Score::Printing, true),
+            Settled::Ambiguous,
+            "a right first choice is not a settled printing"
+        );
+        assert_eq!(settled(Score::Card, true), Settled::Ambiguous);
+        assert_eq!(
+            settled(Score::Wrong, true),
+            Settled::Ambiguous,
+            "an ambiguous decision is counted as one whatever its first choice scored"
+        );
+        assert_eq!(settled(Score::Wrong, false), Settled::Other);
+        assert_eq!(settled(Score::Undecided, false), Settled::Other);
     }
 
     /// A scan of a printing newer than the local card data: no oracle on one side. Only the

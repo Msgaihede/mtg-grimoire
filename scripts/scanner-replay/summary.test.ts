@@ -134,7 +134,27 @@ describe("the replay's summary", () => {
     expect(tally(runs, "Exact")).toMatchObject({ undecided: 2, unresolved: 1 });
     const text = summaryMarkdown(results(runs), null);
     expect(text).toContain("never resolved");
-    expect(text).toMatch(/\| Exact \| 3 \| 33\.3 \| 33\.3 \| 0 \| 66\.7 \| 0 \| 0 \| 9 \| 1 \|/);
+    expect(text).toMatch(/\| Exact \| 3 \| 33\.3 \| 33\.3 \| 0 \| 66\.7 \| 0 \| 1 \| 0 \| 0 \| — \| — \| 9 \| 1 \|/);
+  });
+
+  it("counts what the floor and the bar are read on: resolved right, resolved wrong printing, and the ambiguous ones' choices", () => {
+    const runs = [
+      run({ id: "a", passes: [pass("Neural", "printing", { settled: "right_printing" })] }),
+      run({ id: "b", passes: [pass("Neural", "card", { settled: "wrong_printing" })] }),
+      run({ id: "c", passes: [pass("Neural", "printing", { ambiguous: true, settled: "ambiguous", choices: 3 })] }),
+      run({ id: "d", passes: [pass("Neural", "card", { ambiguous: true, settled: "ambiguous", choices: 3 })] }),
+      run({ id: "e", passes: [pass("Neural", "wrong", { ambiguous: true, settled: "ambiguous", choices: 28 })] }),
+    ];
+    const t = tally(runs, "Neural");
+    expect(t).toMatchObject({ resolvedRight: 1, resolvedWrongPrinting: 1, ambiguous: 3, medianChoices: 3 });
+    expect(t.meanChoices).toBeCloseTo(11.33, 2);
+    const text = summaryMarkdown(results(runs), null);
+    expect(text).toContain("resolved right | resolved wrong printing | ambiguous | median choices | mean choices");
+    expect(text).toMatch(/\| Neural \| 5 \|.* \| 1 \| 1 \| 3 \| 3 \| 11\.3 \|/);
+    expect(tally([run({ passes: [pass("Neural", "printing", { settled: "right_printing" })] })], "Neural")).toMatchObject({
+      medianChoices: null,
+      meanChoices: null,
+    });
   });
 
   it("counts a replay that could not be compared apart from one that differed", () => {

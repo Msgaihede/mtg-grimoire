@@ -463,4 +463,33 @@ Behaviour: once `load_neural` has answered OK, `scanner.ts` starts `fetchNeuralE
 
 ## Baseline
 
-*(Filled in by Task 1, Step 5.)*
+Measured 2026-10-21 by Task 1 on commit `eaf1125aa` plus the Task 1 replay changes (`+dirty`),
+with `pnpm scanner:replay` and the shipped bundle `apps/desktop/src-tauri/scanner-assets/card-hashes.bin`
+(122,390 printings). The corpus mirror holds exactly 124 scans, received 2026-10-12 to 2026-10-15
+(the labels' `received_at`), so the test set and "everything present" are the same 124. Nothing
+was pulled from R2.
+
+**The Neural pass, 124 scans** (`results.json` `passes[name = "Neural"]`):
+
+| measure | value |
+| --- | ---: |
+| card ✓ (the reader's card: printing or another printing of it) | 119 (96.0 %) |
+| printing ✓ (first choice is the reader's printing, ambiguous included) | 112 (90.3 %) |
+| wrong card | **0** |
+| undecided | 5 (4.0 %) |
+| resolved right | **77** |
+| resolved wrong printing (**the floor**) | **0** |
+| ambiguous | **42** |
+| median choices (over the 42 ambiguous) | 2 |
+| mean choices (over the 42 ambiguous) | 2.2 (94 choices in all: thirty-four decisions of 2, six of 3, two of 4) |
+| `true_in_choices` | **41** |
+
+Resolved right + `true_in_choices` = 77 + 41 = **118**, the "today's 118" of Task 13 Step 3. The 42
+ambiguous decisions are the 42 of "ambiguous < 42"; the other 5 of the 124 are undecided. The 119
+card ✓ are the 77 resolved right, the 42 ambiguous and 0 resolved wrong printing: a right first
+choice among the ambiguous still scores `printing`, which is why the bar is not read on
+`printing ✓`.
+
+For reference, the same replay's other passes: As scanned and Exact are identical (49 resolved
+right, 2 resolved wrong printing, 24 ambiguous, 10 wrong card, 45 undecided, 34 never resolved);
+Fast has 42 resolved right, 11 resolved wrong printing, 12 wrong card, 59 undecided.

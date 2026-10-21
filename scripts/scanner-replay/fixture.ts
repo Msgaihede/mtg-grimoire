@@ -26,6 +26,8 @@ export function pass(name: string, score: Score, over: Partial<Pass> = {}): Pass
     mode: name === "Exact" ? "exact" : name === "Neural" ? "neural" : "fast",
     score,
     ambiguous: false,
+    settled: score === "printing" ? "right_printing" : score === "card" ? "wrong_printing" : "other",
+    choices: 0,
     true_in_choices: false,
     got: score === "undecided" || score === "error" ? null : { id: GOT_IDS[score], name: "Shock", set: "m19", number: "156" },
     first_decision_frame: score === "undecided" || score === "error" ? null : 9,

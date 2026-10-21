@@ -44,7 +44,7 @@ use card_scanner::host;
 use card_scanner::index::{format_uuid, parse_uuid, Bundle, ID_LEN};
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::replay::{cut, parse_label, score, ScanLabel, Score};
+use card_scanner::replay::{cut, parse_label, score, settled, ScanLabel, Score, Settled};
 use card_scanner::resolve::TierView;
 use card_scanner::session::{
     CollectorTry, FrameOptions, Outcome, ResolveOn, ScanMode, Session, Verdict,
@@ -306,6 +306,11 @@ struct PassOut {
     mode: ScanMode,
     score: Score,
     ambiguous: bool,
+    /// What the decision settled: the floor and the bar are counted on this, not on `score`,
+    /// because an ambiguous decision's first choice scores as a printing it only guessed.
+    settled: Settled,
+    /// How many printings the decision offered; 0 when it offered none.
+    choices: usize,
     true_in_choices: bool,
     got: Option<Got>,
     /// 1-based. The frame the first decision was made on.
@@ -335,6 +340,8 @@ impl PassOut {
             mode: pass.mode,
             score: Score::Undecided,
             ambiguous: false,
+            settled: Settled::Other,
+            choices: 0,
             true_in_choices: false,
             got: None,
             first_decision_frame: None,
@@ -486,6 +493,8 @@ fn run_pass(
         let got_oracle = d.oracle_id.clone().or_else(|| oracle_of(&d.printing));
         out.score = score(&label.card.id, truth_oracle, Some(&d.printing), got_oracle.as_deref());
         out.ambiguous = d.outcome == Outcome::Ambiguous;
+        out.settled = settled(out.score, out.ambiguous);
+        out.choices = d.choices.len();
         out.true_in_choices =
             out.ambiguous && d.choices.iter().any(|c| c.id.eq_ignore_ascii_case(&label.card.id));
         out.got = Some(Got {
@@ -1464,7 +1473,7 @@ mod tests {
         let pass = &run["passes"][0];
         assert_eq!(
             keys(pass),
-            set(&["name", "mode", "score", "ambiguous", "true_in_choices", "got",
+            set(&["name", "mode", "score", "ambiguous", "settled", "choices", "true_in_choices", "got",
                 "first_decision_frame", "decision_frame", "decisions", "resolve_ran",
                 "locked_frames", "confidence", "distance", "frames", "tiers", "slices", "error"])
         );

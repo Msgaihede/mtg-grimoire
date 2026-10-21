@@ -2,6 +2,11 @@
 // these facts; every count and comparison drawn from them is `summary.ts`'s.
 
 export type Score = "printing" | "card" | "wrong" | "undecided" | "error";
+/**
+ * What a decision settled. An ambiguous one is neither right nor wrong: its first choice scores
+ * as a printing it only guessed.
+ */
+export type Settled = "right_printing" | "wrong_printing" | "ambiguous" | "other";
 export type Mode = "fast" | "exact" | "neural";
 export type Card = { id: string; set: string; number: string; lang: string; name: string };
 export type Got = { id: string; name: string | null; set: string | null; number: string | null };
@@ -36,6 +41,9 @@ export type Pass = {
   mode: Mode;
   score: Score;
   ambiguous: boolean;
+  settled: Settled;
+  /** How many printings the decision offered; 0 when it offered none. */
+  choices: number;
   true_in_choices: boolean;
   got: Got | null;
   /** 1-based; the first decision. */
