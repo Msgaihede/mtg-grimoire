@@ -1056,6 +1056,7 @@ describe("the filter bar's sort picker", () => {
     price: true,
     manaValue: true,
     released: true,
+    imageUpdated: true,
   };
 
   /**

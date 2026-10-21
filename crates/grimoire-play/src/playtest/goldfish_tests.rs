@@ -1700,6 +1700,47 @@ fn a_type_and_a_granted_trigger_are_told_with_their_source() {
     );
 }
 
+/// Issue #1328: a "you may" in an ability the reader activated asks with the ability's words, so
+/// the board can say what is being agreed to — not the card's name alone.
+#[test]
+fn a_may_in_an_activated_ability_asks_with_its_words() {
+    let step = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Wishing Stone",
+            Some("{1}"),
+            "Artifact",
+            "{1}, {T}: You may draw a card.",
+            None,
+            1,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        for _ in 0..2 {
+            put_down(&mut game, "Forest");
+        }
+        let stone = put_down(&mut game, "Wishing Stone");
+        let mut step = game.act(A::Activate { id: stone }).expect("activate");
+        for _ in 0..4 {
+            if step.view.prompt.is_some() {
+                break;
+            }
+            step = game.act(A::Pass).expect("pass");
+        }
+        step
+    });
+    let prompt = step.view.prompt.as_ref().expect("the may is asked");
+    assert_eq!(prompt.kind, "OptionalEffectChoice", "{:?}", step.happened);
+    assert_eq!(prompt.source.as_deref(), Some("Wishing Stone"));
+    assert!(
+        prompt
+            .source_text
+            .as_deref()
+            .is_some_and(|t| t.to_lowercase().contains("draw a card")),
+        "the question names its ability's words: {prompt:?}"
+    );
+}
+
 /// A game whose library holds Invoke Calamity, cheap for the test, and one instant to cast with
 /// it — moved to the graveyard by hand, so the free-cast window offers the graveyard alone.
 fn calamity() -> (Playtest, u64, u64) {

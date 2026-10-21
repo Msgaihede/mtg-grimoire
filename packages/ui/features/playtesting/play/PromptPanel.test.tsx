@@ -1,7 +1,12 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PlaytestPrompt } from "@/lib/ipc";
-import { castChoicePrompt, orderTriggersPrompt, targetPrompt } from "./fixtures";
+import {
+  castChoicePrompt,
+  optionalEffectPrompt,
+  orderTriggersPrompt,
+  targetPrompt,
+} from "./fixtures";
 import { PromptPanel } from "./PromptPanel";
 
 function setup(prompt: PlaytestPrompt, disabled = false) {
@@ -78,6 +83,23 @@ describe("PromptPanel", () => {
     });
     const line = screen.getByText("Impact Tremors for Grizzly Bears");
     expect(line.getAttribute("title")).toBe(`Impact Tremors: ${text} (for Grizzly Bears)`);
+  });
+
+  it("says the ability a yes or a no agrees to, its mana symbols drawn (issue #1328)", () => {
+    const prompt = optionalEffectPrompt().view.prompt!;
+    const { onAct } = setup(prompt);
+    expect(screen.getByRole("heading", { name: "Do you want to…?" })).toBeInTheDocument();
+    expect(screen.getByText("Windbrisk Heights")).toBeInTheDocument();
+    const words = screen.getByText(/You may play the exiled card/).closest("p")!;
+    expect(words.getAttribute("title")).toBe(prompt.sourceText);
+    expect(words).not.toHaveTextContent("{T}");
+    fireEvent.click(screen.getByRole("button", { name: "Yes" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "choose", index: 1 });
+  });
+
+  it("draws no words for a question about no ability", () => {
+    setup(castChoicePrompt().view.prompt!);
+    expect(document.querySelector("p[title]")).toBeNull();
   });
 
   it("offers only the engine's choice for a question it cannot draw", () => {

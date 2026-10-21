@@ -8,6 +8,7 @@ import {
 } from "./cardZoom";
 import type { Finish } from "./finish";
 import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } from "./multiSelect";
+import type { SortSpec } from "./sort";
 import {
   INITIAL_EXPORT_PREFS,
   INITIAL_IMPORT_DEFAULTS,
@@ -16,7 +17,13 @@ import {
 } from "@/features/transfer/prefs";
 import type { TransferSurface } from "@/features/transfer/fields";
 import type { SweepScope } from "@/features/wishlist/wholeWishlistQuery";
-import type { DeckFinish, DeckVariant, PriceMoverWindow, ScannerTrayChoice } from "./ipc";
+import type {
+  DeckFinish,
+  DeckVariant,
+  PriceMoverWindow,
+  ScannerTrayChoice,
+  SearchSortKey,
+} from "./ipc";
 import type { MarketplaceId } from "./marketplace";
 
 /**
@@ -748,10 +755,21 @@ interface AppState {
    * asking every caller to remember it.
    */
   pendingSearchSet: string | null;
+  /**
+   * **The order {@link pendingSearchSet} asked to be read in**, or `null` to keep the reader's
+   * own — the other half of the same hand-off, written and spent with it.
+   *
+   * Only the Coming soon widget names one (issue #1214): a set that is still being previewed is
+   * read newest preview first, so its press opens on `imageUpdated` descending. Every other
+   * writer — the card modal's set name, the price history's set — leaves the sort where the reader
+   * left it, which is `showOnlySet`'s rule.
+   */
+  pendingSearchSort: SortSpec<SearchSortKey> | null;
   /** Go to the Search view showing every card in one set — the view change and the hand-off in
-   *  one action, so no caller can write them in the order that wipes the second. */
-  showSetInSearch: (setCode: string) => void;
-  /** Spend it — `SearchPage`, on the commit it applied it. */
+   *  one action, so no caller can write them in the order that wipes the second. `sort`, when
+   *  given, is the order that set opens in ({@link pendingSearchSort}). */
+  showSetInSearch: (setCode: string, sort?: SortSpec<SearchSortKey>) => void;
+  /** Spend it, sort and all — `SearchPage`, on the commit it applied it. */
   clearPendingSearchSet: () => void;
   /**
    * **The search a press somewhere else asked the Collection page to open on** — the wishlist
@@ -1445,6 +1463,7 @@ export const useAppStore = create<AppState>((set) => ({
         // The search hand-off, for the folder's reason on the line above. `showSetInSearch` writes
         // it *after* calling this, which is the order that survives.
         pendingSearchSet: null,
+        pendingSearchSort: null,
         // The wishlist's owned chips' hand-off, for the same reason (`showInCollection`).
         pendingCollectionQuery: null,
         // The home page's three other hand-offs, for the folder's reason three lines up: each is
@@ -1727,11 +1746,12 @@ export const useAppStore = create<AppState>((set) => ({
   pendingSearchSet: null,
   // Two `set`s rather than one, so the navigation half stays `setActiveView`'s own and cannot
   // drift from it — and the hand-off second, because the first clears it.
-  showSetInSearch: (setCode) => {
+  pendingSearchSort: null,
+  showSetInSearch: (setCode, sort) => {
     useAppStore.getState().setActiveView("search");
-    set({ pendingSearchSet: setCode });
+    set({ pendingSearchSet: setCode, pendingSearchSort: sort ?? null });
   },
-  clearPendingSearchSet: () => set({ pendingSearchSet: null }),
+  clearPendingSearchSet: () => set({ pendingSearchSet: null, pendingSearchSort: null }),
   pendingCollectionQuery: null,
   // `showSetInSearch`'s two `set`s, for its reason: the view first, because it clears the second.
   showInCollection: (query) => {

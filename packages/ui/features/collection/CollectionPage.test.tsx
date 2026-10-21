@@ -307,6 +307,7 @@ const SEARCH_LOTUS: CardSummary = {
   priceHigh: 12000,
   gameChanger: false,
   releasedAt: null,
+  imageUpdatedAt: null,
 };
 
 /** What `search_cards` answers. `totalIsCapped` false, so the caption is a plain count. */

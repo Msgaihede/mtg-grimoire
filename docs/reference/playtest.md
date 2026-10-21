@@ -650,7 +650,8 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
   ("Targeting Tarmogoyf and you"). Its one button, "Let it resolve", is `pass`; it is not modal,
   and the stage buttons stay as they are. A step's stop with the stack empty asks nothing there.
 - **The prompt** docks at the bottom over the hand, at most 640 × 104, and the reader's plate moves
-  to the edge while it is up. **The picker** sits centred over the middle, up to 820 px wide.
+  to the edge while it is up. A question about an ability ("Do you want to…?") shows the ability's
+  words beside its answers, two lines at most and whole in the tooltip (issue #1328). **The picker** sits centred over the middle, up to 820 px wide.
 
 **The middle line** is a turn tracker: Beginning · Main 1 · Combat · Main 2 · End, the current
 phase lit in the active seat's colour, and a caption that names the step, such as "Turn 6 ·

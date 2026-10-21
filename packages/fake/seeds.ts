@@ -3159,6 +3159,10 @@ function upcomingCards(): FakeCard[] {
         setName: set.name,
         collectorNumber: String(i + 1),
         releasedAt: dayAfter(inDays),
+        // A preview posted on each of the days before the seed's clock, **newest last in
+        // collector order** — so the Coming soon press's `Image updated` sort (issue #1214) reads
+        // as a reversal of the set's own order rather than as no sort at all.
+        imageUpdatedAt: `${dayAfter(i - set.printings.length)}T16:00:00Z`,
         prices:
           '{"eur":null,"eur_foil":null,"tix":null,"usd":null,"usd_etched":null,"usd_foil":null}',
         priceUsd: null,

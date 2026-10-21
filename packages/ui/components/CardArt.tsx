@@ -5,7 +5,12 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { type Treatment, treatmentTitle } from "@/lib/treatment";
-import { releaseChipLabel, unreleasedLabel } from "@/lib/unreleased";
+import {
+  imageUpdatedChipLabel,
+  releaseChipLabel,
+  unreleasedLabel,
+  type UnreleasedStamp,
+} from "@/lib/unreleased";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 
@@ -164,14 +169,15 @@ export function CardArt({
   gameChanger?: boolean;
   /**
    * A printing that is **not out yet** — its set code and release date, drawn as the red
-   * "Releases <date>" chip in the art's bottom-left corner by {@link UnreleasedChip}. `null` (the
+   * "Releases <date>" chip in the art's bottom-left corner by {@link UnreleasedChip}, with an
+   * "Image updated <day>" line above it when the stamp carries one (issue #1214). `null` (the
    * default) draws nothing.
    *
    * Derived by the caller with `unreleasedStamp` from `@/lib/unreleased`, for `finish`'s reason:
    * only a printing-shaped row knows its date, and a frame that guessed would mark the wrong
    * cards (issues #940, #965).
    */
-  unreleased?: { set: string; date: string } | null;
+  unreleased?: UnreleasedStamp | null;
   /**
    * The browser's own intersection gate on this frame's `<img>`. **Absent by default, which
    * emits no attribute at all** — the argued position, not an omission; see where it is passed
@@ -275,7 +281,13 @@ export function CardArt({
         </span>
       )}
 
-      {unreleased && <UnreleasedChip set={unreleased.set} date={unreleased.date} />}
+      {unreleased && (
+        <UnreleasedChip
+          set={unreleased.set}
+          date={unreleased.date}
+          imageUpdated={unreleased.imageUpdated}
+        />
+      )}
       <FoilOverlay finish={finish} treatments={treatments} gameChanger={gameChanger} />
     </span>
   );
@@ -303,18 +315,33 @@ export function CardArt({
  * vertical padding, which stay put like the rule-break box's. So its height is a 0.75rem scaled line
  * plus 4px, and `CardGrid` lifts the owned badge by exactly that sum when both are drawn.
  *
+ * **Two lines when the image's day is known** (issue #1214): "Image updated <day>" over
+ * "Releases <date>", on one box — how fresh the preview's picture is, then when the card is out.
+ * The second line is another 0.75rem scaled, and `CardGrid`'s lift counts it.
+ *
  * `aria-hidden` for {@link FoilOverlay}'s reason: this sits inside the tile's button, whose
  * accessible name must stay the card's. Its words are still reachable — the tooltip names the set
  * too, and the search table's Name cell says it in text. `pointer-events-auto` on the chip alone,
  * for the tooltip; a click on it bubbles to the tile's button and opens the card.
  */
-export function UnreleasedChip({ set, date }: { set: string; date: string }) {
+export function UnreleasedChip({
+  set,
+  date,
+  imageUpdated,
+}: {
+  set: string;
+  date: string;
+  imageUpdated?: string | undefined;
+}) {
   const tip = useTooltip();
+  const words = `${set} · ${unreleasedLabel(date)}`;
   return (
     <span
       aria-hidden="true"
       data-unreleased-chip
-      {...tip(`${set} · ${unreleasedLabel(date)}`, { describes: false })}
+      {...tip(imageUpdated ? `${words} · ${imageUpdatedChipLabel(imageUpdated)}` : words, {
+        describes: false,
+      })}
       className={cn(
         "pointer-events-auto absolute select-none whitespace-nowrap",
         "bottom-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
@@ -325,7 +352,16 @@ export function UnreleasedChip({ set, date }: { set: string; date: string }) {
         "text-[calc(0.5625rem*var(--mark-scale,1))] leading-[calc(0.75rem*var(--mark-scale,1))]",
       )}
     >
-      {releaseChipLabel(date)}
+      {imageUpdated ? (
+        <>
+          <span className="block" data-image-updated>
+            {imageUpdatedChipLabel(imageUpdated)}
+          </span>
+          <span className="block">{releaseChipLabel(date)}</span>
+        </>
+      ) : (
+        releaseChipLabel(date)
+      )}
     </span>
   );
 }
