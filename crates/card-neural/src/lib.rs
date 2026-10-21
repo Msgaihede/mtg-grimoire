@@ -24,6 +24,7 @@ use std::borrow::Cow;
 
 pub mod detect;
 pub mod embed;
+pub mod evidence;
 pub mod frame;
 pub mod gallery;
 pub mod meta;
@@ -31,6 +32,7 @@ pub mod narrow;
 pub mod scanner;
 pub mod session;
 
+pub use evidence::{Evidence, EvidenceFiles, EvidenceIndex, EvidenceNets, Glance};
 pub use frame::Frame;
 pub use gallery::{Admit, Gallery};
 pub use meta::Meta;
