@@ -32,7 +32,7 @@ timm (lab and `crates/card-neural/train/`), Modal.
 - **Size target** (Claude's call, from the design's ~40 MB estimate): each crop network ≤ 3 MB; the evidence files together ≤ 20 MB.
 - **Only our own weights**, trained on Scryfall images. Nothing from `E:\mtg-scanner\data\quickdraw\`.
 - **Test set:** the 124 readers' scans up to 2026-10-15 are never trained on; thresholds are tuned on them by grouped cross-validation only. The newer scans are neither trained nor tuned on in this work — they are the owner's merge gate (Task 13).
-- **Monthly retraining ≤ $10 a run** (`budget.HARD_LIMIT_USD`).
+- **Monthly retraining ≤ $10 a run** (`budget.HARD_LIMIT_USD`) (raised to $15 by the owner, 2026-10-21).
 - **Lab first:** networks, crop boxes and thresholds are found in `E:\mtg-scanner`; only the production recipe lands in `crates/card-neural/train/`.
 - **Testing:** run only the task's own tests while working (repo `CLAUDE.md`); `pnpm verify` once, in Task 13.
 - **Commits:** Conventional Commits, ending `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.

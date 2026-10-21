@@ -1,6 +1,6 @@
 """What a training run may spend on Modal, and the ledger that holds it to that.
 
-**The owner's hard limit is $10 a run** (2026-10-20). Modal cannot enforce it per run: GPU
+**The owner's hard limit is $15 a run** (2026-10-21; was $10 from 2026-10-20). Modal cannot enforce it per run: GPU
 containers are always preemptible, a preempted container restarts with a fresh timeout, and
 budgets are per workspace and per month. So each stage keeps its own ledger on the Volume —
 the container-seconds it has used across every attempt — and stops itself before its share of
@@ -26,7 +26,7 @@ CPU_CORE_PER_S = 0.0000131  # a physical core (two vCPUs)
 MEMORY_GIB_PER_S = 0.00000222
 
 # The hard limit, and what is set aside before the four trainings share the rest.
-HARD_LIMIT_USD = 10.0
+HARD_LIMIT_USD = 15.0
 REFRESH_USD = 0.25  # the Scryfall refresh: a few CPU minutes
 PIPELINE_USD = 0.10  # the orchestrator: a quarter core for the length of the run
 # The refresh's container (no GPU), here rather than in `modal_app.py` because its rate is part of
@@ -39,7 +39,8 @@ REFRESH_MEMORY_GIB = 4
 # symbol network 12 epochs (~57 min) and the collector band's 14 (~60 min), at the ~450 views/s
 # they drew on the owner's machine. `train/README.md` ("The budget") has the arithmetic. The
 # trainings share what the refresh, the orchestrator and the watchdogs' reserve leave in
-# proportion to these, so each gets its estimate and the same margin: ~11 % at the default $10.
+# proportion to these, so each gets its estimate and the same margin: ~71 % at the default $15 ($14.23 shared over
+# estimates of $8.30; it was ~11 % at $10).
 ESTIMATE_USD = {"embedder": 2.01, "detector": 2.33, "symbol": 1.92, "band": 2.04}
 # Charged once per container start, on top of the seconds the watchdog sees: scheduling and the
 # image pull happen before any of this code runs.

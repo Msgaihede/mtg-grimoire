@@ -2,7 +2,7 @@
 
     modal deploy crates/card-neural/train/modal_app.py
     python crates/card-neural/train/launch.py --run 2026-11 [--no-detector] [--cpu 16]
-           [--memory-gib 24] [--budget-usd 10] [--smoke] [--git-sha <sha>]
+           [--memory-gib 24] [--budget-usd 15] [--smoke] [--git-sha <sha>]
 
 Prints one JSON line, `{"run": …, "call_id": …}`. The run goes on on Modal for an hour or two;
 `DONE.json` in `runs/<run>/` on the `card-neural` Volume says how it ended, and

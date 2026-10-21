@@ -14,7 +14,7 @@ or ~31 detector scenes a second, and the GPU alone could take 8 400 and 2 000 (b
 on the CPU at any affordable core count, so each training gets 16 physical cores (two data workers
 each) beside its L4, and all four run at once. ~$8.65 a run estimated (`budget.ESTIMATE_USD`;
 `train/README.md`, "The budget"); every resource is a launch argument, and `budget.py` holds the
-run to the owner's $10 whatever they are.
+run to the owner's $15 whatever they are.
 
 **Preemption**: Modal's GPU containers are always preemptible; a preempted container restarts
 with the same input. The trainers resume from their `checkpoint.pt`, the orchestrator rejoins the

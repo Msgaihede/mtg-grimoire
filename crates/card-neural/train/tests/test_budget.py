@@ -22,14 +22,14 @@ def worst_case_usd(s: dict, rate: float) -> float:
 
 
 class Shares(unittest.TestCase):
-    def test_the_hard_limit_is_the_owners_ten_dollars(self):
-        self.assertEqual(budget.HARD_LIMIT_USD, 10.0)
+    def test_the_hard_limit_is_the_owners_fifteen_dollars(self):
+        self.assertEqual(budget.HARD_LIMIT_USD, 15.0)
 
     def test_six_stages_share_the_budget_less_the_watchdogs_reserve(self):
-        s = budget.shares(10.0, True, RATE)
+        s = budget.shares(budget.HARD_LIMIT_USD, True, RATE)
         self.assertEqual(set(s), {"refresh", "pipeline", "embedder", "detector", "symbol", "band"})
         reserve = budget.overrun_usd(budget.REFRESH_RATE) + 4 * budget.overrun_usd(RATE)
-        self.assertAlmostEqual(sum(s.values()) + reserve, 10.0, places=6)
+        self.assertAlmostEqual(sum(s.values()) + reserve, budget.HARD_LIMIT_USD, places=6)
         self.assertGreater(s["symbol"], 0)
         self.assertGreater(s["band"], 0)
 
@@ -45,27 +45,27 @@ class Shares(unittest.TestCase):
                 self.assertLessEqual(worst_case_usd(s, rate), budget.HARD_LIMIT_USD + 1e-9, (rate, detector))
                 self.assertAlmostEqual(worst_case_usd(s, rate), budget.HARD_LIMIT_USD, places=6)
         with self.assertRaises(ValueError):
-            budget.shares(10.01, True, RATE)
+            budget.shares(15.01, True, RATE)
         with self.assertRaises(ValueError):
             budget.shares(budget.REFRESH_USD + budget.PIPELINE_USD, True, RATE)
 
     def test_without_the_detector_the_other_three_trainings_share_what_is_left(self):
-        s = budget.shares(10.0, False, RATE)
+        s = budget.shares(budget.HARD_LIMIT_USD, False, RATE)
         self.assertEqual(set(s), {"refresh", "pipeline", "embedder", "symbol", "band"})
         reserve = budget.overrun_usd(budget.REFRESH_RATE) + 3 * budget.overrun_usd(RATE)
         self.assertAlmostEqual(s["embedder"] + s["symbol"] + s["band"],
-                               10.0 - budget.REFRESH_USD - budget.PIPELINE_USD - reserve)
+                               budget.HARD_LIMIT_USD - budget.REFRESH_USD - budget.PIPELINE_USD - reserve)
 
     def test_each_training_is_shared_its_estimate_and_a_margin(self):
         # 16 cores, 24 GiB, an L4: $1.75 an hour. The four trainings' estimates come to ~$8.30 of the
-        # ~$9.23 left after the refresh, the orchestrator and the watchdogs' reserve, so each gets
-        # its estimate plus ~11 %.
+        # ~$14.23 left after the refresh, the orchestrator and the watchdogs' reserve, so each gets
+        # its estimate plus ~71 %.
         self.assertAlmostEqual(RATE * 3600, 0.799 + 16 * 0.04716 + 24 * 0.007992, places=2)
-        s = budget.shares(10.0, True, RATE)
+        s = budget.shares(budget.HARD_LIMIT_USD, True, RATE)
         estimated = sum(budget.ESTIMATE_USD.values()) + budget.REFRESH_USD + budget.PIPELINE_USD
         self.assertLessEqual(estimated, 9.0, "the owner's ~$9 a run")
         for stage, usd in budget.ESTIMATE_USD.items():
-            self.assertGreater(s[stage], 1.1 * usd, stage)
+            self.assertGreater(s[stage], 1.7 * usd, stage)
             hours = usd / (RATE * 3600)
             self.assertGreater(budget.max_seconds(s[stage], RATE), hours * 3600, stage)
         # The embedder and the detector keep the ratio their measured estimates had.

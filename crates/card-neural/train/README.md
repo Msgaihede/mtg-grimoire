@@ -209,7 +209,7 @@ neural-train → Run workflow_ (run `YYYY-MM-DD-HHMM`, UTC, with `-smoke` after 
 | `detector`   | on      | off keeps the current `detector.onnx`; the embedder and the evidence networks retrain    |
 | `cpu`        | 16      | physical cores for each training container, 1 to 64                                      |
 | `memory_gib` | 24      | GiB for each training container, 4 to 256                                                |
-| `budget_usd` | 10      | the run's limit in dollars; more than 10 is refused before anything is deployed          |
+| `budget_usd` | 15      | the run's limit in dollars; more than 15 is refused before anything is deployed          |
 | `smoke`      | off     | one epoch and 300 detector steps, for cents: proves the plumbing, and is never delivered |
 
 With `detector` off the three other trainings share the budget in the same proportions.
@@ -261,16 +261,17 @@ prints the pull request's body: nothing tested, pushed or written.
      fallback needs _Settings → Actions → General → Allow GitHub Actions to create and approve
      pull requests_. The token expires when you chose; a delivery after that fails at the push.
 4. **A budget on the Modal workspace** (_Usage & Billing_, `/settings/usage`), the backstop behind
-   the $10 a run: Modal stops work that would pass it. $25 a month leaves room for a run by hand
-   beside the monthly one (~$9 each).
+   the $15 a run: Modal stops work that would pass it. $25 a month leaves room for one run plus a
+   smoke run, not two runs (a run is ~$9 expected, up to $15 allowed) — raise the cap in Modal's
+   settings if you want a run by hand beside the monthly one.
 5. **A first, cheap run**: _neural-train_ with `smoke` on, then, once it is done (the first one
    also builds the image and downloads every Scryfall scan to the Volume), _neural-deliver_ with
    `run` set to its name.
 
 ## The budget
 
-**The owner's hard limit is $10 a run** (`budget.HARD_LIMIT_USD`, never raised), and the owner
-accepts about $9 a run for all four networks (2026-10-21). The default training container is an
+**The owner's hard limit is $15 a run** (`budget.HARD_LIMIT_USD`; raised from $10 on 2026-10-21),
+and the owner accepts about $9 a run for all four networks (2026-10-21). The default training container is an
 L4, 16 physical cores and 24 GiB: $0.000222 + 16 × $0.0000131 + 24 × $0.00000222 = **$0.000485 a
 second, $1.75 an hour** (`budget.rate_per_s`, Modal's list prices of 2026-10-20). Training is
 CPU-bound, and the estimates take Modal's 16 cores to draw views as fast as the owner's 12-core
@@ -290,7 +291,7 @@ disk (~5 min), the training and the export:
 
 **Why the evidence networks' epochs were cut.** At the shipped runs' 16 and 20 epochs (74 and
 82 minutes on the owner's machine) the two would cost ~$2.41 and ~$2.68, and a run ~$9.78: over
-the ~$9 the owner accepts, with no margin under the $10 for any stage. Their logs
+the ~$9 the owner accepts, with no margin under the old $10 limit for any stage. Their logs
 (`E:\mtg-scanner\data\runs\ev-symbol-3\log.jsonl`, `ev-band-2\log.jsonl`) show little past
 the new ends: the symbol network's within-card top-1 was **0.927 at epoch 12** (its best; 0.926
 at 16), the band's **0.945 at epoch 14** (0.946 at 18 and 20). Those readings were taken partway
@@ -303,17 +304,19 @@ can let a stage spend past it, once: a retry admitted just under its share is ch
 start, the watchdog sees the share gone only at its next 30-second tick, and the command it stops
 has 60 seconds to exit, seconds no ledger records — `budget.OVERRUN_S`, 210 s
 (`START_OVERHEAD_S` + `GUARD_TICK_S` + `KILL_TIMEOUT_S`). At $0.000485 a second that is $0.10 a
-training and $0.01 for the refresh (4 cores, no GPU): **$0.42 is set aside** at the defaults
+training and $0.01 for the refresh (4 cores, no GPU): **$0.42 is set aside** at the defaults, at any budget
 (`budget.overrun_usd`), so the shares and every stage's worst overrun together come to the
 budget and never past it (`tests/test_budget.py` holds that at 1, 16 and 64 cores). The copy of
 the dataset watches the watchdog too, so a share spent mid-copy stops it.
 
 **The shares** (`budget.shares`): the refresh's $0.25, the orchestrator's $0.10 and the reserve's
-$0.42 are set aside, and the trainings share the remaining $9.23 in proportion to their estimates
-(`ESTIMATE_USD`): each gets its estimate × 1.11 — embedder $2.24 (75 min of container time),
-detector $2.59 (87 min), symbol $2.14 (71 min), band $2.27 (76 min), every one above its estimate's
-minutes in the table, so no epochs were cut for the reserve. The six shares and the reserve sum to
-the budget, and the embedder and detector keep their old 46 : 54. A margin of 11 % is thin: a
+$0.42 are set aside, and the trainings share the remaining $14.23 in proportion to their estimates
+(`ESTIMATE_USD`): each gets its estimate × 1.71 — embedder $3.45 (116 min of container time),
+detector $3.99 (135 min), symbol $3.29 (111 min), band $3.50 (118 min), every one well above its
+estimate's minutes in the table. (At the old $10 limit the factor was 1.11 and the shares
+$2.24, $2.59, $2.14 and $2.27.) The expected spend is unchanged at ≈ $8.65: the shares spread the
+whole run budget, so each stage's headroom grew, not its estimate; the epochs stay 12 and 14. The six shares and the reserve sum to
+the budget, and the embedder and detector keep their old 46 : 54. A margin of 71 % is ample: a
 stage that runs past its share is stopped and the run fails, undelivered. Two things the reserve
 does not cover: the orchestrator has no watchdog (its $0.10 is ~6 hours of a quarter core, longer
 than any run's three attempts a stage), and a container preempted between two ticks takes up to
