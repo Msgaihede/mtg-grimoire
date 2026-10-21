@@ -276,7 +276,8 @@ const tileGameChanger = (card: CardSummary) => card.gameChanger;
  * the deck builder's search panel: a spoiler stamped on one wall and bare on another would be
  * the mark meaning something about the wall rather than the card.
  */
-export const tileUnreleased = (card: CardSummary) => unreleasedStamp(card.setCode, card.releasedAt);
+export const tileUnreleased = (card: CardSummary) =>
+  unreleasedStamp(card.setCode, card.releasedAt, undefined, card.imageUpdatedAt);
 
 /**
  * The card a right-click on a result is about — the same object for a tile and for a table row,
@@ -355,6 +356,9 @@ export function SearchPage() {
    * goes back to `null` once the store has, so pressing the same set's name again still lands.
    */
   const pendingSet = useAppStore((s) => s.pendingSearchSet);
+  // The order that set asked to open in — only the Coming soon widget names one (issue #1214).
+  // Spent with the set by the same `clearPendingSearchSet`.
+  const pendingSort = useAppStore((s) => s.pendingSearchSort);
   const clearPendingSet = useAppStore((s) => s.clearPendingSearchSet);
   // The header's quick search hand-off (issue #1098) — `pendingSearchText`, answered exactly as
   // the set is above: a seed on a mount, a render-phase adjustment on a page already mounted, and
@@ -365,6 +369,7 @@ export function SearchPage() {
   const tags = useTagSelection();
   const search = useCardSearch({
     initialSet: pendingSet,
+    initialSort: pendingSort,
     initialText: pendingText,
     rememberAs: "search",
     tagTerms: tags.tagTerms,
@@ -374,7 +379,7 @@ export function SearchPage() {
   const [appliedSet, setAppliedSet] = useState(pendingSet);
   if (pendingSet !== null && pendingSet !== appliedSet) {
     setAppliedSet(pendingSet);
-    search.showOnlySet(pendingSet);
+    search.showOnlySet(pendingSet, pendingSort);
   } else if (pendingSet === null && appliedSet !== null) {
     setAppliedSet(null);
   }

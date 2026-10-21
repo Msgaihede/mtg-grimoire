@@ -1,4 +1,4 @@
-import { keepPreviousData, skipToken, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, queryOptions, skipToken, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { ipc, type ScannerTrayRow } from "@/lib/ipc";
 import { resolveMarketplace, type Currency, type MarketplaceId } from "@/lib/marketplace";
@@ -13,10 +13,28 @@ import { trayPriceIds, trayPriceMap, trayRowPrice, type TrayPriceMap } from "./t
 export const TRAY_PRICES_KEY = ["cards", "prices"] as const;
 
 /** What one answered read holds: where and for which ids it was asked, and what it quoted. */
-interface Answered {
+export interface Answered {
   marketplace: MarketplaceId;
   asked: ReadonlySet<string>;
   prices: TrayPriceMap;
+}
+
+/**
+ * One batch read of `ids` at `marketplace` — the tray's, and the scan popup's (`useLandedPrice`).
+ * Sorted ids in, so two readers asking about the same printings share one cache entry.
+ */
+export function trayPricesQuery(marketplace: MarketplaceId, ids: readonly string[]) {
+  return queryOptions({
+    queryKey: [...TRAY_PRICES_KEY, marketplace, ids],
+    queryFn:
+      ids.length === 0
+        ? skipToken
+        : async (): Promise<Answered> => ({
+            marketplace,
+            asked: new Set(ids),
+            prices: trayPriceMap(await ipc.printingPrices([...ids], marketplace)),
+          }),
+  });
 }
 
 /**
@@ -51,15 +69,7 @@ export function useTrayPrices(
   const marketplace = at === undefined ? own : resolveMarketplace(at);
   const ids = useMemo(() => trayPriceIds(rows), [rows]);
   const query = useQuery({
-    queryKey: [...TRAY_PRICES_KEY, marketplace.id, ids],
-    queryFn:
-      ids.length === 0
-        ? skipToken
-        : async (): Promise<Answered> => ({
-            marketplace: marketplace.id,
-            asked: new Set(ids),
-            prices: trayPriceMap(await ipc.printingPrices(ids, marketplace.id)),
-          }),
+    ...trayPricesQuery(marketplace.id, ids),
     placeholderData: keepPreviousData,
   });
   const answered = query.data;

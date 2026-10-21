@@ -61,7 +61,9 @@ use engine::types::ability::{EffectKind, KeywordAction, LibraryPosition, TargetR
 use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, MulliganChoice};
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
-use engine::types::game_state::{MulliganDecisionPhase, StackEntry, StackEntryKind, WaitingFor};
+use engine::types::game_state::{
+    CastOfferKind, MulliganDecisionPhase, StackEntry, StackEntryKind, WaitingFor,
+};
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
 use engine::types::statics::{CastFreeOrigin, CastFrequency, StaticMode};
@@ -1508,12 +1510,60 @@ impl Playtest {
                 false,
                 PickAnswer::KeptPermanents,
             ),
+            // "You may cast a spell from among them" (issue #1329): a cast from the hand or a
+            // look at the library picked as the ability resolves, one card or none.
+            WaitingFor::EffectZoneChoice {
+                player,
+                cards,
+                count,
+                min_count,
+                up_to,
+                effect_kind: EffectKind::CastFromZone,
+                ..
+            } if *player == YOU => (
+                PlaytestPickPurpose::Cast,
+                all(cards),
+                all(cards),
+                if *up_to {
+                    (*min_count).min(cards.len())
+                } else {
+                    (*count).min(cards.len())
+                },
+                (*count).min(cards.len()),
+                false,
+                PickAnswer::Cards,
+            ),
+            // A free-cast window — Invoke Calamity's graveyard and hand, or the cards exiled
+            // "from among them": one card cast at a time, or none to close it. The engine
+            // offers the window again after each cast while casts are left.
+            WaitingFor::CastOffer {
+                player,
+                kind: CastOfferKind::FreeCastWindow { candidates, .. },
+            } if *player == YOU => (
+                PlaytestPickPurpose::Cast,
+                all(candidates),
+                all(candidates),
+                0,
+                1,
+                false,
+                PickAnswer::FreeCast,
+            ),
             _ => return None,
         };
         let power_cap = match &self.state.waiting_for {
             WaitingFor::KeepWithinTotalPowerChoice { cap, .. } => Some(*cap),
             _ => None,
         };
+        // Where the cards lie, when they all lie in one place: a cast from the graveyard is
+        // offered as one.
+        let mut zones = shown
+            .iter()
+            .filter_map(|id| self.state.objects.get(&ObjectId(*id)))
+            .map(|o| o.zone);
+        let first = zones.next();
+        let zone = first
+            .filter(|z| zones.all(|other| other == *z))
+            .and_then(place_of);
         Some((
             PlaytestPick {
                 purpose,
@@ -1526,6 +1576,7 @@ impl Playtest {
                 max: max as u32,
                 ordered,
                 power_cap,
+                zone,
             },
             answer,
         ))
@@ -1598,7 +1649,8 @@ impl Playtest {
                 match key.as_str() {
                     // Cards, by id or list of ids.
                     "object_id" | "source_id" | "keep" | "target_id" | "equipment_id"
-                    | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" | "kept" => {
+                    | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" | "kept"
+                    | "selection" => {
                         collect_refs(value, &mut ids, &mut players);
                     }
                     "order" if !abilities.is_empty() => {
@@ -2981,6 +3033,8 @@ enum PickAnswer {
     KeptCreatures,
     /// `ChooseKeptPermanents`: the permanents kept, the rest sacrificed.
     KeptPermanents,
+    /// `FreeCastWindowChoice`: the one card cast, or none to close the window.
+    FreeCast,
 }
 
 /// A pick's answer: the cards, as the question takes them.
@@ -2996,6 +3050,9 @@ fn pick_answer(ids: Vec<u64>, answer: PickAnswer) -> GameAction {
         },
         PickAnswer::KeptCreatures => GameAction::ChooseKeptCreatures { kept: objects() },
         PickAnswer::KeptPermanents => GameAction::ChooseKeptPermanents { kept: objects() },
+        PickAnswer::FreeCast => GameAction::FreeCastWindowChoice {
+            selection: ids.first().copied().map(ObjectId),
+        },
     }
 }
 

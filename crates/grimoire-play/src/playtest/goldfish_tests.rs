@@ -642,9 +642,45 @@ fn counters_change_power_and_toughness() {
             .clone()
     });
     assert_eq!((creature.power, creature.toughness), (Some(4), Some(4)));
+    // The printed P/T stays beside it, for the board's changed-stats chip (issue #1332).
+    assert_eq!(
+        (creature.base_power, creature.base_toughness),
+        (Some(2), Some(2))
+    );
     assert_eq!(creature.counters.len(), 1);
     assert_eq!(creature.counters[0].count, 2);
     assert_eq!(creature.counters[0].kind, "+1/+1");
+}
+
+/// Issue #1332: a `*/*` creature's base is what its own ability makes it, not phase's printed 0,
+/// so the board does not mark one at its own count as pumped.
+#[test]
+fn a_star_creatures_base_is_its_own_count() {
+    let elder = engine(|| {
+        let mut cards = deck();
+        let bears = cards
+            .iter_mut()
+            .find(|c| c.name == "Grizzly Bears")
+            .unwrap();
+        *bears = card(
+            "Dungrove Elder",
+            Some("{2}{G}"),
+            "Creature — Treefolk",
+            "Hexproof\nDungrove Elder's power and toughness are each equal to the number of Forests you control.",
+            Some(("*", "*")),
+            13,
+        );
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Forest");
+        put_down(&mut game, "Dungrove Elder");
+        find(&game.view().you.battlefield, "Dungrove Elder")
+            .unwrap()
+            .clone()
+    });
+    assert_eq!((elder.power, elder.toughness), (Some(2), Some(2)));
+    assert_eq!((elder.base_power, elder.base_toughness), (Some(2), Some(2)));
 }
 
 /// Issue #991: a token the deck keeps is offered and drawn in the printing the reader set for it,
@@ -796,6 +832,7 @@ fn a_spell_with_one_target_is_cast_at_it() {
     }));
     let bear = find(&step.view.you.battlefield, "Grizzly Bears").unwrap();
     assert_eq!((bear.power, bear.toughness), (Some(5), Some(5)));
+    assert_eq!((bear.base_power, bear.base_toughness), (Some(2), Some(2)));
     assert!(find(&step.view.you.graveyard, "Giant Growth").is_some());
 }
 
@@ -1741,4 +1778,102 @@ fn an_anthem_put_down_by_hand_reaches_every_creature_from_turn_to_turn() {
             "an anthem is a permanent, not an emblem"
         );
     }
+}
+
+/// A game whose library holds Invoke Calamity, cheap for the test, and one instant to cast with
+/// it — moved to the graveyard by hand, so the free-cast window offers the graveyard alone.
+fn calamity() -> (Playtest, u64, u64) {
+    let mut cards: Vec<CardFacts> = deck()
+        .into_iter()
+        .filter(|c| c.name != "Giant Growth")
+        .collect();
+    cards.push(card(
+        "Invoke Calamity",
+        Some("{G}"),
+        "Instant",
+        "You may cast up to two instant and/or sorcery spells with total mana value 6 or less from your graveyard and/or hand without paying their mana costs. If those spells would be put into your graveyard, exile them instead. Exile Invoke Calamity.",
+        None,
+        1,
+    ));
+    cards.push(card(
+        "Quick Study",
+        Some("{G}"),
+        "Instant",
+        "Draw a card.",
+        None,
+        1,
+    ));
+    let (mut game, _) = fish(&cards, 7);
+    game.act(A::Keep { bottom: vec![] }).unwrap();
+    let forest = in_hand(&mut game, "Forest");
+    game.act(A::Play { id: forest }).unwrap();
+    let study = in_hand(&mut game, "Quick Study");
+    game.act(A::Move {
+        id: study,
+        to: Place::Graveyard,
+    })
+    .expect("into the graveyard");
+    let invoke = in_hand(&mut game, "Invoke Calamity");
+    (game, invoke, study)
+}
+
+/// "You may cast … from your graveyard" is a pick of the cards it may cast (issue #1329): one
+/// card or none, where the cards lie, so the board can ask whether to cast before it shows them.
+/// Picking none declines, and nothing is cast.
+#[test]
+fn an_optional_cast_from_the_graveyard_is_a_pick_that_may_be_declined() {
+    let (asked, declined, study) = engine(|| {
+        let (mut game, invoke, study) = calamity();
+        let asked = game.act(A::Play { id: invoke }).unwrap();
+        let declined = game.act(A::PickCards { ids: vec![] }).unwrap();
+        (asked, declined, study)
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    let prompt = asked.view.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "CastOffer");
+    let pick = prompt.pick.as_ref().expect("asked as a pick");
+    assert_eq!(pick.purpose, PlaytestPickPurpose::Cast);
+    assert_eq!((pick.min, pick.max), (0, 1), "one card, or none");
+    assert_eq!(pick.eligible, vec![study]);
+    assert_eq!(pick.zone, Some(Place::Graveyard));
+    assert!(
+        prompt
+            .options
+            .iter()
+            .any(|o| o.cards.iter().any(|c| c.id == study)),
+        "the engine's own answers name the card they cast"
+    );
+
+    assert_eq!(declined.view.stage, Stage::Main, "{:?}", declined.happened);
+    assert!(find(&declined.view.you.graveyard, "Quick Study").is_some());
+    assert!(find(&declined.view.you.exile, "Invoke Calamity").is_some());
+    assert!(!declined.happened.contains(&H::Cast {
+        seat: YOU,
+        name: Some("Quick Study".into()),
+    }));
+}
+
+/// Picking the card casts it from the graveyard, free, and exiles it as it resolves.
+#[test]
+fn an_optional_cast_from_the_graveyard_casts_the_card_picked() {
+    let cast = engine(|| {
+        let (mut game, invoke, study) = calamity();
+        game.act(A::Play { id: invoke }).unwrap();
+        let mut step = game.act(A::PickCards { ids: vec![study] }).unwrap();
+        let mut happened = step.happened.clone();
+        // The window may be offered again with nothing left in it to cast; close it.
+        while step.view.stage == Stage::Prompt {
+            step = game.act(A::PickCards { ids: vec![] }).unwrap();
+            happened.extend(step.happened.clone());
+        }
+        (step, happened)
+    });
+    let (step, happened) = cast;
+    assert_eq!(step.view.stage, Stage::Main, "{happened:?}");
+    assert!(happened.contains(&H::Cast {
+        seat: YOU,
+        name: Some("Quick Study".into()),
+    }));
+    assert!(find(&step.view.you.graveyard, "Quick Study").is_none());
+    assert!(find(&step.view.you.exile, "Quick Study").is_some());
 }

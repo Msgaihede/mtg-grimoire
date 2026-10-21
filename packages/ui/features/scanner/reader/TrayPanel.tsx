@@ -62,6 +62,7 @@ import {
 // the same ones — and are handed on from here for the importers that found them in this file.
 export { addLabel, NEXT_DECISION_LABEL };
 import { isKnownFinish, TRAY_FINISH_LABEL, trayFinishChoices } from "./trayFinish";
+import { useHeadLanded } from "./useHeadLanded";
 import { useTrayPrices } from "./useTrayPrices";
 
 export interface TrayPanelProps {
@@ -171,6 +172,16 @@ function scrollRowIntoTray(list: HTMLElement, row: HTMLElement) {
     top: row.offsetTop - Math.max(DECISION_ROOM_PX, centre),
     behavior: reduce ? "auto" : "smooth",
   });
+}
+
+/**
+ * Take the tray's own scroller back to its top, where a card that has just landed is drawn — and,
+ * like {@link scrollRowIntoTray}, **only** that scroller, so the camera beside it stays put.
+ */
+function scrollTrayToTop(list: HTMLElement) {
+  if (list.scrollTop === 0) return;
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  list.scrollTo?.({ top: 0, behavior: reduce ? "auto" : "smooth" });
 }
 
 /** The two layouts in the order the toggle draws them, and the word each is called by. */
@@ -312,6 +323,12 @@ export function TrayPanel({
   // Read-only over `rows`, so it is free of `onRows`' rule: nothing here writes the tray.
   const [cursor, setCursor] = useState<string | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  // **A card that lands takes the tray back to its top** (issue #1320): the tray is newest first,
+  // so a reader forty cards down would otherwise see nothing of the card they just scanned — not
+  // its row, not its flash. A pick, a finish or a removal is no landing and scrolls nothing.
+  useHeadLanded(rows, () => {
+    if (listRef.current !== null) scrollTrayToTop(listRef.current);
+  });
   const nextDecision = () => {
     const key = nextDecisionKey(rows, cursor);
     const list = listRef.current;

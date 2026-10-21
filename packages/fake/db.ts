@@ -7386,6 +7386,7 @@ function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId, forDeck?: num
     // from `cards`, so it can never be the orphan that field's `null` is for.
     gameChanger: c.gameChanger,
     releasedAt: c.releasedAt,
+    imageUpdatedAt: c.imageUpdatedAt ?? null,
     ownedQuantity: ownedOfPrinting(db, c.id, forDeck),
     wishlisted: wishlisted(db, c),
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
@@ -9046,7 +9047,8 @@ function toDeckCard(
 /**
  * `search::SEARCH_SORTS`.
  *
- * **Two of the seven have no column to press.** `manaValue` and `released` are reached from
+ * **Three of the eight have no column to press.** `manaValue`, `released` and `imageUpdated`
+ * (issue #1214) are reached from
  * the filter bar's sort picker instead — the trade the collection's `added` already made,
  * because the search table has no room for a seventh header (`SearchSortKey` in
  * `packages/ui/lib/ipc.ts` is where that room went). This used to say there was no `released` key at
@@ -9092,6 +9094,11 @@ function searchSorts(
     // `search.rs` spells NULLS LAST in both directions for that reason, and a `reversible` here
     // would agree with it only for as long as this fixture stayed lucky.
     released: nullsLast((c) => c.releasedAt, cmp),
+    // `c.image_updated_at`, an ISO timestamp, so byte order is time order again. Nullable here
+    // as it is there — the generated corpus carries none (`FakeCard.imageUpdatedAt`) — and a
+    // representative key in `search.rs`, which this fake's sort-then-group does not distinguish:
+    // `set`, `rarity` and `type` share that simplification.
+    imageUpdated: nullsLast((c) => c.imageUpdatedAt ?? null, cmp),
   };
 }
 

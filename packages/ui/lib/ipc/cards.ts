@@ -22,14 +22,15 @@ import type { ArtWeightFloor, TagTerms } from "./tags";
  * The search's sortable columns. Mirrors `SEARCH_SORTS` in `crates/grimoire-core/src/search.rs`; a key
  * that is not there is dropped at the far end, which is a control that does nothing.
  *
- * The first five are the table's headers. `manaValue` and `released` have **no column to
- * press** and are reachable only from the filter bar's sort picker — the trade the
+ * The first five are the table's headers. `manaValue`, `released` and `imageUpdated` have **no
+ * column to press** and are reachable only from the filter bar's sort picker — the trade the
  * collection's `added` and `price` already made. There is no room for a column: the search
  * table shares its squeeze between two flexible tracks and already reaches 1280px with the
  * card pane open (see `columnsFor` in `SearchPage.tsx`), so a seventh and an eighth would come
  * out of the Name column, which is what identifies a row.
  */
-export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price" | "manaValue" | "released";
+export type SearchSortKey =
+  "name" | "set" | "type" | "rarity" | "price" | "manaValue" | "released" | "imageUpdated";
 
 /**
  * The collection's sortable columns.
@@ -362,6 +363,15 @@ export interface CardSummary {
    * the representative printing's, which is the one whose art the tile shows.
    */
   releasedAt: string | null;
+  /**
+   * When Scryfall last replaced this printing's images — an ISO timestamp
+   * (`2026-07-21T16:44:09Z`) — or `null` where the corpus has none.
+   *
+   * Here so an unreleased card's chip can say how fresh its preview is (issue #1214), and what
+   * the `imageUpdated` sort orders by. Collapsed, it is the representative printing's, for
+   * {@link releasedAt}'s reason.
+   */
+  imageUpdatedAt: string | null;
   /**
    * Copies the collection holds of **this printing, across every finish and condition** —
    * a badge on a search result, and finish-*blind*.

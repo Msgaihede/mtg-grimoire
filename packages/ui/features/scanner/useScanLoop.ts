@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ipc, ipcError } from "@/lib/ipc";
+import { viewMemory } from "@/lib/viewMemory";
 import { pushRunFrame, runClock, runFrameOf, type RunFrame } from "./submit/run";
 import type {
   ScannerCollector,
@@ -165,6 +166,25 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Which card a decision names, by the session's own rule for a second opinion
+ * (`Session::replaces_previous`): the oracle card, or the printing where the corpus has no oracle.
+ */
+function identityOf(decision: ScannerDecision): string {
+  return decision.oracle_id ?? decision.printing;
+}
+
+/**
+ * **The card standing in front of the lens when this window's last pump stopped** — the identity
+ * of the last decision a taken verdict carried, until a taken verdict had no card in it (issue
+ * #1318). `null` for none.
+ *
+ * Module memory (`viewMemory`, window-lifetime) rather than a ref, because the pump that reads it
+ * is often not the pump that wrote it: a view switch unmounts the page, and the Scanner the reader
+ * comes back to is a new hook over the same session. See `useScanLoop`'s note on a start.
+ */
+const standingCard = viewMemory<string | null>("scanner.standing-card");
+
+/**
  * The frame pump — one request in flight, every frame that arrives under it dropped.
  *
  * **The camera runs at 30–60 fps and the detector at roughly 9, and keeping the two apart is
@@ -209,6 +229,23 @@ function sleep(ms: number): Promise<void> {
  *
  * ⚠️ **None of it was measured on a camera** — `scannerOptions.ts`'s `DEFAULT_DETAIL_WAIT_MS`.
  *
+ * **A pump that starts resets the session before its first frame** (issue #1318). The session
+ * outlives every pump — a Stop, a view switch, a minimized window and both of the page's dialogs
+ * stop one — and it judges each frame against what it saw last. What it saw last is a card from
+ * before the gap, and it never saw that card leave: no empty frame went past it. So a card laid
+ * down while the pump was stopped was weighed as a swap under a frozen decision — late, and in
+ * Fast or Exact not at all when its hash churned — and one the session decided on the stream's
+ * very first frame (Neural decides on one clear frame) was taken for the old decision still
+ * standing. Reset, every frame of the stream is judged on its own, and a card already in front of
+ * the lens is decided and added like one laid down a moment later.
+ *
+ * **Except the card that was standing when the last pump stopped** ({@link standingCard}). That
+ * one is in the tray already, and resuming over it — closing a dialog, restoring the window,
+ * coming back to the view — must not file it a second time. So the first decision of a stream
+ * that names it is taken quietly, unless a frame with no card in it came first: then it was
+ * lifted and laid down again, which is a card of its own. A second copy of one card, swapped in
+ * while the pump was stopped, cannot be told from the first; Reset makes it news.
+ *
  * **And the pump keeps the last couple of seconds of what it sent** — `recent()`, for *Send
  * scan…*. A scan is a run of frames and never one picture, and the only run worth sending is
  * the one the scanner was really given: these JPEGs, at this size and quality, in this order,
@@ -242,10 +279,13 @@ export function useScanLoop({
    * The session decided on a card — called once per new `decision_seq`, with the decision and
    * the number, and never for a repeat.
    *
-   * **The first number after the camera starts is a baseline, not news.** A card frozen before a
-   * view switch is still frozen when the camera comes back, and its decision rides every committed
-   * frame; adding on that first frame would re-add the card the tray already holds. Read through a
-   * ref like `options`, so a page passing a fresh closure each render does not restart the pump.
+   * **A start resets the session, and the card it was standing on is not news** (issue #1318):
+   * every decision of a new stream is passed on — its very first frame's too — but one naming the
+   * card the last stream stopped on, before any frame without a card, which is that card still
+   * lying there. Should the reset be refused, the first number is a baseline instead, as it was
+   * before: a card frozen across the gap rides every committed frame of the new stream. Read
+   * through a ref like `options`, so a page passing a fresh closure each render does not restart
+   * the pump.
    *
    * **Nor is a number that moves again within {@link DECISION_GAP_FRAMES} frames**: that is the
    * session deciding one card twice, and the second is dropped.
@@ -299,10 +339,17 @@ export function useScanLoop({
   const tripsRef = useRef<number[]>([]);
   /**
    * The `decision_seq` of the last verdict this loop took, or `null` before the first one since the
-   * camera started — which is what makes that first number a baseline. A ref and not state: nothing
-   * draws it, and it has to be current for the very next answer rather than for the next render.
+   * camera started — which makes that first number a baseline when the start's reset was refused
+   * (see `onDecision`). A ref and not state: nothing draws it, and it has to be current for the
+   * very next answer rather than for the next render.
    */
   const lastSeqRef = useRef<number | null>(null);
+  /**
+   * The card this stream must not file again — {@link standingCard} as the pump found it when it
+   * started — until a frame has no card in it or the stream's first decision has been seen. A ref
+   * for `lastSeqRef`'s reason.
+   */
+  const heldRef = useRef<string | null>(null);
   /**
    * Verdicts since the last decision, the one that carried it not counted — `Infinity` until the
    * camera's first, so a session's first card is never inside the gap. Counted from **every**
@@ -375,14 +422,21 @@ export function useScanLoop({
     wantsDetailRef.current = false;
     waitedRef.current = false;
     sinceDecisionRef.current = Infinity;
+    // A reader who pressed Reset asked for the next decision to be news — the card in front of
+    // the lens included.
+    heldRef.current = null;
+    standingCard.keep(null);
     // The frames are evidence too: a run sent after a reset must not open on the card the
     // reader has just asked the scanner to forget.
     runRef.current = [];
   }, []);
 
-  const reset = useCallback(() => {
+  /**
+   * `scanner_reset`, once: a reset already on its way is joined rather than sent twice. Shared by
+   * the Reset press and the pump's start.
+   */
+  const resetSession = useCallback((): Promise<void> => {
     if (resetRef.current !== null) return resetRef.current;
-    clearReads();
     // Pause synchronously, then drain before invoking: Tauri's blocking tasks need not take
     // the session mutex in invocation order. An old frame must never run AFTER this reset.
     const pending = Promise.resolve().then(async () => {
@@ -395,7 +449,14 @@ export function useScanLoop({
     });
     resetRef.current = pending;
     return pending;
-  }, [clearReads]);
+  }, []);
+
+  const reset = useCallback(() => {
+    // Cleared even when a reset is already on its way — the pump's own, at a start — because
+    // that one keeps the card standing, and this press is the reader's asking it not to.
+    clearReads();
+    return resetSession();
+  }, [clearReads, resetSession]);
 
   const grab = useCallback(
     async (longEdge: number, quality: number): Promise<Uint8Array | null> => {
@@ -417,8 +478,21 @@ export function useScanLoop({
     waitedRef.current = false;
     // Nor has it sent a frame: a run is one stream's, start to press.
     runRef.current = [];
+    // The card the last stream stopped on, which this one must not file again.
+    heldRef.current = standingCard.recall() ?? null;
 
     async function pump() {
+      // **The session forgets what it saw before this stream** (issue #1318) — see the hook's
+      // note. Awaited ahead of the first grab, so no frame of this stream is judged against the
+      // last one's; `resetRef` holds the idle loop below off it meanwhile. A refusal is said and
+      // the pump runs on: the frames would be refused for the same reason, and say so too.
+      let fresh = false;
+      try {
+        await resetSession();
+        fresh = true;
+      } catch (e) {
+        if (!stopped) setError(ipcError(e));
+      }
       while (!stopped) {
         const video = videoRef.current;
         // `readyState < 2` is `HAVE_CURRENT_DATA` unmet — there is no frame to draw yet.
@@ -531,18 +605,33 @@ export function useScanLoop({
           if (answer.quad === null) setLastResolution(null);
           else if (answer.resolution !== null) setLastResolution(answer.resolution);
           setError(null);
+          // A card that has left is not the one the last stream stopped on any more, for this
+          // stream or the next — see `standingCard`.
+          if (answer.quad === null) {
+            heldRef.current = null;
+            standingCard.keep(null);
+          } else if (answer.decision !== null) {
+            standingCard.keep(identityOf(answer.decision));
+          }
           // The decision edge. The ref moves on every verdict — a frame that repeats the number
           // is the frozen card still in front of the lens, and one with no decision is a card
           // nobody has settled on — and only a number that differs from the last one, on a frame
           // carrying the decision, is an add — unless it comes too soon after the last one to be
-          // a second card (`DECISION_GAP_FRAMES`).
+          // a second card (`DECISION_GAP_FRAMES`). The stream's first verdict has no number
+          // before it: after the start's reset nothing it carries can be the old decision, so
+          // its decision is news; without that reset its number is the baseline.
           const seenSeq = lastSeqRef.current;
           lastSeqRef.current = answer.decision_seq;
           sinceDecisionRef.current += 1;
-          if (seenSeq !== null && answer.decision !== null && answer.decision_seq !== seenSeq) {
+          const moved = seenSeq === null ? fresh : answer.decision_seq !== seenSeq;
+          if (moved && answer.decision !== null) {
             const gap = sinceDecisionRef.current;
             sinceDecisionRef.current = 0;
-            if (gap > DECISION_GAP_FRAMES) {
+            // The stream's first decision, naming the card its start found standing: that card,
+            // still lying where it was, and already in the tray.
+            const held = heldRef.current;
+            heldRef.current = null;
+            if (gap > DECISION_GAP_FRAMES && held !== identityOf(answer.decision)) {
               onDecisionRef.current?.(answer.decision, answer.decision_seq);
             }
           }
@@ -574,8 +663,9 @@ export function useScanLoop({
       // stream that has not started yet.
       runRef.current = [];
     };
-    // `videoRef` is stable by construction; everything else the loop reads is behind a ref.
-  }, [live, videoRef]);
+    // `videoRef` and `resetSession` are stable by construction; everything else the loop reads
+    // is behind a ref.
+  }, [live, videoRef, resetSession]);
 
   return {
     verdict,

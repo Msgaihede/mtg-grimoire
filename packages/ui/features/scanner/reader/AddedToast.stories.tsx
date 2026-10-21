@@ -24,7 +24,7 @@ function Held(args: AddedToastProps) {
   return (
     <div className="flex flex-col items-start gap-3">
       <div className="relative h-[28rem] w-[46rem] max-w-full overflow-hidden rounded-lg bg-black">
-        <AddedToast card={card} onDone={args.onDone} />
+        <AddedToast card={card} onDone={args.onDone} price={args.price} />
       </div>
       <button
         type="button"
@@ -55,13 +55,25 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** A card that became a new row in the tray: the tick drawn onto the badge, and its printing. */
+/**
+ * A card that became a new row in the tray: the tick drawn onto the badge, its printing, and what
+ * it costs at the reader's marketplace (issue #1321).
+ */
 export const Added: Story = {
+  args: { price: "$27,500.00" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Added to scanned cards")).toBeInTheDocument();
     await expect(canvas.getByText("Black Lotus")).toBeInTheDocument();
     await expect(canvas.getByText("LEA · 232 · Nonfoil")).toBeInTheDocument();
+    await expect(canvas.getByText("$27,500.00")).toBeInTheDocument();
+  },
+};
+
+/** The price read has not answered yet: the line is the printing alone, with no dash in waiting. */
+export const PriceNotAnswered: Story = {
+  play: async ({ canvasElement }) => {
+    await expect(canvasElement.querySelector("[data-landed-price]")).toBeNull();
   },
 };
 
@@ -88,13 +100,15 @@ export const PrintingUpdated: Story = {
 
 /**
  * Filed, but still waiting on the reader: the first two candidates fanned, the accent at the edge
- * and on the card, and a line saying where the question is answered.
+ * and on the card, a line saying where the question is answered, and the span of prices the pick
+ * will land in.
  */
 export const PickAPrinting: Story = {
-  args: { card: landedFrom(waiting, false, false) },
+  args: { card: landedFrom(waiting, false, false), price: "$0.89 – $4.20" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Pick a printing")).toBeInTheDocument();
     await expect(canvas.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
+    await expect(canvas.getByText("$0.89 – $4.20")).toBeInTheDocument();
   },
 };

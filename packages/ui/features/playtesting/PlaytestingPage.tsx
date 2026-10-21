@@ -1,7 +1,8 @@
 import { useCallback, useState, type JSX } from "react";
 import { useDecks } from "@/features/decks/useDecks";
+import { keepGame, keptGame } from "./keptGame";
+import { holdGame, type HeldGame, type PlaytestPicks } from "./play/heldGame";
 import { PlaytestPage } from "./play/PlaytestPage";
-import type { PlaytestPicks } from "./play/usePlaytestGame";
 import { PlaytestSetup } from "./PlaytestSetup";
 
 /**
@@ -15,26 +16,42 @@ import { PlaytestSetup } from "./PlaytestSetup";
  *
  * **The board covers the window, the setup stays under it** (`PlaytestPage` is `fixed` at
  * `LAYER.stage`), so the way back — the back button, Escape, the result's Back — finds the setup
- * as it was left, its picks still made, and leaving puts the game away.
+ * as it was left, its picks still made, and leaving that way puts the game away (asked first
+ * while it is underway).
+ *
+ * **Going to another view does not** (issue #1322): the game is kept (`./keptGame.ts`), and this
+ * page opens on it again when the reader comes back — the same board, the same log, an AI turn
+ * that finished meanwhile already played.
  */
 export function PlaytestingPage(): JSX.Element {
   const { decks, query } = useDecks();
-  const [playing, setPlaying] = useState<PlaytestPicks | null>(null);
-  const back = useCallback(() => setPlaying(null), []);
+  const [playing, setPlaying] = useState<HeldGame | null>(keptGame);
+  const start = useCallback((picks: PlaytestPicks) => {
+    const game = holdGame(picks);
+    game.start();
+    keepGame(game);
+    setPlaying(game);
+  }, []);
+  const back = useCallback(() => {
+    playing?.end();
+    keepGame(null);
+    setPlaying(null);
+  }, [playing]);
   const nameOf = (id: number) => decks.find((d) => d.id === id)?.name ?? "Deck";
 
   return (
     <>
-      <PlaytestSetup decks={decks} loading={query.isPending} onStart={setPlaying} />
+      <PlaytestSetup decks={decks} loading={query.isPending} onStart={start} />
       {playing !== null && (
         <PlaytestPage
-          picks={playing}
-          deckName={nameOf(playing.deckId)}
+          picks={playing.picks}
+          held={playing}
+          deckName={nameOf(playing.picks.deckId)}
           // The goldfish has no deck to name it: its plate says what it is.
           opponentNames={
-            playing.opponents.length === 0
+            playing.picks.opponents.length === 0
               ? ["Goldfish"]
-              : playing.opponents.map((o) => nameOf(o.deckId))
+              : playing.picks.opponents.map((o) => nameOf(o.deckId))
           }
           onBack={back}
         />

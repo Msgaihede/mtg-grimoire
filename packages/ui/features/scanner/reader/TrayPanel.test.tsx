@@ -273,6 +273,38 @@ describe("TrayPanel", () => {
   });
 
   /**
+   * **A card that lands takes the tray back to its top** (issue #1320) — the tray's own scroller,
+   * and only for a landing: an edit to a row the reader is looking at scrolls nothing.
+   */
+  it("scrolls the tray's own list to its top when a card lands, and not for an edit", () => {
+    const scrollTo = vi.fn();
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTo");
+    Element.prototype.scrollTo = scrollTo as unknown as typeof Element.prototype.scrollTo;
+    try {
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const tray = (rows: ScannerTrayRow[]) => (
+        <QueryClientProvider client={client}>
+          <TooltipProvider>
+            <TrayPanel {...props({ rows })} />
+          </TooltipProvider>
+        </QueryClientProvider>
+      );
+      const { rerender } = render(tray([newer, older]));
+      // A reader scrolled down the pile; jsdom lays nothing out, so the offset is set by hand.
+      screen.getAllByRole("list")[0].scrollTop = 120;
+      rerender(tray([{ ...newer, quantity: 4 }, older]));
+      expect(scrollTo).not.toHaveBeenCalled();
+      rerender(tray([{ ...base, key: "landed", addedAt: 3 }, { ...newer, quantity: 4 }, older]));
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo.mock.contexts[0]).toBe(screen.getAllByRole("list")[0]);
+      expect(scrollTo.mock.calls[0]?.[0]).toMatchObject({ top: 0 });
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollTo", original);
+      else delete (Element.prototype as { scrollTo?: unknown }).scrollTo;
+    }
+  });
+
+  /**
    * **The label says what Add leaves behind** — copies, like the heading's count, and the second
    * half only while there is one.
    */

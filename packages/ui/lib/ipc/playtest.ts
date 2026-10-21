@@ -32,9 +32,18 @@ export type PlaytestStage =
 /** Where the turn is, coarse. */
 export type PlaytestPhase = "beginning" | "main1" | "combat" | "main2" | "ending";
 
-/** What picking a card does: kept on top (scry, surveil), discarded, found, kept, revealed… */
+/** What picking a card does: kept on top (scry, surveil), discarded, found, kept, revealed, cast… */
 export type PlaytestPickPurpose =
-  "scry" | "surveil" | "discard" | "search" | "dig" | "reveal" | "targets" | "choose" | "keep";
+  | "scry"
+  | "surveil"
+  | "discard"
+  | "search"
+  | "dig"
+  | "reveal"
+  | "targets"
+  | "choose"
+  | "keep"
+  | "cast";
 
 /** A step the reader can ask the game to stop at. */
 export type PlaytestStopStep =
@@ -257,6 +266,11 @@ export interface PlaytestPick {
    * power 4 or less", issue #1079); `null` for a pick bounded by its count alone.
    */
   powerCap: number | null;
+  /**
+   * Where the cards lie, when they all lie in one place — the graveyard a cast is offered from
+   * (issue #1329). `null` for cards from several places.
+   */
+  zone: GamePlace | null;
 }
 
 export interface PlaytestOption {

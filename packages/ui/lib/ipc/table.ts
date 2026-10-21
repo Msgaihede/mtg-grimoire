@@ -67,6 +67,12 @@ export interface GameCard {
   counters: CardCounter[];
   power: number | null;
   toughness: number | null;
+  /**
+   * The printed P/T, before counters and effects — what `power` and `toughness` are measured
+   * against to mark a change. `null` for a non-creature, and for a creature with none printed.
+   */
+  basePower: number | null;
+  baseToughness: number | null;
   /** Commander tax in generic mana; 0 for anything else. */
   tax: number;
   /**

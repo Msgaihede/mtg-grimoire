@@ -10,9 +10,17 @@ import {
 import type { GameCard, GamePlace, PlaytestAction, PlaytestEmblem } from "@/lib/ipc";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
+import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
-import { CardFace, counterLabel, pointerAt } from "./Inspect";
-import { tableDraggable, useTableDropTarget, type TableDrag } from "./tableDrag";
+import { CardFace, StatsChip, changedStats, counterLabel, pointerAt } from "./Inspect";
+import {
+  tableDraggable,
+  useAimTarget,
+  useTableDropTarget,
+  type DropAim,
+  type TableAim,
+  type TableDrag,
+} from "./tableDrag";
 import {
   ASPECT,
   BACK_MAX,
@@ -86,8 +94,9 @@ export interface BattlefieldProps {
   /**
    * The sandbox's moves work now (on, the reader's main phase, nothing out): a click taps, a pile
    * is carried off to anywhere, and the menu has every hand move. Off, a card is only clicked when
-   * the rules ask for it (`pick`), dragged nowhere, and its menu is `onActivate`'s row alone — and
-   * the table still takes a card played onto it from the hand or the command zone.
+   * the rules ask for it (`pick`), dragged only onto what the rules take (`carry`, `aim`), and its
+   * menu is `onActivate`'s row alone — and the table still takes a card played onto it from the
+   * hand or the command zone.
    */
   sandbox: boolean;
   onAct: (action: PlaytestAction) => void;
@@ -134,6 +143,18 @@ export interface BattlefieldProps {
   /** Point at an emblem: its picture and words in the preview. Without it an emblem says its
    *  words only to a screen reader and in its own tile. */
   onPointEmblem?: (pointed: Pointed) => void;
+  /**
+   * The reader's cards the rules let them pick up now, with the sandbox's moves off or not
+   * (`play/aim.ts`' `canCarry`): an attacker or a blocker to carry onto what it attacks or
+   * blocks, a permanent to carry onto its ability's target. Never on a `readOnly` table.
+   */
+  carry?: (card: GameCard) => boolean;
+  /**
+   * Where on this table a carried card may be let go for the rules (issue #1335): each card, lit
+   * while one it takes is over it, and the felt, when it is a target of its own — an opponent's,
+   * attacked. Without it no card here takes a drop, and the table only its zone's.
+   */
+  aim?: TableAim;
 }
 
 /**
@@ -167,6 +188,8 @@ export function Battlefield({
   across,
   emblems = NO_EMBLEMS,
   onPointEmblem,
+  carry,
+  aim,
 }: BattlefieldProps): JSX.Element {
   const dropRef = useRef<HTMLElement | null>(null);
   const over = useTableDropTarget({
@@ -177,6 +200,7 @@ export function Battlefield({
     pointerOnly: true,
     refuse: readOnly,
   });
+  const overFelt = useAimTarget({ ref: dropRef, aim: aim?.table });
   const [box, setBox] = useState({ width: 0, height: 0 });
 
   // A callback ref, so the first measurement lands in the commit rather than one paint later
@@ -246,6 +270,8 @@ export function Battlefield({
       own={own}
       marks={marks}
       pick={pick}
+      carry={carry}
+      aim={aim}
     />
   );
   const creatureLane = (
@@ -315,7 +341,7 @@ export function Battlefield({
       className={cn(
         "flex flex-col justify-center gap-2.5 overflow-y-auto rounded-[28px] px-5 py-4",
         dense && "px-3 py-2",
-        over && DROP_GLOW,
+        (over || overFelt) && DROP_GLOW,
         className,
       )}
     >
@@ -383,6 +409,8 @@ function PileView({
   own,
   marks,
   pick,
+  carry,
+  aim,
 }: {
   pile: Pile;
   w: number;
@@ -400,10 +428,14 @@ function PileView({
   own: ReadonlySet<number>;
   marks: ReadonlyMap<number, CardMark> | undefined;
   pick: TablePick | undefined;
+  carry: ((card: GameCard) => boolean) | undefined;
+  aim: TableAim | undefined;
 }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);
   const top = useRef<HTMLButtonElement>(null);
   const { menu, menuKey } = useContextMenu();
+  /** The attachment the pointer is on, drawn over the card it is tucked under (issue #1331). */
+  const [lifted, setLifted] = useState<number | null>(null);
   const { card, ids, tapped } = pile;
   const hosts = pile.attached.length > 0;
   const count = ids.length;
@@ -417,12 +449,16 @@ function PileView({
   const turn = Math.round(w * 0.2);
   const word = count > 1 ? `${count} ${plural(card.name)}` : card.name;
   const counters = card.counters.map(counterLabel).join(" · ");
+  const stats = changedStats(card);
   /** Carried off and tapped by a click: the reader's own card, with the sandbox's moves working. */
   const handled = sandbox && !readOnly;
+  /** Picked up at all: the sandbox's carry, or the rules' (`carry`) — an attack, a target. */
+  const carried = !readOnly && (handled || (carry?.(card) ?? false));
+  const aimed = useAimTarget({ ref: top, aim: aim?.card(ids[0]), overlay: true });
 
   useEffect(() => {
     const element = ref.current;
-    if (!element || !handled) return;
+    if (!element || !carried) return;
     // With attachments the card itself is the handle, so a press on an attachment's edge carries
     // the attachment (its own draggable) rather than the card it is attached to.
     return tableDraggable({
@@ -430,7 +466,7 @@ function PileView({
       handle: hosts ? (top.current ?? undefined) : undefined,
       payload: () => ({ ids, from: "battlefield", name: card.name }),
     });
-  }, [ids, card.name, handled, hosts]);
+  }, [ids, card.name, carried, hosts]);
 
   /** Where one card of the pile is drawn: `x` right and `y` down of the box's corner. */
   const at = (x: number, y: number) => ({
@@ -463,7 +499,9 @@ function PileView({
     <div
       ref={ref}
       data-land={ids.join(" ")}
-      className={cn("relative flex-none", handled ? "cursor-grab" : "cursor-default")}
+      // `isolate`: a lifted attachment comes over its own card and competes with nothing else on
+      // the board — the inspect preview, the hand and the arrows stay above it.
+      className={cn("relative isolate flex-none", carried ? "cursor-grab" : "cursor-default")}
       style={{
         width: pileWidth(pile, w),
         height: pileHeight(pile, w),
@@ -471,7 +509,8 @@ function PileView({
       }}
     >
       {/* The attachments, farthest first, each a name bar higher — tucked under the card the way
-          an Aura or Equipment sits at a real table (issue #1073). */}
+          an Aura or Equipment sits at a real table (issue #1073). The one pointed at comes up
+          over the cards in front of it, whole, until the pointer leaves it (issue #1331). */}
       {pile.attached
         .map((a, i) => ({ a, i }))
         .reverse()
@@ -482,6 +521,8 @@ function PileView({
             host={card}
             style={at(0, lift - (i + 1) * peek)}
             handled={handled && own.has(a.id)}
+            carried={!readOnly && own.has(a.id) && (handled || (carry?.(a) ?? false))}
+            aim={aim?.card(a.id)}
             sandbox={sandbox}
             onAct={onAct}
             onPoint={onPoint}
@@ -489,6 +530,8 @@ function PileView({
             mark={marks?.get(a.id)}
             onPick={pick?.ids.has(a.id) ? pick.onPick : undefined}
             onActivate={readOnly || !own.has(a.id) ? undefined : onActivate}
+            lifted={lifted === a.id}
+            onLift={setLifted}
           />
         ))}
       {/* The cards underneath, a few pixels up and to the right, the way cardboard sits. */}
@@ -511,6 +554,7 @@ function PileView({
           card.isToken ? "token" : null,
           card.gaps.length > 0 ? "played only in part" : null,
           counters === "" ? null : counters,
+          stats === null ? null : `${stats.power}/${stats.toughness}`,
           pile.attached.length > 0 ? `with ${pile.attached.map((a) => a.name).join(", ")}` : null,
           mark?.word ?? null,
         ]
@@ -549,8 +593,12 @@ function PileView({
           "absolute cursor-pointer rounded-md p-0",
           "transition-[left,transform] duration-150 ease-out motion-reduce:transition-none",
           FOCUS,
-          !handled && !picks && "cursor-default",
-          mark !== undefined ? MARK_RING[mark.tone] : picks && PICKABLE_RING,
+          !carried && !picks && "cursor-default",
+          aimed
+            ? MARK_RING.chosen
+            : mark !== undefined
+              ? MARK_RING[mark.tone]
+              : picks && PICKABLE_RING,
         )}
         style={at(0, lift + under * PILE)}
       >
@@ -568,6 +616,7 @@ function PileView({
             {counters}
           </span>
         )}
+        <StatsChip card={card} />
       </button>
       {count > 1 && (
         <span
@@ -586,12 +635,19 @@ function PileView({
  * One Aura or Equipment tucked under the card it is attached to: only its top edge shows, and
  * that edge is the card's own to point at, open the menu of, pick, tap and carry off — an
  * Equipment's equip ability is activated from here.
+ *
+ * **Pointed at, it comes up whole** (`lifted`, issue #1331): over the card it is tucked under
+ * and any attachment nearer that card, so the reader sees it on the table while its preview
+ * waits for the pointer to rest. It goes back the moment the pointer leaves it. Lifted from
+ * state rather than a `hover:` variant, `CardStack`'s way, so the class is `LAYER`'s own.
  */
 function AttachedView({
   card,
   host,
   style,
   handled,
+  carried,
+  aim,
   sandbox,
   onAct,
   onPoint,
@@ -599,12 +655,18 @@ function AttachedView({
   mark,
   onPick,
   onActivate,
+  lifted,
+  onLift,
 }: {
   card: GameCard;
   host: GameCard;
   style: CSSProperties;
-  /** Carried off and tapped by a click: the table's own card, with the sandbox's moves working. */
+  /** Tapped by a click: the table's own card, with the sandbox's moves working. */
   handled: boolean;
+  /** Picked up: by the sandbox's carry (`handled`), or the rules' — an Equipment to re-equip. */
+  carried: boolean;
+  /** What this edge takes when a card is let go on it — the card it belongs to, as a target. */
+  aim: DropAim | undefined;
   sandbox: boolean;
   onAct: (action: PlaytestAction) => void;
   onPoint: (pointed: Pointed) => void;
@@ -612,21 +674,25 @@ function AttachedView({
   mark: CardMark | undefined;
   onPick: ((id: number) => void) | undefined;
   onActivate: ((id: number) => void) | undefined;
+  lifted: boolean;
+  /** Lifts the attachment by its id, or puts every one back (`null`). */
+  onLift: (id: number | null) => void;
 }): JSX.Element {
   const ref = useRef<HTMLButtonElement>(null);
   const { menu, menuKey } = useContextMenu();
   const ids = useMemo(() => [card.id], [card.id]);
   const counters = card.counters.map(counterLabel).join(" · ");
   const picks = onPick !== undefined;
+  const aimed = useAimTarget({ ref, aim, overlay: true });
 
   useEffect(() => {
     const element = ref.current;
-    if (!element || !handled) return;
+    if (!element || !carried) return;
     return tableDraggable({
       element,
       payload: () => ({ ids, from: "battlefield", name: card.name }),
     });
-  }, [ids, card.name, handled]);
+  }, [ids, card.name, carried]);
 
   const build = () => cardMenu({ card, ids, place: "battlefield", sandbox, onAct, onActivate });
   const openMenu = menu(build);
@@ -658,23 +724,32 @@ function AttachedView({
         openMenu(e);
       }}
       onKeyDown={menuKey(build)}
-      onMouseEnter={(e) =>
+      onMouseEnter={(e) => {
+        onLift(card.id);
         onPoint({
           card,
           ids,
           place: "battlefield",
           line: `${card.name}, attached to ${host.name}`,
           at: pointerAt(e),
-        })
-      }
-      onMouseLeave={onUnpoint}
+        });
+      }}
+      onMouseLeave={() => {
+        onLift(null);
+        onUnpoint();
+      }}
       data-point={card.id}
       className={cn(
         "absolute rounded-md p-0",
+        lifted && LAYER.raised,
         "transition-[left,top,transform] duration-150 ease-out motion-reduce:transition-none",
         FOCUS,
-        handled ? "cursor-grab" : picks ? "cursor-pointer" : "cursor-default",
-        mark !== undefined ? MARK_RING[mark.tone] : picks && PICKABLE_RING,
+        carried ? "cursor-grab" : picks ? "cursor-pointer" : "cursor-default",
+        aimed
+          ? MARK_RING.chosen
+          : mark !== undefined
+            ? MARK_RING[mark.tone]
+            : picks && PICKABLE_RING,
       )}
       style={style}
     >
@@ -699,6 +774,8 @@ export function emblemCard(emblem: PlaytestEmblem): GameCard {
     counters: [],
     power: null,
     toughness: null,
+    basePower: null,
+    baseToughness: null,
     tax: 0,
     attachedTo: null,
     foretold: false,

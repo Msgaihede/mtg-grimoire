@@ -43,6 +43,7 @@ import {
   TRAY_ROWS,
   VERDICTS,
 } from "@grimoire/ui/features/scanner/fixtures";
+import { SCANNING_STOPPED } from "@grimoire/ui/features/scanner/reader/readerText";
 import { runClock } from "@grimoire/ui/features/scanner/submit/run";
 import {
   DB_BUSY,
@@ -305,6 +306,14 @@ function mount({
   return { seen, view };
 }
 
+/**
+ * **The page opens stopped** (issue #1317): the camera comes on, and nothing is read until Start
+ * scanning is pressed — pressed here as a reader would, so the pump runs.
+ */
+async function start() {
+  await userEvent.click(await screen.findByRole("button", { name: "Start scanning" }, SETTLE));
+}
+
 /** Long enough for an answer already on its 3 ms timer to land. */
 const settled = () => new Promise<void>((done) => setTimeout(done, 20));
 
@@ -377,7 +386,7 @@ describe("the phone's Scanner page", () => {
         scanner_frame: pile(0).frame,
       }),
     });
-    await screen.findByRole("button", { name: "Stop scanning" }, SETTLE);
+    await screen.findByRole("button", { name: "Start scanning" }, SETTLE);
     await act(() => new Promise((r) => setTimeout(r, 50)));
     expect(getUserMedia).not.toHaveBeenCalled();
 
@@ -393,6 +402,24 @@ describe("the phone's Scanner page", () => {
     });
   });
 
+  it("opens stopped: the camera live, the stopped sentence over it, and no frame sent until Start", async () => {
+    const { getUserMedia } = camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1), SETTLE);
+    expect(await screen.findByText(SCANNING_STOPPED, {}, SETTLE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start scanning" })).toBeInTheDocument();
+    // Long enough for a frame to have gone, had the page started on its own.
+    await act(() => new Promise((r) => setTimeout(r, 150)));
+    expect(cards.sent).toEqual([]);
+
+    await start();
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(0), SETTLE);
+    expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+    expect(screen.queryByText(SCANNING_STOPPED)).toBeNull();
+  });
+
   it("sends no frame until the stored tray has loaded, so a card never lands on an empty one", async () => {
     const { getUserMedia } = camera();
     restoreVideo = shimVideo();
@@ -404,6 +431,7 @@ describe("the phone's Scanner page", () => {
         scanner_frame: cards.frame,
       }),
     });
+    await start();
     // The camera is open and its picture is there to be sent: the prefs are in.
     await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1), SETTLE);
     await act(() => new Promise((r) => setTimeout(r, 150)));
@@ -426,6 +454,7 @@ describe("the phone's Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(3);
     const { seen } = mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await start();
 
     // Three cards laid down; the second is a second copy of the first, counted onto its row.
     await waitFor(
@@ -466,6 +495,7 @@ describe("the phone's Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(1);
     const { seen } = mount({ prefs: { developer: true }, over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);
     expect(cards.sent.every((sent) => sent.previews === false)).toBe(true);
 
@@ -480,10 +510,11 @@ describe("the phone's Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(1, "looking");
     mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     await waitFor(() => expect(trayRows()).toHaveLength(1), SETTLE);
 
     await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
-    expect(await screen.findByText("Scanning stopped. Press Start scanning to resume.")).toBeInTheDocument();
+    expect(await screen.findByText(SCANNING_STOPPED)).toBeInTheDocument();
     // One frame may have been on the wire as the press landed; nothing after it.
     await act(() => new Promise((r) => setTimeout(r, 60)));
     const stopped = cards.sent.length;
@@ -503,6 +534,7 @@ describe("the phone's Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
     const { seen } = mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(0), SETTLE);
     expect(screen.getByRole("button", { name: "Fast" })).toHaveAttribute("aria-pressed", "true");
 
@@ -517,6 +549,7 @@ describe("the phone's Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
     const { seen } = mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(0), SETTLE);
 
     await userEvent.click(screen.getByRole("button", { name: "Neural" }));
@@ -539,6 +572,7 @@ describe("the phone's Scanner page", () => {
         ),
       }),
     });
+    await start();
     const question = await screen.findByRole(
       "group",
       { name: "Printings of Lightning Bolt" },
@@ -559,6 +593,7 @@ describe("the phone's Scanner page", () => {
       // The first number is a baseline; the second, on a frame carrying a decision, is the card.
       over: () => ({ scanner_frame: frames(VERDICTS.voting, { ...VERDICTS.exactAmbiguous, decision_seq: 1 }) }),
     });
+    await start();
     const question = await screen.findByRole("group", { name: "Printings of Lightning Bolt" }, SETTLE);
     expect(within(question).getAllByRole("button")).toHaveLength(3);
     expect(screen.getByText("1 card to pick")).toBeInTheDocument();
@@ -865,9 +900,12 @@ describe("the phone's Scanner page", () => {
     // An empty desk after the card, not a parked frame: a reset drains the frame on the wire
     // before it asks the session, and a frame that never answers would hold it for ever.
     const { seen } = mount({ over: () => ({ scanner_frame: pile(1, "looking").frame }) });
+    await start();
     await waitFor(() => expect(trayRows()).toHaveLength(1), SETTLE);
+    // The pump's start reset the session once already (issue #1318); the press is one more.
+    const started = seen.resets;
     await userEvent.click(screen.getByRole("button", { name: "Reset evidence" }));
-    await waitFor(() => expect(seen.resets).toBe(1), SETTLE);
+    await waitFor(() => expect(seen.resets).toBe(started + 1), SETTLE);
     // The card it had already taken stays in the tray.
     expect(trayRows()).toEqual([["Urza's Saga", "1"]]);
   });
@@ -988,6 +1026,7 @@ describe("sending a scan from the Scanner page", () => {
         },
       }),
     });
+    await start();
     await waitFor(() => expect(trayRows()).toHaveLength(1), SETTLE);
 
     const { opener, dialog } = await opened(cards);
@@ -1082,6 +1121,7 @@ describe("sending a scan from the Scanner page", () => {
       fake: { seed: "starter", fault: "scanInboxFull" },
       over: () => ({ scanner_frame: cards.frame }),
     });
+    await start();
 
     const { dialog } = await opened(cards);
     // Alpha's Bolt was printed one way, so its finish is chosen for the reader.
@@ -1109,6 +1149,7 @@ describe("sending a scan from the Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
     mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     const { opener } = await opened(cards);
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
@@ -1121,6 +1162,7 @@ describe("sending a scan from the Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
     mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     await opened(cards);
     // One frame may have been on the wire as the press landed; nothing after it.
     await act(() => new Promise((r) => setTimeout(r, 60)));
@@ -1144,6 +1186,7 @@ describe("sending a scan from the Scanner page", () => {
     restoreFrames = numberedCanvas();
     const cards = pile(0, "looking");
     mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     const { dialog } = await opened(cards);
 
     const slider = within(dialog).getByRole("slider", { name: "Picture" });
@@ -1183,6 +1226,7 @@ describe("sending a scan from the Scanner page", () => {
         commit: () => Promise.resolve(),
       },
     });
+    await start();
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
     expect(
       await screen.findByRole("button", { name: "Reset evidence" }, SETTLE),
@@ -1209,12 +1253,13 @@ describe("sending a scan from the Scanner page", () => {
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
     mount({ fake: SUPPORTER, over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
     expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
     expect(
-      await screen.findByText("Scanning stopped. Press Start scanning to resume."),
+      await screen.findByText(SCANNING_STOPPED),
     ).toBeInTheDocument();
     // The camera is still live; the press is gone all the same, and Reset is not.
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
@@ -1244,6 +1289,7 @@ describe("sending a scan from the Scanner page", () => {
         },
       }),
     });
+    await start();
     await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"), SETTLE);
 
     await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
@@ -1257,7 +1303,7 @@ describe("sending a scan from the Scanner page", () => {
     // Stopped, the press is gone and its sentence with it: the line is the stopped sentence's.
     await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
     expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(
-      "Scanning stopped. Press Start scanning to resume.",
+      SCANNING_STOPPED,
     );
     expect(screen.queryByText(/Not enough of the scan yet/)).toBeNull();
   });
@@ -1312,6 +1358,7 @@ describe("sending a scan from the Scanner page", () => {
         },
       }),
     });
+    await start();
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(10), SETTLE);
 
     await narrowTo("2020-01-01");
@@ -1353,6 +1400,7 @@ describe("sending a scan from the Scanner page", () => {
         },
       }),
     });
+    await start();
     await waitFor(() => expect(asked).toBe(9), SETTLE);
     await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"), SETTLE);
 
@@ -1368,6 +1416,7 @@ describe("sending a scan from the Scanner page", () => {
     );
 
     // The reader narrows the scan, and the session takes it — which is when it is stored.
+    const resets = seen.resets;
     await narrowTo("2020-01-01");
     await waitFor(
       () =>
@@ -1389,7 +1438,8 @@ describe("sending a scan from the Scanner page", () => {
     expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
     // The line goes on naming the card: this was the run's break, not the evidence's.
     expect(statusLine()).toHaveTextContent("Plains");
-    expect(seen.resets).toBe(0);
+    // No reset: the pump's starts reset the session, and a change of filters is none of them.
+    expect(seen.resets).toBe(resets);
   });
 
   /**
@@ -1419,6 +1469,7 @@ describe("sending a scan from the Scanner page", () => {
           ...(supporter?.(own) ?? membership(own, answers)),
         }),
       });
+      await start();
       await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
       expect(
         await screen.findByRole("button", { name: "Reset evidence" }, SETTLE),
@@ -1668,6 +1719,7 @@ describe("what the Scanner page says when it cannot scan", () => {
         },
       }),
     });
+    await start();
     expect(await screen.findByText(DB_BUSY, {}, SETTLE)).toBeInTheDocument();
     // The loop does not stop on a failure: a sync ends, and the scanner recovers by itself.
     const then = asked;
@@ -1687,6 +1739,7 @@ describe("what the Scanner page says when it cannot scan", () => {
         },
       }),
     });
+    await start();
     expect(await screen.findByText(/It will open here once that window closes/, {}, SETTLE)).toBeInTheDocument();
     expect(stop).toHaveBeenCalled();
     expect(screen.queryByRole("region", { name: "Scanned cards" })).toBeNull();
@@ -1699,6 +1752,7 @@ describe("a Scanner page nobody is looking at", () => {
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
     mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
 
     act(() => parked.set({ paused: true, released: false }));
@@ -1738,6 +1792,7 @@ describe("a Scanner page nobody is looking at", () => {
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
     mount({ over: () => ({ scanner_frame: cards.frame }) });
+    await start();
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(2), SETTLE);
 
     await userEvent.click(tab("Wishlist"));
@@ -1755,6 +1810,7 @@ describe("a Scanner page nobody is looking at", () => {
     camera();
     restoreVideo = shimVideo();
     mount({ over: () => ({ scanner_frame: pile(1).frame }) });
+    await start();
     await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);
     await userEvent.click(tab("Wishlist"));
     await waitFor(() => expect(screen.queryByRole("region", { name: "Scanned cards" })).toBeNull(), SETTLE);

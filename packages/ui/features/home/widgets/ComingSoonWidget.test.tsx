@@ -373,9 +373,9 @@ describe("ComingSoonWidget", () => {
       const calls: string[] = [];
       const real = useAppStore.getState().showSetInSearch;
       useAppStore.setState({
-        showSetInSearch: (code) => {
+        showSetInSearch: (code, sort) => {
           calls.push(code);
-          real(code);
+          real(code, sort);
         },
       });
       qc.setQueryData(upcomingSetsKey(90), ANSWER);
@@ -386,6 +386,10 @@ describe("ComingSoonWidget", () => {
       expect(calls).toEqual(["trk"]);
       expect(useAppStore.getState().activeView).toBe("search");
       expect(useAppStore.getState().pendingSearchSet).toBe("trk");
+      // Issue #1214: a set still being previewed opens newest image first.
+      expect(useAppStore.getState().pendingSearchSort).toEqual([
+        { key: "imageUpdated", dir: "desc" },
+      ]);
     });
 
     it("draws a still body with no presses", () => {
