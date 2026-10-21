@@ -4,7 +4,7 @@
 
 use crate::cards::{CardFacts, FaceFacts};
 use crate::on_engine_stack;
-use crate::view::{GameCard, Lane, ManaByType, Place};
+use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, Place};
 
 use super::session::Playtest;
 use super::view::{
@@ -1723,6 +1723,14 @@ fn a_planeswalkers_emblem_is_shown_applied_and_kept_for_the_rest_of_the_game() {
         "the emblem's +1/+0"
     );
     assert!(
+        bears
+            .effects
+            .iter()
+            .any(|e| e.source == "Sorin, Lord of Innistrad Emblem" && e.power == Some(1)),
+        "the bear's effect names the emblem: {:?}",
+        bears.effects
+    );
+    assert!(
         view.opponents[0].emblems.is_empty(),
         "the goldfish's rules emblems are not the game's"
     );
@@ -1778,6 +1786,161 @@ fn an_anthem_put_down_by_hand_reaches_every_creature_from_turn_to_turn() {
             "an anthem is a permanent, not an emblem"
         );
     }
+}
+
+/// Issue #1327: each continuous effect on a card comes with it, by kind and source — a resolved
+/// spell's (Giant Growth's +3/+3) and a permanent's static (an anthem's +1/+1 and trample) alike —
+/// and a permanent's static on itself is its printed self, never an effect on it.
+#[test]
+fn a_card_carries_each_effect_on_it_with_its_source() {
+    let mut cards = deck();
+    cards.push(card(
+        "Banner Marshal",
+        Some("{1}{G}"),
+        "Creature — Human Soldier",
+        "Creatures you control get +1/+1 and have trample.",
+        Some(("2", "2")),
+        8,
+    ));
+    let (grown, marshal, bears) = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let growth = in_hand(&mut game, "Giant Growth");
+        let grown = game.act(A::Play { id: growth }).unwrap().view;
+        let grown = find(&grown.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .clone();
+        put_down(&mut game, "Banner Marshal");
+        let view = game.view();
+        let on = |name: &str| find(&view.you.battlefield, name).unwrap().clone();
+        (grown, on("Banner Marshal"), on("Grizzly Bears"))
+    });
+    assert_eq!(
+        grown.effects,
+        vec![CardEffect {
+            kind: EffectKind::ModifyPt,
+            source: "Giant Growth".into(),
+            gained: vec![],
+            lost: vec![],
+            loses_abilities: false,
+            abilities: vec![],
+            power: Some(3),
+            toughness: Some(3),
+        }],
+    );
+    let from = |card: &GameCard, kind: EffectKind, source: &str| {
+        card.effects
+            .iter()
+            .find(|e| e.kind == kind && e.source == source)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {kind:?} from {source} on {card:?}"))
+    };
+    let anthem = from(&bears, EffectKind::ModifyPt, "Banner Marshal");
+    assert_eq!((anthem.power, anthem.toughness), (Some(1), Some(1)));
+    let trample = from(&bears, EffectKind::Ability, "Banner Marshal");
+    assert_eq!(trample.gained, vec!["Trample".to_string()]);
+    assert!(
+        bears.effects.iter().any(|e| e.source == "Giant Growth"),
+        "the growth lasts the turn: {bears:?}",
+    );
+    assert_eq!(
+        marshal.effects,
+        vec![],
+        "its own static is its printed self"
+    );
+    assert_eq!((marshal.power, marshal.toughness), (Some(3), Some(3)));
+}
+
+/// Issue #1327's card: an effect that makes a creature a Demon and grants it a dies trigger is
+/// two effects from one source — the type it gained, and the trigger's own text.
+#[test]
+fn a_type_and_a_granted_trigger_are_told_with_their_source() {
+    let mut cards = deck();
+    cards.push(card(
+        "Demonic Pact Rite",
+        Some("{G}"),
+        "Instant",
+        "Until end of turn, target creature becomes a Demon in addition to its other types and gains \"When this creature dies, draw a card.\"",
+        None,
+        8,
+    ));
+    let bear = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let rite = in_hand(&mut game, "Demonic Pact Rite");
+        let view = game.act(A::Play { id: rite }).unwrap().view;
+        find(&view.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .clone()
+    });
+    let kinds: Vec<_> = bear
+        .effects
+        .iter()
+        .map(|e| (e.kind, e.source.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (EffectKind::Type, "Demonic Pact Rite"),
+            (EffectKind::Ability, "Demonic Pact Rite"),
+        ],
+        "{bear:?}",
+    );
+    assert_eq!(bear.effects[0].gained, vec!["Demon".to_string()]);
+    assert!(bear.type_line.contains("Demon"), "{}", bear.type_line);
+    assert_eq!(bear.effects[1].abilities.len(), 1, "{bear:?}");
+    assert!(
+        bear.effects[1].abilities[0].to_lowercase().contains("dies"),
+        "{:?}",
+        bear.effects[1].abilities,
+    );
+}
+
+/// Issue #1328: a "you may" in an ability the reader activated asks with the ability's words, so
+/// the board can say what is being agreed to — not the card's name alone.
+#[test]
+fn a_may_in_an_activated_ability_asks_with_its_words() {
+    let step = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Wishing Stone",
+            Some("{1}"),
+            "Artifact",
+            "{1}, {T}: You may draw a card.",
+            None,
+            1,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        for _ in 0..2 {
+            put_down(&mut game, "Forest");
+        }
+        let stone = put_down(&mut game, "Wishing Stone");
+        let mut step = game.act(A::Activate { id: stone }).expect("activate");
+        for _ in 0..4 {
+            if step.view.prompt.is_some() {
+                break;
+            }
+            step = game.act(A::Pass).expect("pass");
+        }
+        step
+    });
+    let prompt = step.view.prompt.as_ref().expect("the may is asked");
+    assert_eq!(prompt.kind, "OptionalEffectChoice", "{:?}", step.happened);
+    assert_eq!(prompt.source.as_deref(), Some("Wishing Stone"));
+    assert!(
+        prompt
+            .source_text
+            .as_deref()
+            .is_some_and(|t| t.to_lowercase().contains("draw a card")),
+        "the question names its ability's words: {prompt:?}"
+    );
 }
 
 /// A game whose library holds Invoke Calamity, cheap for the test, and one instant to cast with

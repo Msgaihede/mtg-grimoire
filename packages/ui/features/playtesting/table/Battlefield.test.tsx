@@ -19,6 +19,7 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     isCommander: false,
     tapped: false,
     counters: [],
+    effects: [],
     power: null,
     toughness: null,
     basePower: null,
@@ -155,6 +156,60 @@ describe("Battlefield", () => {
     expect(screen.getByText("+2/+2")).toBeInTheDocument();
     expect(screen.getByText("3 loyalty")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Tataru Taru, +2/+2" })).toBeInTheDocument();
+  });
+
+  it("chips each effect on a card with its source, and names them in full (issue #1327)", () => {
+    setup([
+      creature("Vampire Cleric", {
+        effects: [
+          {
+            kind: "type",
+            source: "Clavileño",
+            gained: ["Demon"],
+            lost: [],
+            losesAbilities: false,
+            abilities: [],
+            power: null,
+            toughness: null,
+          },
+          {
+            kind: "ability",
+            source: "Clavileño",
+            gained: [],
+            lost: [],
+            losesAbilities: false,
+            abilities: ["When ~ dies, draw a card."],
+            power: null,
+            toughness: null,
+          },
+        ],
+      }),
+    ]);
+    expect(screen.getByText("+Demon · Clavileño")).toBeInTheDocument();
+    expect(screen.getByText("+Dies trigger · Clavileño")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name:
+          "Vampire Cleric, +Demon from Clavileño; " +
+          "+Dies trigger from Clavileño: “When Vampire Cleric dies, draw a card.”",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts the effects past the third in one more chip", () => {
+    const pump = (source: string) => ({
+      kind: "modifyPt" as const,
+      source,
+      gained: [],
+      lost: [],
+      losesAbilities: false,
+      abilities: [],
+      power: 1,
+      toughness: 1,
+    });
+    setup([creature("Bear", { effects: ["A", "B", "C", "D"].map(pump) })]);
+    expect(document.querySelectorAll("[data-effect]")).toHaveLength(2);
+    expect(screen.getByText("+2 more")).toBeInTheDocument();
   });
 
   it("draws a changed creature's P/T in a chip, each stat coloured by which way it moved", () => {

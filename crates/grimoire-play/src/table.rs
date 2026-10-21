@@ -1,17 +1,20 @@
-//! The table as every board draws it: a card from the engine's object, the place a zone is, a
-//! seat's mana by type. Kept apart from the game (`playtest/session.rs`) because they read the
+//! The table as every board draws it: a card from the engine's object and the effects on it, the
+//! place a zone is, a seat's mana by type. Kept apart from the game (`playtest/session.rs`) because they read the
 //! engine's state and nothing of a session's — a card looks the same whoever's it is.
 
 use engine::game::commander::commander_tax;
 use engine::game::game_object::GameObject;
 use engine::game::mana_sources::{activatable_mana_options, max_mana_yield};
+use engine::types::ability::ContinuousModification;
 use engine::types::card_type::CoreType;
 use engine::types::identifiers::ObjectId;
 use engine::types::mana::ManaType;
 use engine::types::zones::Zone;
-use engine::types::{GameState, Layer, PlayerId};
+use engine::types::{EffectRef, GameState, Layer, PlayerId};
 
-use crate::view::{CardCounter, GameCard, Lane, ManaByType, ManaTable, Place};
+use crate::view::{
+    CardCounter, CardEffect, EffectKind, GameCard, Lane, ManaByType, ManaTable, Place,
+};
 
 /// One object as a board draws it. `card_id` is the printing to draw it by, which only the
 /// session knows (it follows a card across zones by name); `is_commander` and `gaps` likewise.
@@ -55,6 +58,7 @@ pub(crate) fn game_card(
         is_commander,
         tapped: o.tapped,
         counters,
+        effects: effects_on(state, id),
         power: if is_creature { o.power } else { None },
         toughness: if is_creature { o.toughness } else { None },
         base_power: if is_creature { base_pt(o).0 } else { None },
@@ -75,6 +79,176 @@ pub(crate) fn game_card(
         castable: false,
         gaps,
     })
+}
+
+/// The continuous effects on an object, one per source and kind, in layer order (issue #1327).
+///
+/// Read off phase's attribution — the modifications its last layers pass applied to the object,
+/// each by the static ability or the resolved effect it came from — so a card shows exactly what
+/// the rules did to it, never what this crate guesses. A permanent's own statics on itself are
+/// its printed self (CR 113.3c) and are skipped, as phase's own board skips them. An effect whose
+/// source can no longer be read (gone between the pass and this view) is skipped too.
+fn effects_on(state: &GameState, id: ObjectId) -> Vec<CardEffect> {
+    let Some(attribution) = state.attribution.get(&id) else {
+        return Vec::new();
+    };
+    let mut effects: Vec<CardEffect> = Vec::new();
+    for (layer, refs) in &attribution.by_layer {
+        let kind = kind_of(*layer);
+        for effect in refs {
+            let Some((source, modification)) = resolve(state, id, effect) else {
+                continue;
+            };
+            let at = match effects
+                .iter()
+                .position(|e| e.kind == kind && e.source == source)
+            {
+                Some(at) => at,
+                None => {
+                    // A raise starts at +0/+0 and adds up; a set names nothing until it sets.
+                    let zero = (kind == EffectKind::ModifyPt).then_some(0);
+                    effects.push(CardEffect {
+                        kind,
+                        source,
+                        gained: Vec::new(),
+                        lost: Vec::new(),
+                        loses_abilities: false,
+                        abilities: Vec::new(),
+                        power: zero,
+                        toughness: zero,
+                    });
+                    effects.len() - 1
+                }
+            };
+            describe(&mut effects[at], modification);
+        }
+    }
+    effects
+}
+
+/// The source's name and the modification an attribution entry names, or `None` for the
+/// object's own static (its printed self) or an entry that no longer resolves.
+fn resolve<'s>(
+    state: &'s GameState,
+    id: ObjectId,
+    effect: &EffectRef,
+) -> Option<(String, &'s ContinuousModification)> {
+    match *effect {
+        EffectRef::Transient {
+            id: effect,
+            mod_index,
+        } => {
+            let tce = state
+                .transient_continuous_effects
+                .iter()
+                .find(|t| t.id == effect)?;
+            let name = if tce.source_name.is_empty() {
+                state.objects.get(&tce.source_id)?.name.clone()
+            } else {
+                tce.source_name.clone()
+            };
+            Some((name, tce.modifications.get(mod_index)?))
+        }
+        EffectRef::Static {
+            source,
+            def_index,
+            mod_index,
+        } => {
+            if source == id {
+                return None;
+            }
+            let o = state.objects.get(&source)?;
+            let def = o.static_definitions.get(def_index)?;
+            // An emblem is named as Scryfall names it, `<source> Emblem` — its object is only
+            // "Emblem" (issue #1333).
+            let name = match (&o.emblem_source, o.is_emblem) {
+                (Some(made_by), true) => format!("{} Emblem", made_by.name),
+                _ => o.name.clone(),
+            };
+            Some((name, def.modifications.get(mod_index)?))
+        }
+    }
+}
+
+fn kind_of(layer: Layer) -> EffectKind {
+    match layer {
+        Layer::Copy => EffectKind::Copy,
+        Layer::Control => EffectKind::Control,
+        Layer::Text => EffectKind::Text,
+        Layer::Type => EffectKind::Type,
+        Layer::Color => EffectKind::Color,
+        Layer::Ability => EffectKind::Ability,
+        Layer::CharDef | Layer::SetPT => EffectKind::SetPt,
+        Layer::ModifyPT | Layer::CounterPT => EffectKind::ModifyPt,
+        Layer::SwitchPT => EffectKind::SwitchPt,
+    }
+}
+
+/// What one modification adds to its effect's facts. A modification with nothing a reader names
+/// (a chosen type, a copy's values, a rule like "can't be blocked") adds nothing: the effect's
+/// kind and source still say what happened and from where.
+fn describe(effect: &mut CardEffect, modification: &ContinuousModification) {
+    use ContinuousModification as M;
+    fn add(list: &mut Vec<String>, word: String) {
+        if !list.contains(&word) {
+            list.push(word);
+        }
+    }
+    match modification {
+        M::AddType { core_type } => add(&mut effect.gained, core_type.to_string()),
+        M::RemoveType { core_type } => add(&mut effect.lost, core_type.to_string()),
+        M::SetCardTypes { core_types } => {
+            for t in core_types {
+                add(&mut effect.gained, t.to_string());
+            }
+        }
+        M::AddSubtype { subtype } => add(&mut effect.gained, subtype.clone()),
+        M::RemoveSubtype { subtype } => add(&mut effect.lost, subtype.clone()),
+        M::AddSupertype { supertype } => add(&mut effect.gained, supertype.to_string()),
+        M::RemoveSupertype { supertype } => add(&mut effect.lost, supertype.to_string()),
+        M::SetBasicLandType { land_type } => add(&mut effect.gained, format!("{land_type:?}")),
+        M::AddColor { color } => add(&mut effect.gained, format!("{color:?}")),
+        M::SetColor { colors } => {
+            for c in colors {
+                add(&mut effect.gained, format!("{c:?}"));
+            }
+        }
+        M::AddKeyword { keyword } => add(&mut effect.gained, keyword.to_string()),
+        M::RemoveKeyword { keyword } => add(&mut effect.lost, keyword.to_string()),
+        M::RemoveAllAbilities => effect.loses_abilities = true,
+        M::GrantAbility { definition } => {
+            if let Some(text) = &definition.description {
+                add(&mut effect.abilities, text.clone());
+            }
+        }
+        M::GrantTrigger { trigger } => {
+            if let Some(text) = &trigger.description {
+                add(&mut effect.abilities, text.clone());
+            }
+        }
+        M::GrantStaticAbility { definition } => {
+            if let Some(text) = &definition.description {
+                add(&mut effect.abilities, text.clone());
+            }
+        }
+        M::GrantReplacement { replacement } => {
+            if let Some(text) = &replacement.description {
+                add(&mut effect.abilities, text.clone());
+            }
+        }
+        M::AddPower { value } => effect.power = effect.power.map(|p| p + value),
+        M::AddToughness { value } => effect.toughness = effect.toughness.map(|t| t + value),
+        M::SetPower { value } => effect.power = Some(*value),
+        M::SetToughness { value } => effect.toughness = Some(*value),
+        // Worked out as the game goes (+X/+X, "equal to the number of …"): no number to send.
+        M::AddDynamicPower { .. } | M::SetDynamicPower { .. } | M::SetPowerDynamic { .. } => {
+            effect.power = None
+        }
+        M::AddDynamicToughness { .. }
+        | M::SetDynamicToughness { .. }
+        | M::SetToughnessDynamic { .. } => effect.toughness = None,
+        _ => {}
+    }
 }
 
 /// The P/T a board measures a creature's current P/T against (issue #1332): its printed P/T

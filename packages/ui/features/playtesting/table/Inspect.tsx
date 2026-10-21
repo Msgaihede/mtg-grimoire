@@ -5,6 +5,7 @@ import { cardImageUrl, type ImageVariant } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { gapWords } from "../support";
+import { effectLine } from "./effects";
 import type { Pointed } from "./types";
 
 /** How long the pointer rests on a card before its preview opens. */
@@ -146,6 +147,13 @@ export function Inspect({
         <StatsChip card={card} className="right-3 bottom-3 px-2 text-lg" />
       </div>
       <span className="text-xs text-dim">{caption}</span>
+      {card.effects.length > 0 && (
+        <ul className="flex flex-col gap-0.5 text-xs text-text" data-testid="card-effects">
+          {card.effects.map((effect, i) => (
+            <li key={i}>{effectLine(effect, card.name)}</li>
+          ))}
+        </ul>
+      )}
       {card.gaps.length > 0 && (
         <span className="text-xs text-accent">
           {PARTLY} — {card.gaps.map(gapWords).join(" · ")}

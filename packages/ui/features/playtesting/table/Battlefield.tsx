@@ -12,6 +12,7 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
+import { EFFECT_CHIPS, effectChip, effectLine } from "./effects";
 import { CardFace, StatsChip, changedStats, counterLabel, pointerAt } from "./Inspect";
 import {
   tableDraggable,
@@ -449,6 +450,7 @@ function PileView({
   const turn = Math.round(w * 0.2);
   const word = count > 1 ? `${count} ${plural(card.name)}` : card.name;
   const counters = card.counters.map(counterLabel).join(" · ");
+  const effects = card.effects.map((e) => effectLine(e, card.name)).join("; ");
   const stats = changedStats(card);
   /** Carried off and tapped by a click: the reader's own card, with the sandbox's moves working. */
   const handled = sandbox && !readOnly;
@@ -554,6 +556,7 @@ function PileView({
           card.isToken ? "token" : null,
           card.gaps.length > 0 ? "played only in part" : null,
           counters === "" ? null : counters,
+          effects === "" ? null : effects,
           stats === null ? null : `${stats.power}/${stats.toughness}`,
           pile.attached.length > 0 ? `with ${pile.attached.map((a) => a.name).join(", ")}` : null,
           mark?.word ?? null,
@@ -611,10 +614,8 @@ function PileView({
             {mark.badge}
           </span>
         )}
-        {counters !== "" && (
-          <span className="absolute top-1 left-1 rounded border border-border bg-bg px-[5px] font-mono text-[11px] text-text">
-            {counters}
-          </span>
+        {(counters !== "" || card.effects.length > 0) && (
+          <CardChips counters={counters} effects={card.effects.map(effectChip)} />
         )}
         <StatsChip card={card} />
       </button>
@@ -628,6 +629,45 @@ function PileView({
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * What a card on the table carries, drawn over its art's top left corner: its counters, then one
+ * chip per effect on it — what happened and where from, `+Demon · Clavileño` (issue #1327). A
+ * chip too long for the card is cut short; the preview and the card's name for a screen reader
+ * have each in full. Past {@link EFFECT_CHIPS} the rest are counted in one more chip.
+ *
+ * Decorative and inert: it is inside the card's own button, which names all of it.
+ */
+function CardChips({ counters, effects }: { counters: string; effects: string[] }): JSX.Element {
+  const shown = effects.length > EFFECT_CHIPS ? effects.slice(0, EFFECT_CHIPS - 1) : effects;
+  const more = effects.length - shown.length;
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute top-1 right-1 left-1 flex flex-col items-start gap-0.5"
+    >
+      {counters !== "" && (
+        <span className="max-w-full truncate rounded border border-border bg-bg px-[5px] font-mono text-[11px] text-text">
+          {counters}
+        </span>
+      )}
+      {shown.map((chip, i) => (
+        <span
+          key={i}
+          data-effect=""
+          className="max-w-full truncate rounded border border-accent/60 bg-bg/90 px-[5px] text-[10px]/4 text-text"
+        >
+          {chip}
+        </span>
+      ))}
+      {more > 0 && (
+        <span className="rounded border border-accent/60 bg-bg/90 px-[5px] text-[10px]/4 text-dim">
+          +{more} more
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -782,6 +822,7 @@ export function emblemCard(emblem: PlaytestEmblem): GameCard {
     canForetell: false,
     castable: false,
     gaps: [],
+    effects: [],
   };
 }
 
