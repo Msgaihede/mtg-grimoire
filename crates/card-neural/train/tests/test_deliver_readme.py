@@ -246,6 +246,43 @@ class Rewrite(Scratch):
             self.update(done_for())
 
 
+class OneSet(unittest.TestCase):
+    """The set symbol and collector band networks were tuned as a pair beside one recogniser:
+    a run that delivers one without the other would leave the files two sets."""
+
+    def test_a_run_naming_both_evidence_networks_or_neither_is_delivered(self):
+        self.assertEqual(ur.retrained(done_for()), ["embedder", "detector", "symbol", "band"])
+        self.assertEqual(ur.retrained(done_for(evidence=False)), ["embedder", "detector"])
+
+    def test_a_run_whose_metrics_name_one_evidence_network_is_refused(self):
+        for kind in ur.EVIDENCE:
+            done = done_for()
+            del done["metrics"][kind]
+            with self.assertRaisesRegex(ur.HalfEvidence, "symbol and band"):
+                ur.retrained(done)
+
+    def test_a_run_whose_files_name_one_evidence_network_is_refused(self):
+        for kind in ur.EVIDENCE:
+            done = done_for()
+            del done["files"][f"{kind}.onnx"]
+            with self.assertRaises(ur.HalfEvidence):
+                ur.retrained(done)
+
+    def test_the_rewrite_refuses_it_before_writing_anything(self):
+        done = done_for()
+        del done["metrics"]["band"]
+        with tempfile.TemporaryDirectory() as d:
+            models = Path(d)
+            for name in (*ur.FILES, ur.README, ur.TRAINING_JSON):
+                shutil.copyfile(MODELS / name, models / name)
+            before = (models / ur.README).read_bytes(), (models / ur.TRAINING_JSON).read_bytes()
+            gallery = models / "gallery.json"
+            gallery.write_text(json.dumps({"entries": [{}] * 3}), encoding="utf-8")
+            with self.assertRaises(ur.HalfEvidence):
+                ur.update(models, done, gallery)
+            self.assertEqual(((models / ur.README).read_bytes(), (models / ur.TRAINING_JSON).read_bytes()), before)
+
+
 class Seed(unittest.TestCase):
     def test_training_json_holds_the_labs_numbers_for_the_shipped_pair(self):
         seed = json.loads((MODELS / ur.TRAINING_JSON).read_text(encoding="utf-8"))

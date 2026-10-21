@@ -138,6 +138,17 @@ class Find(Workspace):
         marked = json.loads((self.volume / "runs" / "2026-11" / "DELIVERED.json").read_text(encoding="utf-8"))
         self.assertIn("gallery.json` is not on the Volume", marked["reason"])
 
+    def test_a_run_that_trained_one_evidence_network_is_reported_and_the_next_delivered(self):
+        make_run(self.volume, "2026-11")
+        make_run(self.volume, "2026-12")
+        path = self.volume / "runs" / "2026-11" / "DONE.json"
+        done = json.loads(path.read_text(encoding="utf-8"))
+        del done["metrics"]["band"]
+        write_json(path, done)
+        self.assertEqual(deliver.find(self.store, out=self.tmp / "in")["run"], "2026-12")
+        marked = json.loads((self.volume / "runs" / "2026-11" / "DELIVERED.json").read_text(encoding="utf-8"))
+        self.assertIn("symbol and band", marked["reason"])
+
     def test_keeps_a_reason_to_one_table_cell(self):
         make_run(self.volume, "2026-11", status="failed")
         done = self.volume / "runs" / "2026-11" / "DONE.json"

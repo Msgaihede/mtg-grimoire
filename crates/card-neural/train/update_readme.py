@@ -174,20 +174,32 @@ def covered(gallery_json: Path) -> int:
     return len({c for e in entries for c in e.get("covers") or ()})
 
 
+class HalfEvidence(ValueError):
+    """A run that names one printing-evidence network and not the other."""
+
+
 def retrained(done: dict) -> list[str]:
     """The networks a run trained and delivers: the embedder always; the detector unless the run
     was launched with `--no-detector` (then `DONE.json` has no detector file); the set symbol and
-    collector band networks when the run trained them (every run since the pipeline did)."""
+    collector band networks when the run trained them (every run since the pipeline did) — both
+    or neither. Raises `HalfEvidence` for a run that names one: the two were tuned as a pair beside
+    this recogniser (`neural.json`'s `evidence` thresholds), and one delivered alone would leave
+    the files two sets."""
     files = done.get("files")
     metrics = done.get("metrics") or {}
     nets = ["embedder"]
     exported = files is None or "detector.onnx" in files
     if done.get("detector", True) and exported and metrics.get("detector") is not None:
         nets.append("detector")
-    for kind in EVIDENCE:
-        if metrics.get(kind) is not None and (files is None or f"{kind}.onnx" in files):
-            nets.append(kind)
-    return nets
+    evidence = [kind for kind in EVIDENCE
+                if metrics.get(kind) is not None and (files is None or f"{kind}.onnx" in files)]
+    if evidence and len(evidence) != len(EVIDENCE):
+        missing = next(kind for kind in EVIDENCE if kind not in evidence)
+        raise HalfEvidence(
+            f"run `{done.get('run')}` delivers the {evidence[0]} network without the {missing} one; "
+            "the symbol and band networks are delivered together or not at all"
+        )
+    return nets + evidence
 
 
 def provenance(done: dict, training: dict, looks: int) -> str:
@@ -300,6 +312,7 @@ def update(models: Path, done: dict, gallery_json: Path, symbols_json: Path | No
            bands_json: Path | None = None) -> dict:
     """Rewrite `models/README.md` and `models/training.json` in place; the new record back. The
     evidence galleries' `json`s (the run's export) count what the rebuilt galleries hold."""
+    retrained(done)  # refuses half the evidence before anything is written
     training_path = models / TRAINING_JSON
     training = json.loads(training_path.read_text(encoding="utf-8"))
     looks = looks_of(gallery_json)

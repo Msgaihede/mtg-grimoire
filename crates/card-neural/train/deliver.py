@@ -206,7 +206,11 @@ def volume_path(run: str, name: str, files: dict | None) -> str:
 
 
 def wanted(done: dict) -> list[str]:
-    nets = ur.retrained(done)
+    """The files a run's delivery needs; refuses a run that trained one evidence network alone."""
+    try:
+        nets = ur.retrained(done)
+    except ur.HalfEvidence as half:
+        raise Refused(f"{str(half)[0].upper()}{str(half)[1:]}.") from half
     names = ["embedder.onnx", "gallery.head.matrix", "gallery.json"]
     names += ["detector.onnx"] if "detector" in nets else []
     for kind in ur.EVIDENCE:
@@ -479,6 +483,7 @@ def build(work: Path, out: Path, repo: Path = REPO, scratch: bool = False, test:
     run = done.get("run", "")
     if not RUN_NAME.match(run) or done.get("status") != "ok":
         raise Refused(f"`{work / 'DONE.json'}` is not a finished run's (run {run!r}, status {done.get('status')!r}).")
+    wanted(done)  # refuses half the evidence before a file is copied
     info = load((work / "run.json").read_bytes()) if (work / "run.json").exists() else {}
     fetch = load((work / "fetch.json").read_bytes()) if (work / "fetch.json").exists() else None
     smoke = is_smoke(done, info)
