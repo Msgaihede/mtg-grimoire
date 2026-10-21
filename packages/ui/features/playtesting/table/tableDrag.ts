@@ -1,6 +1,6 @@
 import type { RefObject } from "react";
 import type { GamePlace, PlaytestAction } from "@/lib/ipc";
-import { dndDraggable, useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
+import { dndDraggable, releasePoint, useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
 
 /**
  * A card moved across the table — the payload, its reader, and the two registrations.
@@ -143,7 +143,7 @@ export function useTableDropTarget({
     read: readTableDrag,
     canDrop: (drag) =>
       !refuse && (drag.from === place || dropAction(drag, place, sandbox) !== null),
-    onDrop: (drag, at) => onDrop(drag, place, at),
+    onDrop: (drag) => onDrop(drag, place, releasePoint()),
     overlay,
     pointerOnly,
   });

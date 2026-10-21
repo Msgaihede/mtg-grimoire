@@ -12,8 +12,6 @@ const MARK = "mtg-grimoire/dnd-target-test";
 interface Thing {
   id: number;
 }
-/** Where the pointer let go, handed to `onDrop` beside the payload. */
-const AT = { x: expect.any(Number) as number, y: expect.any(Number) as number };
 const data = (id: number): Record<string, unknown> => ({ [MARK_KEY]: MARK, id });
 const read = (record: Record<string, unknown>): Thing | null =>
   record[MARK_KEY] === MARK && typeof record.id === "number" ? { id: record.id } : null;
@@ -175,7 +173,7 @@ describe("useDndDropTarget", () => {
     await held.drop();
 
     expect(onDrop).toHaveBeenCalledTimes(1);
-    expect(onDrop).toHaveBeenCalledWith({ id: 9 }, AT);
+    expect(onDrop).toHaveBeenCalledWith({ id: 9 });
   });
 
   /** Escape ends the drag the same way a drop does, so both flags have to stand down without this
@@ -218,7 +216,7 @@ describe("useDndDropTarget", () => {
     target.rerender({ onDrop });
     await held.drop();
 
-    expect(onDrop).toHaveBeenCalledWith({ id: 9 }, AT);
+    expect(onDrop).toHaveBeenCalledWith({ id: 9 });
   });
 });
 
@@ -290,7 +288,7 @@ describe("useDndDropTarget with armOnMount", () => {
     await held.over(target.element);
     expect(target.state.over).toBe(true);
     await held.drop();
-    expect(onDrop).toHaveBeenCalledWith({ id: 9 }, AT);
+    expect(onDrop).toHaveBeenCalledWith({ id: 9 });
   });
 
   /** An `armOnMount` target reads the page's answer on every render rather than once at
@@ -361,7 +359,7 @@ describe("useDndDropTarget with pointerOnly", () => {
     await held.moveTo(OFF.x, OFF.y);
     expect(target.state.over).toBe(true);
     await held.drop();
-    expect(onDrop).toHaveBeenCalledWith({ id: 7 }, AT);
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
   });
 
   it("is not over, and takes nothing, while the pointer is outside it", async () => {
@@ -385,7 +383,7 @@ describe("useDndDropTarget with pointerOnly", () => {
     await held.over(target.element);
     expect(target.state.over).toBe(true);
     await held.drop();
-    expect(onDrop).toHaveBeenCalledWith({ id: 7 }, AT);
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
   });
 });
 
@@ -426,6 +424,6 @@ describe("useDndDropTarget, a target that moved away before the release", () => 
     await held.over(target.element);
     boxed(target.element, 0);
     await held.drop();
-    expect(onDrop).toHaveBeenCalledWith({ id: 7 }, AT);
+    expect(onDrop).toHaveBeenCalledWith({ id: 7 });
   });
 });
