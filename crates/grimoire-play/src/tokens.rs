@@ -63,6 +63,21 @@ impl DeckTokens {
         }
     }
 
+    /// The deck's printing of the emblem `source` makes: Scryfall names it `<source> Emblem`, and
+    /// failing that it is the deck's one emblem that names `source` among the cards making it.
+    pub(crate) fn emblem_of(&self, source: &str) -> Option<String> {
+        let named = format!("{source} emblem").to_lowercase();
+        self.by_name.get(&named).cloned().flatten().or_else(|| {
+            let mut made = self.tokens.iter().filter(|t| {
+                t.name.to_lowercase().ends_with(" emblem") && t.sources.iter().any(|s| s == source)
+            });
+            match (made.next(), made.next()) {
+                (Some(t), None) => Some(t.card_id.clone()),
+                _ => None,
+            }
+        })
+    }
+
     /// The tokens the board offers to make: every preset phase says one of `deck_names` makes,
     /// and every token the deck keeps that a preset can make, drawn in the deck's printing where
     /// it keeps one. Sorted by name, then source.

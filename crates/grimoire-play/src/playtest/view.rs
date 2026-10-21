@@ -172,6 +172,10 @@ pub struct PlaytestSeat {
     pub exile: Vec<GameCard>,
     /// This seat's commanders while they are in the command zone.
     pub command: Vec<GameCard>,
+    /// This seat's emblems (CR 114), oldest first: in the command zone for the rest of the game,
+    /// and never a card in it. Never the session's own — the goldfish's rules emblems, the
+    /// sandbox's free cast's.
+    pub emblems: Vec<PlaytestEmblem>,
     pub library: u32,
     /// The reader's library, **top first**, for the library menu's look and search; empty for the
     /// opponent.
@@ -189,6 +193,23 @@ pub struct PlaytestSeat {
     /// view's `commander_damage_lethal` — the board's "dead on your turn 5", and `None` again once
     /// neither holds. Always `None` for a player who can lose.
     pub dead_on: Option<u32>,
+}
+
+/// An emblem (CR 114): neither a card nor a permanent, it cannot be removed, and its abilities
+/// work from the command zone for the rest of the game (CR 114.4). The engine applies them; the
+/// board only shows them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestEmblem {
+    pub id: u64,
+    /// The card that made it — `Sorin, Lord of Innistrad` — as it was when it did. `None` for an
+    /// emblem the engine made with no card behind it.
+    pub source: Option<String>,
+    /// The printing to draw it by: the emblem the deck keeps for its source among its Tokens &
+    /// Emblems. `None` when it keeps none, and the board draws its words.
+    pub card_id: Option<String>,
+    /// Its abilities' words, as the engine gives them, one a row.
+    pub text: Vec<String>,
 }
 
 /// One commander's combat damage to one player over the game (CR 903.10a). At the view's
@@ -664,6 +685,11 @@ pub enum PlaytestHappened {
         seat: PlaytestPlayer,
         name: String,
         count: u32,
+    },
+    /// A player got an emblem (CR 114.1); `source` is the card that made it, as `PlaytestEmblem`'s.
+    Emblem {
+        seat: PlaytestPlayer,
+        source: Option<String>,
     },
     /// The reader put a card somewhere by hand; `seat` is whose card it is.
     Put {

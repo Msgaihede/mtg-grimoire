@@ -55,6 +55,7 @@ function seat(player: PlaytestPlayer, over: Partial<PlaytestSeat>): PlaytestSeat
     graveyard: [],
     exile: [],
     command: [],
+    emblems: [],
     library: 0,
     libraryCards: [],
     manaOpen: 0,
@@ -190,6 +191,42 @@ export function withAttachments(): TurnFive {
     gear("Pacifism", "Enchantment — Aura", t.ragavan),
   ];
   t.view.opponents = [opponent];
+  return t;
+}
+
+/**
+ * Turn 5 with emblems (issue #1333): the reader's Bonesplitter beside their emblem from Sorin,
+ * Lord of Innistrad — drawn as a tile of its words, as for a deck that keeps no printing of it —
+ * and the opponent's emblem from Chandra, at their back row's far end.
+ */
+export function withEmblems(): TurnFive {
+  const t = turnFive();
+  const [opponent] = t.view.opponents;
+  t.view.you.battlefield = [
+    ...t.view.you.battlefield,
+    gameCard("Bonesplitter", { typeLine: "Artifact — Equipment", lane: "other", isToken: false }),
+  ];
+  t.view.you.emblems = [
+    {
+      id: 9001,
+      source: "Sorin, Lord of Innistrad",
+      cardId: null,
+      text: ["Creatures you control get +1/+0."],
+    },
+  ];
+  t.view.opponents = [
+    {
+      ...opponent,
+      emblems: [
+        {
+          id: 9002,
+          source: "Chandra, Torch of Defiance",
+          cardId: null,
+          text: ["Whenever you cast a spell, this emblem deals 5 damage to any target."],
+        },
+      ],
+    },
+  ];
   return t;
 }
 

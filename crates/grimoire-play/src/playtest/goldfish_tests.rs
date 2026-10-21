@@ -178,7 +178,7 @@ fn a_new_game_waits_on_the_opening_hand_with_the_commander_in_the_command_zone()
     assert_eq!(lands, 60);
 
     // The goldfish: one seat, 40 life, seven cards kept from a library of lands, and nothing
-    // to show — its rules emblems are never in its command zone.
+    // to show — its rules emblems are never in its command zone, nor among its emblems.
     assert_eq!(view.opponents.len(), 1);
     let goldfish = &view.opponents[0];
     assert_eq!(goldfish.player, FISH);
@@ -187,6 +187,7 @@ fn a_new_game_waits_on_the_opening_hand_with_the_commander_in_the_command_zone()
     assert_eq!(goldfish.library, 193);
     assert!(goldfish.hand.is_empty() && goldfish.library_cards.is_empty());
     assert!(goldfish.command.is_empty() && goldfish.battlefield.is_empty());
+    assert!(goldfish.emblems.is_empty() && view.you.emblems.is_empty());
     assert_eq!(goldfish.dead_on, None);
 }
 
@@ -1316,6 +1317,10 @@ fn a_free_cast_that_asks_is_cancelled_with_its_emblem() {
         "the emblem is there while the cast asks"
     );
     assert_eq!(cancelled, emblems, "and gone with the cast");
+    assert!(
+        asked.view.you.emblems.is_empty(),
+        "the board's own emblem, never the game's to show"
+    );
     assert_eq!(back.view.stage, Stage::Main);
     assert!(find(&back.view.you.hand, "Giant Growth").is_some());
 }
@@ -1731,6 +1736,203 @@ fn a_commander_cast_by_its_back_face_is_still_the_commander() {
     assert_eq!(back.view.you.command.len(), 1);
     assert!(back.view.you.command[0].is_commander);
     assert_eq!(back.view.you.command[0].tax, 2);
+}
+
+fn sorin() -> CardFacts {
+    let mut sorin = card(
+        "Sorin, Lord of Innistrad",
+        Some("{2}{W}{B}"),
+        "Legendary Planeswalker — Sorin",
+        "+1: Create a 1/1 black Vampire creature token with lifelink.\n−3: You get an emblem with \"Creatures you control get +1/+0.\"\n−7: Destroy up to three target creatures and/or other planeswalkers. Return each card put into a graveyard this way to the battlefield under your control.",
+        None,
+        1,
+    );
+    sorin.loyalty = Some("3".into());
+    sorin
+}
+
+/// Pass until the stack is empty: the reader's own ability resolves, the goldfish answering
+/// nothing. How many passes it took, for undo.
+fn resolve(game: &mut Playtest, mut step: PlaytestStep) -> (PlaytestStep, usize) {
+    let mut passes = 0;
+    while !step.view.stack.is_empty() {
+        assert!(
+            passes < 8,
+            "the stack never resolved: {:?}",
+            step.view.stack
+        );
+        step = game.act(A::Pass).expect("pass");
+        passes += 1;
+    }
+    (step, passes)
+}
+
+/// Issue #1333: a planeswalker's emblem is on the reader's seat — drawn by the deck's own emblem
+/// printing, with its words — its effect is applied, and it stays for the rest of the game:
+/// through the opponent's turn, though the planeswalker that made it died paying for it, and
+/// through undo and redo. A planeswalker put down by hand enters with its loyalty, so its
+/// ability can be paid for at all.
+#[test]
+fn a_planeswalkers_emblem_is_shown_applied_and_kept_for_the_rest_of_the_game() {
+    let (put, made, next_turn, undone, redone) = engine(|| {
+        let mut cards = deck();
+        cards.push(sorin());
+        let tokens = [crate::tokens::TokenFacts {
+            oracle_id: "oracle-sorin-emblem".into(),
+            name: "Sorin, Lord of Innistrad Emblem".into(),
+            card_id: "deck-sorin-emblem".into(),
+            sources: vec!["Sorin, Lord of Innistrad".into()],
+        }];
+        let (mut game, _) =
+            Playtest::new(&cards, &tokens, &[], 7, Difficulty::default()).expect("a game starts");
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Grizzly Bears");
+        let walker = put_down(&mut game, "Sorin, Lord of Innistrad");
+        let put = game.view();
+        let asked = game.act(A::Activate { id: walker }).expect("activate");
+        let prompt = asked.view.prompt.expect("which ability");
+        // The −3 is Sorin's second ability; the +1 is the first.
+        let minus = prompt
+            .options
+            .iter()
+            .find(|o| o.number == Some(1))
+            .unwrap_or_else(|| panic!("the −3 is offered: {prompt:?}"))
+            .index;
+        let chosen = game.act(A::Choose { index: minus }).expect("the −3");
+        let mut happened = chosen.happened.clone();
+        let (made, passes) = resolve(&mut game, chosen);
+        happened.extend(made.happened.clone());
+        // Drawing for Sorin filled the hand, so the cleanup asks for a discard: the engine's
+        // AI answers it.
+        let mut next_turn = game
+            .act(A::EndTurn)
+            .expect("to the goldfish's turn and back");
+        // The −3 chosen, the passes it took to resolve, and the turn ended.
+        let mut actions = passes + 2;
+        while next_turn.view.stage == Stage::Prompt {
+            next_turn = game.act(A::Auto).expect("discard to hand size");
+            actions += 1;
+        }
+        for _ in 0..actions {
+            game.act(A::Undo).expect("undo");
+        }
+        let undone = game.view();
+        let mut redone = None;
+        for _ in 0..actions {
+            redone = Some(game.act(A::Redo).expect("redo").view);
+        }
+        (
+            put,
+            (made.view, happened),
+            next_turn,
+            undone,
+            redone.unwrap(),
+        )
+    });
+
+    let walker = find(&put.you.battlefield, "Sorin, Lord of Innistrad").expect("put down");
+    assert_eq!(
+        walker
+            .counters
+            .iter()
+            .find(|c| c.kind == "loyalty")
+            .map(|c| c.count),
+        Some(3),
+        "a planeswalker put down by hand enters with its loyalty: {:?}",
+        walker.counters
+    );
+    assert!(put.you.emblems.is_empty());
+
+    let (view, happened) = made;
+    assert_eq!(view.you.emblems.len(), 1, "{:?}", view.you.emblems);
+    let emblem = &view.you.emblems[0];
+    assert_eq!(emblem.source.as_deref(), Some("Sorin, Lord of Innistrad"));
+    assert_eq!(emblem.card_id.as_deref(), Some("deck-sorin-emblem"));
+    assert!(
+        emblem.text.iter().any(|t| t.contains("+1/+0")),
+        "its words: {emblem:?}"
+    );
+    assert!(
+        find(&view.you.battlefield, "Sorin, Lord of Innistrad").is_none(),
+        "Sorin paid its last loyalty for it"
+    );
+    assert!(
+        happened.iter().any(|h| matches!(
+            h,
+            H::Emblem { seat: YOU, source: Some(s) } if s == "Sorin, Lord of Innistrad"
+        )),
+        "{happened:?}"
+    );
+    let bears = find(&view.you.battlefield, "Grizzly Bears").expect("the bear");
+    assert_eq!(
+        (bears.power, bears.toughness),
+        (Some(3), Some(2)),
+        "the emblem's +1/+0"
+    );
+    assert!(
+        bears
+            .effects
+            .iter()
+            .any(|e| e.source == "Sorin, Lord of Innistrad Emblem" && e.power == Some(1)),
+        "the bear's effect names the emblem: {:?}",
+        bears.effects
+    );
+    assert!(
+        view.opponents[0].emblems.is_empty(),
+        "the goldfish's rules emblems are not the game's"
+    );
+
+    let later = &next_turn.view;
+    assert_eq!(later.active, YOU, "the reader's next turn");
+    assert!(later.turn > view.turn);
+    assert_eq!(
+        later.you.emblems, view.you.emblems,
+        "for the rest of the game"
+    );
+    let bears = find(&later.you.battlefield, "Grizzly Bears").expect("the bear");
+    assert_eq!(bears.power, Some(3), "and still applied");
+
+    assert!(undone.you.emblems.is_empty(), "undo takes the emblem back");
+    let bears = find(&undone.you.battlefield, "Grizzly Bears").expect("the bear");
+    assert_eq!(bears.power, Some(2));
+    assert_eq!(
+        redone.you.emblems, later.you.emblems,
+        "and redo brings it again"
+    );
+}
+
+/// Issue #1333: a global effect — an anthem's static — is applied to every creature it reaches,
+/// the ones that come after it too, and lasts from turn to turn.
+#[test]
+fn an_anthem_put_down_by_hand_reaches_every_creature_from_turn_to_turn() {
+    let (now, later) = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Glorious Anthem",
+            Some("{1}{W}{W}"),
+            "Enchantment",
+            "Creatures you control get +1/+1.",
+            None,
+            1,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        put_down(&mut game, "Grizzly Bears");
+        put_down(&mut game, "Glorious Anthem");
+        put_down(&mut game, "Llanowar Elves");
+        let now = game.view();
+        (now, game.act(A::EndTurn).expect("a turn later").view)
+    });
+    for view in [&now, &later] {
+        let bears = find(&view.you.battlefield, "Grizzly Bears").expect("the bear");
+        assert_eq!((bears.power, bears.toughness), (Some(3), Some(3)));
+        let elves = find(&view.you.battlefield, "Llanowar Elves").expect("the elf");
+        assert_eq!((elves.power, elves.toughness), (Some(2), Some(2)));
+        assert!(
+            view.you.emblems.is_empty(),
+            "an anthem is a permanent, not an emblem"
+        );
+    }
 }
 
 /// Issue #1327: each continuous effect on a card comes with it, by kind and source — a resolved

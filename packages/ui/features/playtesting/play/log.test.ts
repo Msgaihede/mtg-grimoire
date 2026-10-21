@@ -127,6 +127,12 @@ const CASES: [PlaytestHappened, string | null, string][] = [
     "The opponent created 2 Goblin tokens",
     "token",
   ],
+  [
+    { type: "emblem", seat: "you", source: "Sorin, Lord of Innistrad" },
+    "Got an emblem from Sorin, Lord of Innistrad",
+    "token",
+  ],
+  [{ type: "emblem", seat: "opponent", source: null }, "The opponent got an emblem", "token"],
   // The sandbox's, the reader's own cards read as the goldfish board read them.
   [
     { type: "put", seat: "you", name: "Sol Ring", from: "hand", to: "battlefield" },

@@ -100,6 +100,7 @@ export function emptySeat(player: PlaytestPlayer, over: Partial<PlaytestSeat> = 
     graveyard: [],
     exile: [],
     command: [],
+    emblems: [],
     library: 0,
     libraryCards: [],
     manaOpen: 0,

@@ -8,6 +8,7 @@ import {
   FLOOR,
   GAP,
   PILE,
+  SPLIT,
   UNDER,
   HAND_CARD_W,
   HAND_GAP,
@@ -173,6 +174,28 @@ describe("fitWidth", () => {
       "land",
     );
     expect(fitWidth(piles, { row: 300, laneHeight: 296, max: BACK_MAX })).toBe(FLOOR);
+  });
+});
+
+describe("layoutTable's emblems (issue #1333)", () => {
+  it("shares the back row's width with them, a card and a divider each set", () => {
+    const lands = Array.from({ length: 12 }, (_, i) => card(`Land ${i}`));
+    const box = { width: 1100, height: 600 };
+    const without = layoutTable(lands, box);
+    const withTwo = layoutTable(lands, box, undefined, undefined, 2);
+    expect(withTwo.backWidth).toBeLessThan(without.backWidth);
+    const used =
+      withTwo.lands.reduce((n, p) => n + pileWidth(p, withTwo.backWidth), 0) +
+      2 * withTwo.backWidth +
+      GAP * (withTwo.lands.length + 1) +
+      SPLIT;
+    expect(used).toBeLessThanOrEqual(1100);
+  });
+
+  it("draws emblems alone on the row at the row's largest", () => {
+    expect(layoutTable([], { width: 1100, height: 2000 }, undefined, undefined, 1).backWidth).toBe(
+      BACK_MAX,
+    );
   });
 });
 
