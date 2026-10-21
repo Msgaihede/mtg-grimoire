@@ -378,6 +378,40 @@ export function castChoicePrompt(): TurnFive {
   };
 }
 
+/** Windbrisk Heights' activated "you may" (issue #1328): a yes or a no, the ability's words
+ *  beside them. */
+export function optionalEffectPrompt(): TurnFive {
+  const t = turnFive();
+  const answer = (index: number, yes: boolean) => ({
+    index,
+    kind: "DecideOptionalEffect",
+    cards: [],
+    players: [],
+    number: null,
+    yes,
+    label: null,
+  });
+  return {
+    ...t,
+    view: {
+      ...t.view,
+      stage: "prompt",
+      prompt: {
+        kind: "OptionalEffectChoice",
+        source: "Windbrisk Heights",
+        sourceText:
+          "{W}, {T}: You may play the exiled card without paying its mana cost if you attacked " +
+          "with three or more creatures this turn.",
+        cause: null,
+        options: [answer(0, false), answer(1, true)],
+        cancellable: false,
+        pick: null,
+        keyword: null,
+      },
+    },
+  };
+}
+
 /** The opponent's Lightning Bolt at the reader's face, under the reader's own Counterspell at the
  *  Bolt: an arrow from each to its target. */
 export function withStack(): TurnFive {

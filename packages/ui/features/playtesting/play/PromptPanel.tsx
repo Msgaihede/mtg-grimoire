@@ -1,4 +1,5 @@
 import type { JSX, MouseEvent } from "react";
+import { ManaText } from "@/components/ManaText";
 import type { GameCard, PlaytestAction, PlaytestPrompt } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
@@ -33,6 +34,11 @@ import {
  * order of triggers is shown first-to-resolve first, each picture numbered, and a row standing
  * for abilities (triggers, replacement effects) carries their words in its tooltip. A question
  * whose title alone does not say what an answer decides has a line under it (`promptHelp`).
+ *
+ * **A question about an ability says the ability** (issue #1328): its words (`sourceText`) lie
+ * beside the answers, two lines at most and whole in the tooltip, so a "Do you want to…?" says
+ * what is being agreed to. Beside, not above: the panel's 104 px are the foot's, under the
+ * reader's battlefield, and a yes or a no leaves the row's width to spare.
  *
  * **No two rows alike** (issue #1076): a trigger is named by what tells it from the others in its
  * row — its words, or what set it off — and an order of triggers that reads the same as another
@@ -119,7 +125,7 @@ export function PromptPanel({
           The board can’t show this choice. Let the engine choose for you
           {prompt.cancellable ? ", or cancel." : "."}
         </p>
-      ) : (
+      ) : prompt.sourceText === null ? (
         <OptionChips
           prompt={prompt}
           table={table}
@@ -129,6 +135,26 @@ export function PromptPanel({
           onUnpoint={onUnpoint}
           opponents={opponents}
         />
+      ) : (
+        <div className="flex min-h-0 items-center">
+          <p
+            title={prompt.sourceText}
+            className="m-0 line-clamp-2 min-w-0 flex-1 py-1.5 pl-3 text-[12px] leading-4 text-dim"
+          >
+            {/* `inline`: rules text wraps, and the component's `inline-flex` would not. */}
+            <ManaText source={prompt.sourceText} className="inline" />
+          </p>
+          <OptionChips
+            prompt={prompt}
+            table={table}
+            disabled={disabled}
+            onAct={onAct}
+            onPoint={onPoint}
+            onUnpoint={onUnpoint}
+            opponents={opponents}
+            className="max-w-[60%] flex-none justify-end self-stretch"
+          />
+        </div>
       )}
     </section>
   );
@@ -144,6 +170,7 @@ export function OptionChips({
   onPoint,
   onUnpoint,
   opponents = 1,
+  className,
 }: {
   prompt: PlaytestPrompt;
   table: readonly GameCard[];
@@ -152,9 +179,15 @@ export function OptionChips({
   onPoint: (card: GameCard, e: MouseEvent) => void;
   onUnpoint: () => void;
   opponents?: number;
+  className?: string;
 }): JSX.Element {
   return (
-    <ul className="m-0 flex min-h-0 list-none flex-wrap gap-1.5 overflow-y-auto p-1.5">
+    <ul
+      className={cn(
+        "m-0 flex min-h-0 list-none flex-wrap gap-1.5 overflow-y-auto p-1.5",
+        className,
+      )}
+    >
       {distinctOptions(prompt).map((option) => {
         const { text, hint } = optionLabel(option, prompt, opponents);
         const cards = optionCards(option, prompt).map((ref) => cardOfRef(ref, table));
