@@ -53,6 +53,7 @@ import {
 } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
+import type { UnreleasedStamp } from "@/lib/unreleased";
 import { NO_SELECTION, suppressRangeSelection, useCardSelection } from "@/lib/useCardSelection";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -664,7 +665,7 @@ export function CardGrid<T extends GridCard>({
    *
    * Hold it still (module scope, or a `useCallback`) — see {@link dragPayload}.
    */
-  unreleased?: (card: T) => { set: string; date: string } | null;
+  unreleased?: (card: T) => UnreleasedStamp | null;
   /**
    * Why a tile's card **does not belong where it is filed** — a folder rule it breaks (issue
    * #980) — or `null` when it does. A string outlines the whole tile in destructive red (the art
@@ -2581,7 +2582,7 @@ function Tile<T extends GridCard>({
   finish?: (card: T) => Finish | null;
   treatment?: (card: T) => readonly Treatment[];
   gameChanger?: (card: T) => boolean;
-  unreleased?: (card: T) => { set: string; date: string } | null;
+  unreleased?: (card: T) => UnreleasedStamp | null;
   ruleBreak?: (card: T) => string | null;
   action?: (card: T) => ReactNode;
   column?: (card: T) => ReactNode;
@@ -2950,13 +2951,16 @@ function Tile<T extends GridCard>({
             // **Lifted over an unreleased printing's chip**, which `CardArt` draws in this same
             // corner (issue #965). The chip is a 0.75rem scaled line plus 4px of unscaled hairline
             // and padding, so 0.25rem of inset, the chip and 0.25rem of gap put the badge just
-            // above it, at every zoom.
+            // above it, at every zoom. Two lines when it carries the image's day (issue #1214),
+            // so one more 0.75rem.
             className={cn(
               "pointer-events-auto absolute empty:hidden",
               "left-[calc(0.25rem*var(--mark-scale,1))]",
-              stamp
-                ? "bottom-[calc(1.25rem*var(--mark-scale,1)+4px)]"
-                : "bottom-[calc(0.25rem*var(--mark-scale,1))]",
+              stamp?.imageUpdated
+                ? "bottom-[calc(2rem*var(--mark-scale,1)+4px)]"
+                : stamp
+                  ? "bottom-[calc(1.25rem*var(--mark-scale,1)+4px)]"
+                  : "bottom-[calc(0.25rem*var(--mark-scale,1))]",
               badgeChrome === "chip" && [
                 "bg-bg/85",
                 "rounded-[calc(0.25rem*var(--mark-scale,1))]",
