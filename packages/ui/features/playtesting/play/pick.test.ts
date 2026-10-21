@@ -5,6 +5,7 @@ import {
   confirmLabel,
   pickCounter,
   pickedPower,
+  pickOffer,
   pickTitle,
   pickZones,
   togglePick,
@@ -27,6 +28,7 @@ function pick(over: Partial<PlaytestPick>): PlaytestPick {
     max: 3,
     ordered: false,
     powerCap: null,
+    zone: null,
     ...over,
   };
 }
@@ -102,5 +104,27 @@ describe("stops", () => {
     expect(on).toEqual([{ seat: "opponent", step: "upkeep" }]);
     expect(hasStop(on, "opponent", "upkeep")).toBe(true);
     expect(toggleStop(on, "opponent", "upkeep")).toEqual([]);
+  });
+});
+
+describe("an optional cast (issue #1329)", () => {
+  it("asks whether to cast, from where, before it shows the cards", () => {
+    const cast = pick({ purpose: "cast", min: 0, max: 1, zone: "graveyard" });
+    expect(pickOffer(cast)).toEqual({
+      question: "Cast a spell from your graveyard?",
+      yes: "Choose a card",
+      no: "Don’t cast",
+    });
+    expect(pickOffer({ ...cast, zone: "exile" })?.question).toBe("Cast a spell from exile?");
+    expect(pickOffer({ ...cast, zone: null, max: 2 })?.question).toBe("Cast spells?");
+    expect(pickTitle(cast)).toBe("Choose up to 1 to cast");
+    expect(confirmLabel(cast, 0)).toBe("Cast nothing");
+    expect(confirmLabel(cast, 1)).toBe("Cast it");
+  });
+
+  it("asks nothing first of a cast that must be made, or of any other pick", () => {
+    expect(pickOffer(pick({ purpose: "cast", min: 1, max: 1 }))).toBeNull();
+    expect(pickOffer(pick({ purpose: "search", min: 0, max: 1 }))).toBeNull();
+    expect(pickOffer(pick({ purpose: "choose", min: 0 }))).toBeNull();
   });
 });

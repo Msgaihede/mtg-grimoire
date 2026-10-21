@@ -7197,8 +7197,14 @@ mod tests {
             // Not in the corpus: the "any face" half, a token on the second face alone.
             ("flip", Some("Creature — Human // Token Creature — Spirit")),
         ];
+        // The scanner spells this rule again, below the engine, to leave tokens out of a scan
+        // (issue #1323): every line here holds the two to one answer.
         for (layout, line) in yes {
             assert!(is_token_printing(layout, line), "{layout} {line:?}");
+            assert!(
+                card_scanner::labels::is_token(layout, line),
+                "scanner: {layout} {line:?}"
+            );
         }
         let no: [(&str, Option<&str>); 6] = [
             ("reversible_card", Some("Legendary Creature — Elf Druid")),
@@ -7214,6 +7220,10 @@ mod tests {
         ];
         for (layout, line) in no {
             assert!(!is_token_printing(layout, line), "{layout} {line:?}");
+            assert!(
+                !card_scanner::labels::is_token(layout, line),
+                "scanner: {layout} {line:?}"
+            );
         }
 
         let conn = open();
