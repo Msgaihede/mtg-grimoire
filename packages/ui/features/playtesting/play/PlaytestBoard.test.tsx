@@ -213,6 +213,38 @@ describe("PlaytestBoard's prompt", () => {
   });
 });
 
+describe("PlaytestBoard's rules drags", () => {
+  const carried = () => vi.mocked(tableDraggable).mock.calls.map(([{ element }]) => element);
+  const isCarried = (button: HTMLElement) => carried().some((el) => el.contains(button));
+
+  it("lets the reader carry their attackers, but not their lands, with the sandbox off", () => {
+    vi.mocked(tableDraggable).mockClear();
+    setup(attackStep().view);
+    expect(isCarried(within(yours()).getByRole("button", { name: /^Tarmogoyf/ }))).toBe(true);
+    expect(isCarried(within(yours()).getByRole("button", { name: /^Llanowar Elves/ }))).toBe(true);
+    expect(isCarried(within(yours()).getByRole("button", { name: /^Island/ }))).toBe(false);
+    expect(carried().some((el) => theirs().contains(el))).toBe(false);
+  });
+
+  it("lets the reader carry a permanent onto a target with priority", () => {
+    vi.mocked(tableDraggable).mockClear();
+    setup(turnFive().view);
+    expect(isCarried(within(yours()).getByRole("button", { name: /^Sol Ring/ }))).toBe(true);
+  });
+
+  it("carries nothing on the table while the engine asks a question", () => {
+    vi.mocked(tableDraggable).mockClear();
+    setup(targetPrompt().view);
+    expect(carried().some((el) => yours().contains(el))).toBe(false);
+  });
+
+  it("carries nothing on the table while the engine is busy", () => {
+    vi.mocked(tableDraggable).mockClear();
+    setup(attackStep().view, { busy: true });
+    expect(carried().some((el) => yours().contains(el))).toBe(false);
+  });
+});
+
 describe("PlaytestBoard's opponent", () => {
   it("never taps or opens a menu on the opponent's cards with the sandbox off", () => {
     const { onAct } = setup(turnFive().view);
