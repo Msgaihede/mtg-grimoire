@@ -45,6 +45,7 @@ const TITLES: Record<string, string> = {
   NamedChoice: "Choose",
   OptionalCostChoice: "Pay the optional cost?",
   AlternativeCastChoice: "Which cost do you pay?",
+  CastOffer: "Cast it?",
   UnlessPayment: "Pay?",
   ReplacementChoice: "Choose a replacement effect",
   OrderTriggers: "Put your triggers in order",

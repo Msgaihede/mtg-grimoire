@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PlaytestPrompt } from "@/lib/ipc";
-import { discardPick, scryPick } from "./fixtures";
+import { castPick, discardPick, scryPick } from "./fixtures";
 import { PickPanel } from "./PickPanel";
 
 function setup(prompt: PlaytestPrompt) {
@@ -64,5 +64,26 @@ describe("PickPanel", () => {
     expect(screen.getByText("2 of 2")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Let the engine choose" }));
     expect(onAct).toHaveBeenCalledWith({ type: "auto" });
+  });
+
+  it("asks whether to cast from the graveyard before it shows the cards (issue #1329)", () => {
+    const { onAct, pick } = setup(castPick().view.prompt!);
+    const [bolt] = pick.cards;
+    expect(
+      screen.getByRole("heading", { name: "Cast a spell from your graveyard?" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: bolt.name })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Choose a card" }));
+    expect(onAct).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Choose up to 1 to cast" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: bolt.name }));
+    fireEvent.click(screen.getByRole("button", { name: "Cast it" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "pickCards", ids: [bolt.id] });
+  });
+
+  it("declines an optional cast without showing the cards", () => {
+    const { onAct } = setup(castPick().view.prompt!);
+    fireEvent.click(screen.getByRole("button", { name: "Don’t cast" }));
+    expect(onAct).toHaveBeenCalledWith({ type: "pickCards", ids: [] });
   });
 });
