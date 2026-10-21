@@ -1,10 +1,11 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
   Archive,
   ArrowDown,
   ChevronUp,
   Folder,
+  FolderPlus,
   LayoutGrid,
   List as ListIcon,
   LoaderCircle,
@@ -27,7 +28,7 @@ import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { plural } from "@/lib/counts";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
-import { buildFolderTree } from "@/lib/folderTree";
+import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl, type ImageVariant } from "@/lib/images";
 import type {
@@ -39,6 +40,12 @@ import type {
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import type { TrayDestinationFace } from "../useTrayDestination";
+import {
+  NEW_FOLDER_LABEL,
+  newFolderRefusal,
+  useTrayNewFolder,
+  type TrayNewFolder,
+} from "../useTrayNewFolder";
 import { ADD_CARD_LABEL } from "./AddCardDialog";
 import {
   addLabel,
@@ -1249,6 +1256,11 @@ function TileName({
  *
  * **Picking writes nothing but the choice.** The commit is the Add button's; so the list is never
  * pending, and `AddToCollection`'s argument for `pending={false}` holds here word for word.
+ *
+ * **`New folder…` under the list** (issue #1357) swaps the list for a name field in the same
+ * popup, and Create makes the folder at the top level and picks it (`useTrayNewFolder`). The write
+ * is held here rather than in the popup's contents, so a popup closed while it is in flight still
+ * picks the folder it made.
  */
 function FolderPicker({
   folderId,
@@ -1260,6 +1272,7 @@ function FolderPicker({
   const { query, folders } = useCollectionFolderList();
   const mine = useMemo(() => folders.filter((folder) => folder.kind === "user"), [folders]);
   const nodes = useMemo(() => buildFolderTree(mine, []), [mine]);
+  const newFolder = useTrayNewFolder(onFolder);
 
   // A folder another surface deleted reads as the top level, which is where `buildFolderTree`
   // puts a child whose parent is gone. While the list is still loading a named folder has no name
@@ -1294,25 +1307,191 @@ function FolderPicker({
       panelClassName="bottom-full top-auto mb-1 w-64 origin-bottom-left p-1"
     >
       {(close) => (
-        <MoveToFolder
-          label="Folder for scanned cards"
+        <FolderChoices
           nodes={nodes}
-          currentId={folderId}
-          rootLabel={ROOT_LABEL}
-          // Drawn into the popup rather than as a second layer of its own — the role goes with the
-          // box, so the popup stays the one dialog in the tree.
-          inline
-          pending={false}
-          onPick={(id) => {
-            onFolder(id);
-            close();
-          }}
-          // Deliberately nothing: the popup closes itself when focus leaves its root. Wired here it
-          // would fire the moment the popup opened — the list focuses itself as it mounts and the
-          // popup's panel then takes the caret from it, which is focus leaving the list.
-          onClose={() => {}}
+          folderId={folderId}
+          onFolder={onFolder}
+          newFolder={newFolder}
+          close={close}
         />
       )}
     </AnchoredPopup>
+  );
+}
+
+const NEW_FOLDER_CAPTION = "block text-[0.6875rem] text-dim";
+
+const NEW_FOLDER_FIELD = cn(
+  "h-8 w-full rounded-md border border-border bg-bg px-2 text-sm text-text",
+  "focus:border-accent focus:outline-none",
+);
+
+const NEW_FOLDER_BUTTON = cn(
+  "inline-flex h-7 items-center rounded-md border px-2.5 text-xs",
+  PRESS,
+  "aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:active:scale-100",
+  FOCUS,
+);
+
+/**
+ * The popup's body: the folders and `New folder…`, or the new folder's name — one or the other,
+ * the wishlist destination's panel's shape with its parent list left out (the folder goes at the
+ * top level). A component of its own so its state mounts and unmounts with the popup: a
+ * half-typed name is a fact about one opening.
+ *
+ * **One box for both, and it takes the caret between them.** `New folder…` and Cancel each
+ * unmount the press the caret is on, and a focused element that leaves the tree drops the caret to
+ * `<body>` — which is focus leaving the popup's root, and the popup would close under a reader who
+ * only asked for the other half. So the box takes the caret first, then the half that mounts takes
+ * it from there (the name field, or the list).
+ */
+function FolderChoices({
+  nodes,
+  folderId,
+  onFolder,
+  newFolder,
+  close,
+}: {
+  nodes: readonly FolderNode[];
+  folderId: number | null;
+  onFolder: (id: number | null) => void;
+  newFolder: TrayNewFolder;
+  close: () => void;
+}) {
+  const [naming, setNaming] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  return (
+    // A landing pad, not a control: no outline (`packages/ui/lib/focus.ts`).
+    <div ref={boxRef} tabIndex={-1} className="outline-none">
+      {naming ? (
+        <NewFolderForm
+          newFolder={newFolder}
+          onCreated={close}
+          onCancel={() => {
+            boxRef.current?.focus();
+            setNaming(false);
+          }}
+        />
+      ) : (
+        <>
+          <MoveToFolder
+            label="Folder for scanned cards"
+            nodes={nodes}
+            currentId={folderId}
+            rootLabel={ROOT_LABEL}
+            // Drawn into the popup rather than as a second layer of its own — the role goes with
+            // the box, so the popup stays the one dialog in the tree.
+            inline
+            pending={false}
+            onPick={(id) => {
+              onFolder(id);
+              close();
+            }}
+            // Deliberately nothing: the popup closes itself when focus leaves its root. Wired here
+            // it would fire the moment the popup opened — the list focuses itself as it mounts and
+            // the popup's panel then takes the caret from it, which is focus leaving the list.
+            onClose={() => {}}
+          />
+          {/* Under the list and apart from it: a destination is a place the cards go, and this is
+              a press that makes one. `MoveToFolder`'s row shape, so the two read as one popup. */}
+          <div className="border-t border-border p-1">
+            <button
+              type="button"
+              onClick={() => {
+                newFolder.reset();
+                boxRef.current?.focus();
+                setNaming(true);
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 truncate rounded-md px-2 py-1.5 text-left text-xs text-text",
+                "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              <FolderPlus className="size-3.5 flex-none" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{NEW_FOLDER_LABEL}</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The new folder's name, its Create and its Cancel. **Create is `aria-disabled`, never
+ * `disabled`**: a press that disables itself is blurred by the browser with no `relatedTarget`,
+ * and that is focus leaving the popup — it would close under the write, and a refusal would have
+ * nowhere to be said. The refusal is said here, under the name, where the reader is looking.
+ */
+function NewFolderForm({
+  newFolder,
+  onCreated,
+  onCancel,
+}: {
+  newFolder: TrayNewFolder;
+  onCreated: () => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState("");
+  const nameRef = useRef<HTMLInputElement>(null);
+  const nameId = useId();
+  const trimmed = name.trim();
+  const held = trimmed === "" || newFolder.pending;
+
+  useEffect(() => {
+    nameRef.current?.focus();
+  }, []);
+
+  return (
+    <form
+      aria-label="New folder"
+      className="space-y-2 p-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (held) return;
+        void newFolder.create(trimmed).then((made) => {
+          if (made) onCreated();
+        });
+      }}
+    >
+      <div className="space-y-1">
+        <label htmlFor={nameId} className={NEW_FOLDER_CAPTION}>
+          Name
+        </label>
+        <input
+          ref={nameRef}
+          id={nameId}
+          type="text"
+          value={name}
+          autoComplete="off"
+          onChange={(e) => setName(e.target.value)}
+          className={NEW_FOLDER_FIELD}
+        />
+      </div>
+      {/* Mounted for as long as the form is, and filled: a live region that appears together with
+          its words announces nothing. */}
+      <p role="alert" className="text-[0.7rem] leading-relaxed text-destructive empty:hidden">
+        {newFolder.error === null ? null : newFolderRefusal(newFolder.error)}
+      </p>
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className={cn(NEW_FOLDER_BUTTON, "border-border text-dim hover:text-text")}
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          aria-disabled={held || undefined}
+          aria-busy={newFolder.pending || undefined}
+          className={cn(NEW_FOLDER_BUTTON, "border-accent text-accent")}
+        >
+          {newFolder.pending ? "Creating…" : "Create folder"}
+        </button>
+      </div>
+    </form>
   );
 }

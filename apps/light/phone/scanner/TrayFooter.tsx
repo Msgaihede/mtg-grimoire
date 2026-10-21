@@ -1,9 +1,10 @@
-import { useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Archive,
   ChevronRight,
   Ellipsis,
   Folder,
+  FolderPlus,
   History,
   Layers,
   LoaderCircle,
@@ -20,12 +21,19 @@ import {
   totalCopies,
 } from "@grimoire/ui/features/scanner/reader/tray";
 import type { TrayDestinationFace } from "@grimoire/ui/features/scanner/useTrayDestination";
+import {
+  NEW_FOLDER_LABEL,
+  newFolderRefusal,
+  useTrayNewFolder,
+  type TrayNewFolder,
+} from "@grimoire/ui/features/scanner/useTrayNewFolder";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { buildFolderTree, flattenFolders } from "@grimoire/ui/lib/folderTree";
 import type { CollectionFolder, ScannerTrayRow } from "@grimoire/ui/lib/ipc";
-import { PRESS } from "@grimoire/ui/lib/motion";
+import { PRESS, PRESS_STILL } from "@grimoire/ui/lib/motion";
 import { cn } from "@grimoire/ui/lib/utils";
-import { ActionSheet, SheetChoice, SheetRow } from "../deck/sheet";
+import { ActionSheet, SheetBack, SheetChoice, SheetRow } from "../deck/sheet";
+import { GOLD_BUTTON, Refusal } from "../trade/parts";
 
 /** The collection's own word for its top level — the desktop tray's, and `CopyActions`'. */
 export const ROOT_LABEL = "Collection";
@@ -65,6 +73,8 @@ export function destinationName(
  *   folders as a sheet — `CopyActions`' cabinet: the root, then the drawers the reader made, nested.
  *   A deck's group and `Recently removed` are not places the tray could ever land, so they are not
  *   in the list. Picking writes nothing but the choice (`prefs.folderId`); the commit is Add's.
+ *   *New folder…* under the list (issue #1357) is a page of the same sheet — a name and Create —
+ *   that makes the folder at the top level and picks it (`useTrayNewFolder`).
  * - **Add** says both halves of what it will do — `Add 8 to collection · 2 need a finish` — and
  *   while it cannot go it stays drawn, greyed, **with the reason in words under it**. The desktop
  *   says that reason in a tooltip, which a finger never opens.
@@ -131,6 +141,9 @@ export function TrayFooter({
   destination?: TrayDestinationFace;
 }) {
   const [sheet, setSheet] = useState<"folder" | "more" | null>(null);
+  // Which page of the folder sheet is up: the folders, or a new one's name.
+  const [folderPage, setFolderPage] = useState<"list" | "new">("list");
+  const newFolder = useTrayNewFolder(onFolder);
   const reasonId = useId();
   // The destination's press, which its sheet hands the caret back to.
   const folderRef = useRef<HTMLButtonElement>(null);
@@ -172,7 +185,10 @@ export function TrayFooter({
             // Named outright: the icon, the name and the chevron are three elements a gap apart.
             aria-label={`Folder: ${name}`}
             aria-haspopup="dialog"
-            onClick={() => setSheet("folder")}
+            onClick={() => {
+              setFolderPage("list");
+              setSheet("folder");
+            }}
             className={cn(
               "inline-flex h-11 min-w-0 flex-1 items-center gap-2 rounded-md border border-border px-3 text-sm",
               PRESS,
@@ -253,31 +269,59 @@ export function TrayFooter({
           folderRef.current?.focus();
         }}
       >
-        <ul aria-label="Folders">
-          <SheetChoice
-            label={ROOT_LABEL}
-            current={folderId === null}
-            onPick={() => {
-              onFolder(null);
-              setSheet(null);
-              folderRef.current?.focus();
-            }}
-          />
-          {nodes.map(({ folder, depth }) => (
-            <SheetChoice
-              key={folder.id}
-              label={folder.name}
-              current={folder.id === folderId}
-              indent={depth}
-              note={folder.locked ? "set aside" : undefined}
-              onPick={() => {
-                onFolder(folder.id);
+        {folderPage === "new" ? (
+          <>
+            <SheetBack label={NEW_FOLDER_LABEL} onBack={() => setFolderPage("list")} />
+            <NewFolderPage
+              newFolder={newFolder}
+              onCreated={() => {
                 setSheet(null);
                 folderRef.current?.focus();
               }}
             />
-          ))}
-        </ul>
+          </>
+        ) : (
+          <>
+            <ul aria-label="Folders">
+              <SheetChoice
+                label={ROOT_LABEL}
+                current={folderId === null}
+                onPick={() => {
+                  onFolder(null);
+                  setSheet(null);
+                  folderRef.current?.focus();
+                }}
+              />
+              {nodes.map(({ folder, depth }) => (
+                <SheetChoice
+                  key={folder.id}
+                  label={folder.name}
+                  current={folder.id === folderId}
+                  indent={depth}
+                  note={folder.locked ? "set aside" : undefined}
+                  onPick={() => {
+                    onFolder(folder.id);
+                    setSheet(null);
+                    folderRef.current?.focus();
+                  }}
+                />
+              ))}
+            </ul>
+            {/* A list of its own under the destinations: this row makes a place rather than
+                being one. */}
+            <ul className="border-t border-border">
+              <SheetRow
+                label={NEW_FOLDER_LABEL}
+                Icon={FolderPlus}
+                opens
+                onPress={() => {
+                  newFolder.reset();
+                  setFolderPage("new");
+                }}
+              />
+            </ul>
+          </>
+        )}
       </ActionSheet>
 
       <ActionSheet
@@ -344,5 +388,73 @@ export function TrayFooter({
         </ul>
       </ActionSheet>
     </footer>
+  );
+}
+
+/**
+ * A new folder's name — the folder sheet's second page, `HistorySheet`'s rename page in shape: a
+ * labelled 16px box, the refusal under it in the backend's words, and the press. Create makes the
+ * folder at the top level and picks it; the sheet then closes, as a choice in the list does.
+ *
+ * **The caret goes into the box as the page mounts**: the reader pressed *New folder…* to type a
+ * name, and a page that waited for a second press on the box would be one step longer for nothing.
+ */
+function NewFolderPage({
+  newFolder,
+  onCreated,
+}: {
+  newFolder: TrayNewFolder;
+  onCreated: () => void;
+}) {
+  const id = useId();
+  const [name, setName] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const typed = name.trim();
+  const held = typed === "" || newFolder.pending;
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  return (
+    <form
+      aria-label="New folder"
+      className="flex flex-col gap-3 px-4 pt-3 pb-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (held) return;
+        void newFolder.create(typed).then((made) => {
+          if (made) onCreated();
+        });
+      }}
+    >
+      <label htmlFor={`${id}-name`} className="text-[0.8125rem] text-dim">
+        Name
+      </label>
+      <input
+        ref={inputRef}
+        id={`${id}-name`}
+        type="text"
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        autoComplete="off"
+        // 16px: below it a phone zooms the page when the box takes the caret.
+        className={cn(
+          "h-11 w-full min-w-0 rounded-md border border-border bg-bg px-3 text-base text-text",
+          "select-text focus:border-accent focus:outline-none",
+          PRESS_STILL,
+        )}
+      />
+      <Refusal>{newFolder.error === null ? null : newFolderRefusal(newFolder.error)}</Refusal>
+      <button
+        type="submit"
+        aria-disabled={held || undefined}
+        aria-busy={newFolder.pending || undefined}
+        className={cn(GOLD_BUTTON, "self-end px-6")}
+      >
+        {/* Not a bare `New folder…`: the way back at the head of this page is named that. */}
+        Create folder
+      </button>
+    </form>
   );
 }
