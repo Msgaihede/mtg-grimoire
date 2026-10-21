@@ -98,7 +98,7 @@ struct Loaded {
     /// decision is made as it always was, the look's admitted covers its choices.
     index: Option<(EvidenceIndex, EvidenceThresholds)>,
     /// The voting frames of the card being counted, kept while evidence is loaded: what the
-    /// printing is chosen on when the card is decided.
+    /// printing is chosen on when the card is decided. Never more than the agreement's votes.
     frames_seen: Vec<Seen>,
     /// The last decision the evidence chose the printing of.
     report: Option<EvidenceReport>,
@@ -361,9 +361,15 @@ impl Session {
         } else if read.accepted || read.supported {
             l.counted = read.best().map(|b| (b.scored.entry, b.scored.score));
         }
-        // The frames kept are the count's: they end with it, and with a vote for another card.
-        if votes == 0 {
-            l.frames_seen.clear();
+        // **The frames kept are the count's.** A vote for another card ends them — kept or not:
+        // a frame of the decided card keeps nothing ([`keep`]) yet restarts the count. Then
+        // they are trimmed to the votes held, so a frame the agreement dropped (aged out, past
+        // its window, or before a gap that restarted it) never chooses the printing.
+        let voted = (read.accepted || read.supported).then(|| read.best()).flatten();
+        if let Some(card) = voted.map(|b| b.scored.card) {
+            if l.frames_seen.first().is_some_and(|f| f.card != card) {
+                l.frames_seen.clear();
+            }
         }
         if let Some(seen) = seen {
             if l.frames_seen.first().is_some_and(|f| f.card != seen.card) {
@@ -371,6 +377,8 @@ impl Session {
             }
             l.frames_seen.push(seen);
         }
+        let dropped = l.frames_seen.len().saturating_sub(votes);
+        l.frames_seen.drain(..dropped);
         let rules = &l.agreement.rules;
         let decide_at = rules.required as f32;
         // How far the votes held are toward a decision: two accepted frames, or three in all.
@@ -1381,6 +1389,59 @@ mod tests {
             feed_seen(&mut s, &a, Some(along(None)), 300.0);
             s.forget_card();
             assert!(kept(&s).is_empty(), "a reset kept the frames");
+        }
+
+        /// The cards of the frames kept for the evidence, oldest first.
+        fn kept_cards(s: &Session) -> Vec<u32> {
+            let l = s.neural.loaded.as_ref().expect("loaded");
+            l.frames_seen.iter().map(|f| f.card).collect()
+        }
+
+        #[test]
+        fn a_vote_for_the_decided_card_clears_the_frames_kept_for_another() {
+            let mut s = with_evidence(0.75);
+            let (c, a) = (naming(&s, C, true), naming(&s, A, true));
+            // Card 2 decided, then a frame of card 1 kept.
+            feed(&mut s, &c, 0.0);
+            assert_eq!(feed(&mut s, &c, 100.0).decision_seq, 1);
+            feed_seen(&mut s, &a, Some(along(None)), 200.0);
+            assert_eq!(kept_cards(&s), [1]);
+            // A frame of the decided card keeps nothing, yet restarts the count: card 1's frame
+            // is out of it.
+            feed(&mut s, &c, 300.0);
+            assert!(kept_cards(&s).is_empty());
+            // Shown in turn, neither card is ever counted twice, and nothing piles up.
+            for i in 0..10 {
+                let at = 400.0 + 200.0 * i as f64;
+                feed_seen(&mut s, &a, Some(along(None)), at);
+                feed(&mut s, &c, at + 100.0);
+            }
+            assert!(kept_cards(&s).is_empty());
+        }
+
+        #[test]
+        fn the_frames_kept_are_the_votes_the_agreement_holds() {
+            let mut s = with_evidence(0.75);
+            let supported = naming(&s, A, false);
+            feed_seen(&mut s, &supported, Some(along(None)), 0.0);
+            feed_seen(&mut s, &supported, Some(along(None)), 100.0);
+            assert_eq!(kept_cards(&s), [1, 1]);
+            // Past the gap the agreement counts again from this frame alone, and so do they.
+            let v = feed_seen(&mut s, &supported, Some(along(None)), 1000.0);
+            assert_eq!(v.tracked.expect("tracked").streak, 1);
+            assert_eq!(kept_cards(&s), [1]);
+        }
+
+        #[test]
+        fn the_deciding_frames_glance_chooses_the_printing() {
+            let mut s = with_evidence(0.75);
+            let read = naming(&s, A, true);
+            feed_seen(&mut s, &read, Some(along(None)), 0.0);
+            let v = feed_seen(&mut s, &read, Some(along(Some(glance(&[(1, 1.0)])))), 100.0);
+            let d = v.decision.expect("decided");
+            assert_eq!((d.outcome, d.printing), (Outcome::Resolved, format_uuid(&Q)));
+            let report = s.neural_evidence_report().expect("a report");
+            assert_eq!(report.decided, Some(format_uuid(&Q)));
         }
 
         #[test]
