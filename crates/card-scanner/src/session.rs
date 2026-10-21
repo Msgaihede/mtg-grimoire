@@ -971,6 +971,8 @@ pub struct Session {
 #[path = "neural_mode.rs"]
 mod neural_mode;
 pub use neural_mode::{NEURAL_ERROR_PREFIX, NEURAL_UNAVAILABLE_ERROR};
+#[cfg(feature = "neural")]
+pub use neural_mode::{CandidateReport, EvidenceReport};
 
 /// The gap gate: an appearance match that stands less than this clear of the nearest match naming
 /// **another card** is treated as no evidence. See [`crate::resolve::resolve_gated`] for the
