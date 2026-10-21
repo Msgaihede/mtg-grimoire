@@ -1,5 +1,8 @@
 import { useCallback, useState, type JSX } from "react";
+import { useDeckWallMarks } from "@/features/decks/deckWall";
+import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { useDecks } from "@/features/decks/useDecks";
+import { useDeckSort } from "@/features/decks/useDeckSort";
 import { keepGame, keptGame } from "./keptGame";
 import { holdGame, type HeldGame, type PlaytestPicks } from "./play/heldGame";
 import { PlaytestPage } from "./play/PlaytestPage";
@@ -22,9 +25,16 @@ import { PlaytestSetup } from "./PlaytestSetup";
  * **Going to another view does not** (issue #1322): the game is kept (`./keptGame.ts`), and this
  * page opens on it again when the reader comes back — the same board, the same log, an AI turn
  * that finished meanwhile already played.
+ *
+ * **The setup's wall is the Decks page's**, so it reads what that page reads: the folders, each
+ * deck's colours and bracket (`useDeckWallMarks`), and the order the reader keeps the gallery in.
+ * Every one of them is a query the gallery shares, so a reader arriving from Decks asks nothing new.
  */
 export function PlaytestingPage(): JSX.Element {
   const { decks, query } = useDecks();
+  const { folders } = useDeckFolders();
+  const marks = useDeckWallMarks(decks);
+  const { sort } = useDeckSort();
   const [playing, setPlaying] = useState<HeldGame | null>(keptGame);
   const start = useCallback((picks: PlaytestPicks) => {
     const game = holdGame(picks);
@@ -41,7 +51,14 @@ export function PlaytestingPage(): JSX.Element {
 
   return (
     <>
-      <PlaytestSetup decks={decks} loading={query.isPending} onStart={start} />
+      <PlaytestSetup
+        decks={decks}
+        folders={folders}
+        marks={marks}
+        sort={sort}
+        loading={query.isPending}
+        onStart={start}
+      />
       {playing !== null && (
         <PlaytestPage
           picks={playing.picks}

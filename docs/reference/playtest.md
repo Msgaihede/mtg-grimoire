@@ -508,33 +508,53 @@ to the command zone.
 
 ## The setup page
 
-`packages/ui/features/playtesting/PlaytestSetup.tsx`, under the Playtesting rail entry. It has one
-`Dropdown` per seat, listing the decks that are not archived, with the format as the hint. A deck
-with a plan offers a Theory / Actual pair, in the editor's order. Difficulty is a five-button group,
-from "Very easy" to "Very hard", and starts on Medium. Start is `aria-disabled` until both decks are
-picked. The same deck on both sides is allowed, and labelled "A mirror match." The last picks are
-kept for the window's life in `viewMemory("playtesting.setup")`, never in storage.
+`packages/ui/features/playtesting/PlaytestSetup.tsx`, under the Playtesting rail entry: a game
+lobby (redesigned 2026-10-21 from the "Playtest Lobby Redesign" canvas, option A). Two halves:
 
-**The table** is a three-button group: "Goldfish", "1 opponent" (the default) or "3 opponents".
-Three opponents show three dropdowns, "Opponent 1's deck" to "Opponent 3's", and Start waits for
-all four decks. Any deck may sit in any seat, twice over. **"Goldfish"** hides every opponent's
-seat and the difficulty: the goldfish is no deck and plays at no skill, so Start waits for the
-reader's deck alone, and the board opens against it with the sandbox on, exactly as the deck
-editor's "Goldfish this deck" does. The seats a table hides keep their picks.
+- **The wall, on the left** — the reader's decks drawn and walked exactly as the Decks page draws
+  them, with every managing hand taken off. The tiles are `DeckPickTile`, `DeckFolderPickCard` and
+  `ParentDeckFolderPickCard`: the gallery's `DeckTile`, `FolderCard` and `ParentDeckFolderCard`
+  faces (`DeckTile.tsx`, `FolderCard.tsx`) with no menu, drag, rename, tray or Create. The grid
+  tracks and each deck's colour band and bracket pill are `features/decks/deckWall.ts`'
+  (`wallStyle`, `useDeckWallMarks`), shared with the gallery; the order is the gallery's
+  remembered sort, the zoom its `cardZoom.deckGallery`. Folders are walked by their cards, the
+  "Up one level" tile and a path over the wall (`Folder path`). **Typing a name or pressing a
+  format searches every deck**, folders left out (the gallery narrows the drawer on screen
+  instead): the reader is looking for one deck to play. Archived decks are left off.
+- **The table, on the right** — **Gamemode** (three tiles: "Goldfish", "Duel", the default, and
+  "Four-player", each drawn as its table), **Seats** (one row per player: "You", then "Opponent"
+  or "Opponent 1" to "Opponent 3"), **AI skill** (five segments, "Very easy" to "Very hard",
+  starting on Medium) and **Start game**.
+
+**One seat is always the one being picked for** — `aria-pressed`, ringed in accent, and named over
+the wall ("Picking for Opponent 2"). A deck pressed on the wall sits there, and the next empty seat
+round the table is up; pressing a seat makes it the one picked for, so a seated deck is swapped by
+pressing its seat and then a deck. A seat's ✕ empties it. A seated deck's tile wears a ring and a
+plate per seat it is in ("You", "Opp 2"). A deck with a plan seats with the editor's Theory | Actual
+switch, Theory first. Start is `aria-disabled` until every seat the gamemode plays has a deck, and
+the line under it says which seat is missing one. Any deck may sit in any seat, twice over; a duel
+of one deck is labelled "A mirror match." The last picks — gamemode, all four seats, skill — are
+kept for the window's life in `viewMemory("playtesting.setup")`, never in storage; the wall's
+folder and filter are the page's own state.
+
+**"Goldfish"** takes every opponent's seat and the skill away: the goldfish is no deck and plays at
+no skill, so Start waits for the reader's deck alone, and the board opens against it with the
+sandbox on, exactly as the deck editor's "Goldfish this deck" does. The seats a gamemode does not
+play keep their picks.
 
 ### What the engine plays of a deck (issue #1078)
 
 phase's parser reads most cards whole. A card it reads only in part is still dealt and played, as
 a body with a cost and a type, but the parts it could not read do nothing. So the setup page marks
-each deck before it is picked:
+each deck — as marks, with the sentence as the mark's name and hint rather than printed:
 
-- **In the deck lists**, each row has a glyph for the list the deck is first dealt from: a green
-  `CircleCheck` when every card is played whole, a gold `TriangleAlert` when some are played only
-  in part (a caution, not the red of a broken rule: the deck still plays). The row's tooltip is
-  the sentence, and the glyph rides on the closed trigger with the picked deck.
-- **Under each seat**, the picked deck's verdict in the list picked there ("The rules engine plays
-  23 of 24 cards in full; 1 card is played only in part."), and a fold that lists those cards,
-  each with its copies and what phase leaves out of it.
+- **On the wall**, a tile whose deck has cards played only in part (in the list it is first dealt
+  from) wears a gold `TriangleAlert` and the count in its art's top-right corner — a caution, not
+  the red of a broken rule: the deck still plays. A deck played whole wears nothing there.
+- **On each seat**, the seated deck's verdict in the list picked there: a green `CircleCheck`, or
+  the `TriangleAlert` and count as a button whose name is the sentence ("The rules engine plays 23
+  of 24 cards in full; 1 card is played only in part.") and which opens, under the seat, the cards
+  with their copies and what phase leaves out of each. A check that failed is a dim `CircleHelp`.
 
 **The verdict is phase's own.** `grimoire-play`'s `support.rs` parses each face exactly as a game
 does (`cards::parsed_faces`, `build_oracle_face`) and asks `engine::game::coverage::card_face_gaps`,
@@ -559,6 +579,22 @@ sit outside it — wherever it is drawn: the hand, the battlefield, a pile, the 
 label says "played only in part", and the preview names each gap with `gapWords`. A transformed
 card is its shown face's name, so its marks follow the face; it is fixed for the game, so not in a
 `Moment`.
+
+**Each card carries the effects on it, with their sources** (issue #1327). `table.rs`'
+`effects_on` reads phase's own attribution (`GameState::attribution`) — every
+`ContinuousModification` the last layers pass applied to the object, by the static or the
+resolved effect it came from — into `GameCard.effects`: one `CardEffect` per source and kind
+(CR 613's layer, layer 7 split into set, modify and switch), in layer order, with what the engine
+names of it: the types, colors and keywords gained or lost, whether it strips every ability, the
+text of each ability it grants (phase's, `~` for the card itself), and the P/T it adds or sets
+(`null` for an axis worked out in play). A permanent's own statics on itself are its printed self
+(CR 113.3c) and are left out, as phase's own board leaves them; a resolved spell's or ability's
+effect is kept even from the card itself. Facts only: `table/effects.ts` writes them —
+`+3/+3 · Giant Growth`, `+Demon · Clavileño`, `+Dies trigger · Clavileño` on chips under the
+counters at the card's top left (three at most, the rest counted in one more), and each in full,
+a granted ability's text quoted with the card's name for `~`, in the card's label and under the
+preview. A card under an effect is never piled with its untouched twin. The attribution is
+rebuilt with every layers pass and lives in the `GameState`, so undo and replay frames carry it.
 
 ## The board
 
