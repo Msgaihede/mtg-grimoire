@@ -239,6 +239,8 @@ export function playtestSentence(
         : `${playerName(h.seat, opponents)} blocked ${h.attacker} with ${h.blocker}`;
     case "dealt":
       return `${h.source} dealt ${h.amount} damage to ${h.target}`;
+    case "commanderDamage":
+      return `${h.source} has dealt ${playerName(h.seat, opponents, "mid")} ${h.total} commander damage`;
     case "life": {
       if (h.amount === 0) return null;
       // The goldfish cannot lose, so nothing else says it would have: its plate's "dead on your
@@ -306,6 +308,7 @@ export function playtestKind(h: PlaytestHappened): LogKind {
     case "attacked":
     case "blocked":
     case "dealt":
+    case "commanderDamage":
       return "combat";
     case "life":
       return "life";

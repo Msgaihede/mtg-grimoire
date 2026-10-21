@@ -104,6 +104,7 @@ export function emptySeat(player: PlaytestPlayer, over: Partial<PlaytestSeat> = 
     libraryCards: [],
     manaOpen: 0,
     mana: manaTable(),
+    commanderDamage: [],
     deadOn: null,
     ...over,
   };

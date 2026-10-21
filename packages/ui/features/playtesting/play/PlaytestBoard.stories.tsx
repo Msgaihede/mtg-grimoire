@@ -18,6 +18,7 @@ import {
   fourPlayerCombat,
   fourPlayerLost,
   gameOver,
+  goldfishCommanderDead,
   goldfishDead,
   goldfishOpeningHand,
   goldfishTurn,
@@ -511,13 +512,22 @@ const POD = ["Boros Aggro", "Thrasios & Tymna", "Bruna Angels"];
 
 /**
  * A four-player Commander table (issue #994): three opponent areas side by side over the
- * reader's table, in turn order from the left — Opponent 2 on three poison, Opponent 3 out.
+ * reader's table, in turn order from the left — Opponent 2 on three poison, Opponent 3 out. Each
+ * plate counts the commander damage its player has taken (issue #1336), one mark a commander:
+ * Kenrith's 14 on Opponent 2, the 21 in red that put Opponent 3 out, and the reader's 6 and 4
+ * from Thrasios and Tymna.
  */
 export const FourPlayer: Story = {
   args: { view: fourPlayer().view, opponentNames: POD, log: [] },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("region", { name: "Opponent 2's battlefield" })).toBeVisible();
+    await expect(
+      canvas.getByLabelText("21 commander damage from Kenrith, the Returned King, lethal"),
+    ).toBeVisible();
+    await expect(
+      canvas.getByLabelText("6 commander damage from Thrasios, Triton Hero"),
+    ).toBeVisible();
     await expect(canvas.getByRole("region", { name: "Opponent 3 · Bruna Angels" })).toHaveAttribute(
       "data-out",
       "true",
@@ -614,6 +624,19 @@ export const GoldfishLog: Story = {
     const log = canvas.getByRole("region", { name: "Game log" });
     await expect(within(log).getByRole("heading", { name: "Turn 17" })).toBeVisible();
     await expect(within(log).getByRole("heading", { name: "Opening hand" })).toBeVisible();
+  },
+};
+
+/**
+ * The goldfish dead to commander damage (issue #1336): Kenrith's 21 in red on its plate, which
+ * says the reader's turn it would have died on though its life is still 12.
+ */
+export const GoldfishCommanderDamage: Story = {
+  args: { view: goldfishCommanderDead() },
+  render: (args) => <Played view={args.view!} onAct={args.onAct} log={GOLDFISH_LOG} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Dead on your turn 8")).toBeVisible();
   },
 };
 
