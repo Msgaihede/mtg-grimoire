@@ -10,6 +10,10 @@
  * tile's own frame so that a wall of both is one wall, and {@link ParentDeckFolderCard}, the way
  * back up, drawn in the same frame with a dashed accent edge so that the one tile that is not a
  * place cannot be mistaken for one.
+ *
+ * Each has a pick-only twin — {@link DeckFolderPickCard} and {@link ParentDeckFolderPickCard} —
+ * for the Playtesting lobby, whose wall is walked to choose a deck and never filed into: the same
+ * frame and face, none of the drags, the rename or the menu.
  */
 import { useEffect, useRef, useState } from "react";
 import type { MouseEventHandler, ReactNode } from "react";
@@ -136,6 +140,67 @@ const TRAY_SUBMIT = cn(
   "motion-reduce:transition-none",
   FOCUS,
 );
+
+/**
+ * A folder card's frame — {@link FolderCard}'s and {@link DeckFolderPickCard}'s, so the gallery
+ * and the Playtesting lobby draw one drawer. The drop marks a gallery adds are its own, after it.
+ */
+const FOLDER_FRAME = cn(
+  "relative block w-full overflow-hidden rounded-lg border border-border bg-surface",
+  "text-left",
+  BAND_PAD,
+  "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+);
+
+/**
+ * A folder card's name line, at the deck tile's own name size, with the row under it at the
+ * caption size, off the same variable and in the same order — the two cards sit in one grid
+ * track, and a name that disagreed about its own size would be the first thing a reader saw.
+ */
+const FOLDER_NAME = cn(
+  "block truncate",
+  "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
+);
+
+/**
+ * The member covers a folder card draws — at most {@link FOLDER_ARTS}, from the decks it holds.
+ *
+ * Scryfall's image policy, applied to these crops exactly as it is to a cover: an `art` crop has
+ * no printed frame, so a cover this app cannot name an illustrator for is not drawn. The rule
+ * is on `https://scryfall.com/docs/api` under the image guidelines — see `DeckTile`'s
+ * {@link Cover}, which quotes it in full and is where this card's credit went.
+ *
+ * **This excludes a custom cover, and that is deliberate — do not "fix" it.** A deck wearing
+ * the reader's own picture therefore contributes its *card* art here (or nothing, if it has
+ * none), which is a small inconsistency with its own tile and the cheaper of the two
+ * mistakes.
+ *
+ * **The filter stays exactly as it is, and 2026-09-07 is what makes it load-bearing rather
+ * than merely tidy.** Both fields are required, so every crop this strip draws has a name to
+ * put on it — which is precisely what lets the credit move onto the pictures. The version of
+ * this comment that stood until then argued the strip was a sample under **one** credit line
+ * and that the alternative, "a credit line that names artists for some tiles in the strip and
+ * not others", was worse than the inconsistency. That was true of a line; it is not true of
+ * three tooltips. Each picture now carries its own painter's name, which is the arrangement
+ * that objection was really asking for — and it is strictly better than what it replaced,
+ * since the old line comma-joined up to three names with no way to tell which crop belonged
+ * to whom. Ruled 2026-08-11 and re-ruled 2026-09-07, rather than left as an oversight.
+ */
+function folderArts(members: readonly DeckRow[]): { id: number; cardId: string; artist: string }[] {
+  return members
+    .flatMap((deck) =>
+      deck.coverCardId !== null && deck.coverArtist !== null
+        ? [
+            {
+              id: deck.id,
+              cardId: deck.coverCardId,
+              artist: deck.coverArtist,
+            },
+          ]
+        : [],
+    )
+    .slice(0, FOLDER_ARTS);
+}
 
 /**
  * What a card draws inside its frame — the aspect spacer, the member crops and the caption's
@@ -533,39 +598,7 @@ export function FolderCard({
   });
   const eligible = drag !== null && canDrop(drag);
 
-  // Scryfall's image policy, applied to these crops exactly as it is to a cover: an `art` crop has
-  // no printed frame, so a cover this app cannot name an illustrator for is not drawn. The rule
-  // is on `https://scryfall.com/docs/api` under the image guidelines — see `DeckTile`'s
-  // {@link Cover}, which quotes it in full and is where this card's credit went.
-  //
-  // **This excludes a custom cover, and that is deliberate — do not "fix" it.** A deck wearing
-  // the reader's own picture therefore contributes its *card* art here (or nothing, if it has
-  // none), which is a small inconsistency with its own tile and the cheaper of the two
-  // mistakes.
-  //
-  // **The filter stays exactly as it is, and 2026-09-07 is what makes it load-bearing rather
-  // than merely tidy.** Both fields are required, so every crop this strip draws has a name to
-  // put on it — which is precisely what lets the credit move onto the pictures. The version of
-  // this comment that stood until then argued the strip was a sample under **one** credit line
-  // and that the alternative, "a credit line that names artists for some tiles in the strip and
-  // not others", was worse than the inconsistency. That was true of a line; it is not true of
-  // three tooltips. Each picture now carries its own painter's name, which is the arrangement
-  // that objection was really asking for — and it is strictly better than what it replaced,
-  // since the old line comma-joined up to three names with no way to tell which crop belonged
-  // to whom. Ruled 2026-08-11 and re-ruled 2026-09-07, rather than left as an oversight.
-  const arts = members
-    .flatMap((deck) =>
-      deck.coverCardId !== null && deck.coverArtist !== null
-        ? [
-            {
-              id: deck.id,
-              cardId: deck.coverCardId,
-              artist: deck.coverArtist,
-            },
-          ]
-        : [],
-    )
-    .slice(0, FOLDER_ARTS);
+  const arts = folderArts(members);
 
   return (
     <li
@@ -650,10 +683,7 @@ export function FolderCard({
                 // containing-block chain. Without it they would resolve against the `<div>`
                 // above, whose whole job is to be a drop target's rectangle, and the pictures
                 // would hang square-cornered over a rounded frame.
-                "relative block w-full overflow-hidden rounded-lg border border-border bg-surface",
-                "text-left",
-                BAND_PAD,
-                "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+                FOLDER_FRAME,
                 // Both drags' *eligible* mark, on the card's own edge rather than around it — and
                 // it has to be written **before** the line below, because `tailwind-merge`
                 // resolves the border colour by argument order: the card the pointer is actually
@@ -664,22 +694,7 @@ export function FolderCard({
                 FOCUS,
               )}
             >
-              {folderFace(
-                node,
-                arts,
-                // The name is at the deck tile's own name size and the row under it at the
-                // caption size, off the same variable and in the same order — the two cards sit
-                // in one grid track, and a name that disagreed about its own size would be the
-                // first thing a reader saw.
-                <span
-                  className={cn(
-                    "block truncate",
-                    "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
-                  )}
-                >
-                  {node.folder.name}
-                </span>,
-              )}
+              {folderFace(node, arts, <span className={FOLDER_NAME}>{node.folder.name}</span>)}
             </button>
 
             {/* Invisible until the card is hovered or holds the caret — a wall of art is not a
@@ -850,26 +865,7 @@ export function ParentDeckFolderCard({
         aria-label={upCardName(label)}
         onClick={onOpen}
         className={cn(
-          // **No `h-full`, and its removal is the fix rather than a tidy-up** (2026-09-08). This
-          // tile is a grid item and the wall stretches its cells, so `h-full` made the way out as
-          // tall as the tallest thing in the row — which is a *deck* tile, and a deck tile is a
-          // crop plus a band plus two lines of type under both. Beside a 186px folder card the
-          // way out stood at 232px, and the row read as one object that had gone wrong. Its
-          // height now comes from the same two things every other framed box on this wall gets it
-          // from: the {@link ART_ASPECT} box below, and {@link BAND_PAD}.
-          // Centred rather than `text-left`, which is the one thing about this tile's contents
-          // that is not a folder card's: a folder card's caption is a line of type under three
-          // pictures and reads from the left like every other caption on the wall, and this box
-          // holds nothing but the destination, so anything but the middle of it reads as a
-          // picture that failed to arrive beside the words.
-          "flex w-full flex-col overflow-hidden rounded-lg bg-surface",
-          // Dashed, and accented rather than the border colour: the drawers on this wall are
-          // solid framed boxes now, so the dash is free to mean the one thing left that is not a
-          // place. 55% is the canvas's `color-mix(in oklab, var(--color-accent) 55%, transparent)`
-          // — present enough to read as the way out, quiet enough not to outshout a wall of art.
-          "border border-dashed border-accent/55",
-          BAND_PAD,
-          "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+          PARENT_FRAME,
           // Both drags' *eligible* mark, and it has to be written **before** the line below for
           // the reason `FolderCard` states above: `tailwind-merge` resolves a border colour by
           // argument order, so the tile the pointer is actually on would otherwise have its
@@ -879,44 +875,140 @@ export function ParentDeckFolderCard({
           FOCUS,
         )}
       >
-        <span
-          className={cn(
-            "flex w-full flex-col items-center justify-center",
-            "gap-[calc(0.25rem*var(--mark-scale,1))] px-[calc(0.75rem*var(--mark-scale,1))]",
-          )}
-          // The same ratio a folder card and a deck cover are drawn at, so the way out stands in
-          // the track at the shape of the things it stands among rather than at the height of
-          // whatever type happens to be in it.
-          style={{ aspectRatio: ART_ASPECT }}
-        >
-          {/* The folder silhouette with the direction drawn inside it, rather than a bare arrow —
-              which would read as a control among containers. */}
-          <FolderUp
-            aria-hidden="true"
-            className="size-[calc(1.25rem*var(--mark-scale,1))] flex-none text-accent"
-          />
-          {/* The destination in the display face, because it is the *name* a reader is aiming at
-              and this tile has the room a folder card's caption does not. */}
-          <span
-            className={cn(
-              "max-w-full truncate font-heading",
-              "text-[calc(1.125rem*var(--mark-scale,1))]",
-            )}
-          >
-            {label}
-          </span>
-          {/* And what pressing it does, at the caption size the folder cards' second line is set
-              at — the one line that tells this tile from the card for the same folder one level
-              up. */}
-          <span
-            className={cn(
-              "max-w-full truncate text-dim",
-              "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-            )}
-          >
-            {UP_ONE_LEVEL}
-          </span>
-        </span>
+        {parentFace(label)}
+      </button>
+    </li>
+  );
+}
+
+/**
+ * The way out's frame — {@link ParentDeckFolderCard}'s and {@link ParentDeckFolderPickCard}'s, so
+ * the two walls that draw it draw one tile.
+ *
+ * **No `h-full`, and its removal is the fix rather than a tidy-up** (2026-09-08). This tile is a
+ * grid item and the wall stretches its cells, so `h-full` made the way out as tall as the tallest
+ * thing in the row — which is a *deck* tile, and a deck tile is a crop plus a band plus two lines
+ * of type under both. Beside a 186px folder card the way out stood at 232px, and the row read as
+ * one object that had gone wrong. Its height now comes from the same two things every other
+ * framed box on this wall gets it from: the {@link ART_ASPECT} box in {@link parentFace}, and
+ * {@link BAND_PAD}.
+ *
+ * Centred rather than `text-left`, which is the one thing about this tile's contents that is not
+ * a folder card's: a folder card's caption is a line of type under three pictures and reads from
+ * the left like every other caption on the wall, and this box holds nothing but the destination,
+ * so anything but the middle of it reads as a picture that failed to arrive beside the words.
+ *
+ * Dashed, and accented rather than the border colour: the drawers on this wall are solid framed
+ * boxes now, so the dash is free to mean the one thing left that is not a place. 55% is the
+ * canvas's `color-mix(in oklab, var(--color-accent) 55%, transparent)` — present enough to read
+ * as the way out, quiet enough not to outshout a wall of art.
+ */
+const PARENT_FRAME = cn(
+  "flex w-full flex-col overflow-hidden rounded-lg bg-surface",
+  "border border-dashed border-accent/55",
+  BAND_PAD,
+  "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+);
+
+/** What the way out draws inside its frame: where it leads, and that it leads there. */
+function parentFace(label: string): ReactNode {
+  return (
+    <span
+      className={cn(
+        "flex w-full flex-col items-center justify-center",
+        "gap-[calc(0.25rem*var(--mark-scale,1))] px-[calc(0.75rem*var(--mark-scale,1))]",
+      )}
+      // The same ratio a folder card and a deck cover are drawn at, so the way out stands in
+      // the track at the shape of the things it stands among rather than at the height of
+      // whatever type happens to be in it.
+      style={{ aspectRatio: ART_ASPECT }}
+    >
+      {/* The folder silhouette with the direction drawn inside it, rather than a bare arrow —
+          which would read as a control among containers. */}
+      <FolderUp
+        aria-hidden="true"
+        className="size-[calc(1.25rem*var(--mark-scale,1))] flex-none text-accent"
+      />
+      {/* The destination in the display face, because it is the *name* a reader is aiming at
+          and this tile has the room a folder card's caption does not. */}
+      <span
+        className={cn(
+          "max-w-full truncate font-heading",
+          "text-[calc(1.125rem*var(--mark-scale,1))]",
+        )}
+      >
+        {label}
+      </span>
+      {/* And what pressing it does, at the caption size the folder cards' second line is set
+          at — the one line that tells this tile from the card for the same folder one level
+          up. */}
+      <span
+        className={cn(
+          "max-w-full truncate text-dim",
+          "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+        )}
+      >
+        {UP_ONE_LEVEL}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A folder on a wall it is only **walked** — the Playtesting lobby's, where decks are picked and
+ * never filed: {@link FolderCard}'s frame and face with none of its hands (no drag, no drop, no
+ * rename, no tray, no menu). A press opens the folder, as it does in the gallery.
+ */
+export function DeckFolderPickCard({
+  node,
+  members,
+  zoom,
+  onOpen,
+}: {
+  node: FolderNode;
+  /** As {@link FolderCard}'s — {@link decksUnder}'s answer, which the cover art is drawn from. */
+  members: readonly DeckRow[];
+  zoom: number;
+  onOpen: (id: number) => void;
+}) {
+  return (
+    <li style={cardScaleVars(zoom)} className="group relative rounded-lg">
+      <button
+        type="button"
+        aria-label={`${node.folder.name} folder, ${plural(node.count, "deck")}`}
+        onClick={() => onOpen(node.folder.id)}
+        className={cn(FOLDER_FRAME, FOCUS)}
+      >
+        {folderFace(
+          node,
+          folderArts(members),
+          <span className={FOLDER_NAME}>{node.folder.name}</span>,
+        )}
+      </button>
+    </li>
+  );
+}
+
+/** The way out of a folder on a wall it is only walked — {@link ParentDeckFolderCard}'s tile
+ *  without the drop targets a gallery hangs on it. */
+export function ParentDeckFolderPickCard({
+  label,
+  zoom,
+  onOpen,
+}: {
+  label: string;
+  zoom: number;
+  onOpen: () => void;
+}) {
+  return (
+    <li style={cardScaleVars(zoom)} className="relative rounded-lg">
+      <button
+        type="button"
+        aria-label={upCardName(label)}
+        onClick={onOpen}
+        className={cn(PARENT_FRAME, FOCUS)}
+      >
+        {parentFace(label)}
       </button>
     </li>
   );

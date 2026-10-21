@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type RefObject,
 } from "react";
 import { ArrowUp, ChevronDown, ChevronRight, Plus } from "lucide-react";
@@ -22,7 +21,7 @@ import {
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
-import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
+import { cardScaleVars, scaled } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
 import { ART_ASPECT } from "@/lib/images";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
@@ -42,6 +41,7 @@ import { cn } from "@/lib/utils";
 import { CreateDeckDialog } from "./CreateDeckDialog";
 import { deckFormats, filterDecks, NO_DECK_FILTER, type DeckFilter } from "./deckFilter";
 import { DeckTile } from "./DeckTile";
+import { TILE_MIN_WIDTH, useDeckWallMarks, wallStyle } from "./deckWall";
 import { type DeckMenuDeps } from "./deckMenu";
 import { hasTag, tagsInUse } from "./deckTags";
 import {
@@ -78,13 +78,10 @@ import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckP
 import { newDeckDestination } from "@/features/transfer/import/destinations/newDeck";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { FolderRenameAt, Panel } from "./panels";
-import { bracketLabel, useDeckBrackets } from "./useDeckBrackets";
 import { useDeckFolders } from "./useDeckFolders";
-import { useDeckPips } from "./useDeckPips";
 import { receipt, useDecks, type Decks } from "./useDecks";
 import { useDeckSort } from "./useDeckSort";
 import { useFolderPane } from "./useFolderPane";
-import { useFormatSpecs } from "./useFormatSpecs";
 import { useNewDeckFormat } from "./useNewDeckFormat";
 
 /**
@@ -97,20 +94,6 @@ import { useNewDeckFormat } from "./useNewDeckFormat";
  * one names nothing at all, because the deck it is about does not exist yet.
  */
 const NEW_DECK_SUBTITLE = "Paste a list or choose a file to create a deck.";
-
-/**
- * A tile's narrowest track, in px, at 100% zoom — the number the reader's gesture multiplies.
- *
- * A constant rather than a class because it is arithmetic now: {@link wallStyle} builds the
- * track out of it, and the tiles the track sizes carry the same zoom in their own type and
- * marks. It is deliberately not spelled as a Tailwind arbitrary value anywhere in this file,
- * comments included — this file is under Tailwind's `@source`, so writing one would go on
- * emitting a rule for a utility nothing uses.
- */
-const TILE_MIN_WIDTH = 200;
-
-/** The gutter between tiles at 100% zoom (`gap-4`'s 16px), floored by {@link atLeast}. */
-const TILE_GAP = 16;
 
 /**
  * The "All decks" row as {@link reorderedLevel} has to address it.
@@ -133,30 +116,10 @@ const ROOT_TARGET = 0;
 /**
  * The wall — everything about it that is not a function of the zoom.
  *
- * The two tracks-and-gutter properties moved to {@link wallStyle} when the gallery learnt to
- * zoom; what is left here is the display mode, which is the same at every size.
+ * The two tracks-and-gutter properties are {@link wallStyle}'s (`deckWall.ts`, shared with the
+ * Playtesting lobby); what is left here is the display mode, which is the same at every size.
  */
 const GRID = "grid";
-
-/**
- * The wall's tracks and gutter at `zoom`.
- *
- * `auto-fill`, not `auto-fit`: with two decks in the gallery `auto-fit` collapses the empty
- * tracks and stretches those two across the whole window, which blows a 626 px art crop up to
- * half a screen. `auto-fill` keeps a tile a tile — and it is what makes the zoom read as *more
- * decks on screen* rather than as bigger boxes, because the column count is what falls out of a
- * track the reader has resized.
- *
- * The gutter takes {@link atLeast} rather than {@link scaled}: it is the one measurement here
- * that sits **between** tiles rather than **on** one, and halving it at 0.5× is exactly the zoom
- * a reader chose in order to see more decks at once.
- */
-function wallStyle(zoom: number): CSSProperties {
-  return {
-    gridTemplateColumns: `repeat(auto-fill, minmax(${scaled(TILE_MIN_WIDTH, zoom)}px, 1fr))`,
-    gap: atLeast(TILE_GAP, zoom),
-  };
-}
 
 /** The quiet controls in the wall's heading row — everything that is not "New deck". Same
  *  height as it, because a row of controls that disagree about their own size reads as two
@@ -279,40 +242,11 @@ export function DecksPage() {
    */
   const { sort, setSort } = useDeckSort();
   /**
-   * Every deck's printed pips, in one read for the whole gallery.
-   *
-   * One query rather than one per tile, for the reason the zoom is one store read handed down: a
-   * folder of forty decks would otherwise be forty subscriptions and forty round trips for a
-   * fact the backend can fold in a single statement (90 rows for the whole dev database).
+   * Every deck's printed pips and its bracket, each in one read for the whole gallery — the
+   * reads, and why each is one, are {@link useDeckWallMarks}'s, which the Playtesting lobby's
+   * wall shares so a deck cannot come to wear two brackets in one app.
    */
-  const { byDeck: pipsByDeck } = useDeckPips();
-  /**
-   * Which decks even *have* a bracket, and it is a question about the **format** rather than
-   * about the deck — `format_specs.commander_rule`, which is the same cell the editor's own
-   * bracket button is fenced on.
-   *
-   * **The array is the whole of the read's cost, so a gallery with no Commander deck must build
-   * an empty one rather than every id.** {@link useDeckBrackets} is `enabled`-gated on its
-   * length, so an empty list is *no IPC call at all* — a reader whose decks are all Modern pays
-   * nothing for a control they will never see.
-   *
-   * It is every deck in the gallery and not only the ones on the wall, which costs one read and
-   * buys two things: walking into a folder or opening the filed wall asks nothing new, and the
-   * `bracket` sort can order *any* wall the moment it is picked rather than after a round trip.
-   *
-   * `formatSpecFor` rather than a map read out of the hook: {@link useFormatSpecs} exposes the
-   * lookup and keeps the map private, and the lookup is a `useCallback` over it, so this memo is
-   * as stable as the table is (`staleTime: Infinity` — it changes once per app version).
-   */
-  const { formatSpecFor } = useFormatSpecs();
-  const commanderDeckIds = useMemo(
-    () =>
-      decks.decks
-        .filter((d) => formatSpecFor(d.formatKey)?.commanderRule != null)
-        .map((d) => d.id),
-    [decks.decks, formatSpecFor],
-  );
-  const { floorByDeck } = useDeckBrackets(commanderDeckIds);
+  const { pipsByDeck, floorByDeck, bracketFor, bracketExpectedFor } = useDeckWallMarks(decks.decks);
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const returnToDeckId = useAppStore((s) => s.returnToDeckId);
   const clearReturnToDeck = useAppStore((s) => s.clearReturnToDeck);
@@ -1550,34 +1484,6 @@ export function DecksPage() {
   // component — so a `GONE` from deleting a deck another view already deleted takes the tile
   // off the wall without anything on this screen asking it to. The rule lives on the mutation
   // definitions, which is the one place it can be kept.
-
-  /**
-   * The bracket a tile prints, or `null` — **and `null` is the answer for every deck whose
-   * format has no command zone**, which is most of them.
-   *
-   * The fence is the format's `commanderRule`, the same cell {@link commanderDeckIds} asks
-   * `deck_bracket_reads` about, so a deck that was never read for cannot print a reading: the
-   * two are one condition asked twice rather than two conditions that have to agree.
-   * {@link bracketLabel} decides the rest — the reader's own answer where they gave one, the
-   * estimate otherwise, and `null` while the read is in flight or has failed.
-   */
-  const bracketFor = useCallback(
-    (deck: DeckRow) =>
-      formatSpecFor(deck.formatKey)?.commanderRule != null
-        ? bracketLabel(deck.bracket, floorByDeck.get(deck.id))
-        : null,
-    [formatSpecFor, floorByDeck],
-  );
-  /**
-   * Whether a tile's deck is one a bracket is printed for at all — {@link bracketFor}'s own
-   * fence, asked without the answer. A tile places its tag row by it (`DeckTile`'s
-   * `bracketExpected`), so the row is already clear of the pill's place while
-   * `deck_bracket_reads` is still out rather than lifting when it lands.
-   */
-  const bracketExpectedFor = useCallback(
-    (deck: DeckRow) => formatSpecFor(deck.formatKey)?.commanderRule != null,
-    [formatSpecFor],
-  );
 
   const heading = flat ? EVERY_DECK_LABEL : openNode === null ? ROOT_LABEL : openNode.folder.name;
   /**
