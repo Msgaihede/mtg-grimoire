@@ -244,6 +244,16 @@ describe("playtestSentence", () => {
     expect(at4({ type: "life", seat: "opponent2", amount: -4, total: 36 })).toBe(
       "Opponent 2 lost 4, down to 36",
     );
+    expect(
+      at4({
+        type: "commanderDamage",
+        source: "Kenrith, the Returned King",
+        sourceId: 4,
+        seat: "opponent2",
+        amount: 7,
+        total: 21,
+      }),
+    ).toBe("Kenrith, the Returned King has dealt Opponent 2 21 commander damage");
     expect(at4({ type: "lifeSet", seat: "opponent3", life: 30, was: 40 })).toBe(
       "Opponent 3 took 10, down to 30",
     );

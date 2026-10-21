@@ -108,6 +108,11 @@ export interface PlaytestView {
    * have). The game is never `over`.
    */
   goldfish: boolean;
+  /**
+   * A Commander game's commander damage at which a player loses (CR 704.6c): 21. `null` in a game
+   * without a commander, where commander damage is not counted.
+   */
+  commanderDamageLethal: number | null;
   /** The reader's last action can be taken back (`undo`), with all the opponent did after it.
    *  Never in a replay frame. */
   canUndo: boolean;
@@ -142,11 +147,32 @@ export interface PlaytestSeat {
   /** The same open mana by type, and what is floating in the pool. */
   mana: ManaTable;
   /**
+   * The commander damage this player has been dealt (CR 903.10a): one entry a commander, so a
+   * pair of partners is two. Only combat damage counts, and only once a commander has dealt some;
+   * empty outside a Commander game.
+   */
+  commanderDamage: PlaytestCommanderDamage[];
+  /**
    * The goldfish's, which cannot lose: the reader's own turn (counted from 1) on which this
-   * player's life first reached 0 or less — "dead on your turn 5" — and `null` again once it is
-   * back above 0. Always `null` for a player who can lose.
+   * player first would have lost — their life at 0 or less, or one commander's damage to them at
+   * the view's `commanderDamageLethal` — "dead on your turn 5", and `null` again once neither
+   * holds. Always `null` for a player who can lose.
    */
   deadOn: number | null;
+}
+
+/**
+ * One commander's combat damage to one player over the game. At the view's
+ * `commanderDamageLethal` the player loses (CR 704.6c), unless something says they can't.
+ */
+export interface PlaytestCommanderDamage {
+  /** The commander's id: the card the table shows wherever it is now. */
+  id: number;
+  name: string;
+  cardId: string | null;
+  /** Whose commander it is. */
+  player: PlaytestPlayer;
+  damage: number;
 }
 
 export interface PlaytestCombat {
@@ -358,6 +384,18 @@ export type PlaytestHappened =
       amount: number;
     }
   | { type: "life"; seat: PlaytestPlayer; amount: number; total: number }
+  /**
+   * A commander dealt combat damage to a player: `seat` is the player dealt it, `total` all that
+   * commander has dealt them this game.
+   */
+  | {
+      type: "commanderDamage";
+      source: string;
+      sourceId: number;
+      seat: PlaytestPlayer;
+      amount: number;
+      total: number;
+    }
   | { type: "tokensCreated"; seat: PlaytestPlayer; name: string; count: number }
   /** The reader put a card somewhere by hand; `seat` is whose card it is. */
   | { type: "put"; seat: PlaytestPlayer; name: string; from: GamePlace; to: GamePlace }

@@ -84,9 +84,9 @@ use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
-    PlaytestCombat, PlaytestFrame, PlaytestHappened, PlaytestOption, PlaytestPhase, PlaytestPick,
-    PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestSeat, PlaytestStackItem,
-    PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
+    PlaytestCombat, PlaytestCommanderDamage, PlaytestFrame, PlaytestHappened, PlaytestOption,
+    PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestSeat,
+    PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
 };
 
 /// The reader's seat. The opponents are `PlayerId(1)` on, in turn order.
@@ -793,6 +793,7 @@ impl Playtest {
             ending_turn: self.ending == Some(s.turn_number),
             sandbox: self.sandbox,
             goldfish: self.fish.is_some(),
+            commander_damage_lethal: s.format_config.commander_damage_threshold.map(u32::from),
             // A replay frame is a moment inside an action, never one to go back to.
             can_undo: !watching && self.history.can_undo(),
             can_redo: !watching && self.history.can_redo(),
@@ -885,6 +886,26 @@ impl Playtest {
                 .map(|id| max_mana_yield(s, *id, seat))
                 .sum(),
             mana: mana_table(s, seat),
+            // Public, wherever the commander is now; only a face-down one is told without its name.
+            commander_damage: s
+                .commander_damage
+                .iter()
+                .filter(|e| e.player == seat)
+                .filter_map(|e| {
+                    let o = s.objects.get(&e.commander)?;
+                    Some(PlaytestCommanderDamage {
+                        id: e.commander.0,
+                        name: if concealed(o) {
+                            String::new()
+                        } else {
+                            o.name.clone()
+                        },
+                        card_id: self.printing_of(e.commander),
+                        player: seat_of(o.owner),
+                        damage: e.damage,
+                    })
+                })
+                .collect(),
             dead_on: if Some(seat) == self.fish {
                 self.dead_on
             } else {
@@ -2559,13 +2580,21 @@ impl Playtest {
         })
     }
 
-    /// The goldfish's `dead_on`, kept up with its life: the reader's turn it first reached 0 or
-    /// less, and nothing once it is back above 0.
+    /// The goldfish's `dead_on`, kept up with what would have lost it the game: the reader's turn
+    /// its life first reached 0 or less, or one commander's damage to it the lethal amount
+    /// (CR 704.6c), and nothing once neither holds.
     fn mark_dead(&mut self) {
         let Some(fish) = self.fish else {
             return;
         };
-        if self.player(fish).life > 0 {
+        let s = &self.state;
+        let lethal = s.format_config.commander_damage_threshold.map(u32::from);
+        let commanded = lethal.is_some_and(|lethal| {
+            s.commander_damage
+                .iter()
+                .any(|e| e.player == fish && e.damage >= lethal)
+        });
+        if self.player(fish).life > 0 && !commanded {
             self.dead_on = None;
         } else if self.dead_on.is_none() {
             self.dead_on = Some(self.player(YOU).turns_taken.max(1));
@@ -3023,7 +3052,7 @@ pub(super) fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<Playte
             _ => None,
         })
         .collect();
-    for event in events {
+    for (at, event) in events.iter().enumerate() {
         match event {
             GameEvent::TurnStarted {
                 player_id,
@@ -3170,6 +3199,52 @@ pub(super) fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<Playte
                         target_id: target.0,
                         seat: whose,
                         amount: *amount,
+                    });
+                }
+            }
+            GameEvent::CombatDamageDealtToPlayer {
+                player_id,
+                source_amounts,
+                ..
+            } => {
+                for (source_id, amount) in source_amounts {
+                    // The engine's own count is the authority on which sources are commanders.
+                    let Some(total) = state
+                        .commander_damage
+                        .iter()
+                        .find(|e| e.player == *player_id && e.commander == *source_id)
+                        .map(|e| e.damage)
+                    else {
+                        continue;
+                    };
+                    let Some(source) = name(source_id).filter(|_| *amount > 0) else {
+                        continue;
+                    };
+                    // The count is the one after the whole batch: a double striker's first-strike
+                    // hit is told with what it had reached before its second.
+                    let later: u32 = events[at + 1..]
+                        .iter()
+                        .filter_map(|e| match e {
+                            GameEvent::CombatDamageDealtToPlayer {
+                                player_id: p,
+                                source_amounts,
+                                ..
+                            } if p == player_id => Some(
+                                source_amounts
+                                    .iter()
+                                    .filter(|(id, _)| id == source_id)
+                                    .map(|(_, n)| n)
+                                    .sum::<u32>(),
+                            ),
+                            _ => None,
+                        })
+                        .sum();
+                    out.push(PlaytestHappened::CommanderDamage {
+                        source,
+                        source_id: source_id.0,
+                        seat: seat_of(*player_id),
+                        amount: *amount,
+                        total: total.saturating_sub(later),
                     });
                 }
             }

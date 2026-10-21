@@ -24,7 +24,7 @@ export const AREA_ZONE: ZoneSize = { width: 40, height: 56, compact: true };
  * third of the width, so three stand side by side above the middle line in turn order.
  *
  * **The duel's pieces, each with a smaller size**: the compact `LifePlate` in a `PlateFrame` (the
- * turn's gold glow, poison), their zones from `OpponentZones` at {@link AREA_ZONE} — the hand a
+ * turn's gold glow, poison, commander damage), their zones from `OpponentZones` at {@link AREA_ZONE} — the hand a
  * face-down tile with its count among them, since an area has no edge of its own to hang a hand
  * from — and the `Battlefield` flipped, read-only and dense, the creature lane nearest the middle
  * line as on a duel's table. `data-plate` and `data-table` carry the player's own name, so the
@@ -42,6 +42,7 @@ export function OpponentArea({
   seat,
   deckName,
   opponents,
+  lethal,
   active,
   won,
   sandbox,
@@ -63,6 +64,8 @@ export function OpponentArea({
   deckName: string;
   /** How many opponents the game has, for the names. */
   opponents: number;
+  /** The commander damage that loses the game; `null` outside a Commander game. */
+  lethal: number | null;
   /** It is this player's turn. */
   active: boolean;
   /** This player won the game. */
@@ -100,6 +103,8 @@ export function OpponentArea({
           seat={seat.player}
           active={active}
           poison={seat.poison}
+          commanderDamage={seat.commanderDamage}
+          lethal={lethal}
           compact
           className="max-w-full min-w-0"
         >

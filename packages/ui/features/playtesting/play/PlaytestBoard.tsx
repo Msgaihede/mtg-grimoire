@@ -577,6 +577,7 @@ export function PlaytestBoard({
                   seat={seat}
                   deckName={opponentNames[i] ?? "Deck"}
                   opponents={view.opponents.length}
+                  lethal={view.commanderDamageLethal}
                   active={active === seat.player}
                   won={view.winner === seat.player}
                   sandbox={edits}
@@ -726,6 +727,8 @@ export function PlaytestBoard({
               seat="opponent"
               active={active === "opponent"}
               poison={opponent?.poison ?? 0}
+              commanderDamage={opponent?.commanderDamage}
+              lethal={view?.commanderDamageLethal}
               compact
               className="min-w-0"
             >
@@ -895,7 +898,13 @@ export function PlaytestBoard({
               : "12px",
         }}
       >
-        <PlateFrame seat="you" active={active === "you"} poison={you?.poison ?? 0}>
+        <PlateFrame
+          seat="you"
+          active={active === "you"}
+          poison={you?.poison ?? 0}
+          commanderDamage={you?.commanderDamage}
+          lethal={view?.commanderDamageLethal}
+        >
           <LifePlate
             seat="you"
             title={`You · ${deckName}`}
