@@ -49,6 +49,27 @@ export function useCollectionFolderList({ enabled = true }: { enabled?: boolean 
 }
 
 /**
+ * A new folder — at the root with `parentId: null`, or inside another one — on
+ * {@link useCollectionFolders}' settle (`invalidateOwnedWrite`, on success and on error).
+ *
+ * **A hook of its own for {@link useCollectionFolderList}'s reason**: the Scanner's folder pickers
+ * make a folder where the tray's destination is chosen (issue #1357), and they draw no folder
+ * card — mounting the whole cabinet for this one write would ask the summary's `GROUP BY` for
+ * nothing. The cabinet composes this rather than repeating it, so the write and its settle are
+ * spelled once.
+ */
+export function useCreateCollectionFolder() {
+  const queryClient = useQueryClient();
+  const invalidate = () => invalidateOwnedWrite(queryClient);
+  return useMutation({
+    mutationFn: ({ parentId, name }: { parentId: number | null; name: string }) =>
+      ipc.collectionFolderCreate(parentId, name),
+    onSuccess: invalidate,
+    onError: invalidate,
+  });
+}
+
+/**
  * The collection's filing cabinet: every folder there is, the five writes that shape them, and the
  * per-folder summary a folder card is drawn from.
  *
@@ -162,11 +183,7 @@ export function useCollectionFolders() {
   const writes = { onSuccess: invalidate, onError: invalidate };
 
   /** A new folder — at the root with `parentId: null`, or inside another one. */
-  const create = useMutation({
-    mutationFn: ({ parentId, name }: { parentId: number | null; name: string }) =>
-      ipc.collectionFolderCreate(parentId, name),
-    ...writes,
-  });
+  const create = useCreateCollectionFolder();
 
   const rename = useMutation({
     mutationFn: ({ id, name }: { id: number; name: string }) =>

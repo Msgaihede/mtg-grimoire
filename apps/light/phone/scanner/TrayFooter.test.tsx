@@ -13,7 +13,9 @@ import { ARCHIVING, destinationName, TrayFooter, UNREAD_FOLDER } from "./TrayFoo
 
 const RESOLVED = TRAY_ROWS.filter((row) => row.choices.length === 0);
 
-const folder = (over: Partial<CollectionFolder> & { id: number; name: string }): CollectionFolder => ({
+const folder = (
+  over: Partial<CollectionFolder> & { id: number; name: string },
+): CollectionFolder => ({
   rules: [],
   parentId: null,
   kind: "user",
@@ -29,7 +31,10 @@ const DECK_GROUP = folder({ id: 9, name: "Burn", kind: "deck", deckId: 4 });
 const REMOVED = folder({ id: 10, name: "Recently removed", kind: "removed" });
 const FOLDERS = [BINDER, RARES, DECK_GROUP, REMOVED];
 
-function mount(over: Partial<Parameters<typeof TrayFooter>[0]> = {}) {
+function mount(
+  over: Partial<Parameters<typeof TrayFooter>[0]> = {},
+  options: Parameters<typeof renderPhone>[1] = {},
+) {
   const props = {
     rows: RESOLVED as readonly ScannerTrayRow[],
     folders: FOLDERS as readonly CollectionFolder[],
@@ -45,7 +50,7 @@ function mount(over: Partial<Parameters<typeof TrayFooter>[0]> = {}) {
     onHistory: vi.fn(),
     ...over,
   };
-  renderPhone(<TrayFooter {...props} />);
+  renderPhone(<TrayFooter {...props} />, options);
   return props;
 }
 
@@ -109,8 +114,12 @@ describe("the tray's footer", () => {
   });
 
   it("puts a refused commit's own sentence above the press", () => {
-    mount({ commitError: "The card database is busy finishing a sync. Try that again in a moment." });
-    expect(screen.getByRole("alert")).toHaveTextContent("The card database is busy finishing a sync.");
+    mount({
+      commitError: "The card database is busy finishing a sync. Try that again in a moment.",
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The card database is busy finishing a sync.",
+    );
   });
 
   it("names the destination, and the root by the collection's own word", () => {
@@ -143,7 +152,9 @@ describe("the tray's footer", () => {
     const props = mount({ folderId: BINDER.id });
     await userEvent.click(screen.getByRole("button", { name: "Folder: Trade binder" }));
     const sheet = await screen.findByRole("dialog", { name: "Folder for scanned cards" });
-    const choices = within(within(sheet).getByRole("list", { name: "Folders" })).getAllByRole("button");
+    const choices = within(within(sheet).getByRole("list", { name: "Folders" })).getAllByRole(
+      "button",
+    );
     // A deck's group and Recently removed are not places the tray could ever land.
     expect(choices.map((c) => c.textContent)).toEqual(["Collection", "Trade binder", "Rares"]);
     expect(within(sheet).getByRole("button", { name: "Trade binder" })).toHaveAttribute(
@@ -184,6 +195,75 @@ describe("the tray's footer", () => {
     const sheet = await screen.findByRole("dialog", { name: "Folder for scanned cards" });
     await userEvent.click(within(sheet).getByRole("button", { name: "Collection" }));
     expect(props.onFolder).toHaveBeenCalledWith(null);
+  });
+
+  /** Issue #1357: a new folder, made where the tray's destination is picked. */
+  it("makes a new folder at the top level from the folder sheet, and picks it", async () => {
+    const create = vi.fn();
+    const props = mount(
+      {},
+      {
+        commands: (own) => ({
+          collection_folder_create: (args: { parentId: number | null; name: string }) => {
+            create(args);
+            return (own.collection_folder_create as (a: typeof args) => unknown)(args);
+          },
+        }),
+      },
+    );
+    const press = screen.getByRole("button", { name: "Folder: Collection" });
+    await userEvent.click(press);
+    const sheet = await screen.findByRole("dialog", { name: "Folder for scanned cards" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "New folder…" }));
+
+    const form = within(sheet).getByRole("form", { name: "New folder" });
+    const name = within(form).getByRole("textbox", { name: "Name" });
+    expect(name).toHaveFocus();
+    // Held, in place, until there is a name.
+    const submit = within(form).getByRole("button", { name: "Create folder" });
+    expect(submit).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.type(name, "Sealed");
+    await userEvent.click(submit);
+    await waitFor(() => expect(props.onFolder).toHaveBeenCalledTimes(1));
+    expect(create).toHaveBeenCalledWith({ parentId: null, name: "Sealed" });
+    expect(props.onFolder).toHaveBeenCalledWith(expect.any(Number));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(press).toHaveFocus();
+  });
+
+  it("says a refused new folder in the backend's words, on the page it was asked on", async () => {
+    const props = mount(
+      {},
+      {
+        commands: () => ({
+          collection_folder_create: () => {
+            throw new Error("The card database is busy. Try again.");
+          },
+        }),
+      },
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Folder: Collection" }));
+    const sheet = await screen.findByRole("dialog", { name: "Folder for scanned cards" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "New folder…" }));
+    const form = within(sheet).getByRole("form", { name: "New folder" });
+    await userEvent.type(within(form).getByRole("textbox", { name: "Name" }), "Sealed{Enter}");
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      "Couldn't create the folder — The card database is busy. Try again.",
+    );
+    expect(props.onFolder).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Folder for scanned cards" })).toBeInTheDocument();
+  });
+
+  it("goes back from a new folder's page to the folders", async () => {
+    mount();
+    await userEvent.click(screen.getByRole("button", { name: "Folder: Collection" }));
+    const sheet = await screen.findByRole("dialog", { name: "Folder for scanned cards" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "New folder…" }));
+    // The way back at the head of the page is named for it.
+    await userEvent.click(within(sheet).getAllByRole("button", { name: "New folder…" })[0]);
+    expect(within(sheet).queryByRole("form", { name: "New folder" })).toBeNull();
+    expect(within(sheet).getByRole("list", { name: "Folders" })).toBeInTheDocument();
   });
 
   it("asks the page to make a deck and to clear, handing it the press the caret returns to", async () => {
@@ -315,7 +395,9 @@ describe("the tray's footer, filing somewhere that is not the collection", () =>
   });
 
   it("draws no folder, and the destination's summary in its place", () => {
-    const summary = vi.fn((rows: readonly ScannerTrayRow[]) => <p>Scanned so far: {rows.length}</p>);
+    const summary = vi.fn((rows: readonly ScannerTrayRow[]) => (
+      <p>Scanned so far: {rows.length}</p>
+    ));
     mount({ destination: { ...destination, summary } });
     expect(screen.queryByRole("button", { name: /^Folder:/ })).toBeNull();
     expect(screen.getByText("Scanned so far: 3")).toBeInTheDocument();
