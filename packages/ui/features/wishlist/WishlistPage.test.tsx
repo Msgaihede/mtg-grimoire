@@ -408,14 +408,14 @@ async function openTray(user: {
 
 
 /**
- * The header's money figure, scoped — a two-row wishlist prints the same amount in the total
+ * The page bar's money figure, scoped — a two-row wishlist prints the same amount in the total
  * and in the row it came from, and an unscoped query cannot tell the sum from a term.
  *
- * **One figure now, not the pair this header used to draw.** The label names the currency
- * because the figure changes denomination in Settings, so the scoping selector takes it.
+ * **One figure now, not the pair this header used to draw.** Its word is `total cost` in either
+ * currency since the page bar (2026-10-21): the formatted figure before it carries its own sign,
+ * so the cases that switch marketplace read the sign off the money on screen, not off the label.
  */
-const total = async (currency: "USD" | "EUR" = "USD") =>
-  (await screen.findByText(`Total cost (${currency})`)).closest("div") as HTMLElement;
+const total = async () => (await screen.findByText("total cost")).closest("div") as HTMLElement;
 
 /**
  * The page, under the two providers `App` mounts above it.
@@ -582,7 +582,7 @@ const wallOf = (): HTMLElement =>
 const nameField = () => within(wallOf()).findByRole("textbox");
 const follows = (a: Node, b: Node) =>
   (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
-/** A header figure's own value — a `<dd>` beside its `<dt>`. */
+/** A page bar figure's own value — the `<dd>` after its `<dt>` (drawn before it, by `order`). */
 const figure = (label: string) => screen.getByText(label).nextElementSibling as HTMLElement;
 /**
  * Which level the last list read was for. The first shelf asked is the level's own headless shelf
@@ -1096,7 +1096,7 @@ describe("WishlistPage", () => {
     await userEvent.unhover(figure);
     // One figure, not the pair this header drew before the marketplace setting existed: two
     // totals over one shopping list is two answers to the question it is open to ask.
-    expect(screen.queryByText("Total cost (EUR)")).not.toBeInTheDocument();
+    expect(screen.queryAllByText(/€/)).toEqual([]);
   });
 
   /**
@@ -1152,14 +1152,14 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
 
     // All four Bolts at €320, and nothing at all for the etched wish.
-    const eur = await total("EUR");
+    const eur = await total();
     expect(await within(eur).findByText("€1,280.00")).toBeInTheDocument();
     expect(within(eur).getByText("1 unpriced")).toBeInTheDocument();
     await userEvent.hover(eur);
     const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
     await userEvent.unhover(eur);
-    expect(screen.queryByText("Total cost (USD)")).not.toBeInTheDocument();
+    expect(screen.queryAllByText(/\$/)).toEqual([]);
   });
 
   /**
@@ -2288,7 +2288,7 @@ describe("the shelves", () => {
     wishlistList.mockImplementation(listByShelves(filed));
     wrap(<WishlistPage />);
 
-    await waitFor(() => expect(figure("Cards")).toHaveTextContent("25"));
+    await waitFor(() => expect(figure("cards")).toHaveTextContent("25"));
     expect(within(await total()).getByText("$50.00")).toBeInTheDocument();
     expect(await screen.findByText("Filed 1")).toBeInTheDocument();
     expect(screen.getByText("Filed 4")).toBeInTheDocument();
@@ -2340,7 +2340,7 @@ describe("the shelves", () => {
     wrap(<WishlistPage />);
 
     await screen.findByText("Lightning Bolt");
-    await waitFor(() => expect(figure("Cards")).toHaveTextContent("2"));
+    await waitFor(() => expect(figure("cards")).toHaveTextContent("2"));
     const cost = await total();
     expect(within(cost).getByText("$1,614.00")).toBeInTheDocument();
     expect(within(cost).getByText("1 unpriced")).toBeInTheDocument();
@@ -2491,7 +2491,7 @@ describe("the shelves", () => {
     expect(chevronOf(ORDERED.id, "Ordered")).toHaveAttribute("aria-expanded", "false");
     await waitFor(() => expect(lastQuery().shelves).toEqual([0, SOMEDAY.id]));
     // Still counted: the shut heading and the header both read the counts, which cover it.
-    expect(figure("Cards")).toHaveTextContent("3");
+    expect(figure("cards")).toHaveTextContent("3");
 
     await user.click(screen.getByRole("button", { name: "Expand all" }));
 
@@ -3569,14 +3569,14 @@ describe("the folders", () => {
     });
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await waitFor(() => expect(figure("Cards")).toHaveTextContent("3"));
+    await waitFor(() => expect(figure("cards")).toHaveTextContent("3"));
 
     await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     const theRootWhole = () => {
       expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
-      expect(figure("Cards")).toHaveTextContent("3");
+      expect(figure("cards")).toHaveTextContent("3");
       expect(heading(ORDERED.id)).toBeInTheDocument();
       expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
     };
@@ -3589,7 +3589,7 @@ describe("the folders", () => {
     await waitFor(() =>
       expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page"),
     );
-    expect(figure("Cards")).toHaveTextContent("1");
+    expect(figure("cards")).toHaveTextContent("1");
     expect(screen.getByText("Rhystic Study")).toBeInTheDocument();
     expect(screen.queryByText("Lightning Bolt")).toBeNull();
     expect(queryHeading(ORDERED.id)).toBeNull();
@@ -3708,11 +3708,11 @@ describe("the folders", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
     // BOLT and ANY loose, and FILED under Ordered — the wish the drill-down used to hide.
-    await waitFor(() => expect(figure("Cards")).toHaveTextContent("3"));
+    await waitFor(() => expect(figure("cards")).toHaveTextContent("3"));
 
     await userEvent.click(openOf(ORDERED.id, "Ordered"));
 
-    await waitFor(() => expect(figure("Cards")).toHaveTextContent("1"));
+    await waitFor(() => expect(figure("cards")).toHaveTextContent("1"));
   });
 
   /** Replaces "opens on the tree rather than flattened…": there is no flattened list to open on,
@@ -3915,7 +3915,7 @@ describe("the folders", () => {
     await waitFor(() =>
       expect(follows(heading(ORDERED.id), screen.getByText("Lightning Bolt"))).toBe(true),
     );
-    expect(figure("Cards")).toHaveTextContent("3");
+    expect(figure("cards")).toHaveTextContent("3");
   });
 
   /**
@@ -3957,7 +3957,7 @@ describe("the folders", () => {
     await waitFor(() =>
       expect(follows(heading(ORDERED.id), screen.getByText("Lightning Bolt"))).toBe(true),
     );
-    expect(figure("Cards")).toHaveTextContent("3");
+    expect(figure("cards")).toHaveTextContent("3");
   });
 
   /**

@@ -1,6 +1,5 @@
 import { memo, type RefObject } from "react";
 import {
-  ChevronLeft,
   Columns3Cog,
   Fish,
   History,
@@ -12,6 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FILTER_FOCUS } from "@/components/FilterChips";
+import { PageBar } from "@/components/PageBar";
 import { ShareFolderMenu, type ShareTarget } from "@/features/collection/ShareFolderMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
@@ -133,12 +133,13 @@ export const SETTINGS_ICON_PX = 1100;
 export const TIGHT_HEADER_PX = 900;
 
 export interface DeckEditorHeaderProps {
-  /** The header's first control — where the bar's ↥ puts the caret back. */
+  /** The header's first control, the trail's `Decks` crumb — where the bar's ↥ puts the caret
+   *  back. */
   backRef: RefObject<HTMLButtonElement | null>;
   /** Close the deck: `Back to decks`, and Escape's floor beside it. */
   closeDeck: () => void;
-  /** The deck's name, or `null` before `deck_get` has answered — the line is then the back
-   *  button alone. */
+  /** The deck's name, or `null` before `deck_get` has answered — the line is then the `Decks`
+   *  crumb alone. */
   name: string | null;
   renameDeck: (name: string) => void;
   theoryEnabled: boolean;
@@ -182,86 +183,79 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
   return (
     <>
       {/**
-       * The deck's own ribbon, and the `py-1.5` on it is load-bearing rather than spacing.
+       * **The page bar** ("Page & Section Headings", option A, approved 2026-10-21): the deck's
+       * own row, drawn as every page's top row is drawn now — the trail back (`Decks ›`), the
+       * deck's name as the title, everything that can be done to it against the right edge, and
+       * the gold rule under it.
        *
-       * This row is the **first child of the page scroller** — the `section` above is
-       * `overflow-y-auto` — and the name field's focus ring is `outline-2 outline-offset-2`,
-       * so it stands **4px proud of the field on every side**. With no padding here the field
-       * is vertically centred in a row whose tallest child is the 36px back button, which puts
-       * the top of that ring outside the scroller's padding box: a scroll container clips
-       * there, and what is left of it runs into the shell's mana line above. Six pixels is the
-       * ring's four and two to spare, top and bottom.
+       * **The way back is the crumb, not a chevron button.** The `‹ Decks` button became the
+       * trail's `Decks` and keeps everything it carried: {@link closeDeck}, shared with Escape's
+       * `"navigation"` rung — one act, one function, so the key and the crumb can never come to
+       * mean different things — the `backRef` the bar's ↥ puts the caret back on, and the name
+       * `Back to decks`, so it is never a second button called `Decks` beside the rail's. The
+       * word no longer drops at {@link TIGHT_HEADER_PX}, so it binds no tooltip either: a crumb
+       * is a word or nothing.
        *
-       * **Vertical only.** Horizontal padding here would indent the back button and the deck's
-       * actions past the toolbar row beneath them and past the deck itself, and the ring has
-       * room on that axis already — `gap-x-3` is 12px either side of the field's box, which is
-       * three times what the ring asks for.
+       * **No folder crumb yet.** The board's trail is `Decks › My Decks › <deck>`, and this
+       * header is handed neither the folder the deck is filed in nor its name. Nor could a
+       * `Decks` crumb beside one mean anything different from it: a close always lands in the
+       * deck's own drawer (`DecksPage` opens `folderOf` the deck `returnToDeckId` names), so the
+       * gallery has no "the top level, please" to be told.
+       *
+       * **The bar's `py-1.5` is load-bearing here rather than spacing.** This row is the **first
+       * child of the page scroller** — the `section` above is `overflow-y-auto` — and the name
+       * field's focus ring is `outline-2 outline-offset-2`, so it stands **4px proud of the
+       * field on every side**. With no padding the top of that ring would sit outside the
+       * scroller's padding box, which clips there, and what is left of it would run into the
+       * shell's mana line above. Six pixels is the ring's four and two to spare, top and bottom.
        *
        * **Three lines since 2026-08-24, and this is the first of them**: what the deck is and
        * what can be done to it, then the ledger of what it adds up to, then the toolbar that
        * decides how it is drawn. The two selects that used to sit at the right of this row are
        * gone — see {@link ACTIONS}.
        */}
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 py-1.5">
-        <button
-          ref={backRef}
-          type="button"
-          // {@link closeDeck}, shared with Escape's `"navigation"` rung — one act, one function,
-          // so the key and the button can never come to mean different things.
-          onClick={closeDeck}
-          aria-label="Back to decks"
-          // The words go and the chevron stays, at the width where every other word on the row
-          // goes. The tooltip is bound only then, for the reason it is bound at all: at any
-          // other width it would repeat the word printed beside it.
-          {...(tightHeader ? tip("Back to decks", { describes: false }) : {})}
-          className={cn(
-            "inline-flex h-9 shrink-0 items-center rounded-md text-sm text-dim",
-            tightHeader ? "w-9 justify-center px-0" : "gap-1 px-2",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          <ChevronLeft className="size-4 shrink-0" aria-hidden="true" />
-          {!tightHeader && "Decks"}
-        </button>
-
-        {name !== null && (
-          <>
-            {/* The document's heading for this state of the view. Drawn as the field beside it
-                rather than twice — the ribbon's `h1` says "Decks", and this says which one. */}
-            <h2 className="sr-only">{name}</h2>
-            {/**
-             * The deck's name, and it is the row's one flexible child.
+      <PageBar
+        trail={[{ label: "Decks", name: "Back to decks", onOpen: closeDeck, ref: backRef }]}
+        titleAs="div"
+        titleGrows
+        title={
+          name === null ? null : (
+            <>
+              {/* The document's heading for this state of the view — the bar's title is the
+                  field beside it (`titleAs="div"`), so it is not drawn twice. The shell's `h1`
+                  says "Decks", and this says which one. */}
+              <h2 className="sr-only">{name}</h2>
+              {/**
+               * The deck's name, and it is the row's one flexible child — the bar's `titleGrows`.
+               *
+               * **`flex-wrap` and a floor on the field, because this row overflowed in the shipped
+               * window and no test could see it.** Measured over CDP with Theory on: the field was
+               * the only shrinkable child between two `shrink-0` siblings, so it collapsed to its
+               * intrinsic minimum — **18px at 1100, 1200 and 1280** — while the switch and the
+               * control beside it spilled 180px / 80px out of this box and over the actions. At
+               * 1200 the last pixels of that control (a "N cards differ" readout then, the
+               * Compare button since) hit-tested to the *format select*: a reader aiming at the
+               * difference re-formatted their deck.
+               *
+               * So the narrowest things yield first. The field keeps its own floor
+               * (`NAME_FLOOR`, in {@link DeckNameField}) and the actions block wraps to a second
+               * line when it no longer fits beside it; nothing overlaps at any width, because
+               * nothing is squeezed past its own content any more.
+               *
+               * **The field is the bare `<input>` this box's flex layout expects**, which is why
+               * {@link DeckNameField} draws no wrapper of its own — see it.
+               */}
+              <DeckNameField name={name} onRename={renameDeck} />
+            </>
+          )
+        }
+        actions={
+          name === null ? undefined : (
+            /**
+             * Everything that can be done to this deck, in one block against the right edge —
+             * the bar's actions slot, which is the `ml-auto`.
              *
-             * **The wrapper that used to hold it is gone** (2026-08-24). It grouped the field
-             * with the Theory/Actual switch and the Compare button, which was right while those
-             * three were the row's left-hand half; both of them are in the actions block now, so
-             * the group had one child left. The field is therefore the flex item this row's
-             * layout was always about.
-             *
-             * **`flex-wrap` and a floor on the field, because this row overflowed in the shipped
-             * window and no test could see it.** Measured over CDP with Theory on: the field was
-             * the only shrinkable child between two `shrink-0` siblings, so it collapsed to its
-             * intrinsic minimum — **18px at 1100, 1200 and 1280** — while the switch and the
-             * control beside it spilled 180px / 80px out of this box and over the actions. At
-             * 1200 the last pixels of that control (a "N cards differ" readout then, the
-             * Compare button since) hit-tested to the *format select*: a reader aiming at the
-             * difference re-formatted their deck.
-             *
-             * So the narrowest things yield first. The field keeps its own floor
-             * (`NAME_FLOOR`, in {@link DeckNameField}) and the actions block wraps to a second
-             * line when it no longer fits beside it; nothing overlaps at any width, because
-             * nothing is squeezed past its own content any more.
-             *
-             * **The field is the bare `<input>` this box's flex layout expects**, which is why
-             * {@link DeckNameField} draws no wrapper of its own — see it.
-             */}
-            <DeckNameField name={name} onRename={renameDeck} />
-
-            {/**
-             * Everything that can be done to this deck, in one block against the right edge.
-             *
-             * **`ml-auto` and `flex-nowrap`, which is the reverse of what this block used to
+             * **`flex-nowrap`, which is the reverse of what this block used to
              * carry and is safe for a reason the old shape did not have.** It was
              * `flex-wrap justify-end` and deliberately shrinkable, because `shrink-0` on it had
              * pinned it at its max-content width — **692px, at every window size** — and every
@@ -271,8 +265,8 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
              * whose fixed width is a function of the column, and the outer row's `flex-wrap` is
              * what catches the width below which even the narrow run does not fit — the whole
              * block folds to a line of its own rather than crushing the name.
-             */}
-            <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
+             */
+            <div className="flex shrink-0 flex-nowrap items-center gap-2">
               {/* Only for a deck that keeps a plan. A two-way switch over a deck with one list
                   is a control whose other half is empty by construction — the way to get one is
                   Deck settings, where the toggle that creates it lives. The same condition covers
@@ -322,8 +316,8 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
                         onClick={() => pickVariant(id)}
                         aria-pressed={variant === id}
                         className={cn(
-                          // 36px like every other press in this ribbon — the back button and
-                          // {@link PLAIN_PRESS}. At 28px this segmented pair was the shortest thing
+                          // 36px like every other press in this ribbon — {@link PLAIN_PRESS}
+                          // and the transfer pair. At 28px this segmented pair was the shortest thing
                           // in the row by eight pixels and read as a secondary control, which is
                           // the opposite of what it is: it says which of the deck's two lists is
                           // on screen.
@@ -482,9 +476,9 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
                 );
               })}
             </div>
-          </>
-        )}
-      </div>
+          )
+        }
+      />
     </>
   );
 });

@@ -3122,6 +3122,30 @@ describe("the wall's way up", () => {
     expect(await screen.findByRole("heading", { name: "Commander" })).toBeInTheDocument();
   });
 
+  /** The page bar's trail is the third way up: root first, every drawer above, and none at the
+   *  top level, which is a page of its own rather than a place inside one. */
+  it("leads a folder's page bar with a trail back up, root first", async () => {
+    withFolders();
+    wrap(<DecksPage />);
+    await screen.findByRole("heading", { name: "All decks" });
+    expect(screen.queryByRole("navigation", { name: "Page trail" })).toBeNull();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Commander folder, / }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Legends folder, / }));
+    expect(await screen.findByRole("heading", { name: "Legends" })).toBeInTheDocument();
+    const trail = screen.getByRole("navigation", { name: "Page trail" });
+    expect(within(trail).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Decks",
+      "Commander",
+    ]);
+
+    await userEvent.click(within(trail).getByRole("button", { name: "Commander" }));
+    expect(await screen.findByRole("heading", { name: "Commander" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Back to all decks" }));
+    expect(await screen.findByRole("heading", { name: "All decks" })).toBeInTheDocument();
+  });
+
   /** And the drop it exists for: a deck carried out of the folder it is in, onto a target the
    *  size of the tiles it is standing among. */
   it("files a deck up a level when it is dropped on the tile", async () => {

@@ -21,6 +21,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { PageBar } from "@/components/PageBar";
 import { UndoNotice } from "@/components/UndoNotice";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
@@ -83,7 +84,7 @@ import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { toasted, writeFailure } from "@/lib/writes";
 import { ManagedFolderNote } from "./ManagedFolderNote";
-import { WishlistSummaryHeader } from "./WishlistSummary";
+import { WishlistPageFigures } from "./WishlistSummary";
 import { managedEmptySentence, managedIds, userWishFolders } from "./managed";
 import { useWishDrops } from "./useWishDrops";
 import { useWishEntryWrites } from "./useWishEntryWrites";
@@ -1962,9 +1963,9 @@ export function WishlistPage() {
   /** Nothing at and below this level — or not known yet, which the status line says as reading. */
   const empty = totals === null || totals.wishes === 0;
   // **The breadcrumb is drawn only where there is a cabinet to walk.** At the root of a wishlist
-  // nobody has filed, a lone inert "Wishlist" under a ribbon that already says Wishlist is the
-  // subheading this page's own `sr-only` heading exists to avoid, and there is nowhere for it to
-  // lead. The path row itself is drawn always — Add folder lives in it.
+  // nobody has filed, a lone inert "Wishlist" under the page bar's own `Wishlist` title would be
+  // the page's name said twice, one line apart, and there is nowhere for it to lead. The path row
+  // itself is drawn always — Add folder lives in it.
   const hasFolders = folders.folders.length > 0;
   /**
    * **Whether the wall draws anything at all** — a heading, a label or an empty folder's box — which
@@ -2047,7 +2048,7 @@ export function WishlistPage() {
           **The section's first child, and it has to be.** Its wrapper is `sticky top-0 h-0`, and a
           sticky box travels only within its containing block — this section, which under the
           wall's `grow` is as tall as the wishes — so the bar stays pinned for the whole length of
-          the wall. And it is first, above the figures band, where the spec places it: a sticky box
+          the wall. And it is first, above the page bar, where the spec places it: a sticky box
           pins only once its static position reaches the scroller's top, and at the head of the
           section that has always happened by the time the page row has scrolled away.
           `-mb-3` cancels this section's `gap-3`: the wrapper is zero height, so without it the bar
@@ -2067,15 +2068,20 @@ export function WishlistPage() {
         className="-mb-3"
       />
 
-      {/* Not drawn: the ribbon's `h1` already names the view, and a second Cinzel "Wishlist"
-          under it would be a subheading repeating its own heading. */}
-      <h2 className="sr-only">Wishlist</h2>
+      {/* **The page bar** ("Page & Section Headings" canvas, option A, 2026-10-21) —
+          `CollectionPage`'s twin: the figures band this row always was, with the page's `<h2>`
+          drawn at its left end instead of `sr-only`, and the gold rule under it. No extra height.
 
-      <WishlistSummaryHeader
-        // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
+          **No trail inside a folder either**, for the collection's reason: the folder trail stays
+          in the path row, where its segments take drops, and a second copy up here could not. The
+          title stays `Wishlist`; the figures beside it are the level on screen's (spec §3.6). */}
+      <PageBar
+        title="Wishlist"
+        figures={<WishlistPageFigures totals={totals} marketplace={marketplace} />}
+        // The row's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued, and `CollectionPage`, whose twin this is.
         //
-        // **The price sweep rides here too**, because this band is where the controls that act on
+        // **The price sweep rides here too**, because this row is where the controls that act on
         // *the whole list* live and that is exactly what it does — it is scoped by the same query
         // the figures beside it are counted from. It is not a filter and must not join the row
         // below: nothing about it narrows what is on screen, so it is one more thing Reset all
@@ -2137,8 +2143,6 @@ export function WishlistPage() {
             />
           </div>
         }
-        totals={totals}
-        marketplace={marketplace}
       />
 
       {/* The same row the search, the Tags page and the collection draw, over this page's own
@@ -2161,7 +2165,7 @@ export function WishlistPage() {
       />
 
       {/* **The row the sidebar made necessary.** This page was `flex-col` from its root down, so
-          there was nothing to hang a column off — and the figures band and the page's own
+          there was nothing to hang a column off — and the page bar and the page's own
           `FilterBar` deliberately stay full width *above* it: `FilterBar` lays itself out in four
           `@container/fb` bands at 640/900/1500, so taking width off it rearranges the bar rather
           than merely shortening it.
@@ -2565,7 +2569,7 @@ export function WishlistPage() {
         folderNameOf={folderNameOf}
         // One callback for both rungs, `ExportDialog`'s and `ImportDialog`'s arrangement above:
         // every way out of this one is the reader saying "put me back", and the caret's
-        // destination is the button in the figures band they pressed to open it.
+        // destination is the button in the page bar they pressed to open it.
         onClose={() => setOptimizing(false)}
       />
     </section>

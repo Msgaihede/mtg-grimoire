@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { PageBar } from "@/components/PageBar";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { exportFileName } from "@/features/decks/deckExport";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
@@ -259,99 +260,130 @@ export function TradeView({
       tabIndex={-1}
       className="flex min-h-0 min-w-0 flex-1 flex-col gap-3.5 outline-none"
     >
-      <header className="flex items-end gap-3">
-        <div className="min-w-0 flex-1">
-          {renaming ? (
+      {/* **The page bar** ("Page & Section Headings", option A, 2026-10-21): a trade is a sub-page
+          of the Trade view, so the trail is `Trade ›` and the trade's own name is the title — an
+          `<h3>` under the view's `sr-only` `<h2>`, the level it always had. **The crumb is words,
+          not a button**: the trades are `TradesPane`, the column beside this one, not a page to go
+          back to — a `Trade` button here would go nowhere the reader is not already looking.
+
+          The rename field takes the title's place (`titleAs="div"`, `titleGrows`: the field is a
+          control, it carries its own name, and it takes the row's spare width). The pencil and the
+          header line ride in the slot after the title; the actions take the right end. */}
+      <PageBar
+        trail={[{ label: "Trade" }]}
+        titleAs={renaming ? "div" : "h3"}
+        titleGrows={renaming}
+        title={
+          renaming ? (
             <RenameField
               initial={trade.name}
               onSubmit={rename}
               onCancel={() => setRenaming(false)}
             />
           ) : (
-            <div className="flex items-center gap-2">
-              <h3
-                className="min-w-0 truncate font-heading text-2xl leading-tight font-semibold"
-                {...tip(trade.name, { whenClipped: true, describes: false })}
-              >
-                {trade.name}
-              </h3>
-              {editable && (
-                <button
-                  ref={renameRef}
-                  type="button"
-                  aria-label="Rename trade"
-                  onClick={() => setRenaming(true)}
-                  className={TRADE_BARE_BUTTON}
-                  {...tip("Rename", { describes: false })}
-                >
-                  <Pencil className="size-[0.9375rem]" aria-hidden="true" />
-                </button>
-              )}
-            </div>
-          )}
-          <p className="text-[0.8125rem] text-dim">{headerLine(trade)}</p>
-          {failure !== null && (
-            <p role="alert" className={cn(REFUSAL, "mt-1")}>
-              {failure}
-            </p>
-          )}
-        </div>
-
-        {!editable && (
-          <>
-            <button
-              type="button"
-              aria-disabled={busy || undefined}
-              onClick={duplicate}
-              className={TRADE_BUTTON}
+            <span
+              className="block min-w-0 truncate"
+              {...tip(trade.name, { whenClipped: true, describes: false })}
             >
-              <Copy className="size-4" aria-hidden="true" />
-              Duplicate
-            </button>
+              {trade.name}
+            </span>
+          )
+        }
+        figures={
+          editable && !renaming ? (
             <button
+              ref={renameRef}
               type="button"
-              aria-disabled={busy || undefined}
-              onClick={() => run("reopen the trade", () => writes.reopen(trade.id).then(land))}
-              className={TRADE_BUTTON}
+              aria-label="Rename trade"
+              onClick={() => setRenaming(true)}
+              // Pulled in against the name it renames, to the 8px it stood at before the bar:
+              // the bar's `gap-x-5` is the space between a title and its meta, and a pencil that
+              // far out reads as a control of the row.
+              className={cn(TRADE_BARE_BUTTON, "-ml-3 self-center")}
+              {...tip("Rename", { describes: false })}
             >
-              <RotateCcw className="size-4" aria-hidden="true" />
-              Reopen
+              <Pencil className="size-[0.9375rem]" aria-hidden="true" />
             </button>
-          </>
-        )}
-        {/* `aria-haspopup` and no `aria-expanded`: the open state is `ContextMenuProvider`'s, and
-            a static `false` here would be wrong for exactly as long as the menu is up. */}
-        <button
-          ref={moreRef}
-          type="button"
-          aria-label="More actions"
-          aria-haspopup="menu"
-          onClick={menuClick(menu)}
-          className={TRADE_ICON_BUTTON}
-          {...tip("More actions", { describes: false })}
-        >
-          <MoreHorizontal className="size-[1.125rem]" aria-hidden="true" />
-        </button>
-        {editable && (
-          <button
-            type="button"
-            aria-disabled={busy || undefined}
-            onClick={() =>
-              // Archiving puts the trade away — a receipt, as every archive in the app has.
-              run("archive the trade", () =>
-                writes.archive(trade.id).then(() => {
-                  notify.success(`Archived “${trade.name}”`);
-                  land();
-                }),
-              )
-            }
-            className={TRADE_BUTTON}
+          ) : undefined
+        }
+        // The header line is a sentence, not a count, and in the pane beside the trade list it is
+        // wider than the room left — so it gives way (the meta box truncates) and says the rest on
+        // hover. The tooltip is on a box of its own that clips itself: `whenClipped` asks the
+        // element it is bound to, and the bar's own span is not ours to bind.
+        meta={
+          <span
+            className="block truncate"
+            {...tip(headerLine(trade), { whenClipped: true, describes: false })}
           >
-            <Archive className="size-4" aria-hidden="true" />
-            Archive
-          </button>
-        )}
-      </header>
+            {headerLine(trade)}
+          </span>
+        }
+        actions={
+          <>
+            {!editable && (
+              <>
+                <button
+                  type="button"
+                  aria-disabled={busy || undefined}
+                  onClick={duplicate}
+                  className={TRADE_BUTTON}
+                >
+                  <Copy className="size-4" aria-hidden="true" />
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  aria-disabled={busy || undefined}
+                  onClick={() => run("reopen the trade", () => writes.reopen(trade.id).then(land))}
+                  className={TRADE_BUTTON}
+                >
+                  <RotateCcw className="size-4" aria-hidden="true" />
+                  Reopen
+                </button>
+              </>
+            )}
+            {/* `aria-haspopup` and no `aria-expanded`: the open state is `ContextMenuProvider`'s,
+                and a static `false` here would be wrong for exactly as long as the menu is up. */}
+            <button
+              ref={moreRef}
+              type="button"
+              aria-label="More actions"
+              aria-haspopup="menu"
+              onClick={menuClick(menu)}
+              className={TRADE_ICON_BUTTON}
+              {...tip("More actions", { describes: false })}
+            >
+              <MoreHorizontal className="size-[1.125rem]" aria-hidden="true" />
+            </button>
+            {editable && (
+              <button
+                type="button"
+                aria-disabled={busy || undefined}
+                onClick={() =>
+                  // Archiving puts the trade away — a receipt, as every archive in the app has.
+                  run("archive the trade", () =>
+                    writes.archive(trade.id).then(() => {
+                      notify.success(`Archived “${trade.name}”`);
+                      land();
+                    }),
+                  )
+                }
+                className={TRADE_BUTTON}
+              >
+                <Archive className="size-4" aria-hidden="true" />
+                Archive
+              </button>
+            )}
+          </>
+        }
+      />
+      {/* Under the bar rather than in it: a refusal is a sentence the reader has to be able to read
+          whole, and the bar's row truncates. */}
+      {failure !== null && (
+        <p role="alert" className={REFUSAL}>
+          {failure}
+        </p>
+      )}
 
       {!editable && (
         <p className="flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3.5 py-2.5 text-[0.8125rem] text-dim">
@@ -547,6 +579,8 @@ function RenameField({
 
   return (
     <form
+      // The page bar's title slot grows for a field (`titleGrows`); the form is its flex item.
+      className="min-w-0 flex-1"
       onSubmit={(e) => {
         e.preventDefault();
         const trimmed = name.trim();
@@ -563,7 +597,8 @@ function RenameField({
         autoComplete="off"
         className={cn(
           "w-full max-w-md rounded-md border border-accent bg-bg px-2",
-          "font-heading text-2xl leading-tight font-semibold text-text outline-none",
+          // `PAGE_TITLE`'s face, size and tracking, so the name does not jump while it is edited.
+          "font-heading text-xl leading-tight font-semibold tracking-[0.02em] text-text outline-none",
         )}
       />
     </form>

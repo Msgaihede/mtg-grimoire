@@ -27,6 +27,7 @@ import { UndoNotice } from "@/components/UndoNotice";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { OwnedBadge } from "@/components/OwnedBadge";
+import { PageBar } from "@/components/PageBar";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
@@ -95,7 +96,7 @@ import { toasted, writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
 import type { CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSearchPanel } from "./CollectionSearchPanel";
-import { CollectionSummaryHeader } from "./CollectionSummary";
+import { CollectionPageFigures } from "./CollectionSummary";
 import { CollectionTable, type CollectionTableShelves } from "./CollectionTable";
 import { movedReceipt, removedReceipt, report } from "./collectionReceipts";
 import {
@@ -2322,8 +2323,8 @@ export function CollectionPage() {
   ]);
   const empty = rows.length === 0;
   // The cabinet is drawn only where there is one. In a collection nobody has filed, a lone inert
-  // "Collection" under a ribbon that already says Collection is the subheading this page's own
-  // `sr-only` heading exists to avoid.
+  // "Collection" under the page bar's own `Collection` title would be the page's name said twice,
+  // one line apart, with nowhere for it to lead.
   //
   // **`|| folderId !== null` is what keeps a reader from being stranded**, and it arrived with the
   // pinned section: a reader who has made no folders of their own can still be *inside* one, by
@@ -2883,7 +2884,7 @@ export function CollectionPage() {
       {/* **The filter quick bar** (spec 2026-09-29, §6.2) — the page row's filters in one row,
           docked at the top of `main` once the `FilterBar` below has scrolled out of view.
 
-          **The section's first child**, above the figures band: it is a `sticky top-0 h-0`
+          **The section's first child**, above the page bar: it is a `sticky top-0 h-0`
           wrapper, and a sticky box can travel only as far as its containing block, so it has to
           sit in the section that is as tall as the wall rather than in any row inside it. `-mb-3`
           is this section's `gap-3` handed back, so a wrapper of no height costs the page no
@@ -2902,15 +2903,22 @@ export function CollectionPage() {
         className="-mb-3"
       />
 
-      {/* Not drawn: the ribbon's `h1` already names the view, and a second Cinzel
-          "Collection" 18px under it would be a subheading repeating its own heading. The
-          header below says what this view is far better than a title would. */}
-      <h2 className="sr-only">Collection</h2>
+      {/* **The page bar** ("Page & Section Headings" canvas, option A, 2026-10-21): the figures
+          band this row always was, with the page's name drawn at its left end — the `<h2>` that
+          was `sr-only` while the app had no visible header is the bar's title now — and the gold
+          rule under it in place of the band's grey one. No extra height: the title takes the
+          left end of the row the figures and actions already stood in.
 
-      <CollectionSummaryHeader
-        summary={figures}
-        marketplace={marketplace}
-        // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
+          **No trail, in a folder or out of one.** The folder trail stays in the path row below,
+          where its segments are drop targets for cards and folders (spec §3.5); a second, inert
+          copy of the same names up here would be the path said twice on one screen, and the one
+          that could not take a drop. So the title stays `Collection` inside a folder too, and the
+          figures beside it are the level on screen's (`collection_summary` for this folder and
+          everything under it), named by the path row's last segment just below. */}
+      <PageBar
+        title="Collection"
+        figures={<CollectionPageFigures summary={figures} marketplace={marketplace} />}
+        // The row's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued. The names say *what* is moved, because both
         // dialogs carry a control called `Import` and two of those on one screen is a pair a
         // screen reader can only tell apart by position.
@@ -2919,9 +2927,10 @@ export function CollectionPage() {
           // `items-center`: the Share group carries a status line under it that grows and
           // shrinks, and centring would lift the transfer pair off the row every time it said
           // something. `flex-wrap` is what puts them on two lines rather than out of the window
-          // when the row is short, and it is inert unless `FigureRow`'s actions box can be
-          // squeezed — see that file, where the `shrink-0` that made this wrap unreachable is
-          // recorded with the measurement that found it.
+          // when the row is short, and it is inert unless the bar's actions box can be squeezed —
+          // which it can, because `PageBar` keeps `FigureRow`'s rule: never `shrink-0` there (see
+          // `FigureRow`, where the `shrink-0` that made this wrap unreachable is recorded with
+          // the measurement that found it).
           <div className="flex flex-wrap items-start justify-end gap-2">
             <ShareFolderMenu target={shareTarget} />
             <ImportExportPair
@@ -3004,7 +3013,7 @@ export function CollectionPage() {
 
       {/* **The row the list and the search column share** (design §4), and the one thing on this
           page that had to move to make room for a sidebar: everything above stays full width,
-          because the figures band is a band and `FilterBar` lays itself out in four `@container/fb`
+          because the page bar is a band and `FilterBar` lays itself out in four `@container/fb`
           bands at 640/900/1500 — taking width off that row rearranges the bar rather than merely
           shortening it.
 

@@ -1138,13 +1138,16 @@ describe("CollectionPage", () => {
     expect(await screen.findByText("1,240")).toBeInTheDocument();
     expect(screen.getByText("812")).toBeInTheDocument();
     expect(screen.getByText("$9,876.50")).toBeInTheDocument();
-    expect(screen.queryByText("Value (EUR)")).not.toBeInTheDocument();
+    // The page bar's money word is `value`, with no currency in brackets (2026-10-21): the
+    // figure right before it carries its own sign — and that sign is the one the reader picked.
+    const figure = screen.getByText("value").closest("div") as HTMLElement;
+    expect(figure).toHaveTextContent("$9,876.50");
+    expect(screen.queryAllByText(/€/)).toEqual([]);
 
     // Spec §5: no price on screen without saying how old it is — and, with five marketplaces
-    // in the picker, whose it is. The header has no room for the sentence beside the figures,
+    // in the picker, whose it is. The bar has no room for the sentence beside the figures,
     // so it rides on the figure it is about — `Figure`'s own `title` prop, bound through
     // `useTooltip()` since the tooltip sweep rather than a native attribute.
-    const figure = screen.getByText("Value (USD)").closest("div") as HTMLElement;
     await userEvent.hover(figure);
     const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
@@ -1153,7 +1156,7 @@ describe("CollectionPage", () => {
   });
 
   /**
-   * The other side of the same switch: Cardmarket's figure, Cardmarket's label, Cardmarket's
+   * The other side of the same switch: Cardmarket's figure, Cardmarket's sign, Cardmarket's
    * sentence — and no dollars anywhere.
    *
    * **The euro figure is a different answer to the same query, not a second field.** The
@@ -1169,7 +1172,9 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
 
     await waitFor(() => expect(screen.getByText("€8,100.00")).toBeInTheDocument());
-    const figure = screen.getByText("Value (EUR)").closest("div") as HTMLElement;
+    const figure = screen.getByText("value").closest("div") as HTMLElement;
+    expect(figure).toHaveTextContent("€8,100.00");
+    expect(screen.queryAllByText(/\$/)).toEqual([]);
     await userEvent.hover(figure);
     const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
@@ -2027,7 +2032,7 @@ describe("CollectionPage", () => {
    *
    * The table is asserted to draw none of it, which is what proves this is the grid's line rather
    * than something the page draws in both views over a column header that already says it. The
-   * header's own `Value (USD)` figure carries the same sentence and is **not** counted either way:
+   * page bar's own `value` figure carries the same sentence and is **not** counted either way:
    * it is a `useTooltip()` binding, so it is an attribute and a panel that has not been opened,
    * never text on screen.
    */

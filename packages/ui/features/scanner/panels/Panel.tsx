@@ -1,5 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
+import { SECTION_RULE, SECTION_TITLE } from "@/components/PageBar";
 import { PRESS } from "@/lib/motion";
 import { useAppStore, type ScannerPanelId } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -23,11 +24,17 @@ import { cn } from "@/lib/utils";
  * The region keeps its `aria-labelledby` either way — that target is the heading, which is
  * always mounted — so `getByRole("region", { name })` finds a folded panel too.
  *
- * **`SettingsSection`'s classes, copied rather than imported.** That component is the Settings
- * page's chrome and has no fold; a `foldable` prop on it would put this screen's one requirement
- * into the file three settings panels share, and the resemblance here is deliberate rather than
- * shared. What is copied is three class strings — if they drift, one screen looks slightly
- * different from another, which is the kind of mistake a screenshot catches.
+ * **The heading is the app's section heading, as `SettingsSection` draws it** (approved
+ * 2026-10-21): `PageBar.tsx`'s `SECTION_TITLE` — Cinzel at 18/600 — then its `SECTION_RULE`, a
+ * plain grey 1px line to the row's end. On a folding panel the rule is inside the button, so the
+ * whole row is still the press; it carries no text, so it adds nothing to either name.
+ *
+ * **`SettingsSection` itself is not imported.** That component is the Settings page's chrome and
+ * has no fold; a `foldable` prop on it would put this screen's one requirement into the file the
+ * settings panels share, and the resemblance here is deliberate rather than shared. The heading's
+ * recipes are the page bar module's and so cannot drift; what is still copied is the body's box —
+ * if that drifts, one screen looks slightly different from another, which is the kind of mistake
+ * a screenshot catches.
  */
 export function Panel({
   id,
@@ -52,9 +59,12 @@ export function Panel({
           would make "Scanner" and "Match" siblings — a screen reader's heading list would then
           read six views where there is one. Nothing visual moves: the size is `text-lg` either
           way. `ReadoutsPanel`'s tier headings sit under this one at `h4`. */}
-      <h3 id={headingId} className="font-heading text-lg leading-none">
+      <h3 id={headingId} className={cn(SECTION_TITLE, "flex items-center gap-3")}>
         {id === "match" ? (
-          title
+          <>
+            {title}
+            <span aria-hidden="true" className={SECTION_RULE} />
+          </>
         ) : (
           <button
             type="button"
@@ -71,6 +81,9 @@ export function Panel({
               )}
             />
             {title}
+            {/* `ml-1` on the button's `gap-2`: the same 12px between title and rule as the match
+                panel's `gap-3`. */}
+            <span aria-hidden="true" className={cn(SECTION_RULE, "ml-1")} />
           </button>
         )}
       </h3>

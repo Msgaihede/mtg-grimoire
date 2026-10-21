@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Figure, FigureRow } from "@/components/Figure";
+import { Figure, FigureRow, InlineFigureRow } from "@/components/Figure";
 import { count } from "@/lib/counts";
 import type { CollectionSummary as Summary } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -14,14 +14,19 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
  * on screen to say how old it is — and the unpriced count sits beside it because a total
  * that silently omits 200 cards is a number that lies by rounding down.
  *
+ * **Two faces draw these figures, from one list** ({@link CollectionFigureList}): this band is
+ * the light app's phone face, and the desktop page draws {@link CollectionPageFigures} inline in
+ * its page bar (2026-10-21). Sharing the list is what keeps the two from disagreeing about what
+ * the collection adds up to.
+ *
  * ## One Value figure, not two
  *
  * This header drew `Value (USD)` and `Value (EUR)` side by side while there was no way to
  * *say* which one you wanted. The marketplace setting is that way, so the pair collapses into
  * the one the reader picked: two totals for one collection is two answers to the question
  * this row exists to answer, and the second one is now a currency they have declared they are
- * not shopping in. The label still names the currency, because a bare "Value" over a figure
- * that changes denomination in Settings would be a number with no units.
+ * not shopping in. The band's label still names the currency, because a bare "Value" over a
+ * figure that changes denomination in Settings would be a number with no units.
  *
  * **The unpriced count travels with the figure, and it has to.** No two marketplaces have the
  * same holes: `eur_etched` does not exist in Scryfall's data at all, so an etched printing is
@@ -44,19 +49,71 @@ export function CollectionSummaryHeader({
   /** Which marketplace's prices this row totals: its currency writes the figure, its label is
    *  the as-of sentence. The figure itself was summed by the query. */
   marketplace: Marketplace;
-  /** The far end of the band — the page's Import/Export pair. Passed straight through to
-   *  `FigureRow`, which is where the markup rule for it lives. */
+  /** The far end of the band. Passed straight through to `FigureRow`, which is where the markup
+   *  rule for it lives. */
   actions?: ReactNode;
+}) {
+  return (
+    <FigureRow actions={actions}>
+      <CollectionFigureList summary={summary} marketplace={marketplace} inline={false} />
+    </FigureRow>
+  );
+}
+
+/**
+ * The same figures for the desktop page's page bar ("Page & Section Headings" canvas, option A,
+ * 2026-10-21): one quiet line on the title's baseline — `998 cards · 735 unique · $6,247.11
+ * value` — with the value, the one figure this row is for, in gold.
+ *
+ * **Its words are the ones that follow a number** (`cards`, `value`), not the band's column
+ * labels, and the money's word drops the band's `(USD)`: on this line the formatted figure sits
+ * right before its word with its own sign on it (`$`, `€` — the only two currencies a marketplace
+ * quotes in), so the units are already said, and said where the eye is.
+ */
+export function CollectionPageFigures({
+  summary,
+  marketplace,
+}: {
+  summary: Summary | undefined;
+  marketplace: Marketplace;
+}) {
+  return (
+    <InlineFigureRow>
+      <CollectionFigureList summary={summary} marketplace={marketplace} inline />
+    </InlineFigureRow>
+  );
+}
+
+function CollectionFigureList({
+  summary,
+  marketplace,
+  inline,
+}: {
+  summary: Summary | undefined;
+  marketplace: Marketplace;
+  inline: boolean;
 }) {
   const value = summary ? summary.value : null;
   const unpriced = summary ? summary.unpriced : 0;
   return (
-    <FigureRow actions={actions}>
+    <>
       {/* Copies, not rows — a row emptied to zero contributes nothing to what is owned. */}
-      <Figure label="Cards" value={summary ? count(summary.totalCards) : "—"} />
-      <Figure label="Unique" value={summary ? count(summary.uniqueCards) : "—"} />
       <Figure
-        label={`Value (${marketplace.currency.toUpperCase()})`}
+        inline={inline}
+        label={inline ? "cards" : "Cards"}
+        value={summary ? count(summary.totalCards) : "—"}
+      />
+      <Figure
+        inline={inline}
+        label={inline ? "unique" : "Unique"}
+        value={summary ? count(summary.uniqueCards) : "—"}
+      />
+      {/* Gold in the page bar only, and on this figure only: a row gilds one figure or none, and
+          value is what this one is for. The phone band stays colourless. */}
+      <Figure
+        inline={inline}
+        accent={inline}
+        label={inline ? "value" : `Value (${marketplace.currency.toUpperCase()})`}
         value={summary ? formatPrice(value, marketplace.currency) : "—"}
         note={unpriced > 0 ? `${count(unpriced)} unpriced` : undefined}
         title={pricesAsOf(marketplace)}
@@ -64,8 +121,12 @@ export function CollectionSummaryHeader({
       {/* Only when there is one: a permanent "For trade — 0" is a column of chrome that has
           never once been the answer to anything. */}
       {summary && summary.tradelistCards > 0 && (
-        <Figure label="For trade" value={count(summary.tradelistCards)} />
+        <Figure
+          inline={inline}
+          label={inline ? "for trade" : "For trade"}
+          value={count(summary.tradelistCards)}
+        />
       )}
-    </FigureRow>
+    </>
   );
 }

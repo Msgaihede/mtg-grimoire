@@ -737,7 +737,14 @@ describe("SearchPage", () => {
   it("counts the matches, and says `+` when the backend stopped counting", async () => {
     searchCards.mockResolvedValue(page([BOLT], 42));
     const { unmount } = wrap(<SearchPage />);
-    expect(await screen.findByText("42 cards")).toBeInTheDocument();
+    // The live line is a screen reader's while there are rows; the page bar is where it is drawn,
+    // the numeral its own element and the whole `aria-hidden`, so the count is heard once.
+    const line = await screen.findByText("42 cards");
+    expect(line).toHaveAttribute("role", "status");
+    expect(line).toHaveClass("sr-only");
+    const drawn = screen.getByText("42").closest("[aria-hidden='true']");
+    // A prefix: one row of 42 leaves pages to load, so the bar may already say `· loading more…`.
+    expect(drawn).toHaveTextContent(/^42 cards/);
     unmount();
 
     // 5 000 is where the backend gives up counting, so a bare "5,000 cards" would be a
@@ -788,7 +795,9 @@ describe("SearchPage", () => {
 
     // `keepPreviousData`: the list does not blank out while the new page is in flight.
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
-    expect(screen.getByText(/searching…/i)).toBeInTheDocument();
+    // Said in the live result line, and drawn in the page bar's meta — two elements, one of them
+    // `aria-hidden`, so the line is asked for by its role.
+    expect(screen.getByRole("status")).toHaveTextContent(/searching…/i);
   });
 
   it("resets the scroll position when the search changes", async () => {

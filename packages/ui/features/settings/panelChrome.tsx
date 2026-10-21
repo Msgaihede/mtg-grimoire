@@ -16,6 +16,7 @@
  */
 import { AnimatePresence, motion } from "motion/react";
 import type { ReactNode } from "react";
+import { SECTION_RULE, SECTION_TITLE } from "@/components/PageBar";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
@@ -27,7 +28,11 @@ import { cn } from "@/lib/utils";
  * unbreakable. A written string and not `useId()`, because a generated `:r7:` moves with the
  * render order of the page and these ids are readable in the shipped window.
  *
- * Cinzel at 18px is the display face's one job in the content, and the direction's floor for it.
+ * **The heading is the app's section heading** (`PageBar.tsx`'s `SECTION_TITLE`, approved
+ * 2026-10-21): Cinzel at 18/600 — the display face's one job in the content, and the direction's
+ * floor for it — then a plain grey 1px rule (`SECTION_RULE`) to the row's end. The rule is drawn
+ * beside the `<h2>`, not in it, so the region's name stays the title alone.
+ *
  * `SettingsPage`'s "Not here yet" is deliberately **not** one of these: a heading over an absence
  * is `text-dim` with no box, and drawing it a panel's frame would promise a panel behind it.
  */
@@ -46,9 +51,12 @@ export function SettingsSection({
 
   return (
     <section aria-labelledby={headingId} className="space-y-4">
-      <h2 id={headingId} className="font-heading text-lg leading-none">
-        {title}
-      </h2>
+      <div className="flex items-center gap-3">
+        <h2 id={headingId} className={SECTION_TITLE}>
+          {title}
+        </h2>
+        <span aria-hidden="true" className={SECTION_RULE} />
+      </div>
 
       <div className="space-y-4 rounded-lg border border-border bg-surface p-4">{children}</div>
     </section>

@@ -797,3 +797,16 @@ html[data-dragging] * {
 .scrollbar-accent::-webkit-scrollbar-thumb:hover {
   background-color: color-mix(in oklab, var(--color-accent) 78%, var(--color-text));
 }
+
+/* The page bar's rule (`components/PageBar.tsx`): a gold hairline fading out to the right, under
+   every page's top row. Gold at 55% → 20% across the first 55% of the width → nothing. The page
+   bar's alone — a section heading inside a page keeps a plain `--color-border` line. */
+@utility gilt-rule {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-accent) 55%, transparent),
+    color-mix(in oklab, var(--color-accent) 20%, transparent) 55%,
+    transparent
+  );
+}

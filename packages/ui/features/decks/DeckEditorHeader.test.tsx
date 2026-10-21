@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DeckEditorHeader, type DeckEditorHeaderProps } from "./DeckEditorHeader";
@@ -23,6 +23,26 @@ function header(over: Partial<DeckEditorHeaderProps> = {}) {
   render(<DeckEditorHeader {...props} />);
   return props;
 }
+
+describe("DeckEditorHeader's page bar", () => {
+  it("leads with a `Decks` crumb that closes the deck and holds the caret's way back", async () => {
+    const props = header();
+    const trail = screen.getByRole("navigation", { name: "Page trail" });
+    const back = within(trail).getByRole("button", { name: "Back to decks" });
+    // The drawn word is the crumb's, at every width — it no longer drops to a bare chevron.
+    expect(back).toHaveTextContent("Decks");
+    expect(props.backRef.current).toBe(back);
+    await userEvent.click(back);
+    expect(props.closeDeck).toHaveBeenCalledOnce();
+  });
+
+  it("draws the crumb alone, with no actions, before the deck has answered", () => {
+    header({ name: null });
+    expect(screen.getByRole("button", { name: "Back to decks" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Deck settings" })).toBeNull();
+  });
+});
 
 describe("DeckEditorHeader's Goldfish button", () => {
   it("is the fish alone at every width, named for what it does, and opens the board", async () => {

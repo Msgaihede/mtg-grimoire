@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PageBar } from "@/components/PageBar";
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
@@ -16,9 +17,11 @@ import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { VersionPanel } from "@/features/settings/VersionPanel";
 import {
+  GROUPS,
   PANELS,
   groupsOf,
   panelsOf,
+  searching,
   visiblePanels,
   type BadgeId,
   type GroupId,
@@ -307,6 +310,22 @@ export function SettingsPage({ update }: { update: Update }) {
        the pane when there is no room beside it, and the rail's own container query is what
        changes its shape when that happens. */
     <div ref={root} className="mx-auto flex max-w-4xl flex-wrap items-start gap-8 py-2">
+      {/* **The page bar** ("Page & Section Headings", approved 2026-10-21): `Settings ›` and the
+          section on screen — the rail's lit group, or `Search` while a query is typed (a query
+          outranks the group, `nav.ts`'s rule). `basis-full`, so it spans the wrapping row above
+          the rail and the pane. The crumb is words, not a button: Settings has no page of its own
+          above its sections.
+
+          **A `div` title, not a heading.** Every panel below carries its own `<h2>`
+          (`SettingsSection`) and the shell's `<h1>` already says Settings; a heading here would
+          put the panels a level under a section name that changes with every press on the rail. */}
+      <PageBar
+        // The row's `gap-8` is a rail-to-pane gap; under the bar it is half that.
+        className="-mb-4 basis-full"
+        trail={[{ label: "Settings" }]}
+        titleAs="div"
+        title={searching(query) ? "Search" : GROUPS[group].label}
+      />
       <SettingsNav
         group={group}
         onGroup={pickGroup}

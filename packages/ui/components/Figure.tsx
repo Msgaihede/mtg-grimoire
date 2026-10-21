@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { cn } from "@/lib/utils";
 
 /**
  * The header a list of cards is captioned with: a few figures, in the data face, with no
@@ -58,6 +59,20 @@ export function FigureRow({ children, actions }: { children: ReactNode; actions?
 }
 
 /**
+ * The page bar's figures ("Page & Section Headings" canvas, option A, 2026-10-21): one quiet line
+ * on the title's baseline — `998 cards · 735 unique · $6,247.11 value` — the number in mono, its
+ * word after it in dim body type, a middot between figures. Children are `Figure`s with `inline`,
+ * whose labels are the word that follows a number (`cards`, not `Cards`).
+ *
+ * Still a `<dl>`, for `FigureRow`'s reason: a label and the number it names are a description
+ * list wherever they are drawn. The number is drawn first by `order`, not by putting the `dd`
+ * before its `dt`, which the content model does not allow.
+ */
+export function InlineFigureRow({ children }: { children: ReactNode }) {
+  return <dl className="flex min-w-0 items-baseline gap-x-2.5">{children}</dl>;
+}
+
+/**
  * One figure and what it counts.
  *
  * `note` is the qualification a number needs to stay honest — how many copies the value
@@ -71,6 +86,8 @@ export function Figure({
   value,
   note,
   title,
+  inline = false,
+  accent = false,
 }: {
   label: string;
   /** Already formatted. An em dash rather than a zero while the first answer is in flight:
@@ -78,8 +95,32 @@ export function Figure({
   value: string;
   note?: string;
   title?: string;
+  /** Drawn in a page bar's {@link InlineFigureRow}: the number, then its word, on one baseline. */
+  inline?: boolean;
+  /** The one figure that matters most — the money — in gold. A row gilds one figure or none. */
+  accent?: boolean;
 }) {
   const tip = useTooltip();
+  if (inline) {
+    return (
+      // The wrapper stays a `div` holding the `dt`/`dd` pair — the tooltip binds to it, and it is
+      // what a test reaches with `closest("div")` from the label. The middot is its `::before`,
+      // so a figure that is not drawn takes its separator with it.
+      <div
+        className={cn(
+          "inline-flex min-w-0 items-baseline gap-1.5 whitespace-nowrap leading-none",
+          "before:mr-1 before:text-dim/60 before:content-['·'] first:before:content-none",
+        )}
+        {...tip(title)}
+      >
+        <dt className="order-last text-[12.5px] text-dim">{label}</dt>
+        <dd className={cn("font-mono text-[13px] tabular-nums", accent && "text-accent")}>
+          {value}
+        </dd>
+        {note && <dd className="order-last ml-1 font-mono text-[11px] text-dim">{note}</dd>}
+      </div>
+    );
+  }
   return (
     <div className="min-w-0" {...tip(title)}>
       <dt className="text-xs text-dim">{label}</dt>
