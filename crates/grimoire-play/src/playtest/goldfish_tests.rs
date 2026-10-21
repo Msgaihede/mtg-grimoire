@@ -4,7 +4,7 @@
 
 use crate::cards::{CardFacts, FaceFacts};
 use crate::on_engine_stack;
-use crate::view::{GameCard, Lane, ManaByType, Place};
+use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, Place};
 
 use super::session::Playtest;
 use super::view::{
@@ -1584,6 +1584,120 @@ fn a_commander_cast_by_its_back_face_is_still_the_commander() {
     assert_eq!(back.view.you.command.len(), 1);
     assert!(back.view.you.command[0].is_commander);
     assert_eq!(back.view.you.command[0].tax, 2);
+}
+
+/// Issue #1327: each continuous effect on a card comes with it, by kind and source — a resolved
+/// spell's (Giant Growth's +3/+3) and a permanent's static (an anthem's +1/+1 and trample) alike —
+/// and a permanent's static on itself is its printed self, never an effect on it.
+#[test]
+fn a_card_carries_each_effect_on_it_with_its_source() {
+    let mut cards = deck();
+    cards.push(card(
+        "Banner Marshal",
+        Some("{1}{G}"),
+        "Creature — Human Soldier",
+        "Creatures you control get +1/+1 and have trample.",
+        Some(("2", "2")),
+        8,
+    ));
+    let (grown, marshal, bears) = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let growth = in_hand(&mut game, "Giant Growth");
+        let grown = game.act(A::Play { id: growth }).unwrap().view;
+        let grown = find(&grown.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .clone();
+        put_down(&mut game, "Banner Marshal");
+        let view = game.view();
+        let on = |name: &str| find(&view.you.battlefield, name).unwrap().clone();
+        (grown, on("Banner Marshal"), on("Grizzly Bears"))
+    });
+    assert_eq!(
+        grown.effects,
+        vec![CardEffect {
+            kind: EffectKind::ModifyPt,
+            source: "Giant Growth".into(),
+            gained: vec![],
+            lost: vec![],
+            loses_abilities: false,
+            abilities: vec![],
+            power: Some(3),
+            toughness: Some(3),
+        }],
+    );
+    let from = |card: &GameCard, kind: EffectKind, source: &str| {
+        card.effects
+            .iter()
+            .find(|e| e.kind == kind && e.source == source)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {kind:?} from {source} on {card:?}"))
+    };
+    let anthem = from(&bears, EffectKind::ModifyPt, "Banner Marshal");
+    assert_eq!((anthem.power, anthem.toughness), (Some(1), Some(1)));
+    let trample = from(&bears, EffectKind::Ability, "Banner Marshal");
+    assert_eq!(trample.gained, vec!["Trample".to_string()]);
+    assert!(
+        bears.effects.iter().any(|e| e.source == "Giant Growth"),
+        "the growth lasts the turn: {bears:?}",
+    );
+    assert_eq!(
+        marshal.effects,
+        vec![],
+        "its own static is its printed self"
+    );
+    assert_eq!((marshal.power, marshal.toughness), (Some(3), Some(3)));
+}
+
+/// Issue #1327's card: an effect that makes a creature a Demon and grants it a dies trigger is
+/// two effects from one source — the type it gained, and the trigger's own text.
+#[test]
+fn a_type_and_a_granted_trigger_are_told_with_their_source() {
+    let mut cards = deck();
+    cards.push(card(
+        "Demonic Pact Rite",
+        Some("{G}"),
+        "Instant",
+        "Until end of turn, target creature becomes a Demon in addition to its other types and gains \"When this creature dies, draw a card.\"",
+        None,
+        8,
+    ));
+    let bear = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let rite = in_hand(&mut game, "Demonic Pact Rite");
+        let view = game.act(A::Play { id: rite }).unwrap().view;
+        find(&view.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .clone()
+    });
+    let kinds: Vec<_> = bear
+        .effects
+        .iter()
+        .map(|e| (e.kind, e.source.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (EffectKind::Type, "Demonic Pact Rite"),
+            (EffectKind::Ability, "Demonic Pact Rite"),
+        ],
+        "{bear:?}",
+    );
+    assert_eq!(bear.effects[0].gained, vec!["Demon".to_string()]);
+    assert!(bear.type_line.contains("Demon"), "{}", bear.type_line);
+    assert_eq!(bear.effects[1].abilities.len(), 1, "{bear:?}");
+    assert!(
+        bear.effects[1].abilities[0].to_lowercase().contains("dies"),
+        "{:?}",
+        bear.effects[1].abilities,
+    );
 }
 
 /// Issue #1328: a "you may" in an ability the reader activated asks with the ability's words, so

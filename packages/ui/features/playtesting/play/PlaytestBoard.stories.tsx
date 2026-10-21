@@ -258,6 +258,66 @@ export const PartlyPlayed: Story = {
   },
 };
 
+/** Each effect on a card is a chip of its own, what happened and where from (issue #1327):
+ *  Tarmogoyf made a Demon with a dies trigger by Clavileño, and pumped by Giant Growth. Resting
+ *  on it opens the preview, which says each in full. */
+export const EffectsOnACard: Story = {
+  args: (() => {
+    const { view, goyf } = turnFive();
+    const from = { lost: [], losesAbilities: false, power: null, toughness: null };
+    const affected: GameCard = {
+      ...goyf,
+      power: 6,
+      toughness: 7,
+      typeLine: "Creature — Lhurgoyf Demon",
+      effects: [
+        {
+          ...from,
+          kind: "type",
+          source: "Clavileño, First of the Blessed",
+          gained: ["Demon"],
+          abilities: [],
+        },
+        {
+          ...from,
+          kind: "ability",
+          source: "Clavileño, First of the Blessed",
+          gained: [],
+          abilities: [
+            "When ~ dies, draw a card and create a tapped 4/3 white and black Vampire Demon creature token with flying.",
+          ],
+        },
+        {
+          ...from,
+          kind: "modifyPt",
+          source: "Giant Growth",
+          gained: [],
+          abilities: [],
+          power: 3,
+          toughness: 3,
+        },
+      ],
+    };
+    return {
+      view: {
+        ...view,
+        you: {
+          ...view.you,
+          battlefield: view.you.battlefield.map((c) => (c.id === goyf.id ? affected : c)),
+        },
+      },
+    };
+  })(),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("+Demon · Clavileño, First of the Blessed")).toBeVisible();
+    await expect(canvas.getByText("+3/+3 · Giant Growth")).toBeVisible();
+    await expect(
+      canvas.getByRole("button", { name: /^Tarmogoyf, \+Demon from Clavileño/ }),
+    ).toBeVisible();
+  },
+};
+
 /** A spell of each seat's on the stack, top first, each with a dotted arrow at its target: the
  *  reader's Counterspell at the Bolt, the Bolt at the reader's plate (issue #1071). */
 export const StackInUse: Story = {
