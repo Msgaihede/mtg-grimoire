@@ -1851,3 +1851,115 @@ fn an_opponents_card_exiled_face_down_is_told_without_its_name() {
         ]
     );
 }
+
+/// Issue #1336: 21 combat damage from one commander puts a player out (CR 704.6c) with life to
+/// spare, and the others play on. The reader's 11/11 commander hits Opponent 2 twice; three
+/// opponents with nothing but Mountains never block it.
+#[test]
+fn twenty_one_commander_damage_puts_a_player_out_with_life_left() {
+    let (first, second) = engine(|| {
+        let mut you = green();
+        let mut ulda = card(
+            "Ulda, the Mountain",
+            Some("{G}"),
+            "Legendary Creature — Giant",
+            "",
+            Some(("11", "11")),
+            "G",
+            1,
+        );
+        ulda.commander = true;
+        you.push(ulda);
+        let mountains = vec![card(
+            "Mountain",
+            None,
+            "Basic Land — Mountain",
+            "({T}: Add {R}.)",
+            None,
+            "R",
+            40,
+        )];
+        let opponents = vec![
+            OpponentDeck {
+                cards: mountains,
+                tokens: Vec::new(),
+            };
+            3
+        ];
+        let (mut game, _) = Playtest::new(&you, &[], &opponents, 4, Difficulty::VeryEasy)
+            .expect("a four-player game starts");
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        let id = game.view().you.command[0].id;
+        by_hand(&mut game, |game| {
+            game.act(A::Move {
+                id,
+                to: Place::Battlefield,
+            })
+            .expect("out of the command zone")
+        });
+        let hit = |game: &mut Playtest| {
+            to_main(game);
+            let asked = game.act(A::Pass).expect("to combat");
+            assert_eq!(asked.view.stage, Stage::Attack);
+            let attacker = find(&asked.view.you.battlefield, "Ulda, the Mountain")
+                .expect("on the battlefield")
+                .id;
+            game.act(A::Attack {
+                attacks: vec![PlaytestAttackPair {
+                    attacker,
+                    target: None,
+                    player: Some(PlaytestPlayer::Opponent2),
+                }],
+            })
+            .expect("attack")
+        };
+        let first = hit(&mut game);
+        let second = hit(&mut game);
+        (first, second)
+    });
+    let target = |step: &PlaytestStep| step.view.opponents[1].clone();
+    assert_eq!(first.view.commander_damage_lethal, Some(21));
+    let once = target(&first);
+    assert_eq!(once.life, 29);
+    assert_eq!(once.commander_damage.len(), 1);
+    assert_eq!(once.commander_damage[0].damage, 11);
+    assert_eq!(once.commander_damage[0].player, PlaytestPlayer::You);
+    assert!(!once.out);
+
+    let twice = target(&second);
+    assert_eq!(twice.commander_damage[0].damage, 22);
+    assert_eq!(twice.life, 18, "out with life to spare");
+    assert!(twice.out, "{:?}", second.happened);
+    assert!(second.happened.contains(&H::Eliminated {
+        seat: PlaytestPlayer::Opponent2
+    }));
+    let told = second
+        .happened
+        .iter()
+        .position(|h| {
+            matches!(
+                h,
+                H::CommanderDamage {
+                    seat: PlaytestPlayer::Opponent2,
+                    total: 22,
+                    ..
+                }
+            )
+        })
+        .expect("the commander damage is told");
+    let out = second
+        .happened
+        .iter()
+        .position(|h| {
+            *h == H::Eliminated {
+                seat: PlaytestPlayer::Opponent2,
+            }
+        })
+        .unwrap();
+    assert!(told < out, "the blow, then the player out");
+    assert_ne!(second.view.stage, Stage::Over, "the others play on");
+    for other in [0, 2] {
+        let seat = &second.view.opponents[other];
+        assert!(!seat.out && seat.commander_damage.is_empty());
+    }
+}

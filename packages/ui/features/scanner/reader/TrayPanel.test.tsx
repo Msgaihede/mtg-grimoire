@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -31,13 +31,36 @@ const collectionFolderList = vi.hoisted(() =>
  * default — every printing answered with nothing — so a test about something else draws the em
  * dash and nothing it has to account for; the price tests below answer their own.
  */
+/** The folder picker's one write (issue #1357): a new drawer at the top level. */
+const collectionFolderCreate = vi.hoisted(() =>
+  vi.fn((parentId: number | null, name: string) =>
+    Promise.resolve({
+      id: 12,
+      parentId,
+      name,
+      kind: "user",
+      deckId: null,
+      sortOrder: 2,
+      locked: false,
+      syncUid: "f12",
+      rules: [],
+    }),
+  ),
+);
+
 const printingPrices = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 const getMarketplace = vi.hoisted(() => vi.fn().mockResolvedValue("tcgplayer"));
 const marketplaceFeedStatus = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionFolderList, printingPrices, getMarketplace, marketplaceFeedStatus },
+  ipc: {
+    collectionFolderList,
+    collectionFolderCreate,
+    printingPrices,
+    getMarketplace,
+    marketplaceFeedStatus,
+  },
 }));
 
 import { VERDICTS } from "../fixtures";
@@ -548,7 +571,10 @@ describe("TrayPanel", () => {
     const onArchive = vi.fn();
     const onCommit = vi.fn();
     const empty = wrap(<TrayPanel {...props({ rows: [], onArchive })} />);
-    expect(screen.getByRole("button", { name: "Archive" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Archive" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     empty.unmount();
 
     const filing = wrap(<TrayPanel {...props({ committing: true, onArchive })} />);
@@ -617,6 +643,58 @@ describe("TrayPanel", () => {
     expect(within(list).queryByRole("button", { name: "Burn" })).not.toBeInTheDocument();
     await user.click(within(list).getByRole("button", { name: "Rares" }));
     expect(onFolder).toHaveBeenCalledWith(7);
+  });
+
+  it("makes a new folder at the top level from the folder popup, and picks it", async () => {
+    const user = userEvent.setup();
+    const onFolder = vi.fn();
+    collectionFolderCreate.mockClear();
+    wrap(<TrayPanel {...props({ onFolder })} />);
+    const trigger = screen.getByRole("button", { name: "Folder: Collection" });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("button", { name: "New folder…" }));
+    const form = screen.getByRole("form", { name: "New folder" });
+    // The caret is in the name, and Create is held until there is one.
+    const name = within(form).getByRole("textbox", { name: "Name" });
+    expect(name).toHaveFocus();
+    const create = within(form).getByRole("button", { name: "Create folder" });
+    expect(create).toHaveAttribute("aria-disabled", "true");
+    await user.click(create);
+    expect(collectionFolderCreate).not.toHaveBeenCalled();
+
+    await user.type(name, "  Sealed  ");
+    await user.click(create);
+    expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Sealed");
+    await waitFor(() => expect(onFolder).toHaveBeenCalledWith(12));
+    // Picked, so the popup closes and the caret is back on its trigger.
+    await waitFor(() => expect(screen.queryByRole("form", { name: "New folder" })).toBeNull());
+    expect(trigger).toHaveFocus();
+  });
+
+  it("says a refused new folder in the backend's words and keeps the name", async () => {
+    const user = userEvent.setup();
+    const onFolder = vi.fn();
+    collectionFolderCreate.mockRejectedValueOnce("The card database is busy. Try again.");
+    wrap(<TrayPanel {...props({ onFolder })} />);
+    await user.click(screen.getByRole("button", { name: "Folder: Collection" }));
+    await user.click(await screen.findByRole("button", { name: "New folder…" }));
+    const form = screen.getByRole("form", { name: "New folder" });
+    await user.type(within(form).getByRole("textbox", { name: "Name" }), "Sealed{Enter}");
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      "Couldn't create the folder — The card database is busy. Try again.",
+    );
+    expect(within(form).getByRole("textbox", { name: "Name" })).toHaveValue("Sealed");
+    expect(onFolder).not.toHaveBeenCalled();
+  });
+
+  it("goes back to the folders on Cancel, with the popup still open", async () => {
+    const user = userEvent.setup();
+    wrap(<TrayPanel {...props()} />);
+    await user.click(screen.getByRole("button", { name: "Folder: Collection" }));
+    await user.click(await screen.findByRole("button", { name: "New folder…" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("form", { name: "New folder" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Folder for scanned cards" })).toBeInTheDocument();
   });
 
   it("flashes only the row it is told to", () => {
@@ -938,9 +1016,7 @@ describe("TrayPanel filing somewhere that is not the collection", () => {
     await userEvent.click(unpicked);
     unmount();
     wrap(
-      <TrayPanel
-        {...props({ destination, onCommit, rows: [{ ...older, finish: "unknown" }] })}
-      />,
+      <TrayPanel {...props({ destination, onCommit, rows: [{ ...older, finish: "unknown" }] })} />,
     );
     const unfinished = screen.getByRole("button", {
       name: "Add 0 to their side · 1 needs a finish",

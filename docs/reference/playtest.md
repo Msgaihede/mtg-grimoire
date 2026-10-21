@@ -117,6 +117,24 @@ step stop. A block or a question still stops it. `view.endingTurn` says it is ru
 **Commander.** A commander on any side makes the game a Commander game: 40 life, the command
 zone, tax and 21 commander damage. Without one, the format is phase's `freeform` at 20 life.
 
+**Commander damage** (issue #1336) is phase's to count and phase's to rule on. Its combat damage
+step adds each commander's combat damage to a player to `GameState.commander_damage`, one entry a
+commander and player (CR 903.10a), so a pair of partners is two counts, never one; its
+state-based actions put a player out at 21 from any one of them (CR 704.6c), unless something says
+they can't lose (CR 104.3b). The session only reads it:
+
+- `PlaytestSeat.commanderDamage` is what each player has been dealt, one `PlaytestCommanderDamage`
+  a commander (its id, name, printing, owner and count), and `PlaytestView.commanderDamageLethal`
+  is phase's threshold, 21, or `null` outside a Commander game.
+- `commanderDamage` is the fact (`tell`, from phase's `CombatDamageDealtToPlayer`, the commanders
+  among its sources being those phase counts): the commander, the player dealt it, the amount and
+  the count it reached. The log says "Kenrith has dealt Opponent 2 21 commander damage".
+- A player put out by it is told as any loss is: `eliminated` at a table of four, `gameOver` in a
+  duel. Their life may still be well above 0.
+- The goldfish cannot lose, so 21 from one commander is a death `deadOn` counts, as its life at 0
+  is (`mark_dead`).
+- Undo restores it with the rest of `GameState`.
+
 **The first turn's start is told by the session.** phase begins turn 1 inside `start_game`, before
 the hands are kept, and that event is never returned. The keep inserts `turnBegan` for turn 1, so
 the log opens on the right turn. While the hands are being decided, the view's `turn` is 0, even
@@ -705,7 +723,10 @@ always in sight. The top band has no room for it, since the opponent's plate gro
 The game menu has the same switch as a "Sandbox" radio row.
 
 **The plates.** The active seat's plate has a gold glow, and poison shows as a chip when it is
-above 0.
+above 0. Beside it, one chip a commander that has dealt the player combat damage (`PlateFrame`'s
+`CommanderDamageMark`, issue #1336): the commander's art in a circle (a crown for a face-down one)
+and the count, its name and "of 21" in the tooltip. At `commanderDamageLethal` the chip turns red
+(`data-lethal`).
 
 **Combat is drawn.** Arrows run from each attacker to what it attacks (the plate for a player, the
 card for a planeswalker or battle) and from each blocker to its attacker. The reader's attacks are
@@ -834,5 +855,4 @@ The views these pieces take are narrowed to `Pick<…>`s of the fields they read
 - **A difficulty per opponent.** Every AI seat plays at the one difficulty.
 - **Two opponents, five or six.** phase seats up to six; the setup page offers the goldfish, a duel
   or four players. `Playtest::new` takes none to three.
-- **Commander damage on the board.** The rules count it (21 loses), but no plate shows it yet.
 - **Watching the AIs play on** after the reader is out.

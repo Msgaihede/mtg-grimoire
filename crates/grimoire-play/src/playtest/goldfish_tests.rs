@@ -1325,6 +1325,153 @@ fn a_free_cast_that_asks_is_cancelled_with_its_emblem() {
     assert!(find(&back.view.you.hand, "Giant Growth").is_some());
 }
 
+/// Two partners, each an 11/11 for {G}: two commanders, so two counts of commander damage.
+fn partners() -> Vec<CardFacts> {
+    let partner = |name: &str| {
+        let mut c = card(
+            name,
+            Some("{G}"),
+            "Legendary Creature — Giant",
+            "Partner",
+            Some(("11", "11")),
+            1,
+        );
+        c.commander = true;
+        c.keywords = vec!["Partner".into()];
+        c
+    };
+    let mut cards = deck();
+    cards.retain(|c| !c.commander);
+    cards.extend([partner("Ulda, the Mountain"), partner("Brann, the Hill")]);
+    cards
+}
+
+/// The reader's commanders out of the command zone by hand, a turn cycle on, and the attack step
+/// of the reader's next turn: the ids of the two, Ulda first.
+fn partners_ready(game: &mut Playtest) -> (u64, u64) {
+    let id = |game: &Playtest, name: &str| {
+        find(&game.view().you.command, name)
+            .unwrap_or_else(|| panic!("{name} in the command zone"))
+            .id
+    };
+    let (ulda, brann) = (id(game, "Ulda, the Mountain"), id(game, "Brann, the Hill"));
+    for id in [ulda, brann] {
+        game.act(A::Move {
+            id,
+            to: Place::Battlefield,
+        })
+        .expect("out of the command zone");
+    }
+    let on = |game: &Playtest, name: &str| {
+        find(&game.view().you.battlefield, name)
+            .unwrap_or_else(|| panic!("{name} on the battlefield"))
+            .id
+    };
+    (on(game, "Ulda, the Mountain"), on(game, "Brann, the Hill"))
+}
+
+/// Attack the goldfish with `ids` on the reader's next turn, a discard to hand size on the way
+/// answered by the engine.
+fn attack_fish(game: &mut Playtest, ids: &[u64]) -> PlaytestStep {
+    let mut step = game.act(A::EndTurn).expect("a turn cycle");
+    while step.view.stage == Stage::Prompt {
+        step = game.act(A::Auto).expect("the engine's answer");
+    }
+    assert_eq!(step.view.stage, Stage::Main);
+    let asked = game.act(A::Pass).expect("to combat");
+    assert_eq!(asked.view.stage, Stage::Attack);
+    game.act(A::Attack {
+        attacks: ids
+            .iter()
+            .map(|&attacker| PlaytestAttackPair {
+                attacker,
+                target: None,
+                player: None,
+            })
+            .collect(),
+    })
+    .expect("attack")
+}
+
+/// Issue #1336: commander damage is counted per commander (CR 903.10a), so two partners hitting
+/// for 11 each are two counts of 11 and no loss, and the 21st from one of them is the goldfish's
+/// death (CR 704.6c) with its life still above 0. Undo takes the count back with the game.
+#[test]
+fn commander_damage_is_counted_per_commander_and_21_from_one_kills_the_goldfish() {
+    let (both, again, undone) = engine(|| {
+        let (mut game, _) = fish(&partners(), 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        let (ulda, brann) = partners_ready(&mut game);
+        let both = attack_fish(&mut game, &[ulda, brann]);
+        let again = attack_fish(&mut game, &[ulda]);
+        let undone = game.act(A::Undo).expect("undo the attack");
+        (both, again, undone)
+    });
+    let view = &both.view;
+    assert_eq!(view.commander_damage_lethal, Some(21));
+    let fish = &view.opponents[0];
+    assert_eq!(fish.life, 18);
+    let dealt: Vec<(&str, PlaytestPlayer, u32)> = fish
+        .commander_damage
+        .iter()
+        .map(|c| (c.name.as_str(), c.player, c.damage))
+        .collect();
+    assert_eq!(dealt.len(), 2, "one count a commander: {dealt:?}");
+    assert!(dealt.contains(&("Ulda, the Mountain", YOU, 11)));
+    assert!(dealt.contains(&("Brann, the Hill", YOU, 11)));
+    assert!(fish.commander_damage.iter().all(|c| c.card_id.is_some()));
+    assert!(view.you.commander_damage.is_empty());
+    assert_eq!(fish.dead_on, None, "22 in all, but no 21 from one");
+    for source in ["Ulda, the Mountain", "Brann, the Hill"] {
+        assert!(
+            both.happened.iter().any(|h| matches!(
+                h,
+                H::CommanderDamage { source: s, seat: FISH, amount: 11, total: 11, .. }
+                    if s == source
+            )),
+            "{source}: {:?}",
+            both.happened
+        );
+    }
+
+    let fish = &again.view.opponents[0];
+    assert_eq!(fish.life, 7, "still alive by its life");
+    let ulda = fish
+        .commander_damage
+        .iter()
+        .find(|c| c.name == "Ulda, the Mountain")
+        .unwrap();
+    assert_eq!(ulda.damage, 22);
+    assert_eq!(fish.dead_on, Some(3), "dead on the reader's third turn");
+    assert!(!fish.out, "the goldfish never loses");
+    assert_eq!(again.view.stage, Stage::Main);
+    assert!(again.happened.iter().any(|h| matches!(
+        h,
+        H::CommanderDamage {
+            seat: FISH,
+            amount: 11,
+            total: 22,
+            ..
+        }
+    )));
+
+    let fish = &undone.view.opponents[0];
+    assert_eq!(fish.dead_on, None);
+    assert!(fish.commander_damage.iter().all(|c| c.damage == 11));
+}
+
+/// A game without a commander counts no commander damage at all.
+#[test]
+fn a_game_without_a_commander_has_no_commander_damage_lethal() {
+    let view = engine(|| {
+        let mut cards = deck();
+        cards.retain(|c| !c.commander);
+        fish(&cards, 7).1.view
+    });
+    assert_eq!(view.commander_damage_lethal, None);
+    assert!(view.opponents[0].commander_damage.is_empty());
+}
+
 /// A foretell deck (issue #1077): Islands and Behold the Multiverse, the card the issue names.
 /// Not Ranar the Ever-Watchful, the issue's other card: phase does not yet parse its free foretell
 /// or its exile trigger (`support.rs` reports both as gaps).
