@@ -51,6 +51,7 @@ use engine::game::coverage::card_face_gaps;
 use engine::game::effects::create_emblem::grant_emblem;
 use engine::game::engine::apply;
 use engine::game::mana_sources::{activatable_mana_actions_for_player, max_mana_yield};
+use engine::game::printed_cards::intrinsic_etb_counters;
 use engine::game::turn_control::authorized_submitters;
 use engine::game::{
     install_card_db, load_and_hydrate_decks, resolve_deck_list, start_game_with_starting_player,
@@ -86,9 +87,10 @@ use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
-    PlaytestCombat, PlaytestCommanderDamage, PlaytestFrame, PlaytestHappened, PlaytestOption,
-    PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestSeat,
-    PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
+    PlaytestCombat, PlaytestCommanderDamage, PlaytestEmblem, PlaytestFrame, PlaytestHappened,
+    PlaytestOption, PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer,
+    PlaytestPrompt, PlaytestSeat, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop,
+    PlaytestStopStep, PlaytestView,
 };
 
 /// The reader's seat. The opponents are `PlayerId(1)` on, in turn order.
@@ -210,7 +212,8 @@ pub struct Playtest {
     /// The goldfish's seat, in a game against it: it answers every question of its own by doing
     /// nothing (`fish_answer`), and `ai_seats` is empty.
     fish: Option<PlayerId>,
-    /// The emblems that keep a goldfish game going; never shown, never counted as anyone's card.
+    /// The emblems that keep a goldfish game going; never shown (`emblems`), never counted as
+    /// anyone's card.
     rules: Vec<ObjectId>,
     /// The emblem a sandbox cast is made without paying under (`cast_free`), while it is being
     /// made: gone when nothing is pending and the board asks nothing (`end_free`).
@@ -883,6 +886,7 @@ impl Playtest {
                     .get(id)
                     .is_some_and(|o| o.owner == seat && !o.is_emblem)
             })),
+            emblems: self.emblems(seat),
             library: player.library.len() as u32,
             // phase's library is a vector whose **front is the top** (`DrawCards` takes from it).
             library_cards: if reader {
@@ -924,6 +928,53 @@ impl Playtest {
         }
     }
 
+    /// `seat`'s emblems, oldest first: every one in the command zone it controls (CR 114.2),
+    /// but the session's own — the goldfish's `rules` and the sandbox's `free` — which are the
+    /// board's machinery and not the game's.
+    fn emblems(&self, seat: PlayerId) -> Vec<PlaytestEmblem> {
+        let s = &self.state;
+        let mut ids: Vec<ObjectId> = s
+            .command_zone
+            .iter()
+            .copied()
+            .filter(|id| !self.rules.contains(id) && self.free != Some(*id))
+            .filter(|id| {
+                s.objects
+                    .get(id)
+                    .is_some_and(|o| o.is_emblem && o.controller == seat)
+            })
+            .collect();
+        ids.sort();
+        ids.into_iter()
+            .map(|id| {
+                let o = &s.objects[&id];
+                // An emblem's abilities are its own, never changed by an effect (CR 114.4).
+                let text = o
+                    .base_static_definitions
+                    .iter()
+                    .filter_map(|d| d.description.clone())
+                    .chain(
+                        o.base_trigger_definitions
+                            .iter()
+                            .filter_map(|d| d.description.clone()),
+                    )
+                    .chain(
+                        o.base_abilities
+                            .iter()
+                            .filter_map(|d| d.description.clone()),
+                    )
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                PlaytestEmblem {
+                    id: id.0,
+                    source: o.emblem_source.as_ref().map(|e| e.name.clone()),
+                    card_id: self.printing_of(id),
+                    text,
+                }
+            })
+            .collect()
+    }
+
     fn card(&self, id: ObjectId) -> Option<GameCard> {
         let o = self.state.objects.get(&id)?;
         if concealed(o) {
@@ -947,6 +998,22 @@ impl Playtest {
     /// The printing to draw a card by; none for a card the reader may not see the face of.
     fn printing_of(&self, id: ObjectId) -> Option<String> {
         let o = self.state.objects.get(&id).filter(|o| !concealed(o))?;
+        if o.is_emblem {
+            // The deck's own emblem for its source: its owner's deck first, as a token's — the
+            // owner is whoever got it, who may have controlled another player's card.
+            let source = &o.emblem_source.as_ref()?.name;
+            return self
+                .deck_tokens
+                .get(&o.owner)
+                .and_then(|t| t.emblem_of(source))
+                .or_else(|| {
+                    let mut seats: Vec<&PlayerId> = self.deck_tokens.keys().collect();
+                    seats.sort();
+                    seats
+                        .into_iter()
+                        .find_map(|seat| self.deck_tokens[seat].emblem_of(source))
+                });
+        }
         self.printings
             .get(&id)
             .map(|p| p.card_id.clone())
@@ -2502,6 +2569,9 @@ impl Playtest {
                 library_position: position,
                 simulate: false,
             })?;
+            if to == Place::Battlefield {
+                self.enter_with_counters(id)?;
+            }
         }
         out.push(PlaytestHappened::Put {
             seat: seat_of(owner),
@@ -2509,6 +2579,34 @@ impl Playtest {
             from,
             to,
         });
+        Ok(())
+    }
+
+    /// CR 306.5b + CR 310.4b: a planeswalker put onto the battlefield by hand enters with its
+    /// loyalty, and a battle with its defense — phase's own intrinsic counters
+    /// (`intrinsic_etb_counters`), which its inert debug move leaves off. Without them a
+    /// planeswalker put down could never pay for a loyalty ability, its emblem's among them
+    /// (issue #1333). Counters only, as the rules' entry gives them: a put still fires no trigger.
+    fn enter_with_counters(&mut self, id: ObjectId) -> Result<(), String> {
+        let Some(o) = self
+            .state
+            .objects
+            .get(&id)
+            .filter(|o| o.zone == Zone::Battlefield)
+        else {
+            return Ok(());
+        };
+        let missing: Vec<_> = intrinsic_etb_counters(o, None)
+            .into_iter()
+            .filter(|(kind, n)| *n > 0 && o.counters.get(kind).copied().unwrap_or(0) == 0)
+            .collect();
+        for (counter_type, n) in missing {
+            self.debug(DebugAction::ModifyCounters {
+                object_id: id,
+                counter_type,
+                delta: n as i32,
+            })?;
+        }
         Ok(())
     }
 
@@ -3195,6 +3293,31 @@ pub(super) fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<Playte
             .map(|o| o.name.clone())
     };
     let seat = |id: &ObjectId| state.objects.get(id).map(|o| seat_of(o.controller));
+    // The emblems these events made, oldest first: the newest in the command zone, one for each
+    // emblem made (`create_emblem::resolve`). Read off the emblem, not the effect's source — a
+    // planeswalker whose last loyalty paid for it is gone by now.
+    let made = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                GameEvent::EffectResolved {
+                    kind: EffectKind::CreateEmblem,
+                    ..
+                }
+            )
+        })
+        .count();
+    let mut emblems: Vec<ObjectId> = state
+        .command_zone
+        .iter()
+        .copied()
+        .filter(|id| state.objects.get(id).is_some_and(|o| o.is_emblem))
+        .collect();
+    emblems.sort();
+    let mut emblems = emblems
+        .split_off(emblems.len().saturating_sub(made))
+        .into_iter();
     let lands: BTreeSet<ObjectId> = events
         .iter()
         .filter_map(|e| match e {
@@ -3419,6 +3542,17 @@ pub(super) fn tell(state: &GameState, events: &[GameEvent], out: &mut Vec<Playte
                     .0
                     .unwrap_or(state.players[player_id.0 as usize].life),
             }),
+            GameEvent::EffectResolved {
+                kind: EffectKind::CreateEmblem,
+                ..
+            } => {
+                if let Some(o) = emblems.next().and_then(|id| state.objects.get(&id)) {
+                    out.push(PlaytestHappened::Emblem {
+                        seat: seat_of(o.controller),
+                        source: o.emblem_source.as_ref().map(|e| e.name.clone()),
+                    });
+                }
+            }
             GameEvent::TokenCreated {
                 object_id, name, ..
             } => {

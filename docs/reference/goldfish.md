@@ -313,6 +313,13 @@ drags (`tableDrag.ts`), the landing pop (`landing.ts`), the playmats (`playmats.
 Each speaks `PlaytestAction`. `PlaytestBoard` arranges them ([playtest.md](playtest.md#the-board));
 the design below is theirs, wherever they are placed.
 
+**Emblems stand at the back row's far end** (issue #1333): past the other permanents — the
+artifacts and Equipment — behind a dashed divider of their own, on the reader's side the right and
+on the far side the left, upright at the row's card size (`layoutTable`'s `emblems`, which the
+row's width is shared with). An emblem the deck keeps a printing of is drawn by it; any other is a
+tile with "Emblem", its source and its words. Nothing carries, taps or menus one, and pointing at
+one opens the preview with its words as the caption (a `loose` point, since no zone lists it).
+
 **Cards are drawn as big as the table allows.** A lane's card size is capped high (260 px for a
 creature, 220 for the back row) so a table of a few cards fills its lanes, and the lane's height
 and the row's width shrink it as the table fills.

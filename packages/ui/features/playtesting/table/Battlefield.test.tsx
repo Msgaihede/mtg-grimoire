@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { GameCard } from "@/lib/ipc";
+import type { GameCard, PlaytestEmblem } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { LAYER } from "@/lib/layers";
 import { Battlefield, tableCardWidth } from "./Battlefield";
@@ -53,10 +53,19 @@ function setup(
     sandbox = true,
     readOnly = false,
     onActivate,
-  }: { sandbox?: boolean; readOnly?: boolean; onActivate?: (id: number) => void } = {},
+    emblems,
+    flipped = false,
+  }: {
+    sandbox?: boolean;
+    readOnly?: boolean;
+    onActivate?: (id: number) => void;
+    emblems?: PlaytestEmblem[];
+    flipped?: boolean;
+  } = {},
 ) {
   const onAct = vi.fn();
   const onPoint = vi.fn();
+  const onPointEmblem = vi.fn();
   const onUnpoint = vi.fn();
   render(
     <ContextMenuProvider>
@@ -69,10 +78,23 @@ function setup(
         onDrop={vi.fn()}
         onPoint={onPoint}
         onUnpoint={onUnpoint}
+        emblems={emblems}
+        onPointEmblem={onPointEmblem}
+        flipped={flipped}
       />
     </ContextMenuProvider>,
   );
-  return { onAct, onPoint, onUnpoint };
+  return { onAct, onPoint, onPointEmblem, onUnpoint };
+}
+
+function emblem(over: Partial<PlaytestEmblem> = {}): PlaytestEmblem {
+  return {
+    id: next++,
+    source: "Sorin, Lord of Innistrad",
+    cardId: null,
+    text: ["Creatures you control get +1/+0."],
+    ...over,
+  };
 }
 
 const menuRows = () => screen.queryAllByRole("menuitem").map((r) => r.textContent);
@@ -315,6 +337,52 @@ describe("Battlefield", () => {
     await screen.findByRole("menu");
     fireEvent.click(screen.getByRole("menuitem", { name: "Activate ability" }));
     expect(onActivate).toHaveBeenCalledWith(sword.id);
+  });
+
+  it("stands an emblem at the back row's right end, past the artifacts (issue #1333)", () => {
+    const sorin = emblem();
+    setup([card("Forest"), card("Bonesplitter", { lane: "other", isLand: false })], {
+      emblems: [sorin],
+    });
+    const back = screen.getByRole("region", { name: "Lands and other permanents" });
+    const rows = [...back.children].map((r) => r.getAttribute("aria-label"));
+    expect(rows).toEqual(["Lands", "Artifacts, enchantments and other permanents", "Emblems"]);
+    const tile = within(back).getByRole("img", {
+      name: "Emblem from Sorin, Lord of Innistrad — Creatures you control get +1/+0.",
+    });
+    // Its words on the tile itself, since the deck keeps no printing of it.
+    expect(tile).toHaveTextContent("Creatures you control get +1/+0.");
+    // Not a card: nothing to press, carry or tap.
+    expect(within(back).getAllByRole("button")).toHaveLength(2);
+  });
+
+  it("draws an emblem the deck keeps a printing of by it, and previews it as loose", () => {
+    const sorin = emblem({ cardId: "p-sorin-emblem" });
+    const { onPointEmblem, onPoint } = setup([], { emblems: [sorin] });
+    // A table with only an emblem on it is not an empty one.
+    expect(screen.queryByText("Drag a card here to play it")).not.toBeInTheDocument();
+    const tile = screen.getByRole("img", { name: /^Emblem from Sorin/ });
+    expect(tile.querySelector("img")).not.toBeNull();
+    fireEvent.mouseEnter(tile);
+    expect(onPointEmblem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ids: [sorin.id],
+        line: "Emblem from Sorin, Lord of Innistrad — Creatures you control get +1/+0.",
+        card: expect.objectContaining({ id: sorin.id, cardId: "p-sorin-emblem" }),
+      }),
+    );
+    expect(onPoint).not.toHaveBeenCalled();
+  });
+
+  it("puts the far side's emblems at its back row's other end", () => {
+    setup([card("Forest"), card("Sol Ring", { lane: "other", isLand: false })], {
+      emblems: [emblem()],
+      flipped: true,
+      readOnly: true,
+    });
+    const back = screen.getByRole("region", { name: "Lands and other permanents" });
+    const rows = [...back.children].map((r) => r.getAttribute("aria-label"));
+    expect(rows).toEqual(["Emblems", "Artifacts, enchantments and other permanents", "Lands"]);
   });
 
   it("offers an empty table as somewhere to play a card", () => {

@@ -160,7 +160,13 @@ fn resolve<'s>(
             }
             let o = state.objects.get(&source)?;
             let def = o.static_definitions.get(def_index)?;
-            Some((o.name.clone(), def.modifications.get(mod_index)?))
+            // An emblem is named as Scryfall names it, `<source> Emblem` — its object is only
+            // "Emblem" (issue #1333).
+            let name = match (&o.emblem_source, o.is_emblem) {
+                (Some(made_by), true) => format!("{} Emblem", made_by.name),
+                _ => o.name.clone(),
+            };
+            Some((name, def.modifications.get(mod_index)?))
         }
     }
 }
