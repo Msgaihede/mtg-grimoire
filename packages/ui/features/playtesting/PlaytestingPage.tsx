@@ -1,5 +1,8 @@
 import { useCallback, useState, type JSX } from "react";
+import { useDeckWallMarks } from "@/features/decks/deckWall";
+import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { useDecks } from "@/features/decks/useDecks";
+import { useDeckSort } from "@/features/decks/useDeckSort";
 import { PlaytestPage } from "./play/PlaytestPage";
 import type { PlaytestPicks } from "./play/usePlaytestGame";
 import { PlaytestSetup } from "./PlaytestSetup";
@@ -16,16 +19,30 @@ import { PlaytestSetup } from "./PlaytestSetup";
  * **The board covers the window, the setup stays under it** (`PlaytestPage` is `fixed` at
  * `LAYER.stage`), so the way back — the back button, Escape, the result's Back — finds the setup
  * as it was left, its picks still made, and leaving puts the game away.
+ *
+ * **The setup's wall is the Decks page's**, so it reads what that page reads: the folders, each
+ * deck's colours and bracket (`useDeckWallMarks`), and the order the reader keeps the gallery in.
+ * Every one of them is a query the gallery shares, so a reader arriving from Decks asks nothing new.
  */
 export function PlaytestingPage(): JSX.Element {
   const { decks, query } = useDecks();
+  const { folders } = useDeckFolders();
+  const marks = useDeckWallMarks(decks);
+  const { sort } = useDeckSort();
   const [playing, setPlaying] = useState<PlaytestPicks | null>(null);
   const back = useCallback(() => setPlaying(null), []);
   const nameOf = (id: number) => decks.find((d) => d.id === id)?.name ?? "Deck";
 
   return (
     <>
-      <PlaytestSetup decks={decks} loading={query.isPending} onStart={setPlaying} />
+      <PlaytestSetup
+        decks={decks}
+        folders={folders}
+        marks={marks}
+        sort={sort}
+        loading={query.isPending}
+        onStart={setPlaying}
+      />
       {playing !== null && (
         <PlaytestPage
           picks={playing}
