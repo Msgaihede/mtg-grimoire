@@ -36,6 +36,23 @@ export type Slice = {
   /** Title slices: edit distance from the matched name. */
   edits: number | null;
 };
+/** One candidate printing of a Neural decision and what the evidence scored it. */
+export type EvidenceCandidate = {
+  printing: string;
+  look: number;
+  /** The whole-card embedding's score. */
+  whole: number;
+  /** The set symbol's score; null when its gallery has no row for the printing or no crop was read. */
+  symbol: number | null;
+  /** The collector band's score; null likewise. */
+  band: number | null;
+};
+/** What the evidence weighed for the last Neural decision. */
+export type Evidence = {
+  candidates: EvidenceCandidate[];
+  /** The printing the evidence was sure of; null left the decision ambiguous. */
+  decided: string | null;
+};
 export type Pass = {
   name: string;
   mode: Mode;
@@ -63,6 +80,8 @@ export type Pass = {
   tiers: { tier: string; survivors: number; detail: string }[];
   slices: Slice[];
   error: string | null;
+  /** A Neural pass replayed with `--neural-evidence`; null otherwise, and absent in older results. */
+  evidence?: Evidence | null;
 };
 export type Run = {
   id: string;

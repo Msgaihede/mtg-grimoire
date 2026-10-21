@@ -11,6 +11,8 @@ describe("parseArgs", () => {
       models: null,
       corpus: null,
       jobs: null,
+      neuralEvidence: null,
+      neuralEvidenceMeta: null,
       noBuild: false,
     });
   });
@@ -18,7 +20,8 @@ describe("parseArgs", () => {
   it("reads every flag, and --only more than once", () => {
     const args = parseArgs([
       "--baseline", "first", "--save-baseline", "v2", "--only", "bolt", "--only", "abc",
-      "--bundle", "b.bin", "--models", "m", "--corpus", "c.db", "--jobs", "4", "--no-build",
+      "--bundle", "b.bin", "--models", "m", "--corpus", "c.db", "--jobs", "4",
+      "--neural-evidence", "ev", "--neural-evidence-meta", "n.json", "--no-build",
     ]);
     expect(args).toEqual({
       baseline: "first",
@@ -28,6 +31,8 @@ describe("parseArgs", () => {
       models: "m",
       corpus: "c.db",
       jobs: "4",
+      neuralEvidence: "ev",
+      neuralEvidenceMeta: "n.json",
       noBuild: true,
     });
   });

@@ -21,7 +21,8 @@
 //! one ([`host::set_clock`]) that answers the label's time while a Neural pass feeds the thread
 //! and the wall clock otherwise. Its models are `crates/card-neural/models/`, or
 //! `--neural-models`; a replay with none loaded ([`Ingredients::neural`], the tests) has three
-//! passes.
+//! passes. With `--neural-evidence` the Neural pass also loads the set symbol and collector band
+//! files and records, as `evidence`, the candidates and scores of its last decision.
 //!
 //! **What a pass reports beyond its score**: `first_decision_frame` and `decision_frame` (the
 //! frame the last decision was made on, 1-based; the score is the decision held on the last
@@ -97,6 +98,15 @@ struct Args {
     /// given — they are in git.
     #[arg(long)]
     neural_models: Option<PathBuf>,
+    /// The Neural mode's set symbol and collector band files (`symbol.onnx`, `band.onnx`,
+    /// `symbols.bin`, `bands.bin`). Given, the Neural pass narrows the printing on them and each
+    /// decision records its candidates and their scores; left out, today's pass and no scores.
+    #[arg(long)]
+    neural_evidence: Option<PathBuf>,
+    /// A `neural.json` to read in place of the one in `--neural-models`: how the lab tunes the
+    /// evidence thresholds without copying the models.
+    #[arg(long)]
+    neural_evidence_meta: Option<PathBuf>,
 }
 
 /// `crates/card-neural/models/` beside this crate — where the Neural mode's files are in git.
@@ -177,6 +187,23 @@ fn pinned(files: card_scanner::neural::Files<'static>) -> card_scanner::neural::
     }
 }
 
+/// The Neural evidence files as borrows that live as long as the process, for the reason
+/// [`pinned`] gives.
+fn pinned_evidence(
+    files: card_scanner::neural::evidence::EvidenceFiles<'static>,
+) -> card_scanner::neural::evidence::EvidenceFiles<'static> {
+    let pin = |bytes: Cow<'static, [u8]>| match bytes {
+        Cow::Owned(owned) => Cow::Borrowed(&*Box::leak(owned.into_boxed_slice())),
+        borrowed => borrowed,
+    };
+    card_scanner::neural::evidence::EvidenceFiles {
+        symbol_net: pin(files.symbol_net),
+        band_net: pin(files.band_net),
+        symbols: pin(files.symbols),
+        bands: pin(files.bands),
+    }
+}
+
 /// What a session is built from, loaded once and shared by every worker.
 struct Ingredients {
     bundle: Vec<u8>,
@@ -187,6 +214,9 @@ struct Ingredients {
     oracles: HashMap<[u8; ID_LEN], [u8; ID_LEN]>,
     /// The Neural mode's files. `None` replays no Neural pass — what most tests use.
     neural: Option<card_scanner::neural::Files<'static>>,
+    /// The Neural mode's set symbol and collector band files. `None` replays today's pass,
+    /// which records no evidence.
+    neural_evidence: Option<card_scanner::neural::evidence::EvidenceFiles<'static>>,
 }
 
 impl Ingredients {
@@ -197,6 +227,11 @@ impl Ingredients {
         if let (ScanMode::Neural, Some(f)) = (mode, &self.neural) {
             // Borrowed for the life of the process (see `pinned`), so a clone copies no bytes.
             session.load_neural(f.clone()).map_err(|e| format!("neural: {e}"))?;
+            if let Some(e) = &self.neural_evidence {
+                session
+                    .load_neural_evidence(e.clone())
+                    .map_err(|e| format!("neural evidence: {e}"))?;
+            }
         }
         Ok(session)
     }
@@ -331,6 +366,9 @@ struct PassOut {
     tiers: Vec<TierView>,
     slices: Vec<Slice>,
     error: Option<String>,
+    /// A Neural pass with evidence loaded: the candidate printings of its last decision and what
+    /// each scored, so the thresholds can be tuned offline. `null` otherwise.
+    evidence: Option<card_scanner::session::EvidenceReport>,
 }
 
 impl PassOut {
@@ -355,6 +393,7 @@ impl PassOut {
             tiers: Vec::new(),
             slices: Vec::new(),
             error: None,
+            evidence: None,
         }
     }
 }
@@ -486,6 +525,9 @@ fn run_pass(
         out.slices = front;
     }
     out.decisions = seq;
+    if pass.mode == ScanMode::Neural {
+        out.evidence = session.neural_evidence_report();
+    }
     let Some(last) = last else { return out };
     out.confidence = last.tracked.as_ref().map(|t| t.confidence);
     out.distance = out.frames.last().and_then(|f| f.distance);
@@ -1075,6 +1117,21 @@ fn run(args: Args) -> Result<(), String> {
     let neural_dir = args.neural_models.clone().unwrap_or_else(neural_models_in_tree);
     let neural = card_scanner::neural::read_dir(&neural_dir)
         .map_err(|e| format!("neural models {}: {e}", neural_dir.display()))?;
+    let mut neural = neural;
+    if let Some(path) = &args.neural_evidence_meta {
+        let meta = std::fs::read(path)
+            .map_err(|e| format!("neural evidence meta {}: {e}", path.display()))?;
+        neural.meta = Cow::Owned(meta);
+    }
+    let neural_evidence = args
+        .neural_evidence
+        .as_ref()
+        .map(|dir| {
+            card_scanner::neural::evidence::read_dir_evidence(dir)
+                .map(pinned_evidence)
+                .map_err(|e| format!("neural evidence {}: {e}", dir.display()))
+        })
+        .transpose()?;
     // Before any session: a Neural pass's frames are timed by it (see `LabelClock`).
     host::set_clock(replay_clock);
     let conn = open_corpus(&args.corpus)?;
@@ -1088,6 +1145,7 @@ fn run(args: Args) -> Result<(), String> {
         recognition: Some(recognition),
         oracles,
         neural: Some(pinned(neural)),
+        neural_evidence,
     };
     drop(ingredients.session_for(ScanMode::Neural)?);
 
@@ -1264,6 +1322,7 @@ mod tests {
             recognition: None,
             oracles,
             neural: None,
+            neural_evidence: None,
         }
     }
 
@@ -1475,7 +1534,8 @@ mod tests {
             keys(pass),
             set(&["name", "mode", "score", "ambiguous", "settled", "choices", "true_in_choices", "got",
                 "first_decision_frame", "decision_frame", "decisions", "resolve_ran",
-                "locked_frames", "confidence", "distance", "frames", "tiers", "slices", "error"])
+                "locked_frames", "confidence", "distance", "frames", "tiers", "slices", "error",
+                "evidence"])
         );
         assert_eq!(keys(&pass["got"]), set(&["id", "name", "set", "number"]));
         assert_eq!(
@@ -1606,6 +1666,9 @@ mod tests {
         assert_eq!(neural.frames.len(), 12);
         assert!(neural.frames.iter().all(|f| f.error.is_none() && f.lock.is_none()));
         assert!(neural.resolve_ran, "Neural waits for nothing before it can decide");
+        // No evidence loaded, so none is recorded: the key is there and null.
+        assert!(neural.evidence.is_none());
+        assert!(serde_json::to_value(neural).unwrap()["evidence"].is_null());
         assert_eq!(LABEL_MS.with(Cell::get), None, "the pass left its clock behind");
 
         // Without them, a Neural pass — a label scanned in Neural — is an error, not undecided.

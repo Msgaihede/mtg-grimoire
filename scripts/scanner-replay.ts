@@ -8,6 +8,9 @@
 //
 // Also `--bundle <file>`, `--models <dir>`, `--corpus <corpus.db>` and `--jobs <n>`, each
 // found in the main checkout when left out, and `--no-build`, which trusts the binary as it is.
+// `--neural-evidence <dir>` hands the Neural pass the set symbol and collector band files, and
+// each decision then records its candidates and scores (`evidence`); `--neural-evidence-meta
+// <neural.json>` reads the thresholds from that file instead of the models' own.
 //
 // **Run `pnpm scanner:corpus pull` first**: this reads the local mirror and asks no network.
 // It writes `out/results.json`, `out/summary.md` and `out/report.html` beside the corpus,
@@ -110,6 +113,8 @@ const ran = spawnSync(
     "--commit", commitLabel(git("rev-parse", "--short", "HEAD"), dirty, args.noBuild),
     ...args.only.flatMap((text) => ["--only", text]),
     ...(args.jobs ? ["--jobs", args.jobs] : []),
+    ...(args.neuralEvidence ? ["--neural-evidence", args.neuralEvidence] : []),
+    ...(args.neuralEvidenceMeta ? ["--neural-evidence-meta", args.neuralEvidenceMeta] : []),
   ],
   { cwd: ROOT, stdio: "inherit" },
 );
