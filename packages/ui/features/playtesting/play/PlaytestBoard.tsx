@@ -71,6 +71,7 @@ import { OPPONENTS, playerPossessive, seatOfPlayer, tableCards } from "./players
 import { pickableCards } from "./prompt";
 import { PickPanel } from "./PickPanel";
 import { PromptPanel } from "./PromptPanel";
+import { RespondPrompt, respondingTo } from "./RespondPrompt";
 
 /**
  * The board — one table for every game on a deck: the reader's deck against **the goldfish**, an
@@ -485,6 +486,8 @@ export function PlaytestBoard({
   const playing = view !== null && view.stage !== "mulligan" && view.stage !== "over";
   const handCount = opponent?.handCount ?? 0;
   const prompting = view !== null && view.stage === "prompt" && view.prompt !== null;
+  /** The opponent's spell or ability the reader may respond to, asked about over their table. */
+  const responding = replaying ? null : respondingTo(view);
   const tabled = view !== null && view.stage !== "mulligan";
   /** Whose turn it is, lit on their plate — not before the first turn or after the last. */
   const active = playing && view.turn > 0 ? view.active : null;
@@ -645,7 +648,7 @@ export function PlaytestBoard({
           {/* The stack, in the right gutter between the two tables' zone columns. */}
           <StackColumn
             view={view}
-            prominent={view.stage === "respond"}
+            prominent={view.stage === "respond" && responding === null}
             onPoint={pointStack}
             onUnpoint={unpoint}
             className={cn(
@@ -968,6 +971,17 @@ export function PlaytestBoard({
         </div>
       )}
 
+      {responding !== null && (
+        <RespondPrompt
+          item={responding}
+          view={view!}
+          disabled={locked}
+          onAct={act}
+          onPoint={pointStack}
+          onUnpoint={unpoint}
+          className="absolute top-[52px] left-1/2 w-[min(600px,calc(100%-2*var(--table-x)))] -translate-x-1/2"
+        />
+      )}
       {prompting && view.prompt!.pick !== null && (
         <PickPanel
           key={view.prompt!.pick.cards.map((c) => c.id).join(",")}

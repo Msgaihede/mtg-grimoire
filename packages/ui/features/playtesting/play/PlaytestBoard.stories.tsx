@@ -360,7 +360,8 @@ export const Replay: Story = {
   render: (args) => <Replayed onAct={args.onAct} />,
 };
 
-/** The opponent's Lightning Bolt on the stack and the reader may respond: Pass, or Pass turn. */
+/** The opponent's Lightning Bolt on the stack and the reader may respond: asked about large over
+ *  their table (Let it resolve), with Pass and Pass turn at the foot. */
 export const Respond: Story = {
   args: { view: respondStep().view },
   play: async ({ canvasElement, args }) => {

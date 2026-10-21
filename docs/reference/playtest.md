@@ -595,7 +595,15 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
   the reader's side, command over exile is on the left and graveyard over library on the right.
 - **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the
   zone columns, top first, with whose each is; an ability says its words and its cause in its
-  tooltip. It covers no table.
+  tooltip. It covers no table. Its label reads "Stack", and "Respond?" in gold only at a stop
+  with the reader's own spell on top, which no stop leaves today.
+- **The respond question** (issue #1334): with an opponent's spell or ability on top of the stack
+  and the reader holding priority (`respond`), a panel up to 600 px wide stands at the top centre,
+  over the opponent's table, just under their band. It draws the item at 120 × 168 (pointable, for
+  the preview), "The opponent cast" or "The opponent's ability" ("Opponent 2's" at a four-player
+  table), "Respond to <name>?" at 22 px, an ability's words and cause, and what it targets
+  ("Targeting Tarmogoyf and you"). Its one button, "Let it resolve", is `pass`; it is not modal,
+  and the stage buttons stay as they are. A step's stop with the stack empty asks nothing there.
 - **The prompt** docks at the bottom over the hand, at most 640 × 104, and the reader's plate moves
   to the edge while it is up. **The picker** sits centred over the middle, up to 820 px wide.
 
@@ -640,7 +648,7 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | `main`, first main phase  | To combat (`pass`)                                                                                                                 | End turn (`endTurn`)  |
 | `main`, second main phase | End turn (`pass`)                                                                                                                  |                       |
-| `respond`                 | Pass (`pass`)                                                                                                                      | Pass turn (`endTurn`) |
+| `respond`                 | Pass (`pass`; also the respond question's "Let it resolve")                                                                        | Pass turn (`endTurn`) |
 | `attack`                  | Attack with N, or No attack                                                                                                        |                       |
 | `block`                   | Confirm blocks, or No blocks                                                                                                       |                       |
 | busy                      | A spinner and "Opponent is thinking…" ("Playing on…" against the goldfish; "Passing turn…" while `endTurn` runs)                   |                       |

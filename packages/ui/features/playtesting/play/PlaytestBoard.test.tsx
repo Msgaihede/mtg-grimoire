@@ -296,13 +296,28 @@ describe("PlaytestBoard's aimed attacks", () => {
 });
 
 describe("PlaytestBoard's respond stage", () => {
-  it("passes on Space, passes the turn on the second button, and calls out the stack", () => {
+  it("passes on Space, passes the turn on the second button, and asks about the opponent's spell", () => {
     const { onAct } = setup(respondStep().view);
-    expect(screen.getByText("Respond?")).toBeInTheDocument();
+    const asked = screen.getByRole("region", { name: "Respond to Lightning Bolt?" });
+    expect(within(asked).getByText("Targeting")).toBeInTheDocument();
+    // The question is asked over the opponent's table, so the stack's column only says "Stack".
+    expect(screen.queryByText("Respond?")).not.toBeInTheDocument();
+    fireEvent.click(within(asked).getByRole("button", { name: /Let it resolve/ }));
+    expect(onAct).toHaveBeenLastCalledWith({ type: "pass" });
     fireEvent.keyDown(window, { key: " " });
     expect(onAct).toHaveBeenLastCalledWith({ type: "pass" });
     fireEvent.click(screen.getByRole("button", { name: "Pass turn" }));
     expect(onAct).toHaveBeenLastCalledWith({ type: "endTurn" });
+  });
+
+  it("asks about nothing on the stack at a step's stop with the stack empty", () => {
+    setup({ ...respondStep().view, stack: [] });
+    expect(screen.queryByRole("region", { name: /^Respond to/ })).not.toBeInTheDocument();
+  });
+
+  it("holds the question's answer while the engine is busy", () => {
+    setup(respondStep().view, { busy: true });
+    expect(screen.getByRole("button", { name: /Let it resolve/ })).toBeDisabled();
   });
 
   it("says it is passing the turn while the engine plays it out", () => {
@@ -670,9 +685,9 @@ describe("PlaytestBoard's zone columns", () => {
     const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(1400);
     try {
       setup(turnFive().view);
-      expect(
-        screen.getByTestId("playtest-board").style.getPropertyValue("--table-x"),
-      ).toBe(`${zoneSize(1400).width + 24}px`);
+      expect(screen.getByTestId("playtest-board").style.getPropertyValue("--table-x")).toBe(
+        `${zoneSize(1400).width + 24}px`,
+      );
     } finally {
       height.mockRestore();
     }
