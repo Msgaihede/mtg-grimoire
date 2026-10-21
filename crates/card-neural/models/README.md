@@ -4,12 +4,14 @@ In git by the owner's choice (2026-10-20): each is far under GitHub's 100 MB a f
 are one versioned set — **the gallery is only right for the embedder that made it**, and the
 thresholds only for this pair. Change one and the others are suspect.
 
-| file            |      bytes | sha256              | what it is                                                                                                                                                                                                       |
-| --------------- | ---------: | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `detector.onnx` |  2 443 078 | `4e9a46bd…c87a5a35` | corner detector: timm `mobilenetv3_small_075.lamb_in1k` (Apache-2.0) + FPN-lite neck + 10-channel head, trained 30 000 steps on synthetic scenes (scanner lab run `det-a`)                                       |
-| `embedder.onnx` | 10 602 685 | `dd17c180…b189ad1d` | 128-d embedder: timm `mobilenetv4_conv_small.e2400_r224_in1k` (Apache-2.0) + ArcFace over 70 402 looks, 30 epochs on Scryfall scans drawn into sleeves, binder pockets and toploaders (run `qd-mnv4-e`, "run 2") |
-| `gallery.bin`   | 13 979 185 | `40278b05…95a617d4` | `CNGALLR1`: the embedder's ArcFace class weights, one per look, as int8 rows with a scale each, and each look's printings (`src/gallery.rs` has the layout)                                                      |
-| `neural.json`   |        602 | `14539669…1a64992e` | input sizes, decode constants, thresholds (Quickdraw's, score bars −0.025, margins × 0.375, chosen by cross-validation), `"ranking": "aimed"`                                                                    |
+| file            |      bytes | sha256              | what it is                                                                                                                                                                                                             |
+| --------------- | ---------: | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `detector.onnx` |  2 443 078 | `daeccc75…44b4c738` | corner detector: timm `mobilenetv3_small_075.lamb_in1k` (Apache-2.0) + FPN-lite neck + 10-channel head, trained 30 000 steps on synthetic scenes (training run `2026-10-20-0951`)                                      |
+| `embedder.onnx` | 10 602 685 | `249bb2ee…daa0c0fe` | 128-d embedder: timm `mobilenetv4_conv_small.e2400_r224_in1k` (Apache-2.0) + ArcFace over 70 402 looks, 30 epochs on Scryfall scans drawn into sleeves, binder pockets and toploaders (training run `2026-10-20-0951`) |
+| `gallery.bin`   | 13 979 185 | `9090cfb8…57003502` | `CNGALLR1`: the embedder's ArcFace class weights, one per look, as int8 rows with a scale each, and each look's printings (`src/gallery.rs` has the layout)                                                            |
+| `neural.json`   |        602 | `14539669…1a64992e` | input sizes, decode constants, thresholds (Quickdraw's, score bars −0.025, margins × 0.375, chosen by cross-validation), `"ranking": "aimed"`                                                                          |
+
+**Last trained** by `.github/workflows/neural-train.yml`: run `2026-10-20-0951`, finished 2026-10-20 from commit `a6330276` — embedder retrieval top-1 0.999667 after 30 epochs, 70 402 looks; detector found 0.995628, corner error 0.0277352 (p90 0.0463952), wrong way 0.00329308 after 30 000 steps; $2.58 on Modal. The readers'-scan figures below are an earlier pair's until this one is replayed (`pnpm scanner:replay`).
 
 **The web build holds the files to this table** (`apps/light/vite.config.ts`, through
 `packages/ui/lib/core/web/assets.ts`' `neuralTable`): a file whose length or digest ends differ
