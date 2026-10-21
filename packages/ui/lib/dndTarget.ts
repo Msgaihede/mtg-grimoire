@@ -278,6 +278,19 @@ export function useDndDropTarget<T>({
 }
 
 /**
+ * Where the pointer let go, in the window's coordinates — for a target that places what it took
+ * by where it was let go (the playtest board's hand reorders by it, issue #1330).
+ *
+ * **Asked from inside an `onDrop` and nowhere else.** {@link useDndDropTarget} calls `onDrop`
+ * synchronously from its `dragend` listener, while the operation still holds the release point —
+ * the same `position.current` its own `pointerOnly` check reads there.
+ */
+export function releasePoint(): { x: number; y: number } {
+  const { x, y } = dndManager.dragOperation.position.current;
+  return { x, y };
+}
+
+/**
  * An element that arrives through a **callback ref**, in the shape {@link useDndDropTarget} reads.
  *
  * **Why a target cannot always just hand over a `useRef`.** That hook reads `ref.current` once, in

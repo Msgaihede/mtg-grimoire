@@ -82,6 +82,7 @@ const LOTUS: CardSummary = {
   priceHigh: 12000,
   gameChanger: false,
   releasedAt: null,
+  imageUpdatedAt: null,
 };
 
 /** A printing whose finish list is empty, which the column allows and means *unknown*. The mark

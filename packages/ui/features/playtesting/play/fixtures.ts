@@ -579,6 +579,7 @@ export function scryPick(): TurnFive {
     max: 3,
     ordered: true,
     powerCap: null,
+    zone: "libraryTop",
   });
 }
 
@@ -600,6 +601,7 @@ export function discardPick(): TurnFive {
     max: 2,
     ordered: false,
     powerCap: null,
+    zone: "hand",
   });
 }
 
@@ -625,6 +627,32 @@ export function keepPick(): TurnFive {
     max: cards.length,
     ordered: false,
     powerCap: 4,
+    zone: "battlefield",
+  });
+}
+
+/**
+ * "You may cast an instant or sorcery spell from your graveyard" (issue #1329): one card of the
+ * reader's graveyard, or none — asked whether before which.
+ */
+export function castPick(): TurnFive {
+  const t = turnFive();
+  const cards = t.view.you.graveyard.map((c) => ({
+    id: c.id,
+    name: c.name,
+    cardId: c.cardId,
+    text: null,
+    cause: null,
+  }));
+  return pickPrompt(t, "CastOffer", "Invoke Calamity", {
+    purpose: "cast",
+    cards,
+    eligible: cards.map((c) => c.id),
+    min: 0,
+    max: 1,
+    ordered: false,
+    powerCap: null,
+    zone: "graveyard",
   });
 }
 

@@ -259,6 +259,8 @@ phase's:
 | `MultiTargetSelection`                           | `targets` | Are the targets                                             | `min_targets` to `max_targets`                      |
 | `KeepWithinTotalPowerChoice`                     | `keep`    | Are kept; the rest are sacrificed                           | any, their total power at most `powerCap`           |
 | `KeepExactPermanentsChoice`                      | `keep`    | Are kept; the rest are sacrificed                           | `required_count`                                    |
+| `EffectZoneChoice` of `CastFromZone`             | `cast`    | Is cast                                                     | `min_count` to `count`, or `count`                  |
+| `CastOffer`'s `FreeCastWindow`                   | `cast`    | Is cast; none closes the window                             | one, or none                                        |
 
 A keep within a total power (Slaughter the Strong, Destined Confrontation — issue #1079) is bounded
 by power as well as count: `powerCap` is the cap, each creature counts its current power
@@ -266,6 +268,17 @@ by power as well as count: `powerCap` is the cap, each creature counts its curre
 `legal_actions` for it are two canned sets (keep none, and its greedy keep), which before the pick
 showed as two identical "Choose kept creatures" chips; they stay under "Other answers", each naming
 the creatures it keeps (`option_of` reads `kept`).
+
+**An optional cast is asked whether before which** (issue #1329). "You may cast a spell from
+among them" — a cast picked as the ability resolves (`EffectZoneChoice` of `CastFromZone`), or a
+free-cast window over a graveyard, a hand or the cards exiled this way (Invoke Calamity's
+`FreeCastWindow`, answered `FreeCastWindowChoice` with one card or none) — is a pick of purpose
+`cast`. Each pick says where its cards lie when they all lie in one place (`zone`), so a cast
+with none to be picked (`min` 0) opens on the board as its question alone: "Cast a spell from your
+graveyard?", with "Choose a card", which shows the cards, and "Don't cast", which picks none
+and so declines (`pick.ts`' `pickOffer`). A cast that must be made shows its cards at once.
+The engine's own answers to a free-cast window name the card each casts (`option_of` reads
+`selection`), under "Other answers".
 
 The session checks the count, the power cap, that each card is eligible and that none is picked
 twice. The engine
@@ -425,7 +438,7 @@ empties the slot only if it holds that name — even `Busy`. So a board that lea
 mid-turn ends its game then, and the turn's answer drops it; a new board's deal is never
 overwritten by the old board's late answer; and a late action or end from a board that has gone, or
 from another window's, never touches a newer game. On the page the name is drawn like the seed,
-fresh per deal (`usePlaytestGame`), and an action still queued when its deal is put away is not
+fresh per deal (`play/heldGame.ts`), and an action still queued when its deal is put away is not
 sent. All four commands are on
 `command_table::DESKTOP_ONLY`. The goldfish board's own three (`goldfish_start`, `goldfish_act`,
 `goldfish_end`) and its slot were removed on 2026-10-17, when its game became this one; the
@@ -433,7 +446,7 @@ desktop's `facts` and `token_facts` live in `playtest/mod.rs` now.
 
 **The view is sent, never the state.** The whole `GameState` is hundreds of kilobytes. The view is
 what a board draws: each zone's cards, the lives, the mana open, the library, and the tokens the
-deck makes. The page sends actions one at a time, in order (`usePlaytestGame`'s serial queue), so
+deck makes. The page sends actions one at a time, in order (`HeldGame`'s serial queue), so
 each is read against the view it was made from.
 
 **The wire** is `playtest/view.rs` ↔ `packages/ui/lib/ipc/playtest.ts`, built on the table's
@@ -553,8 +566,8 @@ card is its shown face's name, so its marks follow the face; it is fixed for the
 for an AI game it draws for a goldfish game, and a change to it is a change to both. `PlaytestPage`
 covers the window below the caption at `LAYER.stage`, a rung between `header` and `popup`, so the
 board's own menus and dialogs open over it. `PlaytestBoard` is presentational: a view in, actions
-out, no `ipc`, which is what its stories stand on. `usePlaytestGame` is the serial queue that wires
-it to the engine. The pieces it is drawn with are the table's ([goldfish.md](goldfish.md#the-table)).
+out, no `ipc`, which is what its stories stand on. `usePlaytestGame` wires it to the engine,
+through the `HeldGame` that holds the serial queue (`play/heldGame.ts`). The pieces it is drawn with are the table's ([goldfish.md](goldfish.md#the-table)).
 
 **Opened from two places** (`returnTo`). The Playtesting page's setup opens it with `"setup"`, and
 the deck editor's "Goldfish this deck" through `features/playtesting/GoldfishPage.tsx`, a thin
@@ -565,6 +578,22 @@ back ("Back to setup", "Back to the deck"), and the undo chords' scope (`playtes
 is the Decks view's third state: the store's `goldfish` names the open deck and variant, `App.tsx`
 draws the board in the editor's place, and every navigation clears it, so coming back to a deck
 finds the editor.
+
+**The Playtesting page's game outlives the page** (issue #1322, 2026-10-21). A view change
+unmounts the page and its board, so the game's life is not the board's: it is a `HeldGame`
+(`play/heldGame.ts`) — the queue, the host's name for the game, the generations, the view and the
+log book — which `usePlaytestGame` only shows. The page keeps it in `viewMemory("playtest")`
+(`keptGame.ts`, window-lifetime, never storage) and opens on it again: the same board and log, and
+an AI turn that was still being played when the reader left lands in the kept game meanwhile, taken
+whole (every beat logged in order, nothing popped). A board that leaves mid-replay shows the replay
+to its end first. **Only the reader ends it**: the way back (the button, Escape, the game menu's)
+and New game ask first while the game is underway (`EndGameDialog` — "End this game?", Keep
+playing / End game); a game the engine has ended (`over`), or one still being dealt, is left at
+once. The goldfish keeps its own rule, a game held for the board's life: `usePlaytestGame` with no
+held game deals one on mount and ends it on unmount. **The host holds one game**, so "Goldfish this
+deck" asks before dealing over a kept game that is underway ("End your Playtesting game?"; Keep it
+goes back to the deck with nothing dealt), and puts away a kept game that is over without asking. A
+restart opens the setup page; the host's old game is dropped by the next deal.
 
 **The goldfish is drawn in the duel layout** (the owner's choice of 2026-10-17), exactly as a single
 AI opponent is: its band with its face-down hand count, its plate, its zone columns and its empty
@@ -613,7 +642,15 @@ Before the overhaul, a table at 1280 was 275 px and its cards about 61 px wide.
   the reader's side, command over exile is on the left and graveyard over library on the right.
 - **The stack** is real cards (52 × 73, up to three, then "+N") in the right gutter between the
   zone columns, top first, with whose each is; an ability says its words and its cause in its
-  tooltip. It covers no table.
+  tooltip. It covers no table. Its label reads "Stack", and "Respond?" in gold only at a stop
+  with the reader's own spell on top, which no stop leaves today.
+- **The respond question** (issue #1334): with an opponent's spell or ability on top of the stack
+  and the reader holding priority (`respond`), a panel up to 600 px wide stands at the top centre,
+  over the opponent's table, just under their band. It draws the item at 120 × 168 (pointable, for
+  the preview), "The opponent cast" or "The opponent's ability" ("Opponent 2's" at a four-player
+  table), "Respond to <name>?" at 22 px, an ability's words and cause, and what it targets
+  ("Targeting Tarmogoyf and you"). Its one button, "Let it resolve", is `pass`; it is not modal,
+  and the stage buttons stay as they are. A step's stop with the stack empty asks nothing there.
 - **The prompt** docks at the bottom over the hand, at most 640 × 104, and the reader's plate moves
   to the edge while it is up. **The picker** sits centred over the middle, up to 820 px wide.
 
@@ -661,7 +698,7 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
 | `main`, first main phase  | To combat (`pass`)                                                                                                                 | End turn (`endTurn`)  |
 | `main`, second main phase | End turn (`pass`)                                                                                                                  |                       |
-| `respond`                 | Pass (`pass`)                                                                                                                      | Pass turn (`endTurn`) |
+| `respond`                 | Pass (`pass`; also the respond question's "Let it resolve")                                                                        | Pass turn (`endTurn`) |
 | `attack`                  | Attack with N, or No attack                                                                                                        |                       |
 | `block`                   | Confirm blocks, or No blocks                                                                                                       |                       |
 | busy                      | A spinner and "Opponent is thinking…" ("Playing on…" against the goldfish; "Passing turn…" while `endTurn` runs)                   |                       |
@@ -683,7 +720,25 @@ facts are found as a run of `step.happened`, and the end takes the rest.
   zone, and "Activate ability" heads a battlefield card's menu. In `respond`, the hand and the
   abilities are playable as in the main phase; the sandbox is not.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
-  read-only. They are never dragged, and their table takes no drops (`refuse`).
+  read-only. They are never dragged, and their table takes no zone drops (`refuse`) — only the
+  rules' aims below.
+- **Drag beside every click** (issue #1335, `play/aim.ts`). A card carried onto a card or a plate
+  makes the same picks and sends the same actions as the clicks; nothing new reaches the engine.
+  The reader's cards the rules let them pick up (`canCarry`) are draggable with the sandbox off
+  too: the attackers and blockers in their steps, and with priority every permanent but a land.
+  A card that would take the drop is ringed solid gold while a card is over it.
+  - **Attack:** an attacker let go on an opponent's plate, their felt or any card on their table
+    attacks that player; on a planeswalker or battle it may attack, attacks it. Carried back onto
+    the reader's table, it is taken off.
+  - **Block:** a blocker let go on an attacker it may block blocks it; carried back, it is taken
+    off.
+  - **Play, equip, target:** with priority (`main`, `respond`), a card from the hand or the command
+    zone let go on a card on any table or on a plate is played, and a permanent activated, with
+    that card or player kept as its target (`useAimFollowThrough`). The target question that
+    follows is answered with it when it offers it; a question before it (which ability, how to
+    cast) is the reader's, and a target it does not offer leaves the prompt open for them. A
+    refusal, or a play that asked no target, forgets the aim. A land from the hand let go on a card
+    falls through to the table and is played, as before.
 - **Attack:** a click toggles a creature that can only attack the opponent. A creature with
   planeswalkers or battles to choose from attacks the player by default (else its first target)
   and waits to be aimed. While it waits, its targets light up (the opponent's plate too, when it
@@ -712,7 +767,8 @@ board (2026-10-13) rather than being copied; since 2026-10-17 this board is the 
 For a seat that is not the reader's, and for the sandbox:
 
 - `Battlefield`: `flipped`, `readOnly`, `marks` (attack, block or chosen, with a badge), `pick`,
-  `onActivate`, and `dense` (tighter padding).
+  `onActivate`, `dense` (tighter padding), and `carry` and `aim` (the rules' drags, issue #1335).
+- `PlateFrame`: `aim`, the player as a drop target. `tableDrag.ts`' `useAimTarget` registers one.
 - `LifePlate`: `compact`, a one-row plate 38 px tall; `readOnly`, the number as plain text with the
   sandbox off.
 - `layoutTable` and `pilesOf`: an `apart` key, so an attacking creature does not join a pile with

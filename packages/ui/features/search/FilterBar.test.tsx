@@ -1206,12 +1206,12 @@ describe("FilterBar, its sort picker", () => {
   /**
    * Alphabetical by the words on screen, which is the one order an option list in this app is
    * drawn in (`lib/options.ts`). `SEARCH_SORT_OPTIONS` is declared in the order the orders were
-   * reasoned about — the table's five columns, then the two with no column at all — and a picker
-   * that showed that would be showing the author's notes.
+   * reasoned about — the table's five columns, then the three with no column at all — and a
+   * picker that showed that would be showing the author's notes.
    *
    * The whole sequence rather than a spot check: two rows swapped past each other satisfy any
-   * assertion about one row's presence. `Mana value` and `Released` are the two orders no header
-   * can reach, and they are in here as ordinary rows, pinned nowhere.
+   * assertion about one row's presence. `Mana value`, `Released` and `Image updated` are the three
+   * orders no header can reach, and they are in here as ordinary rows, pinned nowhere.
    */
   it("offers the orders alphabetically, under the pinned Best match", async () => {
     const user = userEvent.setup();
@@ -1219,6 +1219,7 @@ describe("FilterBar, its sort picker", () => {
 
     expect(await sortOrder(user)).toEqual([
       "Best match",
+      "Image updated",
       "Mana value",
       "Name",
       "Price",

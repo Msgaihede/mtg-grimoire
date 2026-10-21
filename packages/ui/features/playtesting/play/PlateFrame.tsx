@@ -1,9 +1,10 @@
-import type { JSX, ReactNode } from "react";
+import { useRef, type JSX, type ReactNode } from "react";
 import { Crown, Skull } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import type { PlaytestCommanderDamage, PlaytestPlayer } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
 import { cn } from "@/lib/utils";
+import { useAimTarget, type DropAim } from "../table/tableDrag";
 
 /**
  * A plate's frame: `data-plate`, which the combat's arrows and the life pops find it by (the
@@ -15,6 +16,10 @@ import { cn } from "@/lib/utils";
  * has a mark of its own — its art and its count — so a pair of partners is two counts, never their
  * sum. A count at `lethal` (21, the view's `commanderDamageLethal`) turns red: the player has lost,
  * unless something says they can't (the goldfish's plate says "dead on" instead).
+ *
+ * **It is the player as a drop target too** (`aim`, issue #1335): a creature carried onto an
+ * opponent's plate attacks them, and a spell or an ability carried onto any plate aims at that
+ * player. The ring while a card it takes is over it is the click target's dashed one, solid.
  */
 export function PlateFrame({
   seat,
@@ -24,6 +29,7 @@ export function PlateFrame({
   lethal = null,
   compact = false,
   className,
+  aim,
   children,
 }: {
   seat: PlaytestPlayer;
@@ -35,11 +41,16 @@ export function PlateFrame({
   lethal?: number | null;
   compact?: boolean;
   className?: string;
+  /** The player as a target a carried card is let go on (`aim.ts`): attacked, or aimed at. */
+  aim?: DropAim;
   children: ReactNode;
 }): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null);
+  const aimed = useAimTarget({ ref, aim });
   const marked = poison > 0 || commanderDamage.length > 0;
   return (
     <div
+      ref={ref}
       data-plate={seat}
       data-active={active || undefined}
       className={cn(
@@ -47,6 +58,7 @@ export function PlateFrame({
         compact ? "rounded-full" : "rounded-[14px]",
         active &&
           "shadow-[0_0_0_2px_var(--color-accent),0_0_18px_color-mix(in_oklch,var(--color-accent)_45%,transparent)]",
+        aimed && "outline-3 outline-offset-2 outline-accent outline-solid",
         className,
       )}
     >

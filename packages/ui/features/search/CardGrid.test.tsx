@@ -97,6 +97,7 @@ const card = (id: string, name: string, finishes = `["nonfoil","foil"]`): CardSu
   // the one-line callback the wall is really handed.
   gameChanger: false,
   releasedAt: null,
+  imageUpdatedAt: null,
   ownedQuantity: 0,
   wishlisted: false,
   printings: 1,

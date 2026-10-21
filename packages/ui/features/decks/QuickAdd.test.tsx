@@ -48,6 +48,7 @@ function found(name: string): CardSummary {
     // card that is there. `false`, because nothing in this file is about the crown.
     gameChanger: false,
     releasedAt: null,
+    imageUpdatedAt: null,
     finishes: `["nonfoil"]`,
     ownedQuantity: 0,
     wishlisted: false,

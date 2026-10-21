@@ -200,11 +200,12 @@ export function formatParams(selection: string): { format?: string; playableOnly
  * **This array's order is its declaration order and nothing else.** `FilterBar`'s sort
  * `<select>` draws it alphabetically by label through `sortOptions` (`lib/options.ts`), and
  * the only other reader — `sortSelection` below — asks nothing about position. So reordering
- * these seven lines moves nothing a reader sees; it only costs them the one grouping they
- * have, which is the five the table's headers also reach, then the two nothing on screen can.
+ * these eight lines moves nothing a reader sees; it only costs them the one grouping they
+ * have, which is the five the table's headers also reach, then the three nothing on screen can.
  * Add to the end.
  *
- * **`manaValue` and `released` have no header to press**, and they are why this picker is
+ * **`manaValue`, `released` and `imageUpdated` have no header to press**, and they are why this
+ * picker is
  * more than the table's headers restated. There is no room for two more columns — the reason
  * is at {@link SearchSortKey} — so this is the same trade the collection's select made for
  * "Recently added", from the view whose table is one column wider.
@@ -222,6 +223,9 @@ export const SEARCH_SORT_OPTIONS = [
   { value: "price", label: "Price" },
   { value: "manaValue", label: "Mana value" },
   { value: "released", label: "Released" },
+  // Scryfall's `image_updated_at` (issue #1214) — when a printing's picture was last replaced,
+  // which for a set still being previewed is "newest spoiler first".
+  { value: "imageUpdated", label: "Image updated" },
 ] as const satisfies readonly { value: SearchSortKey; label: string }[];
 
 /**
@@ -235,7 +239,8 @@ export const SEARCH_SORT_OPTIONS = [
  * The two keys with no column follow the same split from the picker: `manaValue` ascending
  * because a curve reads as a list, and `released` **descending** because "newest first" is
  * what pressing a release date means — the argument `price` above it carries, and the one
- * behind the collection's `added: "desc"`.
+ * behind the collection's `added: "desc"`. `imageUpdated` is descending for the same reason:
+ * the question it answers is "which pictures are new".
  */
 const SEARCH_FIRST_DIR: Record<SearchSortKey, SortDir> = {
   name: "asc",
@@ -245,7 +250,16 @@ const SEARCH_FIRST_DIR: Record<SearchSortKey, SortDir> = {
   price: "desc",
   manaValue: "asc",
   released: "desc",
+  imageUpdated: "desc",
 };
+
+/**
+ * The order the Coming soon widget's set press opens on (issue #1214): newest image first, so a
+ * set still being previewed reads as its latest spoilers. Handed to `showSetInSearch`.
+ */
+export const IMAGE_UPDATED_SORT: SortSpec<SearchSortKey> = [
+  { key: "imageUpdated", dir: SEARCH_FIRST_DIR.imageUpdated },
+];
 
 /**
  * The filter's colours are the interface's mana symbols — the same six letters in the same
@@ -667,6 +681,12 @@ export interface CardSearchOptions {
    */
   initialSet?: string | null;
   /**
+   * The order to **open** in with {@link initialSet} — `store.ts`'s `pendingSearchSort`, which
+   * only the Coming soon widget writes (issue #1214). Read once, by the sort's `useState` seed,
+   * for `initialSet`'s reason; absent or `null` keeps the remembered sort.
+   */
+  initialSort?: SortSpec<SearchSortKey> | null;
+  /**
    * A search box to **open** on, alone and at `Any card` — `SearchPage` passing the header's quick
    * search hand-off when that press is what mounted it (issue #1098). {@link initialSet}'s seed
    * for the box instead of the Set chips, read once and ignored after; {@link showOnlyText} is
@@ -830,7 +850,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const [priceMax, setPriceMax] = useState<number | undefined>(seed?.priceMax);
   // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
   // should not also throw away the order you chose to read it in.
-  const [sort, setSort] = useState<SortSpec<SearchSortKey>>(recalled?.sort ?? []);
+  const [sort, setSort] = useState<SortSpec<SearchSortKey>>(
+    options.initialSort ?? recalled?.sort ?? [],
+  );
   // A **view mode**, and outside `resetAll` for the same reason the sort is: clearing what
   // you are looking at should not also change *how* you are looking at it.
   //
@@ -1872,7 +1894,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * wall that is supposed to be that set. The select says so, and one press puts it back.
      *
      * The layout, the sort and `allPrintings` are views rather than filters and stay where the
-     * reader left them — `resetAll`'s own rule.
+     * reader left them — `resetAll`'s own rule — **unless the press names an `order`**, which is
+     * the Coming soon widget's `imageUpdated` (issue #1214): that press asked for the order too.
      */
     /**
      * Show what one box of text finds and nothing else — the header's quick search (issue #1098),
@@ -1896,7 +1919,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       setPriceMin(undefined);
       setPriceMax(undefined);
     },
-    showOnlySet: (code: string) => {
+    showOnlySet: (code: string, order?: SortSpec<SearchSortKey> | null) => {
+      // The one view this touches, and only when the press named an order — the Coming soon
+      // widget's `imageUpdated` (issue #1214). Every other caller keeps the reader's sort.
+      if (order) setSort(order);
       setText("");
       setFormat(ANY_CARD);
       setColorFilter(NO_COLORS);
