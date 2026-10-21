@@ -14,8 +14,9 @@
 //
 //   1. the page opens the camera once its prefs have loaded, and shapes the picture's box by the
 //      stream — inside the screen, with the status line and the tray's heading still on it;
-//   2. frames go out in the stored mode and **never ask for previews**, and each card the script
-//      decides lands in the tray once — the second copy of a card counts onto its row;
+//   2. the page opens stopped (issue #1317) — no frame goes out until *Start scanning* is pressed;
+//      then frames go out in the stored mode and **never ask for previews**, and each card the
+//      script decides lands in the tray once — the second copy of a card counts onto its row;
 //   3. *Stop scanning* stops the frames and keeps the picture;
 //   4. a quantity steps, a folder is chosen from the sheet and stored;
 //   5. nothing scrolls sideways, every control is at least 44px under the coarse pointer, and the
@@ -382,6 +383,15 @@ async function phone(send: Send, width: number, height: number) {
   );
 
   // ------------------------------------------------ 2. cards land ------------------------
+  // Not before the press: the page opens stopped, the camera live and nothing read.
+  await sleep(800);
+  const unstarted = await page.evaluate<{ frames: number; note: string }>(
+    `({ frames: window.seen.frames.length, note: document.querySelector('[data-camera-box]').textContent })`,
+  );
+  if (unstarted.frames !== 0) fail(`${at}: ${unstarted.frames} frames went out before Start`);
+  if (!/Scanning stopped/.test(unstarted.note))
+    fail(`${at}: a scanner not yet started says "${unstarted.note}"`);
+  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
   await page.until(`smoke.rows().length >= 1`, "the first card to land");
   const first = await page.evaluate<{ status: string; row: string }>(
     `({ status: smoke.status(), row: smoke.rows()[0].textContent })`,
@@ -582,6 +592,7 @@ async function phone(send: Send, width: number, height: number) {
   // The offer, and never the instruction it replaced: a file at a path nobody here can reach.
   if (/No reference bundle|No OCR models|Restart the app/.test(slot))
     fail(`${at}: the slot still tells a phone to place a file — "${slot}"`);
+  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
   await page.until(
     `/Can't identify/.test(smoke.status())`,
     "the status line to say it cannot identify",
@@ -625,6 +636,7 @@ async function phone(send: Send, width: number, height: number) {
   // ------------------------------------------------ 9. Exact ------------------------------
   await page.go("/scanner");
   await page.until(`${TRACK}?.readyState === 'live'`, "the camera again");
+  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
   await page.evaluate(`smoke.press(smoke.button('Exact'), 'Exact')`);
   await page.until(
     `smoke.button('Exact').getAttribute('aria-pressed') === 'true'`,
@@ -724,9 +736,10 @@ async function phone(send: Send, width: number, height: number) {
     `smoke.button('Exact').getAttribute('aria-pressed') === 'true'`,
     "Exact to take on a supporter's page",
   );
-  await page.until(`smoke.button('Stop scanning') !== undefined`, "a supporter's scanner to run");
-  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
-  await page.until(`smoke.button('Start scanning') !== undefined`, "the scanner to stop");
+  await page.until(
+    `smoke.button('Start scanning') !== undefined`,
+    "a supporter's scanner to open stopped",
+  );
   await sleep(400);
   const idle = await page.evaluate<{ press: boolean; live: string | undefined }>(
     `({ press: smoke.button('Send scan…') !== undefined, live: ${TRACK}?.readyState })`,
@@ -1098,6 +1111,7 @@ async function sideways(send: Send, width: number, height: number) {
     `${TRACK}?.readyState === 'live' && document.querySelector('video').videoWidth > 0`,
     "the camera",
   );
+  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
   await page.until(`smoke.rows().length >= 2`, "three cards");
   await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
   await sleep(300);
