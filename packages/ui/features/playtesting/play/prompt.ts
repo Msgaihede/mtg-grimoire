@@ -307,6 +307,8 @@ export function cardOfRef(
       counters: [],
       power: null,
       toughness: null,
+      basePower: null,
+      baseToughness: null,
       tax: 0,
       attachedTo: null,
       foretold: false,

@@ -384,9 +384,17 @@ the opponent's Grizzly Bears into their graveyard").
 **The table is laid out by the rules, not by where a card is let go.** Creatures are in front.
 Behind them, lands are on the left and every other permanent on the right. Each lane is one row,
 and its card size is solved so every pile fits (`layout.ts`). Cards of one name that look the same
-— same printing, same tapped state, same counters — are one pile: the cards themselves stacked,
-each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip on the
-pile's bottom edge for the count (issue #1001).
+— same printing, same tapped state, same counters, same P/T — are one pile: the cards themselves
+stacked, each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip
+on the pile's bottom edge for the count (issue #1001).
+
+**A creature whose P/T has changed wears it in a chip over its printed box** (issue #1332):
+`Inspect.tsx`' `StatsChip`, bottom right of the card on the table and in the preview. Both stats
+are always drawn, each coloured by which way it moved from `GameCard.base_power` /
+`base_toughness` — green up, red down, white unchanged — and a creature as printed has no chip.
+The base is phase's printed (copiable) P/T, except for a `*/*` whose characteristic-defining
+ability sets it (CR 604.3; phase prints those as 0): its base is that ability's own value
+(`table.rs`' `base_pt`), so a Tarmogoyf at its own count is not marked as pumped.
 
 **An attachment is tucked under the card it is attached to** (issue #1073), the way MTG Arena and
 a real table show it. `GameCard.attached_to` is the host's object id, read from phase's
