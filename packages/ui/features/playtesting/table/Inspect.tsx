@@ -142,8 +142,9 @@ export function Inspect({
       )}
       style={{ width: width + 16 }}
     >
-      <div style={{ width, height: Math.round(width * 1.4) }}>
+      <div className="relative" style={{ width, height: Math.round(width * 1.4) }}>
         <CardFace card={card} variant="display" className="p-3 text-sm" />
+        <StatsChip card={card} className="right-3 bottom-3 px-2 text-lg" />
       </div>
       <span className="text-xs text-dim">{caption}</span>
       {card.effects.length > 0 && (
@@ -240,6 +241,77 @@ export function counterLabel({ kind, count }: CardCounter): string {
   if (kind === "+1/+1") return `+${count}/+${count}`;
   if (kind === "-1/-1") return `-${count}/-${count}`;
   return `${count} ${kind}`;
+}
+
+/** Which way one stat has moved from its base. */
+export type StatTone = "up" | "down" | "same";
+
+/** A creature's power and toughness as they stand, each with which way it has moved. */
+export interface ChangedStats {
+  power: number;
+  toughness: number;
+  powerTone: StatTone;
+  toughnessTone: StatTone;
+}
+
+/**
+ * A creature's P/T when counters or effects have changed it from its base (issue #1332): both
+ * stats, each with which way it moved. `null` for a creature as printed and for a non-creature.
+ * A creature with no base (an animated land) is changed by definition, and neither of its stats
+ * reads as up or down.
+ */
+export function changedStats(card: GameCard): ChangedStats | null {
+  const { power, toughness, basePower, baseToughness } = card;
+  if (power === null || toughness === null) return null;
+  if (power === basePower && toughness === baseToughness) return null;
+  return {
+    power,
+    toughness,
+    powerTone: tone(power, basePower),
+    toughnessTone: tone(toughness, baseToughness),
+  };
+}
+
+function tone(value: number, base: number | null): StatTone {
+  if (base === null || value === base) return "same";
+  return value > base ? "up" : "down";
+}
+
+const STAT_TONE: Record<StatTone, string> = {
+  up: "text-ok",
+  down: "text-destructive",
+  same: "text-white",
+};
+
+/**
+ * A changed creature's P/T in the card's bottom-right corner, over the printed box (issue
+ * #1332): green for a stat that went up, red for one that went down, white for one as printed —
+ * both stats always. Nothing for a creature as printed. Dark in either theme, because it sits on
+ * the card's art, never on the page. Decorative: the card's control names the P/T itself.
+ */
+export function StatsChip({
+  card,
+  className,
+}: {
+  card: GameCard;
+  className?: string;
+}): JSX.Element | null {
+  const stats = changedStats(card);
+  if (stats === null) return null;
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="stats-chip"
+      className={cn(
+        "pointer-events-none absolute right-1 bottom-1 rounded border border-white/25 bg-black/80 px-[5px] font-mono text-[11px] font-semibold tabular-nums",
+        className,
+      )}
+    >
+      <span className={STAT_TONE[stats.powerTone]}>{stats.power}</span>
+      <span className="text-white">/</span>
+      <span className={STAT_TONE[stats.toughnessTone]}>{stats.toughness}</span>
+    </span>
+  );
 }
 
 /** Where a pointer event happened, for {@link Pointed.at}. */

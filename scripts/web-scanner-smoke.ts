@@ -436,6 +436,8 @@ async function phoneFace(
       `on the phone face the scanner's files were asked for before the press: ${early.join(", ")}`,
     );
 
+  // The page opens stopped (issue #1317): nothing is read until Start scanning is pressed.
+  await page.press("Start scanning", buttonSaying("Start scanning"));
   await page.press("Download", buttonSaying("Download", 'section[aria-label="Scanner files"]'));
   await page.until("on the phone face, the files landed and the offer went", `!${OFFER}`, 120_000);
   await page.until(
@@ -573,6 +575,8 @@ async function main() {
   ) {
     fail(`the offer does not say what it costs:\n${offer}`);
   }
+  // The view opens stopped (issue #1317): a frame goes out only once Start scanning is pressed.
+  await page.press("Start scanning", buttonSaying("Start scanning"));
   await page.until(
     "a frame was refused for want of the files",
     `document.body.innerText.includes(${JSON.stringify(NOT_DOWNLOADED)})`,
@@ -803,11 +807,12 @@ async function main() {
   await page.evaluate(`location.assign("/scanner")`);
   await page.until(
     "offline, the Scanner opened again",
-    `!!${buttonSaying("Stop scanning")} || ${ALERT}`,
+    `!!${buttonSaying("Start scanning")} || ${ALERT}`,
     60_000,
   );
   const refusedOffline = await page.evaluate(ALERT);
   if (refusedOffline) fail(`offline, the app did not open:\n${refusedOffline}`);
+  await page.press("Start scanning", buttonSaying("Start scanning"));
   await page.until(
     "offline, the card was recognised and landed in the tray",
     `!!${ADD} && /^Add 1 /.test(${ADD}.innerText.trim()) && document.body.innerText.includes(${JSON.stringify(CARD.name)})`,

@@ -2578,9 +2578,10 @@ mod tests {
             .execute_batch(&format!(
                 "CREATE TABLE cards (id TEXT PRIMARY KEY, illustration_id TEXT, name TEXT,
                     set_code TEXT, collector_number TEXT, lang TEXT, released_at TEXT,
-                    oracle_id TEXT, finishes TEXT, promo INTEGER NOT NULL DEFAULT 0);
+                    oracle_id TEXT, finishes TEXT, promo INTEGER NOT NULL DEFAULT 0,
+                    layout TEXT NOT NULL DEFAULT 'normal', type_line TEXT);
                  INSERT INTO cards VALUES ('{id}', NULL, 'Lightning Bolt', '2x2', '117', 'en',
-                    '2022-07-08', NULL, '[\"nonfoil\"]', 0);"
+                    '2022-07-08', NULL, '[\"nonfoil\"]', 0, 'normal', 'Instant');"
             ))
             .expect("a card");
     }

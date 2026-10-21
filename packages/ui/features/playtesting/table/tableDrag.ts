@@ -1,6 +1,6 @@
 import type { RefObject } from "react";
 import type { GamePlace, PlaytestAction } from "@/lib/ipc";
-import { dndDraggable, useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
+import { dndDraggable, releasePoint, useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
 
 /**
  * A card moved across the table — the payload, its reader, and the two registrations.
@@ -106,8 +106,9 @@ export function useTableDragging(): TableDrag | null {
  * a card let go there was played. Dropping a card to play it is a decision the pointer makes,
  * not the card's corner.
  *
- * **A zone catches its own cards too**, and does nothing with them. A card from the hand let go
- * over the hand asks nothing (`dropAction` is `null`), and a zone that refused it would leave the
+ * **A zone catches its own cards too**, and asks the game nothing for them. A card from the hand
+ * let go over the hand asks nothing (`dropAction` is `null`) — the hand reorders itself by where it
+ * was let go (`HandFan`, issue #1330) — and a zone that refused it would leave the
  * drop to whatever lies under it: the hand's band reaches up over the table's bottom edge, so a
  * card put back in the hand there was played. Caught, it is simply put back. Only a zone a card
  * could go to lights up for it, so the hand does not glow under a card carried out of it.
@@ -129,7 +130,8 @@ export function useTableDropTarget({
 }: {
   ref: RefObject<HTMLElement | null>;
   place: GamePlace;
-  onDrop: (drag: TableDrag, place: GamePlace) => void;
+  /** `at` is where the pointer let go, in the window's coordinates. */
+  onDrop: (drag: TableDrag, place: GamePlace, at: { x: number; y: number }) => void;
   sandbox: boolean;
   overlay?: boolean;
   pointerOnly?: boolean;
@@ -141,9 +143,54 @@ export function useTableDropTarget({
     read: readTableDrag,
     canDrop: (drag) =>
       !refuse && (drag.from === place || dropAction(drag, place, sandbox) !== null),
-    onDrop: (drag) => onDrop(drag, place),
+    onDrop: (drag) => onDrop(drag, place, releasePoint()),
     overlay,
     pointerOnly,
   });
   return !refuse && over && dragging !== null && dropAction(dragging, place, sandbox) !== null;
+}
+
+/**
+ * A card or a player a carried card can be let go on to make one of the rules' plays — an
+ * attack, a block, a target (`play/aim.ts`) — rather than a zone to move it to. The board says
+ * what each one takes; the pieces only register it.
+ */
+export interface DropAim {
+  accepts: (drag: TableDrag) => boolean;
+  onAim: (drag: TableDrag) => void;
+}
+
+/** A table's aims: each card on it, by id, and the felt between them (`table`), when it is one. */
+export interface TableAim {
+  card: (id: number) => DropAim;
+  table?: DropAim;
+}
+
+/**
+ * One aim registered on `ref`, lit (`true`) while a card it takes is over it. With no `aim` it
+ * takes nothing, so a piece can register one unconditionally.
+ *
+ * `overlay` for a card on a table — **it is drawn over the table's own target**, and has to win
+ * the pointer against it while the pointer is on the card and lose it everywhere else, which is
+ * exactly `useDndDropTarget`'s `overlay`. Anything else (a plate, a table's felt) is
+ * `pointerOnly`: a plate is small, and a card carried past it must not be caught by its corner.
+ */
+export function useAimTarget({
+  ref,
+  aim,
+  overlay = false,
+}: {
+  ref: RefObject<HTMLElement | null>;
+  aim: DropAim | undefined;
+  overlay?: boolean;
+}): boolean {
+  const { over } = useDndDropTarget({
+    ref,
+    read: readTableDrag,
+    canDrop: (drag) => aim?.accepts(drag) ?? false,
+    onDrop: (drag) => aim?.onAim(drag),
+    overlay,
+    pointerOnly: !overlay,
+  });
+  return over && aim !== undefined;
 }

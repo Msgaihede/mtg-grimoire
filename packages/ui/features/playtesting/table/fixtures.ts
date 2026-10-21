@@ -62,6 +62,8 @@ export function gameCard(name: string, over: Partial<GameCard> = {}): GameCard {
     effects: [],
     power: isCreature ? num(row?.power) : null,
     toughness: isCreature ? num(row?.toughness) : null,
+    basePower: isCreature ? num(row?.power) : null,
+    baseToughness: isCreature ? num(row?.toughness) : null,
     tax: 0,
     attachedTo: null,
     foretold: false,

@@ -69,6 +69,11 @@ pub struct GameCard {
     /// The engine's current P/T — counters, statics and all (CR 613). `None` for a non-creature.
     pub power: Option<i32>,
     pub toughness: Option<i32>,
+    /// The printed (copiable) P/T, before counters and effects (CR 208.4b, 707.2) — what the board
+    /// measures `power` and `toughness` against to mark a change. `None` for a non-creature, and
+    /// for a creature with no printed P/T (an animated land).
+    pub base_power: Option<i32>,
+    pub base_toughness: Option<i32>,
     /// What casting it from the command zone costs on top of its mana cost, in generic mana
     /// (CR 903.8). 0 for anything but a commander.
     pub tax: u32,

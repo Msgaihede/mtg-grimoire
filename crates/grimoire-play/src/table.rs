@@ -3,6 +3,7 @@
 //! engine's state and nothing of a session's — a card looks the same whoever's it is.
 
 use engine::game::commander::commander_tax;
+use engine::game::game_object::GameObject;
 use engine::game::mana_sources::{activatable_mana_options, max_mana_yield};
 use engine::types::ability::ContinuousModification;
 use engine::types::card_type::CoreType;
@@ -60,6 +61,8 @@ pub(crate) fn game_card(
         effects: effects_on(state, id),
         power: if is_creature { o.power } else { None },
         toughness: if is_creature { o.toughness } else { None },
+        base_power: if is_creature { base_pt(o).0 } else { None },
+        base_toughness: if is_creature { base_pt(o).1 } else { None },
         tax: if is_commander {
             commander_tax(state, id)
         } else {
@@ -239,6 +242,22 @@ fn describe(effect: &mut CardEffect, modification: &ContinuousModification) {
         | M::SetDynamicToughness { .. }
         | M::SetToughnessDynamic { .. } => effect.toughness = None,
         _ => {}
+    }
+}
+
+/// The P/T a board measures a creature's current P/T against (issue #1332): its printed P/T
+/// (CR 208.4b) — or, for a card whose P/T a characteristic-defining ability sets (CR 604.3, a
+/// `*/*` such as Tarmogoyf, which phase prints as 0), what that ability makes it (layer 7a, CR
+/// 613.4a), so a creature at its own count reads as unchanged. Reading the statics ungated is
+/// classification, which is what `iter_unchecked` is for.
+fn base_pt(o: &GameObject) -> (Option<i32>, Option<i32>) {
+    let defined = o.static_definitions.iter_unchecked().any(|s| {
+        s.characteristic_defining && s.modifications.iter().any(|m| m.layer() == Layer::CharDef)
+    });
+    if defined {
+        (o.layer_base_power, o.layer_base_toughness)
+    } else {
+        (o.base_power, o.base_toughness)
     }
 }
 
