@@ -124,7 +124,7 @@ which is SQLite. The engine holds the corpus, so the page asks the engine's Work
 `scanner_labels()` and hands the buffer to the scanner's Worker, which passes it to `load`.
 
 - **The encoding is `card_scanner::labels`** ([card-scanner.md](card-scanner.md) §2 has the
-  layout): the ten columns `Reference::load_labels` reads, each distinct word and id written
+  layout): the twelve columns `Reference::load_labels` reads, each distinct word and id written
   once in a table and each row naming them by place. The dev corpus's 118 475 labels are
   5 998 193 B.
 - **`host::scanner_labels` reads through the state's one connection, a page at a time**

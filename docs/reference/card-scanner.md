@@ -212,23 +212,25 @@ A permanent 404 is recorded so a re-run never retries it; a transient failure is
 ### The labels, as bytes — `labels.rs` (2026-10-07)
 
 The bundle holds ids. What an id *is* — a name, a set, a number, a language, a release date,
-an oracle, an artwork, its finishes, whether it is a promo — is ten columns of `corpus.db`'s `cards`, which
+an oracle, an artwork, its finishes, whether it is a promo or a token — is twelve columns of `corpus.db`'s `cards`, which
 `Reference::load_labels` reads behind the `corpus` feature. **A browser's scanner has no
 `corpus` feature**: it is a module of this crate alone in a Worker of its own
 (`crates/grimoire-scan`, the light app's step 7.5), and the corpus is the engine's, in another
-Worker. So the engine reads the ten columns, writes them down, and the page hands the bytes
+Worker. So the engine reads the twelve columns, writes them down, and the page hands the bytes
 across. `src/labels.rs` is both ends:
 
 | | Needs `corpus` | What |
 | --- | --- | --- |
-| `Row`, `Row::attach` | no | One printing as the corpus has it, and the three calls that attach it — `set_finishes`, `set_promo`, then `add_label`. `load_labels` goes through the same three |
+| `Row`, `Row::attach` | no | One printing as the corpus has it, and the four calls that attach it — `set_finishes`, `set_promo`, `set_token`, then `add_label`. `load_labels` goes through the same four |
+| `is_token` | no | Whether a `layout` and `type_line` make a token or an emblem — the engine's `deck_tokens::is_token_printing`, spelled again below it and held to it by that function's test |
 | `Encoder` | no | `push(&Row)` a row at a time, `finish()` the file |
 | `decode`, `attach` | no | Read a file through and answer it only if all of it is sound; attach every row, or none |
-| `COLUMNS`, `Row::from_sql`, `read_page` | yes | The ten columns, one row read from them, and `limit` rows after a `rowid` into an `Encoder` |
+| `COLUMNS`, `Row::from_sql`, `read_page` | yes | The twelve columns, one row read from them, and `limit` rows after a `rowid` into an `Encoder` |
 
-**The layout, version 2** (`MAGIC` is `MTGL`, `VERSION` is 2; a varint is LEB128, ten bytes at
+**The layout, version 3** (`MAGIC` is `MTGL`, `VERSION` is 3; a varint is LEB128, ten bytes at
 most). Version 1 had no promo byte; it was added for the promo filter (issue #981, under
-*Filters*), and both ends of a hand-over are one build, so a version 1 file is never met:
+*Filters*). Version 3 made that byte the row's flags, for the tokens a session leaves out (issue
+#1323, under *Filters*). Both ends of a hand-over are one build, so an older file is never met:
 
 ```text
 "MTGL" · version (1 byte) · rows (varint)
@@ -240,7 +242,8 @@ rows ×  id (16 bytes)
         name, set, number,         varint each: a place in its table
           language, released
         finishes                   varint n, then n places in the finish table
-        promo                      1 byte: 0, or 1 for a printing `cards.promo` marks
+        flags                      1 byte: 1 (`PROMO`) for a printing `cards.promo` marks,
+                                     2 (`TOKEN`) for a token or an emblem; no other bit
 ```
 
 Nothing follows the last row. A release date that was `NULL` is the empty string, as
@@ -250,7 +253,7 @@ Nothing follows the last row. A release date that was `NULL` is the empty string
 in first-seen order, so the encoder is one pass and holds no row.
 
 **5 998 193 B for those 118 475 labels** at version 1 (version 2's promo byte adds one a row,
-118 475 B; not re-measured) — against 21 555 383 B for the same rows as the JSON
+118 475 B, and version 3's flags are the same byte; not re-measured) — against 21 555 383 B for the same rows as the JSON
 the frame bench carries (§11), 28% of it. Through brotli at quality 11 it is 4 748 121 B, which
 matters to nobody: it never crosses a network, only from one Worker to the next.
 
@@ -3176,6 +3179,26 @@ Filters popover, the phone's Filters page), and the trigger's summary ends `· n
 scan does not carry it**: the scan inbox rebuilds a label from the fields it checks, and it checks
 no such field, so `replay::LabelFilters::scan_filters` admits promos.
 
+**Tokens are left out of every scan by default — the session's, not a filter** (issue #1323). A
+reader sorting a collection is not sorting its tokens, and a token that shares a card's name or art
+(Ornithopter, a Treasure beside the card that makes it) is one more printing for the descriptor to
+read the card as. The bundle still holds every token; `Session::set_tokens(true)` is what matches
+them, and nothing in either app calls it (there is no toggle, on purpose, until someone asks for
+one). A token is `labels::is_token` — a `token`, `double_faced_token` or `emblem` layout, or a
+`flip` or `reversible_card` printing a face of whose type line begins `Token` or `Emblem`: the
+engine's `deck_tokens::is_token_printing`, whose test holds the two to one answer. The reference
+keeps the tokens as a set beside the promos (`Reference::is_token`, `set_token`) and the labels
+file carries them in its flags byte. **`Reference::mask_without_tokens` is the mask a session
+searches under**: for empty filters it is `Mask::all_but` the tokens — some 17 000 ids, not a list
+of the hundred thousand it admits — and under filters `mask_for`'s list with the tokens off it. A
+reference with no token recorded (no labels, or the evaluation's and the replay's own label rows,
+which read no layout) is unrestricted as before, so those tools still match tokens. The session
+builds that mask in `Session::new`, so the tokens are out from the first frame and not from the
+first filter a page sends; filters that admit nothing but tokens (a token set alone) are *No
+printing matches these filters.* The resolve trace's `filters` tier reads `all but N printings`.
+⚠️ **Not measured**: with tokens left out every frame's search is masked, a hash lookup a row in a
+set a sixth the corpus's size, where an unfiltered reader's search used to look nothing up.
+
 **The mask constrains every tier, not only the hash search** — §3 "Match"'s rule, carried to the
 readers. `Reference::mask_for` builds one `Mask` from the labels; the hash search, the title lookup
 and the collector lookup all take it. A title read resolves only to a card with at least one
@@ -3184,7 +3207,7 @@ its permitted neighbour — a clean *Shock* must not come back as a one-edit cou
 pairing that names an excluded printing is skipped and the next pairing tried. Otherwise one tier
 would hand straight back what another had excluded.
 
-`Session::set_filters` lifts the mask for empty filters; refuses with a sentence when there are no
+`Session::set_filters` lifts the mask for empty filters (down to the tokens, above); refuses with a sentence when there are no
 labels (*Filters need card names, and the scanner has none loaded — it needs corpus.db beside the
 bundle.*) or when nothing survives (*No printing matches these filters.*), keeping the mask already
 in force; and on a change **resets the tracker** — evidence gathered against another candidate set is
