@@ -261,8 +261,8 @@ never replay frames of their own: there is nothing to watch, so the board says "
 the engine runs its turn. **The reader can attack it**, and its life drops by the rules.
 
 **Dead on your turn N.** The goldfish's seat carries `deadOn` (`dead_on`): the reader's own turn
-(phase's `turns_taken`) on which its life first reached 0 or less, `null` again once it is back
-above 0. It is the one count of the reader's turns alone; everything else counts the game's turns,
+(phase's `turns_taken`) on which it first would have lost — its life at 0 or less, or 21 combat
+damage from one of the reader's commanders (issue #1336) — `null` again once neither holds. It is the one count of the reader's turns alone; everything else counts the game's turns,
 both seats'. It is part of undo's moment (`Checkpoint`), so an undo past the killing blow brings
 the goldfish back to life. The plate reads "Dead on your turn 5", highlighted with a gold
 edge, and the game goes on until the reader deals another. A goldfish the rules bring to 0 is told
@@ -384,9 +384,9 @@ the opponent's Grizzly Bears into their graveyard").
 **The table is laid out by the rules, not by where a card is let go.** Creatures are in front.
 Behind them, lands are on the left and every other permanent on the right. Each lane is one row,
 and its card size is solved so every pile fits (`layout.ts`). Cards of one name that look the same
-— same printing, same tapped state, same counters, same P/T — are one pile: the cards themselves
-stacked, each edged 5 px up and to the right of the one above it, five drawn at most, and a ×N chip
-on the pile's bottom edge for the count (issue #1001).
+— same printing, same tapped state, same counters, same effects, same P/T — are one pile: the cards
+themselves stacked, each edged 5 px up and to the right of the one above it, five drawn at most,
+and a ×N chip on the pile's bottom edge for the count (issue #1001).
 
 **A creature whose P/T has changed wears it in a chip over its printed box** (issue #1332):
 `Inspect.tsx`' `StatsChip`, bottom right of the card on the table and in the preview. Both stats

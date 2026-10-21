@@ -59,6 +59,7 @@ export function gameCard(name: string, over: Partial<GameCard> = {}): GameCard {
     isCommander: false,
     tapped: false,
     counters: [],
+    effects: [],
     power: isCreature ? num(row?.power) : null,
     toughness: isCreature ? num(row?.toughness) : null,
     basePower: isCreature ? num(row?.power) : null,
@@ -104,6 +105,7 @@ export function emptySeat(player: PlaytestPlayer, over: Partial<PlaytestSeat> = 
     libraryCards: [],
     manaOpen: 0,
     mana: manaTable(),
+    commanderDamage: [],
     deadOn: null,
     ...over,
   };

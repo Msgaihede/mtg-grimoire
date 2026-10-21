@@ -43,6 +43,7 @@ function card(name: string, over: Partial<GameCard> = {}): GameCard {
     isCommander: false,
     tapped: false,
     counters: [],
+    effects: [],
     power: null,
     toughness: null,
     basePower: null,
@@ -75,6 +76,31 @@ describe("pilesOf", () => {
       ["Plains", 1, false],
     ]);
     expect(pilesOf(cards, "creature")).toHaveLength(2);
+  });
+
+  it("keeps a card under an effect apart from its untouched twin (issue #1327)", () => {
+    const grown = {
+      kind: "modifyPt" as const,
+      source: "Giant Growth",
+      gained: [],
+      lost: [],
+      losesAbilities: false,
+      abilities: [],
+      power: 3,
+      toughness: 3,
+    };
+    const piles = pilesOf(
+      [
+        card("Bear", { lane: "creature" }),
+        card("Bear", { lane: "creature", effects: [grown] }),
+        card("Bear", { lane: "creature" }),
+      ],
+      "creature",
+    );
+    expect(piles.map((p) => [p.ids.length, p.card.effects.length])).toEqual([
+      [2, 0],
+      [1, 1],
+    ]);
   });
 
   it("keeps two creatures of one name apart when their power and toughness differ", () => {

@@ -4,7 +4,7 @@
 
 use crate::cards::{CardFacts, FaceFacts};
 use crate::on_engine_stack;
-use crate::view::{GameCard, Lane, ManaByType, Place};
+use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, Place};
 
 use super::session::Playtest;
 use super::view::{
@@ -1469,6 +1469,153 @@ fn a_free_cast_that_asks_is_cancelled_with_its_emblem() {
     assert!(find(&back.view.you.hand, "Giant Growth").is_some());
 }
 
+/// Two partners, each an 11/11 for {G}: two commanders, so two counts of commander damage.
+fn partners() -> Vec<CardFacts> {
+    let partner = |name: &str| {
+        let mut c = card(
+            name,
+            Some("{G}"),
+            "Legendary Creature — Giant",
+            "Partner",
+            Some(("11", "11")),
+            1,
+        );
+        c.commander = true;
+        c.keywords = vec!["Partner".into()];
+        c
+    };
+    let mut cards = deck();
+    cards.retain(|c| !c.commander);
+    cards.extend([partner("Ulda, the Mountain"), partner("Brann, the Hill")]);
+    cards
+}
+
+/// The reader's commanders out of the command zone by hand, a turn cycle on, and the attack step
+/// of the reader's next turn: the ids of the two, Ulda first.
+fn partners_ready(game: &mut Playtest) -> (u64, u64) {
+    let id = |game: &Playtest, name: &str| {
+        find(&game.view().you.command, name)
+            .unwrap_or_else(|| panic!("{name} in the command zone"))
+            .id
+    };
+    let (ulda, brann) = (id(game, "Ulda, the Mountain"), id(game, "Brann, the Hill"));
+    for id in [ulda, brann] {
+        game.act(A::Move {
+            id,
+            to: Place::Battlefield,
+        })
+        .expect("out of the command zone");
+    }
+    let on = |game: &Playtest, name: &str| {
+        find(&game.view().you.battlefield, name)
+            .unwrap_or_else(|| panic!("{name} on the battlefield"))
+            .id
+    };
+    (on(game, "Ulda, the Mountain"), on(game, "Brann, the Hill"))
+}
+
+/// Attack the goldfish with `ids` on the reader's next turn, a discard to hand size on the way
+/// answered by the engine.
+fn attack_fish(game: &mut Playtest, ids: &[u64]) -> PlaytestStep {
+    let mut step = game.act(A::EndTurn).expect("a turn cycle");
+    while step.view.stage == Stage::Prompt {
+        step = game.act(A::Auto).expect("the engine's answer");
+    }
+    assert_eq!(step.view.stage, Stage::Main);
+    let asked = game.act(A::Pass).expect("to combat");
+    assert_eq!(asked.view.stage, Stage::Attack);
+    game.act(A::Attack {
+        attacks: ids
+            .iter()
+            .map(|&attacker| PlaytestAttackPair {
+                attacker,
+                target: None,
+                player: None,
+            })
+            .collect(),
+    })
+    .expect("attack")
+}
+
+/// Issue #1336: commander damage is counted per commander (CR 903.10a), so two partners hitting
+/// for 11 each are two counts of 11 and no loss, and the 21st from one of them is the goldfish's
+/// death (CR 704.6c) with its life still above 0. Undo takes the count back with the game.
+#[test]
+fn commander_damage_is_counted_per_commander_and_21_from_one_kills_the_goldfish() {
+    let (both, again, undone) = engine(|| {
+        let (mut game, _) = fish(&partners(), 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        let (ulda, brann) = partners_ready(&mut game);
+        let both = attack_fish(&mut game, &[ulda, brann]);
+        let again = attack_fish(&mut game, &[ulda]);
+        let undone = game.act(A::Undo).expect("undo the attack");
+        (both, again, undone)
+    });
+    let view = &both.view;
+    assert_eq!(view.commander_damage_lethal, Some(21));
+    let fish = &view.opponents[0];
+    assert_eq!(fish.life, 18);
+    let dealt: Vec<(&str, PlaytestPlayer, u32)> = fish
+        .commander_damage
+        .iter()
+        .map(|c| (c.name.as_str(), c.player, c.damage))
+        .collect();
+    assert_eq!(dealt.len(), 2, "one count a commander: {dealt:?}");
+    assert!(dealt.contains(&("Ulda, the Mountain", YOU, 11)));
+    assert!(dealt.contains(&("Brann, the Hill", YOU, 11)));
+    assert!(fish.commander_damage.iter().all(|c| c.card_id.is_some()));
+    assert!(view.you.commander_damage.is_empty());
+    assert_eq!(fish.dead_on, None, "22 in all, but no 21 from one");
+    for source in ["Ulda, the Mountain", "Brann, the Hill"] {
+        assert!(
+            both.happened.iter().any(|h| matches!(
+                h,
+                H::CommanderDamage { source: s, seat: FISH, amount: 11, total: 11, .. }
+                    if s == source
+            )),
+            "{source}: {:?}",
+            both.happened
+        );
+    }
+
+    let fish = &again.view.opponents[0];
+    assert_eq!(fish.life, 7, "still alive by its life");
+    let ulda = fish
+        .commander_damage
+        .iter()
+        .find(|c| c.name == "Ulda, the Mountain")
+        .unwrap();
+    assert_eq!(ulda.damage, 22);
+    assert_eq!(fish.dead_on, Some(3), "dead on the reader's third turn");
+    assert!(!fish.out, "the goldfish never loses");
+    assert_eq!(again.view.stage, Stage::Main);
+    assert!(again.happened.iter().any(|h| matches!(
+        h,
+        H::CommanderDamage {
+            seat: FISH,
+            amount: 11,
+            total: 22,
+            ..
+        }
+    )));
+
+    let fish = &undone.view.opponents[0];
+    assert_eq!(fish.dead_on, None);
+    assert!(fish.commander_damage.iter().all(|c| c.damage == 11));
+}
+
+/// A game without a commander counts no commander damage at all.
+#[test]
+fn a_game_without_a_commander_has_no_commander_damage_lethal() {
+    let view = engine(|| {
+        let mut cards = deck();
+        cards.retain(|c| !c.commander);
+        fish(&cards, 7).1.view
+    });
+    assert_eq!(view.commander_damage_lethal, None);
+    assert!(view.opponents[0].commander_damage.is_empty());
+}
+
 /// A foretell deck (issue #1077): Islands and Behold the Multiverse, the card the issue names.
 /// Not Ranar the Ever-Watchful, the issue's other card: phase does not yet parse its free foretell
 /// or its exile trigger (`support.rs` reports both as gaps).
@@ -1733,6 +1880,161 @@ fn a_commander_cast_by_its_back_face_is_still_the_commander() {
     assert_eq!(back.view.you.command.len(), 1);
     assert!(back.view.you.command[0].is_commander);
     assert_eq!(back.view.you.command[0].tax, 2);
+}
+
+/// Issue #1327: each continuous effect on a card comes with it, by kind and source — a resolved
+/// spell's (Giant Growth's +3/+3) and a permanent's static (an anthem's +1/+1 and trample) alike —
+/// and a permanent's static on itself is its printed self, never an effect on it.
+#[test]
+fn a_card_carries_each_effect_on_it_with_its_source() {
+    let mut cards = deck();
+    cards.push(card(
+        "Banner Marshal",
+        Some("{1}{G}"),
+        "Creature — Human Soldier",
+        "Creatures you control get +1/+1 and have trample.",
+        Some(("2", "2")),
+        8,
+    ));
+    let (grown, marshal, bears) = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let growth = in_hand(&mut game, "Giant Growth");
+        let grown = game.act(A::Play { id: growth }).unwrap().view;
+        let grown = find(&grown.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .clone();
+        put_down(&mut game, "Banner Marshal");
+        let view = game.view();
+        let on = |name: &str| find(&view.you.battlefield, name).unwrap().clone();
+        (grown, on("Banner Marshal"), on("Grizzly Bears"))
+    });
+    assert_eq!(
+        grown.effects,
+        vec![CardEffect {
+            kind: EffectKind::ModifyPt,
+            source: "Giant Growth".into(),
+            gained: vec![],
+            lost: vec![],
+            loses_abilities: false,
+            abilities: vec![],
+            power: Some(3),
+            toughness: Some(3),
+        }],
+    );
+    let from = |card: &GameCard, kind: EffectKind, source: &str| {
+        card.effects
+            .iter()
+            .find(|e| e.kind == kind && e.source == source)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {kind:?} from {source} on {card:?}"))
+    };
+    let anthem = from(&bears, EffectKind::ModifyPt, "Banner Marshal");
+    assert_eq!((anthem.power, anthem.toughness), (Some(1), Some(1)));
+    let trample = from(&bears, EffectKind::Ability, "Banner Marshal");
+    assert_eq!(trample.gained, vec!["Trample".to_string()]);
+    assert!(
+        bears.effects.iter().any(|e| e.source == "Giant Growth"),
+        "the growth lasts the turn: {bears:?}",
+    );
+    assert_eq!(
+        marshal.effects,
+        vec![],
+        "its own static is its printed self"
+    );
+    assert_eq!((marshal.power, marshal.toughness), (Some(3), Some(3)));
+}
+
+/// Issue #1327's card: an effect that makes a creature a Demon and grants it a dies trigger is
+/// two effects from one source — the type it gained, and the trigger's own text.
+#[test]
+fn a_type_and_a_granted_trigger_are_told_with_their_source() {
+    let mut cards = deck();
+    cards.push(card(
+        "Demonic Pact Rite",
+        Some("{G}"),
+        "Instant",
+        "Until end of turn, target creature becomes a Demon in addition to its other types and gains \"When this creature dies, draw a card.\"",
+        None,
+        8,
+    ));
+    let bear = engine(move || {
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        put_down(&mut game, "Grizzly Bears");
+        let rite = in_hand(&mut game, "Demonic Pact Rite");
+        let view = game.act(A::Play { id: rite }).unwrap().view;
+        find(&view.you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .clone()
+    });
+    let kinds: Vec<_> = bear
+        .effects
+        .iter()
+        .map(|e| (e.kind, e.source.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (EffectKind::Type, "Demonic Pact Rite"),
+            (EffectKind::Ability, "Demonic Pact Rite"),
+        ],
+        "{bear:?}",
+    );
+    assert_eq!(bear.effects[0].gained, vec!["Demon".to_string()]);
+    assert!(bear.type_line.contains("Demon"), "{}", bear.type_line);
+    assert_eq!(bear.effects[1].abilities.len(), 1, "{bear:?}");
+    assert!(
+        bear.effects[1].abilities[0].to_lowercase().contains("dies"),
+        "{:?}",
+        bear.effects[1].abilities,
+    );
+}
+
+/// Issue #1328: a "you may" in an ability the reader activated asks with the ability's words, so
+/// the board can say what is being agreed to — not the card's name alone.
+#[test]
+fn a_may_in_an_activated_ability_asks_with_its_words() {
+    let step = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Wishing Stone",
+            Some("{1}"),
+            "Artifact",
+            "{1}, {T}: You may draw a card.",
+            None,
+            1,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        for _ in 0..2 {
+            put_down(&mut game, "Forest");
+        }
+        let stone = put_down(&mut game, "Wishing Stone");
+        let mut step = game.act(A::Activate { id: stone }).expect("activate");
+        for _ in 0..4 {
+            if step.view.prompt.is_some() {
+                break;
+            }
+            step = game.act(A::Pass).expect("pass");
+        }
+        step
+    });
+    let prompt = step.view.prompt.as_ref().expect("the may is asked");
+    assert_eq!(prompt.kind, "OptionalEffectChoice", "{:?}", step.happened);
+    assert_eq!(prompt.source.as_deref(), Some("Wishing Stone"));
+    assert!(
+        prompt
+            .source_text
+            .as_deref()
+            .is_some_and(|t| t.to_lowercase().contains("draw a card")),
+        "the question names its ability's words: {prompt:?}"
+    );
 }
 
 /// A game whose library holds Invoke Calamity, cheap for the test, and one instant to cast with

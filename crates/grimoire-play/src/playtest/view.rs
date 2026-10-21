@@ -104,6 +104,9 @@ pub struct PlaytestView {
     /// never attacks or blocks, and that — like the reader — cannot lose (its `dead_on` says when
     /// it would have). The game is never `Over`.
     pub goldfish: bool,
+    /// A Commander game's commander damage at which a player loses (CR 704.6c): 21. `None` in a
+    /// game without a commander, where commander damage is not counted.
+    pub commander_damage_lethal: Option<u32>,
     /// The reader's last action can be taken back (`PlaytestAction::Undo`), with all the opponent
     /// did after it. Never in a replay frame.
     pub can_undo: bool,
@@ -177,10 +180,29 @@ pub struct PlaytestSeat {
     pub mana_open: u32,
     /// The same open mana by type, and what is floating in the pool (`crate::view::ManaTable`).
     pub mana: ManaTable,
-    /// The goldfish's, which cannot lose: the reader's own turn, from 1, on which this player's
-    /// life first reached 0 or less — the board's "dead on your turn 5" — and `None` again once it
-    /// is back above 0. Always `None` for a player who can lose.
+    /// The commander damage this player has been dealt (CR 903.10a): one entry a commander, so a
+    /// pair of partners is two, in the order the engine first counted them. Only combat damage
+    /// counts, and only once a commander has dealt some; empty outside a Commander game.
+    pub commander_damage: Vec<PlaytestCommanderDamage>,
+    /// The goldfish's, which cannot lose: the reader's own turn, from 1, on which this player
+    /// first would have lost — their life at 0 or less, or one commander's damage to them at the
+    /// view's `commander_damage_lethal` — the board's "dead on your turn 5", and `None` again once
+    /// neither holds. Always `None` for a player who can lose.
     pub dead_on: Option<u32>,
+}
+
+/// One commander's combat damage to one player over the game (CR 903.10a). At the view's
+/// `commander_damage_lethal` the player loses (CR 704.6c), unless something says they can't.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestCommanderDamage {
+    /// The commander's id: the card the table shows wherever it is now.
+    pub id: u64,
+    pub name: String,
+    pub card_id: Option<String>,
+    /// Whose commander it is.
+    pub player: PlaytestPlayer,
+    pub damage: u32,
 }
 
 /// The creatures in combat: each attacker and what it attacks, and each block.
@@ -635,6 +657,16 @@ pub enum PlaytestHappened {
         seat: PlaytestPlayer,
         amount: i32,
         total: i32,
+    },
+    /// A commander dealt combat damage to a player (CR 903.10a): `seat` is the player dealt it,
+    /// `total` all that commander has dealt them this game. At the view's
+    /// `commander_damage_lethal` they lose, unless something says they can't.
+    CommanderDamage {
+        source: String,
+        source_id: u64,
+        seat: PlaytestPlayer,
+        amount: u32,
+        total: u32,
     },
     TokensCreated {
         seat: PlaytestPlayer,

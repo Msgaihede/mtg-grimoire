@@ -16,6 +16,7 @@ import {
   fourPlayerAttack,
   fourPlayerLost,
   gameOver,
+  goldfishCommanderDead,
   goldfishDead,
   goldfishOpeningHand,
   goldfishTurn,
@@ -435,6 +436,31 @@ describe("PlaytestBoard at a four-player table", () => {
     expect(screen.getByRole("region", { name: "Opponent 2 · Partners" })).toBeInTheDocument();
   });
 
+  it("counts commander damage on each plate, one mark a commander, red at 21", () => {
+    setup(fourPlayer().view, { opponentNames: FOUR });
+    // The reader's two partners' damage stays two counts, never one of 10.
+    const yourPlate = document.querySelector('[data-plate="you"]') as HTMLElement;
+    const thrasios = within(yourPlate).getByLabelText(
+      "6 commander damage from Thrasios, Triton Hero",
+    );
+    expect(thrasios).toHaveAttribute("title", "Thrasios, Triton Hero: 6 of 21 commander damage");
+    expect(thrasios).not.toHaveAttribute("data-lethal");
+    expect(
+      within(yourPlate).getByLabelText("4 commander damage from Tymna the Weaver"),
+    ).toBeInTheDocument();
+    const second = document.querySelector('[data-plate="opponent2"]') as HTMLElement;
+    expect(within(second).getByLabelText("3 poison")).toBeInTheDocument();
+    expect(
+      within(second).getByLabelText("14 commander damage from Kenrith, the Returned King"),
+    ).toBeInTheDocument();
+    const third = document.querySelector('[data-plate="opponent3"]') as HTMLElement;
+    expect(
+      within(third).getByLabelText("21 commander damage from Kenrith, the Returned King, lethal"),
+    ).toHaveAttribute("data-lethal", "true");
+    const first = document.querySelector('[data-plate="opponent"]') as HTMLElement;
+    expect(first.querySelector("[data-commander-damage]")).toBeNull();
+  });
+
   it("marks an opponent who is out", () => {
     setup(fourPlayer().view, { opponentNames: FOUR });
     const out = screen.getByRole("region", { name: "Opponent 3 · Mono-White" });
@@ -557,6 +583,19 @@ describe("PlaytestBoard against the goldfish", () => {
   it("says on which of the reader's turns the goldfish died", () => {
     setup(goldfishDead(), { opponentNames: GOLDFISH });
     expect(screen.getByText("Dead on your turn 8")).toBeInTheDocument();
+  });
+
+  it("says the goldfish died to commander damage with its life above 0", () => {
+    setup(goldfishCommanderDead(), { opponentNames: GOLDFISH });
+    expect(screen.getByText("Dead on your turn 8")).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("21 commander damage from Kenrith, the Returned King, lethal"),
+    ).toBeInTheDocument();
+  });
+
+  it("draws no commander damage outside a Commander game", () => {
+    setup(turnFive().view);
+    expect(document.querySelector("[data-commander-damage]")).toBeNull();
   });
 
   it("goes back to the deck it was opened from, under the goldfish's undo scope", async () => {

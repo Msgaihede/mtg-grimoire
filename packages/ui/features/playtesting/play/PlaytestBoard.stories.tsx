@@ -18,12 +18,14 @@ import {
   fourPlayerCombat,
   fourPlayerLost,
   gameOver,
+  goldfishCommanderDead,
   goldfishDead,
   goldfishOpeningHand,
   goldfishTurn,
   castPick,
   keepPick,
   openingHand,
+  optionalEffectPrompt,
   playLocally,
   replayStep,
   respondStep,
@@ -257,6 +259,66 @@ export const PartlyPlayed: Story = {
   },
 };
 
+/** Each effect on a card is a chip of its own, what happened and where from (issue #1327):
+ *  Tarmogoyf made a Demon with a dies trigger by Clavileño, and pumped by Giant Growth. Resting
+ *  on it opens the preview, which says each in full. */
+export const EffectsOnACard: Story = {
+  args: (() => {
+    const { view, goyf } = turnFive();
+    const from = { lost: [], losesAbilities: false, power: null, toughness: null };
+    const affected: GameCard = {
+      ...goyf,
+      power: 6,
+      toughness: 7,
+      typeLine: "Creature — Lhurgoyf Demon",
+      effects: [
+        {
+          ...from,
+          kind: "type",
+          source: "Clavileño, First of the Blessed",
+          gained: ["Demon"],
+          abilities: [],
+        },
+        {
+          ...from,
+          kind: "ability",
+          source: "Clavileño, First of the Blessed",
+          gained: [],
+          abilities: [
+            "When ~ dies, draw a card and create a tapped 4/3 white and black Vampire Demon creature token with flying.",
+          ],
+        },
+        {
+          ...from,
+          kind: "modifyPt",
+          source: "Giant Growth",
+          gained: [],
+          abilities: [],
+          power: 3,
+          toughness: 3,
+        },
+      ],
+    };
+    return {
+      view: {
+        ...view,
+        you: {
+          ...view.you,
+          battlefield: view.you.battlefield.map((c) => (c.id === goyf.id ? affected : c)),
+        },
+      },
+    };
+  })(),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("+Demon · Clavileño, First of the Blessed")).toBeVisible();
+    await expect(canvas.getByText("+3/+3 · Giant Growth")).toBeVisible();
+    await expect(
+      canvas.getByRole("button", { name: /^Tarmogoyf, \+Demon from Clavileño/ }),
+    ).toBeVisible();
+  },
+};
+
 /** A spell of each seat's on the stack, top first, each with a dotted arrow at its target: the
  *  reader's Counterspell at the Bolt, the Bolt at the reader's plate (issue #1071). */
 export const StackInUse: Story = {
@@ -288,6 +350,12 @@ export const TargetPrompt: Story = {
 /** How to cast an adventurer. */
 export const CastChoice: Story = {
   args: { view: castChoicePrompt().view },
+};
+
+/** A "you may" in an activated ability: the ability's words beside the yes and the no, so the
+ *  reader knows what they agree to (issue #1328). */
+export const OptionalEffect: Story = {
+  args: { view: optionalEffectPrompt().view },
 };
 
 /** Two triggers at once: each answer is an order, said first-to-resolve first, with pictures. Two
@@ -444,13 +512,22 @@ const POD = ["Boros Aggro", "Thrasios & Tymna", "Bruna Angels"];
 
 /**
  * A four-player Commander table (issue #994): three opponent areas side by side over the
- * reader's table, in turn order from the left — Opponent 2 on three poison, Opponent 3 out.
+ * reader's table, in turn order from the left — Opponent 2 on three poison, Opponent 3 out. Each
+ * plate counts the commander damage its player has taken (issue #1336), one mark a commander:
+ * Kenrith's 14 on Opponent 2, the 21 in red that put Opponent 3 out, and the reader's 6 and 4
+ * from Thrasios and Tymna.
  */
 export const FourPlayer: Story = {
   args: { view: fourPlayer().view, opponentNames: POD, log: [] },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("region", { name: "Opponent 2's battlefield" })).toBeVisible();
+    await expect(
+      canvas.getByLabelText("21 commander damage from Kenrith, the Returned King, lethal"),
+    ).toBeVisible();
+    await expect(
+      canvas.getByLabelText("6 commander damage from Thrasios, Triton Hero"),
+    ).toBeVisible();
     await expect(canvas.getByRole("region", { name: "Opponent 3 · Bruna Angels" })).toHaveAttribute(
       "data-out",
       "true",
@@ -547,6 +624,19 @@ export const GoldfishLog: Story = {
     const log = canvas.getByRole("region", { name: "Game log" });
     await expect(within(log).getByRole("heading", { name: "Turn 17" })).toBeVisible();
     await expect(within(log).getByRole("heading", { name: "Opening hand" })).toBeVisible();
+  },
+};
+
+/**
+ * The goldfish dead to commander damage (issue #1336): Kenrith's 21 in red on its plate, which
+ * says the reader's turn it would have died on though its life is still 12.
+ */
+export const GoldfishCommanderDamage: Story = {
+  args: { view: goldfishCommanderDead() },
+  render: (args) => <Played view={args.view!} onAct={args.onAct} log={GOLDFISH_LOG} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Dead on your turn 8")).toBeVisible();
   },
 };
 

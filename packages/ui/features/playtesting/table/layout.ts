@@ -77,8 +77,8 @@ export interface ZoneSize {
 
 /**
  * One pile: the cards of one name that look the same — same tapped state, same counters, same
- * power and toughness (the changed-stats chip, issue #1332) — and
- * so are drawn as one card with the rest edged under it. The ids are the engine's, in table order.
+ * power and toughness (the changed-stats chip, issue #1332), same effects (issue #1327) — and so
+ * are drawn as one card with the rest edged under it. The ids are the engine's, in table order.
  */
 export interface Pile {
   /** Stable within one view: the first card's id. */
@@ -95,13 +95,15 @@ export interface Pile {
 }
 
 /**
- * What makes two cards one pile: the picture, the name, the state, the counters and the P/T — and
- * whether the rules let it tap for mana, so a click on a pile's top card always taps one that can
- * (a summoning-sick Llanowar Elves is not its ready twin).
+ * What makes two cards one pile: the picture, the name, the state, the counters, the P/T and the
+ * effects on it — a Bear under Giant Growth is not its untouched twin (issue #1327) — and whether
+ * the rules let it tap for mana, so a click on a pile's top card always taps one that can (a
+ * summoning-sick Llanowar Elves is not its ready twin).
  */
 function pileKey(c: GameCard): string {
   const counters = c.counters.map((k) => `${k.kind}=${k.count}`).join(",");
   const pt = `${c.power ?? ""}/${c.toughness ?? ""}`;
+  const effects = c.effects.length === 0 ? "" : JSON.stringify(c.effects);
   return [
     c.cardId ?? "",
     c.name,
@@ -109,6 +111,7 @@ function pileKey(c: GameCard): string {
     counters,
     pt,
     c.isToken ? "t" : "",
+    effects,
     c.canTapForMana ? "m" : "",
   ].join("|");
 }

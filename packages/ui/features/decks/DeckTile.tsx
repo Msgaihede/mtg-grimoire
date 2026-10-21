@@ -13,7 +13,7 @@
  * reading it out of `DecksPage.tsx` would have been an import back into the file this was lifted
  * out of — erased at runtime, and a cycle to a reader and to `import/no-cycle` all the same.
  */
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Archive, ArchiveRestore, Check, Copy, FolderInput, Pencil, Trash2, X } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { useFolderFieldReturn } from "@/components/FolderNameField";
@@ -31,12 +31,12 @@ import { notify } from "@/lib/notifications";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { DeckColorBar } from "./DeckColorBar";
-import { coverUrl, deckBadge, hasCover } from "./deckCover";
+import { coverUrl, deckBadge, hasCover, type DeckBadge } from "./deckCover";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
 import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import type { Panel } from "./panels";
-import { useTagOverflow } from "./tagRow";
+import { useTagOverflow, type TagOverflow } from "./tagRow";
 import { receipt, type Decks } from "./useDecks";
 import { ANY_GAME, gameLabel } from "./useFormatSpecs";
 
@@ -361,8 +361,8 @@ export function DeckTile({
    *  does not move when a bracket that was always coming arrives. See {@link bracketExpected}. */
   const edgeTaken = hasMarks || bracketExpected;
   /** Whether the tag row has tags it cannot draw — and if so, the room its `…` pill takes. */
-  const { rowRef, moreRef, reserve } = useTagOverflow(deck.tags.join("\n"));
-  const tagsHidden = reserve !== null && deck.tags.length > 0;
+  const overflow = useTagOverflow(deck.tags.join("\n"));
+  const tagsHidden = overflow.reserve !== null && deck.tags.length > 0;
   const confirming = panel?.kind === "deleteDeck" && panel.deckId === deck.id;
   const choosingFolder = panel?.kind === "moveDeck" && panel.deckId === deck.id;
   const renaming = panel?.kind === "renameDeck" && panel.deckId === deck.id;
@@ -423,13 +423,7 @@ export function DeckTile({
 
   /** The caption's words, drawn in the button at rest and again under the field — see
    *  {@link CAPTION_LINE}. One node, so the two drawings cannot come to say different things. */
-  const caption = (
-    <>
-      {deck.formatName ?? deck.formatKey}
-      {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
-      <span className="font-mono tabular-nums">{deck.cardCount}</span> {unit}
-    </>
-  );
+  const caption = <DeckCaption deck={deck} />;
 
   return (
     // The two scale variables are set here, on the tile's own root, so everything drawn inside it
@@ -597,28 +591,7 @@ export function DeckTile({
             that draws every tag has nothing to add, and the cover's own hint should answer
             there. Absolute against the `<li>`, inside an art-sized box like the overlay's, so
             {@link tagRowBox} lands it on the row exactly. */}
-        {tagsHidden && (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-x-0 top-0"
-            style={{ aspectRatio: ART_ASPECT }}
-          >
-            <span
-              data-tag-hover=""
-              className={cn(tagRowBox(edgeTaken), "pointer-events-auto")}
-              {...tip(
-                <ul className="flex flex-wrap gap-1 py-0.5">
-                  {deck.tags.map((tag) => (
-                    <li key={tag} className={TIP_TAG}>
-                      {tag}
-                    </li>
-                  ))}
-                </ul>,
-                { describes: false },
-              )}
-            />
-          </span>
-        )}
+        {tagsHidden && <TagHover tags={deck.tags} edgeTaken={edgeTaken} />}
       </button>
 
       {/* Renaming a deck, **on the line the name occupies**.
@@ -719,111 +692,13 @@ export function DeckTile({
           than a child of it. There the press still opens the card; here it would open nothing.
           The pill says its words in visible type anyway, which is exactly what the caption gave
           before it, so the hint would buy a sentence at the price of a hole in the picture. */}
-      {(hasMarks || deck.tags.length > 0) && (
-        <div
-          className="pointer-events-none absolute inset-x-0 top-0"
-          style={{ aspectRatio: ART_ASPECT }}
-        >
-          {/* The reader's own tags, in one row **above** the two marks (issue #834) — and on the
-              art's bottom edge, in their place, on a deck that wears neither: a Modern list read
-              against the binder has no badge and no bracket, and a row floating a mark's height
-              above an empty edge would read as a layout fault.
-
-              **Outside the `<button>` for the marks' reason, and a list for its own.** The tile
-              is still named for its deck, and a reader who cannot see the row hears `Tags` and
-              then each word, rather than three stray phrases after a bracket.
-
-              **One line, and whole tags only.** `flex-wrap-reverse` fills the bottom line first
-              and stacks any overflow *above* it, where the box — exactly one tag tall — clips
-              it. So a deck with more tags than the tile is wide shows the first few entire
-              rather than the last one cut through the middle of a word; a single tag wider than
-              the tile truncates instead (`TILE_TAG`).
-
-              **And it says when it has dropped one** (issue #901). The row is measured
-              (`useTagOverflow`), and when the tags want more than the line an `…` pill stands at
-              its end, with its own width kept clear as `padding-right` so the tags wrap off
-              before it rather than under it; the whole list is a hover on the row (the box in
-              the button above says why the hover is not here). The pill is always mounted — its
-              width has to be known before it is shown — and `aria-hidden`, because the list
-              already holds every tag for a screen reader and `…` is not one of them.
-
-              **Packed to the right**, over the bracket, which is where the issue drew it and
-              the corner the tile already uses for "how to think about this deck". The row is as
-              wide as the art less the marks' own inset, so a long list runs back toward the
-              badge's corner before it wraps. Its place is {@link tagRowBox}. */}
-          {deck.tags.length > 0 && (
-            <ul
-              ref={rowRef}
-              aria-label="Tags"
-              className={cn(
-                tagRowBox(edgeTaken),
-                "flex flex-wrap-reverse content-start justify-end overflow-hidden",
-                "gap-[calc(0.25rem*var(--mark-scale,1))]",
-              )}
-              style={tagsHidden ? { paddingRight: reserve } : undefined}
-            >
-              {deck.tags.map((tag) => (
-                <li key={tag} data-tag="" className={TILE_TAG}>
-                  {tag}
-                </li>
-              ))}
-              <li
-                ref={moreRef}
-                aria-hidden="true"
-                className={cn(TILE_TAG, "absolute right-0 bottom-0", !tagsHidden && "invisible")}
-              >
-                …
-              </li>
-            </ul>
-          )}
-          {/* What kind of deck this is — that it keeps a plan, or that it keeps no cardboard.
-              Absent on the ordinary one-list deck, which is the majority of the wall;
-              {@link deckBadge} argues why that absence is the rule rather than an omission. */}
-          {badge !== null && (
-            <span
-              className={cn(
-                TILE_MARK,
-                "left-[calc(0.375rem*var(--mark-scale,1))]",
-                // Dashed means provisional, here as on a folder card: a theory list is a plan.
-                //
-                // **`VIRTUAL` is therefore solid, and that is a ruling rather than an omission**
-                // (issue #401). A virtual deck's list is not a sketch of a deck the reader
-                // intends to sleeve up — it *is* the deck, and the cards in it are as real as
-                // any other deck's; what they are not is cardboard the reader owns. Dashing it
-                // would spend the vocabulary this file already gave `THEORY ONLY` on a
-                // completely different fact and tell a reader who has learned the dash that a
-                // finished MTGO list is a plan. The mark for "you own none of this" is the word
-                // itself.
-                badge === "THEORY ONLY" && "border-dashed",
-              )}
-            >
-              {badge}
-            </span>
-          )}
-          {/* What the deck reads as, in the opposite corner of the same edge — one mark for what
-              the deck *is* and one for how strong it is, which is the pair a reader browses a
-              wall by.
-
-              **Never dashed, and that is the one thing it does not take from the badge.** The
-              dash means provisional — a plan, a container, something not yet standing for itself
-              — and a bracket is an estimate, which is a different word: it is the deck's real
-              strength as the cards read today, not a strength the deck intends to have.
-
-              **`null` draws nothing, exactly as the caption's segment did.** It covers both "this
-              format has no command zone" and "nothing has answered yet", and the two are treated
-              alike on purpose — neither is a fact about the deck worth a mark, and a placeholder
-              for the second would be a pill that appeared a beat after the wall did. Never
-              `Bracket ?`, never a skeleton, never a dash.
-
-              `uppercase` rather than a second string: the words are {@link bracketLabel}'s and
-              the page's, the shape is the tile's. */}
-          {bracketLabel !== null && (
-            <span className={cn(TILE_MARK, "right-[calc(0.375rem*var(--mark-scale,1))] uppercase")}>
-              {bracketLabel}
-            </span>
-          )}
-        </div>
-      )}
+      <ArtMarks
+        deck={deck}
+        badge={badge}
+        bracketLabel={bracketLabel}
+        edgeTaken={edgeTaken}
+        overflow={overflow}
+      />
 
       {/* Invisible until the tile is hovered or holds the caret — a wall of art is not a wall
           of buttons — and always in the tab order, because "visible on hover" is not a state a
@@ -1250,5 +1125,268 @@ function DeleteConfirm({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The marks laid **on** a tile's art — the reader's tags, what kind of deck it is and the bracket
+ * it reads as — in one box that is exactly the cover's box. {@link DeckTile} mounts it where its
+ * comment says why the box is a sibling of the button; {@link DeckPickTile} mounts the same one,
+ * so a deck wears the same marks on every wall it is drawn on.
+ *
+ * `overflow` is the tile's own {@link useTagOverflow}: the tile measures the row once and hands
+ * the answer both here and to {@link TagHover} inside its button, which is where the hover over a
+ * clipped row has to live.
+ */
+function ArtMarks({
+  deck,
+  badge,
+  bracketLabel,
+  edgeTaken,
+  overflow: { rowRef, moreRef, reserve },
+}: {
+  deck: DeckRow;
+  badge: DeckBadge | null;
+  bracketLabel: string | null;
+  edgeTaken: boolean;
+  overflow: TagOverflow;
+}) {
+  const hasMarks = badge !== null || bracketLabel !== null;
+  const tagsHidden = reserve !== null && deck.tags.length > 0;
+  if (!hasMarks && deck.tags.length === 0) return null;
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 top-0"
+      style={{ aspectRatio: ART_ASPECT }}
+    >
+      {/* The reader's own tags, in one row **above** the two marks (issue #834) — and on the
+          art's bottom edge, in their place, on a deck that wears neither: a Modern list read
+          against the binder has no badge and no bracket, and a row floating a mark's height
+          above an empty edge would read as a layout fault.
+
+          **Outside the `<button>` for the marks' reason, and a list for its own.** The tile
+          is still named for its deck, and a reader who cannot see the row hears `Tags` and
+          then each word, rather than three stray phrases after a bracket.
+
+          **One line, and whole tags only.** `flex-wrap-reverse` fills the bottom line first
+          and stacks any overflow *above* it, where the box — exactly one tag tall — clips
+          it. So a deck with more tags than the tile is wide shows the first few entire
+          rather than the last one cut through the middle of a word; a single tag wider than
+          the tile truncates instead (`TILE_TAG`).
+
+          **And it says when it has dropped one** (issue #901). The row is measured
+          (`useTagOverflow`), and when the tags want more than the line an `…` pill stands at
+          its end, with its own width kept clear as `padding-right` so the tags wrap off
+          before it rather than under it; the whole list is a hover on the row (the box in
+          the button above says why the hover is not here). The pill is always mounted — its
+          width has to be known before it is shown — and `aria-hidden`, because the list
+          already holds every tag for a screen reader and `…` is not one of them.
+
+          **Packed to the right**, over the bracket, which is where the issue drew it and
+          the corner the tile already uses for "how to think about this deck". The row is as
+          wide as the art less the marks' own inset, so a long list runs back toward the
+          badge's corner before it wraps. Its place is {@link tagRowBox}. */}
+      {deck.tags.length > 0 && (
+        <ul
+          ref={rowRef}
+          aria-label="Tags"
+          className={cn(
+            tagRowBox(edgeTaken),
+            "flex flex-wrap-reverse content-start justify-end overflow-hidden",
+            "gap-[calc(0.25rem*var(--mark-scale,1))]",
+          )}
+          style={tagsHidden ? { paddingRight: reserve } : undefined}
+        >
+          {deck.tags.map((tag) => (
+            <li key={tag} data-tag="" className={TILE_TAG}>
+              {tag}
+            </li>
+          ))}
+          <li
+            ref={moreRef}
+            aria-hidden="true"
+            className={cn(TILE_TAG, "absolute right-0 bottom-0", !tagsHidden && "invisible")}
+          >
+            …
+          </li>
+        </ul>
+      )}
+      {/* What kind of deck this is — that it keeps a plan, or that it keeps no cardboard.
+          Absent on the ordinary one-list deck, which is the majority of the wall;
+          {@link deckBadge} argues why that absence is the rule rather than an omission. */}
+      {badge !== null && (
+        <span
+          className={cn(
+            TILE_MARK,
+            "left-[calc(0.375rem*var(--mark-scale,1))]",
+            // Dashed means provisional, here as on a folder card: a theory list is a plan.
+            //
+            // **`VIRTUAL` is therefore solid, and that is a ruling rather than an omission**
+            // (issue #401). A virtual deck's list is not a sketch of a deck the reader
+            // intends to sleeve up — it *is* the deck, and the cards in it are as real as
+            // any other deck's; what they are not is cardboard the reader owns. Dashing it
+            // would spend the vocabulary this file already gave `THEORY ONLY` on a
+            // completely different fact and tell a reader who has learned the dash that a
+            // finished MTGO list is a plan. The mark for "you own none of this" is the word
+            // itself.
+            badge === "THEORY ONLY" && "border-dashed",
+          )}
+        >
+          {badge}
+        </span>
+      )}
+      {/* What the deck reads as, in the opposite corner of the same edge — one mark for what
+          the deck *is* and one for how strong it is, which is the pair a reader browses a
+          wall by.
+
+          **Never dashed, and that is the one thing it does not take from the badge.** The
+          dash means provisional — a plan, a container, something not yet standing for itself
+          — and a bracket is an estimate, which is a different word: it is the deck's real
+          strength as the cards read today, not a strength the deck intends to have.
+
+          **`null` draws nothing, exactly as the caption's segment did.** It covers both "this
+          format has no command zone" and "nothing has answered yet", and the two are treated
+          alike on purpose — neither is a fact about the deck worth a mark, and a placeholder
+          for the second would be a pill that appeared a beat after the wall did. Never
+          `Bracket ?`, never a skeleton, never a dash.
+
+          `uppercase` rather than a second string: the words are {@link bracketLabel}'s and
+          the page's, the shape is the tile's. */}
+      {bracketLabel !== null && (
+        <span className={cn(TILE_MARK, "right-[calc(0.375rem*var(--mark-scale,1))] uppercase")}>
+          {bracketLabel}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The hover over a tag row that cannot draw every tag (issue #901): the whole list, as pills, on
+ * the strip the row occupies — mounted **inside** a tile's button, where {@link DeckTile}'s note
+ * at its mount says why. One component for both tiles that draw it, so the strip and the row
+ * cannot come to cover different parts of the picture.
+ */
+function TagHover({ tags, edgeTaken }: { tags: readonly string[]; edgeTaken: boolean }) {
+  const tip = useTooltip();
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-x-0 top-0"
+      style={{ aspectRatio: ART_ASPECT }}
+    >
+      <span
+        data-tag-hover=""
+        className={cn(tagRowBox(edgeTaken), "pointer-events-auto")}
+        {...tip(
+          <ul className="flex flex-wrap gap-1 py-0.5">
+            {tags.map((tag) => (
+              <li key={tag} className={TIP_TAG}>
+                {tag}
+              </li>
+            ))}
+          </ul>,
+          { describes: false },
+        )}
+      />
+    </span>
+  );
+}
+
+/**
+ * `Modern · Arena · 60 cards` — what rules the list is built to, where it is played and how big
+ * it is. One definition for every tile that captions a deck; {@link DeckTile}'s note on the line
+ * says why `Any` is never printed and why the bracket is not a fourth segment.
+ */
+function DeckCaption({ deck }: { deck: DeckRow }) {
+  return (
+    <>
+      {deck.formatName ?? deck.formatKey}
+      {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
+      <span className="font-mono tabular-nums">{deck.cardCount}</span>{" "}
+      {deck.cardCount === 1 ? "card" : "cards"}
+    </>
+  );
+}
+
+/**
+ * A deck on a wall it is only **picked** from — the Playtesting lobby's — drawn exactly as the
+ * gallery draws it and holding none of the gallery's hands: no menu, no drag, no tray, no rename.
+ * The reader there is choosing a deck to play, not managing one.
+ *
+ * **Built from {@link DeckTile}'s own parts** — {@link Cover}, {@link DeckColorBar}, the name and
+ * caption lines, {@link ArtMarks} and {@link TagHover} — so the two walls cannot come to draw one
+ * deck two ways, and every argument on that tile about why a part sits where it does holds here.
+ *
+ * What it adds is the pick. `picked` rings the picture — cover and band, the object the reader
+ * pointed at — in accent, the app's selection mark. `corner` is laid on the art's top edge for
+ * the page to say what the pick means (the lobby's seat plates): outside the button for the
+ * marks' reason, so the tile is still named for its deck, and in the art's own box so it lands on
+ * the picture at every zoom.
+ */
+export function DeckPickTile({
+  deck,
+  pips,
+  bracketLabel,
+  bracketExpected,
+  zoom,
+  picked,
+  onPick,
+  corner,
+}: {
+  deck: DeckRow;
+  /** The deck's printed pips, as {@link DeckTile} takes them — `null` draws a bare band. */
+  pips: PipCounts | null;
+  /** As {@link DeckTile}'s: the pill's words, or `null` for none. */
+  bracketLabel: string | null;
+  /** As {@link DeckTile}'s: whether a pill is coming, which places the tag row. */
+  bracketExpected: boolean;
+  /** How large the reader draws the deck gallery — the lobby's wall follows the same zoom. */
+  zoom: number;
+  picked: boolean;
+  onPick: (deck: DeckRow) => void;
+  corner?: ReactNode;
+}) {
+  const colorsLabel = deckColorsLabel(pips);
+  const badge = deckBadge(deck);
+  const edgeTaken = badge !== null || bracketLabel !== null || bracketExpected;
+  const overflow = useTagOverflow(deck.tags.join("\n"));
+  const tagsHidden = overflow.reserve !== null && deck.tags.length > 0;
+  return (
+    <li style={cardScaleVars(zoom)} className="group relative">
+      <button
+        type="button"
+        onClick={() => onPick(deck)}
+        className={cn("block w-full rounded-lg text-left", FOCUS)}
+      >
+        {/* The ring goes round the crop and the band together — one object, as the gallery's
+            note on the band argues — and the wrapper adds no gap, margin or edge between them. */}
+        <span className={cn("block rounded-lg", picked && "ring-2 ring-accent")}>
+          <Cover deck={deck} />
+          <DeckColorBar pips={pips} />
+        </span>
+        <span className={NAME_LINE}>{deck.name}</span>
+        {colorsLabel !== null && <span className="sr-only">{colorsLabel}</span>}
+        <span className={CAPTION_LINE}>
+          <DeckCaption deck={deck} />
+        </span>
+        {tagsHidden && <TagHover tags={deck.tags} edgeTaken={edgeTaken} />}
+      </button>
+      <ArtMarks
+        deck={deck}
+        badge={badge}
+        bracketLabel={bracketLabel}
+        edgeTaken={edgeTaken}
+        overflow={overflow}
+      />
+      {corner !== undefined && (
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0"
+          style={{ aspectRatio: ART_ASPECT }}
+        >
+          {corner}
+        </div>
+      )}
+    </li>
   );
 }
