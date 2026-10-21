@@ -857,9 +857,12 @@ pub struct Session {
     /// Frames since the session started, for the reader's cadence.
     seq: u64,
     top: usize,
-    /// What the filters admit, applied to every tier. [`Mask::all`] until filters are set.
+    /// What the filters admit, applied to every tier — and, unless [`Session::set_tokens`] admits
+    /// them, every printing but the tokens ([`Reference::mask_without_tokens`]).
     mask: Mask,
     filters: ScanFilters,
+    /// Whether tokens and emblems are matched at all. `false` until [`Session::set_tokens`].
+    tokens: bool,
     mode: ScanMode,
     /// Decisions so far. Survives a reset and a mode switch — a page keys tray rows on it, and
     /// a number that went back to a value it had already shown would add nothing next time.
@@ -1007,6 +1010,10 @@ struct LaidOver {
 
 impl Session {
     pub fn new(reference: Option<Reference>, reader: Option<Reader>, top: usize) -> Session {
+        // The tokens are left out from the first frame, not from the first filter a page sends.
+        let mask = reference
+            .as_ref()
+            .map_or_else(Mask::all, |r| r.mask_without_tokens(&ScanFilters::default()));
         Session {
             reference: reference.map(Arc::new),
             reader: reader.map(Arc::new),
@@ -1016,8 +1023,9 @@ impl Session {
             tracking: true,
             seq: 0,
             top: top.clamp(1, 25),
-            mask: Mask::all(),
+            mask,
             filters: ScanFilters::default(),
+            tokens: false,
             mode: ScanMode::default(),
             decision_seq: 0,
             was_committed: false,
@@ -1092,7 +1100,8 @@ impl Session {
 
     /// Narrow every tier to the printings these filters admit.
     ///
-    /// Empty filters always succeed and lift the mask. Anything else needs labels to build a
+    /// Empty filters always succeed and lift the mask — down to the tokens, which stay out
+    /// unless [`Session::set_tokens`] admits them. Anything else needs labels to build a
     /// mask from — a bundle alone knows ids, not sets or dates — and has to admit at least one
     /// printing; a refusal is a sentence and keeps the filters already in force. A change resets
     /// the tracker (not the lock — see [`Session::forget_card`]), because evidence gathered
@@ -1107,27 +1116,64 @@ impl Session {
             self.filters = f;
             return Ok(());
         }
-        let mask = if f.is_empty() {
-            Mask::all()
-        } else {
-            let r = self
-                .reference
-                .as_ref()
-                .filter(|r| r.label_count() > 0)
-                .ok_or_else(|| FILTERS_NEED_LABELS.to_string())?;
-            let mask = r.mask_for(&f);
-            if mask.len() == Some(0) {
-                return Err("No printing matches these filters.".to_string());
-            }
-            mask
-        };
-        self.mask = mask;
+        let mask = self.mask_under(&f, self.tokens)?;
+        self.narrow(mask);
         self.filters = f;
+        Ok(())
+    }
+
+    /// Match tokens and emblems, or leave them out — **left out until this says otherwise**
+    /// (issue #1323). A reader sorting a collection is not sorting its tokens, and a token that
+    /// shares a card's name or art (Ornithopter, a Treasure beside the card that makes it) is one
+    /// more printing for the descriptor to read the card as. The bundle still holds them: this
+    /// is the switch that matches them, for a tool or a page that asks.
+    ///
+    /// The same answers [`Session::set_filters`] gives: the same setting again is no change, a
+    /// change resets the tracker, and a refusal (filters that admit nothing but tokens) keeps
+    /// what is in force. Without labels no token is known, and leaving them out is no restriction.
+    pub fn set_tokens(&mut self, admit: bool) -> Result<(), String> {
+        if admit == self.tokens {
+            return Ok(());
+        }
+        let mask = self.mask_under(&self.filters, admit)?;
+        self.narrow(mask);
+        self.tokens = admit;
+        Ok(())
+    }
+
+    /// Whether tokens are matched — [`Session::set_tokens`].
+    pub fn tokens(&self) -> bool {
+        self.tokens
+    }
+
+    /// The mask these filters admit, with or without the tokens.
+    ///
+    /// Empty filters always succeed: every printing, or every one but the tokens the labels
+    /// know. Anything else needs labels to build a mask from — a bundle alone knows ids, not sets
+    /// or dates — and has to admit at least one printing.
+    fn mask_under(&self, f: &ScanFilters, tokens: bool) -> Result<Mask, String> {
+        let labelled = self.reference.as_deref().filter(|r| r.label_count() > 0);
+        if f.is_empty() {
+            return Ok(match labelled {
+                Some(r) if !tokens => r.mask_without_tokens(f),
+                _ => Mask::all(),
+            });
+        }
+        let r = labelled.ok_or_else(|| FILTERS_NEED_LABELS.to_string())?;
+        let mask = if tokens { r.mask_for(f) } else { r.mask_without_tokens(f) };
+        if mask.len() == Some(0) {
+            return Err("No printing matches these filters.".to_string());
+        }
+        Ok(mask)
+    }
+
+    /// Search under `mask` from the next frame on, forgetting the card.
+    fn narrow(&mut self, mask: Mask) {
+        self.mask = mask;
         // The Neural mode searches looks, not printings: the looks this mask admits are worked
         // out again on its next frame.
         self.neural.filters_changed();
         self.forget_card();
-        Ok(())
     }
 
     /// Where Exact resolves run from now on. [`ResolveOn::Background`] until this is called.
@@ -3276,6 +3322,50 @@ mod tests {
         assert!(s.tracker.last_committed());
         s.set_filters(sets(&["ltr"])).expect("ltr has a printing");
         assert!(!s.tracker.last_committed());
+    }
+
+    #[test]
+    fn tokens_are_left_out_from_the_first_frame_until_they_are_admitted() {
+        // Issue #1323. Printing 2, the only LTR one, and printing 3 are tokens.
+        let mut r = labelled();
+        r.set_token(id(2), true);
+        r.set_token(id(3), true);
+        let mut s = inline(r);
+        assert!(!s.tokens());
+        assert!(
+            s.mask.permits(&id(1)) && !s.mask.permits(&id(2)) && !s.mask.permits(&id(3)),
+            "left out from the first frame, not from the first filter"
+        );
+        assert_eq!(s.set_filters(sets(&["hob"])), Ok(()));
+        assert_eq!(s.mask.len(), Some(1));
+        let nothing = Err("No printing matches these filters.".to_string());
+        assert_eq!(s.set_filters(sets(&["ltr"])), nothing);
+
+        // Admitting them is a change: the tracker starts over, and the same filters admit them.
+        for _ in 0..8 {
+            observe(&mut s, &[(id(1), 0.16)]);
+        }
+        assert!(s.tracker.last_committed());
+        assert_eq!(s.set_tokens(true), Ok(()));
+        assert!(s.tokens() && !s.tracker.last_committed());
+        assert_eq!(s.mask.len(), Some(2));
+        assert_eq!(s.set_filters(sets(&["ltr"])), Ok(()));
+
+        // Leaving them out under filters that admit nothing else is refused, and keeps what is in
+        // force.
+        assert_eq!(s.set_tokens(false), nothing);
+        assert!(s.tokens() && s.mask.permits(&id(2)));
+        assert_eq!(s.set_filters(ScanFilters::default()), Ok(()));
+        assert!(s.mask.is_unrestricted());
+        assert_eq!(s.set_tokens(false), Ok(()));
+        assert_eq!((s.mask.len(), s.mask.excluded()), (None, 2));
+
+        // With no labels no token is known, and leaving them out restricts nothing.
+        let mut bare = Session::new(None, None, 5);
+        assert!(bare.mask.is_unrestricted());
+        assert_eq!(bare.set_tokens(true), Ok(()));
+        assert_eq!(bare.set_tokens(false), Ok(()));
+        assert!(bare.mask.is_unrestricted());
     }
 
     #[test]

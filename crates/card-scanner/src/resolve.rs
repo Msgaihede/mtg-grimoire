@@ -314,9 +314,12 @@ fn resolve_once(
     let named = |p: &Id| r.label_for(p);
 
     // ---- 0 filters -----------------------------------------------------------------------
-    let (admitted, detail) = match mask.len() {
-        Some(n) => (n, format!("{n} printings")),
-        None => (r.bundle_printings(), "unrestricted".to_string()),
+    let (admitted, detail) = match (mask.len(), mask.excluded()) {
+        (Some(n), _) => (n, format!("{n} printings")),
+        (None, 0) => (r.bundle_printings(), "unrestricted".to_string()),
+        // The tokens a session leaves out. Some of them may have no picture in the bundle, so the
+        // count is the bundle's less every one of them, at the least.
+        (None, n) => (r.bundle_printings().saturating_sub(n), format!("all but {n} printings")),
     };
     tiers.push(tier("filters", admitted, detail));
 

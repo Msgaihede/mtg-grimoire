@@ -168,28 +168,45 @@ pub fn parse_uuid(s: &str) -> Option<[u8; ID_LEN]> {
 /// excluded printing occupy a slot in the top-K and push a legitimate candidate out of it —
 /// which is the difference between "only cards matching the filters are valid for matching"
 /// and "the filters hide some of the answers".
+///
+/// **Two shapes: the few it admits, or the few it leaves out.** A filter names a narrow set and is
+/// [`Mask::allow_only`]; the tokens a session leaves out by default are some 17 000 of 118 000
+/// printings, and [`Mask::all_but`] holds those rather than the hundred thousand it admits — a
+/// smaller set to build on every filter change and to look each row up in.
 #[derive(Debug, Clone, Default)]
 pub struct Mask {
     allowed: Option<HashSet<[u8; ID_LEN]>>,
+    /// Left out even when `allowed` is `None`. Empty for every mask but [`Mask::all_but`]'s.
+    denied: HashSet<[u8; ID_LEN]>,
 }
 
 impl Mask {
     /// No restriction.
     pub fn all() -> Self {
-        Mask { allowed: None }
+        Mask::default()
     }
     pub fn allow_only(ids: impl IntoIterator<Item = [u8; ID_LEN]>) -> Self {
-        Mask { allowed: Some(ids.into_iter().collect()) }
+        Mask { allowed: Some(ids.into_iter().collect()), denied: HashSet::new() }
+    }
+    /// Every id but these. None at all is [`Mask::all`], and keeps the unrestricted fast path.
+    pub fn all_but(ids: impl IntoIterator<Item = [u8; ID_LEN]>) -> Self {
+        Mask { allowed: None, denied: ids.into_iter().collect() }
     }
     pub fn permits(&self, id: &[u8; ID_LEN]) -> bool {
         self.allowed.as_ref().is_none_or(|s| s.contains(id))
+            && (self.denied.is_empty() || !self.denied.contains(id))
     }
     pub fn is_unrestricted(&self) -> bool {
-        self.allowed.is_none()
+        self.allowed.is_none() && self.denied.is_empty()
     }
-    /// How many ids the mask admits, or `None` when unrestricted.
+    /// How many ids the mask admits, or `None` when it is not a list of them — unrestricted, or
+    /// [`Mask::all_but`] a list.
     pub fn len(&self) -> Option<usize> {
         self.allowed.as_ref().map(|s| s.len())
+    }
+    /// How many ids [`Mask::all_but`] left out; 0 for any other mask.
+    pub fn excluded(&self) -> usize {
+        self.denied.len()
     }
 }
 
@@ -757,6 +774,19 @@ mod tests {
         let hits = b.search(&desc(256, 7), Section::Card, 5, &mask);
         assert_eq!(hits.len(), 5, "masking must not shrink the result set");
         assert!(hits.iter().all(|h| h.id != id(7)), "a masked id was returned");
+    }
+
+    #[test]
+    fn a_mask_of_what_it_leaves_out_excludes_those_and_admits_the_rest() {
+        let b = sample(256);
+        let mask = Mask::all_but([id(7)]);
+        assert!(!mask.is_unrestricted() && !mask.permits(&id(7)) && mask.permits(&id(8)));
+        assert_eq!((mask.len(), mask.excluded()), (None, 1));
+        let hits = b.search(&desc(256, 7), Section::Card, 5, &mask);
+        assert_eq!(hits.len(), 5, "masking must not shrink the result set");
+        assert!(hits.iter().all(|h| h.id != id(7)), "a masked id was returned");
+        // Leaving nothing out is no restriction at all.
+        assert!(Mask::all_but([]).is_unrestricted());
     }
 
     #[test]
