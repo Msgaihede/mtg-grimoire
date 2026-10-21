@@ -14,6 +14,7 @@ function harness() {
   const glue = {
     load: vi.fn<ScanGlue["load"]>(() => JSON.stringify({ ok: FACTS })),
     load_neural: vi.fn<ScanGlue["load_neural"]>(() => undefined),
+    load_neural_evidence: vi.fn<ScanGlue["load_neural_evidence"]>(() => undefined),
     frame: vi.fn<ScanGlue["frame"]>(() => '{"ok":{"ok":true,"decision_seq":0}}'),
     reset: vi.fn<ScanGlue["reset"]>(() => '{"ok":null}'),
     set_filters: vi.fn<ScanGlue["set_filters"]>(() => '{"ok":null}'),
@@ -90,6 +91,33 @@ describe("the scanner Worker's session", () => {
     expect(posted).toEqual([
       { kind: "ok", id: 6, result: null },
       { kind: "err", id: 7, message: "gallery: not a CNGALLR1 file (bad magic)" },
+    ]);
+  });
+
+  it("hands the Neural evidence files to the module, and puts its refusal or its nothing in the envelope", async () => {
+    const { session, glue, posted } = harness();
+    const files = { symbolNet: bytes(5), bandNet: bytes(6), symbols: bytes(7), bands: bytes(8) };
+    await session.handle({ kind: "neural-evidence", id: 8, ...files });
+    expect(glue.load_neural_evidence).toHaveBeenCalledWith(bytes(5), bytes(6), bytes(7), bytes(8));
+    glue.load_neural_evidence.mockReturnValue("the Neural scanner's evidence needs its models loaded first");
+    await session.handle({ kind: "neural-evidence", id: 9, ...files });
+    expect(posted).toEqual([
+      { kind: "ok", id: 8, result: null },
+      { kind: "err", id: 9, message: "the Neural scanner's evidence needs its models loaded first" },
+    ]);
+  });
+
+  it("answers a hand-over of the Neural evidence that throws as a trap, like any export", async () => {
+    const { session, glue, posted } = harness();
+    glue.load_neural_evidence.mockImplementation(() => {
+      throw Object.assign(new Error("unreachable"), { name: "RuntimeError" });
+    });
+    const files = { symbolNet: bytes(5), bandNet: bytes(6), symbols: bytes(7), bands: bytes(8) };
+    await session.handle({ kind: "neural-evidence", id: 1, ...files });
+    await session.handle({ kind: "reset", id: 2 });
+    expect(posted).toEqual([
+      { kind: "trapped", id: 1, message: "RuntimeError: unreachable" },
+      { kind: "trapped", id: 2, message: AFTER_A_TRAP },
     ]);
   });
 

@@ -89,18 +89,19 @@ export const SCANNER_MANIFEST = "manifest.json";
 export const SCANNER_CACHE = "grimoire-scanner-v1";
 
 /**
- * **Where the Neural scanner's four files are served: `/scanner-neural/<set>/`** —
- * `card-neural`'s detector, embedder, gallery and `neural.json`, which are in git
- * (`crates/card-neural/models/`), copied in by the web build and fetched by the page the first
- * time a Neural frame is due (`scanner.ts`) — never before, and never for a Fast or Exact frame.
+ * **Where the Neural scanner's eight files are served: `/scanner-neural/<set>/`** —
+ * `card-neural`'s detector, embedder, gallery and `neural.json`, and the four of its printing
+ * evidence, which are in git (`crates/card-neural/models/`), copied in by the web build and
+ * fetched by the page the first time a Neural frame is due (`scanner.ts`) — never before, and
+ * never for a Fast or Exact frame.
  *
- * **Content-addressed, as the two modules are**: `<set>` is {@link buildIdOf} the four files, so
+ * **Content-addressed, as the two modules are**: `<set>` is {@link buildIdOf} the eight files, so
  * a new set — the gallery is rebuilt when cards come out — is a new address, and nothing kept
  * under an old one is ever stale. So the HTTP cache keeps them a year
  * (`infrastructure/app-worker/_headers`), and the service worker keeps them in
  * {@link SCANNER_CACHE} the first time they are fetched, letting the last set go (`sw/shell.ts`'s
  * `kept`, the module's route) — a reader who has scanned in Neural once does so offline. In no
- * precache ({@link isScannerFile}): twenty-seven megabytes most readers never ask for.
+ * precache ({@link isScannerFile}): 48.7 megabytes most readers never ask for.
  *
  * A tree of its own, not `/scanner-assets/`: those are stable names that are revalidated and
  * kept by the page, and these are neither.
@@ -119,7 +120,29 @@ export const NEURAL_FILES = [
 ] as const;
 export type NeuralFile = (typeof NEURAL_FILES)[number];
 
-/** One of the four as a build serves it. `set` is the four files' own id. */
+/**
+ * **The printing evidence beside them**, in the order `load_neural_evidence` takes them —
+ * `card_neural::evidence`'s `SYMBOL_NET_FILE`, `BAND_NET_FILE`, `SYMBOLS_FILE` and `BANDS_FILE`,
+ * which `assets.test.ts` holds them to: the set symbol and collector band networks and their
+ * galleries. Served from the same folder under the same set, and fetched only once the
+ * recogniser has taken its four (`scanner.ts`), holding up no frame — a page whose fetch of them
+ * fails reads as it did before they existed.
+ */
+export const NEURAL_EVIDENCE_FILES = [
+  "symbol.onnx",
+  "band.onnx",
+  "symbols.bin",
+  "bands.bin",
+] as const;
+export type NeuralEvidenceFile = (typeof NEURAL_EVIDENCE_FILES)[number];
+
+/** All eight, the recogniser's then the evidence's. */
+const ALL_NEURAL_FILES: readonly (NeuralFile | NeuralEvidenceFile)[] = [
+  ...NEURAL_FILES,
+  ...NEURAL_EVIDENCE_FILES,
+];
+
+/** One of the eight as a build serves it. `set` is the eight files' own id. */
 export function neuralPath(set: string, name: string): string {
   return `${NEURAL_PREFIX}${set}/${name}`;
 }
@@ -130,16 +153,16 @@ export function isNeuralFile(path: string): boolean {
 }
 
 /**
- * The one of the four a request under `/scanner-neural/<any set>/` asks for, or `null` — what the
- * dev server reads `crates/card-neural/models/` by. Only the four names are files there: that
- * folder holds a README and nothing else is served from it.
+ * The one of the eight a request under `/scanner-neural/<any set>/` asks for, or `null` — what
+ * the dev server reads `crates/card-neural/models/` by. Only the eight names are files there:
+ * that folder holds a README and nothing else is served from it.
  */
-export function neuralFileOf(path: string): NeuralFile | null {
+export function neuralFileOf(path: string): NeuralFile | NeuralEvidenceFile | null {
   const name = /^\/scanner-neural\/[^/]+\/([^/]+)$/.exec(path)?.[1];
-  return NEURAL_FILES.find((file) => file === name) ?? null;
+  return ALL_NEURAL_FILES.find((file) => file === name) ?? null;
 }
 
-/** What each of the four is: `neural.json` is JSON, and the rest are bytes. */
+/** What each of the eight is: `neural.json` is JSON, and the rest are bytes. */
 export function neuralContentType(name: string): string {
   return name.endsWith(".json") ? "application/json" : "application/octet-stream";
 }
@@ -147,7 +170,7 @@ export function neuralContentType(name: string): string {
 /** The most the host serves as one file: Workers static assets' 25 MiB. */
 export const HOST_FILE_LIMIT = 25 * 1024 * 1024;
 
-/** One of the four as `models/README.md`'s table writes it down. */
+/** One of the eight as `models/README.md`'s table writes it down. */
 export interface NeuralRow {
   bytes: number;
   /** The first and last eight hex digits of its SHA-256 — the table's `4e9a46bd…a87a5a35`. */
@@ -169,17 +192,51 @@ export function neuralTable(readme: string): Map<string, NeuralRow> {
   return rows;
 }
 
+/** A file a web build found: its name, its length and its SHA-256 in hex. */
+export interface FoundFile {
+  name: string;
+  bytes: number;
+  sha256: string;
+}
+
 /**
- * Why the Neural files a web build found **cannot ship** — or `null`, when they can: all four
- * there, each under the host's {@link HOST_FILE_LIMIT}, and each the length and digest
- * `models/README.md` writes down for it. A file the table does not describe was changed without
+ * Why the Neural files a web build found **cannot ship** — or `null`, when they can: all four of
+ * the recogniser's there, each under the host's {@link HOST_FILE_LIMIT}, and each the length and
+ * digest `models/README.md` writes down for it. A file the table does not describe was changed without
  * it, and a page that loaded it would be running a model nobody measured.
+ *
+ * The recogniser's four alone: the evidence is held to the table by {@link neuralEvidenceFault},
+ * and a build asks both.
  */
 export function neuralFault(
-  files: readonly { name: string; bytes: number; sha256: string }[],
+  files: readonly FoundFile[],
   table: ReadonlyMap<string, NeuralRow>,
 ): string | null {
-  for (const name of NEURAL_FILES) {
+  return faultAmong(NEURAL_FILES, files, table);
+}
+
+/**
+ * {@link neuralFault} for the four evidence files ({@link NEURAL_EVIDENCE_FILES}): all four there,
+ * under the host's limit, and each as its row in `models/README.md` says. **A question of its
+ * own** only so each answer can name its set of files: the web build ships all eight, and refuses
+ * to build when either set is missing or does not match the table (`apps/light/vite.config.ts`).
+ * It is the page, not the build, that goes on without the evidence when a reader's fetch of it
+ * fails.
+ */
+export function neuralEvidenceFault(
+  files: readonly FoundFile[],
+  table: ReadonlyMap<string, NeuralRow>,
+): string | null {
+  return faultAmong(NEURAL_EVIDENCE_FILES, files, table);
+}
+
+/** The first of `names` that is missing from `files`, too large, or not as `table` says. */
+function faultAmong(
+  names: readonly string[],
+  files: readonly FoundFile[],
+  table: ReadonlyMap<string, NeuralRow>,
+): string | null {
+  for (const name of names) {
     const file = files.find((found) => found.name === name);
     if (file === undefined) return `crates/card-neural/models/ has no ${name}.`;
     if (file.bytes > HOST_FILE_LIMIT) {
@@ -202,10 +259,12 @@ export function neuralFault(
 }
 
 /**
- * The four files' lengths as a build hands them to the page (`VITE_NEURAL_BYTES`, JSON) — or none
+ * The eight files' lengths as a build hands them to the page (`VITE_NEURAL_BYTES`, JSON) — or none
  * for text that is not that. A file is held to its length as it arrives (`scanNeural.ts`).
  */
-export function neuralBytesOf(text: unknown): Partial<Record<NeuralFile, number>> {
+export function neuralBytesOf(
+  text: unknown,
+): Partial<Record<NeuralFile | NeuralEvidenceFile, number>> {
   let parsed: unknown;
   try {
     parsed = typeof text === "string" ? JSON.parse(text) : null;
@@ -213,8 +272,8 @@ export function neuralBytesOf(text: unknown): Partial<Record<NeuralFile, number>
     return {};
   }
   if (typeof parsed !== "object" || parsed === null) return {};
-  const lengths: Partial<Record<NeuralFile, number>> = {};
-  for (const name of NEURAL_FILES) {
+  const lengths: Partial<Record<NeuralFile | NeuralEvidenceFile, number>> = {};
+  for (const name of ALL_NEURAL_FILES) {
     const bytes = (parsed as Record<string, unknown>)[name];
     if (typeof bytes === "number" && Number.isSafeInteger(bytes) && bytes > 0)
       lengths[name] = bytes;
@@ -225,8 +284,8 @@ export function neuralBytesOf(text: unknown): Partial<Record<NeuralFile, number>
 /**
  * Whether one of a build's files — its path from the output folder — is **the scanner's, and so
  * fetched on first use and never precached**: its module, its three files and the Neural
- * scanner's four. None is asked for until a reader opens the Scanner — the three not before
- * Download, the four not before a Neural frame — and a service worker that put them in its shell
+ * scanner's eight. None is asked for until a reader opens the Scanner — the three not before
+ * Download, the eight not before a Neural frame — and a service worker that put them in its shell
  * would spend 50 MB of every first visit on a view most readers never open.
  */
 export function isScannerFile(file: string): boolean {
@@ -293,7 +352,7 @@ export function wasmContentType(file: string): string {
  * **Where nothing is a page**, whatever the caller accepts: the two trees a build writes its
  * files into, the tree the service worker answers card pictures under (`packages/ui/lib/images.ts`'s
  * `WEB_IMAGE_PREFIX`; `assets.test.ts` holds this spelling to that constant), the folders the
- * scanner's three files and the Neural scanner's four are fetched from, and `/_headers`, which a
+ * scanner's three files and the Neural scanner's eight are fetched from, and `/_headers`, which a
  * host parses and does not serve.
  *
  * A path under any of them names a file or nothing. Answered with the document, a chunk a

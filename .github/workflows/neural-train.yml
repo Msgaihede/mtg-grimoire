@@ -9,9 +9,9 @@ name: neural-train
 # docs/superpowers/plans/2026-10-20-neural-training-pipeline.md; the owner's setup is
 # crates/card-neural/train/README.md, *Running it from GitHub*.
 #
-# **Every run is held to $10** (the owner's limit, 2026-10-20): a dispatch asking for more is
-# refused here, before anything is deployed, and `budget.py` holds the run to what it was given
-# on Modal — each stage's container time is charged as it runs, and a stage that would pass its
+# **Every run is held to $15** (the owner's limit, 2026-10-21; was $10 from 2026-10-20): a
+# dispatch asking for more is refused here, before anything is deployed, and `budget.py` holds
+# the run to what it was given on Modal — each stage's container time is charged as it runs, and a stage that would pass its
 # share is stopped. The Modal workspace's own spending limit is the backstop.
 #
 # **Run names**: `YYYY-MM` for the monthly run, `YYYY-MM-DD-HHMM` (UTC) for a dispatch, with
@@ -39,9 +39,9 @@ on:
         type: number
         default: 24
       budget_usd:
-        description: The run's spending limit in US dollars (10 at most)
+        description: The run's spending limit in US dollars (15 at most)
         type: number
-        default: 10
+        default: 15
       smoke:
         description: A tiny run (one epoch, 300 detector steps) that proves the plumbing for cents; never a pull request
         type: boolean
@@ -100,7 +100,7 @@ jobs:
           detector=${DETECTOR:-true}
           cpu=${CPU:-16}
           memory=${MEMORY_GIB:-24}
-          budget=${BUDGET_USD:-10}
+          budget=${BUDGET_USD:-15}
           smoke=${SMOKE:-false}
           refuse() {
             echo "**Refused: $1** Nothing was deployed or started." >> "$GITHUB_STEP_SUMMARY"
@@ -109,7 +109,7 @@ jobs:
           for value in "$cpu" "$memory" "$budget"; do
             [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]] || refuse "\`$value\` is not a number."
           done
-          awk -v b="$budget" 'BEGIN { exit !(b > 0 && b <= 10) }' || refuse "a budget of \$$budget — a run may spend \$10 at most."
+          awk -v b="$budget" 'BEGIN { exit !(b > 0 && b <= 15) }' || refuse "a budget of \$$budget — a run may spend \$15 at most."
           awk -v c="$cpu" 'BEGIN { exit !(c >= 1 && c <= 64) }' || refuse "$cpu cores — 1 to 64."
           awk -v m="$memory" 'BEGIN { exit !(m >= 4 && m <= 256) }' || refuse "$memory GiB — 4 to 256."
           if [ "$EVENT" = schedule ]; then run=$(date -u +%Y-%m); else run=$(date -u +%Y-%m-%d-%H%M); fi

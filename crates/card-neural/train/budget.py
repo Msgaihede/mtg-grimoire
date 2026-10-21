@@ -1,6 +1,6 @@
 """What a training run may spend on Modal, and the ledger that holds it to that.
 
-**The owner's hard limit is $10 a run** (2026-10-20). Modal cannot enforce it per run: GPU
+**The owner's hard limit is $15 a run** (2026-10-21; was $10 from 2026-10-20). Modal cannot enforce it per run: GPU
 containers are always preemptible, a preempted container restarts with a fresh timeout, and
 budgets are per workspace and per month. So each stage keeps its own ledger on the Volume —
 the container-seconds it has used across every attempt — and stops itself before its share of
@@ -25,16 +25,35 @@ GPU_PER_S = {"L4": 0.000222, "T4": 0.000164, "A10": 0.000306, "L40S": 0.000542}
 CPU_CORE_PER_S = 0.0000131  # a physical core (two vCPUs)
 MEMORY_GIB_PER_S = 0.00000222
 
-# The hard limit, and what is set aside before the two trainings share the rest.
-HARD_LIMIT_USD = 10.0
+# The hard limit, and what is set aside before the four trainings share the rest.
+HARD_LIMIT_USD = 15.0
 REFRESH_USD = 0.25  # the Scryfall refresh: a few CPU minutes
 PIPELINE_USD = 0.10  # the orchestrator: a quarter core for the length of the run
-# The embedder's share of what is left when the detector trains too — the measured estimates
-# were ~$1.80 and ~$2.10 at 16 cores, so 45 / 55.
-EMBEDDER_SHARE = 0.45
+# The refresh's container (no GPU), here rather than in `modal_app.py` because its rate is part of
+# the reserve below.
+REFRESH_CPU = 4.0
+REFRESH_MEMORY_GIB = 4
+# Each training's estimated cost on the default container (an L4, 16 cores, 24 GiB: $1.75 an
+# hour), its whole container life: the start, the dataset's copy (~5 min), the training and the
+# export. The embedder ~1.0 h and the detector ~1.2 h of training (the plan's sizing); the set
+# symbol network 12 epochs (~57 min) and the collector band's 14 (~60 min), at the ~450 views/s
+# they drew on the owner's machine. `train/README.md` ("The budget") has the arithmetic. The
+# trainings share what the refresh, the orchestrator and the watchdogs' reserve leave in
+# proportion to these, so each gets its estimate and the same margin: ~71 % at the default $15 ($14.23 shared over
+# estimates of $8.30; it was ~11 % at $10).
+ESTIMATE_USD = {"embedder": 2.01, "detector": 2.33, "symbol": 1.92, "band": 2.04}
 # Charged once per container start, on top of the seconds the watchdog sees: scheduling and the
 # image pull happen before any of this code runs.
 START_OVERHEAD_S = 120
+# The watchdog (`modal_app.Guard`): how often it adds a container's seconds to its ledger, and how
+# long it lets a stopped command take to exit before it kills it.
+GUARD_TICK_S = 30.0
+KILL_TIMEOUT_S = 60
+# The most a guarded stage can spend past its share. A ledger under its limit admits one more
+# attempt and charges its start overhead; the watchdog sees the share gone only at its next tick;
+# and the command it stops has the kill timeout to exit, seconds no ledger records. After that the
+# ledger is over and refuses every later attempt, so this happens once a stage.
+OVERRUN_S = START_OVERHEAD_S + GUARD_TICK_S + KILL_TIMEOUT_S
 
 
 class BudgetExceeded(RuntimeError):
@@ -47,21 +66,29 @@ def rate_per_s(gpu: str | None, cpu: float, memory_gib: float) -> float:
     return gpu_rate + cpu * CPU_CORE_PER_S + memory_gib * MEMORY_GIB_PER_S
 
 
-def shares(budget_usd: float, detector: bool) -> dict[str, float]:
-    """Each stage's share of a run's budget. Refuses a budget over the hard limit."""
+REFRESH_RATE = rate_per_s(None, REFRESH_CPU, REFRESH_MEMORY_GIB)
+
+
+def overrun_usd(rate: float) -> float:
+    """The most a stage guarded at `rate` can spend past its share (`OVERRUN_S`)."""
+    return OVERRUN_S * rate
+
+
+def shares(budget_usd: float, detector: bool, rate: float) -> dict[str, float]:
+    """Each stage's share of a run's budget, the limit its ledger holds it to: the refresh's and the
+    orchestrator's set amounts, and the rest to the trainings at `rate` in proportion to their
+    estimates (the detector's only when it trains). The rest is what is left once every guarded
+    stage's overrun is set aside too, so the shares and every overrun together never pass the
+    budget. Refuses a budget over the hard limit."""
     if budget_usd > HARD_LIMIT_USD:
         raise ValueError(f"a run may spend at most ${HARD_LIMIT_USD:.2f}, not ${budget_usd:.2f}")
-    rest = budget_usd - REFRESH_USD - PIPELINE_USD
+    trainings = {k: v for k, v in ESTIMATE_USD.items() if detector or k != "detector"}
+    reserve = overrun_usd(REFRESH_RATE) + len(trainings) * overrun_usd(rate)
+    rest = budget_usd - REFRESH_USD - PIPELINE_USD - reserve
     if rest <= 0:
         raise ValueError(f"${budget_usd:.2f} leaves nothing for training")
-    if not detector:
-        return {"refresh": REFRESH_USD, "pipeline": PIPELINE_USD, "embedder": rest}
-    return {
-        "refresh": REFRESH_USD,
-        "pipeline": PIPELINE_USD,
-        "embedder": rest * EMBEDDER_SHARE,
-        "detector": rest * (1 - EMBEDDER_SHARE),
-    }
+    total = sum(trainings.values())
+    return {"refresh": REFRESH_USD, "pipeline": PIPELINE_USD, **{k: rest * v / total for k, v in trainings.items()}}
 
 
 def max_seconds(stage_usd: float, rate: float) -> int:

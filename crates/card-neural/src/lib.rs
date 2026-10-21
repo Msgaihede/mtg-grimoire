@@ -8,13 +8,23 @@
 //! 3. [`gallery`] — that vector's cosine search over every **look** (printings that photograph
 //!    alike), int8 rows with a scale each.
 //!
+//! That is the **card**; two more networks choose the **printing** of the card it decided, from
+//! two small crops of the same frame. They are a second set of files, loaded beside the first
+//! and optional to a host:
+//!
+//! 4. [`evidence`] — a set symbol network and a collector band network (each a
+//!    MobileNetV3-small body to a 64-d unit vector), and a gallery of reference vectors for
+//!    each, keyed by printing. Their crop boxes and thresholds are `neural.json`'s `evidence`
+//!    section ([`meta::EvidenceMeta`]).
+//! 5. [`narrow`] — the rule that turns a card's candidate printings and their three scores
+//!    (whole card, symbol, band) into one printing, or a short list of choices, best first.
+//!
 //! [`scanner::Recognizer`] reads one frame; [`session::Agreement`] agrees across frames. The
 //! design is quickdraw.cards', the weights and the gallery are ours, trained from Apache-2.0
 //! ImageNet checkpoints on Scryfall scans. `docs/reference/card-scanner.md` §10 *Neural* has the
 //! mode and the replay this crate's files scored on, the scanner lab's write-up (outside this
 //! repository, `E:\mtg-scanner\docs\neural-scanner.md`) the evidence and the training, and
-//! `models/README.md` where each
-//! file came from.
+//! `models/README.md` where each file came from.
 //!
 //! **What this crate may not do, because `card-scanner` runs it in a browser Worker**: read a
 //! clock, start a thread, or touch a file outside the `cli` feature. The caller times it, and
@@ -24,12 +34,15 @@ use std::borrow::Cow;
 
 pub mod detect;
 pub mod embed;
+pub mod evidence;
 pub mod frame;
 pub mod gallery;
 pub mod meta;
+pub mod narrow;
 pub mod scanner;
 pub mod session;
 
+pub use evidence::{Evidence, EvidenceFiles, EvidenceIndex, EvidenceNets, Glance};
 pub use frame::Frame;
 pub use gallery::{Admit, Gallery};
 pub use meta::Meta;
@@ -76,6 +89,18 @@ pub fn bundled() -> Files<'static> {
     }
 }
 
+/// The set symbol and collector band files in this crate's `models/`, compiled in (~21 MB):
+/// what [`Evidence::load`] reads beside [`bundled`], whose `neural.json` says how.
+#[cfg(feature = "bundled")]
+pub fn bundled_evidence() -> EvidenceFiles<'static> {
+    EvidenceFiles {
+        symbol_net: Cow::Borrowed(include_bytes!("../models/symbol.onnx")),
+        band_net: Cow::Borrowed(include_bytes!("../models/band.onnx")),
+        symbols: Cow::Borrowed(include_bytes!("../models/symbols.bin")),
+        bands: Cow::Borrowed(include_bytes!("../models/bands.bin")),
+    }
+}
+
 /// The files in a directory laid out as `models/` is — what the command-line tools read.
 #[cfg(feature = "cli")]
 pub fn read_dir(dir: &std::path::Path) -> std::io::Result<Files<'static>> {
@@ -100,6 +125,60 @@ mod tests {
             embedder: Cow::Borrowed(include_bytes!("../models/embedder.onnx")),
             gallery: Cow::Borrowed(include_bytes!("../models/gallery.bin")),
             meta: Cow::Borrowed(include_bytes!("../models/neural.json")),
+        }
+    }
+
+    /// The evidence files in `models/`, as `bundled_evidence` compiles them in — read here
+    /// without the feature, as [`shipped`] is.
+    fn shipped_evidence() -> EvidenceFiles<'static> {
+        EvidenceFiles {
+            symbol_net: Cow::Borrowed(include_bytes!("../models/symbol.onnx")),
+            band_net: Cow::Borrowed(include_bytes!("../models/band.onnx")),
+            symbols: Cow::Borrowed(include_bytes!("../models/symbols.bin")),
+            bands: Cow::Borrowed(include_bytes!("../models/bands.bin")),
+        }
+    }
+
+    #[test]
+    fn the_shipped_evidence_loads_beside_the_shipped_recogniser() {
+        let r = Recognizer::load(shipped()).unwrap();
+        let section = r
+            .meta()
+            .evidence
+            .clone()
+            .expect("the shipped neural.json carries an evidence section");
+        // Each gallery is its own network's: as wide as the crop's network answers.
+        let files = shipped_evidence();
+        let symbols = Gallery::from_bytes(files.symbols.clone()).unwrap();
+        let bands = Gallery::from_bytes(files.bands.clone()).unwrap();
+        assert_eq!(symbols.dim(), section.symbol.dim);
+        assert_eq!(bands.dim(), section.band.dim);
+        // A band row a printing face: the first set had 107 109. Well short of 100 000 is an
+        // export cut short, whichever run made it.
+        assert!(bands.len() >= 100_000, "{} band rows", bands.len());
+        let mut evidence = Evidence::load(files, r.meta()).unwrap();
+        assert_eq!(evidence.thresholds, section.thresholds);
+
+        // Both crops of a hand-made quad on a grey frame read, each as a unit vector.
+        let grey = Frame::new(320, 192, vec![128; 320 * 192 * 3]).unwrap();
+        let p = |x, y| frame::Point { x, y };
+        let quad = [
+            p(100.0, 10.0),
+            p(220.0, 10.0),
+            p(220.0, 182.0),
+            p(100.0, 182.0),
+        ];
+        let glance = evidence.nets.glance(&grey, &quad).unwrap();
+        for (name, v, dim) in [
+            ("symbol", &glance.symbol, section.symbol.dim),
+            ("band", &glance.band, section.band.dim),
+        ] {
+            assert_eq!(v.len(), dim, "{name}");
+            let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-3,
+                "{name}: a unit vector, not {norm}"
+            );
         }
     }
 
@@ -152,6 +231,34 @@ mod tests {
                 "the pictured printing first"
             );
         }
+    }
+
+    #[test]
+    fn a_found_card_carries_the_fingerprint_its_score_came_from() {
+        let mut r = Recognizer::load(shipped()).unwrap();
+        let grey = Frame::new(320, 192, vec![128; 320 * 192 * 3]).unwrap();
+        // One hand-made detection on the frame's inset rectangle, sure of its orientation
+        // (flip 0.0), so one view is embedded. The search always answers, so one card is found.
+        let p = |x, y| frame::Point { x, y };
+        let quad = [
+            p(40.0, 24.0),
+            p(280.0, 24.0),
+            p(280.0, 168.0),
+            p(40.0, 168.0),
+        ];
+        let det = detect::Detection {
+            score: 0.9,
+            quad,
+            flip: 0.0,
+        };
+        let (cards, crops) = r.fingerprint(&grey, &[det], None).unwrap();
+        assert_eq!((cards.len(), crops), (1, 1));
+        let found = &cards[0];
+        assert_eq!(found.embedding.len(), r.meta().embedder.dim);
+        let norm = found.embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-3, "a unit vector, not {norm}");
+        let again = r.gallery().score(found.scored.entry, &found.embedding);
+        assert!((again - found.scored.score).abs() < 1e-5, "{again}");
     }
 
     #[test]

@@ -67,6 +67,9 @@ pub struct Found {
     pub scored: Scored,
     /// The search's best looks for this card, best first, with their cosine scores.
     pub top: Vec<(u32, f32)>,
+    /// The winning view's unit-length fingerprint (`embedder.dim` long): what `scored.score` was
+    /// the cosine of, kept so later evidence can compare the same picture against other looks.
+    pub embedding: Vec<f32>,
     pub accepted: bool,
     /// Size over distance from the target point; doubled when accepted. The ranking key.
     pub prominence: f32,
@@ -309,6 +312,7 @@ impl Recognizer {
                 quad,
                 scored,
                 top,
+                embedding: embeddings[j * dim..(j + 1) * dim].to_vec(),
                 accepted: false,
                 prominence: 0.0,
                 aimed: false,
@@ -403,6 +407,7 @@ mod tests {
                 twins: vec![0],
             },
             top: vec![(0, score)],
+            embedding: vec![],
             accepted: score >= th.accept && margin >= th.margin && det >= th.det_accept,
             prominence: 1.0,
             aimed: false,
@@ -459,6 +464,7 @@ mod tests {
                 twins: vec![card],
             },
             top: vec![(card, score)],
+            embedding: vec![],
             accepted: false,
             prominence: 0.0,
             aimed: false,

@@ -25,5 +25,16 @@
     "supportMargin": 0.03,
     "detSupport": 0.8,
     "flipSure": 0.4
+  },
+  "evidence": {
+    "symbol": { "width": 96, "height": 128, "box": [0.72, 0.4, 0.985, 0.66], "dim": 64 },
+    "band": { "width": 256, "height": 88, "box": [0.0, 0.8, 0.82, 1.0], "dim": 64 },
+    "thresholds": {
+      "candidateGap": 0.04,
+      "symbolWeight": 1.5,
+      "bandWeight": 1,
+      "decideMargin": 0.2,
+      "keepGap": 0.2
+    }
   }
 }

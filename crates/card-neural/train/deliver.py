@@ -4,7 +4,7 @@
 process with code a build runs (`release.yml`'s rule: secrets live in jobs that build nothing):
 
     deliver.py find [--run NAME] --out DIR     Modal token: list the runs, pick one, download it
-    deliver.py build --work DIR --out DIR      no secret: gallery.bin, README, training.json, tests
+    deliver.py build --work DIR --out DIR      no secret: the galleries, README, training.json, tests
     deliver.py publish --work DIR              PR token: branch, commit, push, pull request
     deliver.py mark --run NAME [--pr URL]      Modal token: `DELIVERED.json` on the Volume
 
@@ -56,8 +56,10 @@ EXPORTS = {
     "gallery.head.matrix": "embedder/export/gallery.head.matrix",
     "gallery.json": "embedder/export/gallery.json",
     "detector.onnx": "detector/export/detector.onnx",
+    **{name: f"{kind}/export/{name}" for kind in ur.EVIDENCE for name in (f"{kind}.onnx", f"{kind}s.matrix", f"{kind}s.json")},
 }
-# What a delivery commits: the four files and the two this rewrites.
+# What a delivery commits: the eight files and the two this rewrites. `neural.json` is among the
+# eight but never changed by one: its thresholds are hand-kept (`update_readme.py`).
 DELIVERED = (*ur.FILES, ur.README, ur.TRAINING_JSON)
 BOT = ("github-actions[bot]", "41898282+github-actions[bot]@users.noreply.github.com")
 SHOWN = 12  # runs the summary lists, newest first
@@ -204,8 +206,17 @@ def volume_path(run: str, name: str, files: dict | None) -> str:
 
 
 def wanted(done: dict) -> list[str]:
+    """The files a run's delivery needs; refuses a run that trained one evidence network alone."""
+    try:
+        nets = ur.retrained(done)
+    except ur.HalfEvidence as half:
+        raise Refused(f"{str(half)[0].upper()}{str(half)[1:]}.") from half
     names = ["embedder.onnx", "gallery.head.matrix", "gallery.json"]
-    return names + (["detector.onnx"] if "detector" in ur.retrained(done) else [])
+    names += ["detector.onnx"] if "detector" in nets else []
+    for kind in ur.EVIDENCE:
+        if kind in nets:
+            names += [f"{kind}.onnx", f"{kind}s.matrix", f"{kind}s.json"]
+    return names
 
 
 def fetch_run(store, run: str, out: Path) -> dict:
@@ -366,7 +377,14 @@ def pr_body(done: dict, info: dict | None, before: dict, looks: int, fetch: dict
         lead += f", {ur.group(-grown)} fewer than before (printings Scryfall withdrew)."
     else:
         lead += ", as many as before."
-    lead += " Its card finder was retrained too." if "detector" in nets else " Its card finder is unchanged."
+    evidence = all(kind in nets for kind in ur.EVIDENCE)
+    if "detector" in nets:
+        lead += (" Its card finder was retrained too, and so were the set symbol and collector band networks, which "
+                 "tell a card's printings apart." if evidence else " Its card finder was retrained too.")
+    else:
+        lead += " Its card finder is unchanged."
+        if evidence:
+            lead += " Its set symbol and collector band networks, which tell a card's printings apart, were retrained too."
 
     out = []
     if is_smoke(done, info):
@@ -387,12 +405,29 @@ def pr_body(done: dict, info: dict | None, before: dict, looks: int, fetch: dict
             f"| detector: wrong way up (lower is better) | {ur.number(d.get('wrong_way'))} | {ur.number(old_dm.get('wrong_way'))} |",
             f"| detector: steps | {ur.number(d.get('steps'))} | {ur.number(old_dm.get('steps'))} |",
         ]
-    out += ["", f"The current files: the embedder from run `{old_e.get('run', '?')}` ({old_e.get('where', '?')}), "
-            f"the detector from run `{old_d.get('run', '?')}` ({old_d.get('where', '?')})."]
+    for kind in ur.EVIDENCE:
+        if kind in nets:
+            m, old = metrics.get(kind) or {}, (before.get(kind) or {})
+            om = old.get("metrics") or {}
+            out += [
+                f"| {kind}: within-card top-1 (higher is better) | {ur.number(m.get('within_top1'))} | {ur.number(om.get('within_top1'))} |",
+                f"| {kind}: classes | {ur.number(m.get('classes'))} | {ur.number(old.get('classes'))} |",
+                f"| {kind}: epochs | {ur.number(m.get('epochs'))} | {ur.number(om.get('epochs'))} |",
+            ]
+    current = [f"the embedder from run `{old_e.get('run', '?')}` ({old_e.get('where', '?')})",
+               f"the detector from run `{old_d.get('run', '?')}` ({old_d.get('where', '?')})"]
+    for kind in ur.EVIDENCE:
+        old = before.get(kind) or {}
+        current.append(f"the {kind} network from run `{old.get('run', '?')}` ({old.get('where', '?')})")
+    out += ["", f"The current files: {', '.join(current)}."]
     if "detector" not in nets:
         out += ["This run did not retrain the detector (`--no-detector`), so `detector.onnx` stays as it is."]
+    if not any(kind in nets for kind in ur.EVIDENCE):
+        out += ["This run did not train the printing evidence, so `symbol.onnx`, `band.onnx` and their galleries stay as they are."]
     out += ["Retrieval top-1 is the embedder's check on held-out Scryfall scans; the detector's numbers are on "
-            "synthetic scenes. Neither is a reader's camera — that is the replay below.", ""]
+            "synthetic scenes; within-card top-1 asks, of camera-drawn crops of 1 000 cards with several printings, "
+            "whether the true printing's class is the best of that card's. None is a reader's camera — that is the "
+            "replay below.", ""]
 
     out += ["## Spend", ""]
     spend = done.get("spend_usd")
@@ -414,19 +449,23 @@ def pr_body(done: dict, info: dict | None, before: dict, looks: int, fetch: dict
         "## Before merging",
         "",
         "- [ ] **Replay the readers' scans on this branch.** `neural.json`'s thresholds were tuned for the "
-        "previous pair, by cross-validation on those scans; a new embedder moves every score, so the same "
-        "thresholds can accept less, or accept wrongly. `pnpm scanner:corpus pull`, then `pnpm scanner:replay`, "
-        "whose Neural pass runs these files — compare card ✓ and wrong with the current pair's "
+        "previous pair, by cross-validation on those scans, and its `evidence` thresholds for the previous set "
+        "symbol and collector band networks; a retrained network moves every score it makes — a crop network can "
+        "shift its whole score scale — so the same thresholds can accept less, or accept wrongly. "
+        "`pnpm scanner:corpus pull`, then `pnpm scanner:replay`, whose Neural pass runs these files — compare card ✓ "
+        "and wrong, and the printings decided, wrong and left a choice, with the current files' "
         "(`docs/reference/card-scanner.md` §10 _Neural_).",
-        "- [ ] Write this pair's replay figures into `crates/card-neural/models/README.md` and §10, or tune "
+        "- [ ] Write these files' replay figures into `crates/card-neural/models/README.md` and §10, or tune "
         "`neural.json` on this branch and say so here.",
-        "- [ ] If the new pair does worse, close this pull request: the current files stay.",
+        "- [ ] If the new files do worse, close this pull request: the current files stay.",
         "",
         "## Where the files came from",
         "",
         f"- Run `{run}` on the Modal Volume `{VOLUME}` (`runs/{run}/`), trained from commit "
         f"`{done.get('git_sha') or info.get('git_sha') or 'unrecorded'}`, finished {done.get('finished_at') or 'at an unrecorded time'}.",
-        "- `gallery.bin` built by `build-gallery` from the run's `gallery.head.matrix` and `gallery.json`; "
+        "- `gallery.bin` built by `build-gallery` from the run's `gallery.head.matrix` and `gallery.json`"
+        + ("; `symbols.bin` and `bands.bin` from its `symbols.matrix` and `bands.matrix`, the mean rows" if evidence else "")
+        + "; "
         "the README's rows and `training.json` rewritten by `crates/card-neural/train/update_readme.py`; "
         + ("`cargo test -p card-neural` passed on them." if tested else "not tested (a dry run or a smoke run)."),
     ]
@@ -444,6 +483,7 @@ def build(work: Path, out: Path, repo: Path = REPO, scratch: bool = False, test:
     run = done.get("run", "")
     if not RUN_NAME.match(run) or done.get("status") != "ok":
         raise Refused(f"`{work / 'DONE.json'}` is not a finished run's (run {run!r}, status {done.get('status')!r}).")
+    wanted(done)  # refuses half the evidence before a file is copied
     info = load((work / "run.json").read_bytes()) if (work / "run.json").exists() else {}
     fetch = load((work / "fetch.json").read_bytes()) if (work / "fetch.json").exists() else None
     smoke = is_smoke(done, info)
@@ -457,12 +497,19 @@ def build(work: Path, out: Path, repo: Path = REPO, scratch: bool = False, test:
     models = staged if scratch else real
     before = json.loads((models / ur.TRAINING_JSON).read_text(encoding="utf-8"))
 
-    for name in ("embedder.onnx", "detector.onnx"):
+    for name in ("embedder.onnx", "detector.onnx", *(f"{kind}.onnx" for kind in ur.EVIDENCE)):
         if name in wanted(done):
             shutil.copyfile(work / name, models / name)
     make_gallery(repo, (work / "gallery.head.matrix").resolve(), (work / "gallery.json").resolve(),
                  (models / "gallery.bin").resolve())
-    ur.update(models, done, work / "gallery.json")
+    # The evidence galleries from the mean rows (`<kind>s.matrix`), as the lab built the shipped ones.
+    nets = ur.retrained(done)
+    for kind in ur.EVIDENCE:
+        if kind in nets:
+            make_gallery(repo, (work / f"{kind}s.matrix").resolve(), (work / f"{kind}s.json").resolve(),
+                         (models / f"{kind}s.bin").resolve())
+    ur.update(models, done, work / "gallery.json",
+              work / "symbols.json" if "symbol" in nets else None, work / "bands.json" if "band" in nets else None)
     looks = ur.looks_of(work / "gallery.json")
     if test and not scratch:
         run_tests(repo)
@@ -615,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", type=Path, help="where to download it")
     p.add_argument("--from-dir", type=Path, help="a folder laid out as the Volume, instead of it")
 
-    p = sub.add_parser("build", help="gallery.bin, README.md, training.json and the PR body")
+    p = sub.add_parser("build", help="the galleries, README.md, training.json and the PR body")
     p.add_argument("--work", type=Path, required=True, help="what `find --out` downloaded")
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--scratch", action="store_true", help="leave the repository's models/ alone; no test")

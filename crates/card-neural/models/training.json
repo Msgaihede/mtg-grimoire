@@ -24,5 +24,27 @@
       "steps": 30000
     }
   },
+  "symbol": {
+    "run": "ev-symbol-3",
+    "where": "scanner lab",
+    "finished_at": null,
+    "git_sha": null,
+    "classes": 1999,
+    "metrics": {
+      "within_top1": 0.927,
+      "epochs": 16
+    }
+  },
+  "band": {
+    "run": "ev-band-2",
+    "where": "scanner lab",
+    "finished_at": null,
+    "git_sha": null,
+    "classes": 107109,
+    "metrics": {
+      "within_top1": 0.946,
+      "epochs": 20
+    }
+  },
   "last_run": null
 }

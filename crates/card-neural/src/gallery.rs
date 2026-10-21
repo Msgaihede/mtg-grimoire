@@ -61,6 +61,10 @@ pub struct Gallery {
     at: Layout,
     /// Where each name starts in the names section; `n + 1` entries.
     name_at: Vec<u32>,
+    /// Every look, ordered by card group and then by entry, so one card's looks are a run:
+    /// [`Gallery::looks_of`] finds it by bisection. A small index beside the bytes, not a copy of
+    /// the rows (`n` × 4 bytes).
+    by_card: Vec<u32>,
 }
 
 /// The looks a set of filters lets the search answer: one flag per row.
@@ -241,12 +245,15 @@ impl Gallery {
         if name_at.len() != n + 1 {
             return Err(bad("there is not one name a look"));
         }
+        let mut by_card: Vec<u32> = (0..n as u32).collect();
+        by_card.sort_by_key(|&e| (u32_at(&bytes, at.cards + e as usize * 4), e));
         Ok(Gallery {
             bytes,
             n,
             dim,
             at,
             name_at,
+            by_card,
         })
     }
 
@@ -282,6 +289,16 @@ impl Gallery {
     /// measured against the best look of *another* card.
     pub fn card(&self, entry: u32) -> u32 {
         u32_at(&self.bytes, self.at.cards + entry as usize * 4)
+    }
+
+    /// Every look of a card group, ascending by entry; empty for a group the gallery has none of.
+    /// The looks are the pictures a card is told apart by (another frame, the other face), so
+    /// these are the fingerprints a card's printing evidence can be compared against.
+    pub fn looks_of(&self, card: u32) -> &[u32] {
+        let key = |e: &u32| u32_at(&self.bytes, self.at.cards + *e as usize * 4);
+        let from = self.by_card.partition_point(|e| key(e) < card);
+        let to = self.by_card.partition_point(|e| key(e) <= card);
+        &self.by_card[from..to]
     }
 
     pub fn face(&self, entry: u32) -> Face {
@@ -407,6 +424,20 @@ mod tests {
         );
         assert_eq!(back.name(0), "Lightning Bolt");
         assert_eq!(back.name(2), "Delver // back");
+    }
+
+    #[test]
+    fn looks_of_lists_every_look_of_a_card_and_nothing_else() {
+        // Cards [7, 9, 7, 7]: the looks of 7 are not next to each other.
+        let looks: Vec<Look> = [7u32, 9, 7, 7]
+            .iter()
+            .enumerate()
+            .map(|(i, &card)| look(i as u8, card, &[i as u8], "x"))
+            .collect();
+        let g = Gallery::build(&[0.0; 4 * 2], 2, &looks).unwrap();
+        assert_eq!(g.looks_of(7), &[0, 2, 3]);
+        assert_eq!(g.looks_of(9), &[1]);
+        assert!(g.looks_of(42).is_empty());
     }
 
     #[test]

@@ -1,4 +1,12 @@
-import { NEURAL_FILES, NEURAL_PREFIX, neuralPath, SCANNER_CACHE, type NeuralFile } from "./assets";
+import {
+  NEURAL_EVIDENCE_FILES,
+  NEURAL_FILES,
+  NEURAL_PREFIX,
+  neuralPath,
+  SCANNER_CACHE,
+  type NeuralEvidenceFile,
+  type NeuralFile,
+} from "./assets";
 import { spaced, unstalledBy, type Answered, type StoreEnv } from "./scanStore";
 
 /**
@@ -19,14 +27,18 @@ import { spaced, unstalledBy, type Answered, type StoreEnv } from "./scanStore";
  * body is short: either is refused in a sentence, and no Worker is handed part of a network.
  * Each answer and each chunk is bounded (`scanStore.ts`' `STALL_MS`), so a fetch that never
  * ends is a failure and not a frame that hangs.
+ *
+ * **The printing evidence is four more, fetched the same way and later**
+ * ({@link fetchNeuralEvidence}): once the recogniser has taken its four, in the background, with
+ * no frame waiting on them.
  */
 
-/** What the page knows of the four before it asks: their set, and each one's length. */
+/** What the page knows of the eight before it asks: their set, and each one's length. */
 export interface NeuralSource {
-  /** The four files' own id — the folder of {@link NEURAL_PREFIX} they are served from. */
+  /** The files' own id — the folder of {@link NEURAL_PREFIX} they are served from. */
   set: string;
   /** Each file's exact length, as the build found it. A file with none is read to its end. */
-  bytes: Readonly<Partial<Record<NeuralFile, number>>>;
+  bytes: Readonly<Partial<Record<NeuralFile | NeuralEvidenceFile, number>>>;
 }
 
 /** The four, as `load_neural` takes them. */
@@ -35,6 +47,14 @@ export interface NeuralFiles {
   embedder: Uint8Array;
   gallery: Uint8Array;
   meta: Uint8Array;
+}
+
+/** The evidence's four, as `load_neural_evidence` takes them. */
+export interface NeuralEvidenceFiles {
+  symbolNet: Uint8Array;
+  bandNet: Uint8Array;
+  symbols: Uint8Array;
+  bands: Uint8Array;
 }
 
 /** What a fetch that could not reach the origin says. */
@@ -57,7 +77,7 @@ const failed = (why: string): string =>
 async function one(
   env: Pick<StoreEnv, "fetch" | "after">,
   source: NeuralSource,
-  name: NeuralFile,
+  name: NeuralFile | NeuralEvidenceFile,
 ): Promise<Uint8Array<ArrayBuffer>> {
   let response: Answered;
   try {
@@ -138,9 +158,34 @@ export async function fetchNeural(
 }
 
 /**
- * Whether this browser holds all four of `source`'s set already — kept by the service worker on an
- * earlier visit — so the status can say they are there before this page has asked. Reads no body,
- * and **never creates the cache by asking**; a Cache Storage that throws holds nothing.
+ * Whether this build ships the evidence: it names a length for each of its four files. **A build
+ * made without them names none, and the page then asks for none** — no request that could only
+ * be answered 404, and nothing kept that is not there to keep.
+ */
+export function shipsEvidence(source: NeuralSource): boolean {
+  return NEURAL_EVIDENCE_FILES.every((name) => source.bytes[name] !== undefined);
+}
+
+/**
+ * The evidence's four files, fetched one after another as {@link fetchNeural}'s are and refused
+ * in the same sentences. The page asks for them only after the recogniser has taken its four,
+ * and a refusal here is logged and nothing else: Neural reads on without the evidence.
+ */
+export async function fetchNeuralEvidence(
+  env: Pick<StoreEnv, "fetch" | "after">,
+  source: NeuralSource,
+): Promise<NeuralEvidenceFiles> {
+  const read: Uint8Array[] = [];
+  for (const name of NEURAL_EVIDENCE_FILES) read.push(await one(env, source, name));
+  const [symbolNet, bandNet, symbols, bands] = read;
+  return { symbolNet, bandNet, symbols, bands };
+}
+
+/**
+ * Whether this browser holds all of `source`'s set already — the recogniser's four and, when the
+ * build ships it ({@link shipsEvidence}), the evidence's, kept by the service worker on an earlier
+ * visit — so the status can say they are there before this page has asked. Reads no body, and
+ * **never creates the cache by asking**; a Cache Storage that throws holds nothing.
  */
 export async function neuralKept(
   env: Pick<StoreEnv, "caches">,
@@ -150,7 +195,10 @@ export async function neuralKept(
   try {
     if (!(await env.caches.keys()).includes(SCANNER_CACHE)) return false;
     const cache = await env.caches.open(SCANNER_CACHE);
-    for (const name of NEURAL_FILES) {
+    const names = shipsEvidence(source)
+      ? [...NEURAL_FILES, ...NEURAL_EVIDENCE_FILES]
+      : NEURAL_FILES;
+    for (const name of names) {
       if (!(await cache.match(neuralPath(source.set, name), { ignoreVary: true }))) return false;
     }
     return true;

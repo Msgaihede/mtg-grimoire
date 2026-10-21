@@ -3531,16 +3531,21 @@ when some are only supported, or one sure frame alone. The session's own clock a
 the plan with the contract is
 [2026-10-20-neural-scan-mode](../superpowers/plans/2026-10-20-neural-scan-mode.md).
 
-**What a Neural decision says.** The decided look's pictured printing — or its first printing the
-filters admit — with labels, oracle id and finishes from the `Reference`, as Fast's are. A look
-that stands for more than one admitted printing is `ambiguous`, its printings the `choices`, so
-the tray asks for a pick; the picture alone cannot tell them apart. No band is read, so there is
-no collector line and no finish mark: under *Detect* a printing that exists in two finishes lands
-Unknown. Five frames running with no card forget the decision — the same card shown again adds
-again, and a switch from Fast or Exact on the card in hand replaces its row.
+**What a Neural decision says.** The card is decided by the whole-card match, as above; **which
+printing of it** is then chosen on two small crops of the same frame (*The printing evidence*,
+below). A decision names the one printing the crops were sure of, or is `ambiguous` with the
+printings they could not rule out as its `choices`, best first, so the tray asks for a pick — a
+picture of the whole card cannot tell reprints apart. The decision carries labels, oracle id and
+finishes from the `Reference`, as Fast's do. **No text is read**, so there is no collector line and
+no finish mark: under *Detect* a printing that exists in two finishes lands Unknown. Without the
+evidence loaded a decision is what the first version made: the decided look's pictured printing,
+or, when that look stands for more than one printing the filters admit, those as the `choices` in
+the look's order. Five frames running with no card forget the decision — the same card shown again
+adds again, and a switch from Fast or Exact on the card in hand replaces its row.
 
 **On the 124 readers' scans** (card-scanner's replay, 2026-10-20, the shipped files and
-thresholds, judged on the decision held after the last frame):
+thresholds, **before the printing evidence below**, judged on the decision held after the last
+frame):
 
 | pass | printing ✓ | card ✓ | wrong | undecided |
 | --- | ---: | ---: | ---: | ---: |
@@ -3548,18 +3553,128 @@ thresholds, judged on the decision held after the last frame):
 | Exact | 52.4 % | 56.5 % | 9 | 36.3 % |
 | **Neural** | **90.3 %** | **96.0 %** | **0** | **4.0 %** |
 
-The median Neural decision is on frame 1; 42 decisions were ambiguous, and in 118 runs the
-reader's printing was the decided one or among the choices. **The thresholds were chosen by
+The median Neural decision is on frame 1; 42 decisions were ambiguous (77 resolved on the right
+printing and none on a wrong one), and in 118 runs the reader's printing was the decided one or
+among the choices. **The thresholds were chosen by
 cross-validation on these same scans** (95.2 % card ✓ held out; 96.0 % is the in-sample choice),
 so newer scans are the honest test. The five undecided are cards the embedder does not recognise:
 a foil, a card under binder glare, a Japanese printing, a dark card in a dim deck box, one plain
 miss. How the networks were found, trained and compared with quickdraw.cards' is the scanner
 lab's record (`E:\mtg-scanner`); `crates/card-neural/models/README.md` is the files' provenance.
 
-**Where the files come from.** They are in git (`crates/card-neural/models/`). The desktop and
-Android builds compile them in (`card_neural::bundled()`, carried in `Embedded::neural`); the web
-fetches them from the app origin the first time a Neural frame is due. `ScannerStatus.neural` says
-which. The mode still needs the hash bundle and labels for names and filters, as the others do.
+**The printing evidence (2026-10-21, issue #1324).** The whole-card embedder sees the card through
+the box `[0.03, 0.02, 0.97, 0.72]` at 128×128: the collector band is cut off and the set symbol is
+a few pixels, so reprints that share art look alike and a look (printings that photograph alike)
+is often several. Two more small networks read the two places that tell printings apart, and
+**never change which card is decided** — they cannot add a wrong card:
+
+| network | reads | input | classes it was trained on |
+| --- | --- | --- | --- |
+| `symbol.onnx` | the set symbol, box `[0.72, 0.40, 0.985, 0.66]` (raised to include the promo-pack planeswalker stamp) | 96×128 | printed set × rarity × stamp |
+| `band.onnx` | the collector band, box `[0.0, 0.80, 0.82, 1.0]` (from the card's left edge so The List's planeswalker mark is in it, wide enough for the artist) | 256×88 | one per printing face |
+
+Both are a `mobilenetv3_small_075` body to a 64-d unit vector, trained with ArcFace; each has a
+gallery of reference rows (`symbols.bin` 1.9 MB, `bands.bin` 14.3 MB) keyed by **printing**, not
+look. Within one card's printings, on 3 000 cards, the nearest row is the right printing 0.950 of
+the time for the band, 0.664 for the symbol and 0.965 for both - **on simulated camera views of
+cards 130 to 480 px tall, not on readers' frames**. The four files are 21.6 MB
+(`symbol.onnx` 2.6, `band.onnx` 2.8) and the crops come **from the ordinary frame** Neural already
+reads (~960 px), straightened through the corners the detector found, so the card is decided on
+the same frame as before. The scanner asks for no detail frame, and at that size the band is a few
+pixels tall. The design expected most of the gain to come from the symbol and the wider candidate
+list; **no ablation has separated them**, and the one measurement there is points the other way:
+among the 48 runs with several candidates whose truth is one of them, the band alone ranks the
+truth first on 34 and the symbol alone on 29 (both together, 35).
+
+**What the evidence costs a Worker** (2026-10-21). The web build hands the four files to
+`grimoire-scan`'s `load_neural_evidence` after the recogniser, into a WASM heap that is never given
+back, so a trap on a later frame could be the evidence's and be blamed on the frame. Measured on
+the built `dist-wasm/scanner` module (`simd128`, the `wasm` profile) in **Node 24's V8 on the
+owner's desktop**, loaded through its own `initSync` and fed the readers' JPEG bytes — not in a
+browser (the built-in browser has no camera) and not on a phone: `load` with the
+`card-hashes-v5.bin` bundle (113 494 entries) and both OCR models, no labels; `load_neural` with
+the four recogniser files; ten readers' runs (every twelfth of the 124, 20 frames each), Neural
+options, `reset` between runs; a warm-up pass discarded; two runs of the whole, which agreed.
+
+| step | linear memory | time |
+| --- | ---: | ---: |
+| `load` | 42.1 MiB | 41 ms |
+| `load_neural` | 64.4 MiB | 39–40 ms |
+| 200 Neural frames, no evidence | 64.4 MiB | mean 43.7–44.8 ms, median 42–43, p90 59–60, max 102–109 |
+| `load_neural_evidence` | **90.3 MiB (+25.9)** | **48–49 ms** |
+| 400 Neural frames with the evidence | 90.3 MiB | mean 44.3–45.4 ms, median 42–43, p90 59–63, max 94–116 |
+
+The evidence costs **25.9 MiB** — its 20.6 MiB of files and ~5 MiB of the band index and the two
+networks' working space — and a frame no measurable time. Two of the ten runs that ended
+ambiguous (2 choices) without it ended resolved with it (whether on the reader's printing was
+not checked here; the replay above is the accuracy measure). Both figures are under the bar the review set
+(40 MiB, or a 2 s hand-over) for counting a trap after the evidence loaded against the evidence,
+so a trap is still the frame's: the next Worker gets the evidence again. A phone's V8 is
+slower than this desktop's, perhaps several times; 49 ms has room for that, and the 25.9 MiB
+does not change with the CPU.
+
+The rule (`narrow.rs`, run by `neural_mode::evidence_decision`) is, for the card the agreement
+decided:
+
+1. **Widen the candidates.** Every look of the card whose whole-card score, averaged over the frames
+   kept, is within `candidateGap` (0.04) of the decided look's is a candidate, and so is each of its
+   covers the filters admit. Before this a decision offered only the decided look's covers, and a
+   printing that lost by a little was dropped; the owner had seen readers fix that by hand.
+2. **Score each candidate** `whole + symbolWeight·symbol + bandWeight·band` (1.5 and 1), the symbol
+   and band as the cosine to the printing's own row, over the frames kept.
+3. **Decide a printing only when sure**: no candidate lacks a row in either gallery, and the best
+   leads the second by `decideMargin` (0.20). Otherwise the decision stays `ambiguous` and its
+   choices are the known candidates within `keepGap` (0.20) of the best, best first, then every
+   candidate the galleries hold no row for, since the evidence cannot rule it out.
+
+The thresholds are `neural.json`'s `evidence` section. They were tuned by cross-validation on
+these same scans, and **the owner chose `decideMargin` 0.20 knowing the cross-validated estimate
+at the tighter 0.18 the CV picked had 3 wrong printings held out**; the figures below are
+in-sample. Reading them: *resolved right* is a decision naming exactly the reader's printing,
+*resolved wrong printing* one naming another printing of the right card (the floor: 0 before and
+after), and `ambiguous` a decision left to the tray. `printing ✓` is not the measure, because an
+ambiguous decision whose first choice happens to be the reader's scores `printing` too.
+
+| Neural pass, 124 scans | resolved right | resolved wrong printing | ambiguous | choices (ambiguous) | card ✓ | truth decided or in choices |
+| --- | ---: | ---: | ---: | --- | ---: | ---: |
+| before (2026-10-20 files) | 77 | 0 | 42 | median 2, mean 2.24 | 119 | 118 |
+| with the evidence | **87** | **0** | **32** | median 2, mean 2.09 | 119 | 118 |
+
+Of the 42 that were ambiguous, 10 are now decided on the right printing and none on a wrong one.
+**The 32 left**: 21 are a promo and a regular printing of the same set (mostly the prerelease `s`,
+whose 2021+ datestamp sits outside both crops), 9 are collector-number variants of the same set
+(the digits are too blurry at ~960 px), and 2 are in different sets. A sharper frame is the way on
+for the 9: the design's follow-up cuts the crops from a detail frame once the scan inbox stores one
+([the design](../superpowers/specs/2026-10-21-neural-printing-evidence-design.md)).
+
+**The final replay, 2026-10-21** (`pnpm scanner:replay` against the shipped bundle of 122 390
+printings and the eight shipped files, at the commit before these docs (`af2951d2f`); 124 scans, the corpus mirror
+being exactly the 124 received 2026-10-12 to 2026-10-15): the Neural pass is 87 resolved right,
+0 resolved wrong printing, 32 ambiguous (median 2 choices, mean 2.09), 0 wrong cards, 119 card ✓
+(96.0 %), 5 undecided, `printing ✓` 110 (88.7 %, 90.3 % before), and the reader's printing
+decided or among the choices in 118 runs (87 + 31). **The `printing ✓` drop, 112 to 110, is
+placeholder order only, not a printing filed wrong**: it counts an ambiguous decision whose first
+choice is the reader's, and the evidence reorders the choices. The tray never files `choices[0]`
+of an ambiguous decision — `rowFromDecision` (`packages/ui/features/scanner/reader/tray.ts`) only
+draws it as the row's provisional picture, and a row waiting for a pick stops the commit
+(`unresolvedCount`) until the reader picks. **It matches the figures above exactly.** Scans
+received after 2026-10-15 would be the honest test, but on 2026-10-21 a `pnpm scanner:corpus
+pull` brought none, and the owner waived that gate. The first newer scans to arrive are
+the ones to replay against the same floor — no wrong printing, no wrong card.
+
+**Where the files come from.** They are in git (`crates/card-neural/models/`): **eight, in two
+sets**, the recogniser's four and the evidence's four. The desktop and Android builds compile them
+in (`card_neural::bundled()` carried in `Embedded::neural`, and `bundled_evidence()` in
+`Embedded::neural_evidence`); the web fetches the recogniser's four from the app origin the first
+time a Neural frame is due and the evidence's after them, holding up no frame (a failed fetch of
+the evidence leaves Neural deciding as it did). `ScannerStatus.neural` says which. A refused
+evidence set (files that are not them, or no `evidence` section in `neural.json`) leaves the
+recogniser running without it. The monthly retraining remakes the seven network and gallery files
+(the symbol network 12 epochs and the band network 14 to fit the run's ~$8.65, where the shipped
+files used 16 and 20) and **never `neural.json`**: its thresholds, the evidence's too, are the
+owner's. A retrained crop network can shift its score scale, so the delivery's pull request is
+replayed on the readers' scans before it merges.
+The mode still needs the hash bundle and labels for names and filters, as the others do.
 
 ### A card laid on the last
 
@@ -4404,9 +4519,10 @@ are the only labelled camera frames there are since the photographs were lost (�
 and does not gate: exit 0 for a run that finished whatever the accuracy, 1 when nothing could be
 replayed.
 
-**Three passes a run, a fresh `Session` each**, every frame fed in order with `ResolveOn::Inline`
+**Four passes a run, a fresh `Session` each**, every frame fed in order with `ResolveOn::Inline`
 so no clock decides anything: **As scanned** (the label's mode and filters), **Fast** with no
-filters and **Exact** with none. **A pass is judged on the decision the session holds at the last
+filters, **Exact** with none and **Neural** with none (when its models load; its votes are aged by
+the label's own frame times, not the machine's). **A pass is judged on the decision the session holds at the last
 frame**, since the label names the card in the last frame. The five scores:
 
 | Score | When |
@@ -4417,8 +4533,8 @@ frame**, since the label names the card in the last frame. The five scores:
 | `undecided` | no decision by the last frame |
 | `error` | a frame the scanner failed on: a panic, an undecodable JPEG, a failed resolve |
 
-An Exact answer of choices rather than one printing is `ambiguous`, judged on its first choice as
-`eval` does and recorded with whether the truth was among them. Each pass also records the frame
+An Exact or Neural answer of choices rather than one printing is `ambiguous`, judged on its first
+choice as `eval` does and recorded with whether the truth was among them. Each pass also records the frame
 of its first decision and of the decision it is scored on (`decision_frame`, with `decisions`, how
 many were made), `locked_frames`, and per frame `ok`, lock phase, confidence, best distance and
 the printing decided by then.
@@ -4437,10 +4553,32 @@ has no detail frame, so it always waits the whole seven, after the lock itself h
 run with fewer than seven steady frames after the lock cannot resolve in Exact at all.** Such a
 pass carries `resolve_ran: false` and scores `undecided`: it was too short to resolve, and it is
 not a scanner miss. The summary's columns, as printed, are `pass`, `n`, `printing ✓ %`,
-`card ✓ %`, `wrong card`, `undecided %`, `errors`, `ambiguous`, `median frames`,
-`never resolved` and `decided then lost`. **Exact's percentages keep the too-short runs in their
+`card ✓ %`, `wrong card`, `undecided %`, `errors`, `resolved right`, `resolved wrong printing`,
+`ambiguous`, `median choices`, `mean choices`, `median frames`, `never resolved` and
+`decided then lost`. **Exact's percentages keep the too-short runs in their
 denominator**, so read them beside `never resolved`, which counts exactly those; `decided then
 lost` counts the undecided passes that made a decision and no longer held one at the last frame.
+**What a pass settled, for the Neural bar (2026-10-21).** Each pass also records `settled`
+(`right_printing`, `wrong_printing`, `ambiguous` or `other`, derived from the score and whether the
+decision was `ambiguous`: a decision that offered a choice is `ambiguous` whatever its first
+choice scored) and `choices`, how many printings the decision offered. The new columns are read
+off them: `resolved right` and `resolved wrong printing` count the decisions that named one
+printing, and the `choices` statistics (median and mean) run over the ambiguous decisions only.
+`printing ✓` includes an ambiguous decision whose first choice is the reader's, so it cannot show
+that a scanner stopped guessing; `resolved right` and `resolved wrong printing` can.
+
+**The Neural pass records its evidence.** With the evidence files loaded, each Neural pass carries
+`evidence` in `results.json`: every candidate printing of the last decision, its look and its
+whole-card, set symbol and collector band scores (`null` where the galleries hold no row, or no
+crop was read), and the printing the evidence decided. `--neural-evidence <dir>` names the folder
+of the four files, `--neural-evidence-meta <neural.json>` reads another `neural.json` in place of
+the models' own (how the lab tunes the thresholds without copying files), and `--neural-models`
+moves the recogniser's folder. **Left out, the evidence is loaded from the models folder in use
+when it holds all four files and the `neural.json` there has an `evidence` section**: the folder
+in git does, so a plain `pnpm scanner:replay` replays the shipped pass, and the log says
+`neural evidence: <dir>` or `none`. A `neural.json` without the section replays the pass as it was
+before the evidence, which is how the old figures are reproduced.
+
 **Frame numbers differ by place**: the files are numbered from 00 (`frames/<id>/00.jpg`), while
 every frame number in the results, the report and the slice file names counts from 1.
 

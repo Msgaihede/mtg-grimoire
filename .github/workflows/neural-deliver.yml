@@ -3,10 +3,10 @@ name: neural-deliver
 # Turns a finished Neural training run (`neural-train.yml`) into a pull request: every six hours,
 # and on dispatch. A run on the `card-neural` Volume whose `runs/<run>/DONE.json` says
 # `"status": "ok"` and that has no `DELIVERED.json` is delivered — one a workflow run, the oldest
-# first, or just the one a dispatch names: its files downloaded, `gallery.bin` built, the four rows
-# of `crates/card-neural/models/README.md` and `training.json` rewritten, `cargo test -p
-# card-neural` run on them, a branch `neural-models/<run>` pushed and a pull request opened into
-# `main` — then `DELIVERED.json` written, so it is delivered once. A failed run is reported in the
+# first, or just the one a dispatch names: its files downloaded, `gallery.bin`, `symbols.bin` and
+# `bands.bin` built, the eight rows of `crates/card-neural/models/README.md` and `training.json`
+# rewritten, `cargo test -p card-neural` run on them, a branch `neural-models/<run>` pushed and a
+# pull request opened into `main` — then `DELIVERED.json` written, so it is delivered once. A failed run is reported in the
 # summary, turns the workflow run red once, and gets no pull request. A smoke run is built in a
 # scratch copy and its would-be pull request shown; it never gets one.
 #
@@ -134,7 +134,7 @@ jobs:
       - name: The delivery's own tests
         run: python3 -B -m unittest discover -s crates/card-neural/train/tests -p "test_deliver*.py"
 
-      # `gallery.bin` by `build-gallery`, the README's four rows and `training.json`, then
+      # The three galleries by `build-gallery`, the README's eight rows and `training.json`, then
       # `cargo test -p card-neural` on the files — in the checkout for a real run, in a scratch
       # copy for a smoke run. The pull request's body lands in the summary.
       - name: Build the delivery

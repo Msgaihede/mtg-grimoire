@@ -10,12 +10,20 @@ import type { CallArgs, CallOptions, Core } from "../types";
 import { neuralBytesOf, SCANNER_ASSETS_PREFIX } from "./assets";
 import { webCore } from "./index";
 import { LABELS_COMMAND } from "./protocol";
-import { fetchNeural, NEURAL_PATH, neuralKept, type NeuralSource } from "./scanNeural";
+import {
+  fetchNeural,
+  fetchNeuralEvidence,
+  NEURAL_PATH,
+  neuralKept,
+  shipsEvidence,
+  type NeuralSource,
+} from "./scanNeural";
 import {
   frameMessage,
   isNeuralFrame,
   loadFactsOf,
   loadMessage,
+  neuralEvidenceMessage,
   neuralMessage,
   type FromScanner,
   type LoadFacts,
@@ -98,6 +106,14 @@ import {
  *   and is waited out as a build that failed is — five seconds doubling to a minute — so a phone
  *   whose memory will not take them is not handed twenty-seven megabytes a second; meanwhile a
  *   Neural frame says the last failure's sentence and a Fast one is untouched.
+ * - **The printing evidence follows them, and no frame waits for it.** Once a Worker's recogniser
+ *   has answered that it took the four, the evidence's four (`assets.ts`' `NEURAL_EVIDENCE_FILES`)
+ *   are fetched in the background and posted when they arrive; the frames meanwhile are sent as
+ *   they come and decide without it. A fetch or a refusal that fails is logged and nothing else
+ *   — no frame is refused and the status says nothing — and the next Worker asks again. A
+ *   hand-over that traps or passes its deadline, which ends the Worker and the recogniser with
+ *   it, is not tried again while this page lives: Neural reads on with the recogniser alone. A
+ *   build that ships no evidence is asked for none.
  */
 
 /** The seven commands answered here, and the one this listens to on its way past. */
@@ -256,8 +272,10 @@ type Built =
       /**
        * The Neural files in this Worker: loaded, being fetched and handed over (the one
        * promise every Neural frame meanwhile waits on), or neither. Each Worker starts with none.
+       * `evidence` is whether the evidence has been asked for in it — once a Worker, whatever
+       * became of it.
        */
-      neural: { loaded: boolean; loading: Promise<void> | null };
+      neural: { loaded: boolean; loading: Promise<void> | null; evidence: boolean };
     };
 
 /** A session that was built: a Worker, and what it said. */
@@ -280,6 +298,8 @@ interface Pending {
   load: boolean;
   /** Whether it hands over the Neural files: one that fails is waited out before the next. */
   neural: boolean;
+  /** Whether it hands over the evidence: one that ends the Worker is not tried again. */
+  evidence: boolean;
 }
 
 /** A rejection as the one sentence the pages above read (`ipcError`). */
@@ -387,6 +407,8 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
   /** A Neural fetch or hand-over failed: none is tried again before this moment. */
   let neuralRetryAt = 0;
   let neuralFailures = 0;
+  /** A hand-over of the evidence ended its Worker: no Worker is handed it again. */
+  let evidenceDropped = false;
   const listeners = new Set<(payload: never) => void>();
 
   const emit = (payload: ScannerAssetsProgress): void => {
@@ -431,10 +453,23 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
    * The Worker failed under what was pending — a trap, its own error, a deadline. A hand-over of
    * the Neural files among it is the Neural files' failure: a phone whose memory will not take
    * them would otherwise be handed them again by the next frame's new Worker, and again.
+   *
+   * **The evidence when it is to blame** — `evidenceFailed`: a trap names its call by id, and
+   * then only that call is; a deadline or the Worker's own error names none, and then any
+   * evidence still pending is. A Worker is serial, so a frame posted behind a hand-over that
+   * hangs is stuck with it, and goes overdue first on its shorter deadline. Blamed, the evidence
+   * is not handed to a Worker again: each one it ended took the recogniser with it.
    */
-  function failedUnder(): void {
+  function failedUnder(evidenceFailed: boolean): void {
     if ([...pending.values()].some((waiter) => waiter.neural)) neuralBackOff(NEURAL_COULD_NOT_START);
+    if (evidenceFailed && !evidenceDropped) {
+      evidenceDropped = true;
+      console.warn("MTG Grimoire: the Neural scanner goes on without its printing evidence, which ended its Worker.");
+    }
   }
+
+  /** Whether a hand-over of the evidence is among what the Worker has not answered. */
+  const evidencePending = (): boolean => [...pending.values()].some((waiter) => waiter.evidence);
 
   /** The Scanner is open. Start watching for it not to be, if there is a Worker to end. */
   function touch(): void {
@@ -455,7 +490,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
         // A Worker that hung, or that the browser ended without a word: nothing else says so.
         console.error("MTG Grimoire: the card scanner did not answer in time, and was ended.");
         if (call.load) backOff(COULD_NOT_START);
-        failedUnder();
+        failedUnder(evidencePending());
         return end(STOPPED);
       }
       // Never under a call: a read frame runs for a second, and a load for longer.
@@ -485,7 +520,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
         // A trap under the load is a build that failed, and the next would fail the same way:
         // waited out. A trap under a frame is that frame's, and the next command builds anew.
         if ([...pending.values()].some((waiter) => waiter.load)) backOff(COULD_NOT_START);
-        failedUnder();
+        failedUnder(call?.evidence === true);
         return end(STOPPED);
     }
   }
@@ -502,11 +537,13 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
   function ask(to: ScanPort, { message, transfer }: ScanOutgoing): Promise<unknown> {
     if (to !== port) return Promise.reject(STOPPED);
     const load = message.kind === "load";
-    // Two networks parsed and a gallery taken: a load's work, and a load's deadline.
+    // Two networks parsed and a gallery taken: a load's work, and a load's deadline — the
+    // evidence's two and two as well.
     const neural = message.kind === "neural";
+    const evidence = message.kind === "neural-evidence";
     return new Promise<unknown>((resolve, reject) => {
-      const due = env.now() + (load || neural ? LOAD_DEADLINE_MS : FRAME_DEADLINE_MS);
-      pending.set(message.id, { resolve, reject, due, load, neural });
+      const due = env.now() + (load || neural || evidence ? LOAD_DEADLINE_MS : FRAME_DEADLINE_MS);
+      pending.set(message.id, { resolve, reject, due, load, neural, evidence });
       try {
         to.postMessage(message, transfer);
       } catch (error) {
@@ -558,7 +595,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
       if (made !== port) return;
       console.error(`MTG Grimoire: the card scanner's Worker failed. ${what}`);
       backOff(COULD_NOT_LOAD);
-      failedUnder();
+      failedUnder(evidencePending());
       end(STOPPED);
     };
     // The script never loaded, or threw where no call could catch it — or sent an answer that
@@ -582,7 +619,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
       had: { bundle: bundle !== null, models: detection !== null && recognition !== null },
       reported: false,
       nameless,
-      neural: { loaded: false, loading: null },
+      neural: { loaded: false, loading: null, evidence: false },
     };
   }
 
@@ -615,6 +652,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
           held.loaded = true;
           neuralError = null;
           neuralFailures = 0;
+          evidenceInto(built);
         },
         (error: unknown) => {
           const sentence = sentenceOf(error);
@@ -628,6 +666,29 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
         held.loading = null;
       });
     return held.loading;
+  }
+
+  /**
+   * The printing evidence into `built`'s Worker, whose recogniser has taken the four: fetched and
+   * posted in the background, once a Worker. **Nothing waits on it** — the frames meanwhile are
+   * sent as they come — and a failure is logged and nothing else: Neural reads on without it.
+   */
+  function evidenceInto(built: Live): void {
+    if (evidenceDropped || built.neural.evidence || !shipsEvidence(env.neural)) return;
+    // A Worker ended since its recogniser answered fetches nothing: its successor asks for itself.
+    if (built.port !== port) return;
+    built.neural.evidence = true;
+    const handOver = async (): Promise<void> => {
+      const files = await fetchNeuralEvidence(env, env.neural);
+      // Into the Worker they were fetched for — `STOPPED` when it was ended meanwhile.
+      await ask(built.port, neuralEvidenceMessage(nextId++, files));
+    };
+    handOver().catch((error: unknown) => {
+      const sentence = sentenceOf(error);
+      // A Worker ended under it is the Worker's, and a trap or a deadline has said so already.
+      if (sentence === STOPPED || sentence === RELOADING) return;
+      console.warn(`MTG Grimoire: the Neural scanner goes on without its printing evidence. ${sentence}`);
+    });
   }
 
   /** The session, built on first use. Rejects with one sentence. */
@@ -913,7 +974,7 @@ function pageScanEnv(): ScanEnv {
     simd: () => reach(() => WebAssembly.validate(SIMD_PROBE)) === true,
     format: Number(import.meta.env.VITE_SCANNER_FORMAT),
     pinned: MODEL_SHA256,
-    // The set's id and the four lengths, as `apps/light/vite.config.ts` found them.
+    // The set's id and the files' lengths, as `apps/light/vite.config.ts` found them.
     neural: {
       set: String(import.meta.env.VITE_NEURAL_SET),
       bytes: neuralBytesOf(import.meta.env.VITE_NEURAL_BYTES),

@@ -20,14 +20,30 @@ export type Tally = {
   lost: number;
   /** Could not be replayed; left out of every percentage. */
   error: number;
+  /** Decided on a choice of printings: neither a right nor a wrong printing. */
   ambiguous: number;
+  /** Resolved, on the reader's printing. */
+  resolvedRight: number;
+  /** Resolved, on another printing of the reader's card: the floor. */
+  resolvedWrongPrinting: number;
+  /** Printings offered per ambiguous decision; null when none was ambiguous. */
+  medianChoices: number | null;
+  meanChoices: number | null;
   /** Frames to the first decision, over the runs that made one. */
   medianFrames: number | null;
 };
 
+function median(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
 export function tally(runs: Run[], pass: string): Tally {
-  const out: Tally = { n: 0, printing: 0, card: 0, wrong: 0, undecided: 0, unresolved: 0, lost: 0, error: 0, ambiguous: 0, medianFrames: null };
+  const out: Tally = { n: 0, printing: 0, card: 0, wrong: 0, undecided: 0, unresolved: 0, lost: 0, error: 0, ambiguous: 0, resolvedRight: 0, resolvedWrongPrinting: 0, medianChoices: null, meanChoices: null, medianFrames: null };
   const frames: number[] = [];
+  const choices: number[] = [];
   for (const run of runs) {
     const p = run.passes.find((candidate) => candidate.name === pass);
     if (!p) continue;
@@ -40,14 +56,18 @@ export function tally(runs: Run[], pass: string): Tally {
     if (p.score === "undecided" && decidedAt) out.lost += 1;
     if (p.score === "undecided" && !decidedAt && p.resolve_ran === false) out.unresolved += 1;
     if (p.score === "error") out.error += 1;
-    if (p.ambiguous) out.ambiguous += 1;
+    if (p.settled === "right_printing") out.resolvedRight += 1;
+    if (p.settled === "wrong_printing") out.resolvedWrongPrinting += 1;
+    // `settled`, not `ambiguous`: the two agree, and the floor and the bar are read on this one.
+    if (p.settled === "ambiguous") {
+      out.ambiguous += 1;
+      choices.push(p.choices);
+    }
     if (typeof p.first_decision_frame === "number" && Number.isFinite(p.first_decision_frame)) frames.push(p.first_decision_frame);
   }
-  frames.sort((a, b) => a - b);
-  if (frames.length) {
-    const mid = frames.length >> 1;
-    out.medianFrames = frames.length % 2 ? frames[mid] : (frames[mid - 1] + frames[mid]) / 2;
-  }
+  out.medianFrames = median(frames);
+  out.medianChoices = median(choices);
+  if (choices.length) out.meanChoices = choices.reduce((sum, n) => sum + n, 0) / choices.length;
   return out;
 }
 
@@ -117,12 +137,12 @@ export const cell = (value: unknown): string =>
     .replaceAll("|", "\\|");
 
 const HEAD =
-  "| pass | n | printing ✓ % | card ✓ % | wrong card | undecided % | errors | ambiguous | median frames | never resolved | decided then lost |\n" +
-  "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+  "| pass | n | printing ✓ % | card ✓ % | wrong card | undecided % | errors | resolved right | resolved wrong printing | ambiguous | median choices | mean choices | median frames | never resolved | decided then lost |\n" +
+  "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
 
 function row(name: string, runs: Run[], pass: string): string {
   const t = tally(runs, pass);
-  return `| ${cell(name)} | ${t.n} | ${percent(t.printing, t)} | ${percent(t.card, t)} | ${t.wrong} | ${percent(t.undecided, t)} | ${t.error} | ${t.ambiguous} | ${t.medianFrames ?? "—"} | ${t.unresolved} | ${t.lost} |`;
+  return `| ${cell(name)} | ${t.n} | ${percent(t.printing, t)} | ${percent(t.card, t)} | ${t.wrong} | ${percent(t.undecided, t)} | ${t.error} | ${t.resolvedRight} | ${t.resolvedWrongPrinting} | ${t.ambiguous} | ${t.medianChoices ?? "—"} | ${t.meanChoices === null ? "—" : t.meanChoices.toFixed(1)} | ${t.medianFrames ?? "—"} | ${t.unresolved} | ${t.lost} |`;
 }
 
 const flips = (title: string, list: Flip[]) =>

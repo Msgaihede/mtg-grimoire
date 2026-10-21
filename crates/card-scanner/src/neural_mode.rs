@@ -15,13 +15,16 @@
 //!
 //! - `quad` and `quad_raw`: the card the frame votes for, in the frame's pixels — one quad, as
 //!   there is no lock to smooth it. `lock` is `None`, `search` is `full`, and no detail is asked
-//!   for: no band is read.
+//!   for: no text is read, so no collector line and no finish mark. The collector band is looked
+//!   at all the same, as a picture, by the printing evidence below.
 //! - `match`: that card's best looks, each as its pictured printing, with **`normalized` =
 //!   (1 − cosine) / 2 and `distance` that times 256**, so a panel or the scan inbox reading 0–256
 //!   bits still holds; `margin` is the lead over the best other card × 128.
 //! - `tracked`: the vote rule's shape — `committed` while a decision stands, `confidence` the
 //!   votes held over what deciding takes, `decide_at` 2.
-//! - `decision`: see [`neural_decision`]. **`decision_seq` moves once, when
+//! - `decision`: see [`neural_decision`], or [`evidence_decision`] once the set symbol and
+//!   collector band evidence is loaded — it chooses the printing, never the card, nor when the
+//!   decision is made. **`decision_seq` moves once, when
 //!   [`card_neural::Agreement::decisions`] does**, and every committed frame of one decision
 //!   carries the view its first frame was given — the page keys on the number.
 //!
@@ -42,6 +45,13 @@ use crate::{
     index::{format_uuid, Mask, Section},
     reference::{Candidate, MatchReport, Reference},
     track::CommitRule,
+};
+#[cfg(feature = "neural")]
+use card_neural::{
+    gallery::Face,
+    meta::EvidenceThresholds,
+    narrow::{narrow, Candidate as NarrowCandidate},
+    EvidenceIndex, Glance,
 };
 
 /// A Neural frame's `error` when this build or this session has no Neural scanner: the crate was
@@ -82,6 +92,55 @@ struct Loaded {
     counted: Option<(u32, f32)>,
     /// Frames read since the card was last forgotten.
     frames: u32,
+    /// The set symbol and collector band networks, once [`Session::load_neural_evidence`] has
+    /// given them; `None` in a test, which hands its frames' glances in made by hand.
+    nets: Option<card_neural::EvidenceNets>,
+    /// Their galleries and thresholds. **Evidence is loaded when this is `Some`**; until then a
+    /// decision is made as it always was, the look's admitted covers its choices.
+    index: Option<(EvidenceIndex, EvidenceThresholds)>,
+    /// The voting frames of the card being counted, kept while evidence is loaded: what the
+    /// printing is chosen on when the card is decided. Never more than the agreement's votes.
+    frames_seen: Vec<Seen>,
+    /// The last decision the evidence chose the printing of.
+    report: Option<EvidenceReport>,
+}
+
+/// One voting frame of the card being counted, as the printing evidence weighs it.
+#[cfg(feature = "neural")]
+#[derive(Clone, Debug)]
+struct Seen {
+    /// The card group the frame voted for.
+    card: u32,
+    /// The face its best look shows: only that face's glances can speak for a band row of it.
+    face: Face,
+    /// The whole-card fingerprint, for the scores of the card's other looks.
+    embedding: Vec<f32>,
+    /// Its set symbol and collector band, embedded — `None` when the crops would not read.
+    glance: Option<Glance>,
+}
+
+/// What the evidence weighed for the last Neural decision — for the replay, not the page.
+#[cfg(feature = "neural")]
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EvidenceReport {
+    /// Every candidate printing, in the order the rule breaks ties by.
+    pub candidates: Vec<CandidateReport>,
+    /// The printing the evidence was sure of; `None` left the decision ambiguous.
+    pub decided: Option<String>,
+}
+
+/// One candidate printing and its scores.
+#[cfg(feature = "neural")]
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CandidateReport {
+    pub printing: String,
+    /// The look of the card it came in by.
+    pub look: u32,
+    /// That look's whole-card score, the mean cosine over the frames kept.
+    pub whole: f32,
+    /// `None` when the evidence galleries hold no row for the printing, or no crop was read.
+    pub symbol: Option<f32>,
+    pub band: Option<f32>,
 }
 
 impl NeuralMode {
@@ -95,6 +154,8 @@ impl NeuralMode {
             l.decided = None;
             l.counted = None;
             l.frames = 0;
+            l.frames_seen.clear();
+            l.report = None;
         }
     }
 
@@ -128,8 +189,46 @@ impl Session {
             decided: None,
             counted: None,
             frames: 0,
+            nets: None,
+            index: None,
+            frames_seen: Vec::new(),
+            report: None,
         });
         Ok(())
+    }
+
+    /// Give the Neural mode its printing evidence — the set symbol and collector band networks
+    /// and their galleries — after [`Session::load_neural`], whose `neural.json` must carry an
+    /// `evidence` section to say how they are read and weighed.
+    ///
+    /// Refused (a sentence) before the recogniser, or without that section. **A refusal leaves
+    /// today's behaviour**: whatever evidence an earlier call loaded is dropped first, as
+    /// `load_neural` drops the old recogniser before building the new one.
+    #[cfg(feature = "neural")]
+    pub fn load_neural_evidence(
+        &mut self,
+        files: card_neural::EvidenceFiles<'static>,
+    ) -> Result<(), String> {
+        let Some(l) = self.neural.loaded.as_mut() else {
+            return Err("the Neural scanner's evidence needs its models loaded first".to_string());
+        };
+        l.nets = None;
+        l.index = None;
+        l.frames_seen.clear();
+        l.report = None;
+        let card_neural::Evidence { nets, index, thresholds } =
+            card_neural::Evidence::load(files, l.recognizer.meta()).map_err(|e| e.to_string())?;
+        l.nets = Some(nets);
+        l.index = Some((index, thresholds));
+        Ok(())
+    }
+
+    /// The last Neural decision's candidate printings and their scores, when evidence chose
+    /// its printing — for the replay, not the page. `None` since a reset, or when the decision
+    /// was made without evidence.
+    #[cfg(feature = "neural")]
+    pub fn neural_evidence_report(&self) -> Option<EvidenceReport> {
+        self.neural.loaded.as_ref().and_then(|l| l.report.clone())
     }
 
     /// Whether a Neural frame can be read: the feature is on and the files loaded.
@@ -142,6 +241,14 @@ impl Session {
         {
             false
         }
+    }
+
+    /// Whether a Neural decision narrows the printing: the files loaded and
+    /// [`Session::load_neural_evidence`] took the evidence. A host loads it after the files
+    /// and logs a refusal, so this is how its tests see that it did.
+    #[cfg(feature = "neural")]
+    pub fn has_neural_evidence(&self) -> bool {
+        self.neural.loaded.as_ref().is_some_and(|l| l.index.is_some())
     }
 
     /// One Neural frame, after `frame_inner` has switched the mode — see the module doc.
@@ -203,7 +310,9 @@ impl Session {
             }
         };
         let mask = &self.mask;
-        let Some(Loaded { recognizer, admit, clock, .. }) = self.neural.loaded.as_mut() else {
+        let Some(Loaded { recognizer, admit, clock, agreement, nets, index, .. }) =
+            self.neural.loaded.as_mut()
+        else {
             return self.neural_unavailable();
         };
         // A look is admitted when any printing it stands for is: the filters name printings, the
@@ -215,8 +324,15 @@ impl Session {
         let read = recognizer.read(&pixels, admit.as_ref());
         let read_ms = read_started.ms();
         let now_ms = f64::from(clock.ms());
+        // After the read is timed and the frame's age taken, so the crops change neither.
+        let seen = match &read {
+            Ok(read) if index.is_some() => {
+                keep(read, recognizer.gallery(), agreement, nets.as_mut(), &pixels)
+            }
+            _ => None,
+        };
         match read {
-            Ok(read) => self.neural_verdict(&read, now_ms, frame, decode_ms, read_ms),
+            Ok(read) => self.neural_verdict(&read, seen, now_ms, frame, decode_ms, read_ms),
             Err(e) => self.neural_failed(format!("{NEURAL_ERROR_PREFIX}{e}"), frame, decode_ms),
         }
     }
@@ -228,10 +344,13 @@ impl Session {
 
     /// One read, counted by the agreement at `now_ms` and answered as a verdict — the decision
     /// bookkeeping of the mode, apart from the models so it can be driven with reads made by hand.
+    ///
+    /// `seen` is what the read keeps for the printing evidence ([`keep`]), `None` without it.
     #[cfg(feature = "neural")]
     fn neural_verdict(
         &mut self,
         read: &card_neural::Read,
+        seen: Option<Seen>,
         now_ms: f64,
         frame: FrameSize,
         decode_ms: f32,
@@ -251,6 +370,24 @@ impl Session {
         } else if read.accepted || read.supported {
             l.counted = read.best().map(|b| (b.scored.entry, b.scored.score));
         }
+        // **The frames kept are the count's.** A vote for another card ends them — kept or not:
+        // a frame of the decided card keeps nothing ([`keep`]) yet restarts the count. Then
+        // they are trimmed to the votes held, so a frame the agreement dropped (aged out, past
+        // its window, or before a gap that restarted it) never chooses the printing.
+        let voted = (read.accepted || read.supported).then(|| read.best()).flatten();
+        if let Some(card) = voted.map(|b| b.scored.card) {
+            if l.frames_seen.first().is_some_and(|f| f.card != card) {
+                l.frames_seen.clear();
+            }
+        }
+        if let Some(seen) = seen {
+            if l.frames_seen.first().is_some_and(|f| f.card != seen.card) {
+                l.frames_seen.clear();
+            }
+            l.frames_seen.push(seen);
+        }
+        let dropped = l.frames_seen.len().saturating_sub(votes);
+        l.frames_seen.drain(..dropped);
         let rules = &l.agreement.rules;
         let decide_at = rules.required as f32;
         // How far the votes held are toward a decision: two accepted frames, or three in all.
@@ -268,7 +405,21 @@ impl Session {
                 l.decided = None;
                 None
             }
-            Some((entry, score)) if new => Some(neural_decision(gallery, r, mask, entry, score)),
+            Some((entry, score)) if new => {
+                let chosen = l.index.as_ref().and_then(|evidence| {
+                    evidence_decision(gallery, r, mask, entry, &l.frames_seen, evidence)
+                });
+                Some(match chosen {
+                    Some((d, report)) => {
+                        l.report = Some(report);
+                        d
+                    }
+                    None => {
+                        l.report = None;
+                        neural_decision(gallery, r, mask, entry, score)
+                    }
+                })
+            }
             Some(_) => None,
         };
 
@@ -444,33 +595,183 @@ fn neural_decision(
     if let Some(at) = admitted.iter().position(|p| *p == printing) {
         admitted[..=at].rotate_right(1);
     }
+    let distance = Some(normalized(score));
+    let choices = if admitted.len() > 1 {
+        admitted.iter().map(|p| (*p, distance)).collect()
+    } else {
+        Vec::new()
+    };
+    decision_view(r, printing, choices)
+}
+
+/// A decision on `printing`: `ambiguous` with `choices` (each with its distance) when there are
+/// any, `resolved` when there are none.
+#[cfg(feature = "neural")]
+fn decision_view(
+    r: Option<&Reference>,
+    printing: Id,
+    choices: Vec<(Id, Option<f32>)>,
+) -> DecisionView {
     let oracle_id = |p: &Id| r.and_then(|r| r.oracle_id_of(p)).map(|o| format_uuid(&o));
     let finishes = |p: &Id| r.map(|r| r.finishes_of(p).to_vec()).unwrap_or_default();
-    let distance = Some(normalized(score));
-    let ambiguous = admitted.len() > 1;
     DecisionView {
         printing: format_uuid(&printing),
         oracle_id: oracle_id(&printing),
         label: r.and_then(|r| r.label_for(&printing)),
-        outcome: if ambiguous { Outcome::Ambiguous } else { Outcome::Resolved },
-        choices: if ambiguous {
-            admitted
-                .iter()
-                .map(|p| ChoiceView {
-                    id: format_uuid(p),
-                    oracle_id: oracle_id(p),
-                    label: r.and_then(|r| r.label_for(p)),
-                    distance,
-                    finishes: finishes(p),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        },
+        outcome: if choices.is_empty() { Outcome::Resolved } else { Outcome::Ambiguous },
+        choices: choices
+            .iter()
+            .map(|(p, distance)| ChoiceView {
+                id: format_uuid(p),
+                oracle_id: oracle_id(p),
+                label: r.and_then(|r| r.label_for(p)),
+                distance: *distance,
+                finishes: finishes(p),
+            })
+            .collect(),
         replaces_previous: false,
         finishes: finishes(&printing),
         finish_mark: None,
     }
+}
+
+/// What a read keeps for the printing evidence: its voted-for card's face, fingerprint and
+/// crops. `None` for a frame that votes for nothing.
+///
+/// **Nor for a frame of the card already decided**: the agreement counts a decision again only
+/// for another card or after forgetting it — both of which end the count, and the frames kept
+/// with it — so that frame could never choose a printing, and its two crop networks are not
+/// run. The kept frames stop growing while a card sits decided on the mat.
+///
+/// A crop that will not read drops the frame's glance, not the frame: its fingerprint still
+/// scores the card's looks.
+#[cfg(feature = "neural")]
+fn keep(
+    read: &card_neural::Read,
+    gallery: &card_neural::Gallery,
+    agreement: &card_neural::Agreement,
+    nets: Option<&mut card_neural::EvidenceNets>,
+    pixels: &card_neural::Frame,
+) -> Option<Seen> {
+    if !(read.accepted || read.supported) {
+        return None;
+    }
+    let best = read.best()?;
+    if agreement.decision().is_some_and(|d| d.card == best.scored.card) {
+        return None;
+    }
+    Some(Seen {
+        card: best.scored.card,
+        face: gallery.face(best.scored.entry),
+        embedding: best.embedding.clone(),
+        glance: nets.and_then(|n| n.glance(pixels, &best.quad).ok()),
+    })
+}
+
+/// The decision look `entry` makes when the printing evidence is loaded — design §5, _The
+/// decision_. `None` when no frame kept can score the card, or the filters admit none of its
+/// candidates: the caller decides as [`neural_decision`] does.
+///
+/// - **Widened**: each look of the card is scored by its mean cosine over the frames kept, and
+///   the looks within `candidate_gap` of the decided look's score are candidates — the decided
+///   look always — so a printing that lost by a little comes back.
+/// - **Their printings**: each candidate look's covers the filters admit, once each, the
+///   decided look's first (its pictured printing leading), then the others' by their look's
+///   score — the order [`narrow`] breaks a tie by.
+/// - **Narrowed** on the symbol and band crops of the decided look's face, scored against each
+///   printing's rows. A sure printing is `resolved`; otherwise the printings not ruled out are
+///   the choices, best first, each as far as its own look.
+///
+/// The card is never changed: every candidate is a printing of the card the agreement decided.
+#[cfg(feature = "neural")]
+fn evidence_decision(
+    gallery: &card_neural::Gallery,
+    r: Option<&Reference>,
+    mask: &Mask,
+    entry: u32,
+    seen: &[Seen],
+    (index, th): &(EvidenceIndex, EvidenceThresholds),
+) -> Option<(DecisionView, EvidenceReport)> {
+    let card = gallery.card(entry);
+    let face = gallery.face(entry);
+    let seen: Vec<&Seen> = seen
+        .iter()
+        .filter(|s| s.card == card && s.embedding.len() == gallery.dim())
+        .collect();
+    if seen.is_empty() {
+        return None;
+    }
+    let whole = |e: u32| {
+        seen.iter().map(|s| gallery.score(e, &s.embedding)).sum::<f32>() / seen.len() as f32
+    };
+    let decided = whole(entry);
+    let mut others: Vec<(u32, f32)> = gallery
+        .looks_of(card)
+        .iter()
+        .filter(|&&e| e != entry)
+        .map(|&e| (e, whole(e)))
+        .filter(|&(_, w)| w >= decided - th.candidate_gap)
+        .collect();
+    others.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let pictured = *gallery.printing(entry);
+
+    // (printing, the look it came in by, that look's score), the decided look's first.
+    let mut printings: Vec<(Id, u32, f32)> = Vec::new();
+    for (e, w) in std::iter::once((entry, decided)).chain(others) {
+        let mut covers: Vec<Id> = gallery.covers(e).filter(|p| mask.permits(p)).copied().collect();
+        if e == entry {
+            covers.sort_by_key(|p| *p != pictured);
+        }
+        for p in covers {
+            if !printings.iter().any(|(q, ..)| *q == p) {
+                printings.push((p, e, w));
+            }
+        }
+    }
+    if printings.is_empty() {
+        return None;
+    }
+
+    let glances: Vec<Glance> = seen
+        .iter()
+        .filter(|s| s.face == face)
+        .filter_map(|s| s.glance.clone())
+        .collect();
+    let candidates: Vec<NarrowCandidate> = printings
+        .iter()
+        .map(|&(p, _, w)| NarrowCandidate {
+            printing: p,
+            whole: w,
+            symbol: index.symbol(&glances, &p),
+            band: index.band(&glances, &p, face),
+        })
+        .collect();
+    let narrowed = narrow(&candidates, th);
+    let (printing, choices) = match narrowed.decided {
+        Some(p) => (p, Vec::new()),
+        None => {
+            let distance =
+                |p: &Id| printings.iter().find(|(q, ..)| q == p).map(|&(.., w)| normalized(w));
+            let choices: Vec<(Id, Option<f32>)> =
+                narrowed.choices.iter().map(|p| (*p, distance(p))).collect();
+            (choices.first()?.0, choices)
+        }
+    };
+    let report = EvidenceReport {
+        candidates: candidates
+            .iter()
+            .zip(&printings)
+            .map(|(c, &(_, look, _))| CandidateReport {
+                printing: format_uuid(&c.printing),
+                look,
+                whole: c.whole,
+                symbol: c.symbol,
+                band: c.band,
+            })
+            .collect(),
+        decided: narrowed.decided.map(|p| format_uuid(&p)),
+    };
+    Some((decision_view(r, printing, choices), report))
 }
 
 #[cfg(test)]
@@ -517,8 +818,9 @@ mod tests {
         use crate::reference::Label;
         use card_neural::detect::Detection;
         use card_neural::frame::{Point, Quad};
+        use card_neural::gallery::Look;
         use card_neural::scanner::Scored;
-        use card_neural::{Found, Gallery, Read};
+        use card_neural::{EvidenceFiles, EvidenceIndex, Found, Gallery, Glance, Read};
         use std::borrow::Cow;
 
         fn shipped() -> card_neural::Files<'static> {
@@ -584,6 +886,7 @@ mod tests {
                         twins: vec![entry],
                     },
                     top: vec![(entry, 0.7), (runner, 0.5)],
+                    embedding: vec![],
                     accepted,
                     prominence: 1.0,
                     aimed: true,
@@ -604,7 +907,12 @@ mod tests {
         }
 
         fn feed(s: &mut Session, read: &Read, at_ms: f64) -> Verdict {
-            s.neural_verdict(read, at_ms, FrameSize { w: 640, h: 480 }, 0.0, 0.0)
+            feed_seen(s, read, None, at_ms)
+        }
+
+        /// A read, with what `neural_read` would have kept of it for the printing evidence.
+        fn feed_seen(s: &mut Session, read: &Read, seen: Option<Seen>, at_ms: f64) -> Verdict {
+            s.neural_verdict(read, seen, at_ms, FrameSize { w: 640, h: 480 }, 0.0, 0.0)
         }
 
         /// One accepted frame of `entry`.
@@ -864,6 +1172,387 @@ mod tests {
             let built = admit(&s).flatten().expect("an admit for the filters");
             assert!(built.admits(e), "a look is admitted by any printing it stands for");
             assert!(built.count() >= 1 && built.count() < gallery(&s).len());
+        }
+
+        // **The printing evidence**, over galleries built by hand: the shipped networks with a
+        // whole-card gallery of three looks, and symbol and band galleries of five printings.
+        // Look A of card 1 stands for P, Q and R (P pictured), look B of card 1 for S, look C
+        // of card 2 for T. No crop network runs: the frames' glances are made by hand too.
+
+        const P: Id = [1; 16];
+        const Q: Id = [2; 16];
+        const R: Id = [3; 16];
+        const S: Id = [4; 16];
+        const T: Id = [5; 16];
+        const A: u32 = 0;
+        const B: u32 = 1;
+        const C: u32 = 2;
+        const DIM: usize = 128;
+        const BAND_DIM: usize = 8;
+
+        /// A vector of `dim` zeros but for `parts`.
+        fn vector(dim: usize, parts: &[(usize, f32)]) -> Vec<f32> {
+            let mut v = vec![0.0; dim];
+            for &(i, x) in parts {
+                v[i] = x;
+            }
+            v
+        }
+
+        fn look(printing: Id, card: u32, covers: Vec<Id>) -> Look {
+            Look { printing, card, face: Face::Front, covers, name: "look".into() }
+        }
+
+        /// A session over the three looks, in Neural, no evidence loaded. Against [`along`]'s
+        /// fingerprint look A scores 0.80 and look B scores `b`.
+        fn with_looks(b: f32) -> Session {
+            with_looks_read_by(b, shipped().meta)
+        }
+
+        /// [`with_looks`], its `neural.json` this one.
+        fn with_looks_read_by(b: f32, meta: Cow<'static, [u8]>) -> Session {
+            let rows = [
+                vector(DIM, &[(0, 0.8), (1, 0.6)]),
+                vector(DIM, &[(0, b), (2, (1.0 - b * b).sqrt())]),
+                vector(DIM, &[(3, 1.0)]),
+            ]
+            .concat();
+            let looks = [look(P, 1, vec![P, Q, R]), look(S, 1, vec![S]), look(T, 2, vec![T])];
+            let g = Gallery::build(&rows, DIM, &looks).expect("a gallery");
+            let files = Files { gallery: Cow::Owned(g.as_bytes().to_vec()), meta, ..shipped() };
+            let mut s = Session::new(None, None, 5);
+            s.load_neural(files).expect("the shipped networks over a gallery made by hand");
+            s.set_mode(ScanMode::Neural);
+            s
+        }
+
+        /// One symbol shared by every printing, and a band row of its own for each: P on the
+        /// band's axis 0, Q on 1, R on 2, S on 3, T on 4.
+        fn index() -> EvidenceIndex {
+            let printings = [P, Q, R, S, T];
+            let symbols =
+                Gallery::build(&vector(4, &[(0, 1.0)]), 4, &[look(P, 0, printings.to_vec())])
+                    .expect("a symbol gallery");
+            let rows: Vec<f32> =
+                (0..printings.len()).flat_map(|i| vector(BAND_DIM, &[(i, 1.0)])).collect();
+            let bands = Gallery::build(&rows, BAND_DIM, &printings.map(|p| look(p, 0, vec![p])))
+                .expect("a band gallery");
+            EvidenceIndex::new(symbols, bands).expect("an index")
+        }
+
+        fn thresholds() -> EvidenceThresholds {
+            EvidenceThresholds {
+                candidate_gap: 0.08,
+                symbol_weight: 1.0,
+                band_weight: 1.0,
+                decide_margin: 0.1,
+                keep_gap: 0.15,
+            }
+        }
+
+        /// [`with_looks`], its evidence loaded as `load_neural_evidence` leaves it bar the
+        /// networks.
+        fn with_evidence(b: f32) -> Session {
+            let mut s = with_looks(b);
+            s.neural.loaded.as_mut().expect("loaded").index = Some((index(), thresholds()));
+            s
+        }
+
+        /// The symbol crop, and a band crop scoring each printing's row by `band`.
+        fn glance(band: &[(usize, f32)]) -> Glance {
+            Glance { symbol: vector(4, &[(0, 1.0)]), band: vector(BAND_DIM, band) }
+        }
+
+        /// A frame of card 1's front, its whole-card fingerprint on the gallery's axis 0.
+        fn along(glance: Option<Glance>) -> Seen {
+            Seen { card: 1, face: Face::Front, embedding: vector(DIM, &[(0, 1.0)]), glance }
+        }
+
+        /// Two accepted frames of look A, each kept as `seen`: a decision.
+        fn decide_seen(s: &mut Session, seen: &Seen) -> Verdict {
+            let read = naming(s, A, true);
+            feed_seen(s, &read, Some(seen.clone()), 0.0);
+            feed_seen(s, &read, Some(seen.clone()), 100.0)
+        }
+
+        fn ids(ps: &[Id]) -> Vec<String> {
+            ps.iter().map(format_uuid).collect()
+        }
+
+        fn choices(d: &DecisionView) -> Vec<String> {
+            d.choices.iter().map(|c| c.id.clone()).collect()
+        }
+
+        fn json<T: serde::Serialize>(t: &T) -> serde_json::Value {
+            serde_json::to_value(t).expect("json")
+        }
+
+        #[test]
+        fn without_evidence_the_decision_is_todays() {
+            let mut today = with_looks(0.75);
+            let mut evidence = with_evidence(0.75);
+            let seen = along(Some(glance(&[(1, 1.0)])));
+            let read = naming(&today, A, true);
+            let rival = naming(&today, C, true);
+            for (i, read) in [&read, &read, &read, &rival, &rival].into_iter().enumerate() {
+                let at = 100.0 * i as f64;
+                let card = if i < 3 { seen.clone() } else { Seen { card: 2, ..seen.clone() } };
+                let a = feed_seen(&mut today, read, Some(card.clone()), at);
+                let b = feed_seen(&mut evidence, read, Some(card), at);
+                // Evidence chooses the printing, and nothing else a frame reports.
+                assert_eq!(a.decision_seq, b.decision_seq, "frame {i}");
+                assert_eq!(json(&a.tracked), json(&b.tracked), "frame {i}");
+                assert_eq!(json(&a.r#match), json(&b.r#match), "frame {i}");
+                assert_eq!(a.quad, b.quad, "frame {i}");
+                if i == 1 {
+                    // Kept frames and all, a session with no evidence decides as it always has.
+                    let g = gallery(&today);
+                    let d = a.decision.expect("decided");
+                    assert_eq!(json(&d), json(&neural_decision(g, None, &Mask::all(), A, 0.7)));
+                    assert_eq!(d.outcome, Outcome::Ambiguous);
+                    assert_eq!(choices(&d), ids(&[P, Q, R]));
+                    assert!(today.neural_evidence_report().is_none());
+                }
+            }
+            assert_eq!(today.decision_seq, 2);
+        }
+
+        #[test]
+        fn a_lower_scored_look_of_the_card_within_the_gap_adds_its_printings() {
+            let mut s = with_evidence(0.75);
+            let d = decide_seen(&mut s, &along(None)).decision.expect("decided");
+            // No crop read: nothing rules any of them out, so all four, in the order given.
+            assert_eq!(d.outcome, Outcome::Ambiguous);
+            assert_eq!(choices(&d), ids(&[P, Q, R, S]));
+            assert_eq!(d.printing, format_uuid(&P));
+            // Each choice is as far as its own look.
+            let distances: Vec<f32> = d.choices.iter().map(|c| c.distance.expect("one")).collect();
+            for (got, look) in distances.iter().zip([0.8, 0.8, 0.8, 0.75]) {
+                assert!((got - normalized(look)).abs() < 1e-3, "{distances:?}");
+            }
+        }
+
+        #[test]
+        fn a_look_outside_the_gap_adds_nothing() {
+            let mut s = with_evidence(0.70);
+            let d = decide_seen(&mut s, &along(None)).decision.expect("decided");
+            assert_eq!(d.outcome, Outcome::Ambiguous);
+            assert_eq!(choices(&d), ids(&[P, Q, R]));
+        }
+
+        #[test]
+        fn sure_crop_evidence_resolves_a_look_of_many_printings() {
+            let mut s = with_evidence(0.70);
+            let v = decide_seen(&mut s, &along(Some(glance(&[(1, 1.0)]))));
+            assert_eq!(v.decision_seq, 1);
+            let d = v.decision.expect("decided");
+            assert_eq!((d.outcome, d.choices.len()), (Outcome::Resolved, 0));
+            assert_eq!(d.printing, format_uuid(&Q));
+            // Every later frame of the card repeats it.
+            let read = naming(&s, A, true);
+            let later = feed_seen(&mut s, &read, Some(along(None)), 200.0);
+            assert_eq!(later.decision.expect("held").printing, format_uuid(&Q));
+        }
+
+        #[test]
+        fn unsure_crop_evidence_leaves_fewer_choices_best_first() {
+            let mut s = with_evidence(0.70);
+            // Q leads R by 0.04, under the margin; P is 0.6 behind, past the keep gap.
+            let d = decide_seen(&mut s, &along(Some(glance(&[(1, 0.6), (2, 0.56)]))))
+                .decision
+                .expect("decided");
+            assert_eq!(d.outcome, Outcome::Ambiguous);
+            assert_eq!(choices(&d), ids(&[Q, R]));
+            assert_eq!(d.printing, format_uuid(&Q));
+        }
+
+        #[test]
+        fn the_filters_limit_the_widened_candidates() {
+            let filtered = |allowed: &[Id]| {
+                let mut s = with_evidence(0.75);
+                s.mask = Mask::allow_only(allowed.iter().copied());
+                s.neural.filters_changed();
+                s.forget_card();
+                decide_seen(&mut s, &along(None)).decision.expect("decided")
+            };
+            let two = filtered(&[R, S]);
+            assert_eq!(two.outcome, Outcome::Ambiguous);
+            assert_eq!(choices(&two), ids(&[R, S]));
+            assert_eq!(two.printing, format_uuid(&R));
+
+            let one = filtered(&[R]);
+            assert_eq!((one.outcome, one.choices.len()), (Outcome::Resolved, 0));
+            assert_eq!(one.printing, format_uuid(&R));
+        }
+
+        #[test]
+        fn a_vote_for_another_card_clears_the_evidence_frames() {
+            let kept = |s: &Session| -> Vec<u32> {
+                let l = s.neural.loaded.as_ref().expect("loaded");
+                l.frames_seen.iter().map(|f| f.card).collect()
+            };
+            let mut s = with_evidence(0.75);
+            let (a, c) = (naming(&s, A, true), naming(&s, C, true));
+            feed_seen(&mut s, &a, Some(along(None)), 0.0);
+            assert_eq!(kept(&s), [1]);
+            feed_seen(&mut s, &c, Some(Seen { card: 2, ..along(None) }), 100.0);
+            assert_eq!(kept(&s), [2]);
+            // A frame that votes for nothing ends the count, and the frames kept for it.
+            feed(&mut s, &empty(), 200.0);
+            assert!(kept(&s).is_empty());
+            feed_seen(&mut s, &a, Some(along(None)), 300.0);
+            s.forget_card();
+            assert!(kept(&s).is_empty(), "a reset kept the frames");
+        }
+
+        /// The cards of the frames kept for the evidence, oldest first.
+        fn kept_cards(s: &Session) -> Vec<u32> {
+            let l = s.neural.loaded.as_ref().expect("loaded");
+            l.frames_seen.iter().map(|f| f.card).collect()
+        }
+
+        #[test]
+        fn a_vote_for_the_decided_card_clears_the_frames_kept_for_another() {
+            let mut s = with_evidence(0.75);
+            let (c, a) = (naming(&s, C, true), naming(&s, A, true));
+            // Card 2 decided, then a frame of card 1 kept.
+            feed(&mut s, &c, 0.0);
+            assert_eq!(feed(&mut s, &c, 100.0).decision_seq, 1);
+            feed_seen(&mut s, &a, Some(along(None)), 200.0);
+            assert_eq!(kept_cards(&s), [1]);
+            // A frame of the decided card keeps nothing, yet restarts the count: card 1's frame
+            // is out of it.
+            feed(&mut s, &c, 300.0);
+            assert!(kept_cards(&s).is_empty());
+            // Shown in turn, neither card is ever counted twice, and nothing piles up.
+            for i in 0..10 {
+                let at = 400.0 + 200.0 * i as f64;
+                feed_seen(&mut s, &a, Some(along(None)), at);
+                feed(&mut s, &c, at + 100.0);
+            }
+            assert!(kept_cards(&s).is_empty());
+        }
+
+        #[test]
+        fn the_frames_kept_are_the_votes_the_agreement_holds() {
+            let mut s = with_evidence(0.75);
+            let supported = naming(&s, A, false);
+            feed_seen(&mut s, &supported, Some(along(None)), 0.0);
+            feed_seen(&mut s, &supported, Some(along(None)), 100.0);
+            assert_eq!(kept_cards(&s), [1, 1]);
+            // Past the gap the agreement counts again from this frame alone, and so do they.
+            let v = feed_seen(&mut s, &supported, Some(along(None)), 1000.0);
+            assert_eq!(v.tracked.expect("tracked").streak, 1);
+            assert_eq!(kept_cards(&s), [1]);
+        }
+
+        #[test]
+        fn the_deciding_frames_glance_chooses_the_printing() {
+            let mut s = with_evidence(0.75);
+            let read = naming(&s, A, true);
+            feed_seen(&mut s, &read, Some(along(None)), 0.0);
+            let v = feed_seen(&mut s, &read, Some(along(Some(glance(&[(1, 1.0)])))), 100.0);
+            let d = v.decision.expect("decided");
+            assert_eq!((d.outcome, d.printing), (Outcome::Resolved, format_uuid(&Q)));
+            let report = s.neural_evidence_report().expect("a report");
+            assert_eq!(report.decided, Some(format_uuid(&Q)));
+        }
+
+        #[test]
+        fn a_frame_keeps_its_voted_for_card_until_that_card_is_decided() {
+            let s = with_looks(0.75);
+            let g = gallery(&s);
+            let pixels = card_neural::Frame::new(32, 32, vec![0; 32 * 32 * 3]).expect("a frame");
+            let mut agreement = card_neural::Agreement::default();
+            let mut read = naming(&s, A, true);
+            read.cards[0].embedding = vector(DIM, &[(0, 1.0)]);
+            let kept = keep(&read, g, &agreement, None, &pixels).expect("a voting frame is kept");
+            assert_eq!((kept.card, kept.face, kept.embedding.len()), (1, Face::Front, DIM));
+            assert!(kept.glance.is_none(), "no networks, no crops");
+            assert!(keep(&empty(), g, &agreement, None, &pixels).is_none());
+            // Once the card is decided its frames can never choose a printing, so none is kept.
+            agreement.observe(&read, 0.0);
+            agreement.observe(&read, 100.0);
+            assert!(agreement.decision().is_some());
+            assert!(keep(&read, g, &agreement, None, &pixels).is_none());
+            assert!(keep(&naming(&s, C, true), g, &agreement, None, &pixels).is_some());
+        }
+
+        #[test]
+        fn the_report_names_every_candidate_with_its_scores() {
+            let mut s = with_evidence(0.75);
+            assert!(s.neural_evidence_report().is_none());
+            decide_seen(&mut s, &along(Some(glance(&[(1, 0.6), (2, 0.56)]))));
+            let report = s.neural_evidence_report().expect("a report");
+            assert_eq!(report.decided, None);
+            let printings: Vec<String> =
+                report.candidates.iter().map(|c| c.printing.clone()).collect();
+            assert_eq!(printings, ids(&[P, Q, R, S]));
+            let looks: Vec<u32> = report.candidates.iter().map(|c| c.look).collect();
+            assert_eq!(looks, [A, A, A, B]);
+            let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+            for (c, (whole, band)) in
+                report.candidates.iter().zip([(0.8, 0.0), (0.8, 0.6), (0.8, 0.56), (0.75, 0.0)])
+            {
+                assert!(close(c.whole, whole), "{c:?}");
+                assert!(c.symbol.is_some_and(|v| close(v, 1.0)), "{c:?}");
+                assert!(c.band.is_some_and(|v| close(v, band)), "{c:?}");
+            }
+
+            // A reset forgets it; a sure decision names its printing.
+            s.forget_card();
+            assert!(s.neural_evidence_report().is_none());
+            decide_seen(&mut s, &along(Some(glance(&[(1, 1.0)]))));
+            let report = s.neural_evidence_report().expect("a report");
+            assert_eq!(report.decided, Some(format_uuid(&Q)));
+        }
+
+        #[test]
+        fn evidence_is_refused_before_the_recogniser_or_without_a_section() {
+            let files = || EvidenceFiles {
+                symbol_net: Cow::Borrowed(b"not a network"),
+                band_net: Cow::Borrowed(b"not a network"),
+                symbols: Cow::Borrowed(b"not a gallery"),
+                bands: Cow::Borrowed(b"not a gallery"),
+            };
+            let mut bare = Session::new(None, None, 5);
+            assert!(bare.load_neural_evidence(files()).is_err());
+            // A neural.json from before the evidence models — the shipped one without its
+            // section: no section, so no evidence.
+            let mut meta: serde_json::Value =
+                serde_json::from_slice(&shipped().meta).expect("the shipped neural.json");
+            meta.as_object_mut().expect("an object").remove("evidence");
+            let mut s = with_looks_read_by(0.75, Cow::Owned(meta.to_string().into_bytes()));
+            s.neural.loaded.as_mut().expect("loaded").index = Some((index(), thresholds()));
+            assert!(s.has_neural_evidence());
+            let refused = s.load_neural_evidence(files()).expect_err("no evidence section");
+            assert!(refused.contains("evidence"), "{refused}");
+            // A refusal leaves today's behaviour, not the evidence loaded before it.
+            assert!(!s.has_neural_evidence());
+            let d = decide_seen(&mut s, &along(Some(glance(&[(1, 1.0)])))).decision;
+            assert_eq!(d.map(|d| choices(&d)), Some(ids(&[P, Q, R])));
+            assert!(s.neural_evidence_report().is_none());
+
+            // With the section, files that are not networks or galleries are refused too, and
+            // leave the same.
+            let mut s = with_evidence(0.75);
+            assert!(s.load_neural_evidence(files()).is_err());
+            assert!(!s.has_neural_evidence());
+        }
+
+        /// The networks and galleries in git load beside the recogniser in git.
+        #[test]
+        fn the_shipped_evidence_loads_into_a_session() {
+            let mut s = session(None);
+            assert!(!s.has_neural_evidence());
+            let files = EvidenceFiles {
+                symbol_net: Cow::Borrowed(include_bytes!("../../card-neural/models/symbol.onnx")),
+                band_net: Cow::Borrowed(include_bytes!("../../card-neural/models/band.onnx")),
+                symbols: Cow::Borrowed(include_bytes!("../../card-neural/models/symbols.bin")),
+                bands: Cow::Borrowed(include_bytes!("../../card-neural/models/bands.bin")),
+            };
+            s.load_neural_evidence(files).expect("the evidence in git loads");
+            assert!(s.has_neural_evidence());
         }
     }
 }

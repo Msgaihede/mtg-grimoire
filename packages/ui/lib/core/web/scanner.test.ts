@@ -3,9 +3,16 @@ import scannerAssetsRs from "../../../../../crates/grimoire-core/src/scanner_ass
 import type { ScannerAssetsOwed, ScannerAssetsProgress, ScannerStatus } from "@/lib/ipc";
 import { HOST_SCANNER_UNAVAILABLE, SCANNER_NEEDS_SIMD, SCANNER_NOT_SHIPPED } from "../hostScanner";
 import type { Core } from "../types";
-import { NEURAL_FILES, NEURAL_PREFIX, neuralPath, SCANNER_ASSETS_PREFIX, SCANNER_CACHE } from "./assets";
+import {
+  NEURAL_EVIDENCE_FILES,
+  NEURAL_FILES,
+  NEURAL_PREFIX,
+  neuralPath,
+  SCANNER_ASSETS_PREFIX,
+  SCANNER_CACHE,
+} from "./assets";
 import { LABELS_COMMAND } from "./protocol";
-import { NEURAL_OTHER_SET, NEURAL_UNREACHABLE } from "./scanNeural";
+import { NEURAL_OTHER_SET, NEURAL_UNREACHABLE, type NeuralSource } from "./scanNeural";
 import type { FromScanner, LoadFacts, ToScanner } from "./scanProtocol";
 import {
   answeringScanner,
@@ -36,6 +43,7 @@ import {
   fakeBrowser,
   FILES,
   MANIFEST,
+  NEURAL_EVIDENCE_TEST_FILES,
   NEURAL_SOURCE,
   NEURAL_TEST_FILES,
   settle,
@@ -739,8 +747,21 @@ describe("the Worker's life", () => {
 describe("the Neural mode's files", () => {
   const NEURAL_OPTIONS = { "x-scanner-options": '{"mode":"neural","previews":false}' };
   const PATHS = NEURAL_FILES.map((name) => neuralPath(NEURAL_SOURCE.set, name));
-  const kinds = (port: FakePort): string[] => port.posted.map(({ message }) => message.kind);
-  const lastKind = (port: FakePort): string | undefined => port.posted[port.posted.length - 1]?.message.kind;
+  const EVIDENCE_PATHS = NEURAL_EVIDENCE_FILES.map((name) => neuralPath(NEURAL_SOURCE.set, name));
+  /** Everything posted to `port`, the evidence included. */
+  const allKinds = (port: FakePort): string[] => port.posted.map(({ message }) => message.kind);
+  /** What was posted, less the evidence — which goes in the background, whenever its fetch ends. */
+  const kinds = (port: FakePort): string[] => allKinds(port).filter((kind) => kind !== "neural-evidence");
+  const lastKind = (port: FakePort): string | undefined => kinds(port)[kinds(port).length - 1];
+  /** The last message of `kind` posted to `port`. */
+  const latest = <K extends ToScanner["kind"]>(port: FakePort, kind: K): Extract<ToScanner, { kind: K }> => {
+    const found = [...port.posted].reverse().find(({ message }) => message.kind === kind);
+    if (!found) throw new Error(`nothing of kind ${kind} was posted`);
+    return found.message as Extract<ToScanner, { kind: K }>;
+  };
+  /** Answer the last message of `kind` posted to `port` with `result`. */
+  const reply = (port: FakePort, kind: ToScanner["kind"], result: unknown): void =>
+    port.say({ kind: "ok", id: latest(port, kind).id, result });
   /** Let the page work until `check` holds — a fetch of four files is many turns deep. */
   const until = async (check: () => boolean): Promise<void> => {
     for (let turn = 0; turn < 5_000 && !check(); turn += 1) await Promise.resolve();
@@ -763,18 +784,25 @@ describe("the Neural mode's files", () => {
       await settle(50);
       return said;
     };
-    const fetched = (): string[] => h.browser.asked.filter((path) => path.startsWith(NEURAL_PREFIX));
-    return { ...h, neuralFrame, refusedFrame, fetched };
+    /** The recogniser's four as they were asked for, and the evidence's. */
+    const fetched = (): string[] => h.browser.asked.filter((path) => PATHS.includes(path));
+    const evidenceFetched = (): string[] => h.browser.asked.filter((path) => EVIDENCE_PATHS.includes(path));
+    return { ...h, neuralFrame, refusedFrame, fetched, evidenceFetched };
   }
 
-  /** The first Neural frame on `port`, the hand-over answered `ok` and the frame answered. */
+  /**
+   * The first Neural frame on `port`, the hand-over answered `ok` and the frame answered — and
+   * then the evidence that follows them, answered `ok` too.
+   */
   async function firstNeuralFrame(s: Awaited<ReturnType<typeof scanning>>, port: FakePort): Promise<void> {
     const verdict = s.neuralFrame();
     await until(() => kinds(port).includes("neural"));
-    port.answer(null);
+    reply(port, "neural", null);
     await until(() => lastKind(port) === "frame");
-    port.answer({ ok: true, mode: "neural" });
+    reply(port, "frame", { ok: true, mode: "neural" });
     expect(await verdict).toEqual({ ok: true, mode: "neural" });
+    await until(() => allKinds(port).includes("neural-evidence"));
+    reply(port, "neural-evidence", null);
   }
 
   it("are never asked for by a Fast or an Exact frame, and the status says none are here", async () => {
@@ -804,8 +832,10 @@ describe("the Neural mode's files", () => {
     const { core, ports, browser, fetched } = s;
     const verdict = s.neuralFrame();
     await until(() => kinds(ports[0]).includes("neural"));
-    // One after another, in `load_neural`'s order, past nothing but the HTTP cache.
+    // One after another, in `load_neural`'s order, past nothing but the HTTP cache — and none of
+    // the evidence, which is nothing without the recogniser.
     expect(fetched()).toEqual(PATHS);
+    expect(s.evidenceFetched()).toEqual([]);
     const asked = browser.asked.map((path, at) => [path, browser.modes[at]]);
     expect(asked.filter(([path]) => path.startsWith(NEURAL_PREFIX)).map(([, mode]) => mode)).toEqual(
       NEURAL_FILES.map(() => "default"),
@@ -821,17 +851,17 @@ describe("the Neural mode's files", () => {
     // The frame waits for the hand-over's answer.
     await settle();
     expect(kinds(ports[0])).toEqual(["load", "neural"]);
-    ports[0].answer(null);
+    reply(ports[0], "neural", null);
     await until(() => kinds(ports[0]).length === 3);
-    expect(ports[0].last("frame").options).toBe(NEURAL_OPTIONS["x-scanner-options"]);
-    ports[0].answer({ ok: true, decision_seq: 1 });
+    expect(latest(ports[0], "frame").options).toBe(NEURAL_OPTIONS["x-scanner-options"]);
+    reply(ports[0], "frame", { ok: true, decision_seq: 1 });
     expect(await verdict).toEqual({ ok: true, decision_seq: 1 });
 
     // Once a Worker: the next Neural frame is sent as it comes.
     const next = s.neuralFrame();
     await settle();
     expect(kinds(ports[0])).toEqual(["load", "neural", "frame", "frame"]);
-    ports[0].answer({ ok: true });
+    reply(ports[0], "frame", { ok: true });
     await next;
     expect(fetched()).toEqual(PATHS);
     expect((await core.call<ScannerStatus>("scanner_status")).neural).toEqual({
@@ -853,11 +883,12 @@ describe("the Neural mode's files", () => {
     await settle(200);
     release();
     await until(() => kinds(s.ports[0]).includes("neural"));
-    s.ports[0].answer(null);
+    reply(s.ports[0], "neural", null);
     await until(() => kinds(s.ports[0]).length === 4);
     expect(kinds(s.ports[0])).toEqual(["load", "neural", "frame", "frame"]);
-    s.ports[0].say({ kind: "ok", id: s.ports[0].posted[2].message.id, result: { ok: true } });
-    s.ports[0].say({ kind: "ok", id: s.ports[0].posted[3].message.id, result: { ok: true } });
+    for (const { message } of s.ports[0].posted.filter((posted) => posted.message.kind === "frame")) {
+      s.ports[0].say({ kind: "ok", id: message.id, result: { ok: true } });
+    }
     await Promise.all([one, two]);
     expect(s.fetched()).toEqual(PATHS);
   });
@@ -873,12 +904,16 @@ describe("the Neural mode's files", () => {
     await until(() => s.ports.length === 2);
     s.ports[1].answer(FACTS);
     await until(() => kinds(s.ports[1]).includes("neural"));
-    s.ports[1].answer(null);
+    reply(s.ports[1], "neural", null);
     await until(() => lastKind(s.ports[1]) === "frame");
-    s.ports[1].answer({ ok: true });
+    reply(s.ports[1], "frame", { ok: true });
     expect(await verdict).toEqual({ ok: true });
     expect(kinds(s.ports[1])).toEqual(["load", "neural", "frame"]);
     expect(s.fetched()).toEqual([...PATHS, ...PATHS]);
+    // And the evidence after them, as the first Worker was handed it.
+    await until(() => allKinds(s.ports[1]).includes("neural-evidence"));
+    expect(allKinds(s.ports[1])).toEqual(["load", "neural", "frame", "neural-evidence"]);
+    expect(s.evidenceFetched()).toEqual([...EVIDENCE_PATHS, ...EVIDENCE_PATHS]);
   });
 
   it("are not posted to a Worker that was ended while they were on their way", async () => {
@@ -1020,7 +1055,7 @@ describe("the Neural mode's files", () => {
     expect((await status).neural).toMatchObject({ loaded: false, error: NEURAL_COULD_NOT_START });
   });
 
-  it("kept by the service worker on an earlier visit are present before any Neural frame", async () => {
+  it("kept by the service worker on an earlier visit are present before any Neural frame — all eight", async () => {
     const { download, built, browser } = harness();
     await download();
     const cache = await browser.caches.open(SCANNER_CACHE);
@@ -1028,10 +1063,258 @@ describe("the Neural mode's files", () => {
     const three = await built();
     expect(three.neural).toMatchObject({ present: false, loaded: false });
     await cache.put(PATHS[3], new Response("kept"));
-    const later = harness({}, { caches: browser.caches });
-    const four = await later.built();
-    expect(four.neural).toMatchObject({ present: true, loaded: false, error: null });
+    const four = await harness({}, { caches: browser.caches }).built();
+    expect(four.neural).toMatchObject({ present: false, loaded: false });
+    for (const path of EVIDENCE_PATHS) await cache.put(path, new Response("kept"));
+    const eight = await harness({}, { caches: browser.caches }).built();
+    expect(eight.neural).toMatchObject({ present: true, loaded: false, error: null });
   });
+
+  describe("and the printing evidence beside them", () => {
+    it("is fetched once the recogniser has taken its four, and never holds up a frame", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((done) => (release = done));
+      const slow = {
+        [EVIDENCE_PATHS[0]]: () => held.then(() => answered(NEURAL_EVIDENCE_TEST_FILES["symbol.onnx"])),
+      };
+      const s = await scanning(slow);
+      const port = s.ports[0];
+      const verdict = s.neuralFrame();
+      await until(() => kinds(port).includes("neural"));
+      await settle(200);
+      // Not before the recogniser has said it took its four: the evidence is nothing without it.
+      expect(s.evidenceFetched()).toEqual([]);
+      reply(port, "neural", null);
+      await until(() => lastKind(port) === "frame");
+      // The frame went while the evidence was still on its way.
+      expect(s.evidenceFetched()).toEqual([EVIDENCE_PATHS[0]]);
+      reply(port, "frame", { ok: true, decision_seq: 1 });
+      expect(await verdict).toEqual({ ok: true, decision_seq: 1 });
+      const next = s.neuralFrame();
+      await settle();
+      reply(port, "frame", { ok: true });
+      await next;
+      expect(allKinds(port)).toEqual(["load", "neural", "frame", "frame"]);
+
+      release();
+      await until(() => allKinds(port).includes("neural-evidence"));
+      // One after another, in `load_neural_evidence`'s order, past nothing but the HTTP cache.
+      expect(s.evidenceFetched()).toEqual(EVIDENCE_PATHS);
+      const at = s.browser.asked.indexOf(EVIDENCE_PATHS[0]);
+      expect(s.browser.modes.slice(at, at + 4)).toEqual(NEURAL_EVIDENCE_FILES.map(() => "default"));
+      const { message, transfer } = port.posted[port.posted.length - 1];
+      if (message.kind !== "neural-evidence") throw new Error("not the evidence");
+      expect(message.symbolNet).toEqual(NEURAL_EVIDENCE_TEST_FILES["symbol.onnx"]);
+      expect(message.bandNet).toEqual(NEURAL_EVIDENCE_TEST_FILES["band.onnx"]);
+      expect(message.symbols).toEqual(NEURAL_EVIDENCE_TEST_FILES["symbols.bin"]);
+      expect(message.bands).toEqual(NEURAL_EVIDENCE_TEST_FILES["bands.bin"]);
+      // Every buffer handed over: the page keeps none of the four.
+      expect(transfer).toEqual([
+        message.symbolNet.buffer,
+        message.bandNet.buffer,
+        message.symbols.buffer,
+        message.bands.buffer,
+      ]);
+      reply(port, "neural-evidence", null);
+
+      // Once a Worker: the frames after it go as they come, and nothing more is fetched.
+      const after = s.neuralFrame();
+      await settle();
+      reply(port, "frame", { ok: true });
+      await after;
+      expect(allKinds(port)).toEqual(["load", "neural", "frame", "frame", "neural-evidence", "frame"]);
+      expect(s.evidenceFetched()).toEqual(EVIDENCE_PATHS);
+      expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({ loaded: true, error: null });
+    });
+
+    it("that cannot be fetched is logged, and Neural carries on without it", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const s = await scanning({ [EVIDENCE_PATHS[3]]: () => answered("Not found", { status: 404 }) });
+        const port = s.ports[0];
+        const verdict = s.neuralFrame();
+        await until(() => kinds(port).includes("neural"));
+        reply(port, "neural", null);
+        await until(() => lastKind(port) === "frame");
+        reply(port, "frame", { ok: true });
+        await verdict;
+        await until(() => warn.mock.calls.length > 0);
+        expect(String(warn.mock.calls[0][0])).toContain(NEURAL_OTHER_SET);
+        expect(s.evidenceFetched()).toEqual(EVIDENCE_PATHS);
+        // Frames flow, this Worker does not ask for the evidence again, and nothing is wrong.
+        for (let n = 0; n < 2; n += 1) {
+          const more = s.neuralFrame();
+          await settle();
+          reply(port, "frame", { ok: true });
+          expect(await more).toEqual({ ok: true });
+        }
+        expect(allKinds(port)).toEqual(["load", "neural", "frame", "frame", "frame"]);
+        expect(s.evidenceFetched()).toEqual(EVIDENCE_PATHS);
+        expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toEqual({
+          path: "/scanner-neural/",
+          present: true,
+          loaded: true,
+          error: null,
+          source: "store",
+        });
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("that the module refuses is logged in its words, and Neural carries on without it", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        const s = await scanning();
+        const port = s.ports[0];
+        const verdict = s.neuralFrame();
+        await until(() => kinds(port).includes("neural"));
+        reply(port, "neural", null);
+        await until(() => lastKind(port) === "frame");
+        reply(port, "frame", { ok: true });
+        await verdict;
+        await until(() => allKinds(port).includes("neural-evidence"));
+        port.say({ kind: "err", id: latest(port, "neural-evidence").id, message: "neural.json has no evidence section" });
+        await until(() => warn.mock.calls.length > 0);
+        expect(String(warn.mock.calls[0][0])).toContain("neural.json has no evidence section");
+        expect(port.terminated).toBe(false);
+        const more = s.neuralFrame();
+        await settle();
+        reply(port, "frame", { ok: true });
+        expect(await more).toEqual({ ok: true });
+        expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({ loaded: true, error: null });
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("whose hand-over traps is not handed to the next Worker, which reads with the recogniser alone", async () => {
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const s = await scanning();
+        await firstNeuralFrameLeavingEvidence(s, s.ports[0]);
+        s.ports[0].say({
+          kind: "trapped",
+          id: latest(s.ports[0], "neural-evidence").id,
+          message: "RuntimeError: unreachable",
+        });
+        expect(s.ports[0].terminated).toBe(true);
+        // A phone whose memory would not take the evidence is not handed it again, Worker after
+        // Worker — and the recogniser, which took, is not waited out for it.
+        const next = s.neuralFrame();
+        await until(() => s.ports.length === 2);
+        s.ports[1].answer(FACTS);
+        await until(() => kinds(s.ports[1]).includes("neural"));
+        reply(s.ports[1], "neural", null);
+        await until(() => lastKind(s.ports[1]) === "frame");
+        reply(s.ports[1], "frame", { ok: true });
+        expect(await next).toEqual({ ok: true });
+        await settle(600);
+        expect(allKinds(s.ports[1])).toEqual(["load", "neural", "frame"]);
+        expect(s.evidenceFetched()).toEqual(EVIDENCE_PATHS);
+        expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({ loaded: true, error: null });
+      } finally {
+        quiet.mockRestore();
+      }
+    });
+
+    it("whose hand-over passes its deadline is not handed to the next Worker either", async () => {
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const s = await scanning();
+        await firstNeuralFrameLeavingEvidence(s, s.ports[0]);
+        // A load's deadline, not a frame's: two networks are parsed and two galleries taken.
+        s.browser.advance(FRAME_DEADLINE_MS + 1_000);
+        expect(s.ports[0].terminated).toBe(false);
+        s.browser.advance(LOAD_DEADLINE_MS);
+        expect(s.ports[0].terminated).toBe(true);
+        const next = s.neuralFrame();
+        await until(() => s.ports.length === 2);
+        s.ports[1].answer(FACTS);
+        await until(() => kinds(s.ports[1]).includes("neural"));
+        reply(s.ports[1], "neural", null);
+        await until(() => lastKind(s.ports[1]) === "frame");
+        reply(s.ports[1], "frame", { ok: true });
+        expect(await next).toEqual({ ok: true });
+        await settle(600);
+        expect(allKinds(s.ports[1])).toEqual(["load", "neural", "frame"]);
+        expect((await s.core.call<ScannerStatus>("scanner_status")).neural.error).toBeNull();
+      } finally {
+        quiet.mockRestore();
+      }
+    });
+
+    it("whose hand-over hangs is dropped though the frame queued behind it is what goes overdue", async () => {
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const s = await scanning();
+        await firstNeuralFrameLeavingEvidence(s, s.ports[0]);
+        // A reader scanning on: the next frame waits in the Worker behind the evidence, which
+        // never answers — a phone that cannot take it, killed without a word.
+        void s.neuralFrame().catch(() => undefined);
+        await until(() => kinds(s.ports[0]).filter((kind) => kind === "frame").length === 2);
+        expect(lastKind(s.ports[0])).toBe("frame");
+        // The frame's deadline passes first: that is what ends the Worker.
+        s.browser.advance(FRAME_DEADLINE_MS + 1_000);
+        expect(s.ports[0].terminated).toBe(true);
+        const next = s.neuralFrame();
+        await until(() => s.ports.length === 2);
+        s.ports[1].answer(FACTS);
+        await until(() => kinds(s.ports[1]).includes("neural"));
+        reply(s.ports[1], "neural", null);
+        await until(() => lastKind(s.ports[1]) === "frame");
+        reply(s.ports[1], "frame", { ok: true });
+        expect(await next).toEqual({ ok: true });
+        await settle(600);
+        // The next Worker is not handed the evidence that hung the last one.
+        expect(allKinds(s.ports[1])).toEqual(["load", "neural", "frame"]);
+        expect(s.evidenceFetched()).toEqual(EVIDENCE_PATHS);
+        expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({ loaded: true, error: null });
+      } finally {
+        quiet.mockRestore();
+      }
+    });
+
+    it("is asked for by no page whose build ships none, and is not looked for among what is kept", async () => {
+      // A build made before the evidence existed names no length for it.
+      const recogniserOnly: NeuralSource = {
+        set: NEURAL_SOURCE.set,
+        bytes: Object.fromEntries(NEURAL_FILES.map((name) => [name, NEURAL_TEST_FILES[name].byteLength])),
+      };
+      const h = harness({}, { neural: recogniserOnly });
+      await h.download();
+      await h.built();
+      const port = h.ports[0];
+      const verdict = h.core.call("scanner_frame", new Uint8Array([1, 2]), { headers: NEURAL_OPTIONS });
+      await until(() => kinds(port).includes("neural"));
+      reply(port, "neural", null);
+      await until(() => lastKind(port) === "frame");
+      reply(port, "frame", { ok: true });
+      await verdict;
+      await settle(600);
+      expect(allKinds(port)).toEqual(["load", "neural", "frame"]);
+      expect(h.browser.asked.filter((path) => EVIDENCE_PATHS.includes(path))).toEqual([]);
+      // The recogniser's four kept are all there is to keep.
+      const cache = await h.browser.caches.open(SCANNER_CACHE);
+      for (const path of PATHS) await cache.put(path, new Response("kept"));
+      const later = await harness({}, { caches: h.browser.caches, neural: recogniserOnly }).built();
+      expect(later.neural).toMatchObject({ present: true, loaded: false, error: null });
+    });
+  });
+
+  /** The first Neural frame on `port`, answered, and the evidence posted after it left unanswered. */
+  async function firstNeuralFrameLeavingEvidence(
+    s: Awaited<ReturnType<typeof scanning>>,
+    port: FakePort,
+  ): Promise<void> {
+    const verdict = s.neuralFrame();
+    await until(() => kinds(port).includes("neural"));
+    reply(port, "neural", null);
+    await until(() => lastKind(port) === "frame");
+    reply(port, "frame", { ok: true });
+    await verdict;
+    await until(() => allKinds(port).includes("neural-evidence"));
+  }
 });
 
 describe("what is not the scanner's", () => {

@@ -19,7 +19,7 @@ import deliver  # noqa: E402
 import update_readme as ur  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_deliver_readme import done_for, neural_table  # noqa: E402
+from test_deliver_readme import EVIDENCE, bands_json, done_for, neural_table, symbols_json  # noqa: E402
 
 
 def write_json(path: Path, value) -> None:
@@ -27,13 +27,14 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def make_run(root: Path, run: str, status="ok", detector=True, smoke=False, delivered=None, done=True, looks=70950):
+def make_run(root: Path, run: str, status="ok", detector=True, smoke=False, delivered=None, done=True, looks=70950,
+             evidence=True):
     base = root / "runs" / run
     write_json(base / "run.json", {"run": run, "git_sha": "0123456789abcdef", "started_at": "2026-11-01T03:41:00Z",
                                    "detector": detector, "smoke": smoke, "budget_usd": 10.0,
                                    "resources": {"gpu": "L4", "cpu": 16.0, "memory_gib": 24.0}})
     if done:
-        d = done_for(run=run, detector=detector, smoke=smoke)
+        d = done_for(run=run, detector=detector, smoke=smoke, evidence=evidence)
         d["status"] = status
         if status != "ok":
             d["reason"] = "embedder: TimeoutError: out of budget"
@@ -46,6 +47,13 @@ def make_run(root: Path, run: str, status="ok", detector=True, smoke=False, deli
     if detector:
         (base / "detector" / "export").mkdir(parents=True, exist_ok=True)
         (base / "detector" / "export" / "detector.onnx").write_bytes(b"detector " + run.encode())
+    if evidence:
+        for kind, gallery in (("symbol", symbols_json(20, 50)), ("band", bands_json(30))):
+            export = base / kind / "export"
+            export.mkdir(parents=True, exist_ok=True)
+            (export / f"{kind}.onnx").write_bytes(f"{kind} {run}".encode())
+            (export / f"{kind}s.matrix").write_bytes(b"NSGALLR1" + kind.encode())
+            write_json(export / f"{kind}s.json", gallery)
     if delivered is not None:
         write_json(base / "DELIVERED.json", delivered)
 
@@ -94,13 +102,20 @@ class Find(Workspace):
         write_json(self.volume / "data" / "scryfall" / "fetch.json", {"fetched_at": "2026-11-01T03:50:00Z"})
         deliver.find(self.store, out=self.tmp / "in")
         got = sorted(p.name for p in (self.tmp / "in").iterdir())
-        self.assertEqual(got, ["DONE.json", "detector.onnx", "embedder.onnx", "fetch.json", "gallery.head.matrix",
-                               "gallery.json", "run.json"])
+        self.assertEqual(got, ["DONE.json", "band.onnx", "bands.json", "bands.matrix", "detector.onnx", "embedder.onnx",
+                               "fetch.json", "gallery.head.matrix", "gallery.json", "run.json", "symbol.onnx",
+                               "symbols.json", "symbols.matrix"])
 
     def test_a_run_without_the_detector_downloads_none(self):
         make_run(self.volume, "2026-11", detector=False)
         deliver.find(self.store, out=self.tmp / "in")
         self.assertFalse((self.tmp / "in" / "detector.onnx").exists())
+
+    def test_a_run_from_before_the_evidence_downloads_none_of_it(self):
+        make_run(self.volume, "2026-11", evidence=False)
+        deliver.find(self.store, out=self.tmp / "in")
+        got = {p.name for p in (self.tmp / "in").iterdir()}
+        self.assertFalse(got & {"symbol.onnx", "symbols.matrix", "symbols.json", "band.onnx", "bands.matrix", "bands.json"})
 
     def test_reports_a_failed_run_once_and_marks_it(self):
         make_run(self.volume, "2026-11", status="failed")
@@ -122,6 +137,17 @@ class Find(Workspace):
         self.assertEqual(self.output()["failed"], "true")
         marked = json.loads((self.volume / "runs" / "2026-11" / "DELIVERED.json").read_text(encoding="utf-8"))
         self.assertIn("gallery.json` is not on the Volume", marked["reason"])
+
+    def test_a_run_that_trained_one_evidence_network_is_reported_and_the_next_delivered(self):
+        make_run(self.volume, "2026-11")
+        make_run(self.volume, "2026-12")
+        path = self.volume / "runs" / "2026-11" / "DONE.json"
+        done = json.loads(path.read_text(encoding="utf-8"))
+        del done["metrics"]["band"]
+        write_json(path, done)
+        self.assertEqual(deliver.find(self.store, out=self.tmp / "in")["run"], "2026-12")
+        marked = json.loads((self.volume / "runs" / "2026-11" / "DELIVERED.json").read_text(encoding="utf-8"))
+        self.assertIn("symbol and band", marked["reason"])
 
     def test_keeps_a_reason_to_one_table_cell(self):
         make_run(self.volume, "2026-11", status="failed")
@@ -188,7 +214,7 @@ class Body(unittest.TestCase):
         lead = body.split("\n\n")[0]
         self.assertTrue(lead.startswith("The Scanner's **Neural** mode knows the cards printed up to 2026-11-01"))
         self.assertIn("70 950 card pictures apart, 548 more than before", lead)
-        self.assertIn("Its card finder was retrained too.", lead)
+        self.assertIn("Its card finder was retrained too, and so were the set symbol and collector band networks", lead)
         self.assertNotIn("|", lead)
 
     def test_sets_the_run_beside_the_current_files(self):
@@ -199,10 +225,21 @@ class Body(unittest.TestCase):
         self.assertIn("| detector: corner error, 90th percentile | 0.049 | 0.0483 |", body)
         self.assertIn("| detector: wrong way up (lower is better) | 0.004 | 0.0033 |", body)
         self.assertIn("the embedder from run `qd-mnv4-e` (scanner lab)", body)
+        self.assertIn("| symbol: within-card top-1 (higher is better) | 0.931 | 0.927 |", body)
+        self.assertIn("| symbol: classes | 2 004 | 1 999 |", body)
+        self.assertIn("| band: within-card top-1 (higher is better) | 0.947 | 0.946 |", body)
+        self.assertIn("| band: epochs | 14 | 20 |", body)
+        self.assertIn("the symbol network from run `ev-symbol-3` (scanner lab)", body)
+
+    def test_a_run_from_before_the_evidence_says_its_files_stay(self):
+        body = deliver.pr_body(done_for(evidence=False), self.info, self.before, 70950)
+        self.assertNotIn("symbol: within-card", body)
+        self.assertIn("`symbol.onnx`, `band.onnx` and their galleries stay as they are", body)
 
     def test_names_the_spend_and_the_caveat(self):
         body = deliver.pr_body(done_for(), self.info, self.before, 70950, link="https://github.com/o/r/actions/runs/1")
-        self.assertIn("**$3.94** on Modal for the whole run, against its budget of $10.00 (embedder $1.71, detector $2.02", body)
+        self.assertIn("**$7.80** on Modal for the whole run, against its budget of $10.00 (embedder $1.71, detector $2.02, "
+                      "symbol $1.85, band $2.01", body)
         self.assertIn("one L4 with 16 cores and 24 GiB", body)
         self.assertIn("`neural.json`'s thresholds were tuned for the previous pair", body)
         self.assertIn("`pnpm scanner:replay`", body)
@@ -237,27 +274,56 @@ class Build(Workspace):
     def no_tests(self, repo):
         self.fail("a scratch build runs no test")
 
+    def test_a_delivery_commits_the_eight_files_the_readme_and_training_json(self):
+        self.assertEqual(sorted(deliver.DELIVERED), sorted([
+            "detector.onnx", "embedder.onnx", "gallery.bin", "neural.json", "symbol.onnx", "band.onnx",
+            "symbols.bin", "bands.bin", "README.md", "training.json"]))
+
     def test_a_scratch_build_writes_the_delivery_and_leaves_models_alone(self):
         make_run(self.volume, "2026-11")
         deliver.find(self.store, out=self.tmp / "in")
         real = Path(deliver.REPO) / deliver.MODELS
         before = tree_digest(real)
+        built = []
+        def gallery(repo, matrix, gallery, out):
+            built.append((matrix.name, gallery.name, out.name))
+            self.fake_gallery(repo, matrix, gallery, out)
         delivery = deliver.build(self.tmp / "in", self.tmp / "out", scratch=True,
-                                 make_gallery=self.fake_gallery, run_tests=self.no_tests)
+                                 make_gallery=gallery, run_tests=self.no_tests)
         self.assertEqual(tree_digest(real), before, "the repository's models/ untouched")
+        # Each gallery from its own export: the evidence's from the mean rows, as the lab built them.
+        self.assertEqual(sorted(built), [("bands.matrix", "bands.json", "bands.bin"),
+                                         ("gallery.head.matrix", "gallery.json", "gallery.bin"),
+                                         ("symbols.matrix", "symbols.json", "symbols.bin")])
         staged = self.tmp / "out" / "models"
         self.assertEqual(sorted(p.name for p in staged.iterdir()), sorted(deliver.DELIVERED))
         self.assertEqual((staged / "embedder.onnx").read_bytes(), b"embedder 2026-11")
         self.assertEqual((staged / "detector.onnx").read_bytes(), b"detector 2026-11")
+        self.assertEqual((staged / "symbol.onnx").read_bytes(), b"symbol 2026-11")
+        self.assertEqual((staged / "band.onnx").read_bytes(), b"band 2026-11")
+        self.assertEqual((staged / "bands.bin").read_bytes(), b"CNGALLR1 built from NSGALLR1band")
+        self.assertEqual((staged / "neural.json").read_bytes(), (real / "neural.json").read_bytes(), "hand-kept")
         rows = neural_table((staged / ur.README).read_text(encoding="utf-8"))
-        for name, (size, head, tail) in rows.items():
+        for name in ur.FILES:
+            size, head, tail = rows[name]
             sha = hashlib.sha256((staged / name).read_bytes()).hexdigest()
             self.assertEqual((size, head, tail), ((staged / name).stat().st_size, sha[:8], sha[-8:]), name)
         self.assertEqual(delivery, {"run": "2026-11", "smoke": False, "branch": "neural-models/2026-11",
                                     "title": "feat(scanner): retrain the Neural models (2026-11)",
-                                    "retrained": ["embedder", "detector"], "tested": False})
+                                    "retrained": ["embedder", "detector", "symbol", "band"], "tested": False})
         self.assertEqual(json.loads((self.tmp / "out" / "delivery.json").read_text(encoding="utf-8")), delivery)
         self.assertIn("## Before merging", (self.tmp / "out" / "pr-body.md").read_text(encoding="utf-8"))
+
+    def test_a_run_from_before_the_evidence_keeps_the_evidence_files(self):
+        make_run(self.volume, "2026-11", evidence=False)
+        deliver.find(self.store, out=self.tmp / "in")
+        real = Path(deliver.REPO) / deliver.MODELS
+        delivery = deliver.build(self.tmp / "in", self.tmp / "out", scratch=True,
+                                 make_gallery=self.fake_gallery, run_tests=self.no_tests)
+        staged = self.tmp / "out" / "models"
+        for name in EVIDENCE:
+            self.assertEqual((staged / name).read_bytes(), (real / name).read_bytes(), name)
+        self.assertEqual(delivery["retrained"], ["embedder", "detector"])
 
     def test_a_smoke_run_is_built_in_scratch_whatever_it_is_asked(self):
         make_run(self.volume, "2026-11-05-1200-smoke", smoke=True)

@@ -44,6 +44,20 @@ export function load_neural(
 ): string | undefined;
 
 /**
+ * Give the session the Neural mode's printing evidence — `card-neural`'s set symbol and collector
+ * band networks and their galleries — after `load_neural` has taken the recogniser. **Not the
+ * envelope**: `undefined`, or the crate's sentence — before the recogniser, without an
+ * `evidence` section in its `neural.json`, or for files that would not load. A refusal leaves
+ * the recogniser reading as it did.
+ */
+export function load_neural_evidence(
+  symbol_net: Uint8Array,
+  band_net: Uint8Array,
+  symbols: Uint8Array,
+  bands: Uint8Array,
+): string | undefined;
+
+/**
  * One frame. `options` is a `FrameOptions` as JSON; left out, empty, or text that is not one,
  * it is the defaults. Answers the verdict exactly as the desktop's `scanner_frame` serialises it.
  */

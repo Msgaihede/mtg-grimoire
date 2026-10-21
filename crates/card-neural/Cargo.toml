@@ -21,8 +21,9 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# `card_neural::bundled()`: the four files in `models/`, `include_bytes!`ed (~27 MB). The
-# desktop and Android hosts take it; the web fetches the files instead.
+# `card_neural::bundled()`: the recogniser's four files in `models/`, `include_bytes!`ed (~27 MB),
+# and `bundled_evidence()`: the set symbol and collector band's four (~21 MB). The desktop and
+# Android hosts take it; the web fetches the files instead.
 bundled = []
 # The command-line tools: `build-gallery` and `probe`.
 cli = ["dep:clap", "dep:image"]

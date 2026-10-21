@@ -3,16 +3,18 @@
     modal deploy crates/card-neural/train/modal_app.py      # the workflow does this per run
     python crates/card-neural/train/launch.py --run 2026-11   # spawns `pipeline` and returns
 
-`pipeline` (a small CPU container) refreshes Scryfall's images on the Volume, runs both
-trainings at once on L4s, and writes `DONE.json`; `.github/workflows/neural-deliver.yml` turns a
-finished run into a pull request. The layout of the Volume and the contract with the delivery are
+`pipeline` (a small CPU container) refreshes Scryfall's images on the Volume, runs the four
+trainings at once on L4s — the embedder, the corner detector, and the printing evidence's set
+symbol and collector band networks — and writes `DONE.json`;
+`.github/workflows/neural-deliver.yml` turns a finished run into a pull request. The layout of the Volume and the contract with the delivery are
 `docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`.
 
 **Sized for a CPU-bound trainer.** On the owner's machine one data worker draws ~41 embedder views
 or ~31 detector scenes a second, and the GPU alone could take 8 400 and 2 000 (bf16): the GPU waits
 on the CPU at any affordable core count, so each training gets 16 physical cores (two data workers
-each) beside its L4, and both run at once. ~$3.90 a run estimated; every resource is a launch
-argument, and `budget.py` holds the run to the owner's $10 whatever they are.
+each) beside its L4, and all four run at once. ~$8.65 a run estimated (`budget.ESTIMATE_USD`;
+`train/README.md`, "The budget"); every resource is a launch argument, and `budget.py` holds the
+run to the owner's $15 whatever they are.
 
 **Preemption**: Modal's GPU containers are always preemptible; a preempted container restarts
 with the same input. The trainers resume from their `checkpoint.pt`, the orchestrator rejoins the
@@ -53,16 +55,21 @@ GPU = "L4"
 # What each training container gets unless the launch says otherwise (see the module doc).
 TRAIN_CPU = 16.0
 TRAIN_MEMORY_GIB = 24
-REFRESH_CPU = 4.0
-REFRESH_MEMORY_GIB = 4
+REFRESH_CPU = budget.REFRESH_CPU  # in `budget.py`: its rate is part of the run's reserve
+REFRESH_MEMORY_GIB = budget.REFRESH_MEMORY_GIB
 PIPELINE_CPU = 0.25
 PIPELINE_MEMORY_GIB = 0.5
-# Below these the run is a failure and is not delivered — well under what the shipped pair
-# reached (retrieval top-1 0.9997; found 0.993, corner error 2.8 %), so only a broken run trips them.
+# Below these the run is a failure and is not delivered — well under what the shipped files
+# reached (retrieval top-1 0.9997; found 0.993, corner error 2.8 %; within-card top-1 0.927 for the
+# set symbol and 0.946 for the collector band, ~90 % of which are the evidence's floors), so only
+# a broken run trips them.
 FLOORS = {
     "embedder": {"retrieval_top1": 0.99},
     "detector": {"found": 0.98, "corner_err_max": 0.04, "wrong_way_max": 0.01},
+    "symbol": {"within_top1": 0.83},
+    "band": {"within_top1": 0.85},
 }
+EVIDENCE = ("symbol", "band")
 
 HERE = Path(__file__).parent
 image = (
@@ -101,9 +108,11 @@ class Guard:
     """A stage's spend, held to its share for the whole life of its container — copying the
     dataset as much as training — by a thread that adds the container's seconds to the stage's
     ledger every `tick_s` and stops whatever is running once the share is spent. Volumes v2 commits
-    in the background every few seconds, so the ledger reaches the Volume without a commit here."""
+    in the background every few seconds, so the ledger reaches the Volume without a commit here.
+    What it can let past a share is `budget.OVERRUN_S`, which the shares set aside: keep the tick
+    and the kill timeout in `budget.py`."""
 
-    def __init__(self, ledger: budget.Ledger, tick_s: float = 30.0):
+    def __init__(self, ledger: budget.Ledger, tick_s: float = budget.GUARD_TICK_S):
         self.ledger = ledger
         self.tick_s = tick_s
         self.proc: subprocess.Popen | None = None
@@ -138,7 +147,7 @@ class Guard:
             return
         proc.send_signal(signal.SIGTERM)
         try:
-            proc.wait(timeout=60)
+            proc.wait(timeout=budget.KILL_TIMEOUT_S)
         except subprocess.TimeoutExpired:
             proc.kill()
 
@@ -172,10 +181,12 @@ class Guard:
         return rows
 
 
-def _stage_local_copy() -> Path:
+def _stage_local_copy(stop: threading.Event) -> Path:
     """The dataset on the container's own disk: the trainers read every scan once an epoch, and
     a local disk answers that faster than a network volume. ~11 GB; sharded folders copied in
-    parallel. Kept for the container's life, so a resumed trainer in the same container skips it."""
+    parallel. Kept for the container's life, so a resumed trainer in the same container skips it.
+    The watchdog has no process to stop during the copy, so the copy watches `stop` itself: a share
+    spent mid-copy ends it within the shards already in flight, not ~5 minutes later."""
     marker = LOCAL_DATA / ".copied"
     if marker.exists():
         return LOCAL_DATA
@@ -186,10 +197,13 @@ def _stage_local_copy() -> Path:
     shards = sorted(p for p in (DATA / "normal").iterdir() if p.is_dir())
 
     def copy(shard: Path):
-        shutil.copytree(shard, LOCAL_DATA / "normal" / shard.name, dirs_exist_ok=True)
+        if not stop.is_set():
+            shutil.copytree(shard, LOCAL_DATA / "normal" / shard.name, dirs_exist_ok=True)
 
     with ThreadPoolExecutor(32) as pool:
         list(pool.map(copy, shards))
+    if stop.is_set():
+        return LOCAL_DATA  # incomplete, and unmarked: the caller's check stops the stage
     marker.write_text(_now(), encoding="utf-8")
     print(json.dumps({"copied": len(shards), "seconds": round(time.monotonic() - started)}), flush=True)
     return LOCAL_DATA
@@ -222,7 +236,7 @@ def _train(stage: str, run: str, cpu: float, memory_gib: float, limit_usd: float
     out = run_dir / stage
     ledger = budget.Ledger(run_dir, stage, budget.rate_per_s(GPU, cpu, memory_gib), limit_usd)
     with Guard(ledger) as guard:
-        data = _stage_local_copy()
+        data = _stage_local_copy(guard.over)
         guard.check()
         rows = guard.run(cmd_for(data, out), out / "train.out")
         guard.run(export_for(data, out), out / "export.out")
@@ -286,6 +300,50 @@ def train_detector(run: str, cpu: float, memory_gib: float, limit_usd: float, sm
     }
 
 
+def _train_evidence(kind: str, run: str, cpu: float, memory_gib: float, limit_usd: float, smoke: bool) -> dict:
+    """One printing-evidence network (`ev_train.py`'s defaults for `kind`) and its export from
+    `best.pt`, as the shipped files were exported."""
+
+    def cmd(data: Path, out: Path) -> list[str]:
+        args = [sys.executable, "-u", "ev_train.py", str(data), str(out), "--kind", kind,
+                "--workers", str(_workers(cpu)), "--prefetch", "2"]
+        if smoke:
+            args += ["--epochs", "1", "--eval-every", "1", "--eval-cards", "300"]
+            if kind == "symbol":
+                args += ["--repeats", "8"]
+        return args
+
+    def export(data: Path, out: Path) -> list[str]:
+        return [sys.executable, "-u", "ev_export.py", str(data), str(out / "best.pt"), str(out / "export"),
+                "--kind", kind, "--workers", str(_workers(cpu))]
+
+    result = _train(kind, run, cpu, memory_gib, limit_usd, cmd, export)
+    # The done row: a resumed run that had finished prints it alone.
+    done = next((r for r in reversed(result["rows"]) if r.get("done")), {})
+    return {
+        "within_top1": done.get("best_within_top1"),
+        "epochs": done.get("epoch"),
+        "classes": done.get("classes"),
+        "views_per_s": done.get("views_per_s"),
+        "usd": result["spend"]["usd"],
+    }
+
+
+@app.function(volumes={VOL_MOUNT: volume}, gpu=GPU, cpu=TRAIN_CPU, memory=TRAIN_MEMORY_GIB * 1024,
+              timeout=4 * 3600, retries=modal.Retries(max_retries=2, initial_delay=30.0))
+def train_symbol(run: str, cpu: float, memory_gib: float, limit_usd: float, smoke: bool) -> dict:
+    """The set symbol network: one class per (symbol set, rarity, stamp), on the crop around the
+    symbol at the type line's right end."""
+    return _train_evidence("symbol", run, cpu, memory_gib, limit_usd, smoke)
+
+
+@app.function(volumes={VOL_MOUNT: volume}, gpu=GPU, cpu=TRAIN_CPU, memory=TRAIN_MEMORY_GIB * 1024,
+              timeout=4 * 3600, retries=modal.Retries(max_retries=2, initial_delay=30.0))
+def train_band(run: str, cpu: float, memory_gib: float, limit_usd: float, smoke: bool) -> dict:
+    """The collector band network: one class per printing face, on the card's bottom strip."""
+    return _train_evidence("band", run, cpu, memory_gib, limit_usd, smoke)
+
+
 def _floors_failed(metrics: dict) -> list[str]:
     failed = []
     e = metrics.get("embedder") or {}
@@ -300,6 +358,10 @@ def _floors_failed(metrics: dict) -> list[str]:
             failed.append(f"detector corner error {d.get('corner_err')} over {f['corner_err_max']}")
         if (d.get("wrong_way") or 1) > f["wrong_way_max"]:
             failed.append(f"detector wrong way {d.get('wrong_way')} over {f['wrong_way_max']}")
+    for kind in EVIDENCE:
+        got = (metrics.get(kind) or {}).get("within_top1")
+        if (got or 0) < FLOORS[kind]["within_top1"]:
+            failed.append(f"{kind} within-card top-1 {got} under {FLOORS[kind]['within_top1']}")
     return failed
 
 
@@ -317,13 +379,13 @@ def _call(stages: dict, key: str, spawn, run_dir: Path):
 @app.function(volumes={VOL_MOUNT: volume}, cpu=PIPELINE_CPU, memory=int(PIPELINE_MEMORY_GIB * 1024), timeout=24 * 3600)
 def pipeline(run: str, detector: bool = True, cpu: float = TRAIN_CPU, memory_gib: float = TRAIN_MEMORY_GIB,
              budget_usd: float = budget.HARD_LIMIT_USD, smoke: bool = False, git_sha: str = "") -> dict:
-    """One run, start to finish: refresh, both trainings at once, `DONE.json`."""
+    """One run, start to finish: refresh, the four trainings at once, `DONE.json`."""
     volume.reload()
     run_dir = RUNS / run
     if (run_dir / "DONE.json").exists():
         return _read_json(run_dir / "DONE.json")
-    share = budget.shares(budget_usd, detector)
     rate = budget.rate_per_s(GPU, cpu, memory_gib)
+    share = budget.shares(budget_usd, detector, rate)
     info = _read_json(run_dir / "run.json") or {
         "run": run, "git_sha": git_sha, "started_at": _now(), "detector": detector, "smoke": smoke,
         "resources": {"gpu": GPU, "cpu": cpu, "memory_gib": memory_gib},
@@ -349,6 +411,9 @@ def pipeline(run: str, detector: bool = True, cpu: float = TRAIN_CPU, memory_gib
         if detector:
             calls["detector"] = _call(stages, "detector", lambda: options(train_detector, "detector").spawn(
                 run, cpu, memory_gib, share["detector"], smoke), run_dir)
+        for kind, fn in (("symbol", train_symbol), ("band", train_band)):
+            calls[kind] = _call(stages, kind, lambda fn=fn, kind=kind: options(fn, kind).spawn(
+                run, cpu, memory_gib, share[kind], smoke), run_dir)
         metrics, errors = {}, []
         for key, call in calls.items():
             try:
@@ -362,6 +427,9 @@ def pipeline(run: str, detector: bool = True, cpu: float = TRAIN_CPU, memory_gib
                  "gallery.json": f"runs/{run}/embedder/export/gallery.json"}
         if detector:
             files["detector.onnx"] = f"runs/{run}/detector/export/detector.onnx"
+        for kind in EVIDENCE:
+            for name in (f"{kind}.onnx", f"{kind}s.matrix", f"{kind}s.json"):
+                files[name] = f"runs/{run}/{kind}/export/{name}"
         done.update({"status": "failed" if failed else "ok", "metrics": metrics, "files": files})
         if failed:
             done["reason"] = "; ".join(failed)

@@ -2,7 +2,7 @@
 
     modal deploy crates/card-neural/train/modal_app.py
     python crates/card-neural/train/launch.py --run 2026-11 [--no-detector] [--cpu 16]
-           [--memory-gib 24] [--budget-usd 10] [--smoke] [--git-sha <sha>]
+           [--memory-gib 24] [--budget-usd 15] [--smoke] [--git-sha <sha>]
 
 Prints one JSON line, `{"run": …, "call_id": …}`. The run goes on on Modal for an hour or two;
 `DONE.json` in `runs/<run>/` on the `card-neural` Volume says how it ended, and
@@ -28,7 +28,7 @@ RUN_NAME = re.compile(r"^\d{4}-\d{2}(-\d{2}-\d{4})?(-smoke)?$")
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", required=True, help="YYYY-MM for the monthly run, YYYY-MM-DD-HHMM by hand")
-    ap.add_argument("--no-detector", action="store_true", help="retrain the embedder and gallery only")
+    ap.add_argument("--no-detector", action="store_true", help="keep the current detector; retrain the other three")
     ap.add_argument("--cpu", type=float, default=16.0, help="physical cores a training container gets")
     ap.add_argument("--memory-gib", type=float, default=24.0)
     ap.add_argument("--budget-usd", type=float, default=budget.HARD_LIMIT_USD)
@@ -39,8 +39,8 @@ def main() -> None:
     if not RUN_NAME.match(args.run):
         sys.exit(f"--run {args.run!r} is not YYYY-MM or YYYY-MM-DD-HHMM")
     # Refuses a budget over the hard limit, or one that leaves nothing to train with.
-    shares = budget.shares(args.budget_usd, not args.no_detector)
     rate = budget.rate_per_s("L4", args.cpu, args.memory_gib)
+    shares = budget.shares(args.budget_usd, not args.no_detector, rate)
     if not 1 <= args.cpu <= 64 or not 4 <= args.memory_gib <= 256:
         sys.exit("--cpu must be 1–64 physical cores and --memory-gib 4–256")
 
@@ -60,7 +60,7 @@ def main() -> None:
         "shares_usd": {k: round(v, 2) for k, v in shares.items()},
         "training_hours_at_most": {
             k: round(budget.max_seconds(v, rate) / 3600, 2) for k, v in shares.items()
-            if k in ("embedder", "detector")
+            if k not in ("refresh", "pipeline")
         },
     }), flush=True)
 

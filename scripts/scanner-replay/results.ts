@@ -2,6 +2,11 @@
 // these facts; every count and comparison drawn from them is `summary.ts`'s.
 
 export type Score = "printing" | "card" | "wrong" | "undecided" | "error";
+/**
+ * What a decision settled. An ambiguous one is neither right nor wrong: its first choice scores
+ * as a printing it only guessed.
+ */
+export type Settled = "right_printing" | "wrong_printing" | "ambiguous" | "other";
 export type Mode = "fast" | "exact" | "neural";
 export type Card = { id: string; set: string; number: string; lang: string; name: string };
 export type Got = { id: string; name: string | null; set: string | null; number: string | null };
@@ -31,11 +36,31 @@ export type Slice = {
   /** Title slices: edit distance from the matched name. */
   edits: number | null;
 };
+/** One candidate printing of a Neural decision and what the evidence scored it. */
+export type EvidenceCandidate = {
+  printing: string;
+  look: number;
+  /** The whole-card embedding's score. */
+  whole: number;
+  /** The set symbol's score; null when its gallery has no row for the printing or no crop was read. */
+  symbol: number | null;
+  /** The collector band's score; null likewise. */
+  band: number | null;
+};
+/** What the evidence weighed for the last Neural decision. */
+export type Evidence = {
+  candidates: EvidenceCandidate[];
+  /** The printing the evidence was sure of; null left the decision ambiguous. */
+  decided: string | null;
+};
 export type Pass = {
   name: string;
   mode: Mode;
   score: Score;
   ambiguous: boolean;
+  settled: Settled;
+  /** How many printings the decision offered; 0 when it offered none. */
+  choices: number;
   true_in_choices: boolean;
   got: Got | null;
   /** 1-based; the first decision. */
@@ -55,6 +80,8 @@ export type Pass = {
   tiers: { tier: string; survivors: number; detail: string }[];
   slices: Slice[];
   error: string | null;
+  /** A Neural pass replayed with `--neural-evidence`; null otherwise, and absent in older results. */
+  evidence?: Evidence | null;
 };
 export type Run = {
   id: string;

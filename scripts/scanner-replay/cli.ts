@@ -9,10 +9,12 @@ export type Args = {
   models: string | null;
   corpus: string | null;
   jobs: string | null;
+  neuralEvidence: string | null;
+  neuralEvidenceMeta: string | null;
   noBuild: boolean;
 };
 
-const WITH_VALUE = ["--baseline", "--save-baseline", "--only", "--bundle", "--models", "--corpus", "--jobs"] as const;
+const WITH_VALUE = ["--baseline", "--save-baseline", "--only", "--bundle", "--models", "--corpus", "--jobs", "--neural-evidence", "--neural-evidence-meta"] as const;
 
 /** A baseline is a file name in the corpus folder: no separators, no leading dot. */
 const BASELINE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
@@ -37,6 +39,8 @@ export function parseArgs(argv: string[]): Args {
     models: null,
     corpus: null,
     jobs: null,
+    neuralEvidence: null,
+    neuralEvidenceMeta: null,
     noBuild: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -72,6 +76,12 @@ export function parseArgs(argv: string[]): Args {
           throw new Error(`--jobs needs a whole number above zero, not ${JSON.stringify(value)}`);
         }
         args.jobs = value;
+        break;
+      case "--neural-evidence":
+        args.neuralEvidence = value;
+        break;
+      case "--neural-evidence-meta":
+        args.neuralEvidenceMeta = value;
         break;
     }
   }

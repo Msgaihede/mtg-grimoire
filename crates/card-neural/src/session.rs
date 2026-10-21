@@ -225,6 +225,7 @@ mod tests {
                 twins: vec![card * 10],
             },
             top: vec![(card * 10, 0.65)],
+            embedding: vec![],
             accepted,
             prominence: 1.0,
             aimed: true,
