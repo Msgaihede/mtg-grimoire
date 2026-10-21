@@ -3827,6 +3827,15 @@ out of order, and folding into a row they scrolled past would move a number nobo
 first provisionally; the camera keeps running while it waits, and *More printings…* opens the app's
 all-printings dialog with a `pick` that hands the printing back.
 
+**A card that lands takes the tray back to its top** (issue #1320) — newest first means a reader
+scrolled forty cards down would otherwise see nothing of the card just scanned. A landing is
+`tray.ts`'s `headLanded`: a head row whose key and `addedAt` the rows before did not have, so a new
+row, a bump, a second opinion and a card added by hand all count, and a pick, a finish, a quantity
+or a removal never does. Both trays hear it through `reader/useHeadLanded.ts`, never on their first
+render. `TrayPanel` scrolls **its own scroller only** to 0, as the walk does, so the camera beside
+it stays put; the phone's `Tray` scrolls with the page, under the camera on a narrow phone, so it
+brings its heading back **only when the reader has scrolled past it**, never down to it.
+
 **A decision that `replaces_previous` replaces the newest row instead of adding one** — but only when
 that row is the same oracle card, both ids known, or the same printing when both Oracle IDs are
 absent (#742). It keeps the row's key, quantity and finish (the

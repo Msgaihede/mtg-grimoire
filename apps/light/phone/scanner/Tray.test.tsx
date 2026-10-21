@@ -26,8 +26,11 @@ function mount(
   {
     flashKey = null,
     drawnLate = false,
+    scroller = false,
   }: {
     flashKey?: string | null;
+    /** Mount the tray in a box that scrolls, as the page's own column is. */
+    scroller?: boolean;
     /**
      * Draw an edit a tick after it is made, as the page does: its rows come back through the
      * tray's cache, so the tray is drawn once with the sheet shut and the rows as they were, and
@@ -60,7 +63,15 @@ function mount(
       />
     );
   }
-  renderPhone(<Held />);
+  renderPhone(
+    scroller ? (
+      <div data-testid="scroller" style={{ overflowY: "auto" }}>
+        <Held />
+      </div>
+    ) : (
+      <Held />
+    ),
+  );
   return held;
 }
 
@@ -377,3 +388,55 @@ describe("the phone's review tray", () => {
     expect(within(row("Pick a printing")).queryByText(/^[$€]\d/)).toBeNull();
   });
 });
+
+  /**
+   * **A card that lands brings the tray's heading back, only once the reader has scrolled past
+   * it** (issue #1320) — never down to it, which would scroll away the camera above the tray.
+   */
+  describe("a card landing", () => {
+    function scrolled(sectionTop: number) {
+      const scrollIntoView = vi.fn();
+      const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+      Element.prototype.scrollIntoView = scrollIntoView;
+      const held = mount([SAGA, TOMB], { scroller: true });
+      const at = (top: number) => ({ top }) as DOMRect;
+      vi.spyOn(screen.getByTestId("scroller"), "getBoundingClientRect").mockReturnValue(at(100));
+      vi.spyOn(
+        screen.getByRole("region", { name: "Scanned cards" }),
+        "getBoundingClientRect",
+      ).mockReturnValue(at(sectionTop));
+      const restore = () => {
+        if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original);
+        else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      };
+      return { held, scrollIntoView, restore };
+    }
+
+    it("scrolls up to the tray's heading when the reader is down in the rows", () => {
+      const { held, scrollIntoView, restore } = scrolled(-400);
+      try {
+        // An edit is no landing.
+        act(() => held.set([{ ...SAGA, quantity: 2 }, TOMB]));
+        expect(scrollIntoView).not.toHaveBeenCalled();
+        act(() =>
+          held.set([{ ...BOLT, addedAt: SAGA.addedAt + 1 }, { ...SAGA, quantity: 2 }, TOMB]),
+        );
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+        expect(scrollIntoView.mock.contexts[0]).toBe(
+          screen.getByRole("region", { name: "Scanned cards" }),
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it("leaves the page alone when the heading is in view or below it", () => {
+      const { held, scrollIntoView, restore } = scrolled(300);
+      try {
+        act(() => held.set([{ ...BOLT, addedAt: SAGA.addedAt + 1 }, SAGA, TOMB]));
+        expect(scrollIntoView).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+  });
