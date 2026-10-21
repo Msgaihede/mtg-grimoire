@@ -2661,6 +2661,7 @@ the next generated write is one editor away.
 | `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints — or the reader's camera by `deviceId: { exact }`, falling back to the default when that camera has gone — one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. It opens nothing while its `deviceId` is `undefined`, which is how the page holds the camera shut until the stored choice has loaded. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives. `useCameraDevices` lists the `videoinput`s for the picker, re-read on `devicechange` and once a camera is live, because a browser names no camera before one is granted |
 | `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar, and *Reset evidence* beside it |
 | `reader/AddedToast.tsx` | The card laid over the camera for 2.2 s each time the tray takes one |
+| `reader/useLandedPrice.ts` | That card's price at the tray's marketplace, or the span across a pick's candidates |
 | `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (**with a `catch` of its own** — a throwing `drawImage`/`toBlob` outside one rejects `pump()` and freezes the loop with `error` still `null`), and the two **kept reads** below |
 | `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
 | `ScannerPanels.tsx` | Pure. The whole column from `{ status, verdict, options, … }` |
@@ -3962,6 +3963,14 @@ first two candidates fanned for a card waiting on a pick. It is drawn from the t
 once in the same colour as it lands. **It is `aria-hidden`**: the strip above says the same thing,
 and two live regions announcing one landing is noise. Its motion is `motion.ts`'s `landed` preset;
 the tick's draw has its own `useReducedMotion` opt-out, because `pathLength` is not a positional key.
+
+**It closes its bottom line with a price** (issue #1321, `reader/useLandedPrice.ts`): the filed
+card's figure in its finish, or — for a card waiting on a pick — the span across its candidates
+(`$0.25 – $12.00`, one figure when the ends meet), each by `trayRowPrice`'s rule and with an
+unquoted candidate left out of the span. It is quoted at the tray's marketplace (a trade's while the
+tray files onto one) through the tray's own query (`trayPricesQuery`, under `["cards", "prices"]`),
+so it is the figure the row beneath will show. Nothing is drawn until the read answers, and no
+previous landing's figure is kept while it is in flight; an em dash means nothing was quoted.
 
 ### Scan history — Archive and the History dialog (issue #989, 2026-10-14)
 
