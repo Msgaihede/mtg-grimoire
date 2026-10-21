@@ -1244,6 +1244,37 @@ describe("the Neural mode's files", () => {
       }
     });
 
+    it("whose hand-over hangs is dropped though the frame queued behind it is what goes overdue", async () => {
+      const quiet = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      try {
+        const s = await scanning();
+        await firstNeuralFrameLeavingEvidence(s, s.ports[0]);
+        // A reader scanning on: the next frame waits in the Worker behind the evidence, which
+        // never answers — a phone that cannot take it, killed without a word.
+        void s.neuralFrame().catch(() => undefined);
+        await until(() => kinds(s.ports[0]).filter((kind) => kind === "frame").length === 2);
+        expect(lastKind(s.ports[0])).toBe("frame");
+        // The frame's deadline passes first: that is what ends the Worker.
+        s.browser.advance(FRAME_DEADLINE_MS + 1_000);
+        expect(s.ports[0].terminated).toBe(true);
+        const next = s.neuralFrame();
+        await until(() => s.ports.length === 2);
+        s.ports[1].answer(FACTS);
+        await until(() => kinds(s.ports[1]).includes("neural"));
+        reply(s.ports[1], "neural", null);
+        await until(() => lastKind(s.ports[1]) === "frame");
+        reply(s.ports[1], "frame", { ok: true });
+        expect(await next).toEqual({ ok: true });
+        await settle(600);
+        // The next Worker is not handed the evidence that hung the last one.
+        expect(allKinds(s.ports[1])).toEqual(["load", "neural", "frame"]);
+        expect(s.evidenceFetched()).toEqual(EVIDENCE_PATHS);
+        expect((await s.core.call<ScannerStatus>("scanner_status")).neural).toMatchObject({ loaded: true, error: null });
+      } finally {
+        quiet.mockRestore();
+      }
+    });
+
     it("is asked for by no page whose build ships none, and is not looked for among what is kept", async () => {
       // A build made before the evidence existed names no length for it.
       const recogniserOnly: NeuralSource = {
