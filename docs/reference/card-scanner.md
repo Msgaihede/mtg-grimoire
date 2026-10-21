@@ -3600,7 +3600,12 @@ printings and the eight shipped files, at the commit before these docs (`af2951d
 being exactly the 124 received 2026-10-12 to 2026-10-15): the Neural pass is 87 resolved right,
 0 resolved wrong printing, 32 ambiguous (median 2 choices, mean 2.09), 0 wrong cards, 119 card ✓
 (96.0 %), 5 undecided, `printing ✓` 110 (88.7 %, 90.3 % before), and the reader's printing
-decided or among the choices in 118 runs (87 + 31). **It matches the figures above exactly.** The
+decided or among the choices in 118 runs (87 + 31). **The `printing ✓` drop, 112 to 110, is
+placeholder order only, not a printing filed wrong**: it counts an ambiguous decision whose first
+choice is the reader's, and the evidence reorders the choices. The tray never files `choices[0]`
+of an ambiguous decision — `rowFromDecision` (`packages/ui/features/scanner/reader/tray.ts`) only
+draws it as the row's provisional picture, and a row waiting for a pick stops the commit
+(`unresolvedCount`) until the reader picks. **It matches the figures above exactly.** The
 scans after 2026-10-15 are the honest test and are not in this mirror; they are the owner's to
 pull and replay (`pnpm scanner:corpus pull`), and the same floor — no wrong printing, no wrong
 card — must hold there before the evidence merges.
