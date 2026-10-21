@@ -101,7 +101,7 @@ export const SCANNER_CACHE = "grimoire-scanner-v1";
  * (`infrastructure/app-worker/_headers`), and the service worker keeps them in
  * {@link SCANNER_CACHE} the first time they are fetched, letting the last set go (`sw/shell.ts`'s
  * `kept`, the module's route) — a reader who has scanned in Neural once does so offline. In no
- * precache ({@link isScannerFile}): about forty-nine megabytes most readers never ask for.
+ * precache ({@link isScannerFile}): 48.7 megabytes most readers never ask for.
  *
  * A tree of its own, not `/scanner-assets/`: those are stable names that are revalidated and
  * kept by the page, and these are neither.

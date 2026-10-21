@@ -3551,11 +3551,15 @@ is often several. Two more small networks read the two places that tell printing
 Both are a `mobilenetv3_small_075` body to a 64-d unit vector, trained with ArcFace; each has a
 gallery of reference rows (`symbols.bin` 1.9 MB, `bands.bin` 14.3 MB) keyed by **printing**, not
 look. Within one card's printings, on 3 000 cards, the nearest row is the right printing 0.950 of
-the time for the band, 0.664 for the symbol and 0.965 for both. The four files are 21.6 MB
+the time for the band, 0.664 for the symbol and 0.965 for both - **on simulated camera views of
+cards 130 to 480 px tall, not on readers' frames**. The four files are 21.6 MB
 (`symbol.onnx` 2.6, `band.onnx` 2.8) and the crops come **from the ordinary frame** Neural already
 reads (~960 px), straightened through the corners the detector found, so the card is decided on
-the same frame as before. The scanner asks for no detail frame; at that size the band is a few
-pixels tall, which is why it is the symbol and the wider candidate list that carry most of the gain.
+the same frame as before. The scanner asks for no detail frame, and at that size the band is a few
+pixels tall. The design expected most of the gain to come from the symbol and the wider candidate
+list; **no ablation has separated them**, and the one measurement there is points the other way:
+among the 48 runs with several candidates whose truth is one of them, the band alone ranks the
+truth first on 34 and the symbol alone on 29 (both together, 35).
 
 The rule (`narrow.rs`, run by `neural_mode::evidence_decision`) is, for the card the agreement
 decided:
@@ -3592,7 +3596,7 @@ for the 9: the design's follow-up cuts the crops from a detail frame once the sc
 ([the design](../superpowers/specs/2026-10-21-neural-printing-evidence-design.md)).
 
 **The final replay, 2026-10-21** (`pnpm scanner:replay` against the shipped bundle of 122 390
-printings and the eight shipped files, the branch's last commit; 124 scans, the corpus mirror
+printings and the eight shipped files, at the commit before these docs (`af2951d2f`); 124 scans, the corpus mirror
 being exactly the 124 received 2026-10-12 to 2026-10-15): the Neural pass is 87 resolved right,
 0 resolved wrong printing, 32 ambiguous (median 2 choices, mean 2.09), 0 wrong cards, 119 card ✓
 (96.0 %), 5 undecided, `printing ✓` 110 (88.7 %, 90.3 % before), and the reader's printing
@@ -3608,8 +3612,11 @@ in (`card_neural::bundled()` carried in `Embedded::neural`, and `bundled_evidenc
 time a Neural frame is due and the evidence's after them, holding up no frame (a failed fetch of
 the evidence leaves Neural deciding as it did). `ScannerStatus.neural` says which. A refused
 evidence set (files that are not them, or no `evidence` section in `neural.json`) leaves the
-recogniser running without it. The monthly retraining remakes all eight (the symbol network 12
-epochs and the band network 14 to fit the run's ~$8.65, where the shipped files used 16 and 20).
+recogniser running without it. The monthly retraining remakes the seven network and gallery files
+(the symbol network 12 epochs and the band network 14 to fit the run's ~$8.65, where the shipped
+files used 16 and 20) and **never `neural.json`**: its thresholds, the evidence's too, are the
+owner's. A retrained crop network can shift its score scale, so the delivery's pull request is
+replayed on the readers' scans before it merges.
 The mode still needs the hash bundle and labels for names and filters, as the others do.
 
 ### A card laid on the last

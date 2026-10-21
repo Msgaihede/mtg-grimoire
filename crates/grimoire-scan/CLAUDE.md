@@ -42,7 +42,7 @@ Eight synchronous functions (`src/glue.rs`). Every string answered is `{"ok": â€
 
 ## 3. Manifest Rules
 
-- **`card-scanner` with `ocr` and `neural`, never `corpus`.** `neural` compiles no model in (`card-neural`'s `bundled` is the native hosts'): the page fetches the four files. `corpus` is SQLite. Labels arrive as bytes (`card_scanner::labels`), read and encoded by the engine (`grimoire_web`'s `scanner_labels`).
+- **`card-scanner` with `ocr` and `neural`, never `corpus`.** `neural` compiles no model in (`card-neural`'s `bundled` is the native hosts'): the page fetches the recogniser's four files, and the evidence's four after them. `corpus` is SQLite. Labels arrive as bytes (`card_scanner::labels`), read and encoded by the engine (`grimoire_web`'s `scanner_labels`).
 - **No `grimoire-core`, `tokio` or `reqwest`.** Nothing here fetches, stores or waits.
 - **Build it alone**: `cargo build -p grimoire-scan`. A build that also names the engine unifies features and compiles the scanner with `corpus`.
 - **`simd128` is this module's alone**, set by `scripts/build-wasm.ts` in the environment of one cargo run with a build tree of its own (`target/scanner-simd128`). Never put the flag in `.cargo/config.toml`: the engine's module must load in a browser without SIMD.

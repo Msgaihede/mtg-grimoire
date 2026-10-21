@@ -294,7 +294,7 @@ export function createWorker(env: WorkerEnv): Served {
    *   does not know would otherwise be this module for good.
    * - **Another build's module is let go when this build's is kept**: two files of four and a
    *   half megabytes, of which only the newest can ever be asked for again. **And another set's
-   *   Neural files when this set's are** — about forty-nine megabytes — each kind sweeping only its
+   *   Neural files when this set's are** — 48.7 megabytes — each kind sweeping only its
    *   own: the module and the Neural files move apart.
    * - **A Cache Storage that throws is a miss, and a `put` that fails costs nothing but the
    *   keeping** — `fromShell`'s rule. With no network and no copy, the rejection is the
