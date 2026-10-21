@@ -584,6 +584,7 @@ mod tests {
                         twins: vec![entry],
                     },
                     top: vec![(entry, 0.7), (runner, 0.5)],
+                    embedding: vec![],
                     accepted,
                     prominence: 1.0,
                     aimed: true,

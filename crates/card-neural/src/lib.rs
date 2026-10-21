@@ -155,6 +155,34 @@ mod tests {
     }
 
     #[test]
+    fn a_found_card_carries_the_fingerprint_its_score_came_from() {
+        let mut r = Recognizer::load(shipped()).unwrap();
+        let grey = Frame::new(320, 192, vec![128; 320 * 192 * 3]).unwrap();
+        // One hand-made detection on the frame's inset rectangle, sure of its orientation
+        // (flip 0.0), so one view is embedded. The search always answers, so one card is found.
+        let p = |x, y| frame::Point { x, y };
+        let quad = [
+            p(40.0, 24.0),
+            p(280.0, 24.0),
+            p(280.0, 168.0),
+            p(40.0, 168.0),
+        ];
+        let det = detect::Detection {
+            score: 0.9,
+            quad,
+            flip: 0.0,
+        };
+        let (cards, crops) = r.fingerprint(&grey, &[det], None).unwrap();
+        assert_eq!((cards.len(), crops), (1, 1));
+        let found = &cards[0];
+        assert_eq!(found.embedding.len(), r.meta().embedder.dim);
+        let norm = found.embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+        assert!((norm - 1.0).abs() < 1e-3, "a unit vector, not {norm}");
+        let again = r.gallery().score(found.scored.entry, &found.embedding);
+        assert!((again - found.scored.score).abs() < 1e-5, "{again}");
+    }
+
+    #[test]
     fn a_gallery_of_another_width_is_refused() {
         let mut files = shipped();
         let looks = [gallery::Look {
