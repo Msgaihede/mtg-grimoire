@@ -407,7 +407,7 @@ empties the slot only if it holds that name — even `Busy`. So a board that lea
 mid-turn ends its game then, and the turn's answer drops it; a new board's deal is never
 overwritten by the old board's late answer; and a late action or end from a board that has gone, or
 from another window's, never touches a newer game. On the page the name is drawn like the seed,
-fresh per deal (`usePlaytestGame`), and an action still queued when its deal is put away is not
+fresh per deal (`play/heldGame.ts`), and an action still queued when its deal is put away is not
 sent. All four commands are on
 `command_table::DESKTOP_ONLY`. The goldfish board's own three (`goldfish_start`, `goldfish_act`,
 `goldfish_end`) and its slot were removed on 2026-10-17, when its game became this one; the
@@ -415,7 +415,7 @@ desktop's `facts` and `token_facts` live in `playtest/mod.rs` now.
 
 **The view is sent, never the state.** The whole `GameState` is hundreds of kilobytes. The view is
 what a board draws: each zone's cards, the lives, the mana open, the library, and the tokens the
-deck makes. The page sends actions one at a time, in order (`usePlaytestGame`'s serial queue), so
+deck makes. The page sends actions one at a time, in order (`HeldGame`'s serial queue), so
 each is read against the view it was made from.
 
 **The wire** is `playtest/view.rs` ↔ `packages/ui/lib/ipc/playtest.ts`, built on the table's
@@ -535,8 +535,8 @@ card is its shown face's name, so its marks follow the face; it is fixed for the
 for an AI game it draws for a goldfish game, and a change to it is a change to both. `PlaytestPage`
 covers the window below the caption at `LAYER.stage`, a rung between `header` and `popup`, so the
 board's own menus and dialogs open over it. `PlaytestBoard` is presentational: a view in, actions
-out, no `ipc`, which is what its stories stand on. `usePlaytestGame` is the serial queue that wires
-it to the engine. The pieces it is drawn with are the table's ([goldfish.md](goldfish.md#the-table)).
+out, no `ipc`, which is what its stories stand on. `usePlaytestGame` wires it to the engine,
+through the `HeldGame` that holds the serial queue (`play/heldGame.ts`). The pieces it is drawn with are the table's ([goldfish.md](goldfish.md#the-table)).
 
 **Opened from two places** (`returnTo`). The Playtesting page's setup opens it with `"setup"`, and
 the deck editor's "Goldfish this deck" through `features/playtesting/GoldfishPage.tsx`, a thin
@@ -547,6 +547,22 @@ back ("Back to setup", "Back to the deck"), and the undo chords' scope (`playtes
 is the Decks view's third state: the store's `goldfish` names the open deck and variant, `App.tsx`
 draws the board in the editor's place, and every navigation clears it, so coming back to a deck
 finds the editor.
+
+**The Playtesting page's game outlives the page** (issue #1322, 2026-10-21). A view change
+unmounts the page and its board, so the game's life is not the board's: it is a `HeldGame`
+(`play/heldGame.ts`) — the queue, the host's name for the game, the generations, the view and the
+log book — which `usePlaytestGame` only shows. The page keeps it in `viewMemory("playtest")`
+(`keptGame.ts`, window-lifetime, never storage) and opens on it again: the same board and log, and
+an AI turn that was still being played when the reader left lands in the kept game meanwhile, taken
+whole (every beat logged in order, nothing popped). A board that leaves mid-replay shows the replay
+to its end first. **Only the reader ends it**: the way back (the button, Escape, the game menu's)
+and New game ask first while the game is underway (`EndGameDialog` — "End this game?", Keep
+playing / End game); a game the engine has ended (`over`), or one still being dealt, is left at
+once. The goldfish keeps its own rule, a game held for the board's life: `usePlaytestGame` with no
+held game deals one on mount and ends it on unmount. **The host holds one game**, so "Goldfish this
+deck" asks before dealing over a kept game that is underway ("End your Playtesting game?"; Keep it
+goes back to the deck with nothing dealt), and puts away a kept game that is over without asking. A
+restart opens the setup page; the host's old game is dropped by the next deal.
 
 **The goldfish is drawn in the duel layout** (the owner's choice of 2026-10-17), exactly as a single
 AI opponent is: its band with its face-down hand count, its plate, its zone columns and its empty

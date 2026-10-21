@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PlaytestStep, PlaytestView } from "@/lib/ipc";
 import { openingHand, replayStep, turnFive } from "./fixtures";
+import { holdGame } from "./heldGame";
 import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
 
 // Hoisted with the mock below, which runs before this file's own top level.
@@ -325,5 +326,54 @@ describe("usePlaytestGame", () => {
     await waitFor(() => expect(result.current.busy).toBe(false));
     act(() => result.current.act({ type: "undo" }));
     await waitFor(() => expect(texts()).toEqual(["Shuffled and drew seven"]));
+  });
+
+  // Issue #1322: the Playtesting page keeps its game while the reader is on another view.
+  it("keeps a held game when its board leaves, and shows the next board the answer that came meanwhile", async () => {
+    let release: () => void = () => {};
+    playtestAct.mockImplementation(async () => {
+      await new Promise<void>((r) => (release = r));
+      return {
+        view: turnFive().view,
+        happened: [{ type: "cast", seat: "you", name: "Sol Ring" }],
+        frames: [],
+      };
+    });
+    const held = holdGame(PICKS);
+    const first = renderHook(() => usePlaytestGame(PICKS, held));
+    await waitFor(() => expect(first.result.current.view?.stage).toBe("mulligan"));
+    act(() => first.result.current.act({ type: "keep", bottom: [] }));
+    await waitFor(() => expect(playtestAct).toHaveBeenCalledTimes(1));
+    first.unmount();
+    expect(playtestEnd).not.toHaveBeenCalled();
+    release();
+    await waitFor(() => expect(held.state().busy).toBe(false));
+    expect(held.state().view?.stage).toBe("main");
+
+    const second = renderHook(() => usePlaytestGame(PICKS, held));
+    expect(second.result.current.view?.stage).toBe("main");
+    expect(second.result.current.log[0].text).toBe("Cast Sol Ring");
+    expect(second.result.current.lastHappened).toEqual([]);
+    expect(playtestStart).toHaveBeenCalledTimes(1);
+    second.unmount();
+    expect(playtestEnd).not.toHaveBeenCalled();
+    held.end();
+    expect(playtestEnd).toHaveBeenCalledWith(playtestStart.mock.calls[0][0]);
+    expect(held.live()).toBe(false);
+  });
+
+  it("shows a replay to its end when a held game's board leaves mid-replay", async () => {
+    const { step } = replayStep();
+    playtestAct.mockResolvedValue(step);
+    const held = holdGame(PICKS);
+    const { result, unmount } = renderHook(() => usePlaytestGame(PICKS, held));
+    await waitFor(() => expect(result.current.view).not.toBeNull());
+    const before = result.current.log.length;
+    act(() => result.current.act({ type: "endTurn" }));
+    await waitFor(() => expect(result.current.replaying).toBe(true));
+    unmount();
+    expect(held.state().view).toBe(step.view);
+    expect(held.state().book.log).toHaveLength(before + 9);
+    expect(held.inPlay()).toBe(true);
   });
 });
