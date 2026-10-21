@@ -21,8 +21,10 @@
 //! one ([`host::set_clock`]) that answers the label's time while a Neural pass feeds the thread
 //! and the wall clock otherwise. Its models are `crates/card-neural/models/`, or
 //! `--neural-models`; a replay with none loaded ([`Ingredients::neural`], the tests) has three
-//! passes. With `--neural-evidence` the Neural pass also loads the set symbol and collector band
-//! files and records, as `evidence`, the candidates and scores of its last decision.
+//! passes. The Neural pass also loads the set symbol and collector band files —
+//! `--neural-evidence`, or the models' own folder when it holds them and its `neural.json` says
+//! how to weigh them — and records, as `evidence`, the candidates and scores of its last
+//! decision.
 //!
 //! **What a pass reports beyond its score**: `first_decision_frame` and `decision_frame` (the
 //! frame the last decision was made on, 1-based; the score is the decision held on the last
@@ -99,8 +101,10 @@ struct Args {
     #[arg(long)]
     neural_models: Option<PathBuf>,
     /// The Neural mode's set symbol and collector band files (`symbol.onnx`, `band.onnx`,
-    /// `symbols.bin`, `bands.bin`). Given, the Neural pass narrows the printing on them and each
-    /// decision records its candidates and their scores; left out, today's pass and no scores.
+    /// `symbols.bin`, `bands.bin`): the Neural pass narrows the printing on them and each
+    /// decision records its candidates and their scores. Left out, the models' folder when it
+    /// holds all four and the `neural.json` in use has an `evidence` section (the folder in git
+    /// does), and otherwise no evidence: a pass deciding a look, with no scores.
     #[arg(long)]
     neural_evidence: Option<PathBuf>,
     /// A `neural.json` to read in place of the one in `--neural-models`: how the lab tunes the
@@ -1123,8 +1127,16 @@ fn run(args: Args) -> Result<(), String> {
             .map_err(|e| format!("neural evidence meta {}: {e}", path.display()))?;
         neural.meta = Cow::Owned(meta);
     }
-    let neural_evidence = args
-        .neural_evidence
+    // The evidence travels with the models it was tuned beside, so a folder of models brings its
+    // own; a `neural.json` without the section (`--neural-evidence-meta`) replays the pass
+    // without, as it was before the evidence existed.
+    let weighs_evidence = card_scanner::neural::Meta::from_json(&neural.meta)
+        .is_ok_and(|m| m.evidence.is_some());
+    let evidence_dir = args.neural_evidence.clone().or_else(|| {
+        (weighs_evidence && card_scanner::neural::evidence::has_evidence_files(&neural_dir))
+            .then(|| neural_dir.clone())
+    });
+    let neural_evidence = evidence_dir
         .as_ref()
         .map(|dir| {
             card_scanner::neural::evidence::read_dir_evidence(dir)
@@ -1132,6 +1144,10 @@ fn run(args: Args) -> Result<(), String> {
                 .map_err(|e| format!("neural evidence {}: {e}", dir.display()))
         })
         .transpose()?;
+    match &evidence_dir {
+        Some(dir) => eprintln!("neural evidence: {}", dir.display()),
+        None => eprintln!("neural evidence: none"),
+    }
     // Before any session: a Neural pass's frames are timed by it (see `LabelClock`).
     host::set_clock(replay_clock);
     let conn = open_corpus(&args.corpus)?;

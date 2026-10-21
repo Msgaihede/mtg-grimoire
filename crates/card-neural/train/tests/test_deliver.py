@@ -19,7 +19,7 @@ import deliver  # noqa: E402
 import update_readme as ur  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_deliver_readme import done_for, neural_table  # noqa: E402
+from test_deliver_readme import EVIDENCE, done_for, neural_table  # noqa: E402
 
 
 def write_json(path: Path, value) -> None:
@@ -250,9 +250,13 @@ class Build(Workspace):
         self.assertEqual((staged / "embedder.onnx").read_bytes(), b"embedder 2026-11")
         self.assertEqual((staged / "detector.onnx").read_bytes(), b"detector 2026-11")
         rows = neural_table((staged / ur.README).read_text(encoding="utf-8"))
-        for name, (size, head, tail) in rows.items():
+        # The delivered files' rows; the evidence's are not a delivery's (`EVIDENCE`) and stay as in git.
+        for name in ur.FILES:
+            size, head, tail = rows[name]
             sha = hashlib.sha256((staged / name).read_bytes()).hexdigest()
             self.assertEqual((size, head, tail), ((staged / name).stat().st_size, sha[:8], sha[-8:]), name)
+        shipped = neural_table((real / ur.README).read_text(encoding="utf-8"))
+        self.assertEqual({name: rows[name] for name in EVIDENCE}, {name: shipped[name] for name in EVIDENCE})
         self.assertEqual(delivery, {"run": "2026-11", "smoke": False, "branch": "neural-models/2026-11",
                                     "title": "feat(scanner): retrain the Neural models (2026-11)",
                                     "retrained": ["embedder", "detector"], "tested": False})

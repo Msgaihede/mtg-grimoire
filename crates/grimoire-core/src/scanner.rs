@@ -185,6 +185,12 @@ pub struct Embedded {
     /// set (the gallery is the embedder's own and the thresholds were tuned on the pair) and a
     /// new set is a rebuild; and no download is owed for them ([`crate::scanner_assets`]).
     pub neural: Option<card_scanner::neural::Files<'static>>,
+    /// The Neural scanner's printing evidence — `card_neural::bundled_evidence()`: the set symbol
+    /// and collector band networks and their galleries, in git beside [`Embedded::neural`] and
+    /// built in or nothing for the same reasons. Loaded after those files, whose `neural.json`
+    /// says how to read and weigh them; **without it the Neural mode still decides**, a look
+    /// with its printings as the choices, so a refusal is logged and is not the asset's error.
+    pub neural_evidence: Option<card_scanner::neural::EvidenceFiles<'static>>,
 }
 
 impl Embedded {
@@ -196,6 +202,7 @@ impl Embedded {
             bundle: None,
             models: None,
             neural: None,
+            neural_evidence: None,
         }
     }
 }
@@ -737,7 +744,8 @@ fn asset(path: &Path) -> Asset {
 /// **Per asset, first hit wins: the file in `dir`, then `embedded`, then absent.** The models
 /// stay a pair — they are `File` only when **both** files exist; one file alone falls through to
 /// the embedded pair (or to nothing), because a lone model reads nothing. The Neural scanner's
-/// files are the embedded copy or nothing ([`load_neural`]).
+/// files are the embedded copy or nothing ([`load_neural`]), and so is their printing evidence,
+/// loaded once they have ([`load_neural_evidence`]).
 pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded {
     let bundle_path = dir.join(BUNDLE_FILE);
     let mut bundle = asset(&bundle_path);
@@ -828,6 +836,9 @@ pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded
 
     let mut session = Session::new(reference, reader, top);
     let neural = load_neural(&mut session, embedded.neural);
+    if neural.loaded {
+        load_neural_evidence(&mut session, embedded.neural_evidence);
+    }
 
     Loaded {
         session,
@@ -868,6 +879,21 @@ fn load_neural(
         }
     }
     asset
+}
+
+/// The Neural scanner's printing evidence into `session`, whose Neural files have loaded. **A
+/// refusal is logged and goes no further**: the session decides as it did before the evidence
+/// existed — a look, with its printings as the choices — so the reader loses a narrower choice
+/// and keeps the scanner, and the Neural asset still says what it loaded.
+fn load_neural_evidence(
+    session: &mut Session,
+    files: Option<card_scanner::neural::EvidenceFiles<'static>>,
+) {
+    if let Some(files) = files {
+        if let Err(sentence) = session.load_neural_evidence(files) {
+            eprintln!("scanner: the Neural printing evidence did not load: {sentence}");
+        }
+    }
 }
 
 /// The model pair at `detection` and `recognition`, read through [`files`] — what
@@ -1429,6 +1455,7 @@ mod tests {
                 bundle: Some(&b"not a bundle"[..]),
                 models: None,
                 neural: None,
+                neural_evidence: None,
             },
         );
         assert_eq!(l.status.bundle.source, AssetSource::File);
@@ -1448,6 +1475,7 @@ mod tests {
                 bundle: Some(tiny_bundle()),
                 models: None,
                 neural: None,
+                neural_evidence: None,
             },
         );
         let b = &l.status.bundle;
@@ -1508,6 +1536,49 @@ mod tests {
         assert_eq!(l.status.bundle.source, AssetSource::Absent);
         assert_eq!(l.status.detection_model.source, AssetSource::Absent);
         assert!(!l.session.has_reference() && !l.session.has_reader());
+        // Carried without its evidence: the files load, and decide as they did before it.
+        assert!(!l.session.has_neural_evidence());
+    }
+
+    /// **The printing evidence the desktop and Android carry loads after the Neural files**;
+    /// evidence that does not load leaves the Neural scanner loaded and its asset without an
+    /// error, and evidence without the files it belongs to is not tried.
+    #[test]
+    fn the_built_in_evidence_loads_beside_the_neural_files_and_a_refusal_is_not_fatal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let load_with = |neural, neural_evidence| {
+            load(
+                &dir.path().join("scanner"),
+                &dir.path().join("corpus.db"),
+                5,
+                Embedded {
+                    neural,
+                    neural_evidence,
+                    ..Embedded::none()
+                },
+            )
+        };
+        let both = load_with(
+            Some(card_neural::bundled()),
+            Some(card_neural::bundled_evidence()),
+        );
+        assert!(both.session.has_neural() && both.session.has_neural_evidence());
+        assert!(both.status.neural.loaded && both.status.neural.error.is_none());
+
+        let garbage = card_scanner::neural::EvidenceFiles {
+            symbol_net: Cow::Borrowed(&b"not a network"[..]),
+            band_net: Cow::Borrowed(&b"not a network"[..]),
+            symbols: Cow::Borrowed(&b"not a gallery"[..]),
+            bands: Cow::Borrowed(&b"not a gallery"[..]),
+        };
+        let refused = load_with(Some(card_neural::bundled()), Some(garbage));
+        assert!(refused.session.has_neural() && !refused.session.has_neural_evidence());
+        let n = &refused.status.neural;
+        assert!(n.loaded && n.error.is_none(), "{n:?}");
+
+        let alone = load_with(None, Some(card_neural::bundled_evidence()));
+        assert!(!alone.session.has_neural() && !alone.session.has_neural_evidence());
+        assert_eq!(alone.status.neural.source, AssetSource::Absent);
     }
 
     /// Files the binary carries that do not load are `Embedded`, there, not loaded, and carry
@@ -1576,6 +1647,7 @@ mod tests {
             bundle: None,
             models: Some(garbage),
             neural: None,
+            neural_evidence: None,
         };
 
         // One file on disk: the embedded pair answers, for both.
@@ -2059,6 +2131,7 @@ mod tests {
             bundle: Some(tiny_bundle()),
             models: None,
             neural: None,
+            neural_evidence: None,
         };
         let loaded = load(&scanner, &dir.path().join("corpus.db"), 5, embedded);
         assert!(loaded.status.bundle.present);

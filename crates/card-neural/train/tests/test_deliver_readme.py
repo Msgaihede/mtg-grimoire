@@ -31,6 +31,10 @@ def _neural_table_pattern() -> re.Pattern:
 
 NEURAL_TABLE = _neural_table_pattern()
 
+# The printing evidence's four rows: in the table the web build reads, and never a delivery's —
+# the lab makes those files (`models/README.md`), so `update_readme` leaves their rows as they are.
+EVIDENCE = ("symbol.onnx", "band.onnx", "symbols.bin", "bands.bin")
+
 
 def neural_table(readme: str) -> dict:
     return {m[1]: (int(m[2].replace(" ", "")), m[3], m[4]) for m in NEURAL_TABLE.finditer(readme)}
@@ -87,13 +91,13 @@ class TheTableAsItIs(unittest.TestCase):
     def test_lays_out_the_shipped_table_exactly_as_it_is(self):
         lines = (MODELS / ur.README).read_text(encoding="utf-8").split("\n")
         start, end = ur.find_table(lines)
-        self.assertEqual(end - start, 6, "a header, a rule and four rows")
+        self.assertEqual(end - start, 2 + len(ur.FILES) + len(EVIDENCE), "a header, a rule and eight rows")
         self.assertEqual(ur.render_table(*ur.parse_table(lines[start:end])), lines[start:end])
 
     def test_the_shipped_readme_pins_the_shipped_files(self):
         # The same check the web build makes: so the table this script rewrites is the one it reads.
         rows = neural_table((MODELS / ur.README).read_text(encoding="utf-8"))
-        self.assertEqual(sorted(rows), sorted(ur.FILES))
+        self.assertEqual(sorted(rows), sorted(ur.FILES + EVIDENCE))
         for name, (size, head, tail) in rows.items():
             got_size, sha = ur.digest(MODELS / name)
             self.assertEqual((size, head, tail), (got_size, sha[:8], sha[-8:]), name)
@@ -101,12 +105,17 @@ class TheTableAsItIs(unittest.TestCase):
 
 class Rewrite(Scratch):
     def test_every_row_is_read_from_the_file_on_disk(self):
+        shipped = neural_table(self.readme())
         self.update(done_for())
         rows = neural_table(self.readme())
-        self.assertEqual(sorted(rows), sorted(ur.FILES))
-        for name, (size, head, tail) in rows.items():
+        self.assertEqual(sorted(rows), sorted(ur.FILES + EVIDENCE))
+        for name in ur.FILES:
+            size, head, tail = rows[name]
             got_size, sha = ur.digest(self.dir / name)
             self.assertEqual((size, head, tail), (got_size, sha[:8], sha[-8:]), name)
+        # The evidence's rows are not the delivery's: kept as they were.
+        for name in EVIDENCE:
+            self.assertEqual(rows[name], shipped[name], name)
 
     def test_keeps_the_table_aligned(self):
         self.update(done_for())

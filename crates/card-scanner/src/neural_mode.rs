@@ -242,6 +242,14 @@ impl Session {
         }
     }
 
+    /// Whether a Neural decision narrows the printing: the files loaded and
+    /// [`Session::load_neural_evidence`] took the evidence. A host loads it after the files
+    /// and logs a refusal, so this is how its tests see that it did.
+    #[cfg(feature = "neural")]
+    pub fn has_neural_evidence(&self) -> bool {
+        self.neural.loaded.as_ref().is_some_and(|l| l.index.is_some())
+    }
+
     /// One Neural frame, after `frame_inner` has switched the mode — see the module doc.
     ///
     /// `_opts` asks nothing of it: the sliders are the edge detector's and the tracker's, the
@@ -1197,6 +1205,11 @@ mod tests {
         /// A session over the three looks, in Neural, no evidence loaded. Against [`along`]'s
         /// fingerprint look A scores 0.80 and look B scores `b`.
         fn with_looks(b: f32) -> Session {
+            with_looks_read_by(b, shipped().meta)
+        }
+
+        /// [`with_looks`], its `neural.json` this one.
+        fn with_looks_read_by(b: f32, meta: Cow<'static, [u8]>) -> Session {
             let rows = [
                 vector(DIM, &[(0, 0.8), (1, 0.6)]),
                 vector(DIM, &[(0, b), (2, (1.0 - b * b).sqrt())]),
@@ -1205,7 +1218,7 @@ mod tests {
             .concat();
             let looks = [look(P, 1, vec![P, Q, R]), look(S, 1, vec![S]), look(T, 2, vec![T])];
             let g = Gallery::build(&rows, DIM, &looks).expect("a gallery");
-            let files = Files { gallery: Cow::Owned(g.as_bytes().to_vec()), ..shipped() };
+            let files = Files { gallery: Cow::Owned(g.as_bytes().to_vec()), meta, ..shipped() };
             let mut s = Session::new(None, None, 5);
             s.load_neural(files).expect("the shipped networks over a gallery made by hand");
             s.set_mode(ScanMode::Neural);
@@ -1503,15 +1516,42 @@ mod tests {
             };
             let mut bare = Session::new(None, None, 5);
             assert!(bare.load_neural_evidence(files()).is_err());
-            // The neural.json in git predates the evidence models: no section, so no evidence.
-            let mut s = with_evidence(0.75);
+            // A neural.json from before the evidence models — the shipped one without its
+            // section: no section, so no evidence.
+            let mut meta: serde_json::Value =
+                serde_json::from_slice(&shipped().meta).expect("the shipped neural.json");
+            meta.as_object_mut().expect("an object").remove("evidence");
+            let mut s = with_looks_read_by(0.75, Cow::Owned(meta.to_string().into_bytes()));
+            s.neural.loaded.as_mut().expect("loaded").index = Some((index(), thresholds()));
+            assert!(s.has_neural_evidence());
             let refused = s.load_neural_evidence(files()).expect_err("no evidence section");
             assert!(refused.contains("evidence"), "{refused}");
             // A refusal leaves today's behaviour, not the evidence loaded before it.
-            assert!(s.neural.loaded.as_ref().expect("loaded").index.is_none());
+            assert!(!s.has_neural_evidence());
             let d = decide_seen(&mut s, &along(Some(glance(&[(1, 1.0)])))).decision;
             assert_eq!(d.map(|d| choices(&d)), Some(ids(&[P, Q, R])));
             assert!(s.neural_evidence_report().is_none());
+
+            // With the section, files that are not networks or galleries are refused too, and
+            // leave the same.
+            let mut s = with_evidence(0.75);
+            assert!(s.load_neural_evidence(files()).is_err());
+            assert!(!s.has_neural_evidence());
+        }
+
+        /// The networks and galleries in git load beside the recogniser in git.
+        #[test]
+        fn the_shipped_evidence_loads_into_a_session() {
+            let mut s = session(None);
+            assert!(!s.has_neural_evidence());
+            let files = EvidenceFiles {
+                symbol_net: Cow::Borrowed(include_bytes!("../../card-neural/models/symbol.onnx")),
+                band_net: Cow::Borrowed(include_bytes!("../../card-neural/models/band.onnx")),
+                symbols: Cow::Borrowed(include_bytes!("../../card-neural/models/symbols.bin")),
+                bands: Cow::Borrowed(include_bytes!("../../card-neural/models/bands.bin")),
+            };
+            s.load_neural_evidence(files).expect("the evidence in git loads");
+            assert!(s.has_neural_evidence());
         }
     }
 }

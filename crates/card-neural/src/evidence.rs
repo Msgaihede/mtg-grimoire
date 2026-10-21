@@ -52,6 +52,15 @@ pub fn read_dir_evidence(dir: &std::path::Path) -> std::io::Result<EvidenceFiles
     })
 }
 
+/// Whether `dir` holds all four evidence files — the command-line tools load them beside the
+/// recogniser's when its folder does, and go without when it holds the recogniser alone.
+#[cfg(feature = "cli")]
+pub fn has_evidence_files(dir: &std::path::Path) -> bool {
+    [SYMBOL_NET_FILE, BAND_NET_FILE, SYMBOLS_FILE, BANDS_FILE]
+        .iter()
+        .all(|name| dir.join(name).is_file())
+}
+
 /// Both crops of one card on one frame, embedded.
 #[derive(Clone, Debug)]
 pub struct Glance {
@@ -358,9 +367,20 @@ mod tests {
         assert!(EvidenceIndex::new(empty(), both).is_ok());
     }
 
+    #[cfg(feature = "cli")]
+    #[test]
+    fn the_models_folder_holds_the_evidence_files_and_another_does_not() {
+        let crate_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(has_evidence_files(&crate_dir.join("models")));
+        assert!(!has_evidence_files(&crate_dir.join("src")));
+        assert!(read_dir_evidence(&crate_dir.join("models")).is_ok());
+    }
+
     #[test]
     fn evidence_is_refused_without_an_evidence_section() {
-        let meta = Meta::from_json(include_bytes!("../models/neural.json")).unwrap();
+        // The shipped file without its section: a `neural.json` made before the evidence models.
+        let mut meta = Meta::from_json(include_bytes!("../models/neural.json")).unwrap();
+        meta.evidence = None;
         // Empty buffers: the section is checked before either network is parsed.
         let files = EvidenceFiles {
             symbol_net: Cow::Owned(Vec::new()),

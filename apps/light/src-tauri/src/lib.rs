@@ -367,13 +367,15 @@ pub(crate) fn spawn_downloads(state: &Arc<State>) {
 }
 
 /// What this host's binary carries of the scanner's files, for the core's
-/// `ScannerState::carry`: **the Neural scanner's four, and nothing else.** They are in git
-/// (`crates/card-neural/models/`) and compiled in by `card_neural::bundled()`, as the desktop's
-/// are. The other three — the bundle and the two OCR models — are not carried, so they stay
-/// owed and are downloaded on a reader's press (`scanner_assets`), as before.
+/// `ScannerState::carry`: **the Neural scanner's four and their printing evidence's four, and
+/// nothing else.** They are in git (`crates/card-neural/models/`) and compiled in by
+/// `card_neural::bundled()` and `bundled_evidence()`, as the desktop's are. The other three —
+/// the bundle and the two OCR models — are not carried, so they stay owed and are downloaded on
+/// a reader's press (`scanner_assets`), as before.
 fn carried() -> grimoire_core::scanner::Embedded {
     grimoire_core::scanner::Embedded {
         neural: Some(card_neural::bundled()),
+        neural_evidence: Some(card_neural::bundled_evidence()),
         ..grimoire_core::scanner::Embedded::none()
     }
 }

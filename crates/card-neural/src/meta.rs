@@ -195,8 +195,40 @@ mod tests {
 
     #[test]
     fn a_file_without_an_evidence_section_reads_as_none() {
-        let m = Meta::from_json(include_bytes!("../models/neural.json")).unwrap();
+        // The shipped file as it was before the evidence models: no section.
+        let mut v: serde_json::Value =
+            serde_json::from_slice(include_bytes!("../models/neural.json")).unwrap();
+        v.as_object_mut().unwrap().remove("evidence");
+        let m = Meta::from_json(v.to_string().as_bytes()).unwrap();
         assert!(m.evidence.is_none());
+    }
+
+    #[test]
+    fn the_shipped_file_carries_the_owners_evidence_thresholds() {
+        let m = Meta::from_json(include_bytes!("../models/neural.json")).unwrap();
+        let e = m
+            .evidence
+            .expect("the shipped file has an evidence section");
+        // The crops the shipped networks were trained on (`models/README.md`).
+        assert_eq!(e.symbol.crop, [0.72, 0.40, 0.985, 0.66]);
+        assert_eq!(
+            (e.symbol.width, e.symbol.height, e.symbol.dim),
+            (96, 128, 64)
+        );
+        assert_eq!(e.band.crop, [0.0, 0.80, 0.82, 1.0]);
+        assert_eq!((e.band.width, e.band.height, e.band.dim), (256, 88, 64));
+        // The owner's choice (2026-10-21): the decide margin at 0.20, above the cross-validated
+        // 0.18, for room over the largest lead a wrong printing had on the readers' scans.
+        assert_eq!(
+            e.thresholds,
+            EvidenceThresholds {
+                candidate_gap: 0.04,
+                symbol_weight: 1.5,
+                band_weight: 1.0,
+                decide_margin: 0.20,
+                keep_gap: 0.20,
+            }
+        );
     }
 
     #[test]

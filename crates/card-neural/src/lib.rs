@@ -79,6 +79,18 @@ pub fn bundled() -> Files<'static> {
     }
 }
 
+/// The set symbol and collector band files in this crate's `models/`, compiled in (~21 MB):
+/// what [`Evidence::load`] reads beside [`bundled`], whose `neural.json` says how.
+#[cfg(feature = "bundled")]
+pub fn bundled_evidence() -> EvidenceFiles<'static> {
+    EvidenceFiles {
+        symbol_net: Cow::Borrowed(include_bytes!("../models/symbol.onnx")),
+        band_net: Cow::Borrowed(include_bytes!("../models/band.onnx")),
+        symbols: Cow::Borrowed(include_bytes!("../models/symbols.bin")),
+        bands: Cow::Borrowed(include_bytes!("../models/bands.bin")),
+    }
+}
+
 /// The files in a directory laid out as `models/` is — what the command-line tools read.
 #[cfg(feature = "cli")]
 pub fn read_dir(dir: &std::path::Path) -> std::io::Result<Files<'static>> {
@@ -103,6 +115,60 @@ mod tests {
             embedder: Cow::Borrowed(include_bytes!("../models/embedder.onnx")),
             gallery: Cow::Borrowed(include_bytes!("../models/gallery.bin")),
             meta: Cow::Borrowed(include_bytes!("../models/neural.json")),
+        }
+    }
+
+    /// The evidence files in `models/`, as `bundled_evidence` compiles them in — read here
+    /// without the feature, as [`shipped`] is.
+    fn shipped_evidence() -> EvidenceFiles<'static> {
+        EvidenceFiles {
+            symbol_net: Cow::Borrowed(include_bytes!("../models/symbol.onnx")),
+            band_net: Cow::Borrowed(include_bytes!("../models/band.onnx")),
+            symbols: Cow::Borrowed(include_bytes!("../models/symbols.bin")),
+            bands: Cow::Borrowed(include_bytes!("../models/bands.bin")),
+        }
+    }
+
+    #[test]
+    fn the_shipped_evidence_loads_beside_the_shipped_recogniser() {
+        let r = Recognizer::load(shipped()).unwrap();
+        let section = r
+            .meta()
+            .evidence
+            .clone()
+            .expect("the shipped neural.json carries an evidence section");
+        // Each gallery is its own network's: as wide as the crop's network answers.
+        let files = shipped_evidence();
+        let symbols = Gallery::from_bytes(files.symbols.clone()).unwrap();
+        let bands = Gallery::from_bytes(files.bands.clone()).unwrap();
+        assert_eq!(symbols.dim(), section.symbol.dim);
+        assert_eq!(bands.dim(), section.band.dim);
+        // A band row a printing face: the first set had 107 109. Well short of 100 000 is an
+        // export cut short, whichever run made it.
+        assert!(bands.len() >= 100_000, "{} band rows", bands.len());
+        let mut evidence = Evidence::load(files, r.meta()).unwrap();
+        assert_eq!(evidence.thresholds, section.thresholds);
+
+        // Both crops of a hand-made quad on a grey frame read, each as a unit vector.
+        let grey = Frame::new(320, 192, vec![128; 320 * 192 * 3]).unwrap();
+        let p = |x, y| frame::Point { x, y };
+        let quad = [
+            p(100.0, 10.0),
+            p(220.0, 10.0),
+            p(220.0, 182.0),
+            p(100.0, 182.0),
+        ];
+        let glance = evidence.nets.glance(&grey, &quad).unwrap();
+        for (name, v, dim) in [
+            ("symbol", &glance.symbol, section.symbol.dim),
+            ("band", &glance.band, section.band.dim),
+        ] {
+            assert_eq!(v.len(), dim, "{name}");
+            let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!(
+                (norm - 1.0).abs() < 1e-3,
+                "{name}: a unit vector, not {norm}"
+            );
         }
     }
 

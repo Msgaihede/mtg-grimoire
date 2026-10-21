@@ -97,6 +97,8 @@ struct Args {
     /// Directory holding the Neural mode's four files (`detector.onnx`, `embedder.onnx`,
     /// `gallery.bin`, `neural.json`). `crates/card-neural/models/` of this checkout when not
     /// given — they are in git. Without them the page's neural segment says so on every frame.
+    /// The printing evidence (`symbol.onnx`, `band.onnx`, `symbols.bin`, `bands.bin`) is loaded
+    /// from the same folder when it holds all four; without it a decision names a look.
     #[arg(long)]
     neural_models: Option<PathBuf>,
 }
@@ -472,6 +474,15 @@ fn main() {
         Ok(()) => eprintln!("  neural: models loaded from {}", neural.display()),
         Err(e) => eprintln!("  neural {}: {e} — continuing without it", neural.display()),
     }
+    if session.has_neural() && card_scanner::neural::evidence::has_evidence_files(&neural) {
+        match card_scanner::neural::evidence::read_dir_evidence(&neural)
+            .map_err(|e| e.to_string())
+            .and_then(|files| session.load_neural_evidence(files))
+        {
+            Ok(()) => eprintln!("  neural: printing evidence loaded from {}", neural.display()),
+            Err(e) => eprintln!("  neural evidence: {e} — deciding without it"),
+        }
+    }
     let session: Shared = Arc::new(Mutex::new(session));
 
     println!("card-scanner live view: http://{addr}");
@@ -633,6 +644,8 @@ mod tests {
     fn the_neural_models_in_the_tree_are_where_the_server_looks() {
         let files = card_scanner::neural::read_dir(&neural_models_in_tree()).expect("in git");
         assert!(!files.gallery.is_empty() && !files.meta.is_empty());
+        // And their printing evidence beside them, which the server loads when it is there.
+        assert!(card_scanner::neural::evidence::has_evidence_files(&neural_models_in_tree()));
     }
 
     #[test]

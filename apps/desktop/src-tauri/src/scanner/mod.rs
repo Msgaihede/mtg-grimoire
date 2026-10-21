@@ -39,24 +39,26 @@ const EMBEDDED_RECOGNITION: &[u8] = include_bytes!("../../scanner-assets/text-re
 
 /// What this build carries, for the core's [`ScannerState::carry`]. `build.rs` sets
 /// `cfg(scanner_assets)` only when all three files are present, so a bundle is never embedded
-/// without its models or the reverse. **The Neural scanner's files are carried by every build**,
-/// whatever that `cfg` says: they are in git (`crates/card-neural/models/`), so there is no build
-/// without them.
+/// without its models or the reverse. **The Neural scanner's files and their printing evidence
+/// are carried by every build**, whatever that `cfg` says: they are in git
+/// (`crates/card-neural/models/`), so there is no build without them.
 #[cfg(scanner_assets)]
 pub fn compiled() -> Embedded {
     Embedded {
         bundle: Some(EMBEDDED_BUNDLE),
         models: Some((EMBEDDED_DETECTION, EMBEDDED_RECOGNITION)),
         neural: Some(card_neural::bundled()),
+        neural_evidence: Some(card_neural::bundled_evidence()),
     }
 }
 
-/// What this build carries: the Neural scanner's files and nothing else, because
-/// `apps/desktop/src-tauri/scanner-assets/` was not filled.
+/// What this build carries: the Neural scanner's files and their evidence and nothing else,
+/// because `apps/desktop/src-tauri/scanner-assets/` was not filled.
 #[cfg(not(scanner_assets))]
 pub fn compiled() -> Embedded {
     Embedded {
         neural: Some(card_neural::bundled()),
+        neural_evidence: Some(card_neural::bundled_evidence()),
         ..Embedded::none()
     }
 }

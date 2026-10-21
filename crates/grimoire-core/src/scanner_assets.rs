@@ -1974,6 +1974,7 @@ mod tests {
             bundle: Some(&b"carried"[..]),
             models: Some((&b"d"[..], &b"r"[..])),
             neural: None,
+            neural_evidence: None,
         };
         assert_eq!(lacking(&nothing, &embedded, [false, false]), []);
         assert_eq!(lacking(&old, &embedded, [false, false]), []);
@@ -1982,6 +1983,7 @@ mod tests {
             bundle: embedded.bundle,
             models: None,
             neural: None,
+            neural_evidence: None,
         };
         assert_eq!(lacking(&nothing, &bundle_only, [false, false]), [D, R]);
 

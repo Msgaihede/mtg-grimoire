@@ -23,7 +23,15 @@ For global repo workflow, style, and testing conventions, refer to:
   (the owner's decision, 2026-10-20; `.gitattributes` marks them binary). **They change
   together or not at all**: the gallery is the embedder's own, and the thresholds were tuned on
   this pair. `models/README.md` is their provenance and the recipe to remake them — update its
-  table (bytes, sha256) with any change.
+  table (bytes, sha256) with any change; the web build refuses a file its row does not match.
+- **The printing evidence is four more** (2026-10-21): `symbol.onnx` and `band.onnx`, the set
+  symbol and collector band networks, and their galleries `symbols.bin` and `bands.bin`, which
+  `neural.json`'s `evidence` section says how to read and weigh ([`Evidence`],
+  `bundled_evidence()`). The same rule: each gallery is its network's own, and the thresholds
+  were tuned on the pair beside this recogniser. On the 124 readers' scans the Neural pass names
+  the right printing on 87 and the wrong one on none, with 32 left a choice (77 / 0 / 42 without
+  them); the thresholds are in-sample, and the owner chose `decideMargin` 0.20 knowing the
+  cross-validated estimate had 3 wrong printings. Their training is the lab's, not `train/`'s.
 - **Only our own weights.** Never a file from quickdraw.cards (no licence) or any other model
   whose licence we have not read; the spike's comparison files live in the scanner lab, outside
   the repository.

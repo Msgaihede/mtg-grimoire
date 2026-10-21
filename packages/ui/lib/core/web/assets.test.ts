@@ -238,8 +238,8 @@ describe("what a web build holds the Neural files to", () => {
     return { name, bytes: row.bytes, sha256: sha(row.head, row.tail) };
   });
 
-  it("reads models/README.md's table: a length and the two ends of a digest for each of the four", () => {
-    expect([...table.keys()].sort()).toEqual([...NEURAL_FILES].sort());
+  it("reads models/README.md's table: a length and the two ends of a digest for each of the eight", () => {
+    expect([...table.keys()].sort()).toEqual([...NEURAL_FILES, ...NEURAL_EVIDENCE_FILES].sort());
     for (const [name, row] of table) {
       expect(row.bytes, name).toBeGreaterThan(0);
       expect(row.head, name).toMatch(/^[0-9a-f]{8}$/);
@@ -274,7 +274,7 @@ describe("what a web build holds the Neural files to", () => {
     );
   });
 
-  /** The evidence files are not in git yet: their rows are this suite's own, built alike. */
+  /** Evidence rows of this suite's own, built alike, so the faults read apart from the files in git. */
   const evidenceTable = new Map(
     NEURAL_EVIDENCE_FILES.map((name, at) => [
       name,
