@@ -241,6 +241,8 @@ phase's:
 | `MultiTargetSelection`                           | `targets` | Are the targets                                             | `min_targets` to `max_targets`                      |
 | `KeepWithinTotalPowerChoice`                     | `keep`    | Are kept; the rest are sacrificed                           | any, their total power at most `powerCap`           |
 | `KeepExactPermanentsChoice`                      | `keep`    | Are kept; the rest are sacrificed                           | `required_count`                                    |
+| `EffectZoneChoice` of `CastFromZone`             | `cast`    | Is cast                                                     | `min_count` to `count`, or `count`                  |
+| `CastOffer`'s `FreeCastWindow`                   | `cast`    | Is cast; none closes the window                             | one, or none                                        |
 
 A keep within a total power (Slaughter the Strong, Destined Confrontation — issue #1079) is bounded
 by power as well as count: `powerCap` is the cap, each creature counts its current power
@@ -248,6 +250,17 @@ by power as well as count: `powerCap` is the cap, each creature counts its curre
 `legal_actions` for it are two canned sets (keep none, and its greedy keep), which before the pick
 showed as two identical "Choose kept creatures" chips; they stay under "Other answers", each naming
 the creatures it keeps (`option_of` reads `kept`).
+
+**An optional cast is asked whether before which** (issue #1329). "You may cast a spell from
+among them" — a cast picked as the ability resolves (`EffectZoneChoice` of `CastFromZone`), or a
+free-cast window over a graveyard, a hand or the cards exiled this way (Invoke Calamity's
+`FreeCastWindow`, answered `FreeCastWindowChoice` with one card or none) — is a pick of purpose
+`cast`. Each pick says where its cards lie when they all lie in one place (`zone`), so a cast
+with none to be picked (`min` 0) opens on the board as its question alone: "Cast a spell from your
+graveyard?", with "Choose a card", which shows the cards, and "Don't cast", which picks none
+and so declines (`pick.ts`' `pickOffer`). A cast that must be made shows its cards at once.
+The engine's own answers to a free-cast window name the card each casts (`option_of` reads
+`selection`), under "Other answers".
 
 The session checks the count, the power cap, that each card is eligible and that none is picked
 twice. The engine
