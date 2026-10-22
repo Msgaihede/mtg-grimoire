@@ -835,7 +835,25 @@ async function shelfMenu(user: Clicker, name: string): Promise<void> {
 const pathRow = () => screen.getByRole("group", { name: "Shelves" });
 const pathRowAddFolder = () => within(pathRow()).queryByRole("button", { name: "Add folder" });
 
+/** The folder trail — the levels **above** the one on screen, in the page bar since 2026-10-21.
+ *  Not drawn at the root, where there is nothing above. */
 const crumbs = () => screen.getByRole("navigation", { name: "Collection folders" });
+const queryCrumbs = () => screen.queryByRole("navigation", { name: "Collection folders" });
+
+/** The page bar's title: the level the page has drawn — the open folder's name, `Collection` at
+ *  the root. */
+const pageTitle = () => screen.getByRole("heading", { level: 2 });
+
+/**
+ * Where the page says the reader is standing: the page bar's title names the level, and the trail
+ * — the way back — does not offer it. The folder trail's `aria-current` segment said this before
+ * the trail moved into the bar.
+ */
+function expectTitled(name: string): void {
+  expect(screen.getByRole("heading", { level: 2, name })).toBeInTheDocument();
+  const trail = queryCrumbs();
+  if (trail !== null) expect(within(trail).queryByText(name)).toBeNull();
+}
 
 /** What the header last asked. */
 const lastSummary = () =>
@@ -3721,10 +3739,13 @@ describe("the collection's shelves", () => {
     await openShelf(user, "Trade binder");
     await waitFor(() => expect(standingIn()).toBe(3));
 
-    expect(within(crumbs()).getByText("Trade binder")).toHaveAttribute("aria-current", "page");
+    await waitFor(() => expectTitled("Trade binder"));
     await user.click(within(crumbs()).getByRole("button", { name: "Collection" }));
 
     await waitFor(() => expect(standingIn()).toBeNull());
+    // Back at the root: the bar is the page's own name again, with no trail above it.
+    await waitFor(() => expectTitled("Collection"));
+    expect(queryCrumbs()).toBeNull();
   });
 
   /**
@@ -3755,14 +3776,19 @@ describe("the collection's shelves", () => {
     const user = userEvent.setup();
     wrap(<CollectionPage />);
     await findHeading("Trade binder");
-    expect(within(crumbs()).queryByRole("button")).toBeNull();
+    // At the root there is no level above, so no trail at all.
+    expect(queryCrumbs()).toBeNull();
 
     await openShelf(user, "Trade binder");
     await openShelf(user, "Foils");
     await waitFor(() => expect(standingIn()).toBe(9));
 
-    expect(within(crumbs()).getByRole("button", { name: "Trade binder" })).toBeInTheDocument();
-    expect(within(crumbs()).getByRole("button", { name: "Collection" })).toBeInTheDocument();
+    await waitFor(() => expectTitled("Foils"));
+    expect(
+      within(crumbs())
+        .getAllByRole("button")
+        .map((crumb) => crumb.textContent),
+    ).toEqual(["Collection", "Trade binder"]);
   });
 
   it("walks up one level from the breadcrumb's parent segment", async () => {
@@ -4252,7 +4278,7 @@ describe("the collection's shelves", () => {
       wrap(<CollectionPage />);
 
       await waitFor(() => expect(standingIn()).toBe(3));
-      expect(within(crumbs()).getByText("Trade binder")).toHaveAttribute("aria-current", "page");
+      await waitFor(() => expectTitled("Trade binder"));
       await waitFor(() => expect(useAppStore.getState().pendingFolder).toBeNull());
     });
 
@@ -7378,8 +7404,8 @@ describe("Escape walks out of a folder", () => {
   const filterBox = () => screen.getByRole("searchbox", { name: "Search your collection" });
 
   /** Opened by its heading's Open button (issue #599), and Escape walks one level up — the
-   *  breadcrumb's own parent segment, unchanged. */
-  it("goes up one level after a folder is opened from its heading, and the breadcrumb says so", async () => {
+   *  breadcrumb's own parent segment, unchanged — and the page bar's title says where it landed. */
+  it("goes up one level after a folder is opened from its heading, and the page bar says so", async () => {
     collectionFolderList.mockResolvedValue([BINDER, FOILS]);
     wrap(<CollectionPage />);
     await openShelf(userEvent, "Trade binder");
@@ -7390,7 +7416,7 @@ describe("Escape walks out of a folder", () => {
     expect(escape()).toBe(false);
 
     await waitFor(() => expect(standingIn()).toBe(3));
-    expect(within(crumbs()).getByText("Trade binder")).toHaveAttribute("aria-current", "page");
+    await waitFor(() => expectTitled("Trade binder"));
   });
 
   /**
@@ -7587,8 +7613,8 @@ describe("walking up to a level nothing has cached", () => {
     );
   });
 
-  /** The breadcrumb's segment for the level it says the reader is standing in. */
-  const current = () => crumbs().querySelector('[aria-current="page"]');
+  /** The level the page bar says the reader is standing in — its title. */
+  const current = pageTitle;
 
   it("keeps drawing the level being left until the one walked to has answered", async () => {
     const user = userEvent.setup();
@@ -7599,8 +7625,8 @@ describe("walking up to a level nothing has cached", () => {
 
     expect(escape()).toBe(false);
 
-    // Asked for — the reads have gone out — and not yet drawn: the breadcrumb, the figures and the
-    // wall are all still `Foils`', with nothing of `Trade binder`'s beside them.
+    // Asked for — the reads have gone out — and not yet drawn: the page bar's title, the figures
+    // and the wall are all still `Foils`', with nothing of `Trade binder`'s beside them.
     await waitFor(() => expect(standingIn()).toBe(3));
     expect(current()).toHaveTextContent("Foils");
     expect(screen.getByText("555")).toBeInTheDocument();
@@ -7628,7 +7654,8 @@ describe("walking up to a level nothing has cached", () => {
     expect(escape()).toBe(false);
 
     await waitFor(() => expect(standingIn()).toBeNull());
-    await waitFor(() => expect(within(crumbs()).queryByText("Foils")).toBeNull());
+    await waitFor(() => expectTitled("Collection"));
+    expect(queryCrumbs()).toBeNull();
     expect(await screen.findByText("111")).toBeInTheDocument();
   });
 

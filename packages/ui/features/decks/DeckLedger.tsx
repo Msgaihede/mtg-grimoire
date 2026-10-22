@@ -193,9 +193,11 @@ export const DeckLedger = memo(function DeckLedger({
   return (
     <dl
       className={cn(
-        "flex min-h-9 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1",
-        // No rules of its own since 2026-10-21: it is the page bar's second line, and the bar's
-        // rule under it is the one line between the heading and the toolbar (`DeckEditor`).
+        "flex min-h-6 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1",
+        // **A thin row** (the owner's note, 2026-10-21): `min-h-6` and 24px chips (`h-6` here, in
+        // `ValidationPanel` and in `DeckBracket`), with 6px over and under it (`DeckEditor`).
+        // No rules of its own since 2026-10-21: `DeckEditor` draws the page bar's rule over it and
+        // another under it, a gap away, where a border here stood flush against the bar's.
         // The row's own floor, for the reason every flex row in this editor carries one: without
         // it the terms are the only shrinkable children and a squeeze falls on the numbers.
         "min-w-0",
@@ -410,7 +412,7 @@ export const DeckLedger = memo(function DeckLedger({
             )}
             onClick={onGameChangersOnlyToggle}
             className={cn(
-              "inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md",
+              "inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md",
               "border px-2 font-mono text-[0.6875rem] tabular-nums",
               "transition-colors duration-150 motion-reduce:transition-none",
               gameChangersOnly

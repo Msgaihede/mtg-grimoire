@@ -547,7 +547,8 @@ export function SearchPage() {
               filter block, so naming the page costs no height — this view had no top row to give
               the title, and a row of its own cost the wall 45px (the owner's note). The count
               stays the result line's, where it always was. */}
-          <div className="flex flex-col gap-3">
+          {/* `-mt-2`: the page bar's 12px above the row rather than `main`'s 20 (`PageBar`). */}
+          <div className="-mt-2 flex flex-col gap-3">
             <FilterBar
               search={search}
               rootRef={setFilterRow}

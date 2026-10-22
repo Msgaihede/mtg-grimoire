@@ -264,7 +264,7 @@ export function ValidationPanel({
         {...tip(label, { describes: false })}
         onClick={() => (open ? onDismiss() : onOpen())}
         className={cn(
-          "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border",
+          "inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border",
           "px-2 font-mono text-[0.6875rem] tabular-nums text-dim",
           "transition-colors duration-150 motion-reduce:transition-none",
           // **The border carries open and hover, never the words.** The glyph's colour is its

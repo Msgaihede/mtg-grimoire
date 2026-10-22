@@ -2322,16 +2322,6 @@ export function CollectionPage() {
     toasted(folders.setRules),
   ]);
   const empty = rows.length === 0;
-  // The cabinet is drawn only where there is one. In a collection nobody has filed, a lone inert
-  // "Collection" under the page bar's own `Collection` title would be the page's name said twice,
-  // one line apart, with nowhere for it to lead.
-  //
-  // **`|| folderId !== null` is what keeps a reader from being stranded**, and it arrived with the
-  // pinned section: a reader who has made no folders of their own can still be *inside* one, by
-  // pressing a deck group or `Recently removed`, and the breadcrumb is the only way back out.
-  // Without this clause the trail was gated on a list that folder is deliberately not in, so
-  // opening a deck group closed the door behind them.
-  const hasFolders = userFolders.length > 0 || folderId !== null;
 
   /**
    * How many copies `Recently removed` holds, from the folder summary — or `null` before it has
@@ -2909,14 +2899,25 @@ export function CollectionPage() {
           bar's full-width rule under it, where the band's was. No extra height: the title takes the
           left end of the row the figures and actions already stood in.
 
-          **No trail, in a folder or out of one.** The folder trail stays in the path row below,
-          where its segments are drop targets for cards and folders (spec §3.5); a second, inert
-          copy of the same names up here would be the path said twice on one screen, and the one
-          that could not take a drop. So the title stays `Collection` inside a folder too, and the
-          figures beside it are the level on screen's (`collection_summary` for this folder and
-          everything under it), named by the path row's last segment just below. */}
+          The figures beside the title are the level on screen's (`collection_summary` for the
+          open folder and everything under it), which the title names. */}
       <PageBar
-        title="Collection"
+        // **An open folder is the page** (the owner's note, 2026-10-21): its name is the title and
+        // the levels above it are the bar's trail — the folder trail this page drew in its path
+        // row, moved up and drawn in the bar's crumb style, every crumb still a drop target for a
+        // card or a folder going back up. At the root the title is the page's own name and no
+        // trail is drawn. The sticky shelf bar keeps its own trail for the expanded overview.
+        title={trail.length > 0 ? trail[trail.length - 1].name : "Collection"}
+        trailNode={
+          <CollectionBreadcrumb
+            trail={trail}
+            onOpen={collection.openFolder}
+            canDrop={canFile}
+            onDropCard={fileCard}
+            canDropFolder={canPlaceOnLevel}
+            onDropFolder={placeOnLevel}
+          />
+        }
         figures={<CollectionPageFigures summary={figures} marketplace={marketplace} />}
         // The row's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued. The names say *what* is moved, because both
@@ -3043,31 +3044,17 @@ export function CollectionPage() {
             across the whole page — the 1024px-floor failure `ManaValueChips` already shipped once.
             Everything else here is what this box has always carried. */}
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {/* **The path row** (spec §3.5): where the reader is standing on the left, what they can
-              do to the shelves below on the right. Navigation and shelf controls both, which is why
-              neither is among the filters — Reset all undoes neither, and a control in that row
-              Reset all could not undo would be the one thing in it that lies.
-
-              The breadcrumb is drawn wherever there is a cabinet to speak of — a lone `Collection`
-              under a ribbon that says Collection is not one — and **its segments are the only place
-              a folder can be dropped besides a heading**: a heading's lead segments and the sticky
-              bar's are buttons only. `Clear…` joins the row inside `Recently removed` (issue #506),
+          {/* **The path row** (spec §3.5): what the reader can do to the shelves below. Shelf
+              controls, which is why they are not among the filters — Reset all undoes none of
+              them, and a control in that row Reset all could not undo would be the one thing in it
+              that lies. **Where the reader is standing is the page bar's** since 2026-10-21: the
+              open folder is its title and the folder trail its crumbs, which are still the only
+              place besides a heading a card or folder can be dropped to go back up — a heading's
+              lead segments and the sticky bar's are buttons only. `Clear…` joins the row inside `Recently removed` (issue #506),
               by the summary's count, so a filter that hides every row does not hide the control
               that would clear them. The toolbar is always drawn: Expand all and Collapse all mean
               something at every level, and Add folder is drawn where the level can hold one. */}
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-            {hasFolders && (
-              <div className="min-w-0">
-                <CollectionBreadcrumb
-                  trail={trail}
-                  onOpen={collection.openFolder}
-                  canDrop={canFile}
-                  onDropCard={fileCard}
-                  canDropFolder={canPlaceOnLevel}
-                  onDropFolder={placeOnLevel}
-                />
-              </div>
-            )}
             {/* The rules of the folder the reader is standing in (issue #980) — its own heading is
                 not drawn here, so this is where its badge goes, with the whole sub-tree's count:
                 that is everything on the wall below. Nothing at the root, which holds no rules. */}

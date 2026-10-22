@@ -334,7 +334,9 @@ export const Shelves: Story = {
     await userEvent.click(within(ordered).getByRole("button", { name: "Open Ordered" }));
 
     const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
-    await expect(within(trail).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+    // The folder the reader is in is the page bar's title, and the trail is the levels above it.
+    await expect(canvas.getByRole("heading", { level: 2, name: "Ordered" })).toBeVisible();
+    await expect(within(trail).queryByText("Ordered")).toBeNull();
     await expect(await waitFor(() => headingNamed(canvas, "Backordered"))).toBeInTheDocument();
     await waitFor(async () => {
       await expect(canvas.queryByText("Ragavan, Nimble Pilferer")).toBeNull();
@@ -414,7 +416,9 @@ export const DeepNesting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
-    await expect(within(trail).getByText("Lands")).toHaveAttribute("aria-current", "page");
+    // The folder the reader is in is the page bar's title, and the trail is the levels above it.
+    await expect(canvas.getByRole("heading", { level: 2, name: "Lands" })).toBeVisible();
+    await expect(within(trail).queryByText("Lands")).toBeNull();
     const signed = await waitFor(() => headingNamed(canvas, "Signed"));
     const lead = within(signed)
       .getAllByRole("button")
@@ -490,7 +494,9 @@ export const AddingAFolder: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
-    await expect(within(trail).getByText("Someday")).toHaveAttribute("aria-current", "page");
+    // The folder the reader is in is the page bar's title, and the trail is the levels above it.
+    await expect(canvas.getByRole("heading", { level: 2, name: "Someday" })).toBeVisible();
+    await expect(within(trail).queryByText("Someday")).toBeNull();
 
     await userEvent.click(await waitFor(() => pathAddFolder(canvas)));
 

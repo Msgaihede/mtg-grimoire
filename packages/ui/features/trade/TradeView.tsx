@@ -625,7 +625,8 @@ function RenameField({
         className={cn(
           "w-full max-w-md rounded-md border border-accent bg-bg px-2",
           // `PAGE_TITLE`'s face, size and tracking, so the name does not jump while it is edited.
-          "font-heading text-xl leading-tight font-semibold tracking-[0.02em] text-text outline-none",
+          // `h-9`, the row's control height, so the bigger face does not make the bar taller.
+          "h-9 font-heading text-[26px] leading-none font-semibold tracking-[0.02em] text-text outline-none",
         )}
       />
     </form>

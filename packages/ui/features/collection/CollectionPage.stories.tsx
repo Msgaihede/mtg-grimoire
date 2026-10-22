@@ -342,7 +342,9 @@ export const DeepNesting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const trail = await canvas.findByRole("navigation", { name: "Collection folders" }, SETTLED);
-    await expect(within(trail).getByText("Binder")).toHaveAttribute("aria-current", "page");
+    // The folder the reader is in is the page bar's title, and the trail is the levels above it.
+    await expect(canvas.getByRole("heading", { level: 2, name: "Binder" })).toBeVisible();
+    await expect(within(trail).queryByText("Binder")).toBeNull();
     const signed = await waitFor(() => headingNamed(canvas, "Signed"), SETTLED);
     const lead = within(signed)
       .getAllByRole("button")

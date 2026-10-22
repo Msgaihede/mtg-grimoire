@@ -10,11 +10,13 @@
  * folder band (spec §7): `inside` already means "which drawer, and nothing about where in it", so
  * the segment says "last" without having to draw it.
  *
- * The last segment is the folder the reader is already in, so it is neither a link nor a target:
- * it carries `aria-current="page"` and takes no drop, because "move this where it already is" is
- * not an operation. At the root the trail is empty and `Wishlist` is itself that last segment.
+ * **It is the page bar's trail since 2026-10-21** (`PageBar`'s `trailNode`, the owner's note): the
+ * folder the reader is in is the bar's title, so this draws only the levels above it, in the bar's
+ * crumb style, and nothing at the root. That folder was never a target — "move this where it
+ * already is" is not an operation — so no drop was lost with it.
  */
-import { useRef } from "react";
+import { Fragment, useRef } from "react";
+import { CrumbChevron, PAGE_CRUMB } from "@/components/PageBar";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import { useFolderDropTarget, type FolderDrag } from "@/lib/folderDrag";
@@ -45,40 +47,33 @@ export function WishlistBreadcrumb({
   canDropFolder?: (drag: FolderDrag, folderId: number | null) => boolean;
   onDropFolder?: (drag: FolderDrag, folderId: number | null) => void;
 }) {
+  // The folders **above** the one on screen, root first: the folder the reader is in is the page
+  // bar's title, so it is not a crumb (and was the one segment that took no drop anyway). At the
+  // root there is nothing above, and no trail is drawn.
+  if (trail.length === 0) return null;
   const segments: { folderId: number | null; name: string }[] = [
     { folderId: null, name: ROOT },
-    ...trail.map((folder) => ({ folderId: folder.id, name: folder.name })),
+    ...trail.slice(0, -1).map((folder) => ({ folderId: folder.id, name: folder.name })),
   ];
 
   return (
-    <nav aria-label="Wishlist folders">
-      <ol className="flex flex-wrap items-center gap-1 text-sm">
-        {segments.map((segment, i) => {
-          const last = i === segments.length - 1;
-          return (
-            <li key={segment.folderId ?? "root"} className="flex min-w-0 items-center gap-1">
-              {/* Decoration: the list structure is what says these are steps, and a screen
-                  reader announcing "greater than" between every pair is noise. */}
-              {i > 0 && <span aria-hidden="true" className="flex-none text-dim">›</span>}
-              {last ? (
-                <span aria-current="page" className="truncate text-text">
-                  {segment.name}
-                </span>
-              ) : (
-                <Segment
-                  folderId={segment.folderId}
-                  name={segment.name}
-                  onOpen={onOpen}
-                  canDrop={canDrop}
-                  onDropWish={onDropWish}
-                  canDropFolder={canDropFolder}
-                  onDropFolder={onDropFolder}
-                />
-              )}
-            </li>
-          );
-        })}
-      </ol>
+    // Drawn as the page bar's trail (`PageBar`'s `trailNode`): `PAGE_CRUMB` words and a chevron
+    // after each, so it reads as every other page's trail — and every crumb still takes a drop.
+    <nav aria-label="Wishlist folders" className="flex min-w-0 items-baseline gap-2">
+      {segments.map((segment) => (
+        <Fragment key={segment.folderId ?? "root"}>
+          <Segment
+            folderId={segment.folderId}
+            name={segment.name}
+            onOpen={onOpen}
+            canDrop={canDrop}
+            onDropWish={onDropWish}
+            canDropFolder={canDropFolder}
+            onDropFolder={onDropFolder}
+          />
+          <CrumbChevron />
+        </Fragment>
+      ))}
     </nav>
   );
 }
@@ -135,8 +130,10 @@ function Segment({
       type="button"
       onClick={() => onOpen(folderId)}
       className={cn(
-        "min-w-0 truncate rounded-md px-1.5 py-0.5 text-dim",
-        "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+        // The page bar's crumb, with the room a drop ring needs taken back by the margin, so the
+        // word stands where a plain crumb would.
+        PAGE_CRUMB,
+        "-mx-1 min-w-0 truncate rounded-md px-1",
         (armed || folder.armed) && DROP_RING,
         (over || folder.edge !== null) && cn("text-text", DROP_OVER),
         FOCUS,

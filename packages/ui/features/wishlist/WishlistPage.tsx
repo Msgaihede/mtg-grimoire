@@ -2072,11 +2072,28 @@ export function WishlistPage() {
           `CollectionPage`'s twin: the figures band this row always was, with the page's `<h2>`
           drawn at its left end instead of `sr-only`, and the rule under it. No extra height.
 
-          **No trail inside a folder either**, for the collection's reason: the folder trail stays
-          in the path row, where its segments take drops, and a second copy up here could not. The
-          title stays `Wishlist`; the figures beside it are the level on screen's (spec §3.6). */}
+          The figures beside the title are the level on screen's (spec §3.6), which the title
+          names. */}
       <PageBar
-        title="Wishlist"
+        // **An open folder is the page** (the owner's note, 2026-10-21): its name is the title and
+        // the levels above it are the bar's trail — the folder trail this page drew in its path
+        // row, moved up and drawn in the bar's crumb style, every crumb still a drop target for a
+        // card or a folder going back up. At the root the title is the page's own name and no
+        // trail is drawn. The sticky shelf bar keeps its own trail for the expanded overview.
+        title={trail.length > 0 ? trail[trail.length - 1].name : "Wishlist"}
+        trailNode={
+          <WishlistBreadcrumb
+            // Root-most first and **without the root**, which the breadcrumb prepends itself:
+            // `null` is a destination rather than a folder, and only that component knows
+            // what it calls it.
+            trail={trail}
+            onOpen={openFolder}
+            canDrop={canFile}
+            onDropWish={fileWish}
+            canDropFolder={canMoveInto}
+            onDropFolder={moveInto}
+          />
+        }
         figures={<WishlistPageFigures totals={totals} marketplace={marketplace} />}
         // The row's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued, and `CollectionPage`, whose twin this is.
@@ -2193,31 +2210,16 @@ export function WishlistPage() {
         )}
       >
         <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {/* **The path row** (spec §3.5): where the reader is standing on the left, and the three
-              controls that act on the shelves below it on the right. **Drawn always** — Add folder
-              is how a reader who has never filed anything makes their first folder, so a row gated
-              on having folders would be the trap door the band's `New folder` tile once closed.
-              The breadcrumb inside it is still drawn only where there is a cabinet to walk.
+          {/* **The path row** (spec §3.5): the three controls that act on the shelves below.
+              **Drawn always** — Add folder is how a reader who has never filed anything makes their
+              first folder, so a row gated on having folders would be the trap door the band's `New
+              folder` tile once closed. Where the reader is standing is the page bar's since
+              2026-10-21: the open folder is its title and the folder trail its crumbs.
 
               **Not among the filters**, the fence this page has always kept: `resetAll` leaves
               `folderId` and every fold alone, so none of these could sit in the filter row without
               being the one control there Reset all cannot undo. */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            {hasFolders && (
-              <div className="min-w-0">
-                <WishlistBreadcrumb
-                  // Root-most first and **without the root**, which the breadcrumb prepends itself:
-                  // `null` is a destination rather than a folder, and only that component knows
-                  // what it calls it.
-                  trail={trail}
-                  onOpen={openFolder}
-                  canDrop={canFile}
-                  onDropWish={fileWish}
-                  canDropFolder={canMoveInto}
-                  onDropFolder={moveInto}
-                />
-              </div>
-            )}
             {/* The rules of the folder the reader is standing in (issue #980), with its whole
                 sub-tree's count — its heading is not drawn on its own wall. */}
             {folderId !== null && rulesBadge(folderId)}

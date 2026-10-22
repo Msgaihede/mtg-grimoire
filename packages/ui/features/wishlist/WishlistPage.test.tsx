@@ -593,6 +593,21 @@ const levelAsked = (): number | null => {
   return first === undefined || first === 0 ? null : first;
 };
 
+/** The folder trail — the levels **above** the one on screen, in the page bar since 2026-10-21.
+ *  Not drawn at the root, where there is nothing above. */
+const queryCrumbs = () => screen.queryByRole("navigation", { name: "Wishlist folders" });
+
+/**
+ * Where the page says the reader is standing: the page bar's title (its `<h2>`) names the level —
+ * the open folder, or `Wishlist` at the root — and the trail, the way back, does not offer it. The
+ * folder trail's `aria-current` segment said this before the trail moved into the bar.
+ */
+function expectTitled(name: string): void {
+  expect(screen.getByRole("heading", { level: 2, name })).toBeInTheDocument();
+  const trail = queryCrumbs();
+  if (trail !== null) expect(within(trail).queryByText(name)).toBeNull();
+}
+
 /**
  * A wish carried out of the list and onto one of the two places it can be filed — a folder card,
  * or a segment of the breadcrumb.
@@ -3527,7 +3542,7 @@ describe("the folders", () => {
    * Opening a folder **replaces the level**: the read is a different read, so the root's wishes are
    * gone rather than filtered out of a list that still holds them.
    */
-  it("opens a folder from its heading's title, and the breadcrumb says where the reader is", async () => {
+  it("opens a folder from its heading's title, and the page bar says where the reader is", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
 
@@ -3537,10 +3552,14 @@ describe("the folders", () => {
     expect(lastQuery().shelves).toEqual([ORDERED.id, BACKORDERED.id]);
     expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
-    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
-    expect(within(crumbs()).getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
-    // The opened folder's own cards have no heading of their own — the path row names them
-    // (spec §3.1) — and its sub-folder is the top shelf now.
+    expectTitled("Ordered");
+    expect(
+      within(crumbs())
+        .getAllByRole("button")
+        .map((crumb) => crumb.textContent),
+    ).toEqual(["Wishlist"]);
+    // The opened folder's own cards have no heading of their own — the page bar's title names them
+    // (spec §3.1, moved up from the path row) — and its sub-folder is the top shelf now.
     expect(queryHeading(ORDERED.id)).toBeNull();
     expect(await findHeading(BACKORDERED.id)).toHaveTextContent("2 cards · $20.00");
   });
@@ -3575,7 +3594,7 @@ describe("the folders", () => {
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     const theRootWhole = () => {
-      expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+      expectTitled("Wishlist");
       expect(figure("cards")).toHaveTextContent("3");
       expect(heading(ORDERED.id)).toBeInTheDocument();
       expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
@@ -3586,9 +3605,7 @@ describe("the folders", () => {
     theRootWhole();
 
     await act(async () => openList());
-    await waitFor(() =>
-      expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page"),
-    );
+    await waitFor(() => expectTitled("Ordered"));
     expect(figure("cards")).toHaveTextContent("1");
     expect(screen.getByText("Rhystic Study")).toBeInTheDocument();
     expect(screen.queryByText("Lightning Bolt")).toBeNull();
@@ -3610,9 +3627,7 @@ describe("the folders", () => {
     });
     useAppStore.setState({ pendingFolder: { scope: "wishlist", id: BACKORDERED.id } });
     wrap(<WishlistPage />);
-    await waitFor(() =>
-      expect(within(crumbs()).getByText("Backordered")).toHaveAttribute("aria-current", "page"),
-    );
+    await waitFor(() => expectTitled("Backordered"));
     // Backordered answered in full — its own empty box drawn from its counts — so it is the level
     // held while Ordered is read.
     await waitFor(() => expect(emptyBoxes()).toHaveLength(1));
@@ -3620,14 +3635,12 @@ describe("the folders", () => {
     act(() => void pressEscape());
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
     // Held: still drawn at Backordered.
-    expect(within(crumbs()).getByText("Backordered")).toHaveAttribute("aria-current", "page");
+    expectTitled("Backordered");
     act(() => void pressEscape());
 
     await waitFor(() => expect(levelAsked()).toBeNull());
     await act(async () => openOrdered());
-    await waitFor(() =>
-      expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page"),
-    );
+    await waitFor(() => expectTitled("Wishlist"));
   });
 
   /**
@@ -3649,12 +3662,12 @@ describe("the folders", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
-    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+    expectTitled("Ordered");
 
     await userEvent.keyboard("{Escape}");
 
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+    expectTitled("Wishlist");
   });
 
   /**
@@ -3670,7 +3683,7 @@ describe("the folders", () => {
     expect(pressEscape()).toBe(false);
 
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
-    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+    expectTitled("Wishlist");
   });
 
   /**
@@ -3694,12 +3707,12 @@ describe("the folders", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(box).toHaveValue("");
-    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+    expectTitled("Ordered");
 
     await userEvent.keyboard("{Escape}");
 
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+    expectTitled("Wishlist");
   });
 
   /** Spec §3.6: the figures count everything the wall covers — this level and every shelf below
@@ -3744,24 +3757,33 @@ describe("the folders", () => {
 
   /**
    * Replaces "draws Flatten with the layout pair on the filter bar…": the fence is still "not
-   * among the filters" — the shelf controls ride the path row beside the breadcrumb.
+   * among the filters" — the shelf controls ride the path row beside the status line. The trail
+   * left that row for the page bar on 2026-10-21, so the row is found by its status line now, and
+   * the case stands inside a folder, where there is a trail for the row to be apart from.
    *
    * **Asserted as a containment fact rather than as a class string**, which is the only form of
    * this that cannot go quietly green: jsdom applies no container query, so nothing about where
    * the controls *paint* is observable here. What is observable is which box holds what.
    */
-  it("draws the shelf controls on the path row, beside the breadcrumb and off the filter bar", async () => {
+  it("draws the shelf controls on the path row, beside the status line and off the filter bar", async () => {
     wrap(<WishlistPage />);
-    await screen.findByText("Lightning Bolt");
+    await findHeading(ORDERED.id);
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
+    await waitFor(() => expectTitled("Ordered"));
 
+    const status = document.querySelector<HTMLElement>('p[role="status"]');
+    expect(status).not.toBeNull();
     const expand = screen.getByRole("button", { name: "Expand all" });
     let row = expand.parentElement;
-    while (row !== null && !row.contains(crumbs())) row = row.parentElement;
+    while (row !== null && !row.contains(status)) row = row.parentElement;
     expect(row).not.toBeNull();
     expect(row).toContainElement(screen.getByRole("button", { name: "Collapse all" }));
     expect(row).toContainElement(pathAddFolder());
-    // The smallest box holding the trail and the controls holds no filter — it is the path row.
+    // The smallest box holding the status line and the controls holds no filter — it is the path
+    // row — and none of the page bar: not its title, not the trail.
     expect(row).not.toContainElement(screen.getByLabelText("Search your wishlist"));
+    expect(row).not.toContainElement(screen.getByRole("heading", { level: 2, name: "Ordered" }));
+    expect(row).not.toContainElement(crumbs());
   });
 
   /** Replaces "puts New folder first in the wall of folder cards". */
@@ -4256,7 +4278,7 @@ describe("the folders", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+    expectTitled("Wishlist");
   });
 
   /**
@@ -4332,7 +4354,7 @@ describe("the folders", () => {
     await userEvent.click(within(crumbs()).getByRole("button", { name: "Ordered" }));
 
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
-    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+    expectTitled("Ordered");
   });
 
   /** Replaces "un-files a wish dropped on the up tile": at the root the drawer-sized way out is the
@@ -4538,7 +4560,7 @@ describe("the folders", () => {
 
       await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
       expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
-      expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+      expectTitled("Ordered");
       await waitFor(() => expect(useAppStore.getState().pendingFolder).toBeNull());
     });
 
@@ -4605,7 +4627,7 @@ describe("the folders", () => {
       useAppStore.setState({ pendingFolder: { scope: "wishlist", id: BACKORDERED.id } });
       const { client } = wrap(<WishlistPage />);
       await waitFor(() => expect(levelAsked()).toBe(BACKORDERED.id));
-      expect(within(crumbs()).getByText("Backordered")).toHaveAttribute("aria-current", "page");
+      expectTitled("Backordered");
       /** The folder list re-read without the deleted drawers — and, in the same moment, whatever
        *  else `alongside` does (a hand-off arriving from another page). */
       return async (after: WishlistFolder[], alongside?: () => void) => {
@@ -4623,7 +4645,7 @@ describe("the folders", () => {
       await deleteElsewhere([ORDERED, SOMEDAY]);
 
       await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
-      expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+      expectTitled("Ordered");
     });
 
     it("opens the root when no ancestor survives", async () => {
@@ -4650,7 +4672,7 @@ describe("the folders", () => {
 
       await waitFor(() => expect(levelAsked()).toBe(SOMEDAY.id));
       await waitFor(() => expect(useAppStore.getState().pendingFolder).toBeNull());
-      expect(within(crumbs()).getByText("Someday")).toHaveAttribute("aria-current", "page");
+      expectTitled("Someday");
       // And it stays there: the walk does not act on the level the hand-off opened.
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(levelAsked()).toBe(SOMEDAY.id);
@@ -5614,8 +5636,6 @@ describe("a needs-review hand-off over a filed wishlist", () => {
     return page(all.items.filter((row) => q.needsReview !== true || row.needsReview !== null));
   };
 
-  const crumbs = () => screen.getByRole("navigation", { name: "Wishlist folders" });
-
   beforeEach(() => {
     useAppStore.setState({ pendingReviewFilter: { scope: "wishlist" } });
     wishlistFolderList.mockResolvedValue(FOLDERS);
@@ -5677,14 +5697,14 @@ describe("a needs-review hand-off over a filed wishlist", () => {
     });
     wrap(<WishlistPage />);
     await waitFor(() => expect(levelAsked()).toBe(SOMEDAY.id));
-    expect(within(crumbs()).getByText("Someday")).toHaveAttribute("aria-current", "page");
+    expectTitled("Someday");
 
     act(() => useAppStore.setState({ pendingReviewFilter: { scope: "wishlist" } }));
 
     await waitFor(() => expect(levelAsked()).toBeNull());
     expect(lastQuery().needsReview).toBe(true);
     expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
-    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+    expectTitled("Wishlist");
     await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
   });
 

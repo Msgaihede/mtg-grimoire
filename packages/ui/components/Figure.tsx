@@ -113,11 +113,11 @@ export function Figure({
         )}
         {...tip(title)}
       >
-        <dt className="order-last text-[12.5px] text-dim">{label}</dt>
-        <dd className={cn("font-mono text-[13px] tabular-nums", accent && "text-accent")}>
+        <dt className="order-last text-sm text-dim">{label}</dt>
+        <dd className={cn("font-mono text-[15px] tabular-nums", accent && "text-accent")}>
           {value}
         </dd>
-        {note && <dd className="order-last ml-1 font-mono text-[11px] text-dim">{note}</dd>}
+        {note && <dd className="order-last ml-1 font-mono text-xs text-dim">{note}</dd>}
       </div>
     );
   }

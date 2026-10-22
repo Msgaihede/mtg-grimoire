@@ -23,21 +23,24 @@ export interface PageCrumb {
   ref?: Ref<HTMLButtonElement>;
 }
 
-/** The page title: Cinzel at 20/600, two steps over the display face's 18px floor. */
+/** The page title: Cinzel at 26/600, close to the height of the row's 36px buttons beside it (the
+ *  owner's notes, 2026-10-21: at 20px it read smaller than its own controls, at 30 a tad large).
+ *  `leading-none`: the row, not the line box, decides the height. */
 export const PAGE_TITLE =
-  "m-0 min-w-0 font-heading text-xl font-semibold leading-none tracking-[0.02em]";
+  "m-0 min-w-0 font-heading text-[26px] font-semibold leading-none tracking-[0.02em]";
 
-/** A parent crumb: the body face, small and dim, so the trail reads as a quiet lead-in to the
- *  title rather than as a row of buttons. Cinzel is never drawn below 18px, so it is not this. */
-const CRUMB = cn(
-  "shrink-0 whitespace-nowrap text-[13px] text-dim",
+/** A parent crumb: the body face, dim, so the trail reads as a quiet lead-in to the title rather
+ *  than as a row of buttons. Cinzel is never drawn below 18px, so it is not this. 15px since the
+ *  owner's note (2026-10-21) that the bar's secondary text was too small at 13. */
+export const PAGE_CRUMB = cn(
+  "shrink-0 whitespace-nowrap text-[15px] text-dim",
   "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
   FOCUS,
 );
 
 /** The mono meta beside a title that has counts rather than figures (`4 folders · 23 decks`), and
  *  beside a section heading. */
-export const PAGE_META = "whitespace-nowrap font-mono text-xs tabular-nums text-dim";
+export const PAGE_META = "whitespace-nowrap font-mono text-sm tabular-nums text-dim";
 
 /**
  * A section heading inside a page — a group, a folder wall, a settings or scanner panel: Cinzel at
@@ -53,7 +56,7 @@ export const SECTION_RULE = "h-px min-w-6 flex-1 self-center bg-border";
 
 /** A section heading's optional link at the row's end (`Show all`). */
 export const SECTION_LINK = cn(
-  "shrink-0 whitespace-nowrap text-[13px] text-accent",
+  "shrink-0 whitespace-nowrap text-sm text-accent",
   "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
   FOCUS,
 );
@@ -93,12 +96,12 @@ export function PageBar({
   titleId,
   titleGrows = false,
   trail = [],
+  trailNode,
   figures,
   meta,
   actions,
   toolbar,
   children,
-  ruled = true,
   className,
 }: {
   /** The page on screen. A string almost always; a node where the title is a control. */
@@ -113,6 +116,12 @@ export function PageBar({
   titleGrows?: boolean;
   /** The pages above this one, root first. Empty on a top-level page. */
   trail?: readonly PageCrumb[];
+  /**
+   * A trail the page draws itself, in place of {@link trail}, for crumbs that are more than
+   * buttons — the collection's and the wishlist's folder trails, whose crumbs are drop targets
+   * too. Drawn with {@link PAGE_CRUMB} and {@link CrumbChevron}, so it reads as every other trail.
+   */
+  trailNode?: ReactNode;
   /** Inline figures (`InlineFigureRow` from `@/components/Figure`), on the title's baseline. */
   figures?: ReactNode;
   /** Mono meta for a page with counts rather than figures. */
@@ -128,21 +137,15 @@ export function PageBar({
   /** A second line that belongs to the heading — the deck editor's stats — drawn under the row
    *  and above the rule, so the page has one rule rather than the bar's and its own. */
   children?: ReactNode;
-  /**
-   * `false` draws no rule and no space for one: the page draws {@link PageRule} itself, under a
-   * line of its own that belongs to the heading — the deck editor's ledger, which is a sibling of
-   * its bar rather than a child because the bar's component is memoised and the ledger is not.
-   */
-  ruled?: boolean;
   className?: string;
 }) {
   return (
-    // **No padding above, 12px below, and the row no taller than its controls** (owner's note,
-    // 2026-10-21): `main`'s own 20px is the space above the title, and the 12px under the row
-    // matches the gap most pages leave under the rule — a 52px row centred its title 16px further
-    // down and read as a gap above the heading that was not there below it.
-    <div className={cn("flex shrink-0 flex-col", className)}>
-      <div className={cn("flex min-w-0 flex-col gap-2", ruled && "pb-3")}>
+    // **12px above the row and 12px below it, and the row no taller than its controls** (the
+    // owner's notes, 2026-10-21): the same space on both sides of a heading whose content is
+    // centred in it. `-mt-2` takes 8px back from `main`'s 20px of padding, leaving 12; `pb-3` is
+    // the 12 under the row, above the rule.
+    <div className={cn("-mt-2 flex shrink-0 flex-col", className)}>
+      <div className="flex min-w-0 flex-col gap-2 pb-3">
         {toolbar !== undefined ? (
           // The title at the left end of the page's own toolbar, centred on its first 36px line —
           // Search's filter row, the Scanner's controls — so naming the page costs no height.
@@ -154,6 +157,7 @@ export function PageBar({
                 titleId={titleId}
                 titleGrows={titleGrows}
                 trail={trail}
+                trailNode={trailNode}
               />
             </div>
             <div className="min-w-0 flex-1">{toolbar}</div>
@@ -167,6 +171,7 @@ export function PageBar({
                 titleId={titleId}
                 titleGrows={titleGrows}
                 trail={trail}
+                trailNode={trailNode}
               />
               {figures}
               {/* Shrinkable: a long meta line (a trade's "Opened … · prices · Saved as you go")
@@ -187,7 +192,7 @@ export function PageBar({
         {children}
       </div>
       {/* The rule, in place of the hairline or gap that was under each page's top row. */}
-      {ruled && <PageRule />}
+      <PageRule />
     </div>
   );
 }
@@ -204,12 +209,15 @@ export function PageTitle({
   titleId,
   titleGrows = false,
   trail = [],
+  trailNode,
 }: {
   title: ReactNode;
   titleAs?: "h2" | "h3" | "div";
   titleId?: string;
   titleGrows?: boolean;
   trail?: readonly PageCrumb[];
+  /** See {@link PageBar}'s. */
+  trailNode?: ReactNode;
 }) {
   // Root, `…`, immediate parent: the two a reader most often wants, and the rest elided. A trail
   // of two is drawn whole — eliding one crumb to save one crumb is no saving.
@@ -222,41 +230,38 @@ export function PageTitle({
         titleGrows ? "flex-1" : "min-w-0",
       )}
     >
-      {shown.length > 0 && (
-        // A trail is navigation, so it is a landmark — named `Page trail` rather than
-        // `Breadcrumb`, so it never shares a name with a page's own folder trail (the
-        // collection's `Collection folders`, the wishlist's `Wishlist folders`).
-        <nav aria-label="Page trail" className="flex min-w-0 items-baseline gap-2">
-          {shown.map((crumb, i) => (
-            <Fragment key={crumb === null ? "gap" : `${i}:${crumb.label}`}>
-              {crumb === null ? (
-                <span aria-hidden="true" className="text-[13px] text-dim">
-                  …
-                </span>
-              ) : crumb.onOpen === undefined ? (
-                <span className="shrink-0 whitespace-nowrap text-[13px] text-dim">
-                  {crumb.label}
-                </span>
-              ) : (
-                <button
-                  ref={crumb.ref}
-                  type="button"
-                  onClick={crumb.onOpen}
-                  aria-label={crumb.name}
-                  className={CRUMB}
-                >
-                  {crumb.label}
-                </button>
-              )}
-              <ChevronRight
-                aria-hidden="true"
-                className="size-3 shrink-0 self-center text-dim/60"
-                strokeWidth={2}
-              />
-            </Fragment>
-          ))}
-        </nav>
-      )}
+      {trailNode ??
+        (shown.length > 0 && (
+          // A trail is navigation, so it is a landmark — named `Page trail` rather than
+          // `Breadcrumb`, so it never shares a name with a page's own folder trail (the
+          // collection's `Collection folders`, the wishlist's `Wishlist folders`).
+          <nav aria-label="Page trail" className="flex min-w-0 items-baseline gap-2">
+            {shown.map((crumb, i) => (
+              <Fragment key={crumb === null ? "gap" : `${i}:${crumb.label}`}>
+                {crumb === null ? (
+                  <span aria-hidden="true" className="text-[15px] text-dim">
+                    …
+                  </span>
+                ) : crumb.onOpen === undefined ? (
+                  <span className="shrink-0 whitespace-nowrap text-[15px] text-dim">
+                    {crumb.label}
+                  </span>
+                ) : (
+                  <button
+                    ref={crumb.ref}
+                    type="button"
+                    onClick={crumb.onOpen}
+                    aria-label={crumb.name}
+                    className={PAGE_CRUMB}
+                  >
+                    {crumb.label}
+                  </button>
+                )}
+                <CrumbChevron />
+              </Fragment>
+            ))}
+          </nav>
+        ))}
       {/* Truncated only when it is words: a control in the title (the rename field) carries a
           focus outline that an `overflow: hidden` here would clip. A growing title gives back
           `PAGE_TITLE`'s `min-w-0` for `min-w-auto`, so no box between the field and the
@@ -272,6 +277,18 @@ export function PageTitle({
         {title}
       </Title>
     </div>
+  );
+}
+
+/** The mark after every crumb. Exported with {@link PAGE_CRUMB} for a page that draws its own
+ *  crumbs (`trailNode`). */
+export function CrumbChevron() {
+  return (
+    <ChevronRight
+      aria-hidden="true"
+      className="size-3.5 shrink-0 self-center text-dim/60"
+      strokeWidth={2}
+    />
   );
 }
 

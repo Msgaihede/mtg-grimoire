@@ -235,13 +235,10 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
        * word no longer drops at {@link TIGHT_HEADER_PX}, so it binds no tooltip either: a crumb
        * is a word or nothing.
        *
-       * **The `pt-5` below is load-bearing as well as spacing** — the bar itself has no top
-       * padding (`main`'s is the room above every other page's title). This row is the **first
-       * child of the page scroller** — the `section` above is `overflow-y-auto` — and the name
-       * field's focus ring is `outline-2 outline-offset-2`, so it stands **4px proud of the
-       * field on every side**. With no padding the top of that ring would sit outside the
-       * scroller's padding box, which clips there, and what is left of it would run into the
-       * shell's mana line above. The ring needs four of the twenty.
+       * **No top padding of its own, as on every other page** (the owner's note, 2026-10-21 — a
+       * `pt-5` left from when the editor was its own scroller put 33px over this row and 13 under
+       * it). The page scrolls in `main` now, and the bar's 12px inside `main`'s padding is room
+       * enough for the name field's focus ring, which stands 4px proud of the field.
        *
        * **Three lines since 2026-08-24, and this is the first of them**: what the deck is and
        * what can be done to it, then the ledger of what it adds up to, then the toolbar that
@@ -249,13 +246,6 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
        * gone — see {@link ACTIONS}.
        */}
       <PageBar
-        // `pt-5`: the 20px `main` puts above every other page's title, which this view's
-        // scroller sits flush against — and room for the focus ring, for the reason above.
-        // `ruled={false}`: the rule is drawn under the ledger, the heading's second line, by
-        // `DeckEditor` — so the page has one rule between its heading and its toolbar rather than
-        // the bar's and the ledger's.
-        className="pt-5"
-        ruled={false}
         trail={trail}
         titleAs="div"
         titleGrows
