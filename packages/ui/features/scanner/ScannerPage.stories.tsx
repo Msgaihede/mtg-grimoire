@@ -194,6 +194,24 @@ export const Developer: Story = {
 };
 
 /**
+ * **Point and shoot**, stored on: the bar's press is *Scan card* — one click, one card — and the
+ * picture says so in Start's place. The camera is refused here, so the press reads nothing.
+ */
+export const PointAndShoot: Story = {
+  render: () => <Written prefs={{ pointAndShoot: true }} />,
+  parameters: { docs: { story: { inline: false, height: "640px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
+    await expect(canvas.getByRole("switch", { name: "Point & shoot" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(canvas.queryByRole("button", { name: "Start scanning" })).toBeNull();
+  },
+};
+
+/**
  * *Archive* (issue #989): the resolved rows go to the scan history, not the collection, and the
  * tray empties — then *History* on the bar opens the dialog with the pile at the top, `Archived`.
  *

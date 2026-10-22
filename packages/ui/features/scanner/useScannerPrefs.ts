@@ -79,6 +79,7 @@ export const SCANNER_PREFS_BEFORE_LOAD: ScannerPrefs = {
   developer: false,
   cameraId: null,
   trayLayout: "grid",
+  pointAndShoot: false,
 };
 
 /**

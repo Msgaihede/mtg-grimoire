@@ -948,6 +948,10 @@ pub struct ScannerPrefs {
     /// validated, for `finish`'s reason: which layouts exist is the page's vocabulary, and it
     /// reads a word it does not know as the grid.
     pub tray_layout: String,
+    /// **Point and shoot**: recognition runs only for a press — a click on the desktop face, a
+    /// hold on the phone's — rather than from Start until Stop, so a camera moving between two
+    /// cards reads nothing. The page's to act on; stored here so the choice outlives the visit.
+    pub point_and_shoot: bool,
 }
 
 impl Default for ScannerPrefs {
@@ -964,6 +968,7 @@ impl Default for ScannerPrefs {
             developer: false,
             camera_id: None,
             tray_layout: "grid".to_owned(),
+            point_and_shoot: false,
         }
     }
 }
@@ -1720,6 +1725,7 @@ mod tests {
         assert!(!p.developer);
         assert_eq!(p.camera_id, None);
         assert_eq!(p.tray_layout, "grid");
+        assert!(!p.point_and_shoot);
     }
 
     /// A row an older build wrote has no camera and no tray layout, and `#[serde(default)]` is
@@ -1740,6 +1746,7 @@ mod tests {
         assert!(p.developer);
         assert_eq!(p.camera_id, None);
         assert_eq!(p.tray_layout, "grid");
+        assert!(!p.point_and_shoot);
     }
 
     /// **Detect is a policy, so it must never be a word the collection would file.**
@@ -1777,6 +1784,7 @@ mod tests {
         assert_eq!(p["mode"], "fast");
         assert_eq!(p["cameraId"], "cam-1");
         assert_eq!(p["trayLayout"], "grid");
+        assert_eq!(p["pointAndShoot"], false);
         // The filters keep the crate's snake case inside the camel-case document.
         assert!(p["filters"].get("released_from").is_some(), "{p}");
 
