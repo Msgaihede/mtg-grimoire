@@ -39,12 +39,20 @@ thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 
-# The user schema's derived uids, and the updater's integrity check: every GitHub release asset carries a
-# `digest` (`sha256:…`, measured live 2026-08-09 on all five), which says a download arrived as
-# it was uploaded. **It says nothing about who uploaded it** — anyone who can put a file on a
-# release gets a valid digest computed for them. Update signing was removed on 2026-09-29; see
-# docs/reference/in-app-updates.md.
+# The user schema's derived uids, and the updater's transport check: every GitHub release asset
+# carries a `digest` (`sha256:…`, measured live 2026-08-09 on all five), which says a download
+# arrived as it was uploaded. **It says nothing about who uploaded it** — GitHub computes a valid
+# digest for whatever file is put on a release. Who published it is the signature's question,
+# `minisign-verify`, below.
 sha2 = "0.10"
+# Who published an update: the updater verifies a minisign signature over the portable zip and
+# the NSIS setup before it unpacks or stages either (`update::verify_signature`), against a
+# public key compiled into the binary. release.yml's `attach` job makes the signatures with
+# `scripts/update-signing.ts`. **Zero dependencies** and verify-only — nothing here signs.
+# `0.3` rather than the `0.2` line: `lib.rs` is byte-identical between 0.2.5 and 0.3.0, and the
+# one file that changed swapped raw-pointer copies for safe slice copies, so 0.3.0 carries no
+# `unsafe` at all.
+minisign-verify = "0.3"
 # **The pairing cryptography's crates are `grimoire-core`'s since 2026-10-02** — `x25519-dalek`,
 # `chacha20poly1305`, `hkdf` and `qrcode` moved to that manifest with `sync_pair::crypto` and
 # `sync_pair::invite`, the only code that names them, and their version arguments went with them.

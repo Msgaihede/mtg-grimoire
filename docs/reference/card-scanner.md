@@ -2829,7 +2829,11 @@ makes a run cost a new set's few hundred fetches rather than half an hour and ~1
 steps, in order: read the format version; fetch Scryfall's `default_cards`; restore the cache; build
 with `--bulk`; save the cache (`if: always()`, and the glob takes SQLite's `-wal`, so a run that
 died mid-write keeps what it wrote); fetch the models; run the synthetic evaluation; then a dry run
-or a publish.
+or a publish. **Two jobs since 2026-10-21**: `build` does all of that with `contents: read` and no
+token in any step, and on `main` hands the three files on as the artifact `scanner-bundle` (one
+day); `publish` (`contents: write`) downloads it and runs the comparison and `gh release upload`,
+with no checkout, no toolchain and no install — so the cargo build scripts, `build-hashes`, `eval`
+and the model fetch never run beside a token that can write the release every build embeds.
 
 **Scryfall's bulk descriptor has no `download_uri`, and the file is gzipped JSON Lines.** Checked
 live 2026-09-15: `GET https://api.scryfall.com/bulk-data/default-cards` answers
