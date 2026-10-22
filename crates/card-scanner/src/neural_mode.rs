@@ -33,6 +33,11 @@
 //! again — and, as a lock that lets go does in the other modes, clear the previous decision
 //! [`DecisionView::replaces_previous`] is asked against. A switch from Fast or Exact on the card
 //! still in hand keeps it, so the Neural decision on that card replaces the row.
+//!
+//! **Another look of the decided card come to rest is a card laid on it** (#1359): the
+//! agreement decides it ([`card_neural::Decision::another_look`]), and, as a change the watch
+//! sees in the other modes, it is a second copy and adds — unless its printing is the one the
+//! last decision named, which is that card's own look wavering, a second opinion.
 
 use super::{FrameOptions, FrameSize, ScanMode, Session, Verdict};
 
@@ -397,6 +402,7 @@ impl Session {
         let gone = l.agreement.absent() >= rules.forget_after;
         let decisions = l.agreement.decisions();
         let new = decisions != l.decisions;
+        let laid_on = new && l.agreement.decision().is_some_and(|d| d.another_look);
         l.decisions = decisions;
         let standing = l.agreement.decision().map(|d| (d.entry, d.score));
         let gallery = l.recognizer.gallery();
@@ -502,6 +508,11 @@ impl Session {
         }
         if let Some(mut d) = fresh {
             self.decision_seq += 1;
+            if laid_on && self.previous_printing.as_deref() != Some(d.printing.as_str()) {
+                // Another printing of the card laid on it: what the last decision named is no
+                // longer in front of the lens, so the same card now is a second copy.
+                self.previous_card = None;
+            }
             d.replaces_previous = self.replaces_previous(&d);
             if let Some(l) = self.neural.loaded.as_mut() {
                 l.decided = Some(d);
@@ -639,9 +650,10 @@ fn decision_view(
 /// crops. `None` for a frame that votes for nothing.
 ///
 /// **Nor for a frame of the card already decided**: the agreement counts a decision again only
-/// for another card or after forgetting it — both of which end the count, and the frames kept
-/// with it — so that frame could never choose a printing, and its two crop networks are not
-/// run. The kept frames stop growing while a card sits decided on the mat.
+/// for another card, another look of the decided one, or after forgetting it — each of which
+/// ends the count, and the frames kept with it — so that frame could never choose a printing,
+/// and its two crop networks are not run. The kept frames stop growing while a card sits decided
+/// on the mat. A frame of another look of it is kept: it may be a second printing laid on top.
 ///
 /// A crop that will not read drops the frame's glance, not the frame: its fingerprint still
 /// scores the card's looks.
@@ -657,7 +669,7 @@ fn keep(
         return None;
     }
     let best = read.best()?;
-    if agreement.decision().is_some_and(|d| d.card == best.scored.card) {
+    if agreement.is_decided(&best.scored) {
         return None;
     }
     Some(Seen {
@@ -1446,6 +1458,99 @@ mod tests {
             assert_eq!(kept_cards(&s), [1]);
         }
 
+        /// [`with_looks`], over a reference where card 1's printings P, Q, R and S are one oracle
+        /// card and T another — so a decision on one of card 1's looks after another is the same
+        /// card to [`Session::replaces_previous`].
+        fn one_oracle(b: f32) -> Session {
+            let mut s = with_looks(b);
+            let (mut r, _, _) = fast::two_far_cards();
+            for (printing, oracle, number) in
+                [(P, 30, "1"), (Q, 30, "2"), (R, 30, "3"), (S, 30, "4"), (T, 31, "5")]
+            {
+                let label = Label {
+                    name: format!("Card {oracle}"),
+                    set: "hob".into(),
+                    number: number.into(),
+                    lang: "en".into(),
+                    released: "2025-01-01".into(),
+                };
+                r.add_label(printing, Some(fast::id(oracle)), None, label);
+            }
+            s.reference = Some(std::sync::Arc::new(r));
+            s
+        }
+
+        /// #1359: look B of card 1 laid on look A of it is a second copy, as another card is.
+        #[test]
+        fn a_second_printing_laid_on_the_decided_card_is_another_copy() {
+            let mut s = one_oracle(0.75);
+            let first = decide(&mut s, A, 0.0).decision.expect("decided");
+            assert_eq!(first.printing, format_uuid(&P));
+            // Two frames of it are not at rest: the first printing stands.
+            for at in [200.0, 300.0] {
+                let v = vote(&mut s, B, at);
+                assert_eq!(v.decision_seq, 1);
+                assert_eq!(v.decision.expect("held").printing, format_uuid(&P));
+            }
+            let v = vote(&mut s, B, 400.0);
+            assert_eq!(v.decision_seq, 2, "a second printing of the decided card never decided");
+            let d = v.decision.expect("decided");
+            assert_eq!((d.printing, d.oracle_id.clone()), (format_uuid(&S), first.oracle_id));
+            assert!(!d.replaces_previous, "a second printing replaced the first one's row");
+            assert!(vote(&mut s, B, 500.0).decision.expect("held").printing == format_uuid(&S));
+
+            // The first printing laid back on it adds in turn.
+            for at in [600.0, 700.0] {
+                assert_eq!(vote(&mut s, A, at).decision_seq, 2);
+            }
+            let v = vote(&mut s, A, 800.0);
+            assert_eq!(v.decision_seq, 3);
+            assert!(!v.decision.expect("decided").replaces_previous);
+        }
+
+        #[test]
+        fn a_held_cards_look_wavering_adds_nothing() {
+            let mut s = one_oracle(0.75);
+            decide(&mut s, A, 0.0);
+            for (i, entry) in [B, B, A, B, B, A, A].into_iter().enumerate() {
+                let v = vote(&mut s, entry, 200.0 + 100.0 * i as f64);
+                assert_eq!(v.decision_seq, 1, "frame {i}");
+            }
+        }
+
+        #[test]
+        fn another_look_that_comes_to_the_same_printing_is_a_second_opinion() {
+            // The evidence says Q on look A and again on look B: the card's own look wavered
+            // long enough to decide, and its row is replaced rather than added to.
+            let mut s = one_oracle(0.75);
+            s.neural.loaded.as_mut().expect("loaded").index = Some((index(), thresholds()));
+            let q = along(Some(glance(&[(1, 1.0)])));
+            let first = decide_seen(&mut s, &q).decision.expect("decided");
+            assert_eq!(first.printing, format_uuid(&Q));
+            let read = naming(&s, B, true);
+            let v = (0..3)
+                .map(|i| feed_seen(&mut s, &read, Some(q.clone()), 200.0 + 100.0 * i as f64))
+                .last()
+                .expect("three frames");
+            assert_eq!(v.decision_seq, 2);
+            let d = v.decision.expect("decided");
+            assert_eq!(d.printing, format_uuid(&Q));
+            assert!(d.replaces_previous, "the same printing on another look was added twice");
+
+            // Laid on with S's band, it is S, and adds.
+            let mut s = one_oracle(0.75);
+            s.neural.loaded.as_mut().expect("loaded").index = Some((index(), thresholds()));
+            decide_seen(&mut s, &q);
+            let on_s = along(Some(glance(&[(3, 1.0)])));
+            let v = (0..3)
+                .map(|i| feed_seen(&mut s, &read, Some(on_s.clone()), 200.0 + 100.0 * i as f64))
+                .last()
+                .expect("three frames");
+            let d = v.decision.expect("decided");
+            assert_eq!((v.decision_seq, d.printing.clone()), (2, format_uuid(&S)));
+            assert!(!d.replaces_previous);
+        }
+
         #[test]
         fn the_deciding_frames_glance_chooses_the_printing() {
             let mut s = with_evidence(0.75);
@@ -1476,6 +1581,8 @@ mod tests {
             assert!(agreement.decision().is_some());
             assert!(keep(&read, g, &agreement, None, &pixels).is_none());
             assert!(keep(&naming(&s, C, true), g, &agreement, None, &pixels).is_some());
+            // Another look of it may be a second printing laid on top, which is chosen on them.
+            assert!(keep(&naming(&s, B, true), g, &agreement, None, &pixels).is_some());
         }
 
         #[test]

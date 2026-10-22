@@ -15,9 +15,20 @@
 //! another card is decided, **or until the card has been gone [`Rules::forget_after`] frames
 //! running** — ours, not Quickdraw's: a reader who lifts a card and lays down another copy of it
 //! is adding a second copy, and a decision that stood through the gap would add nothing.
+//!
+//! **Or until another look of it comes to rest** (#1359), also ours. A pile is scanned by laying
+//! each card on the last, and a second printing of the decided card — another art, a Forest on
+//! a Forest from another set — is the same card to the count, so it never decided and the reader
+//! had to Reset or scan something else first. While a card is decided its votes are counted by
+//! look: [`Rules::another_look`] accepted frames running that each tell their look apart from
+//! the deciding frame's (neither is among the other's twins, [`crate::scanner::TWIN_GAP`])
+//! decide that look, [`Decision::another_look`]. More frames than a card takes, because a held
+//! card's best look can waver where its twins do not reach, and a change made in error adds a
+//! row. Two copies of one look are still one decision — nothing about the second looks
+//! different.
 
 use crate::frame::{bounds_iou, Quad};
-use crate::scanner::Read;
+use crate::scanner::{Read, Scored};
 
 #[derive(Clone, Debug)]
 pub struct Rules {
@@ -30,6 +41,9 @@ pub struct Rules {
     /// Frames running with no card in front of the lens ([`Read::present`]) that forget the
     /// standing decision.
     pub forget_after: u32,
+    /// Accepted frames running, each naming another look of the decided card than the deciding
+    /// frame's, that decide it: a second printing laid on the first.
+    pub another_look: usize,
 }
 
 impl Default for Rules {
@@ -41,6 +55,7 @@ impl Default for Rules {
             max_gap_ms: 850.0,
             same_place: 0.35,
             forget_after: 5,
+            another_look: 3,
         }
     }
 }
@@ -48,6 +63,8 @@ impl Default for Rules {
 #[derive(Clone, Debug)]
 struct Vote {
     card: u32,
+    entry: u32,
+    twins: Vec<u32>,
     at: f64,
     strong: bool,
 }
@@ -62,6 +79,14 @@ pub struct Decision {
     pub twins: Vec<u32>,
     /// Why: `"agreed"` or `"instant"`.
     pub how: &'static str,
+    /// Another look of the card decided before it, come to rest with no break between: a second
+    /// printing laid on the first, where the card alone says nothing changed.
+    pub another_look: bool,
+}
+
+/// Two looks the picture cannot tell apart: the same look, or either among the other's twins.
+fn alike(a: (u32, &[u32]), b: (u32, &[u32])) -> bool {
+    a.0 == b.0 || a.1.contains(&b.0) || b.1.contains(&a.0)
 }
 
 #[derive(Default)]
@@ -70,7 +95,11 @@ pub struct Agreement {
     votes: Vec<Vote>,
     last_quad: Option<Quad>,
     decision: Option<Decision>,
-    /// Decisions made: a different card, or the same card after it was forgotten, counts again.
+    /// The deciding frame's look and its twins, while a decision stands — what another look is
+    /// told apart from. Not the decision's own, which later frames of its look refresh.
+    look: Option<(u32, Vec<u32>)>,
+    /// Decisions made: a different card, the same card after it was forgotten, or another look
+    /// of it come to rest, counts again.
     decisions: usize,
     /// Frames running with no card in front of the lens.
     absent: u32,
@@ -88,6 +117,7 @@ impl Agreement {
         self.votes.clear();
         self.last_quad = None;
         self.decision = None;
+        self.look = None;
         self.absent = 0;
     }
 
@@ -114,6 +144,25 @@ impl Agreement {
         self.absent
     }
 
+    /// Whether `scored` is the decided card as it was decided: its card, and a look the picture
+    /// cannot tell from the deciding frame's. A frame of another look of it is not.
+    pub fn is_decided(&self, scored: &Scored) -> bool {
+        self.look.as_ref().is_some_and(|(entry, twins)| {
+            self.decision
+                .as_ref()
+                .is_some_and(|d| d.card == scored.card)
+                && alike((*entry, twins), (scored.entry, &scored.twins))
+        })
+    }
+
+    /// Whether a vote names another look of the decided card than the deciding frame's.
+    fn another_look(&self, card: u32, entry: u32, twins: &[u32]) -> bool {
+        match (&self.decision, &self.look) {
+            (Some(d), Some((e, t))) => d.card == card && !alike((*e, t), (entry, twins)),
+            _ => false,
+        }
+    }
+
     /// Feed one frame's read, taken at `now_ms`. True when this frame made a decision (a new
     /// one, or the same card decided again).
     pub fn observe(&mut self, r: &Read, now_ms: f64) -> bool {
@@ -123,6 +172,7 @@ impl Agreement {
             self.absent = self.absent.saturating_add(1);
             if self.absent >= self.rules.forget_after {
                 self.decision = None;
+                self.look = None;
             }
         }
         let best = r.best();
@@ -146,8 +196,16 @@ impl Agreement {
             return false;
         }
         let b = best.expect("a voting frame has a card");
+        let (card, entry, twins) = (b.scored.card, b.scored.entry, &b.scored.twins);
+        // While the card is decided, its votes are counted by look: a look the picture tells
+        // apart from the last vote's starts the count again, as another card would.
+        let relooked = |last: &Vote| {
+            self.decision.as_ref().is_some_and(|d| d.card == card)
+                && !alike((last.entry, &last.twins), (entry, twins))
+        };
         if let Some(last) = &last {
-            if last.card != b.scored.card
+            if last.card != card
+                || relooked(last)
                 || now_ms - last.at > self.rules.max_gap_ms
                 || now_ms < last.at
             {
@@ -157,15 +215,44 @@ impl Agreement {
         self.votes
             .retain(|v| now_ms - v.at <= self.rules.max_age_ms);
         self.votes.push(Vote {
-            card: b.scored.card,
+            card,
+            entry,
+            twins: twins.clone(),
             at: now_ms,
             strong: r.accepted,
         });
-        let window = self.rules.required.max(self.rules.support_required);
+        let window = self
+            .rules
+            .required
+            .max(self.rules.support_required)
+            .max(self.rules.another_look);
         if self.votes.len() > window {
             self.votes.remove(0);
         }
         self.last_quad = Some(b.quad);
+        if self.another_look(card, entry, twins) {
+            // Accepted frames of another look than the deciding frame's, and nothing less: a
+            // supported or an instant frame does not lay a second printing on the first.
+            let running = self
+                .votes
+                .iter()
+                .filter(|v| v.strong && self.another_look(v.card, v.entry, &v.twins))
+                .count();
+            if running < self.rules.another_look.max(1) {
+                return false;
+            }
+            self.decisions += 1;
+            self.look = Some((entry, twins.clone()));
+            self.decision = Some(Decision {
+                entry,
+                card,
+                score: b.scored.score,
+                twins: twins.clone(),
+                how: "agreed",
+                another_look: true,
+            });
+            return true;
+        }
         let strong = self.votes.iter().filter(|v| v.strong).count();
         let agreed =
             strong >= self.rules.required || self.votes.len() >= self.rules.support_required;
@@ -179,9 +266,15 @@ impl Agreement {
             score: b.scored.score,
             twins: b.scored.twins.clone(),
             how: if agreed { "agreed" } else { "instant" },
+            // Later frames of a decision repeat what its first said.
+            another_look: self
+                .decision
+                .as_ref()
+                .is_some_and(|d| d.card == card && d.another_look),
         };
         if self.decision.as_ref().map(|d| d.card) != Some(decision.card) {
             self.decisions += 1;
+            self.look = Some((entry, twins.clone()));
         }
         self.decision = Some(decision);
         true
@@ -247,6 +340,16 @@ mod tests {
 
     fn nothing() -> Read {
         Read::default()
+    }
+
+    /// An accepted frame of `card` whose best look is `entry`, with `twins` beside it.
+    fn look(card: u32, entry: u32, twins: &[u32]) -> Read {
+        let mut r = accepted(card);
+        r.cards[0].scored.entry = entry;
+        r.cards[0].scored.twins = std::iter::once(entry)
+            .chain(twins.iter().copied())
+            .collect();
+        r
     }
 
     #[test]
@@ -324,6 +427,84 @@ mod tests {
         s.observe(&accepted(2), 300.0);
         assert_eq!(s.decision().map(|d| d.card), Some(2));
         assert_eq!(s.decisions(), 2);
+    }
+
+    #[test]
+    fn another_look_of_the_decided_card_at_rest_is_a_new_decision() {
+        // Card 1 decided on look 10; a second printing of it, look 11, laid on top (#1359).
+        let mut s = Agreement::default();
+        s.observe(&look(1, 10, &[]), 0.0);
+        assert!(s.observe(&look(1, 10, &[]), 100.0));
+        assert!(!s.decision().expect("decided").another_look);
+        assert!(s.is_decided(&look(1, 10, &[]).cards[0].scored));
+        assert!(!s.is_decided(&look(1, 11, &[]).cards[0].scored));
+        assert!(!s.observe(&look(1, 11, &[]), 200.0));
+        assert!(
+            !s.observe(&look(1, 11, &[]), 300.0),
+            "two frames of a look are not at rest"
+        );
+        assert_eq!(
+            s.decision().map(|d| d.entry),
+            Some(10),
+            "the first look still stands"
+        );
+        assert!(s.observe(&look(1, 11, &[]), 400.0));
+        let d = s.decision().expect("decided");
+        assert_eq!((d.card, d.entry, d.another_look), (1, 11, true));
+        assert_eq!(s.decisions(), 2);
+        // Now the second look is the one decided: more of it changes nothing, and the first
+        // look laid back on it is another decision in turn.
+        assert!(s.observe(&look(1, 11, &[]), 500.0));
+        assert_eq!(s.decisions(), 2);
+        assert!(s.is_decided(&look(1, 11, &[]).cards[0].scored));
+        for at in [600.0, 700.0] {
+            assert!(!s.observe(&look(1, 10, &[]), at));
+        }
+        assert!(s.observe(&look(1, 10, &[]), 800.0));
+        assert_eq!(
+            (s.decisions(), s.decision().map(|d| d.entry)),
+            (3, Some(10))
+        );
+    }
+
+    #[test]
+    fn a_wavering_look_or_a_twin_of_it_is_the_decided_card() {
+        let mut s = Agreement::default();
+        s.observe(&look(1, 10, &[]), 0.0);
+        s.observe(&look(1, 10, &[]), 100.0);
+        // Another look on two frames, then the decided one: a held card's best look wavering.
+        s.observe(&look(1, 11, &[]), 200.0);
+        s.observe(&look(1, 11, &[]), 300.0);
+        s.observe(&look(1, 10, &[]), 400.0);
+        assert!(
+            !s.observe(&look(1, 11, &[]), 500.0),
+            "the waver counted across the look"
+        );
+        assert_eq!(s.decisions(), 1);
+        // A look the picture could not tell from the deciding one, either way round, is it.
+        let mut s = Agreement::default();
+        s.observe(&look(1, 10, &[12]), 0.0);
+        s.observe(&look(1, 10, &[12]), 100.0);
+        for (i, frame) in [look(1, 12, &[]), look(1, 13, &[10])]
+            .iter()
+            .cycle()
+            .take(6)
+            .enumerate()
+        {
+            s.observe(frame, 200.0 + 100.0 * i as f64);
+            assert!(!s.decision().expect("decided").another_look, "frame {i}");
+        }
+        assert_eq!(s.decisions(), 1);
+        // And only accepted frames lay a second printing: supported ones never do.
+        let mut s = Agreement::default();
+        s.observe(&look(1, 10, &[]), 0.0);
+        s.observe(&look(1, 10, &[]), 100.0);
+        let mut supported = look(1, 11, &[]);
+        (supported.accepted, supported.supported, supported.weak) = (false, true, true);
+        for i in 0..4 {
+            assert!(!s.observe(&supported, 200.0 + 100.0 * i as f64));
+        }
+        assert_eq!(s.decisions(), 1);
     }
 
     #[test]
