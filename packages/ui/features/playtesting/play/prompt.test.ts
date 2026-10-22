@@ -51,6 +51,15 @@ describe("optionLabel", () => {
     );
   });
 
+  it("says the color a mana-color answer makes, never the shape of the choice (issue #1363)", () => {
+    const prompt = { kind: "ChooseManaColor" };
+    const color = (label: string) => option({ kind: "ChooseManaColor", label });
+    expect(optionLabel(color("Black"), prompt)).toEqual({ text: "Add black mana", hint: null });
+    expect(optionLabel(color("White"), prompt).text).toBe("Add white mana");
+    expect(optionLabel(color("White Blue"), prompt).text).toBe("Add white and blue mana");
+    expect(optionLabel(color("Red White Red"), prompt).text).toBe("Add 2 red and white mana");
+  });
+
   const target = { kind: "TargetSelection" };
 
   it("names a target by its card or its player", () => {

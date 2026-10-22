@@ -323,7 +323,10 @@ or not** (issue #1326, 2026-10-21): the reader picks which lands pay for the nex
 land-tap reducer checks a tap against): a land's `TapLandForMana`, one per kind of mana it makes,
 and any other permanent's mana `ActivateAbility` (Sol Ring, a ready Llanowar Elves). One way is
 taken; several (Savannah's {G} or {W}) are the board's own `ManaChoice` prompt, each answer's
-`label` the mana it makes (`Green`); none is a refusal. **The mana floats in the pool** — the mana
+`label` the mana it makes (`Green`); none is a refusal. A source of any color (Commander's Sphere,
+a Treasure) is one way whose ability asks the engine's own `ChooseManaColor`, and each answer's
+`label` is its mana too — `Black`, or a `Combination`'s types with a space between (`White Blue`),
+never the choice's shape (`SingleColor`, issue #1363). **The mana floats in the pool** — the mana
 table's Pool row — and the next cast spends it before tapping anything else. Unspent, it empties as
 the step or phase ends (CR 500.4), as the rules have it; there is no mana burn. The reader keeps
 priority: nothing plays on after a tap, so a step they stopped at is not passed over. It is told as
