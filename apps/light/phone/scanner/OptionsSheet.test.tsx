@@ -29,6 +29,8 @@ function mount(over: Partial<Parameters<typeof OptionsSheet>[0]> = {}) {
     onDismiss: vi.fn(),
     mode: "fast" as const,
     onMode: vi.fn(),
+    pointAndShoot: false,
+    onPointAndShoot: vi.fn(),
     filters: NO_FILTERS,
     onFilters: vi.fn(),
     filterError: null as string | null,
@@ -94,6 +96,29 @@ describe("the scanner's options sheet", () => {
     expect(modes[0]).toHaveAttribute("aria-current", "true");
     await userEvent.click(modes[1]);
     expect(props.onMode).toHaveBeenCalledWith("exact");
+    // Back on the first page.
+    expect(within(dialog).getByRole("button", { name: /^Filters/ })).toBeInTheDocument();
+  });
+
+  it("switches to point and shoot from its page, saying what each way does", async () => {
+    const props = mount();
+    expect(
+      within(await sheet())
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toContain("ScanningStart and stop");
+    await open(/^Scanning/);
+    const dialog = await sheet();
+    const ways = within(within(dialog).getByRole("list", { name: "Ways to scan" })).getAllByRole(
+      "button",
+    );
+    expect(ways.map((w) => w.textContent)).toEqual([
+      "Start and stopStart once, and every card the camera sees is read until you stop.",
+      "Point & shootHold Scan to read. The scanner pauses the moment you let go, so moving between cards reads nothing.",
+    ]);
+    expect(ways[0]).toHaveAttribute("aria-current", "true");
+    await userEvent.click(ways[1]);
+    expect(props.onPointAndShoot).toHaveBeenCalledWith(true);
     // Back on the first page.
     expect(within(dialog).getByRole("button", { name: /^Filters/ })).toBeInTheDocument();
   });

@@ -49,6 +49,25 @@ export const SCAN_MODES: readonly { id: ScanMode; label: string; hint: string }[
  */
 export const SCANNING_STOPPED = "Scanning stopped. Press Start scanning to begin.";
 
+/** Point and shoot's name — the desktop bar's switch and the phone's options row. */
+export const POINT_AND_SHOOT = "Point & shoot";
+
+/**
+ * What the picture says between two shots under point and shoot ({@link SCANNING_STOPPED}'s place)
+ * — one sentence a face, because the press each names is that face's own: a click of *Scan card*
+ * on the desktop's bar, a hold of *Scan* on the phone's.
+ */
+export const SHOT_READY_CLICK = "Point at a card, then press Scan card.";
+export const SHOT_READY_HOLD = "Point at a card, then press and hold Scan.";
+
+/** What point and shoot does, said where it is switched: the desktop's tooltip, the phone's note. */
+export const POINT_AND_SHOOT_CLICK_HINT =
+  "Read one card per press of Scan card, so moving the camera between cards reads nothing.";
+export const POINT_AND_SHOOT_HOLD_HINT =
+  "Hold Scan to read. The scanner pauses the moment you let go, so moving between cards reads nothing.";
+/** The other way, under its name on the phone's sheet. */
+export const CONTINUOUS_HINT = "Start once, and every card the camera sees is read until you stop.";
+
 /**
  * Under the list of cameras, on both surfaces. **"Device", not "computer"**: the choice is a row
  * of `app_meta` that never syncs, which is true of a phone and of a desktop alike, and the phone

@@ -690,6 +690,11 @@ export interface ScannerPrefs {
    * read it through `trayLayoutOf`, which takes a word it does not know as the grid.
    */
   trayLayout: string;
+  /**
+   * **Point and shoot**: recognition runs only for a press — a click on the desktop face, a hold
+   * on the phone's — instead of from Start until Stop (`usePointAndShoot`).
+   */
+  pointAndShoot: boolean;
 }
 
 /**

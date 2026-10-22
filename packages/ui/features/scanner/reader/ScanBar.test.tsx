@@ -32,6 +32,10 @@ function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
   return {
     scanning: true,
     onScanning: vi.fn(),
+    pointAndShoot: false,
+    onPointAndShoot: vi.fn(),
+    shooting: false,
+    onShoot: vi.fn(),
     mode: "fast",
     onMode: vi.fn(),
     filters: { sets: [], released_from: null, released_to: null },
@@ -65,6 +69,34 @@ function wrap(ui: ReactElement) {
 }
 
 describe("ScanBar", () => {
+  /** Point and shoot: the switch is a stored pref, and on it the press is one click, one card. */
+  it("trades Start and Stop for Scan card under point and shoot", async () => {
+    const user = userEvent.setup();
+    const onPointAndShoot = vi.fn();
+    const onShoot = vi.fn();
+    const { rerender } = wrap(<ScanBar {...props({ onPointAndShoot, onShoot })} />);
+    const toggle = screen.getByRole("switch", { name: "Point & shoot" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+    await user.click(toggle);
+    expect(onPointAndShoot).toHaveBeenCalledWith(true);
+
+    rerender(<ScanBar {...props({ pointAndShoot: true, onPointAndShoot, onShoot })} />);
+    expect(screen.getByRole("switch", { name: "Point & shoot" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.queryByRole("button", { name: /scanning/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Scan card" }));
+    expect(onShoot).toHaveBeenLastCalledWith(true);
+
+    rerender(
+      <ScanBar {...props({ pointAndShoot: true, shooting: true, onPointAndShoot, onShoot })} />,
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel scan" }));
+    expect(onShoot).toHaveBeenLastCalledWith(false);
+  });
+
   /** The way into the scan history (issue #989) is the Scanner view's alone. */
   it("opens the scan history from its own press, handing up the button for the caret", async () => {
     const user = userEvent.setup();
