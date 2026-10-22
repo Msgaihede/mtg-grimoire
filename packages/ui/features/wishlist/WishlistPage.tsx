@@ -2070,7 +2070,7 @@ export function WishlistPage() {
 
       {/* **The page bar** ("Page & Section Headings" canvas, option A, 2026-10-21) —
           `CollectionPage`'s twin: the figures band this row always was, with the page's `<h2>`
-          drawn at its left end instead of `sr-only`, and the gold rule under it. No extra height.
+          drawn at its left end instead of `sr-only`, and the rule under it. No extra height.
 
           **No trail inside a folder either**, for the collection's reason: the folder trail stays
           in the path row, where its segments take drops, and a second copy up here could not. The

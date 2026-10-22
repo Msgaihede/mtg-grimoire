@@ -29,7 +29,7 @@ const meta = {
           "Every page's top row, and its heading (\"Page & Section Headings\" canvas, option " +
           "A · Quiet row, approved 2026-10-21). Not a block above the page: the Cinzel title " +
           "takes the left end of the row the page's figures and actions already stood in, and " +
-          "a gold hairline fading to the right sits under it — no extra height. Left to right: " +
+          "a full-width grey rule sits under it — no extra height. Left to right: " +
           "the trail (sub-pages only), the title, inline figures (`998 cards · 735 unique`) or " +
           "mono meta, the page's own actions. **Sub-pages are one rule:** the page on screen " +
           "is the title, everything above it a dim crumb with a chevron after it. Three or " +
@@ -116,7 +116,7 @@ export const StaticCrumb: Story = {
 /**
  * The section heading inside a page — a group, a folder wall, a settings or scanner panel —
  * drawn from the module's recipes: Cinzel 18, mono meta, a grey rule to the row's end and an
- * optional gold link. Grey, because the gold rule is the page bar's alone.
+ * optional gold link — the page bar's grey rule, started after the title.
  */
 export const SectionHeading: Story = {
   render: () => (

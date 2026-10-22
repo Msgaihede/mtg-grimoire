@@ -2905,8 +2905,8 @@ export function CollectionPage() {
 
       {/* **The page bar** ("Page & Section Headings" canvas, option A, 2026-10-21): the figures
           band this row always was, with the page's name drawn at its left end — the `<h2>` that
-          was `sr-only` while the app had no visible header is the bar's title now — and the gold
-          rule under it in place of the band's grey one. No extra height: the title takes the
+          was `sr-only` while the app had no visible header is the bar's title now — and the
+          bar's full-width rule under it, where the band's was. No extra height: the title takes the
           left end of the row the figures and actions already stood in.
 
           **No trail, in a folder or out of one.** The folder trail stays in the path row below,

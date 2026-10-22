@@ -1697,7 +1697,7 @@ export function DecksPage() {
 
       {/* **The page bar** ("Page & Section Headings", option A, approved 2026-10-21): the wall's
           heading, its count and its controls, as the page's heading — the Cinzel title, the
-          count as mono meta, the gold rule under it, the controls unchanged against the right
+          count as mono meta, the rule under it, the controls unchanged against the right
           edge. **Across the whole page, above the tree as well as the wall** (the owner's note,
           2026-10-21): it names where the reader is standing, which both columns answer to, and a
           heading that began at the wall read as the wall's alone. Inside a folder the trail leads

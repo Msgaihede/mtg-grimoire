@@ -543,7 +543,7 @@ export function SearchPage() {
           {/* `rootRef` hands the hook above the whole block — row, tray, stated filters — whose
               bottom edge is the quick bar's trigger. */}
           {/* **The page bar, drawn by the filter row** ("Page & Section Headings", option A,
-              2026-10-21): the title as the row's first item (`lead`) and the gold rule under the
+              2026-10-21): the title as the row's first item (`lead`) and the rule under the
               filter block, so naming the page costs no height — this view had no top row to give
               the title, and a row of its own cost the wall 45px (the owner's note). The count
               stays the result line's, where it always was. */}

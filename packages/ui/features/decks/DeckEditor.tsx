@@ -3502,7 +3502,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         />
       )}
 
-      {/* The page bar's gold rule, under the ledger rather than between it and the bar's row
+      {/* The page bar's rule, under the ledger rather than between it and the bar's row
           (the owner's note, 2026-10-21: two rules one over the other read as a mistake). The
           ledger is the heading's second line, so the heading ends here. */}
       <PageRule />

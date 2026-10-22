@@ -489,7 +489,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               : undefined
           }
           // **The page bar, drawn by the scan bar** ("Page & Section Headings", 2026-10-21): the
-          // title as its first item and the gold rule under it, so naming the view costs the
+          // title as its first item and the rule under it, so naming the view costs the
           // camera no height. Not over a trade, whose dialog is already titled.
           lead={destination === undefined ? <PageTitle title="Scanner" titleAs="div" /> : undefined}
         />

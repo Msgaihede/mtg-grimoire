@@ -47,8 +47,8 @@ export const PAGE_META = "whitespace-nowrap font-mono text-xs tabular-nums text-
  */
 export const SECTION_TITLE = "m-0 font-heading text-lg font-semibold leading-none";
 
-/** The line after a section heading: a flex filler, 1px of `--border` to the row's end. Grey,
- *  not gold — the gold rule is the page bar's alone. */
+/** The line after a section heading: a flex filler, 1px of `--border` to the row's end — the
+ *  page bar's own rule ({@link PageRule}), started after the title instead of under it. */
 export const SECTION_RULE = "h-px min-w-6 flex-1 self-center bg-border";
 
 /** A section heading's optional link at the row's end (`Show all`). */
@@ -65,8 +65,8 @@ export const SECTION_LINK = cn(
  * **It is the row each page already drew, not a block above it.** The app's visible page header
  * went on 2026-10-11 because vertical space is the thing every wall is short of; this brings the
  * page's name back without spending any — the title takes the left end of the row the page's
- * figures and actions already stood in, and a gold hairline fading to the right replaces the rule
- * or gap that was under it.
+ * figures and actions already stood in, and a full-width grey rule replaces the rule or gap that
+ * was under it.
  *
  * Left to right: the trail (sub-pages only), the title, then the slot the page fills — inline
  * figures (`InlineFigureRow`) on the title's baseline, or mono meta — and the actions against the
@@ -186,7 +186,7 @@ export function PageBar({
         )}
         {children}
       </div>
-      {/* The gold rule, in place of the hairline or gap that was under each page's top row. */}
+      {/* The rule, in place of the hairline or gap that was under each page's top row. */}
       {ruled && <PageRule />}
     </div>
   );
@@ -275,7 +275,14 @@ export function PageTitle({
   );
 }
 
-/** The page bar's gold rule, for a page that draws its heading row itself ({@link PageTitle}). */
+/**
+ * The page bar's rule, for a page that draws its heading row itself ({@link PageTitle}): 1px of
+ * `--border` across the whole width.
+ *
+ * **Grey and full-width, not the gold fading hairline the canvas drew** (the owner's note,
+ * 2026-10-21): a line that fades out to the right leaves the right half of the heading with no
+ * edge under it, and the space above the title and below the line then read as uneven.
+ */
 export function PageRule() {
-  return <div aria-hidden="true" className="gilt-rule" />;
+  return <div aria-hidden="true" className="h-px shrink-0 bg-border" />;
 }

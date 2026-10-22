@@ -195,7 +195,7 @@ export const DeckLedger = memo(function DeckLedger({
       className={cn(
         "flex min-h-9 shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1",
         // No rules of its own since 2026-10-21: it is the page bar's second line, and the bar's
-        // gold rule under it is the one line between the heading and the toolbar (`DeckEditor`).
+        // rule under it is the one line between the heading and the toolbar (`DeckEditor`).
         // The row's own floor, for the reason every flex row in this editor carries one: without
         // it the terms are the only shrinkable children and a squeeze falls on the numbers.
         "min-w-0",

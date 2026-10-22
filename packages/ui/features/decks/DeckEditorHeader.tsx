@@ -225,7 +225,7 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
        * **The page bar** ("Page & Section Headings", option A, approved 2026-10-21): the deck's
        * own row, drawn as every page's top row is drawn now — the trail back (`Decks ›`), the
        * deck's name as the title, everything that can be done to it against the right edge, and
-       * the gold rule under it.
+       * the rule under it.
        *
        * **The way back is the crumb, not a chevron button.** The `‹ Decks` button became the
        * trail's last crumb ({@link trail}) and keeps everything it carried: {@link closeDeck}, shared with Escape's
@@ -251,7 +251,7 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
       <PageBar
         // `pt-5`: the 20px `main` puts above every other page's title, which this view's
         // scroller sits flush against — and room for the focus ring, for the reason above.
-        // `ruled={false}`: the gold rule is drawn under the ledger, the heading's second line, by
+        // `ruled={false}`: the rule is drawn under the ledger, the heading's second line, by
         // `DeckEditor` — so the page has one rule between its heading and its toolbar rather than
         // the bar's and the ledger's.
         className="pt-5"
