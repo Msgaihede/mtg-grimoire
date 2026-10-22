@@ -180,6 +180,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const [picking, setPicking] = useState(false);
   const pickOpener = useRef<HTMLElement | null>(null);
 
+  // Read above the loop: a device that may send scans keeps each frame of its run at full
+  // resolution (`keepFullFrames`), and one that may not pays nothing for it.
+  const maySend = useMaySendScans();
   const loop = useScanLoop({
     videoRef,
     // **Held until the prefs and the tray are in.** The first frame must go out in the stored
@@ -198,6 +201,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     options: frameOptions,
     sendPx,
     detailWaitMs,
+    keepFullFrames: maySend,
     onDecision,
   });
 
@@ -285,7 +289,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * `prefs.filters` moves the moment the reader changes it, before the session has taken the
    * change, and is put back if the session refuses it.
    */
-  const maySend = useMaySendScans();
   const sendable = destination === undefined && maySend && camera.kind === "live" && scanning;
   const submit = useScanSubmit({
     recent: loop.recent,

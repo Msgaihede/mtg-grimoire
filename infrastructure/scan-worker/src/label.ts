@@ -10,6 +10,11 @@ import { MAX_LABEL_CHARS, MAX_RUN_BYTES, MAX_RUN_FRAMES, MIN_RUN_FRAMES } from "
  * refused rather than stored — there is no partial credit, and nothing arrives here that the app
  * did not have in hand when the reader pressed Send.
  *
+ * **Or no card at all.** A reader can say the last frame has no card in it — the scanner looking
+ * for one where there is none — and that label has `card` and `finish` both `null`, never one
+ * without the other. It is a false positive's evidence, as whole a label as one that names a
+ * printing.
+ *
  * **A scan is a run of frames, and one picture is not a scan.** `run` has an entry a frame and
  * fewer than `MIN_RUN_FRAMES` of them is refused like any other label that is not whole — there
  * is no field here a single still could be sent in.
@@ -29,17 +34,15 @@ export interface Label {
   v: 1;
   /**
    * The printing the reader chose — Scryfall's id for it, and enough to read it by eye. It is
-   * the card in the **last** frame: the one under the camera at the press.
+   * the card in the **last** frame: the one under the camera at the press. `null` where the
+   * reader said there is no card in it.
    */
-  card: {
-    id: string;
-    set: string;
-    number: string;
-    lang: string;
-    name: string;
-  };
-  /** The finish of the cardboard in the pictures, which no hash can tell and a person can. */
-  finish: Finish;
+  card: LabelCard | null;
+  /**
+   * The finish of the cardboard in the pictures, which no hash can tell and a person can —
+   * `null` exactly where {@link Label.card} is.
+   */
+  finish: Finish | null;
   /** What the scanner had to say at the press. Every figure is `null` when it had none. */
   scanner: {
     /**
@@ -72,6 +75,15 @@ export interface Label {
    * starts.
    */
   run: Frame[];
+}
+
+/** The printing a label names, by Scryfall's id and by what is printed on it. */
+export interface LabelCard {
+  id: string;
+  set: string;
+  number: string;
+  lang: string;
+  name: string;
 }
 
 /** One frame of a run: where it is, how big it is, and what the scanner answered for it. */
@@ -196,7 +208,8 @@ export function readLabel(header: string | null): Label | string {
   if (header.length > MAX_LABEL_CHARS) return "that label is too long";
   for (let at = 0; at < header.length; at += 1) {
     const code = header.charCodeAt(at);
-    if (code < 0x20 || code > 0x7e) return "a label is ASCII JSON, with every other character escaped";
+    if (code < 0x20 || code > 0x7e)
+      return "a label is ASCII JSON, with every other character escaped";
   }
 
   let sent: unknown;
@@ -210,14 +223,22 @@ export function readLabel(header: string | null): Label | string {
 
   const { card, finish, scanner, app, run } = sent;
 
-  if (!isRecord(card)) return "that label names no card";
-  if (!matches(card.id, UUID)) return "that label's card id is not a Scryfall id";
-  if (!matches(card.set, SET)) return "that label's set is not a set code";
-  if (!text(card.number, 32)) return "that label's collector number is missing";
-  if (!matches(card.lang, LANG)) return "that label's language is not a language code";
-  if (!text(card.name, 200)) return "that label's card name is missing";
+  // No card and no finish is a reader saying the last frame holds no card; one without the
+  // other is half an answer, and refused like any label that is not whole.
+  let named: LabelCard | null = null;
+  let finished: Finish | null = null;
+  if (card !== null || finish !== null) {
+    if (!isRecord(card)) return "that label names no card";
+    if (!matches(card.id, UUID)) return "that label's card id is not a Scryfall id";
+    if (!matches(card.set, SET)) return "that label's set is not a set code";
+    if (!text(card.number, 32)) return "that label's collector number is missing";
+    if (!matches(card.lang, LANG)) return "that label's language is not a language code";
+    if (!text(card.name, 200)) return "that label's card name is missing";
 
-  if (!FINISHES.some((known) => known === finish)) return "that label's finish is not a finish";
+    if (!FINISHES.some((known) => known === finish)) return "that label's finish is not a finish";
+    named = { id: card.id, set: card.set, number: card.number, lang: card.lang, name: card.name };
+    finished = finish as Finish;
+  }
 
   if (!isRecord(scanner)) return "that label says nothing of the scanner";
   if (scanner.reported !== null && !matches(scanner.reported, UUID)) {
@@ -267,14 +288,8 @@ export function readLabel(header: string | null): Label | string {
 
   return {
     v: 1,
-    card: {
-      id: card.id,
-      set: card.set,
-      number: card.number,
-      lang: card.lang,
-      name: card.name,
-    },
-    finish: finish as Finish,
+    card: named,
+    finish: finished,
     scanner: {
       reported: scanner.reported,
       mode: scanner.mode,

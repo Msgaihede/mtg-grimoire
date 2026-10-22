@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import goldenNoCard from "../../../crates/grimoire-core/src/__golden__/scan-label-no-card.txt?raw";
 import goldenLabel from "../../../crates/grimoire-core/src/__golden__/scan-label.txt?raw";
 import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs?raw";
 import { MAX_LABEL_CHARS, MAX_RUN_BYTES, MAX_RUN_FRAMES, MIN_RUN_FRAMES } from "./env";
-import { frame, label, labelOver } from "./fake";
+import { frame, label, labelOver, type NamedLabel } from "./fake";
 import { FINISHES, MAX_FILTER_SETS, readLabel, type Label } from "./label";
 
 /**
@@ -58,6 +59,11 @@ describe("a label that is whole", () => {
     expect(read(silent)).toEqual(silent);
   });
 
+  it("may say there is no card in the last frame, with no finish beside it", () => {
+    const empty: Label = { ...label(), card: null, finish: null };
+    expect(read(empty)).toEqual(empty);
+  });
+
   it.each(FINISHES)("takes the finish %s", (finish) => {
     expect(read(withField("finish", finish))).toMatchObject({ finish });
   });
@@ -65,7 +71,7 @@ describe("a label that is whole", () => {
   it("takes a name and a collector number that are not ASCII, escaped", () => {
     // `JSON.stringify` leaves these as they are spelled; the engine escapes them, and so does
     // this — the header is ASCII and the strings it decodes to are not.
-    const named = withField("card.name", "Lim-Dûl’s Vault") as Label;
+    const named = withField("card.name", "Lim-Dûl’s Vault") as NamedLabel;
     named.card.number = "107★";
     const header = JSON.stringify(named).replace(
       /[\u0080-￿]/g,
@@ -176,6 +182,7 @@ describe("a label that is refused", () => {
   // Each row is one field made wrong in one way; every other field is whole. A row that came
   // back as a label would be a check `readLabel` does not make.
   it.each<[string, unknown]>([
+    // `null` beside a finish: no card is no finish too, and half an answer is not one.
     ["card", null],
     ["card", []],
     ["card.id", "not-a-uuid"],
@@ -371,6 +378,19 @@ describe("the engine's label, read as text", () => {
         }),
         frame(0, 51_990, { ok: true, lock: "locked", confidence: 0.82, distance: 31, decided }),
       ],
+    });
+  });
+
+  it("takes the engine's golden label with no card in it whole", () => {
+    const header = goldenNoCard.trimEnd();
+    expect(header).toMatch(/^[\x20-\x7e]+$/);
+    const read = readLabel(header);
+    expect(read).toMatchObject({ card: null, finish: null });
+    // The same label as the card's golden in every other field.
+    expect(read).toEqual({
+      ...(readLabel(goldenLabel.trimEnd()) as Label),
+      card: null,
+      finish: null,
     });
   });
 

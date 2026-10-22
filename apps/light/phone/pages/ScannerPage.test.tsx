@@ -172,7 +172,10 @@ function noCamera(name: string) {
 
 /* ------------------------------------------------------------------ the host's half ------- */
 
-type Frame = (jpeg: unknown, options?: { headers?: Record<string, string> }) => Promise<ScannerVerdict>;
+type Frame = (
+  jpeg: unknown,
+  options?: { headers?: Record<string, string> },
+) => Promise<ScannerVerdict>;
 
 const sentWith = (options: { headers?: Record<string, string> } | undefined): ScannerOptions =>
   JSON.parse(options?.headers?.["x-scanner-options"] ?? "{}") as ScannerOptions;
@@ -223,7 +226,10 @@ function pile(cards: number, after: "parked" | "looking" = "parked") {
     return new Promise((answer) =>
       setTimeout(() => {
         // Past the pile the desk is empty: the first frame of a card that is never laid down.
-        script.frame = card >= cards ? cards * FRAMES_PER_CARD : card * FRAMES_PER_CARD + SHOWN[at % SHOWN.length];
+        script.frame =
+          card >= cards
+            ? cards * FRAMES_PER_CARD
+            : card * FRAMES_PER_CARD + SHOWN[at % SHOWN.length];
         answer(scanStep(script, under.mode, under.previews, false));
       }, 3),
     );
@@ -266,16 +272,22 @@ function mount({
   const seen = {
     prefs: [] as ScannerPrefs[],
     trays: [] as ScannerTrayRow[][],
-    commits: [] as { items: CollectionImportItem[]; folderId: number | null; remaining: ScannerTrayRow[] }[],
+    commits: [] as {
+      items: CollectionImportItem[];
+      folderId: number | null;
+      remaining: ScannerTrayRow[];
+    }[],
     holds: 0,
     resets: 0,
   };
-  const page = destination === undefined ? <PhoneFace /> : <ScannerPage destination={destination} />;
+  const page =
+    destination === undefined ? <PhoneFace /> : <ScannerPage destination={destination} />;
   const view = renderPhone(page, {
     path: "/scanner",
     fake,
     commands: (own) => {
-      const call = (name: string, args?: unknown) => (own[name] as (a: unknown) => unknown)(args ?? {});
+      const call = (name: string, args?: unknown) =>
+        (own[name] as (a: unknown) => unknown)(args ?? {});
       return {
         ...(prefs && { scanner_prefs: () => ({ ...DEFAULT_SCANNER_PREFS, ...prefs }) }),
         ...(tray && { scanner_tray: () => tray }),
@@ -466,14 +478,18 @@ describe("the phone's Scanner page", () => {
       SETTLE,
     );
     expect(screen.getByRole("heading", { name: "Scanned cards, 3 copies" })).toBeInTheDocument();
-    await waitFor(() => expect(statusLine()).toHaveTextContent("Matched Ancient Tomb TMP 315"), SETTLE);
+    await waitFor(
+      () => expect(statusLine()).toHaveTextContent("Matched Ancient Tomb TMP 315"),
+      SETTLE,
+    );
     expect(screen.getByRole("button", { name: "Add 3 to collection" })).toBeInTheDocument();
     // Written behind the reader, whole.
     await waitFor(
-      () => expect(last(seen.trays)?.map((row) => [row.name, row.quantity])).toEqual([
-        ["Ancient Tomb", 1],
-        ["Urza's Saga", 2],
-      ]),
+      () =>
+        expect(last(seen.trays)?.map((row) => [row.name, row.quantity])).toEqual([
+          ["Ancient Tomb", 1],
+          ["Urza's Saga", 2],
+        ]),
       SETTLE,
     );
     // Every frame in the stored mode, and none asking for previews.
@@ -487,21 +503,30 @@ describe("the phone's Scanner page", () => {
     const { view } = mount({ over: () => ({ scanner_frame: pile(0).frame }) });
     const box = () => view.container.querySelector<HTMLElement>("[data-camera-box]");
     // A phone held upright: a portrait stream, capped by the box's own class rather than drawn whole.
-    await waitFor(() => expect(parseFloat(box()?.style.aspectRatio ?? "")).toBe(1080 / 1920), SETTLE);
+    await waitFor(
+      () => expect(parseFloat(box()?.style.aspectRatio ?? "")).toBe(1080 / 1920),
+      SETTLE,
+    );
   });
 
   it("never asks for previews whatever the stored Developer switch says, and leaves the switch alone", async () => {
     camera();
     restoreVideo = shimVideo();
     const cards = pile(1);
-    const { seen } = mount({ prefs: { developer: true }, over: () => ({ scanner_frame: cards.frame }) });
+    const { seen } = mount({
+      prefs: { developer: true },
+      over: () => ({ scanner_frame: cards.frame }),
+    });
     await start();
     await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);
     expect(cards.sent.every((sent) => sent.previews === false)).toBe(true);
 
     // A write of another field carries the switch on as it was stored: it is the desktop face's.
     await userEvent.click(screen.getByRole("button", { name: "Exact" }));
-    await waitFor(() => expect(last(seen.prefs)).toMatchObject({ mode: "exact", developer: true }), SETTLE);
+    await waitFor(
+      () => expect(last(seen.prefs)).toMatchObject({ mode: "exact", developer: true }),
+      SETTLE,
+    );
     expect(screen.queryByRole("switch")).toBeNull();
   });
 
@@ -591,21 +616,34 @@ describe("the phone's Scanner page", () => {
     const { seen } = mount({
       prefs: { mode: "exact" },
       // The first number is a baseline; the second, on a frame carrying a decision, is the card.
-      over: () => ({ scanner_frame: frames(VERDICTS.voting, { ...VERDICTS.exactAmbiguous, decision_seq: 1 }) }),
+      over: () => ({
+        scanner_frame: frames(VERDICTS.voting, { ...VERDICTS.exactAmbiguous, decision_seq: 1 }),
+      }),
     });
     await start();
-    const question = await screen.findByRole("group", { name: "Printings of Lightning Bolt" }, SETTLE);
+    const question = await screen.findByRole(
+      "group",
+      { name: "Printings of Lightning Bolt" },
+      SETTLE,
+    );
     expect(within(question).getAllByRole("button")).toHaveLength(3);
     expect(screen.getByText("1 card to pick")).toBeInTheDocument();
     // Add is refused, and says why on the page.
     expect(screen.getByText("Pick a printing for every card first")).toBeInTheDocument();
 
-    await userEvent.click(within(question).getByRole("button", { name: "Lightning Bolt — STA 105" }));
+    await userEvent.click(
+      within(question).getByRole("button", { name: "Lightning Bolt — STA 105" }),
+    );
     expect(
       await screen.findByRole("button", { name: /^More printings of Lightning Bolt — STA 105/ }),
     ).toBeInTheDocument();
     await waitFor(
-      () => expect(last(seen.trays)?.[0]).toMatchObject({ setCode: "sta", collectorNumber: "105", choices: [] }),
+      () =>
+        expect(last(seen.trays)?.[0]).toMatchObject({
+          setCode: "sta",
+          collectorNumber: "105",
+          choices: [],
+        }),
       SETTLE,
     );
   });
@@ -616,8 +654,14 @@ describe("the phone's Scanner page", () => {
     await screen.findByText("Urza's Saga", {}, SETTLE);
 
     await userEvent.click(screen.getByRole("button", { name: "One more Urza's Saga — MH2 259" }));
-    await userEvent.click(screen.getByRole("button", { name: "Finish of Black Lotus — LEA 232: Nonfoil" }));
-    await userEvent.click(within(await screen.findByRole("dialog", { name: "Black Lotus" })).getByRole("button", { name: "Foil" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Finish of Black Lotus — LEA 232: Nonfoil" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("dialog", { name: "Black Lotus" })).getByRole("button", {
+        name: "Foil",
+      }),
+    );
     await userEvent.click(screen.getByRole("button", { name: "Remove Ancient Tomb — TMP 315" }));
 
     await waitFor(
@@ -660,16 +704,22 @@ describe("the phone's Scanner page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add 5 to collection" }));
     await waitFor(() => expect(seen.commits).toHaveLength(1), SETTLE);
     expect(seen.commits[0].folderId).toBe(1);
-    expect(await screen.findByText("Added 5 copies to your collection.", {}, SETTLE)).toBeInTheDocument();
+    expect(
+      await screen.findByText("Added 5 copies to your collection.", {}, SETTLE),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/to Collection\./)).toBeNull();
   });
 
   it("stores the folder a reader chooses, and names it on the footer", async () => {
     noCamera("NotAllowedError");
     const { seen } = mount({ tray: [...RESOLVED] });
-    await userEvent.click(await screen.findByRole("button", { name: "Folder: Collection" }, SETTLE));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Folder: Collection" }, SETTLE),
+    );
     const sheet = await screen.findByRole("dialog", { name: "Folder for scanned cards" });
-    const folders = within(within(sheet).getByRole("list", { name: "Folders" })).getAllByRole("button");
+    const folders = within(within(sheet).getByRole("list", { name: "Folders" })).getAllByRole(
+      "button",
+    );
     expect(folders[0]).toHaveTextContent("Collection");
     expect(folders[0]).toHaveAttribute("aria-current", "true");
     // The name alone: a drawer set aside says so on a second line.
@@ -684,7 +734,9 @@ describe("the phone's Scanner page", () => {
   it("reads a stored folder that has gone as the Collection, and stores it so", async () => {
     noCamera("NotAllowedError");
     const { seen } = mount({ prefs: { folderId: 987_654 } });
-    expect(await screen.findByRole("button", { name: "Folder: Collection" }, SETTLE)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Folder: Collection" }, SETTLE),
+    ).toBeInTheDocument();
     await waitFor(() => expect(last(seen.prefs)).toMatchObject({ folderId: null }), SETTLE);
   });
 
@@ -699,7 +751,12 @@ describe("the phone's Scanner page", () => {
     const [commit] = seen.commits;
     expect(commit.folderId).toBeNull();
     expect(commit.items).toEqual(
-      RESOLVED.map((row) => ({ cardId: row.cardId, quantity: row.quantity, finish: row.finish, condition: "NM" })),
+      RESOLVED.map((row) => ({
+        cardId: row.cardId,
+        quantity: row.quantity,
+        finish: row.finish,
+        condition: "NM",
+      })),
     );
     // The row of unknown finish was never taken: it is what the store is left holding.
     expect(commit.remaining.map((row) => row.key)).toEqual([NEEDS_A_FINISH_ROW.key]);
@@ -740,7 +797,9 @@ describe("the phone's Scanner page", () => {
 
     // A snapshot was subtracted, not the tray emptied: the two copies added since are still here.
     await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "2"]]), SETTLE);
-    expect(await screen.findByText("Added 5 copies to Collection.", {}, SETTLE)).toBeInTheDocument();
+    expect(
+      await screen.findByText("Added 5 copies to Collection.", {}, SETTLE),
+    ).toBeInTheDocument();
   });
 
   it("keeps every row and says the backend's sentence when the commit is refused", async () => {
@@ -753,9 +812,14 @@ describe("the phone's Scanner page", () => {
         },
       }),
     });
-    await userEvent.click(await screen.findByRole("button", { name: "Add 5 to collection" }, SETTLE));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add 5 to collection" }, SETTLE),
+    );
     const footer = screen.getByRole("button", { name: "Add 5 to collection" }).closest("footer");
-    await waitFor(() => expect(within(footer as HTMLElement).getByRole("alert")).toHaveTextContent(DB_BUSY), SETTLE);
+    await waitFor(
+      () => expect(within(footer as HTMLElement).getByRole("alert")).toHaveTextContent(DB_BUSY),
+      SETTLE,
+    );
     expect(trayRows()).toHaveLength(3);
     expect(screen.queryByText(/^Added /)).toBeNull();
   });
@@ -784,9 +848,13 @@ describe("the phone's Scanner page", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Create deck" }));
 
     await waitFor(() => expect(window.location.pathname).toMatch(/^\/decks\/\d+$/), SETTLE);
-    expect(await screen.findByRole("heading", { level: 2, name: "Scanned pile" }, SETTLE)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Scanned pile" }, SETTLE),
+    ).toBeInTheDocument();
     expect(made).toHaveLength(1);
-    expect((made[0] as { items: { quantity: number }[] }).items.map((item) => item.quantity)).toEqual([3, 1, 1]);
+    expect(
+      (made[0] as { items: { quantity: number }[] }).items.map((item) => item.quantity),
+    ).toEqual([3, 1, 1]);
     // Nothing was filed into the collection, and nothing left the tray.
     expect(seen.commits).toEqual([]);
     expect(seen.trays.every((rows) => rows.length === 3)).toBe(true);
@@ -873,7 +941,10 @@ describe("the phone's Scanner page", () => {
       }),
     );
     const footer = screen.getByRole("button", { name: "Add 5 to collection" }).closest("footer");
-    await waitFor(() => expect(within(footer as HTMLElement).getByRole("alert")).toHaveTextContent(DB_BUSY), SETTLE);
+    await waitFor(
+      () => expect(within(footer as HTMLElement).getByRole("alert")).toHaveTextContent(DB_BUSY),
+      SETTLE,
+    );
     expect(trayRows()).toHaveLength(3);
   });
 
@@ -888,9 +959,14 @@ describe("the phone's Scanner page", () => {
       }),
     );
     const sheet = await screen.findByRole("dialog", { name: "Scan history" }, SETTLE);
-    expect(await within(sheet).findByRole("button", { name: /^Bob's binder/ }, SETTLE)).toBeInTheDocument();
+    expect(
+      await within(sheet).findByRole("button", { name: /^Bob's binder/ }, SETTLE),
+    ).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Scan history" })).toBeNull(), SETTLE);
+    await waitFor(
+      () => expect(screen.queryByRole("dialog", { name: "Scan history" })).toBeNull(),
+      SETTLE,
+    );
     expect(more).toHaveFocus();
   });
 
@@ -1088,12 +1164,15 @@ describe("sending a scan from the Scanner page", () => {
       ].sort(),
     );
 
-    // **The run is frames the pump really sent**: as many as the dialog counted, consecutive
-    // encodes of the camera's picture in the order they were made, the last of them the one the
-    // dialog rested on — and each counted back from the press, none after it.
+    // **The run is frames the pump really sent**: as many as the dialog counted, each kept at
+    // full resolution — the second of the two encodes every draw of the camera's picture makes
+    // on a device that may send, the first being the frame the scanner was given — in the order
+    // they were made, the last of them the one the dialog rested on, and each counted back from
+    // the press, none after it.
     expect(submission.run).toHaveLength(pictures);
     const encodes = submission.run.map((frame) => numberOf(frame.jpeg));
-    expect(encodes).toEqual(Array.from({ length: pictures }, (_, n) => encodes[0] + n));
+    expect(encodes).toEqual(Array.from({ length: pictures }, (_, n) => encodes[0] + 2 * n));
+    expect(encodes.every((n) => n % 2 === 0)).toBe(true);
     expect(`data:image/jpeg;base64,${submission.run[pictures - 1].jpeg}`).toBe(shown);
     const ms = submission.run.map((frame) => frame.ms);
     expect([...ms].sort((a, b) => a - b)).toEqual(ms);
@@ -1125,7 +1204,11 @@ describe("sending a scan from the Scanner page", () => {
 
     const { dialog } = await opened(cards);
     // Alpha's Bolt was printed one way, so its finish is chosen for the reader.
-    const lea = await within(dialog).findByRole("radio", { name: "Lightning Bolt — LEA 161" }, SETTLE);
+    const lea = await within(dialog).findByRole(
+      "radio",
+      { name: "Lightning Bolt — LEA 161" },
+      SETTLE,
+    );
     await userEvent.click(lea);
     expect(within(dialog).getByRole("radio", { name: "Nonfoil" })).toHaveAttribute(
       "aria-checked",
@@ -1258,9 +1341,7 @@ describe("sending a scan from the Scanner page", () => {
     expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
-    expect(
-      await screen.findByText(SCANNING_STOPPED),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(SCANNING_STOPPED)).toBeInTheDocument();
     // The camera is still live; the press is gone all the same, and Reset is not.
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
     expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
@@ -1302,9 +1383,7 @@ describe("sending a scan from the Scanner page", () => {
 
     // Stopped, the press is gone and its sentence with it: the line is the stopped sentence's.
     await userEvent.click(screen.getByRole("button", { name: "Stop scanning" }));
-    expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(
-      SCANNING_STOPPED,
-    );
+    expect(within(box as HTMLElement).getByRole("status")).toHaveTextContent(SCANNING_STOPPED);
     expect(screen.queryByText(/Not enough of the scan yet/)).toBeNull();
   });
 
@@ -1548,13 +1627,17 @@ describe("what the Scanner page says when it cannot scan", () => {
       "MTG Grimoire needs camera access to scan a card.",
     );
     expect(screen.getByRole("group", { name: "Scan mode" })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Add 5 to collection" }, SETTLE)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Add 5 to collection" }, SETTLE),
+    ).toBeInTheDocument();
   });
 
   it("says a device has no camera", async () => {
     noCamera("NotFoundError");
     mount();
-    expect(await screen.findByRole("alert", {}, SETTLE)).toHaveTextContent("No camera on this device.");
+    expect(await screen.findByRole("alert", {}, SETTLE)).toHaveTextContent(
+      "No camera on this device.",
+    );
   });
 
   it("offers the missing data in its slot, says it cannot identify, and refuses the filters in words", async () => {
@@ -1566,7 +1649,9 @@ describe("what the Scanner page says when it cannot scan", () => {
       SETTLE,
     );
     // The offer, and not an instruction to put a file where nobody holding this page can reach.
-    expect(within(slot() as HTMLElement).getByRole("button", { name: "Download" })).toBeInTheDocument();
+    expect(
+      within(slot() as HTMLElement).getByRole("button", { name: "Download" }),
+    ).toBeInTheDocument();
     expect(slot()).not.toHaveTextContent("No reference bundle.");
     expect(slot()).not.toHaveTextContent("Restart the app");
     await waitFor(() => expect(statusLine()).toHaveTextContent("Can't identify"), SETTLE);
@@ -1574,10 +1659,9 @@ describe("what the Scanner page says when it cannot scan", () => {
     await userEvent.click(screen.getByRole("button", { name: "Scanner options" }));
     const sheet = await screen.findByRole("dialog", { name: "Scanner options" });
     // A greyed row's name includes its reason.
-    expect(within(sheet).getByRole("button", { name: /^Filters\s*Filters need the card database/ })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(
+      within(sheet).getByRole("button", { name: /^Filters\s*Filters need the card database/ }),
+    ).toHaveAttribute("aria-disabled", "true");
   });
 
   /**
@@ -1668,7 +1752,10 @@ describe("what the Scanner page says when it cannot scan", () => {
 
     const box = () => view.container.querySelector<HTMLElement>("[data-camera-box]");
     await waitFor(
-      () => expect(within(box() as HTMLElement).getByRole("alert")).toHaveTextContent(SCANNER_NOT_IN_A_BROWSER_YET),
+      () =>
+        expect(within(box() as HTMLElement).getByRole("alert")).toHaveTextContent(
+          SCANNER_NOT_IN_A_BROWSER_YET,
+        ),
       SETTLE,
     );
     // Long enough for a camera to have opened and a frame to have gone, had either been asked for.
@@ -1735,12 +1822,16 @@ describe("what the Scanner page says when it cannot scan", () => {
         scanner_elsewhere: () => taken,
         scanner_frame: () => {
           taken = true;
-          return new Promise((_, refuse) => setTimeout(() => refuse(new Error(SCANNER_OPEN_ELSEWHERE)), 5));
+          return new Promise((_, refuse) =>
+            setTimeout(() => refuse(new Error(SCANNER_OPEN_ELSEWHERE)), 5),
+          );
         },
       }),
     });
     await start();
-    expect(await screen.findByText(/It will open here once that window closes/, {}, SETTLE)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/It will open here once that window closes/, {}, SETTLE),
+    ).toBeInTheDocument();
     expect(stop).toHaveBeenCalled();
     expect(screen.queryByRole("region", { name: "Scanned cards" })).toBeNull();
   });
@@ -1813,7 +1904,10 @@ describe("a Scanner page nobody is looking at", () => {
     await start();
     await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);
     await userEvent.click(tab("Wishlist"));
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Scanned cards" })).toBeNull(), SETTLE);
+    await waitFor(
+      () => expect(screen.queryByRole("region", { name: "Scanned cards" })).toBeNull(),
+      SETTLE,
+    );
     await userEvent.click(tab("Scanner"));
     await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);
   });

@@ -125,6 +125,36 @@ export type GrabPair = (
   quality: number,
 ) => Promise<GrabbedPair | null>;
 
+/**
+ * One video frame as the pump wants it when it keeps full frames for a run: the pair a read
+ * wants ({@link GrabbedPair}, `detail` `null` where none was asked for) and `kept`, the same
+ * draw at the camera's resolution up to {@link EVIDENCE_MAX_WIDTH} wide — `null` where that
+ * encode produced nothing, and the run then keeps the pump's own frame.
+ */
+export interface GrabbedKept extends GrabbedPair {
+  kept: Uint8Array | null;
+}
+
+/**
+ * How a frame becomes that triple. A seam of its own for {@link GrabPair}'s reason: a page that
+ * keeps no full frames, and every test that injects a single grab, keeps the shape it had.
+ * `detail` is whether the read asked for a detail image this frame.
+ */
+export type GrabKept = (
+  video: HTMLVideoElement,
+  longEdge: number,
+  quality: number,
+  detail: boolean,
+) => Promise<GrabbedKept | null>;
+
+/**
+ * The widest a frame kept for *Send scan…* is — the owner's decision, 2026-10-22: **scans are
+ * collected at full resolution**, capped at 1920 pixels wide, because a picture can always be
+ * brought down to the scanner's size when it is used and never brought up. A 1920×1080 camera —
+ * `useCamera`'s ideal — is kept whole.
+ */
+export const EVIDENCE_MAX_WIDTH = 1920;
+
 /** The quality the pump sends at. The capture button uses 0.92 — see {@link ScanLoop.grab}. */
 const PUMP_QUALITY = 0.72;
 /**
@@ -138,6 +168,12 @@ const DETAIL_LONG_EDGE = 2560;
  * fine print a 960 px frame has already lost: set symbols, collector numbers, a title's serifs.
  */
 const DETAIL_QUALITY = 0.85;
+/**
+ * A kept frame's JPEG quality: the detail image's, for its reason — the fine print is the point
+ * of keeping the frame large. One number, so a kept frame and a detail image drawn from the same
+ * canvas are one encode ({@link defaultGrabKept}).
+ */
+const EVIDENCE_QUALITY = DETAIL_QUALITY;
 /** The idle wait between two looks at a video that has nothing new, matching the debug page. */
 const IDLE_MS = 16;
 /** How many round trips the rate averages over. */
@@ -248,9 +284,13 @@ const standingCard = viewMemory<string | null>("scanner.standing-card");
  *
  * **And the pump keeps the last couple of seconds of what it sent** — `recent()`, for *Send
  * scan…*. A scan is a run of frames and never one picture, and the only run worth sending is
- * the one the scanner was really given: these JPEGs, at this size and quality, in this order,
- * each beside the verdict it got. Nothing is grabbed or encoded for it — the frames are the
- * ones already made for the detector — and nothing is turned into text until a reader presses.
+ * the one the scanner was really given: these frames, in this order, each beside the verdict it
+ * got — **and at full resolution where the page may send them**
+ * (`keepFullFrames`): each frame is then drawn off the video once, at up to
+ * {@link EVIDENCE_MAX_WIDTH} wide, and the pump's frame is made from that same draw, so the
+ * picture kept and the picture judged are one moment of the video. That costs one more encode a
+ * frame, which is why a page that cannot send pays none of it. Nothing is turned into text until
+ * a reader presses.
  */
 export function useScanLoop({
   videoRef,
@@ -260,6 +300,8 @@ export function useScanLoop({
   detailWaitMs,
   grabFrame = defaultGrabFrame,
   grabPair = defaultGrabPair,
+  grabKept = defaultGrabKept,
+  keepFullFrames = false,
   onDecision,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -275,6 +317,14 @@ export function useScanLoop({
   grabFrame?: GrabFrame;
   /** The paired grab a frame after `wants_detail` uses. Injectable for {@link GrabFrame}'s reason. */
   grabPair?: GrabPair;
+  /** The grab every frame uses while `keepFullFrames` is on. Injectable for the same reason. */
+  grabKept?: GrabKept;
+  /**
+   * Keep each frame of the run at full resolution — the page's word that *Send scan…* may be
+   * offered (`useMaySendScans`), so a reader who can never send pays nothing for it. Read
+   * through a ref like `sendPx`; a change starts the run over, because a run is one size.
+   */
+  keepFullFrames?: boolean;
   /**
    * The session decided on a card — called once per new `decision_seq`, with the decision and
    * the number, and never for a repeat.
@@ -325,6 +375,8 @@ export function useScanLoop({
   const detailWaitRef = useRef(detailWaitMs);
   const grabRef = useRef(grabFrame);
   const grabPairRef = useRef(grabPair);
+  const grabKeptRef = useRef(grabKept);
+  const keepFullRef = useRef(keepFullFrames);
   const onDecisionRef = useRef(onDecision);
   useLayoutEffect(() => {
     optionsRef.current = options;
@@ -332,6 +384,7 @@ export function useScanLoop({
     detailWaitRef.current = detailWaitMs;
     grabRef.current = grabFrame;
     grabPairRef.current = grabPair;
+    grabKeptRef.current = grabKept;
     onDecisionRef.current = onDecision;
   });
 
@@ -410,6 +463,21 @@ export function useScanLoop({
     runEpochRef.current += 1;
     runRef.current = [];
   }, []);
+
+  /**
+   * Moved each time the page starts or stops keeping full frames. A frame notes it as it is
+   * grabbed — not as it is sent, which is `runEpochRef`'s moment: the size of the picture is
+   * settled by the grab.
+   */
+  const keptSizeRef = useRef(0);
+  // **A run is one size of picture**: a page that starts or stops keeping full frames starts the
+  // run over, and a frame grabbed under the old word is kept out of the new run.
+  useLayoutEffect(() => {
+    if (keepFullRef.current === keepFullFrames) return;
+    keepFullRef.current = keepFullFrames;
+    keptSizeRef.current += 1;
+    breakRun();
+  }, [keepFullFrames, breakRun]);
 
   const clearReads = useCallback(() => {
     // A grab or IPC answer already outstanding belongs to the evidence being discarded (#781).
@@ -514,6 +582,10 @@ export function useScanLoop({
         let bytes: Uint8Array | null;
         const evidence = evidenceRef.current;
         let detail: Uint8Array | null = null;
+        /** The full-resolution copy the run keeps, where the page keeps one. */
+        let full: Uint8Array | null = null;
+        // Which size of picture the grab is for — see `keptSizeRef`.
+        const keptSize = keptSizeRef.current;
         // Read and lowered in one step, before the grab can throw — see `wantsDetailRef`.
         const paired = wantsDetailRef.current;
         wantsDetailRef.current = false;
@@ -522,7 +594,12 @@ export function useScanLoop({
         // clock (`runClock`), which is the one a press reads; the round trip below is the wall's.
         const grabbedAt = runClock.now();
         try {
-          if (paired) {
+          if (keepFullRef.current) {
+            const got = await grabKeptRef.current(video, sendPxRef.current, PUMP_QUALITY, paired);
+            bytes = got?.frame ?? null;
+            detail = got?.detail ?? null;
+            full = got?.kept ?? null;
+          } else if (paired) {
             const pair = await grabPairRef.current(video, sendPxRef.current, PUMP_QUALITY);
             bytes = pair?.frame ?? null;
             detail = pair?.detail ?? null;
@@ -556,8 +633,11 @@ export function useScanLoop({
         // zero-length the moment the call is made. A ring that kept `bytes` would be full of
         // frames on the desktop and full of nothing in a browser, with no error anywhere — so it
         // keeps a copy, on every host alike. A frame's worth of bytes copied nine times a second,
-        // which is small beside the encode that made them.
-        const kept = bytes.slice();
+        // which is small beside the encode that made them. **The full-resolution frame needs no
+        // copy**: it is never sent to the scanner, so nothing can detach it; and one grabbed
+        // across a change of `keepFullFrames` is not this run's size, and is kept out of it.
+        const sameSize = keptSize === keptSizeRef.current;
+        const kept = full ?? bytes.slice();
         // Said of the frame as it was sent: a pair with an empty detail goes out as a plain frame.
         const withDetail = detail !== null && detail.length > 0;
         // Which run this frame is sent into — see `runEpochRef`. Noted here, as it goes out, and
@@ -594,7 +674,7 @@ export function useScanLoop({
           // frame whose answer was dropped above, or refused below, was never part of what the
           // scanner is seen to have said. Nor does one that was on the wire across `breakRun`:
           // its answer is drawn like any other, and it belongs to neither run.
-          if (epoch === runEpochRef.current) {
+          if (sameSize && epoch === runEpochRef.current) {
             pushRunFrame(runRef.current, runFrameOf(kept, grabbedAt, answer, withDetail));
           }
           // Latched only where there is something to latch: a frame the readers did not run
@@ -766,6 +846,98 @@ async function defaultGrabPair(
   ]);
   if (frame === null) return null;
   return { frame, detail };
+}
+
+/** The canvases {@link defaultGrabKept} draws on — {@link scratch}'s reason, one each. */
+let keptScratch: HTMLCanvasElement | null = null;
+let keptDetailScratch: HTMLCanvasElement | null = null;
+
+/** `from` drawn onto `canvas` at `w`×`h`, or `null` where the canvas has no 2D context. */
+function drawn(
+  canvas: HTMLCanvasElement,
+  from: CanvasImageSource,
+  w: number,
+  h: number,
+): HTMLCanvasElement | null {
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) return null;
+  ctx.drawImage(from, 0, 0, w, h);
+  return canvas;
+}
+
+/**
+ * Video → the frame, its detail image where one was asked for, and the full-resolution copy the
+ * run keeps — out of **one** draw of the video, for {@link defaultGrabPair}'s reason: a picture
+ * kept beside a verdict must be the picture that verdict was about.
+ *
+ * The video is drawn once, at the larger of the two sizes asked of it: up to
+ * {@link EVIDENCE_MAX_WIDTH} wide for the copy kept, and up to {@link DETAIL_LONG_EDGE} on its
+ * long edge for a detail image. Everything else is drawn from that canvas. For a 1920×1080
+ * camera the two sizes are the camera's own, so the copy kept and the detail image are one
+ * canvas at one quality — **one encode**, handed out twice (the detail image is sent, and may be
+ * transferred away, so the run keeps a copy of its own).
+ */
+async function defaultGrabKept(
+  video: HTMLVideoElement,
+  longEdge: number,
+  quality: number,
+  detail: boolean,
+): Promise<GrabbedKept | null> {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (w === 0 || h === 0) return null;
+  const keptScale = Math.min(1, EVIDENCE_MAX_WIDTH / w);
+  const detailScale = Math.min(1, DETAIL_LONG_EDGE / Math.max(w, h));
+  const drawScale = detail ? Math.max(keptScale, detailScale) : keptScale;
+  const size = (scale: number): [number, number] => [
+    Math.max(1, Math.round(w * scale)),
+    Math.max(1, Math.round(h * scale)),
+  ];
+
+  const source = drawn(
+    (detailScratch ??= document.createElement("canvas")),
+    video,
+    ...size(drawScale),
+  );
+  if (source === null) return null;
+  const keptCanvas =
+    keptScale === drawScale
+      ? source
+      : drawn((keptScratch ??= document.createElement("canvas")), source, ...size(keptScale));
+  const detailCanvas = !detail
+    ? null
+    : detailScale === drawScale
+      ? source
+      : drawn(
+          (keptDetailScratch ??= document.createElement("canvas")),
+          source,
+          ...size(detailScale),
+        );
+  const scale = Math.min(1, longEdge / Math.max(source.width, source.height));
+  const small = drawn(
+    (scratch ??= document.createElement("canvas")),
+    source,
+    Math.max(1, Math.round(source.width * scale)),
+    Math.max(1, Math.round(source.height * scale)),
+  );
+  if (small === null) return null;
+
+  // `defaultGrabPair`'s rule: a detail image no larger than the frame is the frame twice.
+  const worthIt = detailCanvas !== null && detailCanvas.width > small.width;
+  const shared = worthIt && detailCanvas === keptCanvas;
+  const [frame, kept, detailBytes] = await Promise.all([
+    jpegOf(small, quality),
+    keptCanvas === null ? Promise.resolve(null) : jpegOf(keptCanvas, EVIDENCE_QUALITY),
+    worthIt && !shared ? jpegOf(detailCanvas, DETAIL_QUALITY) : Promise.resolve(null),
+  ]);
+  if (frame === null) return null;
+  return {
+    frame,
+    detail: shared ? (kept?.slice() ?? null) : detailBytes,
+    kept,
+  };
 }
 
 /** A canvas's pixels as JPEG bytes, or `null` where the browser produced no blob. */

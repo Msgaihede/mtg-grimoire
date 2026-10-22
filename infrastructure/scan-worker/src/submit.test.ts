@@ -57,9 +57,7 @@ describe("a scan the inbox takes", () => {
     expect(received).toBeGreaterThanOrEqual(before);
     expect(received).toBeLessThanOrEqual(after);
     // The id leads with the same second, so a listing is in the order things arrived.
-    expect(id.slice(0, 16)).toBe(
-      sidecar.received_at.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"),
-    );
+    expect(id.slice(0, 16)).toBe(sidecar.received_at.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z"));
   });
 
   it("stores a run its label can cut back into the frames that were sent", async () => {
@@ -155,10 +153,10 @@ describe("one picture is never a scan", () => {
   it("refuses a JPEG sent as a JPEG, before the label and the bucket", async () => {
     // The request this route was first written to take: one picture, as `image/jpeg`.
     const box = inbox();
-    const response = await worker.fetch(
-      scan({ type: "image/jpeg", body: jpeg(300) }),
-      { ...box.env, SCANS: untouchable },
-    );
+    const response = await worker.fetch(scan({ type: "image/jpeg", body: jpeg(300) }), {
+      ...box.env,
+      SCANS: untouchable,
+    });
     expect(response.status).toBe(415);
     expect((await refusal(response)).error).toBe(`a scan is sent as ${RUN_TYPE}`);
   });
@@ -402,7 +400,7 @@ describe("the cap on what waits to be read", () => {
   });
 
   it("counts runs, one page of them, and so counts one whose label never landed", async () => {
-    // The run is the two megabytes. Were it labels that were counted, every run whose label
+    // The run is the megabytes. Were it labels that were counted, every run whose label
     // never landed would be bytes the cap could not see — and a sender can make those.
     const box = inbox({ waiting: MAX_PENDING - 1 });
     box.objects.set("runs/20261001T000000Z-ffffffffffffffff.bin", {
@@ -448,7 +446,9 @@ describe("the cap on what waits to be read", () => {
   });
 
   it("bounds the inbox in bytes, well under R2's free ten gigabytes", () => {
-    expect(MAX_PENDING * MAX_RUN_BYTES).toBeLessThanOrEqual(1024 ** 3);
+    // Two at most: full-resolution runs (2026-10-22) are five times what they were, and the
+    // count came down to keep the bound near where it was.
+    expect(MAX_PENDING * MAX_RUN_BYTES).toBeLessThanOrEqual(2 * 1024 ** 3);
   });
 });
 

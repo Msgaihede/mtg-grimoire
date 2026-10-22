@@ -15,8 +15,10 @@ import type {
  * nothing at all*). The scanner decides over a run — two frames that agree, a tally
  * that reaches its bar, a read on the frame after a lock — so one picture cannot say what it
  * did, and a picture taken *after* the press is not one it was ever shown. What is sent is
- * therefore the last couple of seconds **the scanner was actually given**: the pump's own JPEGs,
- * byte for byte, each beside what it answered.
+ * therefore the last couple of seconds **the scanner was actually given**, each frame beside what
+ * it answered — **at full resolution**: the very draw of the video the pump made its own smaller
+ * frame from, kept at up to 1920 pixels wide (`useScanLoop`'s `keepFullFrames`). A picture can
+ * always be brought down to the scanner's size later, and never up.
  *
  * This module is the run on this side of the wire, in its two states — the ring the pump keeps
  * as it goes ({@link RunFrame}, bytes), and the snapshot a press freezes ({@link ScanRun}, the
@@ -35,10 +37,12 @@ export const RUN_MAX_FRAMES = 20;
 /**
  * The most JPEG a run holds, in bytes as the pump made them — before the base64 a press turns
  * them into, which is a third as much again. How much one frame weighs is the camera's and the
- * desk's to say, so on some this binds before {@link RUN_MAX_FRAMES} does: the run is then
- * shorter in frames and no lighter. (Neither bound was measured against a camera here.)
+ * desk's to say — a full-resolution frame of a 1920×1080 camera is some two to four hundred
+ * kilobytes — so on some this binds before {@link RUN_MAX_FRAMES} does: the run is then shorter
+ * in frames and no lighter. Under the engine's ten megabytes, so a run the ring keeps is one the
+ * engine takes. (Neither bound was measured against a camera here.)
  */
-export const RUN_MAX_BYTES = 1.5 * 1024 * 1024;
+export const RUN_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * The fewest frames that are a scan — about half a second of the scanner looking. Fewer is a
@@ -87,7 +91,11 @@ export const runClock = { now: (): number => performance.now() };
  * and a snapshot that could be written through would not be one.
  */
 export interface RunFrame {
-  /** The pump's JPEG, as it went to the scanner. */
+  /**
+   * The frame as it is kept for sending: the full-resolution JPEG of the draw the pump's frame
+   * was made from, or — where the page keeps no such copy — the pump's own JPEG, as it went to
+   * the scanner.
+   */
   jpeg: Uint8Array;
   /** {@link runClock}'s reading as the frame was drawn off the video. */
   at: number;
@@ -305,7 +313,21 @@ export function scanRun(
   };
 }
 
-/** The whole submission: the reader's two answers, what the scanner had said, and the run. */
-export function submissionOf(scan: ScanRun, cardId: string, finish: Finish): ScannerSubmission {
-  return { cardId, finish, ...scan.said, run: scan.frames };
+/**
+ * What a reader says the last picture shows: a printing and its finish, or `null` for no card in
+ * it at all.
+ */
+export type ScanAnswer = { cardId: string; finish: Finish } | null;
+
+/**
+ * The whole submission: the reader's answer, what the scanner had said, and the run. No card is
+ * sent as a `null` id **and** a `null` finish — the engine refuses one without the other.
+ */
+export function submissionOf(scan: ScanRun, answer: ScanAnswer): ScannerSubmission {
+  return {
+    cardId: answer?.cardId ?? null,
+    finish: answer?.finish ?? null,
+    ...scan.said,
+    run: scan.frames,
+  };
 }

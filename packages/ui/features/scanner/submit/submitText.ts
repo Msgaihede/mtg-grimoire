@@ -70,6 +70,17 @@ export const WHICH_CARD = "Which card is in the last picture?";
 
 export const SEARCH_PLACEHOLDER = "Card name…";
 
+/**
+ * The other answer to {@link WHICH_CARD}: there is no card in the last picture — the scanner was
+ * looking for one in an empty desk, a sleeve, a hand. A switch, beside the question it answers.
+ * **"Picture" and never "frame"**, for this file's rule: to a reader each one is a picture.
+ */
+export const NO_CARD = "No card in the picture";
+
+/** Under the switch while it is on: what the answer is for, so it is not mistaken for a skip. */
+export const NO_CARD_NOTE =
+  "Sent as a scan with nothing to find, so the scanner can learn what is not a card.";
+
 /** The printings' radio group, by name. */
 export const PRINTINGS = "Printings";
 
@@ -174,7 +185,7 @@ export const CHOOSE_ITS_FINISH = "Choose its finish.";
 export function disclosure(pictures: number): string {
   return (
     `These ${pictures} pictures — the last couple of seconds the scanner saw — and the card you ` +
-    "choose are sent to MTG Grimoire's maker, with what the scanner read and how it was set, the " +
+    "choose, or that there is none, are sent to MTG Grimoire's maker, with what the scanner read and how it was set, the " +
     "app's version and which app it is, and kept to improve the scanner. Nothing from your " +
     "collection is sent, and nothing is kept that says who you are. Look through them and check " +
     "they show only what you mean to send."

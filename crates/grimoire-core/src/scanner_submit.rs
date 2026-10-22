@@ -27,6 +27,11 @@
 //! reader to one bought elsewhere, and its host rewords only what a `sync_` command says
 //! (`apps/light/src-tauri/src/membership.rs`).
 //!
+//! **Or no card at all.** A reader can say the last frame has no card in it — the scanner
+//! looking for one in an empty desk, a sleeve, a hand — and that scan is sent with no printing
+//! and no finish ([`Label::card`] and [`Label::finish`] `null` together). It is a false
+//! positive's evidence, and as much worth having as a card the scanner named wrongly.
+//!
 //! **What is sent is the run and a [`Label`], and the label says nothing of who sent it**: the
 //! printing and its finish, what the scanner had read, what it was narrowed to, the app's
 //! version and what kind of host it is on. No device id, no group, no collection. The privacy
@@ -42,7 +47,7 @@
 //! **A `task` in the table, and its pictures are base64 in its arguments** — not a `bytes` entry
 //! like the scanner's frame. A frame is nine a second and is answered by this engine; this is
 //! one call a press, awaited across a network, and `bytes` runs its body on the blocking pool
-//! where nothing can be awaited. Four thirds of two megabytes, once, is the price.
+//! where nothing can be awaited. Four thirds of [`MAX_RUN_BYTES`], once, is the price.
 //!
 //! **Every host sends it the same way**, a page included: a `fetch` from the engine's Worker,
 //! which the inbox answers for the web app's origin by name
@@ -90,11 +95,14 @@ pub const MIN_RUN_FRAMES: usize = 5;
 /// `MAX_RUN_FRAMES` and the page's `RUN_MAX_FRAMES`, held the same way.
 pub const MAX_RUN_FRAMES: usize = 20;
 
-/// Two megabytes a run, every frame of it together — **`env.ts`'s `MAX_RUN_BYTES`**, held the
-/// same way. Refused here first, so a reader on a slow link is told in a sentence rather than
-/// after an upload. The page keeps its run under less than this (`RUN_MAX_BYTES`), so the
-/// refusal is a backstop and not something a reader meets.
-pub const MAX_RUN_BYTES: usize = 2 * 1024 * 1024;
+/// Ten megabytes a run, every frame of it together — **`env.ts`'s `MAX_RUN_BYTES`**, held the
+/// same way. The frames are kept at the camera's own resolution up to 1920 pixels wide (the
+/// owner's decision, 2026-10-22: a picture can always be brought down later, never up), some
+/// two to four hundred kilobytes each, so twenty of them are most of this. Refused here first,
+/// so a reader on a slow link is told in a sentence rather than after an upload. The page keeps
+/// its run under less than this (`RUN_MAX_BYTES`), so the refusal is a backstop and not
+/// something a reader meets.
+pub const MAX_RUN_BYTES: usize = 10 * 1024 * 1024;
 
 /// The header the label rides in — `cors.ts`'s `LABEL_HEADER`, which the same test holds.
 pub const LABEL_HEADER: &str = "x-scan-label";
@@ -146,6 +154,10 @@ pub const UNCONFIRMED: &str =
 /// The inbox would not take the token: 401 or 403. A key that is not set on it, a token that
 /// died on the way, a device since removed from its group.
 pub const NOT_ACCEPTED: &str = "The scan could not be sent: the server did not accept this device.";
+/// A card without its finish or a finish without its card. The page sends both or neither, so
+/// this is the rule held a second time.
+pub const HALF_AN_ANSWER: &str =
+    "Choose the card and its finish, or say there is no card in the picture.";
 
 /// What a reader says a scan shows, and what the scanner had said — the page's half of a
 /// [`Label`], mirrored as `ScannerSubmission` in `packages/ui/lib/ipc.ts`.
@@ -161,12 +173,14 @@ pub const NOT_ACCEPTED: &str = "The scan could not be sent: the server did not a
 /// kind beside `card_id`, and "the scanner got it right" could never be read off the two.
 ///
 /// **`card_id` and `finish` name the card in the last frame**, the one under the camera at the
-/// press. `filters` is the scanner crate's own struct, snake case inside as it is everywhere.
+/// press — **or are both absent, where the reader said there is no card in it** ([`label_for`]
+/// refuses one without the other). `filters` is the scanner crate's own struct, snake case
+/// inside as it is everywhere.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Submission {
-    pub card_id: String,
-    pub finish: String,
+    pub card_id: Option<String>,
+    pub finish: Option<String>,
     pub reported: Option<String>,
     pub mode: String,
     pub confidence: Option<f64>,
@@ -179,8 +193,9 @@ pub struct Submission {
 /// One frame of a run: the picture the scanner was given, and what it answered for it —
 /// `ScannerSubmissionFrame` in `ipc.ts`.
 ///
-/// **`jpeg` is the pump's own frame**, in base64: the bytes `scanner_frame` judged, not a
-/// picture made for sending. `ms` is when it was taken, counted back from the press — zero or
+/// **`jpeg` is the frame the scanner judged, at full resolution**, in base64: the same draw of
+/// the video the pump's smaller frame was made from, kept at up to 1920 pixels wide — not a
+/// picture taken for sending. `ms` is when it was taken, counted back from the press — zero or
 /// negative, and a number of any spelling, since it is a difference of two of the page's
 /// clock readings.
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -211,11 +226,14 @@ pub struct Submitted {
 /// **`run` is one entry a frame, oldest first, and it is the index of the body**: the frames
 /// are sent end to end with nothing between them, and each entry's `bytes` is where the next
 /// one starts.
+///
+/// **`card` and `finish` are `null` together where the reader said there is no card in the
+/// last frame** — and sent as `null`, never left out, for [`LabelScanner`]'s reason.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Label {
     pub v: u8,
-    pub card: LabelCard,
-    pub finish: String,
+    pub card: Option<LabelCard>,
+    pub finish: Option<String>,
     pub scanner: LabelScanner,
     pub app: LabelApp,
     pub run: Vec<LabelFrame>,
@@ -488,12 +506,13 @@ fn tidy_frame(frame: &SubmissionFrame, measured: Measured) -> LabelFrame {
 }
 
 /// The label for one submission: the printing read out of this install's own card data, the
-/// finish checked against it, and the scanner's figures tidied.
+/// finish checked against it, and the scanner's figures tidied — or no printing and no finish,
+/// where the reader said there is no card in the last frame.
 ///
-/// **Refuses three things, each in a sentence**: a finish that is not a finish, a printing
-/// these cards do not have, and a finish that printing is not made in. `cards.finishes` that is
-/// missing or unreadable is *unknown* and refuses nothing — an older corpus, not a card with no
-/// foil.
+/// **Refuses four things, each in a sentence**: a card without its finish or the reverse
+/// ([`HALF_AN_ANSWER`]), a finish that is not a finish, a printing these cards do not have, and
+/// a finish that printing is not made in. `cards.finishes` that is missing or unreadable is
+/// *unknown* and refuses nothing — an older corpus, not a card with no foil.
 ///
 /// `frames` is [`pictures`]' measure of `submission.run`, one for one.
 pub fn label_for(
@@ -501,7 +520,17 @@ pub fn label_for(
     submission: &Submission,
     frames: &[Measured],
 ) -> Result<Label, String> {
-    let finish = submission.finish.as_str();
+    let (card_id, finish) = match (&submission.card_id, &submission.finish) {
+        (Some(card_id), Some(finish)) => (card_id, finish.as_str()),
+        (None, None) => {
+            if !is_word(&submission.mode) {
+                return Err(format!("{} is not a scan mode.", submission.mode));
+            }
+            // No card is nothing to read out of the card data, and nothing to hold a finish to.
+            return Ok(label_of(submission, frames, None, None));
+        }
+        _ => return Err(HALF_AN_ANSWER.to_owned()),
+    };
     if !FINISHES.contains(&finish) {
         return Err(format!("{finish} is not a finish a card comes in."));
     }
@@ -512,7 +541,7 @@ pub fn label_for(
     let printing = conn
         .query_row(
             "SELECT name, set_code, collector_number, lang, finishes FROM cards WHERE id = ?1",
-            [&submission.card_id],
+            [card_id],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -540,16 +569,33 @@ pub fn label_for(
         ));
     }
 
-    Ok(Label {
+    let card = LabelCard {
+        id: card_id.clone(),
+        set: set.to_lowercase(),
+        number,
+        lang: lang.to_lowercase(),
+        name,
+    };
+    Ok(label_of(
+        submission,
+        frames,
+        Some(card),
+        Some(finish.to_owned()),
+    ))
+}
+
+/// The label around an answer [`label_for`] has checked: the scanner's figures and the frames,
+/// tidied, beside the printing and its finish — or beside two `None`s for no card.
+fn label_of(
+    submission: &Submission,
+    frames: &[Measured],
+    card: Option<LabelCard>,
+    finish: Option<String>,
+) -> Label {
+    Label {
         v: LABEL_VERSION,
-        card: LabelCard {
-            id: submission.card_id.clone(),
-            set: set.to_lowercase(),
-            number,
-            lang: lang.to_lowercase(),
-            name,
-        },
-        finish: finish.to_owned(),
+        card,
+        finish,
         scanner: LabelScanner {
             reported: tidy_id(submission.reported.as_deref()),
             mode: submission.mode.clone(),
@@ -570,7 +616,7 @@ pub fn label_for(
             .zip(frames)
             .map(|(frame, measured)| tidy_frame(frame, *measured))
             .collect(),
-    })
+    }
 }
 
 /// The label as the header carries it: JSON with every character past `~` escaped.
@@ -619,19 +665,19 @@ fn http() -> http::Client {
     build_http()
 }
 
-/// Ten seconds to connect, and **two minutes for the answer to begin** — which is not a gap
+/// Ten seconds to connect, and **five minutes for the answer to begin** — which is not a gap
 /// between reads here: the client starts that clock when the request is sent, so it runs
-/// through the whole upload, and a run of a megabyte and a half over a phone's weak uplink is
-/// most of the wait. Two and a half minutes for all of it where the host has no socket to
-/// bound.
+/// through the whole upload, and a run of several megabytes of full-resolution frames over a
+/// phone's weak uplink is most of the wait. Five and a half minutes for all of it where the
+/// host has no socket to bound.
 fn build_http() -> http::Client {
     http::Client::new(&http::Config {
         user_agent: crate::scryfall::USER_AGENT,
         connect_timeout: Some(Duration::from_secs(10)),
-        read_timeout: Some(Duration::from_secs(120)),
+        read_timeout: Some(Duration::from_secs(300)),
         https_only: false,
     })
-    .deadline(Duration::from_secs(150))
+    .deadline(Duration::from_secs(330))
 }
 
 /// What a refusal's body says its reason is, when it says one.
@@ -790,8 +836,8 @@ mod tests {
 
     fn submission(card_id: &str, finish: &str) -> Submission {
         Submission {
-            card_id: card_id.to_owned(),
-            finish: finish.to_owned(),
+            card_id: Some(card_id.to_owned()),
+            finish: Some(finish.to_owned()),
             reported: Some(SHOCK.to_owned()),
             mode: "fast".to_owned(),
             confidence: Some(0.82),
@@ -854,14 +900,14 @@ mod tests {
     fn written() -> Label {
         Label {
             v: LABEL_VERSION,
-            card: LabelCard {
+            card: Some(LabelCard {
                 id: "c-bolt".to_owned(),
                 set: "2x2".to_owned(),
                 number: "117".to_owned(),
                 lang: "en".to_owned(),
                 name: "Lightning Bolt".to_owned(),
-            },
-            finish: "foil".to_owned(),
+            }),
+            finish: Some("foil".to_owned()),
             scanner: LabelScanner {
                 reported: None,
                 mode: "exact".to_owned(),
@@ -993,16 +1039,16 @@ mod tests {
         assert_eq!(label.v, LABEL_VERSION);
         assert_eq!(
             label.card,
-            LabelCard {
+            Some(LabelCard {
                 id: "c-bolt".to_owned(),
                 // Lower case, whatever the row holds: the inbox takes a set code one way.
                 set: "2x2".to_owned(),
                 number: "117".to_owned(),
                 lang: "en".to_owned(),
                 name: "Lightning Bolt".to_owned(),
-            }
+            })
         );
-        assert_eq!(label.finish, "foil");
+        assert_eq!(label.finish.as_deref(), Some("foil"));
         assert_eq!(label.scanner.reported.as_deref(), Some(SHOCK));
         assert_eq!(label.scanner.mode, "fast");
         assert_eq!(label.scanner.confidence, Some(0.82));
@@ -1268,13 +1314,13 @@ mod tests {
             height: 65_535,
         };
         let mut label = written();
-        label.card = LabelCard {
+        label.card = Some(LabelCard {
             id: id.clone(),
             set: "a".repeat(8),
             number: "★".repeat(32),
             lang: "zhs".to_owned(),
             name: "龍".repeat(200),
-        };
+        });
         label.scanner = LabelScanner {
             reported: Some(id),
             mode: "a".repeat(16),
@@ -1294,7 +1340,7 @@ mod tests {
         // And it is a bound that is met, not one with nothing near it: a label this side could
         // not have built — a name of a thousand such characters — is refused in the reader's
         // sentence rather than sent to be a 400.
-        label.card.name = "龍".repeat(1000);
+        label.card.as_mut().expect("a card").name = "龍".repeat(1000);
         assert_eq!(ascii_json(&label).unwrap_err(), TOO_LARGE);
     }
 
@@ -1321,14 +1367,14 @@ mod tests {
         };
         let label = Label {
             v: LABEL_VERSION,
-            card: LabelCard {
+            card: Some(LabelCard {
                 id: "ce711943-c1a1-43a0-8b89-8d169cfb8e06".to_owned(),
                 set: "2x2".to_owned(),
                 number: "117★".to_owned(),
                 lang: "en".to_owned(),
                 name: "Lim-Dûl’s Vault".to_owned(),
-            },
-            finish: "foil".to_owned(),
+            }),
+            finish: Some("foil".to_owned()),
             scanner: LabelScanner {
                 reported: Some("f29ba16f-c8fb-42fe-aabf-87089cb214a7".to_owned()),
                 mode: "exact".to_owned(),
@@ -1377,6 +1423,53 @@ mod tests {
             ],
         };
         assert_eq!(ascii_json(&label).expect("a header"), golden);
+    }
+
+    /// **No card, on the wire**: the same header with `card` and `finish` both `null` — and
+    /// there, never left out. `label.test.ts` holds `readLabel` to this file too.
+    #[test]
+    fn a_label_with_no_card_on_the_wire_is_the_one_the_inbox_is_tested_against() {
+        let golden = include_str!("__golden__/scan-label-no-card.txt").trim_end();
+        let mut label: Label =
+            serde_json::from_str(include_str!("__golden__/scan-label.txt").trim_end())
+                .expect("the card's golden");
+        label.card = None;
+        label.finish = None;
+        assert_eq!(ascii_json(&label).expect("a header"), golden);
+        assert!(golden.contains(r#""card":null,"finish":null"#), "{golden}");
+    }
+
+    #[test]
+    fn no_card_in_the_last_frame_is_a_label_with_no_printing_and_no_finish() {
+        let state = seeded("submit-no-card");
+        let mut sent = submission("c-bolt", "foil");
+        sent.card_id = None;
+        sent.finish = None;
+        let label = labelled(&state, &sent).expect("a label");
+        assert_eq!(label.card, None);
+        assert_eq!(label.finish, None);
+        // Everything else is as it is for a card: what the scanner said, and every frame.
+        assert_eq!(label.scanner.reported.as_deref(), Some(SHOCK));
+        assert_eq!(label.scanner.mode, "fast");
+        assert_eq!(label.run.len(), MIN_RUN_FRAMES);
+        assert_eq!(label.run[0].width, TINY.width);
+        // A mode that is no word is refused here as it is beside a card.
+        sent.mode = "Fast!".to_owned();
+        assert_eq!(
+            labelled(&state, &sent).unwrap_err(),
+            "Fast! is not a scan mode."
+        );
+    }
+
+    #[test]
+    fn a_card_without_its_finish_or_a_finish_without_its_card_is_refused() {
+        let state = seeded("submit-half");
+        let mut no_finish = submission("c-bolt", "foil");
+        no_finish.finish = None;
+        assert_eq!(labelled(&state, &no_finish).unwrap_err(), HALF_AN_ANSWER);
+        let mut no_card = submission("c-bolt", "foil");
+        no_card.card_id = None;
+        assert_eq!(labelled(&state, &no_card).unwrap_err(), HALF_AN_ANSWER);
     }
 
     #[test]

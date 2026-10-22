@@ -35,9 +35,13 @@
 //! not a pass that disagreed. A frame the scanner failed on (a panic, an undecodable JPEG, a
 //! failed resolve) carries `error`, and its pass scores `error` rather than `undecided`.
 //!
-//! **A replay is not the scan**, three ways the inbox documents: nothing from before the first
-//! frame, no detail pictures, and the developer sliders at their defaults. `then` and
-//! `decided_differs` are how far that moved an answer, apart from any change to the scanner.
+//! **A replay is not the scan**, four ways the inbox documents: nothing from before the first
+//! frame, no detail pictures, the developer sliders at their defaults, and — for a run kept at
+//! full resolution — each frame brought down to the pump's size again here
+//! ([`card_scanner::replay::as_sent`]), which is a resample of the scanner's picture and not its
+//! bytes. `then` and `decided_differs` are how far that moved an answer, apart from any change
+//! to the scanner. **A scan the reader sent with no card in it is skipped**, by name
+//! ([`card_scanner::replay::NO_CARD`]): nothing here scores a false positive yet.
 //!
 //! **No wall clock decides anything**: the resolve runs inside its frame ([`ResolveOn::Inline`]),
 //! the Neural agreement reads the label's times, so a run answers the same on a loaded machine
@@ -47,7 +51,7 @@ use card_scanner::host;
 use card_scanner::index::{format_uuid, parse_uuid, Bundle, ID_LEN};
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::replay::{cut, parse_label, score, settled, ScanLabel, Score, Settled};
+use card_scanner::replay::{as_sent, cut, parse_label, score, settled, ScanLabel, Score, Settled};
 use card_scanner::resolve::TierView;
 use card_scanner::session::{
     CollectorTry, FrameOptions, Outcome, ResolveOn, ScanMode, Session, Verdict,
@@ -810,6 +814,9 @@ fn replay_file(
     let skip = |why: String| Skipped { id: label.id.clone(), why };
     let run = std::fs::read(path).map_err(|e| skip(format!("run: {e}")))?;
     let frames = cut(label, &run).map_err(skip)?;
+    // At the size the scanner was given each frame, not the size the inbox keeps it at.
+    let sent: Vec<Cow<[u8]>> = frames.iter().map(|frame| as_sent(frame)).collect();
+    let frames: Vec<&[u8]> = sent.iter().map(AsRef::as_ref).collect();
     let mut done = replay_run(label, &frames, ingredients);
     for pass in &mut done.passes {
         keep_written(out, &mut pass.slices).map_err(skip)?;

@@ -2,8 +2,9 @@
 
 A fourth Cloudflare Worker, beside the relay, the share Worker and the web app's hosting. It has
 one route: the card scanner's **Send** posts one scan to it — the last couple of seconds of
-frames the scanner was given, with the exact printing and finish a reader says they show — and
-it keeps both so the scanner can be tested against them and improved (issue #776).
+frames the scanner was given, with the exact printing and finish a reader says they show, or
+the reader's word that there is no card in them — and it keeps both so the scanner can be
+tested against them and improved (issue #776).
 
 **Sending a scan is a supporter's** (the owner's decision, 2026-10-11). The app draws the press
 only on a device whose sync group a membership covers, the engine refuses a send from any other
@@ -14,8 +15,11 @@ else.
 
 **A scan is a run of frames, never one picture.** The scanner decides over a run — a lock that
 settles, evidence that pools, a vote that crosses a bar — so one frame cannot say what it did.
-What is sent is five to twenty of the frames it actually judged, byte for byte and in order,
-each beside what it answered for it: put back through the scanner, that is the scan again. It
+What is sent is five to twenty of the frames it actually judged, in order, each beside what it
+answered for it — **kept at the camera's own resolution, up to 1920 pixels wide** (the owner's
+decision, 2026-10-22: a picture can be brought down later, never up). The scanner was handed
+the same draw of the video brought down to some 960 pixels on its long edge; brought down the
+same way and put back through the scanner, that is the scan again. It
 is all of them or nothing: **the app cannot send one picture, and this Worker refuses both
 shapes one would arrive in** — a body sent as `image/jpeg`, and a label that lists fewer than
 five frames (`src/label.test.ts` and `src/submit.test.ts`, *one picture is never a scan*). What
@@ -79,11 +83,11 @@ The refusals, in the order they are checked — each before anything that costs 
 | 401 | `unauthorized` | no bearer token, or one the relay's key does not verify — expired, another key's, edited, junk. One answer for all of them, and **ahead of everything about the scan**: a stranger's type, label and body are not read |
 | 415 | | not sent as `application/octet-stream` — **`image/jpeg`, one picture's type, among them** |
 | 400 | | no label, or one `src/label.ts` refuses (the sentence names the field, and the frame) — **a `run` of fewer than five frames among them** |
-| 413 | `run_limit` | over 2 MB by what the label's frames add up to, or by its `content-length` |
+| 413 | `run_limit` | over 10 MB by what the label's frames add up to, or by its `content-length` |
 | 503 | `inbox_full` | the inbox was full when this isolate last asked, under a minute ago |
-| 413 | `run_limit` | over 2 MB by the bytes as they arrive |
+| 413 | `run_limit` | over 10 MB by the bytes as they arrive |
 | 400 | | the body is not as long as the label's frames together, or does not start as a JPEG does at one of them |
-| 503 | `inbox_full` | 500 runs already waiting |
+| 503 | `inbox_full` | 200 runs already waiting |
 
 The app words each of these for a reader itself (`crates/grimoire-core/src/scanner_submit.rs`),
 matching on the status or the `code` and never on the sentence, which is written for a developer
@@ -126,10 +130,16 @@ eight random bytes:
 }
 ```
 
-(Three frames shown; a real `run` has five to twenty.)
+(Three frames shown, at the scanner's size as runs were kept before 2026-10-22; a real `run` has
+five to twenty, and one sent since is some 1920×1080.)
+
+**A scan with no card in it** has `"card": null, "finish": null` — both, never one: the reader
+said the last frame holds no card, and the scanner was looking for one anyway. It is a false
+positive's evidence; every other field is as above. `pnpm scanner:replay` skips such a scan by
+name, since nothing there scores one yet.
 
 `card` is the printing the reader chose — **the card in the last frame**, the one under the
-camera at the press; the engine reads its set, number, language and name out of the install's
+camera at the press, or `null` for none; the engine reads its set, number, language and name out of the install's
 own card data, so a label cannot pair one printing's id with another's name. `scanner` is what
 the scanner had said at the press, and every figure is `null` when it had none. **`reported` is
 the printing it had decided on, and `null` while it had decided nothing** — never the card it
@@ -171,8 +181,8 @@ cap all the same — see below.
 - **A supporter's token** (`src/auth.ts`). Who can store a byte here is the devices a
   membership covers, and whoever holds a leaked token for the day it lives. Everything below is
   what bounds *them*.
-- **500 runs waiting** (`MAX_PENDING`), counted by listing `runs/` — one list a submission, no
-  counter to drift. With the 2 MB cap that is **about a gigabyte**, against R2's free ten,
+- **200 runs waiting** (`MAX_PENDING`), counted by listing `runs/` — one list a submission, no
+  counter to drift. With the 10 MB cap that is **about two gigabytes**, against R2's free ten,
   whoever is sending and from however many addresses. A full inbox turns scans away with a
   sentence until it is emptied; that is the right way round — a full inbox costs a few scans, an
   unbounded one costs money.
@@ -182,16 +192,16 @@ cap all the same — see below.
     headers and held its body back was counted in before it stored anything, and any number of
     them could be let past a nearly full inbox at once.
   - **"About", because the count and the write are two steps.** Requests that count in the same
-    instant each store, so the inbox can end a burst holding 500 and that burst. Nothing here
+    instant each store, so the inbox can end a burst holding 200 and that burst. Nothing here
     can make the two one step — that takes a Durable Object or a database, which this Worker
     is deliberately without — and the next request after the burst is refused.
   - **A full inbox is remembered for a minute** by the isolate that found it full, so a flood
     against one costs a refusal and not a list each. A list is a billed R2 operation (the free
     plan gives a million a month, shared with the share Worker); a submission that is stored
     costs three.
-- **2 MB a run** (`MAX_RUN_BYTES`), every frame together, which the engine refuses first. The
-  app sends the frames its scanner was given — JPEGs some 960 pixels on their long edge — and
-  keeps a run under a megabyte and a half.
+- **10 MB a run** (`MAX_RUN_BYTES`), every frame together, which the engine refuses first. The
+  app sends the frames its scanner judged at up to 1920 pixels wide — JPEGs of two to four
+  hundred kilobytes — and keeps a run under eight megabytes.
 - **Five to twenty frames a run** (`MIN_RUN_FRAMES`, `MAX_RUN_FRAMES`): about half a second to
   about two. The floor is the rule above — one picture is not a scan.
 - **12 a minute from one address** (`RL_SUBMIT`). Measured on the relay, these limiters are far
@@ -278,14 +288,16 @@ for (const [n, frame] of run.entries()) {
 }
 ```
 
-Fed to the scanner in that order, `ms` apart, with `scanner.mode` and `scanner.filters` set as
-the label says, the frames are the scan as the scanner saw it — short of whatever came before
-the run's first frame, and of the larger picture a `detail` frame had beside it.
+Brought down to 960 pixels on their long edge (`card_scanner::replay::as_sent`, which the
+replay does) and fed to the scanner in that order, `ms` apart, with `scanner.mode` and
+`scanner.filters` set as the label says, the frames are the scan as the scanner saw it — short
+of whatever came before the run's first frame, and of the larger picture a `detail` frame had
+beside it.
 
 For the whole inbox, R2's S3 API with an API token scoped to this one bucket (`rclone copy`, or
 `aws s3 sync` against the account's R2 endpoint) brings `runs/` and `labels/` down as two
 folders that pair by file name. **Delete what has been read** — the cap counts what is waiting,
-and an inbox nobody empties stops taking scans at 500. A deletion request names an id; delete
+and an inbox nobody empties stops taking scans at 200. A deletion request names an id; delete
 both of its objects, in the bucket and in any copy.
 
 ## Deploying

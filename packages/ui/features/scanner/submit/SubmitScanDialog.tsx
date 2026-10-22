@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useId, useRef, useState, type JSX } from "react";
 import { Dialog } from "@/components/Dialog";
+import { FILTER_CONTROL, FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import { PANEL_BUTTON } from "@/features/settings/controls";
 import { PrivacyLink } from "@/features/settings/PrivacyLink";
 import type { Finish } from "@/lib/finish";
@@ -17,6 +18,8 @@ import {
   disclosure,
   DONE,
   KEEP_THE_REFERENCE,
+  NO_CARD,
+  NO_CARD_NOTE,
   REFERENCE,
   SEND,
   SEND_TITLE,
@@ -46,6 +49,12 @@ export interface SubmitScanDialogProps {
  * reader gives both halves themselves (issue #776): nothing is chosen for them but a finish the
  * printing leaves no choice about, and Send says why it will not send until both are.
  *
+ * **Or that there is no card at all** — *No card in the picture*, a switch beside the question:
+ * the scanner looking for a card where there was none is a false positive, and the pictures of
+ * one are as worth having as a card it named wrongly. While it is on, the printings and the
+ * finishes are put out of sight (and kept, so turning it off brings back what was chosen), and
+ * Send sends the run with no card and no finish.
+ *
  * **All of the run or none of it.** What is sent is every frame the scanner was given in its
  * last couple of seconds — it decides over a run, so one picture could not say what it did — and
  * there is no switch here to send fewer: the reader looks through them (`RunPictures`), and
@@ -63,11 +72,7 @@ export interface SubmitScanDialogProps {
  * reference dropped on the floor, so Escape, the ✕ and the scrim wait for the answer, as
  * *Create deck* does for its write.
  */
-export function SubmitScanDialog({
-  run,
-  onDismiss,
-  onClose,
-}: SubmitScanDialogProps): JSX.Element {
+export function SubmitScanDialog({ run, onDismiss, onClose }: SubmitScanDialogProps): JSX.Element {
   /** A send is in flight. A ref, read only by the two handlers below: nothing draws it here. */
   const sending = useRef(false);
   // Stable, because the body hangs an effect on it and this component is re-rendered with its
@@ -141,6 +146,8 @@ const Body = memo(function Body({
   const id = useId();
   const [chosen, setChosen] = useState<CardSummary | null>(null);
   const [finish, setFinish] = useState<FinishChoice | null>(null);
+  /** The reader says there is no card in the last picture. */
+  const [noCard, setNoCard] = useState(false);
   const [pending, setPending] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   /** The inbox's reference for the scan it took — `null` until it has taken one. */
@@ -187,20 +194,31 @@ const Body = memo(function Body({
     );
   };
 
-  // The card first: which finishes there are to choose between depends on it.
-  const reason = chosen === null ? CHOOSE_THE_CARD : finish === null ? CHOOSE_ITS_FINISH : null;
+  // The card first: which finishes there are to choose between depends on it. No card is an
+  // answer whole by itself.
+  const reason = noCard
+    ? null
+    : chosen === null
+      ? CHOOSE_THE_CARD
+      : finish === null
+        ? CHOOSE_ITS_FINISH
+        : null;
   const blocked = reason !== null || pending;
 
   const send = async () => {
-    if (chosen === null || finish === null || inFlight.current) return;
+    if (reason !== null || inFlight.current) return;
+    const answer =
+      noCard || chosen === null || finish === null
+        ? null
+        : { cardId: chosen.id, finish: finish.value };
     inFlight.current = true;
     onSending(true);
     setRefusal(null);
     setPending(true);
     try {
-      // One argument: the reader's two answers, what the scanner had said, and every frame of
-      // the run as it stood at the press.
-      const taken = await ipc.scannerSubmit(submissionOf(run, chosen.id, finish.value));
+      // One argument: the reader's answer, what the scanner had said, and every frame of the run
+      // as it stood at the press.
+      const taken = await ipc.scannerSubmit(submissionOf(run, answer));
       setSent(taken.id);
       // **Filed in the inbox, with no toast.** The dialog stays open and says "Sent" with the
       // reference itself, so a toast would say it twice — but the reference is the only handle
@@ -232,14 +250,47 @@ const Body = memo(function Body({
                 and its reasons. */}
             <RunPictures frames={run.frames} />
 
-            <PrintingPicker initialQuery={run.leadName} chosen={chosen} onChoose={choose} />
+            {/* **The other answer, before the question it skips**: a switch in the finish
+                chips' own look, so it reads as one of the dialog's choices. Pressed again it
+                hands the two questions back with what had been chosen in them. */}
+            <div className="flex flex-col gap-1.5">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={noCard}
+                aria-describedby={noCard ? `${id}-no-card` : undefined}
+                onClick={() => {
+                  setRefusal(null);
+                  setNoCard((was) => !was);
+                }}
+                className={cn(
+                  FILTER_CONTROL,
+                  FILTER_FOCUS,
+                  "self-start px-3",
+                  filterChipState(noCard, false),
+                )}
+              >
+                {NO_CARD}
+              </button>
+              {noCard && (
+                <p id={`${id}-no-card`} className="text-xs text-dim">
+                  {NO_CARD_NOTE}
+                </p>
+              )}
+            </div>
 
-            <div ref={finishBox}>
-              <FinishRadios
-                chosen={chosen}
-                finish={finish?.value ?? null}
-                onFinish={(value) => setFinish({ value, by: "reader" })}
-              />
+            {/* Out of sight while there is no card, and still mounted: the search, the
+                printing and the finish come back as they were. */}
+            <div hidden={noCard} className="space-y-4">
+              <PrintingPicker initialQuery={run.leadName} chosen={chosen} onChoose={choose} />
+
+              <div ref={finishBox}>
+                <FinishRadios
+                  chosen={chosen}
+                  finish={finish?.value ?? null}
+                  onFinish={(value) => setFinish({ value, by: "reader" })}
+                />
+              </div>
             </div>
           </div>
 

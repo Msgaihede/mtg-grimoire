@@ -35,13 +35,14 @@ vi.mock("@/lib/ipc", async (orig) => {
       // The scanner's files. **Refused by default**, which is a host with nothing to offer — so
       // every test but the one that says otherwise draws the status's own sentences, as the page
       // did before there was an offer, and none reaches the real core for an answer.
-      scannerAssets: vi.fn(
-        (): Promise<ScannerAssetsOwed> =>
-          Promise.reject(new Error("There is no command named scanner_assets on this host.")),
+      scannerAssets: vi.fn((): Promise<ScannerAssetsOwed> =>
+        Promise.reject(new Error("There is no command named scanner_assets on this host.")),
       ),
-      scannerAssetsFetch: vi.fn(
-        async (): Promise<ScannerAssetsOwed> => ({ owed: [], bytes: 0, fetching: false }),
-      ),
+      scannerAssetsFetch: vi.fn(async (): Promise<ScannerAssetsOwed> => ({
+        owed: [],
+        bytes: 0,
+        fetching: false,
+      })),
       onScannerAssets: vi.fn(() => () => {}),
       // The lease, free: every test but the ones that say otherwise is a window with the scanner to
       // itself, which is also the only state the page had before there was more than one window.
@@ -58,22 +59,22 @@ vi.mock("@/lib/ipc", async (orig) => {
       // mocked so no test reaches the real core, and typed by what they answer — a bare `vi.fn()`
       // takes any shape a test hands it.
       scannerSubmit: vi.fn(async (): Promise<ScannerSubmitted> => ({ id: "unset" })),
-      searchCards: vi.fn(
-        async (): Promise<SearchResponse> => ({ items: [], total: 0, totalIsCapped: false }),
-      ),
+      searchCards: vi.fn(async (): Promise<SearchResponse> => ({
+        items: [],
+        total: 0,
+        totalIsCapped: false,
+      })),
       // The membership, which *Send scan…* is drawn for and for nobody else. **A supporter's by
       // default, and the default is doing work**: every test here that asks why the press is or
       // is not there — a refused camera, a Stop, a trade — is asking about its own condition,
       // and can only ask it where the membership would have let the press be drawn. The tests
       // about the membership itself say what it answers instead.
-      syncSupporterStatus: vi.fn(
-        async (): Promise<SupporterStatus> => ({
-          entitled: true,
-          status: "active",
-          since: 1_756_000_000,
-          groupBound: true,
-        }),
-      ),
+      syncSupporterStatus: vi.fn(async (): Promise<SupporterStatus> => ({
+        entitled: true,
+        status: "active",
+        since: 1_756_000_000,
+        groupBound: true,
+      })),
       // The four the reader's half reads and writes. The pump waits for the first two to have
       // answered — prefs loaded and their filters pushed — so each is a resolved promise by default.
       scannerPrefs: vi.fn(async () => prefs),
@@ -1518,9 +1519,10 @@ describe("ScannerPage sending a scan", () => {
       expect(scope).not.toBeNull();
       expect(scope?.contains(dialog)).toBe(false);
 
-      // It rests on the last frame the pump sent, as the text that is drawn and sent, and says
-      // how many there are to look through.
-      expect(picture(dialog)).toHaveAttribute("src", `data:image/jpeg;base64,${text(7)}`);
+      // It rests on the last frame the pump sent — its full-resolution copy, the second of the
+      // two encodes each frame is drawn into on a device that may send — as the text that is
+      // drawn and sent, and says how many there are to look through.
+      expect(picture(dialog)).toHaveAttribute("src", `data:image/jpeg;base64,${text(14)}`);
       expect(picture(dialog)).toHaveAttribute("alt", "Picture 7 of 7 that will be sent");
       expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "7");
       expect(dialog).toHaveTextContent("These 7 pictures — the last couple of seconds");
@@ -1558,14 +1560,16 @@ describe("ScannerPage sending a scan", () => {
         filters: DEFAULT_SCANNER_PREFS.filters,
       });
 
-      // **The run is the frames the pump really sent**, byte for byte and in the order it sent
-      // them — not a picture taken for the purpose after the press.
+      // **The run is the frames the pump really sent**, in the order it sent them — each kept at
+      // full resolution, out of the same draw of the video as the frame the scanner was given:
+      // the pump's frame is each draw's first encode and the kept copy its second. Not a
+      // picture taken for the purpose after the press.
       const pumped = vi
         .mocked(ipc.scannerFrame)
         .mock.calls.slice(0, 7)
         .map(([jpeg]) => btoa(String.fromCharCode(...jpeg)));
-      expect(pumped).toEqual([1, 2, 3, 4, 5, 6, 7].map(text));
-      expect(sent.run.map((frame) => frame.jpeg)).toEqual(pumped);
+      expect(pumped).toEqual([1, 3, 5, 7, 9, 11, 13].map(text));
+      expect(sent.run.map((frame) => frame.jpeg)).toEqual([2, 4, 6, 8, 10, 12, 14].map(text));
       // Each beside what the scanner answered for it.
       const settled = "storm-of-saruman-ltr-72";
       expect(sent.run.map((frame) => frame.decided)).toEqual([
@@ -1618,9 +1622,7 @@ describe("ScannerPage sending a scan", () => {
       await start();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
       // Enough of a scan to send: a few frames more than the fewest.
-      await waitFor(() =>
-        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8),
-      );
+      await waitFor(() => expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8));
       await user.click(screen.getByRole("button", { name: "Send scan…" }));
       const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
       const shown = picture(dialog);
@@ -1792,9 +1794,7 @@ describe("ScannerPage sending a scan", () => {
       mount();
       await start();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
-      await waitFor(() =>
-        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8),
-      );
+      await waitFor(() => expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(8));
 
       await narrowTo(user, "2020-01-01");
       const pending = {
@@ -2182,8 +2182,7 @@ describe("ScannerPage on a host with no scanner session", () => {
     // sends the next on microtasks alone, starves this file's timers, and the run hangs for as
     // long as it is left (seen: ten minutes and no result) instead of going red.
     vi.mocked(ipc.scannerFrame).mockImplementation(
-      () =>
-        new Promise((_, reject) => setTimeout(() => reject(SCANNER_NOT_IN_A_BROWSER_YET), 10)),
+      () => new Promise((_, reject) => setTimeout(() => reject(SCANNER_NOT_IN_A_BROWSER_YET), 10)),
     );
   }
 
@@ -2426,10 +2425,12 @@ describe("ScannerPage with a destination", () => {
       // press opens one.
       expect(await screen.findByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
       expect(ipc.syncSupporterStatus).toHaveBeenCalled();
-      await expect(vi.mocked(ipc.syncSupporterStatus).mock.results[0].value).resolves.toMatchObject({
-        entitled: true,
-        status: "active",
-      });
+      await expect(vi.mocked(ipc.syncSupporterStatus).mock.results[0].value).resolves.toMatchObject(
+        {
+          entitled: true,
+          status: "active",
+        },
+      );
       expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
       await user.click(
         await within(theirTray()).findByRole("button", { name: "Add 5 to their side" }),
@@ -2478,10 +2479,9 @@ describe("ScannerPage with a destination", () => {
     expect(commit.mock.calls[0][0]).toEqual(known);
     settle[0].resolve();
     await waitFor(() => expect(within(theirTray()).getAllByRole("listitem")).toHaveLength(1));
-    await waitFor(
-      () => expect(ipc.setScannerTray).toHaveBeenLastCalledWith([NEEDS_A_FINISH_ROW]),
-      { timeout: 2000 },
-    );
+    await waitFor(() => expect(ipc.setScannerTray).toHaveBeenLastCalledWith([NEEDS_A_FINISH_ROW]), {
+      timeout: 2000,
+    });
   });
 
   it("keeps every row and shows the sentence when the destination refuses", async () => {

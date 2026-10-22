@@ -174,6 +174,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // *Send scan…*'s dialog is open, so recognition pauses (issue #977) — the desktop page's
   // `sending`, synced below `useScanSubmit` for its reason.
   const [sending, setSending] = useState(false);
+  // Read above the loop, as on the desktop: a device that may send scans keeps its run's frames
+  // at full resolution.
+  const maySend = useMaySendScans();
   const loop = useScanLoop({
     videoRef,
     live:
@@ -187,6 +190,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     options,
     sendPx: DEFAULT_SEND_PX,
     detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
+    keepFullFrames: maySend,
     onDecision,
   });
   useRefusedElsewhere(loop.error);
@@ -299,7 +303,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // so nothing here hints at one. A lapse while the dialog is open is the engine's to refuse.
   // **The filters it says are the ones in force** (`inForce`), not the ones the sheet is drawing:
   // `prefs.filters` moves before the session has taken a change, and goes back if it is refused.
-  const maySend = useMaySendScans();
   const sendable = destination === undefined && maySend && camera.kind === "live" && scanning;
   const submit = useScanSubmit({
     recent: loop.recent,

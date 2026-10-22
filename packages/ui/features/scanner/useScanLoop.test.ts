@@ -4,7 +4,7 @@ import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from
 import { READS, VERDICTS } from "./fixtures";
 import { RUN_MAX_AGE_MS, RUN_MAX_BYTES, RUN_MAX_FRAMES, runClock } from "./submit/run";
 import type { ScannerDecision, ScannerOptions, ScannerVerdict } from "./types";
-import { useScanLoop, type GrabbedPair, type RunFrame } from "./useScanLoop";
+import { useScanLoop, type GrabbedKept, type GrabbedPair, type RunFrame } from "./useScanLoop";
 
 const scannerFrame =
   vi.fn<
@@ -1388,14 +1388,16 @@ describe("the run useScanLoop keeps", () => {
       [0xff, 0xd8, 2],
       [0xff, 0xd8, 3],
     ]);
-    expect(run.map(({ ok, lock, confidence, distance, decided, detail }) => ({
-      ok,
-      lock,
-      confidence,
-      distance,
-      decided,
-      detail,
-    }))).toEqual([
+    expect(
+      run.map(({ ok, lock, confidence, distance, decided, detail }) => ({
+        ok,
+        lock,
+        confidence,
+        distance,
+        decided,
+        detail,
+      })),
+    ).toEqual([
       { ok: false, lock: "idle", confidence: null, distance: null, decided: null, detail: false },
       { ok: true, lock: "locked", confidence: 0.625, distance: 74, decided: null, detail: false },
       {
@@ -1529,19 +1531,19 @@ describe("the run useScanLoop keeps", () => {
   });
 
   /** A camera whose frames are heavy keeps a shorter run, never a heavier one. */
-  it("holds a mebibyte and a half of frames at most, dropping the oldest", async () => {
+  it("holds eight mebibytes of frames at most, dropping the oldest", async () => {
     scannerFrame.mockImplementation(() => answersIn(10));
     let n = 0;
     const grabFrame = vi.fn(async (): Promise<Uint8Array | null> => {
-      const frame = new Uint8Array(400_000);
+      const frame = new Uint8Array(3_000_000);
       frame[2] = ++n;
       return frame;
     });
     const { result } = mount({ grabFrame });
     await tick(45);
-    // Four answered; three of them fit the budget, and they are the newest three.
+    // Four answered; two of them fit the budget, and they are the newest two.
     const run = result.current.recent();
-    expect(numbers(run)).toEqual([2, 3, 4]);
+    expect(numbers(run)).toEqual([3, 4]);
     expect(run.reduce((sum, frame) => sum + frame.jpeg.length, 0)).toBeLessThanOrEqual(
       RUN_MAX_BYTES,
     );
@@ -1673,6 +1675,104 @@ describe("the run useScanLoop keeps", () => {
     await act(async () => gates[0].resolve({ ...VERDICTS.voting, wants_detail: true }));
     await act(async () => gates[1].resolve(VERDICTS.voting));
     expect(result.current.recent().map((frame) => frame.detail)).toEqual([false, false]);
+  });
+
+  /**
+   * **A device that may send keeps its run at full resolution** (the owner's decision,
+   * 2026-10-22): every frame is one grab of three pictures — the scanner's frame, a detail image
+   * when one was asked for, and the copy the run keeps — and only the first two go to the
+   * scanner.
+   */
+  describe("with full frames kept", () => {
+    /** A kept grab whose three pictures are told apart: `ff d8 n` small, `ff d9 n` kept. */
+    function keptGrab() {
+      let n = 0;
+      return vi.fn(
+        async (
+          _video: HTMLVideoElement,
+          _longEdge: number,
+          _quality: number,
+          detail: boolean,
+        ): Promise<GrabbedKept | null> => {
+          n += 1;
+          return {
+            frame: new Uint8Array([0xff, 0xd8, n]),
+            detail: detail ? new Uint8Array([0xff, 0xda, n]) : null,
+            kept: new Uint8Array([0xff, 0xd9, n]),
+          };
+        },
+      );
+    }
+
+    it("keeps the full copy, sends the scanner its own frame, and the detail beside it", async () => {
+      const gates = gated(3);
+      const grabKept = keptGrab();
+      const { result, grabFrame, grabPair } = mount({
+        grabKept,
+        keepFullFrames: true,
+        detailWaitMs: 0,
+      });
+      await tick();
+      await act(async () => gates[0].resolve({ ...VERDICTS.voting, wants_detail: true }));
+      await act(async () => gates[1].resolve(VERDICTS.voting));
+      await act(async () => gates[2].resolve(VERDICTS.voting));
+
+      // Every grab is the kept one, asked at the pump's size, and for a detail image only on the
+      // frame after the ask.
+      expect(grabFrame).not.toHaveBeenCalled();
+      expect(grabPair).not.toHaveBeenCalled();
+      expect(grabKept.mock.calls.slice(0, 3).map((call) => call[3])).toEqual([false, true, false]);
+      expect(grabKept.mock.calls[0][1]).toBe(DEFAULT_SEND_PX);
+      // The scanner was given the small frames, and the detail with the second…
+      const sent = scannerFrame.mock.calls.slice(0, 3);
+      expect(sent.map((call) => Array.from(call[0] as Uint8Array))).toEqual([
+        [0xff, 0xd8, 1],
+        [0xff, 0xd8, 2],
+        [0xff, 0xd8, 3],
+      ]);
+      expect(sent.map((call) => call.length)).toEqual([2, 3, 2]);
+      // …and the run is the full copies, each beside what was said of its frame.
+      const run = result.current.recent();
+      expect(run.map((frame) => Array.from(frame.jpeg))).toEqual([
+        [0xff, 0xd9, 1],
+        [0xff, 0xd9, 2],
+        [0xff, 0xd9, 3],
+      ]);
+      expect(run.map((frame) => frame.detail)).toEqual([false, true, false]);
+    });
+
+    it("keeps the scanner's own frame where the full copy did not encode", async () => {
+      const gates = gated(1);
+      const grabKept = vi.fn(async (): Promise<GrabbedKept | null> => ({
+        frame: PAIR_FRAME,
+        detail: null,
+        kept: null,
+      }));
+      const { result } = mount({ grabKept, keepFullFrames: true });
+      await tick();
+      await act(async () => gates[0].resolve(VERDICTS.voting));
+      expect(result.current.recent().map((frame) => frame.jpeg)).toEqual([PAIR_FRAME]);
+    });
+
+    it("starts the run over when the page starts or stops keeping them", async () => {
+      const gates = gated(3);
+      const grabKept = keptGrab();
+      const { result, rerender, args } = mount({ grabFrame: numbered(), grabKept });
+      await tick();
+      await act(async () => gates[0].resolve(VERDICTS.voting));
+      expect(result.current.recent()).toHaveLength(1);
+
+      // A run is one size of picture: the small frame already kept goes with the switch.
+      args.keepFullFrames = true;
+      rerender();
+      expect(result.current.recent()).toEqual([]);
+      await tick();
+      await act(async () => gates[1].resolve(VERDICTS.voting));
+      await tick();
+      await act(async () => gates[2].resolve(VERDICTS.voting));
+      expect(result.current.recent().every((frame) => frame.jpeg[1] === 0xd9)).toBe(true);
+      expect(result.current.recent().length).toBeGreaterThan(0);
+    });
   });
 
   /**
