@@ -3547,6 +3547,20 @@ or, when that look stands for more than one printing the filters admit, those as
 the look's order. Five frames running with no card forget the decision — the same card shown again
 adds again, and a switch from Fast or Exact on the card in hand replaces its row.
 
+**A second printing laid on the decided card adds (#1359).** The agreement counts votes by card, so
+another art of the decided card stacked on it was the same card to it, and never decided: the
+reader had to Reset or scan another card first. While a card is decided its votes are now counted
+by **look**, and **three accepted frames running** whose look the picture tells apart from the
+deciding frame's (neither among the other's twins, `TWIN_GAP`) decide that look
+(`Rules::another_look`, `Decision::another_look`) — one frame more than a card takes, because a
+held card's best look can waver and a change made in error adds a row. The session takes it as the
+watch's change in the other modes: a second copy, `replaces_previous` false — **unless its
+printing is the one the last decision named**, which is the card's own look wavering long enough,
+and replaces its row. The frames of the other look are kept for the printing evidence, so it
+chooses the second printing on them. Not measured on readers' scans; the test is the stacked pile.
+Two copies of one look are still one decision, as in the other modes: lift the first away for five
+frames, or use the tray's quantity stepper.
+
 **On the 124 readers' scans** (card-scanner's replay, 2026-10-20, the shipped files and
 thresholds, **before the printing evidence below**, judged on the decision held after the last
 frame):

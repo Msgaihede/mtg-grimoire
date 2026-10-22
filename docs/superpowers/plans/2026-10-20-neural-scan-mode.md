@@ -51,12 +51,13 @@ pub struct Read { pub cards: Vec<Found>, pub accepted, supported, instant, weak,
 // Found: detection {score, quad, flip}, quad, flipped, scored {entry, card, score, margin, twins},
 //        top: Vec<(u32, f32)> (the search's best looks, best first), accepted, prominence, aimed
 
-impl Agreement {                                 // Default: required 2, support 3, ages in ms, forget_after 5
+impl Agreement {                                 // Default: required 2, support 3, ages in ms, forget_after 5, another_look 3 (#1359)
     pub fn observe(&mut self, read: &Read, now_ms: f64) -> bool;   // true on a deciding frame
-    pub fn decision(&self) -> Option<&Decision>;                    // {entry, card, score, twins, how}
+    pub fn decision(&self) -> Option<&Decision>;                    // {entry, card, score, twins, how, another_look}
     pub fn decisions(&self) -> usize;                               // moves on each new decision
     pub fn votes(&self) -> (usize, usize);                          // (held, of which accepted)
     pub fn absent(&self) -> u32;                                    // frames running with no card
+    pub fn is_decided(&self, scored: &Scored) -> bool;              // the decided card, in its deciding look
     pub fn reset(&mut self);
 }
 
