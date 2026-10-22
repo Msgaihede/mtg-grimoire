@@ -686,6 +686,12 @@ function CardChips({ counters, effects }: { counters: string; effects: string[] 
  * and any attachment nearer that card, so the reader sees it on the table while its preview
  * waits for the pointer to rest. It goes back the moment the pointer leaves it. Lifted from
  * state rather than a `hover:` variant, `CardStack`'s way, so the class is `LAYER`'s own.
+ *
+ * **Only its edge is ever under the pointer** (issue #1364): the lifted card is a picture drawn
+ * over the others, inert to the pointer, while the button stays tucked where it was. Raising the
+ * button itself put its whole face over the card it is attached to, so a pointer that came down
+ * through the edge stayed on the attachment, and a click meant for the creature — an attacker,
+ * a blocker, a target — picked the attachment instead.
  */
 function AttachedView({
   card,
@@ -745,66 +751,78 @@ function AttachedView({
 
   const build = () => cardMenu({ card, ids, place: "battlefield", sandbox, onAct, onActivate });
   const openMenu = menu(build);
+  const ring = aimed
+    ? MARK_RING.chosen
+    : mark !== undefined
+      ? MARK_RING[mark.tone]
+      : picks && PICKABLE_RING;
 
   return (
-    <button
-      ref={ref}
-      type="button"
-      aria-label={[
-        card.name,
-        `attached to ${host.name}`,
-        card.tapped ? "tapped" : null,
-        card.isToken ? "token" : null,
-        counters === "" ? null : counters,
-        mark?.word ?? null,
-      ]
-        .filter((part) => part !== null)
-        .join(", ")}
-      aria-pressed={picks ? mark !== undefined : undefined}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (onPick !== undefined) onPick(card.id);
-        else if (makesMana) onAct({ type: "tapForMana", id: card.id });
-        else if (handled) onAct({ type: "tap", ids, tapped: !card.tapped });
-      }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        if (build().length === 0) return;
-        onUnpoint();
-        openMenu(e);
-      }}
-      onKeyDown={menuKey(build)}
-      onMouseEnter={(e) => {
-        onLift(card.id);
-        onPoint({
-          card,
-          ids,
-          place: "battlefield",
-          line: `${card.name}, attached to ${host.name}`,
-          at: pointerAt(e),
-        });
-      }}
-      onMouseLeave={() => {
-        onLift(null);
-        onUnpoint();
-      }}
-      data-point={card.id}
-      className={cn(
-        "absolute rounded-md p-0",
-        lifted && LAYER.raised,
-        "transition-[left,top,transform] duration-150 ease-out motion-reduce:transition-none",
-        FOCUS,
-        carried ? "cursor-grab" : picks ? "cursor-pointer" : "cursor-default",
-        aimed
-          ? MARK_RING.chosen
-          : mark !== undefined
-            ? MARK_RING[mark.tone]
-            : picks && PICKABLE_RING,
+    <>
+      <button
+        ref={ref}
+        type="button"
+        aria-label={[
+          card.name,
+          `attached to ${host.name}`,
+          card.tapped ? "tapped" : null,
+          card.isToken ? "token" : null,
+          counters === "" ? null : counters,
+          mark?.word ?? null,
+        ]
+          .filter((part) => part !== null)
+          .join(", ")}
+        aria-pressed={picks ? mark !== undefined : undefined}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (onPick !== undefined) onPick(card.id);
+          else if (makesMana) onAct({ type: "tapForMana", id: card.id });
+          else if (handled) onAct({ type: "tap", ids, tapped: !card.tapped });
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          if (build().length === 0) return;
+          onUnpoint();
+          openMenu(e);
+        }}
+        onKeyDown={menuKey(build)}
+        onMouseEnter={(e) => {
+          onLift(card.id);
+          onPoint({
+            card,
+            ids,
+            place: "battlefield",
+            line: `${card.name}, attached to ${host.name}`,
+            at: pointerAt(e),
+          });
+        }}
+        onMouseLeave={() => {
+          onLift(null);
+          onUnpoint();
+        }}
+        data-point={card.id}
+        className={cn(
+          "absolute rounded-md p-0",
+          "transition-[left,top,transform] duration-150 ease-out motion-reduce:transition-none",
+          FOCUS,
+          carried ? "cursor-grab" : picks ? "cursor-pointer" : "cursor-default",
+          ring,
+        )}
+        style={style}
+      >
+        <CardFace card={card} />
+      </button>
+      {lifted && (
+        <div
+          aria-hidden="true"
+          data-lifted={card.id}
+          className={cn("pointer-events-none absolute rounded-md", LAYER.raised, ring)}
+          style={style}
+        >
+          <CardFace card={card} />
+        </div>
       )}
-      style={style}
-    >
-      <CardFace card={card} />
-    </button>
+    </>
   );
 }
 

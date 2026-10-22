@@ -7,6 +7,7 @@ import type { Playmat } from "../table/types";
 import {
   GOLDFISH,
   attackStep,
+  attackWithRole,
   blockStep,
   castChoicePrompt,
   orderTriggersPrompt,
@@ -333,6 +334,19 @@ export const AttackStep: Story = {
     const canvas = within(canvasElement);
     const yours = canvas.getByRole("region", { name: "Your battlefield" });
     await userEvent.click(within(yours).getByRole("button", { name: /^Llanowar Elves/ }));
+    await userEvent.click(canvas.getByRole("button", { name: /Attack with 1/ }));
+    await expect(args.onAct).toHaveBeenLastCalledWith(expect.objectContaining({ type: "attack" }));
+  },
+};
+
+/** Issue #1364: Tarmogoyf wears a Wicked Role, whose edge peeks over it; a click on Tarmogoyf
+ *  still declares it as an attacker. */
+export const AttackWithRole: Story = {
+  args: { view: attackWithRole().view },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const yours = canvas.getByRole("region", { name: "Your battlefield" });
+    await userEvent.click(within(yours).getByRole("button", { name: /^Tarmogoyf/ }));
     await userEvent.click(canvas.getByRole("button", { name: /Attack with 1/ }));
     await expect(args.onAct).toHaveBeenLastCalledWith(expect.objectContaining({ type: "attack" }));
   },

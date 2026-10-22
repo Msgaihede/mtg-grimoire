@@ -1,4 +1,5 @@
 import type { RefObject } from "react";
+import { PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom";
 import type { GamePlace, PlaytestAction } from "@/lib/ipc";
 import { dndDraggable, releasePoint, useDndDragging, useDndDropTarget } from "@/lib/dndTarget";
 
@@ -77,6 +78,16 @@ export function dropAction(
   return sandbox ? { type: "move", id, to } : null;
 }
 
+/**
+ * A card that can be picked up off the table.
+ *
+ * **A `handle` puts the 5px threshold back** (issue #1364), `useCategoryDragSource`'s way:
+ * dnd-kit's default activation constraints are none at all for a mouse press inside a declared
+ * handle, so the drag began on `pointerdown` and every click on the handle was a zero-pixel drag
+ * that never reached its `onClick`. The handle is a card with an attachment tucked under it — so
+ * a creature wearing a Role or an Equipment could not be picked as an attacker, a blocker or a
+ * target, nor tapped for mana, by a click.
+ */
 export function tableDraggable({
   element,
   handle,
@@ -88,7 +99,20 @@ export function tableDraggable({
   /** Read at the press, so a pile that grew since it mounted carries what it is now. */
   payload: () => TableDrag;
 }): () => void {
-  return dndDraggable({ element, handle, data: () => tableDragData(payload()) });
+  return dndDraggable({
+    element,
+    handle,
+    data: () => tableDragData(payload()),
+    ...(handle === undefined
+      ? {}
+      : {
+          sensors: [
+            PointerSensor.configure({
+              activationConstraints: [new PointerActivationConstraints.Distance({ value: 5 })],
+            }),
+          ],
+        }),
+  });
 }
 
 /** The card in the air, or `null` — what lights the zones that could take it. */

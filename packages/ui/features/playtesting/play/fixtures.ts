@@ -254,6 +254,22 @@ export function attackStep(): TurnFive {
 }
 
 /**
+ * Declaring attackers with a Wicked Role token on Tarmogoyf (issue #1364): the Role's edge peeks
+ * over the attacker it is attached to, and a click on the creature still declares it.
+ */
+export function attackWithRole(): TurnFive {
+  const t = attackStep();
+  const role = gameCard("Wicked Role", {
+    typeLine: "Token Enchantment — Aura Role",
+    lane: "other",
+    isToken: true,
+    attachedTo: t.goyf.id,
+  });
+  t.view.you.battlefield = [...t.view.you.battlefield, role];
+  return t;
+}
+
+/**
  * The opponent's turn 6, declare blockers: Ragavan attacks; Tarmogoyf and the Elves may block it.
  */
 export function blockStep(): TurnFive {

@@ -416,6 +416,14 @@ menu opened but it is not carried off or tapped by a click. The edge is the atta
 button: it points, opens its own menu (an Equipment's equip ability is activated there) and is
 picked when the rules ask for it on its own table.
 
+**The host stays the host under the pointer** (issue #1364, a creature wearing a Wicked Role that
+could not be declared as an attacker). Two things kept a click from it. A card with attachments
+is its pile's drag handle, and dnd-kit drops its activation constraints for a press inside a
+declared handle, so every click was a zero-pixel drag; `tableDraggable` gives a handle the 5px
+threshold back, as the deck editor's category grip does. And an attachment pointed at comes up
+whole (issue #1331) as an inert picture (`data-lifted`), never by raising its button: raised, the
+button covered the host, and a pointer that came down through the edge stayed on the attachment.
+
 **Drags are dnd-kit, as everywhere in the app** (`tableDrag.ts`, `TableDrag`, `useTableDropTarget`,
 with a mark of its own, `mtg-grimoire/table-card`). A drop is a zone, never a coordinate, and only
 the reader's cards are dragged — an opponent's never:
