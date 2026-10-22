@@ -588,12 +588,16 @@ a body with a cost and a type, but the parts it could not read do nothing. So th
 each deck — as marks, with the sentence as the mark's name and hint rather than printed:
 
 - **On the wall**, a tile whose deck has cards played only in part (in the list it is first dealt
-  from) wears a gold `TriangleAlert` and the count in its art's top-right corner — a caution, not
-  the red of a broken rule: the deck still plays. A deck played whole wears nothing there.
+  from) wears a red (`--destructive`) `TriangleAlert` and the count in its art's top-right corner.
+  It was gold — a caution — until 2026-10-22, when the owner asked for red: a card played in part
+  is behaviour that does not work, and gold on this gold-accented app did not say so loudly
+  enough. A deck played whole wears nothing there.
 - **On each seat**, the seated deck's verdict in the list picked there: a green `CircleCheck`, or
-  the `TriangleAlert` and count as a button whose name is the sentence ("The rules engine plays 23
-  of 24 cards in full; 1 card is played only in part.") and which opens, under the seat, the cards
-  with their copies and what phase leaves out of each. A check that failed is a dim `CircleHelp`.
+  the red `TriangleAlert` and count as a button whose name is the sentence ("The rules engine plays
+  23 of 24 cards in full; 1 card is played only in part.") and which opens, under the seat, the
+  cards with their copies and what phase leaves out of each — each beside a `thumb` of its first
+  printing (issue #1325), so a card is known by sight as well as by name. A check that failed is a
+  dim `CircleHelp`.
 
 **The verdict is phase's own.** `grimoire-play`'s `support.rs` parses each face exactly as a game
 does (`cards::parsed_faces`, `build_oracle_face`) and asks `engine::game::coverage::card_face_gaps`,
@@ -612,9 +616,9 @@ database read and cache lookups.
 **In a game, each card carries its own gaps** (issue #1093). `Playtest::new` asks
 `card_face_gaps` of every face in the game's card database once, and keeps the faces with a gap by
 name; every `GameCard` the session builds carries its face's (`gaps`, empty for a face played in
-full and for a token). The board's `CardFace` draws a card with any in a **gold border inside the
-card** — the setup's caution colour, clear of the outline marks for attack, block and pick, which
-sit outside it — wherever it is drawn: the hand, the battlefield, a pile, the preview. The card's
+full and for a token). The board's `CardFace` draws a card with any in a **red border inside the
+card** — the setup's colour for the same verdict, clear of the outline marks for attack, block and
+pick, which sit outside it — wherever it is drawn: the hand, the battlefield, a pile, the preview. The card's
 label says "played only in part", and the preview names each gap with `gapWords`. A transformed
 card is its shown face's name, so its marks follow the face; it is fixed for the game, so not in a
 `Moment`.

@@ -155,7 +155,7 @@ export function Inspect({
         </ul>
       )}
       {card.gaps.length > 0 && (
-        <span className="text-xs text-accent">
+        <span className="text-xs text-destructive">
           {PARTLY} — {card.gaps.map(gapWords).join(" · ")}
         </span>
       )}
@@ -171,11 +171,12 @@ const PARTLY = "Played only in part by the rules engine";
  * engine has no printing for — a plain tile with its name and power/toughness, so it is still a
  * card-shaped thing on the table rather than a hole.
  *
- * **A card the engine plays only in part wears a gold border** (`gaps`, issue #1093), wherever
+ * **A card the engine plays only in part wears a red border** (`gaps`, issue #1093), wherever
  * it is drawn — the hand, the battlefield, a pile, the preview — so the reader knows before
- * playing it that the board may need setting right by hand. Gold is the setup screen's caution
- * for the same verdict; the border sits inside the card, clear of the table's outline marks
- * (attack, block, pick), which sit outside it.
+ * playing it that the board may need setting right by hand. Red (`--destructive`) is the setup
+ * screen's mark for the same verdict — gold until 2026-10-22, when it was found too quiet for a
+ * card whose rules do not all work; the border sits inside the card, clear of the table's outline
+ * marks (attack, block, pick), which sit outside it.
  *
  * `alt` defaults to empty because every caller but one wraps the face in a control that already
  * names the card; a second name inside it would be read twice.
@@ -192,7 +193,7 @@ export function CardFace(props: {
       <Face {...props} />
       <span
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 rounded-md border-2 border-accent"
+        className="pointer-events-none absolute inset-0 rounded-md border-2 border-destructive"
       />
     </span>
   );

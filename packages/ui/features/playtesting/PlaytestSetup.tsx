@@ -1,5 +1,6 @@
 import { Fragment, useId, useMemo, useState, type JSX, type ReactNode } from "react";
 import { CircleCheck, CircleHelp, Fish, Play, Plus, TriangleAlert, X } from "lucide-react";
+import { CardArt } from "@/components/CardArt";
 import { CardImage } from "@/components/CardImage";
 import { FILTER_FIELD, FILTER_FOCUS, ToggleChip } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -397,7 +398,7 @@ const SEAT_PLATE = cn(
 const TILE_WARN = cn(
   "absolute right-[calc(0.375rem*var(--mark-scale,1))] top-[calc(0.375rem*var(--mark-scale,1))]",
   "inline-flex items-center gap-[calc(0.1875rem*var(--mark-scale,1))] rounded-sm bg-bg/85",
-  "px-[calc(0.375rem*var(--mark-scale,1))] text-accent",
+  "px-[calc(0.375rem*var(--mark-scale,1))] text-destructive",
   "font-mono text-[calc(0.6875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
 );
 
@@ -811,13 +812,23 @@ function SeatRow({
           className="m-0 flex list-none flex-col gap-1.5 border-t border-border px-3 py-2.5 text-xs"
         >
           {partly.map((card) => (
-            <li key={card.name} className="flex flex-col">
-              <span className="text-text">
-                {card.name}
-                {card.quantity > 1 && <span className="text-dim"> ×{card.quantity}</span>}
-                {card.commander && <span className="text-dim"> · commander</span>}
+            <li key={card.name} className="flex items-start gap-2.5">
+              {/* The printing's picture, so the card is known by sight as well as by name
+                  (issue #1325). Decorative: the name is the line beside it. */}
+              <CardArt
+                cardId={card.cardId}
+                name=""
+                variant="thumb"
+                className="w-10 shrink-0 rounded-[3px]"
+              />
+              <span className="flex min-w-0 flex-col">
+                <span className="text-text">
+                  {card.name}
+                  {card.quantity > 1 && <span className="text-dim"> ×{card.quantity}</span>}
+                  {card.commander && <span className="text-dim"> · commander</span>}
+                </span>
+                <span className="text-dim">{card.gaps.map(gapWords).join(" · ")}</span>
               </span>
-              <span className="text-dim">{card.gaps.map(gapWords).join(" · ")}</span>
             </li>
           ))}
         </ul>
@@ -920,7 +931,7 @@ function SupportMark({
       {...tip(open ? "Hide the cards" : "Show the cards", { describes: false })}
       onClick={onToggle}
       className={cn(
-        "inline-flex h-6 items-center gap-1 rounded-md px-1.5 font-mono text-xs text-accent hover:bg-accent/10",
+        "inline-flex h-6 items-center gap-1 rounded-md px-1.5 font-mono text-xs text-destructive hover:bg-destructive/10",
         PRESS,
         FOCUS,
       )}
