@@ -1,18 +1,33 @@
 //! A reader's scan, as the scan inbox stores it, and how a replay of one is scored.
 //!
 //! The inbox (`infrastructure/scan-worker/`) keeps a run of five to twenty JPEGs end to end
-//! and a label beside it. This module reads the label, cuts the run by it, and says how a
-//! decision compares with the printing the reader named. It builds no session and reads no
-//! file: `bin/replay` does both, and everything here is tested under any feature set.
+//! and a label beside it. This module reads the label, cuts the run by it, brings each frame
+//! down to the size the scanner was given it at, and says how a decision compares with the
+//! printing the reader named. It builds no session and reads no file: `bin/replay` does both,
+//! and everything here is tested under any feature set.
 
 use crate::filters::ScanFilters;
 use crate::session::ScanMode;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 /// The label shape this reads. The inbox writes `"v": 1`.
 pub const LABEL_VERSION: u32 = 1;
 /// A JPEG's first three bytes — what the inbox holds each frame's start to.
 const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
+
+/// Why a label the reader sent with **no card in the last frame** is not replayed. The inbox
+/// stores such a scan with `card` and `finish` both `null` — the scanner looking for a card where
+/// there was none, kept to find false positives by — and nothing here scores one yet: every
+/// score below is against a printing.
+pub const NO_CARD: &str =
+    "the reader said there is no card in the last frame; the replay does not score those yet";
+
+/// The long edge the app's pump sends its scanner a frame at — `DEFAULT_SEND_PX` in
+/// `packages/ui/features/scanner/scannerOptions.ts`.
+pub const SENT_LONG_EDGE: u32 = 960;
+/// The JPEG quality the pump sends at — `PUMP_QUALITY` in `useScanLoop.ts`.
+pub const SENT_QUALITY: u8 = 72;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScanLabel {
@@ -87,9 +102,15 @@ pub struct LabelFrame {
     pub detail: bool,
 }
 
-/// A label as the inbox stored it. A version this does not read is refused by number.
+/// A label as the inbox stored it. A version this does not read is refused by number, and a
+/// scan with no card in it by [`NO_CARD`].
 pub fn parse_label(text: &str) -> Result<ScanLabel, String> {
-    let label: ScanLabel = serde_json::from_str(text).map_err(|e| format!("label: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|e| format!("label: {e}"))?;
+    if value.get("card").is_some_and(serde_json::Value::is_null) {
+        return Err(NO_CARD.to_string());
+    }
+    let label: ScanLabel = serde_json::from_value(value).map_err(|e| format!("label: {e}"))?;
     if label.v != LABEL_VERSION {
         return Err(format!("label version {} is not {LABEL_VERSION}", label.v));
     }
@@ -128,6 +149,43 @@ pub fn cut<'a>(label: &ScanLabel, run: &'a [u8]) -> Result<Vec<&'a [u8]>, String
         at += frame.bytes;
     }
     Ok(frames)
+}
+
+/// A frame as the scanner was given it.
+///
+/// **The inbox keeps each frame at the camera's resolution, up to 1920 pixels wide** (since
+/// 2026-10-22), where the scanner was handed the same picture brought down to the pump's
+/// [`SENT_LONG_EDGE`]. Replayed as stored, the scanner would be judging a picture four times the
+/// size of any it saw — so a frame larger than that is brought down to it here, with the
+/// browser canvas's filter and the pump's quality. A frame no larger is the frame as stored:
+/// every run sent before then is the pump's own bytes, and replays byte for byte.
+///
+/// A frame that will not decode is handed back as it is, for the session to fail on in its own
+/// words.
+pub fn as_sent(jpeg: &[u8]) -> Cow<'_, [u8]> {
+    let Ok(source) = image::load_from_memory(jpeg) else {
+        return Cow::Borrowed(jpeg);
+    };
+    let (w, h) = (source.width(), source.height());
+    let long = w.max(h);
+    if long <= SENT_LONG_EDGE {
+        return Cow::Borrowed(jpeg);
+    }
+    let scale = f64::from(SENT_LONG_EDGE) / f64::from(long);
+    let to = |side: u32| ((f64::from(side) * scale).round() as u32).max(1);
+    let small = image::imageops::resize(
+        &source.to_rgb8(),
+        to(w),
+        to(h),
+        image::imageops::FilterType::Triangle,
+    );
+    let mut out = Vec::new();
+    match image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, SENT_QUALITY)
+        .encode_image(&small)
+    {
+        Ok(()) => Cow::Owned(out),
+        Err(_) => Cow::Borrowed(jpeg),
+    }
 }
 
 /// How a decision compares with the printing the reader named.
@@ -247,6 +305,46 @@ mod tests {
         let end = start + empty[start..].find(r#"],"#).unwrap() + 1;
         let empty = format!(r#"{}"run":[]{}"#,&empty[..start], &empty[end..]);
         assert_eq!(parse_label(&empty).unwrap_err(), "label lists no frames");
+    }
+
+    #[test]
+    fn a_label_with_no_card_in_it_is_refused_by_name() {
+        let none = label_text(5, 7).replace(
+            r#""card":{"id":"aaaaaaaa-0000-0000-0000-000000000001","set":"2x2",
+            "number":"117","lang":"en","name":"Lightning Bolt"},"finish":"foil""#,
+            r#""card":null,"finish":null"#,
+        );
+        assert!(none.contains(r#""card":null"#), "{none}");
+        assert_eq!(parse_label(&none).unwrap_err(), NO_CARD);
+    }
+
+    fn encoded(w: u32, h: u32) -> Vec<u8> {
+        let frame = image::RgbImage::from_pixel(w, h, image::Rgb([90, 100, 110]));
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85)
+            .encode_image(&frame)
+            .expect("encode");
+        out
+    }
+
+    #[test]
+    fn a_full_resolution_frame_is_brought_down_to_the_pumps_size() {
+        let full = encoded(1920, 1080);
+        let sent = as_sent(&full);
+        assert!(matches!(sent, Cow::Owned(_)));
+        let small = image::load_from_memory(&sent).expect("a JPEG");
+        assert_eq!((small.width(), small.height()), (960, 540));
+        // Upright too: the long edge is the one held to the pump's.
+        let upright = image::load_from_memory(&as_sent(&encoded(1080, 1920))).expect("a JPEG");
+        assert_eq!((upright.width(), upright.height()), (540, 960));
+    }
+
+    #[test]
+    fn a_frame_at_the_pumps_size_or_less_is_replayed_byte_for_byte() {
+        let pumped = encoded(960, 540);
+        assert!(matches!(as_sent(&pumped), Cow::Borrowed(b) if b == pumped.as_slice()));
+        let junk = jpeg(12, 7);
+        assert!(matches!(as_sent(&junk), Cow::Borrowed(b) if b == junk.as_slice()));
     }
 
     #[test]

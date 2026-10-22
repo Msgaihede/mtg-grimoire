@@ -80,7 +80,7 @@ describe("what Send scan says", () => {
    */
   it("says how many pictures are sent, to whom, and what is not", () => {
     expect(text.disclosure(18)).toBe(
-      "These 18 pictures — the last couple of seconds the scanner saw — and the card you choose are sent to MTG Grimoire's maker, with what the scanner read and how it was set, the app's version and which app it is, and kept to improve the scanner. Nothing from your collection is sent, and nothing is kept that says who you are. Look through them and check they show only what you mean to send.",
+      "These 18 pictures — the last couple of seconds the scanner saw — and the card you choose, or that there is none, are sent to MTG Grimoire's maker, with what the scanner read and how it was set, the app's version and which app it is, and kept to improve the scanner. Nothing from your collection is sent, and nothing is kept that says who you are. Look through them and check they show only what you mean to send.",
     );
     expect(text.disclosure(5)).toMatch(/^These 5 pictures — /);
     // Never "nothing else": the scanner's reading and the app's version go too. And never that

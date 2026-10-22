@@ -5218,9 +5218,14 @@ frames or nothing at all; we don't want a single screenshot*. Everything in §5 
 what happens *across* frames: a lock that needs two that agree, evidence that pools and decays,
 a vote that crosses a bar, a title read on the frame after a lock. One still says none of that,
 and a still taken for the purpose — at another size and quality than the pump's — is a picture
-the scanner never judged. What is sent is therefore the frames it **was** given, byte for byte
-and in order, each beside what it answered for it: put back through a session, with the mode
-and filters the label names, that is the scan again. It is the whole run or nothing, on every
+the scanner never judged. What is sent is therefore the frames it **was** given, in order, each
+beside what it answered for it — **at full resolution** (the owner's decision, 2026-10-22: a
+picture can always be brought down later, never up). On a device that may send, the pump draws
+each video frame once at up to 1920 pixels wide (`EVIDENCE_MAX_WIDTH`), makes the scanner's own
+smaller frame from that same draw, and keeps the large one for the run; a device that may not
+pays nothing for it. Brought down to the pump's size again (`card_scanner::replay::as_sent`)
+and put back through a session, with the mode and filters the label names, that is the scan
+again. It is the whole run or nothing, on every
 layer — the page opens no dialog on fewer than five frames, the engine refuses a run that short
 before any request, and the inbox has no shape a single picture fits.
 
@@ -5244,7 +5249,9 @@ test apiece.
 
 **It is the only thing here that sends a picture off the device, and it takes two presses.** The
 first freezes the run and opens a dialog on it; nothing has been sent. The reader looks through
-the pictures, chooses **the exact printing** and **its finish** by hand, and the second press
+the pictures, chooses **the exact printing** and **its finish** by hand — or says **there is no
+card in the picture**, which sends the run with no printing and no finish: the scanner looking
+for a card where there was none, kept to weed out false positives by — and the second press
 sends. The scanner itself is unchanged: every frame is examined where it was taken, and none is
 kept past the two seconds below.
 
@@ -5255,11 +5262,12 @@ kept past the two seconds below.
 - **Only frames whose verdict the page took.** A frame is added on the line that accepts its
   answer — one that was refused, or whose answer was thrown away because the camera stopped or
   the evidence was cleared under it, was never part of what the reader saw the scanner say.
-- **At most twenty frames and a megabyte and a half** (`RUN_MAX_FRAMES`, `RUN_MAX_BYTES`), the
+- **At most twenty frames and eight megabytes** (`RUN_MAX_FRAMES`, `RUN_MAX_BYTES`), the
   oldest dropped first: about two seconds at the pump's nine a second. Fewer than five
   (`RUN_MIN_FRAMES`) is not a scan, and the press says *Not enough of the scan yet…* over the
   picture instead of opening a dialog. `ipc.test.ts` holds the two frame counts to the engine's
-  and the byte budget under the engine's 2 MB.
+  and the byte budget under the engine's 10 MB. A page that starts or stops keeping full frames
+  starts the run over: a run is one size of picture.
 - **Never across a break in the evidence.** The ring is emptied by `clearReads` and `reset`, and
   whenever the pump starts or stops — so a run cannot span a *Reset evidence*, a Stop, or two
   camera streams, and the press is offered only while a camera is live and recognition is
@@ -5355,10 +5363,11 @@ src/scanner_submit.rs`) → `POST /scan` on the scan inbox (`infrastructure/scan
   the web app's origin, and the hosting policy's `connect-src` names its host.
 - **Every refusal the engine can make, it makes before any request**, and each refuses the whole
   submission: a run of fewer than five frames (*Not enough of the scan yet…* — the page's own
-  sentence, said by the engine for a page that did not), one of more than twenty or over 2 MB
+  sentence, said by the engine for a page that did not), one of more than twenty or over 10 MB
   (never trimmed to fit — a cut run is not what the reader was shown), a frame that is not a
   JPEG (nothing is sent around a hole), a printing this install's cards do not have, a finish
-  the printing is not made in. What the inbox refuses is reworded for a reader by status or
+  the printing is not made in, and a card without its finish or the reverse (*no card* is both
+  `null`). What the inbox refuses is reworded for a reader by status or
   `code` — full (*try again in a few days*), too many at once, too large — and anything else is
   named by its number. A rejection is drawn in the dialog, which stays open with the reader's
   choices so a second press can try again.
@@ -5376,8 +5385,8 @@ src/scanner_submit.rs`) → `POST /scan` on the scan inbox (`infrastructure/scan
   read whole by the inbox's, so the two cannot part over how a number, a `null` or an escaped
   character is spelled. The Storybook fake refuses a run shorter than five in the engine's
   sentence too, so a page that sent one picture would be told so in the workbench.
-- **The inbox is bounded, and by what** is `infrastructure/scan-worker/README.md`'s: 2 MB and
-  twenty frames a run, 500 runs waiting, 12 a minute from one address. A full one is the
+- **The inbox is bounded, and by what** is `infrastructure/scan-worker/README.md`'s: 10 MB and
+  twenty frames a run, 200 runs waiting, 12 a minute from one address. A full one is the
   engine's *try again in a few days*. That README also has the dozen lines that cut a stored run
   back into its frames.
 

@@ -230,10 +230,11 @@ export interface ScannerCaptured {
  * One frame of a sent scan: the picture the scanner was given, and what it answered for it —
  * `SubmissionFrame` in `crates/grimoire-core/src/scanner_submit.rs`.
  *
- * **`jpeg` is the pump's own frame, byte for byte** (base64) — the very bytes `scanner_frame`
- * judged, at the size and quality the pump sends — so a run of these put back through the
- * scanner in order is what the scanner saw. The five after `ms` are its answer for this frame,
- * each `null` (or `false`) where it had none.
+ * **`jpeg` is the frame the scanner judged, at full resolution** (base64): the same draw of
+ * the video the pump's own smaller frame was made from, kept at the camera's size up to 1920
+ * pixels wide (`useScanLoop`'s `EVIDENCE_MAX_WIDTH`). Brought down to the pump's size, a run of
+ * these put back through the scanner in order is what the scanner saw. The five after `ms` are
+ * its answer for this frame, each `null` (or `false`) where it had none.
  */
 export interface ScannerSubmissionFrame {
   jpeg: string;
@@ -265,11 +266,20 @@ export interface ScannerSubmissionFrame {
  * data, so a label can never pair one printing's id with another's name. They name **the card in
  * the last frame** — the one under the camera at the press. The figures after them are the
  * scanner's side of the story at the press, each `null` when it had none.
+ *
+ * **`cardId` and `finish` are `null` together, and only together: the reader said there is no
+ * card in the last frame.** That is a scan of the scanner looking for a card where there is none
+ * — a false positive's evidence, and as much worth having as a card it named wrongly. The engine
+ * refuses one of the two without the other.
  */
 export interface ScannerSubmission {
-  /** The printing in the last frame — a Scryfall id, as every `cardId` in this file is. */
-  cardId: string;
-  finish: Finish;
+  /**
+   * The printing in the last frame — a Scryfall id, as every `cardId` in this file is — or
+   * `null` where the reader said there is no card in it.
+   */
+  cardId: string | null;
+  /** Its finish, or `null` beside a `null` {@link ScannerSubmission.cardId}. */
+  finish: Finish | null;
   /**
    * The printing the scanner had **decided** on (`ScannerDecision.printing`), or `null` while it
    * had decided nothing. Never a standing's `id`: that is the oracle id its evidence pooled on,

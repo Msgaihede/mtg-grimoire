@@ -12,9 +12,11 @@ vi.mock("@/lib/ipc", async (orig) => {
       ...real.ipc,
       // Both typed by what they answer: a bare `vi.fn()` would take any shape a test handed it,
       // and the page would be drawing a row the real command cannot send.
-      searchCards: vi.fn(
-        async (): Promise<SearchResponse> => ({ items: [], total: 0, totalIsCapped: false }),
-      ),
+      searchCards: vi.fn(async (): Promise<SearchResponse> => ({
+        items: [],
+        total: 0,
+        totalIsCapped: false,
+      })),
       scannerSubmit: vi.fn(async (): Promise<ScannerSubmitted> => ({ id: "unset" })),
     },
   };
@@ -32,6 +34,8 @@ import {
   disclosure,
   FINISH_NEEDS_CARD,
   KEEP_THE_REFERENCE,
+  NO_CARD,
+  NO_CARD_NOTE,
   ONE_FINISH,
   SEARCH_PROMPT,
   SET_HINT,
@@ -82,8 +86,18 @@ const STA = printing({
   setName: "Strixhaven Mystical Archive",
   finishes: '["nonfoil","foil","etched"]',
 });
-const JGP = printing({ id: "bolt-jgp", setCode: "jgp", collectorNumber: "1", finishes: '["foil"]' });
-const UNKNOWN = printing({ id: "bolt-plst", setCode: "plst", collectorNumber: "A25-141", finishes: null });
+const JGP = printing({
+  id: "bolt-jgp",
+  setCode: "jgp",
+  collectorNumber: "1",
+  finishes: '["foil"]',
+});
+const UNKNOWN = printing({
+  id: "bolt-plst",
+  setCode: "plst",
+  collectorNumber: "A25-141",
+  finishes: null,
+});
 const BOLTS = [LEA, DBL, STA, JGP, UNKNOWN];
 const SARUMAN = printing({
   id: "saruman-ltr",
@@ -93,7 +107,11 @@ const SARUMAN = printing({
   finishes: '["nonfoil","foil"]',
 });
 
-const page = (items: CardSummary[], total = items.length, totalIsCapped = false): SearchResponse => ({
+const page = (
+  items: CardSummary[],
+  total = items.length,
+  totalIsCapped = false,
+): SearchResponse => ({
   items,
   total,
   totalIsCapped,
@@ -154,7 +172,8 @@ const dialog = () => screen.getByRole("dialog", { name: "Send this scan" });
  * The one picture of the run that is showing — the rest are mounted and `hidden`. By its name,
  * because every printing's tile is a picture too.
  */
-const picture = () => within(dialog()).getByRole("img", { name: /^Picture \d+ of \d+ that will be sent$/ });
+const picture = () =>
+  within(dialog()).getByRole("img", { name: /^Picture \d+ of \d+ that will be sent$/ });
 const slider = () => within(dialog()).getByRole("slider", { name: "Picture" });
 const printings = () => screen.findByRole("radiogroup", { name: "Printings" });
 const finishes = () => screen.getByRole("radiogroup", { name: "Finish" });
@@ -195,7 +214,9 @@ describe("SubmitScanDialog", () => {
     open();
     expect(picture()).toHaveAttribute("src", LAST_PICTURE);
     expect(picture()).toHaveAttribute("alt", "Picture 6 of 6 that will be sent");
-    expect(within(dialog()).getByText("Picture 6 of 6 · the moment you pressed")).toBeInTheDocument();
+    expect(
+      within(dialog()).getByText("Picture 6 of 6 · the moment you pressed"),
+    ).toBeInTheDocument();
     // Never an object URL: the shipped policy allows no `blob:` picture on any host.
     expect(picture().getAttribute("src")).not.toMatch(/^blob:/);
   });
@@ -216,7 +237,9 @@ describe("SubmitScanDialog", () => {
       expect(slider()).toHaveAttribute("aria-valuetext", `Picture ${n} of 6`);
     }
     fireEvent.change(slider(), { target: { value: "2" } });
-    expect(within(dialog()).getByText("Picture 2 of 6 · 0.4 s before you pressed")).toBeInTheDocument();
+    expect(
+      within(dialog()).getByText("Picture 2 of 6 · 0.4 s before you pressed"),
+    ).toBeInTheDocument();
 
     expect(await tile("Lightning Bolt — STA 105")).toHaveAttribute("aria-checked", "true");
     expect(finish("Foil")).toHaveAttribute("aria-checked", "true");
@@ -237,7 +260,11 @@ describe("SubmitScanDialog", () => {
     open();
     expect(screen.getByRole("searchbox", { name: WHICH_CARD })).toHaveValue("Lightning Bolt");
     const group = await printings();
-    expect(within(group).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"))).toEqual([
+    expect(
+      within(group)
+        .getAllByRole("radio")
+        .map((radio) => radio.getAttribute("aria-label")),
+    ).toEqual([
       "Lightning Bolt — LEA 161",
       "Lightning Bolt — 2X2 117",
       "Lightning Bolt — STA 105",
@@ -349,10 +376,11 @@ describe("SubmitScanDialog", () => {
   it("offers only the finishes the printing comes in", async () => {
     open();
     await answer("Lightning Bolt — 2X2 117");
-    expect(within(finishes()).getAllByRole("radio").map((radio) => radio.textContent)).toEqual([
-      "Nonfoil",
-      "Foil",
-    ]);
+    expect(
+      within(finishes())
+        .getAllByRole("radio")
+        .map((radio) => radio.textContent),
+    ).toEqual(["Nonfoil", "Foil"]);
   });
 
   /** The one thing chosen for the reader: a finish the cardboard leaves no choice about. */
@@ -373,11 +401,11 @@ describe("SubmitScanDialog", () => {
   it("offers all three finishes for a printing that does not say, and selects none", async () => {
     open();
     await answer("Lightning Bolt — PLST A25-141");
-    expect(within(finishes()).getAllByRole("radio").map((radio) => radio.textContent)).toEqual([
-      "Nonfoil",
-      "Foil",
-      "Etched",
-    ]);
+    expect(
+      within(finishes())
+        .getAllByRole("radio")
+        .map((radio) => radio.textContent),
+    ).toEqual(["Nonfoil", "Foil", "Etched"]);
     expect(checked(finishes())).toHaveLength(0);
     expect(send()).toHaveAccessibleDescription(CHOOSE_ITS_FINISH);
   });
@@ -451,7 +479,14 @@ describe("SubmitScanDialog", () => {
       run: FRAMES,
     });
     expect(call[0].run).toHaveLength(6);
-    expect(call[0].run.map((one) => one.jpeg)).toEqual(["AQ==", "Ag==", "Aw==", "BA==", "BQ==", "Bg=="]);
+    expect(call[0].run.map((one) => one.jpeg)).toEqual([
+      "AQ==",
+      "Ag==",
+      "Aw==",
+      "BA==",
+      "BQ==",
+      "Bg==",
+    ]);
     expect(call[0].run[3]).toEqual({
       jpeg: "BA==",
       ms: -228,
@@ -461,6 +496,61 @@ describe("SubmitScanDialog", () => {
       distance: 36,
       decided: null,
       detail: true,
+    });
+  });
+
+  /**
+   * **No card in the picture** — the scanner looking for a card where there is none. A switch
+   * beside the question, and an answer whole by itself: Send needs nothing more, and sends the
+   * run with no card and no finish.
+   */
+  it("sends the run with no card and no finish when the reader says there is no card", async () => {
+    open();
+    const none = screen.getByRole("switch", { name: NO_CARD });
+    expect(none).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByText(NO_CARD_NOTE)).toBeNull();
+    // A printing chosen first is not what is sent once the switch is on.
+    await answer("Lightning Bolt — STA 105", "Foil");
+
+    await userEvent.click(none);
+    expect(none).toHaveAttribute("aria-checked", "true");
+    expect(none).toHaveAccessibleDescription(NO_CARD_NOTE);
+    // The two questions are out of sight, and Send is within reach with nothing to say.
+    expect(screen.queryByRole("radiogroup", { name: "Printings" })).toBeNull();
+    expect(screen.queryByRole("radiogroup", { name: "Finish" })).toBeNull();
+    expect(send()).not.toHaveAttribute("aria-disabled");
+    expect(send()).not.toHaveAccessibleDescription();
+
+    await userEvent.click(send());
+    await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(ipc.scannerSubmit).mock.calls[0][0]).toEqual({
+      cardId: null,
+      finish: null,
+      reported: "bolt-2x2",
+      mode: "exact",
+      confidence: 0.82,
+      distance: 36,
+      bundle: 117630,
+      filters: { sets: ["2x2"], released_from: null, released_to: null },
+      run: FRAMES,
+    });
+  });
+
+  it("hands the two questions back as they were when the switch is turned off", async () => {
+    open();
+    await answer("Lightning Bolt — STA 105", "Foil");
+    const none = screen.getByRole("switch", { name: NO_CARD });
+    await userEvent.click(none);
+    await userEvent.click(none);
+    expect(none).toHaveAttribute("aria-checked", "false");
+    expect(await tile("Lightning Bolt — STA 105")).toHaveAttribute("aria-checked", "true");
+    expect(finish("Foil")).toHaveAttribute("aria-checked", "true");
+
+    await userEvent.click(send());
+    await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(ipc.scannerSubmit).mock.calls[0][0]).toMatchObject({
+      cardId: "bolt-sta",
+      finish: "foil",
     });
   });
 
@@ -592,7 +682,9 @@ describe("SubmitScanDialog", () => {
     // The count is the run's own: six frames, six pictures.
     const said = within(dialog()).getByText(disclosure(FRAMES.length));
     expect(said).toBeVisible();
-    expect(said).toHaveTextContent(/^These 6 pictures — the last couple of seconds the scanner saw — /);
+    expect(said).toHaveTextContent(
+      /^These 6 pictures — the last couple of seconds the scanner saw — /,
+    );
     expect(within(dialog()).getByRole("link", { name: "Privacy policy" })).toHaveAttribute(
       "href",
       "https://mtg-grimoire.app/privacy",
@@ -750,9 +842,11 @@ describe("the printings a reader chooses between", () => {
     await userEvent.keyboard("{ArrowRight}");
     expect(radios[1]).toHaveFocus();
     expect(radios[1]).toHaveAttribute("aria-checked", "true");
-    expect(within(await printings()).getAllByRole("radio").map((radio) => radio.tabIndex)).toEqual([
-      -1, 0, -1, -1, -1,
-    ]);
+    expect(
+      within(await printings())
+        .getAllByRole("radio")
+        .map((radio) => radio.tabIndex),
+    ).toEqual([-1, 0, -1, -1, -1]);
   });
 
   it("marks the chosen tile with more than a colour", async () => {
@@ -835,7 +929,14 @@ describe("the dialog, opened by the press", () => {
     await userEvent.click(send());
     await waitFor(() => expect(ipc.scannerSubmit).toHaveBeenCalledTimes(1));
     const [sent] = vi.mocked(ipc.scannerSubmit).mock.calls[0];
-    expect(sent.run.map((one) => one.jpeg)).toEqual(["AQ==", "Ag==", "Aw==", "BA==", "BQ==", "Bg=="]);
+    expect(sent.run.map((one) => one.jpeg)).toEqual([
+      "AQ==",
+      "Ag==",
+      "Aw==",
+      "BA==",
+      "BQ==",
+      "Bg==",
+    ]);
     // Oldest first, a hundred and ten milliseconds apart, and none after the press.
     const ms = sent.run.map((one) => one.ms);
     expect([...ms].sort((a, b) => a - b)).toEqual(ms);

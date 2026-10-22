@@ -31,10 +31,10 @@ describe("the bounds of a run", () => {
    * side's — `lib/ipc.test.ts` holds each to the engine's own. Said here as well, because a
    * moved bound is a dialog whose Send can only be refused.
    */
-  it("is five frames at least, and twenty or a mebibyte and a half at most", () => {
+  it("is five frames at least, and twenty or eight mebibytes at most", () => {
     expect(RUN_MIN_FRAMES).toBe(5);
     expect(RUN_MAX_FRAMES).toBe(20);
-    expect(RUN_MAX_BYTES).toBe(1.5 * 1024 * 1024);
+    expect(RUN_MAX_BYTES).toBe(8 * 1024 * 1024);
   });
 
   /** *The last couple of seconds*, with room for a slow host — and never minutes. */
@@ -127,9 +127,9 @@ describe("pushRunFrame", () => {
   /** A camera whose frames are heavy keeps a shorter run, not a heavier one. */
   it("drops the oldest once the bytes pass the budget, however few frames that leaves", () => {
     const ring: RunFrame[] = [];
-    // Three fit (1.2 MB); the fourth takes it to 1.6 MB, over the 1.5 MiB budget.
-    for (let n = 1; n <= 4; n++) pushRunFrame(ring, heavy(n, 400_000));
-    expect(ring.map((one) => one.at)).toEqual([2, 3, 4]);
+    // Four fit (8 MB); the fifth takes it to 10 MB, over the 8 MiB budget.
+    for (let n = 1; n <= 5; n++) pushRunFrame(ring, heavy(n, 2_000_000));
+    expect(ring.map((one) => one.at)).toEqual([2, 3, 4, 5]);
     expect(ring.reduce((sum, one) => sum + one.jpeg.length, 0)).toBeLessThanOrEqual(RUN_MAX_BYTES);
 
     // Exactly at the budget is inside it.
@@ -364,7 +364,14 @@ describe("scanRun", () => {
 
   /** The other way about: the render is ahead of nothing, and has simply decided since. */
   it("reports nothing for a run whose last frame had decided nothing, though the verdict has", () => {
-    const run = scanRun(endingOn(VERDICTS.voting), 1450, VERDICTS.decided, "fast", null, NO_FILTERS);
+    const run = scanRun(
+      endingOn(VERDICTS.voting),
+      1450,
+      VERDICTS.decided,
+      "fast",
+      null,
+      NO_FILTERS,
+    );
     expect(run.said).toMatchObject({ reported: null, confidence: 0.625, distance: 74 });
   });
 
@@ -508,7 +515,11 @@ describe("scanRun", () => {
 
   /** What the scanner was narrowed to decides what it could have answered at all. */
   it("carries the filters the scanner was narrowed to", () => {
-    const narrowed: ScanFilters = { sets: ["ltr", "hob"], released_from: "2023-01-01", released_to: null };
+    const narrowed: ScanFilters = {
+      sets: ["ltr", "hob"],
+      released_from: "2023-01-01",
+      released_to: null,
+    };
     expect(scanRun(RING, 1450, null, "fast", null, narrowed).said.filters).toEqual(narrowed);
   });
 });
@@ -524,7 +535,10 @@ describe("submissionOf", () => {
       STATUS.present,
       narrowed,
     );
-    const sent = submissionOf(run, "b14fae63-2e82-49c1-8e62-d84a65f27479", "etched");
+    const sent = submissionOf(run, {
+      cardId: "b14fae63-2e82-49c1-8e62-d84a65f27479",
+      finish: "etched",
+    });
     expect(sent).toEqual({
       cardId: "b14fae63-2e82-49c1-8e62-d84a65f27479",
       finish: "etched",
@@ -539,5 +553,19 @@ describe("submissionOf", () => {
     // Exactly the wire's nine fields, and the frames are the run's own, in its order.
     expect(Object.keys(sent)).toHaveLength(9);
     expect(sent.run.map((one) => one.ms)).toEqual([-120, -10]);
+  });
+
+  it("sends no card as a null id and a null finish, and everything else as it is", () => {
+    const ring = [1, 2, 3, 4, 5].map((n) => frame(n, 1000 + n * 100));
+    const run = scanRun(ring, 1550, null, "fast", null, NO_FILTERS);
+    const sent = submissionOf(run, null);
+    expect(sent.cardId).toBeNull();
+    expect(sent.finish).toBeNull();
+    expect(sent).toEqual({
+      ...submissionOf(run, { cardId: "x", finish: "foil" }),
+      cardId: null,
+      finish: null,
+    });
+    expect(Object.keys(sent)).toHaveLength(9);
   });
 });

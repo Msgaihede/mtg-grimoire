@@ -179,6 +179,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const [picking, setPicking] = useState(false);
   const pickOpener = useRef<HTMLElement | null>(null);
 
+  // Read above the loop: a device that may send scans keeps each frame of its run at full
+  // resolution (`keepFullFrames`), and one that may not pays nothing for it.
+  const maySend = useMaySendScans();
+
   /**
    * **Point and shoot** (`usePointAndShoot`): with the pref on, the bar's *Scan card* runs the pump
    * until one card lands, and Start/Stop is not drawn. Over anything that pauses the pump the shot
@@ -212,6 +216,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     options: frameOptions,
     sendPx,
     detailWaitMs,
+    keepFullFrames: maySend,
     onDecision: (decision) => {
       onDecision(decision);
       shot.landed();
@@ -305,7 +310,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * `prefs.filters` moves the moment the reader changes it, before the session has taken the
    * change, and is put back if the session refuses it.
    */
-  const maySend = useMaySendScans();
   // Under point and shoot a run lives only as long as its shot, so the press is drawn during one.
   const sendable = destination === undefined && maySend && camera.kind === "live" && reading;
   const submit = useScanSubmit({

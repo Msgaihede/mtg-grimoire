@@ -38,8 +38,9 @@
 //      the press is not drawn;
 //      over a running scanner it stands beside *Reset evidence* and leaves the match bar
 //      room; pressed before the scanner has answered enough frames it opens nothing and says
-//      so; then its dialog holds the last frames the scanner was given — each drawn from the
-//      very text it will send, the last one showing, a slider and a *Play* through them — with
+//      so; then its dialog holds the last frames the scanner was given, each kept at the
+//      camera's own size up to 1920 pixels wide — each drawn from the very text it will send,
+//      the last one showing, a slider and a *Play* through them — with
 //      nothing chosen and Send out of reach; a printing sold more than one way brings its
 //      finishes into view under a thumb; and the two answers go out with every one of those
 //      frames in one `scanner_submit`, the reference comes back, and Done hands the caret to
@@ -860,8 +861,10 @@ async function phone(send: Send, width: number, height: number) {
     fail(
       `${at}: the dialog opens showing ${opened.showing} pictures, the last of them: ${opened.last}`,
     );
-  if (opened.edge > 960 || opened.edge < 320)
-    fail(`${at}: the pictures are ${opened.size} — not the frames the pump sends`);
+  // Kept at full resolution (2026-10-22): the camera's own size, at most 1920 wide — never the
+  // scanner's smaller frame. The exact size is held against the camera below, once sent.
+  if (opened.edge > 2560 || opened.edge < 320)
+    fail(`${at}: the pictures are ${opened.size} — not the camera's frames at full resolution`);
   if (opened.box.width < 100 || opened.box.right > width + 0.5)
     fail(`${at}: the picture is drawn ${Math.round(opened.box.width)}px wide`);
   if (opened.slider === null || opened.slider.name !== "Picture")
@@ -1006,22 +1009,30 @@ async function phone(send: Send, width: number, height: number) {
     /** The run as it was sent, each picture cut to its first four characters. */
     frames: ({ jpeg: string; ms: number } & Record<string, unknown>)[];
     shown: boolean;
-    newest: number;
-    behind: number;
-    given: boolean;
+    given: number;
+    /** Every picture sent, decoded: its width and height. */
+    sizes: [number, number][];
+    /** The camera's own size, brought to 1920 wide where it is wider. */
+    full: [number, number];
     thanks: string;
-  }>(`(() => {
+  }>(`(async () => {
     const [sent] = window.sentScans;
     const { run, ...said } = sent.submission;
     const texts = run.map((frame) => frame.jpeg);
-    // Where the newest frame sent stands among the frames the scanner answered before the press:
-    // the last of them, or the one before a frame that was answered as the press landed.
-    const newest = window.givenAtPress.lastIndexOf(texts[texts.length - 1]);
-    const from = newest - texts.length + 1;
+    // **Kept at full resolution**: each picture is the camera's own size up to 1920 wide, out
+    // of the draw the scanner's smaller frame was made from — so not the scanner's bytes, and
+    // checked by size rather than by text.
+    const sizes = await Promise.all(texts.map(async (text) => {
+      const bytes = Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+      return [bitmap.width, bitmap.height];
+    }));
+    const video = document.querySelector('video');
+    const scale = Math.min(1, 1920 / video.videoWidth);
+    const full = [Math.round(video.videoWidth * scale), Math.round(video.videoHeight * scale)];
     return { keys: Object.keys(sent), said, frames: run.map(({ jpeg, ...figures }) => ({ ...figures, jpeg: jpeg.slice(0, 4) })),
       shown: texts.length === window.shownScan.length && texts.every((text, at) => text === window.shownScan[at]),
-      newest, behind: window.givenAtPress.length - 1 - newest,
-      given: from >= 0 && texts.every((text, at) => text === window.givenAtPress[from + at]),
+      given: window.givenAtPress.length, sizes, full,
       thanks: smoke.sheet().textContent };
   })()`);
   if (scan.keys.join() !== "submission")
@@ -1032,9 +1043,13 @@ async function phone(send: Send, width: number, height: number) {
     fail(`${at}: the pictures sent are not the pictures that were shown, one for one`);
   if (scan.frames.length !== opened.pictures)
     fail(`${at}: ${opened.pictures} pictures were shown and ${scan.frames.length} sent`);
-  if (!scan.given || scan.behind > 1)
+  if (scan.given < scan.frames.length)
     fail(
-      `${at}: the pictures sent are not the last frames the scanner was given (newest at ${scan.newest}, ${scan.behind} behind)`,
+      `${at}: ${scan.frames.length} pictures were sent and the scanner had been given ${scan.given} frames`,
+    );
+  if (scan.sizes.some(([w, h]) => w !== scan.full[0] || h !== scan.full[1]))
+    fail(
+      `${at}: the pictures sent are not at the camera's full size ${scan.full.join("×")} — ${scan.sizes.map((size) => size.join("×")).join(", ")}`,
     );
   if (scan.frames.some((frame) => frame.jpeg !== "/9j/"))
     fail(`${at}: a picture that was sent is not a JPEG`);
@@ -1095,7 +1110,7 @@ async function phone(send: Send, width: number, height: number) {
   if (back.sent !== 1) fail(`${at}: ${back.sent} scans were sent`);
   const span = -scan.frames[0].ms;
   say(
-    `${at}: Send scan — no press and no word of one on a device that is not a supporter's; on one that is, no press while stopped, a press too soon says so and opens nothing; then ${opened.pictures} ${opened.size} pictures over ${(span / 1000).toFixed(1)}s, ${Math.round(opened.bytes / 1024)} kB, every one a frame the scanner was given and drawn from the text that is sent; a slider and a Play through them, nothing chosen for the reader; a printing, its finishes brought into view, Foil, one scanner_submit with all of them, a reference, and the caret back on the press`,
+    `${at}: Send scan — no press and no word of one on a device that is not a supporter's; on one that is, no press while stopped, a press too soon says so and opens nothing; then ${opened.pictures} ${opened.size} pictures over ${(span / 1000).toFixed(1)}s, ${Math.round(opened.bytes / 1024)} kB, every one a frame the scanner was given, kept at the camera's ${scan.full.join("×")} and drawn from the text that is sent; a slider and a Play through them, nothing chosen for the reader; a printing, its finishes brought into view, Foil, one scanner_submit with all of them, a reference, and the caret back on the press`,
   );
 
   const thrown = await page.evaluate<string[]>(`window.thrown`);

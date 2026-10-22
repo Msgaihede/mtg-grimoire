@@ -1,7 +1,7 @@
 import { mint } from "@grimoire/relay/src/token";
 import { LABEL_HEADER } from "./cors";
 import type { Env } from "./env";
-import type { Frame, Label } from "./label";
+import type { Finish, Frame, Label, LabelCard } from "./label";
 
 /**
  * The suite's stand-ins: a bucket, a limiter, a label, a run and a request.
@@ -137,13 +137,16 @@ export function frame(ms: number, bytes: number, over: Partial<Frame> = {}): Fra
   };
 }
 
+/** A label that names a card — every fixture here but the one with no card in it. */
+export type NamedLabel = Label & { card: LabelCard; finish: Finish };
+
 /**
  * A whole label, as the engine builds one — Lightning Bolt, Double Masters 2022, in foil, over
  * the fewest frames that are a run: nothing found, a lock being taken, and the frame it was
  * decided on. **Every frame is a different length**, so a body cut at the wrong place is a body
  * some test can tell from the right one.
  */
-export function label(): Label {
+export function label(): NamedLabel {
   return {
     v: 1,
     card: {
@@ -203,7 +206,7 @@ export function frames(run: readonly { bytes: number }[] = label().run): Uint8Ar
 }
 
 /** `label()` over `lengths`, one frame each and the last one at the press. */
-export function labelOver(lengths: readonly number[]): Label {
+export function labelOver(lengths: readonly number[]): NamedLabel {
   return {
     ...label(),
     run: lengths.map((bytes, at) => frame(-110 * (lengths.length - 1 - at), bytes)),

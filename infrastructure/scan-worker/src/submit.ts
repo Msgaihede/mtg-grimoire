@@ -47,7 +47,10 @@ export const labelKey = (id: string): string => `labels/${id}.json`;
  * as the reference a deletion request names.
  */
 function mintId(now: number): string {
-  const stamp = new Date(now).toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const stamp = new Date(now)
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "Z");
   const random = crypto.getRandomValues(new Uint8Array(8));
   return `${stamp}-${[...random].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
@@ -150,7 +153,7 @@ function full(): Response {
  *
  * **And what is counted is runs, not labels.** The run is written first and the label last — a
  * write that fails in between leaves a run nobody named, which is litter and not a wrong answer,
- * where a label with no run under it would be the reverse. But the run is the two megabytes, so
+ * where a label with no run under it would be the reverse. But the run is the megabytes, so
  * it is the run {@link MAX_PENDING} counts: were it labels, every run whose label never landed
  * would be bytes the cap could not see.
  *

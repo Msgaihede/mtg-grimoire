@@ -67,20 +67,23 @@ export const MIN_RUN_FRAMES = 5;
 export const MAX_RUN_FRAMES = 20;
 
 /**
- * Two megabytes a run, every frame of it together. The app sends the frames its scanner was
- * given — JPEGs some 960 pixels on their long edge, forty to ninety kilobytes each — and keeps a
- * run under a megabyte and a half; the rest is room, and the ceiling is what makes
+ * Ten megabytes a run, every frame of it together. The app sends the frames its scanner judged
+ * at the camera's own resolution, up to 1920 pixels wide (the owner's decision, 2026-10-22: a
+ * picture can always be brought down later, never up) — two to four hundred kilobytes each — and
+ * keeps a run under eight megabytes; the rest is room, and the ceiling is what makes
  * {@link MAX_PENDING} a bound in bytes as well as in objects.
  *
  * ⚠️ **`scanner_submit::MAX_RUN_BYTES` in the engine is this number**, held the same way.
  */
-export const MAX_RUN_BYTES = 2 * 1024 * 1024;
+export const MAX_RUN_BYTES = 10 * 1024 * 1024;
 
 /**
- * Five hundred runs waiting to be read, and then the inbox is full until it is emptied.
+ * Two hundred runs waiting to be read, and then the inbox is full until it is emptied.
  *
- * **This is the bound on what the inbox can be made to store**: 500 × 2 MB is about a
- * gigabyte against R2's free ten, whoever is sending and however many addresses they send from.
+ * **This is the bound on what the inbox can be made to store**: 200 × 10 MB is about two
+ * gigabytes against R2's free ten, whoever is sending and however many addresses they send from.
+ * (It was 500 × 2 MB while a run was the scanner's small frames; the runs grew five times and
+ * the count came down to keep the bound near where it was.)
  * A rate limit cannot be that bound — it is per address and, measured on the relay, far looser
  * than its number reads. The price is that a flood can fill the inbox and turn honest readers
  * away with a sentence until the maker empties it, which is the right way round: a full inbox
@@ -91,7 +94,7 @@ export const MAX_RUN_BYTES = 2 * 1024 * 1024;
  * is the bytes: `submit.ts` has why, and why "about" — the count and the write are two steps,
  * so a burst that counts in one instant can leave the inbox holding the cap and itself.
  */
-export const MAX_PENDING = 500;
+export const MAX_PENDING = 200;
 
 /**
  * The label's header, in characters. A real one is some four thousand — twenty frames' figures
