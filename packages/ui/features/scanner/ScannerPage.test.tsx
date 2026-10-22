@@ -141,7 +141,7 @@ vi.mock("./useWindowParked", async () => {
   };
 });
 import { ipc } from "@/lib/ipc";
-import { SCANNING_STOPPED } from "./reader/readerText";
+import { SCANNING_STOPPED, SHOT_READY_CLICK } from "./reader/readerText";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
 import { runClock } from "./submit/run";
@@ -775,6 +775,86 @@ describe("ScannerPage", () => {
     } finally {
       restore();
     }
+  });
+
+  /**
+   * **Point and shoot on the desktop face is a click**: *Scan card* runs the pump until one card
+   * lands, then pauses on its own — the card stays over the camera, and nothing more is read until
+   * the next press. The next press is news even for the card still lying there: a second copy.
+   */
+  it("reads one card per Scan card under point and shoot, then pauses by itself", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ pointAndShoot: true });
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // Every frame decided, paced (`paced`'s reason): each shot's first frame lands its card.
+    vi.mocked(ipc.scannerFrame).mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve(VERDICTS.decided), 10)),
+    );
+    try {
+      const { container } = mount();
+      const press = await screen.findByRole("button", { name: "Scan card" });
+      expect(screen.queryByRole("button", { name: "Start scanning" })).toBeNull();
+      expect(screen.getByText(SHOT_READY_CLICK)).toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(ipc.scannerFrame).not.toHaveBeenCalled();
+
+      fireEvent.click(press);
+      expect(await screen.findByRole("button", { name: "Cancel scan" })).toBeInTheDocument();
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+      // The shot is over once its card has landed, and the card is still said over the camera.
+      expect(await screen.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
+      expect(screen.getByText(SHOT_READY_CLICK)).toBeInTheDocument();
+      expect(videoBox(container)).toHaveTextContent("Added to scanned cards");
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(ipc.scannerFrame).toHaveBeenCalledTimes(sent);
+
+      // The next press reads again, and the same card is a second copy rather than old news.
+      fireEvent.click(screen.getByRole("button", { name: "Scan card" }));
+      await waitFor(() =>
+        expect(
+          within(tray()).getByRole("button", { name: "Add 2 to collection" }),
+        ).toBeInTheDocument(),
+      );
+      expect(await screen.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  it("cancels a shot that found nothing on a second press", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ pointAndShoot: true });
+    paced();
+    try {
+      mount();
+      fireEvent.click(await screen.findByRole("button", { name: "Scan card" }));
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      fireEvent.click(screen.getByRole("button", { name: "Cancel scan" }));
+      expect(await screen.findByText(SHOT_READY_CLICK)).toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(ipc.scannerFrame).toHaveBeenCalledTimes(sent);
+    } finally {
+      restore();
+    }
+  });
+
+  it("stores point and shoot from the bar's switch, and lands stopped", async () => {
+    refused();
+    mount();
+    const toggle = await screen.findByRole("switch", { name: "Point & shoot" });
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({
+        ...DEFAULT_SCANNER_PREFS,
+        pointAndShoot: true,
+      }),
+    );
+    expect(await screen.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
   });
 
   /** The card that just landed is laid over the camera, named as the tray filed it. */

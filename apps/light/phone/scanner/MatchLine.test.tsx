@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { VERDICTS } from "@grimoire/ui/features/scanner/fixtures";
@@ -160,6 +160,10 @@ describe("the bar over the camera", () => {
     const props = {
       scanning: true,
       onScanning: vi.fn(),
+      pointAndShoot: false,
+      shooting: false,
+      onHold: vi.fn(),
+      onTap: vi.fn(),
       mode: "fast" as const,
       onMode: vi.fn(),
       onOptions: vi.fn(),
@@ -168,6 +172,39 @@ describe("the bar over the camera", () => {
     render(<ScanControls {...props} />);
     return props;
   }
+
+  it("draws Scan in place of Start and Stop under point and shoot, read while held", () => {
+    const props = bar({ pointAndShoot: true });
+    expect(screen.queryByRole("button", { name: /scanning/ })).toBeNull();
+    const scan = screen.getByRole("button", { name: "Scan" });
+    expect(scan).toHaveAttribute("aria-pressed", "false");
+    fireEvent.pointerDown(scan, { pointerId: 1 });
+    expect(props.onHold).toHaveBeenLastCalledWith(true);
+    fireEvent.pointerUp(scan, { pointerId: 1 });
+    expect(props.onHold).toHaveBeenLastCalledWith(false);
+    // A finger taken away by the system ends the hold too.
+    fireEvent.pointerDown(scan, { pointerId: 2 });
+    fireEvent.pointerCancel(scan, { pointerId: 2 });
+    expect(props.onHold).toHaveBeenLastCalledWith(false);
+    // The pointer's own click after a hold is not a second press.
+    fireEvent.click(scan, { detail: 1 });
+    expect(props.onTap).not.toHaveBeenCalled();
+  });
+
+  it("holds on Space, and takes a press with no finger behind it as one card's tap", () => {
+    const props = bar({ pointAndShoot: true });
+    const scan = screen.getByRole("button", { name: "Scan" });
+    fireEvent.keyDown(scan, { key: " " });
+    expect(props.onHold).toHaveBeenLastCalledWith(true);
+    fireEvent.keyUp(scan, { key: " " });
+    expect(props.onHold).toHaveBeenLastCalledWith(false);
+    // Space's own click on release is the hold's, not a tap.
+    fireEvent.click(scan, { detail: 0 });
+    expect(props.onTap).not.toHaveBeenCalled();
+    // Assistive tech's activation (and Enter): no pointer, so one card's shot.
+    fireEvent.click(scan, { detail: 0 });
+    expect(props.onTap).toHaveBeenCalledTimes(1);
+  });
 
   it("stops and starts in the desktop's words", async () => {
     const stopping = bar();

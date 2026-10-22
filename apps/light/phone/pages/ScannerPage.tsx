@@ -4,7 +4,10 @@ import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
 import { AddCardDialog } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { AddedToast } from "@grimoire/ui/features/scanner/reader/AddedToast";
-import { SCANNING_STOPPED } from "@grimoire/ui/features/scanner/reader/readerText";
+import {
+  SCANNING_STOPPED,
+  SHOT_READY_HOLD,
+} from "@grimoire/ui/features/scanner/reader/readerText";
 import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
 import { withoutCommitted } from "@grimoire/ui/features/scanner/reader/trayCommit";
 import { useLandedPrice } from "@grimoire/ui/features/scanner/reader/useLandedPrice";
@@ -19,6 +22,7 @@ import { useMaySendScans } from "@grimoire/ui/features/scanner/submit/useMaySend
 import { useScanSubmit } from "@grimoire/ui/features/scanner/submit/useScanSubmit";
 import { useCamera, useCameraDevices } from "@grimoire/ui/features/scanner/useCamera";
 import { usePageParked } from "@grimoire/ui/features/scanner/useParked";
+import { usePointAndShoot } from "@grimoire/ui/features/scanner/usePointAndShoot";
 import { useScanLoop } from "@grimoire/ui/features/scanner/useScanLoop";
 import { useScannedDeck } from "@grimoire/ui/features/scanner/useScannedDeck";
 import { useScannerElsewhere } from "@grimoire/ui/features/scanner/useScannerElsewhere";
@@ -158,9 +162,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     tray,
     prefs.finish,
   );
-  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
-  const landedPrice = useLandedPrice(scanning ? landed : null, destination?.marketplace);
-
   // The crate's defaults, in the reader's mode, and never with previews.
   // *Add card…* (issue #978) — the desktop page's: the scanner pauses while the search is open,
   // and closing it resumes whatever was running before.
@@ -177,10 +178,24 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // Read above the loop, as on the desktop: a device that may send scans keeps its run's frames
   // at full resolution.
   const maySend = useMaySendScans();
+  // **Point and shoot** — the desktop page's, with this face's press: *Scan* reads while it is
+  // held and pauses the moment it is let go (`usePointAndShoot`, `ScanControls`' `HoldToScan`).
+  // Anything that pauses the pump ends the hold, so a release lost behind a sheet or another app
+  // never leaves the scanner reading. `reading` and `armed` are the desktop page's two words.
+  const pointAndShoot = prefs.pointAndShoot;
+  const shot = usePointAndShoot({
+    on: pointAndShoot,
+    interrupted: parked.paused || sending || picking,
+  });
+  const reading = pointAndShoot ? shot.shooting : scanning;
+  const armed = pointAndShoot || scanning;
+  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
+  const landedPrice = useLandedPrice(armed ? landed : null, destination?.marketplace);
+
   const loop = useScanLoop({
     videoRef,
     live:
-      scanning &&
+      reading &&
       camera.kind === "live" &&
       loaded &&
       tray.loaded &&
@@ -191,7 +206,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     sendPx: DEFAULT_SEND_PX,
     detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
     keepFullFrames: maySend,
-    onDecision,
+    onDecision: (decision) => {
+      onDecision(decision);
+      shot.landed();
+    },
   });
   useRefusedElsewhere(loop.error);
 
@@ -303,7 +321,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // so nothing here hints at one. A lapse while the dialog is open is the engine's to refuse.
   // **The filters it says are the ones in force** (`inForce`), not the ones the sheet is drawing:
   // `prefs.filters` moves before the session has taken a change, and goes back if it is refused.
-  const sendable = destination === undefined && maySend && camera.kind === "live" && scanning;
+  // Under point and shoot a run lives only as long as its hold, so the press is drawn during one.
+  const sendable = destination === undefined && maySend && camera.kind === "live" && reading;
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
@@ -336,8 +355,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const cameraNote =
     unavailable !== null
       ? null
-      : !scanning
-        ? SCANNING_STOPPED
+      : !reading
+        ? pointAndShoot
+          ? SHOT_READY_HOLD
+          : SCANNING_STOPPED
         : (loop.error ?? resetError ?? submit.error);
 
   return (
@@ -354,6 +375,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             <ScanControls
               scanning={scanning}
               onScanning={setScanning}
+              pointAndShoot={pointAndShoot}
+              shooting={shot.shooting}
+              onHold={(held) => (held ? shot.start(loop.clearReads, "release") : shot.stop())}
+              onTap={() => (shot.shooting ? shot.stop() : shot.start(loop.clearReads, "card"))}
               mode={prefs.mode}
               onMode={(mode) => update({ mode })}
               onOptions={(opener) => {
@@ -364,12 +389,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             <CameraBox
               videoRef={videoRef}
               camera={camera}
-              verdict={scanning ? loop.verdict : null}
+              verdict={reading ? loop.verdict : null}
               note={cameraNote}
               unavailable={unavailable}
             >
               <AddedToast
-                card={scanning ? landed : null}
+                card={armed ? landed : null}
                 onDone={clearLanded}
                 price={landedPrice}
               />
@@ -386,7 +411,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             />
             {unavailable === null && (
               <MatchLine
-                verdict={scanning ? loop.verdict : null}
+                verdict={reading ? loop.verdict : null}
                 mode={prefs.mode}
                 lastAdded={lastAdded}
                 hasBundle={hasBundle}
@@ -474,6 +499,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         }}
         mode={prefs.mode}
         onMode={(mode) => update({ mode })}
+        pointAndShoot={pointAndShoot}
+        onPointAndShoot={(on) => {
+          // Either way the page lands stopped, as on the desktop: a hold ends with the pref, and
+          // Start is pressed afresh.
+          setScanning(false);
+          update({ pointAndShoot: on });
+        }}
         filters={prefs.filters}
         onFilters={(filters) => update({ filters })}
         filterError={filterError}

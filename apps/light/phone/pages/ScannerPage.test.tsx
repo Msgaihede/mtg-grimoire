@@ -43,7 +43,10 @@ import {
   TRAY_ROWS,
   VERDICTS,
 } from "@grimoire/ui/features/scanner/fixtures";
-import { SCANNING_STOPPED } from "@grimoire/ui/features/scanner/reader/readerText";
+import {
+  SCANNING_STOPPED,
+  SHOT_READY_HOLD,
+} from "@grimoire/ui/features/scanner/reader/readerText";
 import { runClock } from "@grimoire/ui/features/scanner/submit/run";
 import {
   DB_BUSY,
@@ -552,6 +555,51 @@ describe("the phone's Scanner page", () => {
     await userEvent.click(screen.getByRole("button", { name: "Start scanning" }));
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(stopped), SETTLE);
     expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **Point and shoot on the phone is a hold**: *Scan* reads while a finger is on it, and the
+   * scanner pauses the moment it lifts — the card it read stays over the camera.
+   */
+  it("reads while Scan is held under point and shoot, and pauses the moment it is let go", async () => {
+    const { stop } = camera();
+    restoreVideo = shimVideo();
+    const cards = pile(1, "looking");
+    mount({ prefs: { pointAndShoot: true }, over: () => ({ scanner_frame: cards.frame }) });
+    const scan = await screen.findByRole("button", { name: "Scan" }, SETTLE);
+    expect(screen.queryByRole("button", { name: "Start scanning" })).toBeNull();
+    expect(await screen.findByText(SHOT_READY_HOLD, {}, SETTLE)).toBeInTheDocument();
+    await act(() => new Promise((r) => setTimeout(r, 150)));
+    expect(cards.sent).toEqual([]);
+
+    fireEvent.pointerDown(scan, { pointerId: 1 });
+    await waitFor(() => expect(trayRows()).toHaveLength(1), SETTLE);
+    expect(scan).toHaveAttribute("aria-pressed", "true");
+    // Held past its card, it goes on looking — a hold ends only when it is let go.
+    const atLanding = cards.sent.length;
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(atLanding), SETTLE);
+
+    fireEvent.pointerUp(scan, { pointerId: 1 });
+    expect(await screen.findByText(SHOT_READY_HOLD)).toBeInTheDocument();
+    expect(scan).toHaveAttribute("aria-pressed", "false");
+    // One frame may have been on the wire as the finger lifted; nothing after it.
+    await act(() => new Promise((r) => setTimeout(r, 60)));
+    const released = cards.sent.length;
+    await act(() => new Promise((r) => setTimeout(r, 120)));
+    expect(cards.sent.length).toBe(released);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("stores point and shoot from the options sheet", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const { seen } = mount();
+    await userEvent.click(await screen.findByRole("button", { name: "Scanner options" }, SETTLE));
+    const sheet = await screen.findByRole("dialog", { name: "Scanner options" });
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Scanning/ }));
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Point & shoot/ }));
+    await waitFor(() => expect(last(seen.prefs)?.pointAndShoot).toBe(true), SETTLE);
+    expect(await screen.findByRole("button", { name: "Scan" })).toBeInTheDocument();
   });
 
   it("stores a change of mode and sends the next frame in it", async () => {

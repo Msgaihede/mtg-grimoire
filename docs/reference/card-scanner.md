@@ -4119,6 +4119,29 @@ the review tray available; Start resumes on the same stream. This session-only c
 minimize/restore, and changing cameras while stopped does not restart recognition. A frame still
 being encoded when Stop is pressed is discarded, and an in-flight answer cannot add to the tray.
 
+**Point and shoot reads for the length of a press** (2026-10-22). The Neural mode decides on one
+clear frame, so a camera carried from one card to the next filed whatever passed under it — a
+*phantom scan*. With the stored `ScannerPrefs.pointAndShoot` on, Start and Stop give way to a press
+of the face's own: **a click of _Scan card_ on the desktop face** (the desktop app, and the light
+app's web and Android builds from 1024px) runs the pump until one card lands and then pauses by
+itself, a second click cancelling a shot that found nothing; **a hold of _Scan_ on the phone face**
+reads while a finger is on it and pauses the moment it lifts (a held phone's thumb is the trigger;
+Space holds it from a keyboard, and a press with no pointer behind it — Enter, an assistive
+tech's activation — is one card's shot, as a click is). It is an addition, not a replacement:
+*Point & shoot* is a switch on the desktop bar and a *Scanning* page of the phone's options sheet,
+and either way of turning it lands stopped. What a press does is
+`packages/ui/features/scanner/usePointAndShoot.ts`, shared by both pages:
+
+- **Every shot is news.** A shot starts with the loop's `clearReads`, so the card left standing by
+  the last one is not held back (issue #1318's rule is for a pump resumed behind the reader's back;
+  a press is the reader saying "this card") — a second copy laid where the first lay is filed.
+- **A shot never outlives what pauses the pump**: a parked window or page, *Send scan…*'s dialog,
+  *Add card…* end it, so a release lost behind a sheet never leaves the scanner reading.
+- **The card stays over the camera after its shot** (`AddedToast`, the price), while the overlay,
+  the status line's verdict and the detector's sentence follow the shot. Between shots the picture
+  says `SHOT_READY_CLICK` or `SHOT_READY_HOLD` in `SCANNING_STOPPED`'s place.
+- *Send scan…* is offered during a shot only: the run is the pump's, and a stopped pump lets it go.
+
 **_Reset evidence_ sits at the bar's end, for every reader** (issue #740). It was a press in the
 Developer column's Match panel only, so a reader whose scanner had settled on the wrong card had no
 way to make it start over short of taking the card out of frame. It is the same press — the page's
@@ -5476,7 +5499,7 @@ The arrangement, because each of the desktop's is built for a pointer and a wide
 
 | Desktop | Phone | Why |
 | --- | --- | --- |
-| `ScanBar`: four anchored popovers, 256–300px wide, and a Developer switch | `ScanControls`: *Stop scanning*, *Fast \| Exact*, and one press opening `OptionsSheet` — Scan mode, Filters, Finish, Condition, Camera as pages of one bottom sheet | An anchored panel has nowhere to be anchored at 360px. The Camera row is drawn only with more than one camera. No Developer switch: the phone sends `previews: false` whatever the stored switch says and never writes it |
+| `ScanBar`: four anchored popovers, 256–300px wide, a *Point & shoot* switch (its press a click of *Scan card*) and a Developer switch | `ScanControls`: *Stop scanning* (or, under point and shoot, *Scan* held), *Fast \| Exact*, and one press opening `OptionsSheet` — Scan mode, Scanning, Filters, Finish, Condition, Camera as pages of one bottom sheet | An anchored panel has nowhere to be anchored at 360px. The Camera row is drawn only with more than one camera. No Developer switch: the phone sends `previews: false` whatever the stored switch says and never writes it |
 | Each mode's hint is a tooltip | Each mode's hint is a sentence under its name in the sheet | A finger has no hover |
 | The video is a `flex-1` box in a column that is the view's height | `CameraBox`: the column's width at the **stream's own aspect ratio**, 4:3 until a stream reports one, capped at 38dvh (60dvh from 720px) | The page is a scrolling column, where a zero-basis grow collapses to nothing (§9, *The view*). A portrait stream — what a phone held upright is expected to answer, and no phone has yet been seen to — would be 583px tall at 9:16 and 328 wide. Video and overlay canvas share the one object fit |
 | `MatchStrip`: pill, name, printing and instruction on one row | `MatchLine`: the pill, name and printing on one line, the instruction on the next; the same `matchStrip` value, tone maps and `MatchBar` | At 330px the one row is the pill and the instruction with no room for a name |

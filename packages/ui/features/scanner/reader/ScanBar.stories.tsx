@@ -27,6 +27,8 @@ const CAMERAS: readonly CameraDevice[] = [
  */
 function Held(args: ScanBarProps) {
   const [scanning, setScanning] = useState(args.scanning);
+  const [pointAndShoot, setPointAndShoot] = useState(args.pointAndShoot);
+  const [shooting, setShooting] = useState(args.shooting);
   const [mode, setMode] = useState<ScanMode>(args.mode);
   const [filters, setFilters] = useState<ScanFilters>(args.filters);
   const [finish, setFinish] = useState<ScannerFinishPref>(args.finish);
@@ -40,6 +42,17 @@ function Held(args: ScanBarProps) {
       onScanning={(on) => {
         setScanning(on);
         args.onScanning(on);
+      }}
+      pointAndShoot={pointAndShoot}
+      onPointAndShoot={(on) => {
+        setPointAndShoot(on);
+        setShooting(false);
+        args.onPointAndShoot(on);
+      }}
+      shooting={shooting}
+      onShoot={(on) => {
+        setShooting(on);
+        args.onShoot(on);
       }}
       mode={mode}
       onMode={(m) => {
@@ -83,6 +96,10 @@ const meta = {
   args: {
     scanning: true,
     onScanning: fn(),
+    pointAndShoot: false,
+    onPointAndShoot: fn(),
+    shooting: false,
+    onShoot: fn(),
     mode: "fast",
     onMode: fn(),
     filters: { sets: [], released_from: null, released_to: null },
@@ -148,6 +165,26 @@ export const StartAndStop: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Stop scanning" }));
     await userEvent.click(canvas.getByRole("button", { name: "Start scanning" }));
     await expect(canvas.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * **Point and shoot**: the switch beside the press trades Start and Stop for *Scan card* — one
+ * click, one card. While a shot is looking the same press reads *Cancel scan*; in the app the shot
+ * ends by itself once a card lands.
+ */
+export const PointAndShoot: Story = {
+  args: { scanning: false },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("switch", { name: "Point & shoot" }));
+    await expect(args.onPointAndShoot).toHaveBeenCalledWith(true);
+    await expect(canvas.queryByRole("button", { name: "Start scanning" })).toBeNull();
+    await userEvent.click(canvas.getByRole("button", { name: "Scan card" }));
+    await expect(args.onShoot).toHaveBeenLastCalledWith(true);
+    await userEvent.click(canvas.getByRole("button", { name: "Cancel scan" }));
+    await expect(args.onShoot).toHaveBeenLastCalledWith(false);
+    await expect(canvas.getByRole("button", { name: "Scan card" })).toBeInTheDocument();
   },
 };
 

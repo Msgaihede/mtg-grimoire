@@ -13,7 +13,7 @@ import { TiersPanel } from "./panels/TiersPanel";
 import { AddCardDialog } from "./reader/AddCardDialog";
 import { AddedToast } from "./reader/AddedToast";
 import { MatchStrip } from "./reader/MatchStrip";
-import { SCANNING_STOPPED } from "./reader/readerText";
+import { SCANNING_STOPPED, SHOT_READY_CLICK } from "./reader/readerText";
 import { ScanBar } from "./reader/ScanBar";
 import { setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
 import { withoutCommitted } from "./reader/trayCommit";
@@ -32,6 +32,7 @@ import { useMaySendScans } from "./submit/useMaySendScans";
 import { useScanSubmit } from "./submit/useScanSubmit";
 import type { ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera, useCameraDevices } from "./useCamera";
+import { usePointAndShoot } from "./usePointAndShoot";
 import { useScanLoop } from "./useScanLoop";
 import { useScannerElsewhere } from "./useScannerElsewhere";
 import { useRefusedElsewhere, useScannerHold } from "./useScannerHold";
@@ -161,8 +162,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     tray,
     prefs.finish,
   );
-  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
-  const landedPrice = useLandedPrice(scanning ? landed : null, destination?.marketplace);
 
   /**
    * *Send scan…*'s dialog is open (issue #977). Mirrors `submit.run !== null`, which the pump
@@ -183,6 +182,22 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // Read above the loop: a device that may send scans keeps each frame of its run at full
   // resolution (`keepFullFrames`), and one that may not pays nothing for it.
   const maySend = useMaySendScans();
+
+  /**
+   * **Point and shoot** (`usePointAndShoot`): with the pref on, the bar's *Scan card* runs the pump
+   * until one card lands, and Start/Stop is not drawn. Over anything that pauses the pump the shot
+   * is over, so a dialog closing never resumes one. `reading` is whichever of the two is running
+   * — what the overlay, the strip and the sentences over the picture follow; `armed` is whether
+   * the reader is scanning at all, so a card that ended its own shot still lands over the camera.
+   */
+  const pointAndShoot = prefs.pointAndShoot;
+  const shot = usePointAndShoot({
+    on: pointAndShoot,
+    interrupted: parked.paused || sending || picking,
+  });
+  const reading = pointAndShoot ? shot.shooting : scanning;
+  const armed = pointAndShoot || scanning;
+
   const loop = useScanLoop({
     videoRef,
     // **Held until the prefs and the tray are in.** The first frame must go out in the stored
@@ -191,7 +206,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     // for as long as *Send scan…*'s dialog is open (`sending`, below), and while a card is being
     // added by hand (`picking`).
     live:
-      scanning &&
+      reading &&
       camera.kind === "live" &&
       loaded &&
       tray.loaded &&
@@ -202,8 +217,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     sendPx,
     detailWaitMs,
     keepFullFrames: maySend,
-    onDecision,
+    onDecision: (decision) => {
+      onDecision(decision);
+      shot.landed();
+    },
   });
+
+  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
+  const landedPrice = useLandedPrice(armed ? landed : null, destination?.marketplace);
 
   // **A refused frame is the lease saying another window has the scanner** — asking the gate again
   // flips it to the sentence, which unmounts this view and stops the camera.
@@ -289,7 +310,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * `prefs.filters` moves the moment the reader changes it, before the session has taken the
    * change, and is put back if the session refuses it.
    */
-  const sendable = destination === undefined && maySend && camera.kind === "live" && scanning;
+  // Under point and shoot a run lives only as long as its shot, so the press is drawn during one.
+  const sendable = destination === undefined && maySend && camera.kind === "live" && reading;
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
@@ -459,6 +481,15 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         <ScanBar
           scanning={scanning}
           onScanning={setScanning}
+          pointAndShoot={pointAndShoot}
+          onPointAndShoot={(on) => {
+            // Either way the switch lands stopped: a shot ends with the pref, and Start is
+            // pressed afresh — the view's own rule, a visit starts stopped (issue #1317).
+            setScanning(false);
+            update({ pointAndShoot: on });
+          }}
+          shooting={shot.shooting}
+          onShoot={(on) => (on ? shot.start(loop.clearReads, "card") : shot.stop())}
           mode={prefs.mode}
           onMode={(mode) => update({ mode })}
           filters={prefs.filters}
@@ -505,7 +536,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 scanner is leaning towards and how close it is: a reader holding a card watches the
                 bar fill, and a line under a tall camera is a line below where they are looking. */}
             <MatchStrip
-              verdict={scanning ? loop.verdict : null}
+              verdict={reading ? loop.verdict : null}
               mode={prefs.mode}
               lastAdded={lastAdded}
               hasBundle={hasBundle}
@@ -522,15 +553,15 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 than 16:9, and a letterboxed feed there is a strip with black above and below. */}
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
               <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
-              <Overlay videoRef={videoRef} verdict={scanning ? loop.verdict : null} />
+              <Overlay videoRef={videoRef} verdict={reading ? loop.verdict : null} />
               <AddedToast
-                card={scanning ? landed : null}
+                card={armed ? landed : null}
                 onDone={clearLanded}
                 price={landedPrice}
               />
-              {!scanning && (
+              {!reading && (
                 <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
-                  {SCANNING_STOPPED}
+                  {pointAndShoot ? SHOT_READY_CLICK : SCANNING_STOPPED}
                 </p>
               )}
               {camera.kind === "error" && (
@@ -563,7 +594,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 className="absolute left-3 top-2 min-h-[2.5em] text-xs text-dim"
                 aria-live="polite"
               >
-                {scanning ? detectorSentence : ""}
+                {reading ? detectorSentence : ""}
               </p>
             </div>
             {/* The scanner's files: the offer to download them where the host says it owes

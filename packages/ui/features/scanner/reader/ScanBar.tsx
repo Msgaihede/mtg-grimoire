@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react";
-import { Bug, Check, ChevronDown, History, Play, Square } from "lucide-react";
+import { Bug, Check, ChevronDown, Crosshair, History, Play, Square, X } from "lucide-react";
 import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -20,6 +20,8 @@ import {
   filtering,
   filterSummary,
   NO_FILTERS,
+  POINT_AND_SHOOT,
+  POINT_AND_SHOOT_CLICK_HINT,
   SCAN_MODES,
   SKIP_PROMOS,
   SKIP_PROMOS_NOTE,
@@ -29,6 +31,16 @@ import { DETECT, FINISH_PREF_LABEL } from "./trayFinish";
 export interface ScanBarProps {
   scanning: boolean;
   onScanning: (scanning: boolean) => void;
+  /**
+   * **Point and shoot** (`usePointAndShoot`): on, the bar draws *Scan card* where Start and Stop
+   * were — a click reads one card, and a second click while it is looking cancels it.
+   */
+  pointAndShoot: boolean;
+  onPointAndShoot: (on: boolean) => void;
+  /** A shot is running — *Scan card* reads *Cancel scan* for its length. */
+  shooting: boolean;
+  /** `true` is a click on *Scan card*, `false` the same press while a shot is running. */
+  onShoot: (on: boolean) => void;
   mode: ScanMode;
   onMode: (m: ScanMode) => void;
   filters: ScanFilters;
@@ -113,6 +125,10 @@ const CONDITION_OPTIONS: readonly DropdownOption[] = CONDITIONS.map((c) => ({
 export function ScanBar({
   scanning,
   onScanning,
+  pointAndShoot,
+  onPointAndShoot,
+  shooting,
+  onShoot,
   mode,
   onMode,
   filters,
@@ -148,18 +164,23 @@ export function ScanBar({
     <div className={cn("flex flex-wrap items-center gap-2", lead !== undefined && "-mt-2")}>
       {/* `mr-3` makes the title's gap the page bar's 20px rather than the controls' 8px. */}
       {lead !== undefined && <div className="mr-3 flex h-9 shrink-0 items-center">{lead}</div>}
-      <button
-        type="button"
-        onClick={() => onScanning(!scanning)}
-        className={cn(FILTER_CONTROL, "inline-flex items-center gap-1.5 px-2.5", FOCUS)}
-      >
-        {scanning ? (
-          <Square className="size-3.5" aria-hidden="true" />
-        ) : (
-          <Play className="size-3.5" aria-hidden="true" />
-        )}
-        {scanning ? "Stop scanning" : "Start scanning"}
-      </button>
+      {pointAndShoot ? (
+        <ShootButton shooting={shooting} onShoot={onShoot} />
+      ) : (
+        <button
+          type="button"
+          onClick={() => onScanning(!scanning)}
+          className={cn(FILTER_CONTROL, "inline-flex items-center gap-1.5 px-2.5", FOCUS)}
+        >
+          {scanning ? (
+            <Square className="size-3.5" aria-hidden="true" />
+          ) : (
+            <Play className="size-3.5" aria-hidden="true" />
+          )}
+          {scanning ? "Stop scanning" : "Start scanning"}
+        </button>
+      )}
+      <PointAndShootSwitch on={pointAndShoot} onChange={onPointAndShoot} />
       <ModeSwitch mode={mode} onMode={onMode} />
 
       <BarPopover
@@ -236,6 +257,66 @@ export function ScanBar({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * *Scan card*: one shot of point and shoot — the pump runs until a card lands, then pauses on its
+ * own. **A click, not a hold**, on this face (the owner's decision, 2026-10-22): a mouse held down
+ * is a hand that cannot also hold the card, and a click is one press per card either way.
+ *
+ * While the shot is looking the same press reads *Cancel scan* and ends it, so a click that found
+ * nothing is never left running behind the reader's back. Accent-filled, because the press the
+ * reader makes once a card is the one thing on the row they reach for without looking.
+ */
+function ShootButton({ shooting, onShoot }: { shooting: boolean; onShoot: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onShoot(!shooting)}
+      className={cn(
+        FILTER_CONTROL,
+        "inline-flex items-center gap-1.5 px-2.5",
+        shooting
+          ? "border-accent text-accent"
+          : "border-accent bg-accent font-medium text-accent-fg",
+        FOCUS,
+      )}
+    >
+      {shooting ? (
+        <X className="size-3.5" aria-hidden="true" />
+      ) : (
+        <Crosshair className="size-3.5" aria-hidden="true" />
+      )}
+      {shooting ? "Cancel scan" : "Scan card"}
+    </button>
+  );
+}
+
+/**
+ * The switch between Start/Stop and point and shoot, beside the press it changes. A stored pref,
+ * `role="switch"` named by its own word as the Developer switch is, with what it does as its
+ * tooltip.
+ */
+function PointAndShootSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  const tip = useTooltip();
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={() => onChange(!on)}
+      {...tip(POINT_AND_SHOOT_CLICK_HINT)}
+      className={cn(
+        FILTER_CONTROL,
+        "inline-flex items-center gap-1.5 px-2.5",
+        FOCUS,
+        filterChipState(on),
+      )}
+    >
+      {on && <Check className="size-3.5 shrink-0" aria-hidden="true" />}
+      {POINT_AND_SHOOT}
+    </button>
   );
 }
 

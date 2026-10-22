@@ -1,9 +1,12 @@
 import { useId, useState } from "react";
-import { Camera, Check, Gauge, ListFilter, ScanLine, Sparkles } from "lucide-react";
+import { Camera, Check, Crosshair, Gauge, ListFilter, ScanLine, Sparkles } from "lucide-react";
 import {
   CAMERA_CHOICE_NOTE,
+  CONTINUOUS_HINT,
   filterSummary,
   NO_FILTERS,
+  POINT_AND_SHOOT,
+  POINT_AND_SHOOT_HOLD_HINT,
   SCAN_MODES,
   SKIP_PROMOS,
   SKIP_PROMOS_NOTE,
@@ -20,7 +23,13 @@ import { sortOptions } from "@grimoire/ui/lib/options";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ActionSheet, SheetBack, SheetChoice, SheetRow } from "../deck/sheet";
 
-type Page = "main" | "mode" | "filters" | "finish" | "condition" | "camera";
+type Page = "main" | "mode" | "trigger" | "filters" | "finish" | "condition" | "camera";
+
+/** The two ways to run the scanner, as the Scanning page lists them — the bar's press for each. */
+const TRIGGERS = [
+  { pointAndShoot: false, label: "Start and stop", note: CONTINUOUS_HINT },
+  { pointAndShoot: true, label: POINT_AND_SHOOT, note: POINT_AND_SHOOT_HOLD_HINT },
+] as const;
 
 /** `Detect` first, because it is the default and the one choice that is not a finish; then a
  *  printing's finishes, plain before the premium treatments — the desktop Defaults popover's order. */
@@ -50,6 +59,8 @@ const DATE_FIELD = cn(
  *
  * - **Scan mode** — the bar's switch again, with each mode's sentence under its name. On the
  *   desktop that sentence is a tooltip; here it has to be on the page to be read at all.
+ * - **Scanning** — *Start and stop*, or *Point & shoot*: the bar's press becomes *Scan*, read
+ *   while held (`usePointAndShoot`). The desktop's switch on its bar, as a page of two choices.
  * - **Filters** — the set picker, the promo switch and the release window, sent as they are changed. A refusal from
  *   the session (*No printing matches these filters.*) is said in words under the fields, and the
  *   row itself is refused, with its reason, where the scanner has no card names to filter by.
@@ -68,6 +79,8 @@ export function OptionsSheet({
   onDismiss,
   mode,
   onMode,
+  pointAndShoot,
+  onPointAndShoot,
   filters,
   onFilters,
   filterError,
@@ -87,6 +100,9 @@ export function OptionsSheet({
   onDismiss: () => void;
   mode: ScanMode;
   onMode: (mode: ScanMode) => void;
+  /** The stored point-and-shoot pref. */
+  pointAndShoot: boolean;
+  onPointAndShoot: (on: boolean) => void;
   filters: ScanFilters;
   onFilters: (filters: ScanFilters) => void;
   /** The session's last refusal of a filter, in its words. */
@@ -134,6 +150,13 @@ export function OptionsSheet({
             onPress={() => setPage("mode")}
           />
           <SheetRow
+            label="Scanning"
+            value={pointAndShoot ? POINT_AND_SHOOT : "Start and stop"}
+            Icon={Crosshair}
+            opens
+            onPress={() => setPage("trigger")}
+          />
+          <SheetRow
             label="Filters"
             value={filterSummary(filters)}
             Icon={ListFilter}
@@ -179,6 +202,26 @@ export function OptionsSheet({
                 current={id === mode}
                 onPick={() => {
                   onMode(id);
+                  back();
+                }}
+              />
+            ))}
+          </ul>
+        </>
+      )}
+
+      {page === "trigger" && (
+        <>
+          <SheetBack label="Scanning" onBack={back} />
+          <ul aria-label="Ways to scan">
+            {TRIGGERS.map((t) => (
+              <SheetChoice
+                key={t.label}
+                label={t.label}
+                note={t.note}
+                current={t.pointAndShoot === pointAndShoot}
+                onPick={() => {
+                  onPointAndShoot(t.pointAndShoot);
                   back();
                 }}
               />
