@@ -230,7 +230,7 @@ export const YourMainPhase: Story = {
   },
 };
 
-/** Cards the rules engine plays only in part wear a gold border, in the hand and on the table
+/** Cards the rules engine plays only in part wear a red border, in the hand and on the table
  *  (issue #1093): here the Sphinx in hand and the Sol Ring on the battlefield. */
 export const PartlyPlayed: Story = {
   args: (() => {

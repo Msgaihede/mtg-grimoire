@@ -324,6 +324,10 @@ describe("PlaytestSetup", () => {
     await userEvent.click(partly);
     const list = screen.getByRole("list", { name: "Cards the rules engine plays only in part" });
     expect(within(list).getByText("Moonlit Bard")).toBeInTheDocument();
+    // Each card beside a thumbnail of its printing (issue #1325).
+    expect(within(list).getByRole("listitem").querySelector("img")?.getAttribute("src")).toContain(
+      "/thumb/moon/0",
+    );
     expect(
       within(list).getByText(
         "Trigger: Whenever the moon is full · Effect: unrecognized clause head",
