@@ -62,7 +62,7 @@ use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, Mulliga
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{
-    CastOfferKind, MulliganDecisionPhase, StackEntry, StackEntryKind, WaitingFor,
+    CastOfferKind, ManaChoice, MulliganDecisionPhase, StackEntry, StackEntryKind, WaitingFor,
 };
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
@@ -1702,8 +1702,10 @@ impl Playtest {
                             .and_then(Value::as_i64)
                     }
                     "accept" | "pay" | "top" => yes = value.as_bool(),
-                    // A word, or one of phase's tagged choices: `{ "type": "Alternative" }`.
-                    "choice" => label = tag_of(value),
+                    // A word, or one of phase's tagged choices: `{ "type": "Alternative" }`. A
+                    // mana color's answer is told by its mana (issue #1363): `SingleColor`'s
+                    // `Black`, or `Combination`'s types in order, a space between.
+                    "choice" => label = mana_of(value).or_else(|| tag_of(value)),
                     _ => {}
                 }
             }
@@ -3249,6 +3251,24 @@ fn tag_of(value: &Value) -> Option<String> {
         .as_str()
         .or_else(|| value.get("type")?.as_str())
         .map(str::to_string)
+}
+
+/// The mana a `ManaChoice` answer makes: `{ "type": "SingleColor", "data": "Black" }` is
+/// `Black`, `{ "type": "Combination", "data": ["White", "Blue"] }` is `White Blue`. Any other
+/// choice is `None`.
+fn mana_of(value: &Value) -> Option<String> {
+    serde_json::from_value::<ManaChoice>(value.clone()).ok()?;
+    match value.get("data")? {
+        Value::String(one) => Some(one.clone()),
+        Value::Array(types) => Some(
+            types
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
+        _ => None,
+    }
 }
 
 /// Whether an action is something `id` does: its data names `id` as the source, the equipment,

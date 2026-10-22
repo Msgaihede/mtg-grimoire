@@ -177,8 +177,9 @@ export function optionLabel(
   if (option.kind === "ChooseAlternativeCast")
     return { text: costText(option, prompt), hint: null };
   // A mana ability's row says the mana it makes ("Add green mana"), else which ability it is.
-  if (prompt.kind === "ManaChoice" && option.label !== null)
-    return { text: `Add ${option.label.toLowerCase()} mana`, hint: null };
+  // So does an answer to the engine's own "which color" (issue #1363).
+  if ((prompt.kind === "ManaChoice" || option.kind === "ChooseManaColor") && option.label !== null)
+    return { text: `Add ${manaText(option.label)} mana`, hint: null };
   if (prompt.kind === "OrderTriggers" && option.cards.length > 0) {
     const refs = optionCards(option, prompt);
     const [first, ...rest] = refs.map((ref) => abilityName(ref, refs, opponents));
@@ -200,6 +201,20 @@ export function optionLabel(
     (option.kind === "ChooseTarget" ? "No more targets" : (hint ?? words(option.kind)));
   // The hint repeats nothing: when the line is already the kind's words, it goes.
   return { text, hint: hint === text ? null : hint };
+}
+
+/**
+ * The mana an answer makes, from its types as the engine sends them, a space between: "Green" is
+ * "green", "White Blue" is "white and blue", "White White Blue" is "2 white and blue".
+ */
+function manaText(label: string): string {
+  const counts = new Map<string, number>();
+  for (const type of label.toLowerCase().split(" ").filter(Boolean))
+    counts.set(type, (counts.get(type) ?? 0) + 1);
+  const parts = [...counts].map(([type, n]) => (n > 1 ? `${n} ${type}` : type));
+  return parts.length > 1
+    ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+    : parts.join("");
 }
 
 /** An alternative cost's two answers: the keyword's cost ("Overload") or the printed one. */

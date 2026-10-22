@@ -1173,6 +1173,51 @@ fn a_source_of_several_kinds_of_mana_asks_which_and_a_rock_makes_its_whole_outpu
     assert!(refused.contains("can't make mana"), "{refused}");
 }
 
+/// A source of any color asks the engine's own "which color", and each answer is told by its
+/// color, never by the shape of the choice: two `SingleColor`s side by side said nothing (issue
+/// #1363).
+#[test]
+fn a_mana_color_answer_is_told_by_its_color() {
+    let deck = vec![card(
+        "Manalith",
+        Some("{3}"),
+        "Artifact",
+        "{T}: Add one mana of any color.",
+        None,
+        40,
+    )];
+    let (asked, black) = engine(move || {
+        let (mut game, _) = fish(&deck, 7);
+        game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+        let manalith = put_down(&mut game, "Manalith");
+        game.act(A::SetSandbox { on: false }).unwrap();
+        let asked = game.act(A::TapForMana { id: manalith }).unwrap().view;
+        let index = asked
+            .prompt
+            .as_ref()
+            .and_then(|p| {
+                p.options
+                    .iter()
+                    .find(|o| o.label.as_deref() == Some("Black"))
+            })
+            .map(|o| o.index)
+            .expect("a Black answer");
+        let black = game.act(A::Choose { index }).unwrap().view;
+        (asked, black)
+    });
+    assert_eq!(asked.stage, Stage::Prompt);
+    let prompt = asked.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "ChooseManaColor");
+    let mut labels: Vec<_> = prompt
+        .options
+        .iter()
+        .filter_map(|o| o.label.clone())
+        .collect();
+    labels.sort();
+    assert_eq!(labels, ["Black", "Blue", "Green", "Red", "White"]);
+    assert_eq!(black.you.mana.floating.black, 1);
+}
+
 #[test]
 fn a_life_total_the_rules_change_is_told_for_either_seat() {
     let step = engine(|| {
