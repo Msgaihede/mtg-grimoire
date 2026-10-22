@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GameCard, PlaytestEmblem } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { LAYER } from "@/lib/layers";
-import { Battlefield, tableCardWidth } from "./Battlefield";
+import { Battlefield, tableCardWidth, type TablePick } from "./Battlefield";
 
 let next = 1;
 function card(name: string, over: Partial<GameCard> = {}): GameCard {
@@ -55,12 +55,16 @@ function setup(
     onActivate,
     emblems,
     flipped = false,
+    pick,
+    carry,
   }: {
     sandbox?: boolean;
     readOnly?: boolean;
     onActivate?: (id: number) => void;
     emblems?: PlaytestEmblem[];
     flipped?: boolean;
+    pick?: TablePick;
+    carry?: (card: GameCard) => boolean;
   } = {},
 ) {
   const onAct = vi.fn();
@@ -81,6 +85,8 @@ function setup(
         emblems={emblems}
         onPointEmblem={onPointEmblem}
         flipped={flipped}
+        pick={pick}
+        carry={carry}
       />
     </ContextMenuProvider>,
   );
@@ -312,18 +318,49 @@ describe("Battlefield", () => {
     const edge = (name: string) =>
       screen.getByRole("button", { name: `${name}, attached to Grizzly Bears` });
 
-    expect(edge("Bonesplitter")).not.toHaveClass(LAYER.raised);
+    const lifted = (name: string) =>
+      document.querySelector(`[data-lifted="${edge(name).getAttribute("data-point")}"]`);
+
+    expect(lifted("Bonesplitter")).toBeNull();
     fireEvent.mouseEnter(edge("Bonesplitter"));
-    expect(edge("Bonesplitter")).toHaveClass(LAYER.raised);
-    expect(edge("Rancor")).not.toHaveClass(LAYER.raised);
+    expect(lifted("Bonesplitter")).toHaveClass(LAYER.raised);
+    expect(lifted("Rancor")).toBeNull();
 
     fireEvent.mouseLeave(edge("Bonesplitter"));
     fireEvent.mouseEnter(edge("Rancor"));
-    expect(edge("Bonesplitter")).not.toHaveClass(LAYER.raised);
-    expect(edge("Rancor")).toHaveClass(LAYER.raised);
+    expect(lifted("Bonesplitter")).toBeNull();
+    expect(lifted("Rancor")).toHaveClass(LAYER.raised);
 
     fireEvent.mouseLeave(edge("Rancor"));
-    expect(edge("Rancor")).not.toHaveClass(LAYER.raised);
+    expect(lifted("Rancor")).toBeNull();
+  });
+
+  it("lifts only a picture, so the creature under a pointed-at attachment stays pickable (issue #1364)", () => {
+    const vampire = creature("Vampire Interloper");
+    const role = card("Wicked Role", {
+      lane: "other",
+      isLand: false,
+      isToken: true,
+      attachedTo: vampire.id,
+    });
+    const onPick = vi.fn();
+    setup([vampire, role], {
+      sandbox: false,
+      pick: { ids: new Set([vampire.id]), onPick },
+      carry: (c) => c.id === vampire.id,
+    });
+    const edge = screen.getByRole("button", { name: /^Wicked Role, attached to/ });
+
+    // The pointer came down through the Role's edge: its card comes up whole, but as a picture
+    // the pointer passes through — the edge's own button stays tucked under the creature.
+    fireEvent.mouseEnter(edge);
+    const lifted = document.querySelector(`[data-lifted="${role.id}"]`);
+    expect(lifted).toHaveClass(LAYER.raised, "pointer-events-none");
+    expect(lifted).toHaveAttribute("aria-hidden", "true");
+    expect(edge).not.toHaveClass(LAYER.raised);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Vampire Interloper/ }));
+    expect(onPick).toHaveBeenCalledWith(vampire.id);
   });
 
   it("activates an Equipment's ability from its edge under the creature", async () => {
