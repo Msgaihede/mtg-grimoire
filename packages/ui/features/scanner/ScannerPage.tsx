@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { PageRule, PageTitle } from "@/components/PageBar";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
@@ -447,8 +448,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     // fragment's other children, siblings of the box and not inside it.
     <>
       <section className="@container/scan flex h-full flex-col gap-3">
-        {/* Not shown: the ribbon already says `Scanner`, and every pixel of this view's height is
-            the camera's. It is here to name the view for assistive tech, as the other views' do. */}
+        {/* Not shown: the page title at the start of the bar below draws the view's name, and
+            this heading names it for assistive tech, as the other views' do — so that title is a
+            `div`. */}
         <h2 className="sr-only">Scanner</h2>
 
         <ScanBar
@@ -486,7 +488,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 }
               : undefined
           }
+          // **The page bar, drawn by the scan bar** ("Page & Section Headings", 2026-10-21): the
+          // title as its first item and the rule under it, so naming the view costs the
+          // camera no height. Not over a trade, whose dialog is already titled.
+          lead={destination === undefined ? <PageTitle title="Scanner" titleAs="div" /> : undefined}
         />
+        {destination === undefined && <PageRule />}
 
         <div className="flex min-h-0 flex-1 gap-4">
           {/* The camera's column: how close the scanner is to a card, then the picture. */}

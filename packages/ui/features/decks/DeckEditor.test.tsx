@@ -1153,8 +1153,13 @@ describe("DeckEditor", () => {
    * the block gives width back *itself* now, dropping the four labelled buttons to their icons as
    * the column narrows, so it is a fixed run whose fixed width is a function of the column. What
    * catches the width below which even the narrow run does not fit is the row's own `flex-wrap`:
-   * the whole block folds to a line of its own rather than crushing the name. The wrapper that
-   * used to sit between the field and this row went with the Compare button that made it a group.
+   * the whole block folds to a line of its own rather than crushing the name.
+   *
+   * **The row is the page bar's since 2026-10-21** (`PageBar`, `titleGrows`), so the field sits
+   * inside the bar's title and title groups rather than directly in the wrapping row. What has to
+   * hold is the same claim one level wider: every box between the field and the row grows, and
+   * none of them is `min-w-0` — any one of them that could be squeezed would undo the field's
+   * floor.
    */
   it("keeps the deck name from collapsing between the controls beside it", async () => {
     await open();
@@ -1166,15 +1171,21 @@ describe("DeckEditor", () => {
     // …and an intrinsic width small enough that the floor is the only floor.
     expect(name).toHaveAttribute("size", "1");
 
-    // The field is the row's own flexible child: no wrapper between it and the wrapping row.
-    const row = name.parentElement!;
-    expect(row.className).toContain("flex-wrap");
-    expect(row.className).not.toContain("min-w-0");
+    // The wrapping row, and every box between it and the field: each grows, none can be
+    // squeezed past the field's own floor.
+    const row = name.closest<HTMLElement>(".flex-wrap")!;
+    expect(row).not.toBeNull();
+    for (let box = name.parentElement!; box !== row; box = box.parentElement!) {
+      expect(box.className).toContain("flex-1");
+      expect(box.className).not.toContain("min-w-0");
+    }
 
-    // The controls are the row's last child, pinned to the right and never squeezed.
-    const controls = row.lastElementChild!;
+    // The controls are the row's last child, pinned to the right, and never squeezed or wrapped
+    // inside themselves — the row's `flex-wrap` folds the whole run instead.
+    const slot = row.lastElementChild!;
+    expect(slot.className).toContain("ml-auto");
+    const controls = slot.firstElementChild!;
     expect(controls.className).toContain("shrink-0");
-    expect(controls.className).toContain("ml-auto");
     expect(controls.className).not.toContain("flex-wrap");
   });
 

@@ -6,6 +6,7 @@ import { FinishMark } from "@/components/FinishMark";
 import { GameChangerMark } from "@/components/GameChangerMark";
 import { ManaText } from "@/components/ManaText";
 import { OwnedBadge } from "@/components/OwnedBadge";
+import { PageRule, PageTitle } from "@/components/PageBar";
 import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
@@ -517,8 +518,9 @@ export function SearchPage() {
         }
       />
 
-      {/* Not shown: the filter bar says what this view is far better than a title would,
-          and the window is short. It is here to name the view for assistive tech. */}
+      {/* Not shown: the page bar beside the filter row draws the view's name, and this heading
+          names the view for assistive tech in the words it always had — so the bar's title is a
+          `div` (`AppShell`'s "a plain line where the page already has one"). */}
       <h2 className="sr-only">Card search</h2>
 
       <div ref={deskRef} className={cn("flex gap-4", view === "table" && "min-h-0 flex-1")}>
@@ -545,7 +547,20 @@ export function SearchPage() {
 
           {/* `rootRef` hands the hook above the whole block — row, tray, stated filters — whose
               bottom edge is the quick bar's trigger. */}
-          <FilterBar search={search} rootRef={setFilterRow} />
+          {/* **The page bar, drawn by the filter row** ("Page & Section Headings", option A,
+              2026-10-21): the title as the row's first item (`lead`) and the rule under the
+              filter block, so naming the page costs no height — this view had no top row to give
+              the title, and a row of its own cost the wall 45px (the owner's note). The count
+              stays the result line's, where it always was. */}
+          {/* `-mt-2`: the page bar's 12px above the row rather than `main`'s 20 (`PageBar`). */}
+          <div className="-mt-2 flex flex-col gap-3">
+            <FilterBar
+              search={search}
+              rootRef={setFilterRow}
+              lead={<PageTitle title="Search" titleAs="div" />}
+            />
+            <PageRule />
+          </div>
 
           <Results search={search} />
         </div>

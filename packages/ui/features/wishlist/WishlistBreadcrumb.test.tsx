@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -20,6 +20,11 @@ import { wishDraggable, type WishDrag, type WishDrop } from "./wishDrag";
  * flattened"*, which went with Flatten. One case is new: a segment takes a **folder** now, filed
  * last in that level (the `ParentFolderCard` "Up one level" tile's job, spec §6), and its marks are
  * the same pair the wish's are.
+ *
+ * **It is the page bar's trail since 2026-10-21**: the folder the reader is in is the bar's title
+ * (`WishlistPage.test.tsx` holds that), so the trail draws only the levels above it, and nothing at
+ * the root. The cases that pinned the current folder as an inert `aria-current` segment now pin its
+ * absence.
  *
  * **Both drags are driven over the library's real code path, and both are pointer gestures.**
  * `packages/ui/test-drag.ts` supplies the two things jsdom cannot: it lays nothing out, so **every source,
@@ -150,19 +155,25 @@ const stack = (...segments: HTMLElement[]) =>
   segments.forEach((segment, index) => boxed(segment, 200 + index * 100));
 
 describe("WishlistBreadcrumb", () => {
-  it("draws the trail root-most first, with the folder you are in current and inert", () => {
+  it("draws the levels above the folder you are in, root-most first, and not that folder", () => {
     mount();
-    expect(screen.getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Expensive" })).toBeInTheDocument();
-    // The folder the reader is standing in is not a place to go.
-    expect(screen.queryByRole("button", { name: "Someday" })).not.toBeInTheDocument();
-    expect(screen.getByText("Someday")).toHaveAttribute("aria-current", "page");
+    const bar = screen.getByRole("navigation", { name: "Wishlist folders" });
+    expect(
+      within(bar)
+        .getAllByRole("button")
+        .map((segment) => segment.textContent),
+    ).toEqual(["Wishlist", "Expensive"]);
+    // The folder the reader is standing in is the page bar's title, not a place to go — and not
+    // an inert word in the trail either, so nothing here is `current`.
+    expect(screen.queryByText("Someday")).not.toBeInTheDocument();
+    expect(bar.querySelector("[aria-current]")).toBeNull();
   });
 
-  it("makes the root itself current when the reader is already there", () => {
+  it("draws no trail when the reader is already at the root", () => {
     mount({ trail: [] });
-    expect(screen.queryByRole("button", { name: "Wishlist" })).not.toBeInTheDocument();
-    expect(screen.getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+    // Nothing above the root: no landmark, no lone inert `Wishlist` beside the bar's own title.
+    expect(screen.queryByRole("navigation", { name: "Wishlist folders" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Wishlist")).not.toBeInTheDocument();
   });
 
   it("climbs to the root and to an ancestor", async () => {
@@ -202,21 +213,26 @@ describe("WishlistBreadcrumb", () => {
   });
 
   it("offers no drop on the folder the reader is already standing in", async () => {
-    mount({ withSource: true });
-    // Boxed like its neighbours, so "nothing happened" is the target refusing rather than a
-    // pointer that was never over it.
-    const current = screen.getByText("Someday");
+    // It is not a segment, so no target is registered for it at all. Every target asks the page
+    // about its own level at `dragstart` (the ring), so the levels asked about are exactly the
+    // segments drawn — the two above, and never the one the reader is in.
+    const asked = new Set<number | null>();
+    mount({
+      withSource: true,
+      canDrop: (_drop, folderId) => {
+        asked.add(folderId);
+        return true;
+      },
+    });
     stack(
       screen.getByRole("button", { name: "Wishlist" }),
       screen.getByRole("button", { name: "Expensive" }),
-      current,
     );
 
     const held = await startPointerDrag(screen.getByText("the wish"));
-    expect(marked(current, DROP_RING)).toBe(false);
-
-    await held.over(current);
-    await held.drop();
+    expect([...asked]).toEqual(expect.arrayContaining([null, 3]));
+    expect(asked.has(SOMEDAY.id)).toBe(false);
+    await held.cancel();
     expect(onDropWish).not.toHaveBeenCalled();
   });
 

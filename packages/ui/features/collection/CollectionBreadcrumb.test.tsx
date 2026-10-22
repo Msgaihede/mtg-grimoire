@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -16,9 +16,14 @@ import {
 } from "./collectionDrag";
 
 /**
- * Where the reader is standing, and the way back out — every segment but the last takes a copy
- * **and a folder** dropped on it. Moved here from `CollectionFolderCard.test.tsx` when the folder
- * cards were deleted for shelves (spec §7); the Flatten case went with Flatten.
+ * The way back out of the folder the reader is standing in — every segment takes a copy **and a
+ * folder** dropped on it. Moved here from `CollectionFolderCard.test.tsx` when the folder cards
+ * were deleted for shelves (spec §7); the Flatten case went with Flatten.
+ *
+ * **It is the page bar's trail since 2026-10-21**: the folder the reader is in is the bar's title
+ * (`CollectionPage.test.tsx` holds that), so the trail draws only the levels above it, and nothing
+ * at the root. The cases that pinned the current folder as an inert `aria-current` segment now pin
+ * its absence.
  *
  * Every source and every segment is given a box of its own, because dnd-kit hit-tests by
  * coordinate and jsdom measures every rectangle as four zeroes (`packages/ui/test-drag.ts`).
@@ -144,27 +149,35 @@ describe("CollectionBreadcrumb", () => {
     );
   }
 
-  /** Every segment boxed, 60px apart and clear of the source — the current one too, because it is
-   *  the one that must refuse, and a refusal only counts where the pointer really arrived. */
+  /** Every segment boxed, 60px apart and clear of the source. */
   const stand = () => {
     const bar = screen.getByRole("navigation", { name: "Collection folders" });
-    [...bar.querySelectorAll<HTMLElement>("button, [aria-current]")].forEach((element, index) =>
+    [...bar.querySelectorAll<HTMLElement>("button")].forEach((element, index) =>
       boxed(element, 200 + index * 60),
     );
   };
 
-  it("draws the trail root-most first, with the folder you are in current and inert", () => {
+  it("draws the levels above the folder you are in, root-most first, and not that folder", () => {
     mount();
-    expect(screen.getByRole("button", { name: "Collection" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Trade binder" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Foils" })).not.toBeInTheDocument();
-    expect(screen.getByText("Foils")).toHaveAttribute("aria-current", "page");
+    const bar = screen.getByRole("navigation", { name: "Collection folders" });
+    // Every element in the bar is a way back, in order — the folder the reader is in is the page
+    // bar's title, so it is neither a segment nor an inert word here, and nothing is `current`.
+    expect(
+      within(bar)
+        .getAllByRole("button")
+        .map((segment) => segment.textContent),
+    ).toEqual(["Collection", "Trade binder"]);
+    expect(screen.queryByText("Foils")).not.toBeInTheDocument();
+    expect(bar.querySelector("[aria-current]")).toBeNull();
   });
 
-  it("makes the root itself current when the reader is already there", () => {
+  it("draws no trail when the reader is already at the root", () => {
     mount({ trail: [] });
-    expect(screen.queryByRole("button", { name: "Collection" })).not.toBeInTheDocument();
-    expect(screen.getByText("Collection")).toHaveAttribute("aria-current", "page");
+    // Nothing above the root: no landmark, no lone inert `Collection` beside the bar's own title.
+    expect(
+      screen.queryByRole("navigation", { name: "Collection folders" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Collection")).not.toBeInTheDocument();
   });
 
   it("climbs to the root and to an ancestor", async () => {
@@ -219,14 +232,23 @@ describe("CollectionBreadcrumb", () => {
     await held.cancel();
   });
 
+  /** "Move this to where it already is" is not an operation: the folder the reader is standing in
+   *  is not a segment, so no target is ever registered for it — every target asks the page about
+   *  its own level at `dragstart`, and the page is asked about the two levels above and no other. */
   it("offers no drop on the folder the reader is already standing in", async () => {
-    mount({ withSource: true });
+    const asked = new Set<number | null>();
+    mount({
+      withSource: true,
+      canDrop: (_drop, folderId) => {
+        asked.add(folderId);
+        return true;
+      },
+    });
     stand();
     const held = await startPointerDrag(screen.getByText("the copy"));
-    expect(marked(screen.getByText("Foils"), DROP_RING)).toBe(false);
-
-    await held.over(screen.getByText("Foils"));
-    await held.drop();
+    expect([...asked]).toEqual(expect.arrayContaining([null, 3]));
+    expect(asked.has(FOILS.id)).toBe(false);
+    await held.cancel();
     expect(onDropCard).not.toHaveBeenCalled();
   });
 
@@ -318,7 +340,7 @@ describe("CollectionBreadcrumb's segments and a pointer outside them", () => {
       <>
         <Overlapping drag={drag} />
         <CollectionBreadcrumb
-          trail={[BINDER]}
+          trail={[BINDER, FOILS]}
           onOpen={onOpen}
           canDrop={() => true}
           onDropCard={onDropCard}
@@ -328,7 +350,7 @@ describe("CollectionBreadcrumb's segments and a pointer outside them", () => {
       </>,
     );
     boxed(screen.getByRole("button", { name: "Collection" }), 200);
-    boxed(screen.getByText("Trade binder"), 400);
+    boxed(screen.getByRole("button", { name: "Trade binder" }), 400);
   }
 
   it("files no copy whose card only overlaps a segment", async () => {

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 /**
  * The narrowest the deck's name field may be squeezed to.
  *
- * 10rem, which at the field's `text-xl` is about thirteen characters — enough to tell two decks
+ * 10rem, which at the field's 26px is a handful of characters — enough to tell two decks
  * apart, and enough that the caret has somewhere to go. Below that the field stops being a
  * field: measured in the shipped window, with nothing holding it, it collapsed to **18px**,
  * which draws as a sliver with no glyph in it at all.
@@ -99,7 +99,7 @@ export function DeckNameField({
       aria-label="Deck name"
       // **`size={1}` is load-bearing, and it is not about the drawn width.** A text
       // input with no `size` defaults to 20 characters, and *that* is what a flex
-      // container reports as its min-content — at this field's `text-xl` it measured
+      // container reports as its min-content — at this field's old `text-xl` it measured
       // over 240px, which is what pushed the whole row of deck controls onto a second
       // line at 1280 even with the Theory switch off. With `size={1}` the intrinsic
       // width is a character and {@link NAME_FLOOR} is the only floor left, which is
@@ -136,9 +136,11 @@ export function DeckNameField({
       // Cinzel is also drawn in caps — which in a field you type into means the
       // letters never match the ones being typed.
       className={cn(
-        "flex-1 rounded-md border border-transparent bg-transparent px-2 py-1",
+        // `h-9` and `leading-none`: the page title's 26px face (`PAGE_TITLE`, which this field
+        // stands in for) inside the row's 36px control height, so editing never grows the bar.
+        "h-9 flex-1 rounded-md border border-transparent bg-transparent px-2",
         NAME_FLOOR,
-        "text-xl font-medium leading-tight",
+        "text-[26px] font-medium leading-none",
         "transition-colors duration-150 hover:border-border motion-reduce:transition-none",
         FOCUS,
       )}

@@ -152,7 +152,7 @@ export function DeckBracket({
         }
         onClick={() => (open ? onDismiss() : onOpen())}
         className={cn(
-          "inline-flex h-7 shrink-0 items-center whitespace-nowrap rounded-md border",
+          "inline-flex h-6 shrink-0 items-center whitespace-nowrap rounded-md border",
           "px-2 font-mono text-[0.6875rem] tabular-nums",
           // **Accent, and it is not a state.** The bracket is the one figure on this line that is
           // a *reading* rather than a count, and the edge is what says the number came from

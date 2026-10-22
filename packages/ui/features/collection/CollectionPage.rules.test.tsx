@@ -388,11 +388,14 @@ describe("CollectionPage — folder rules", () => {
   it("badges the folder the reader is standing in beside the path row", async () => {
     useAppStore.setState({ pendingFolder: { scope: "collection", id: 3 } });
     wrap(<CollectionPage />);
-    const crumbs = await screen.findByRole("navigation", { name: "Collection folders" });
+    // Standing in it: the page bar's title names it (the trail above it is the way back out).
+    await screen.findByRole("heading", { level: 2, name: "Trade binder" });
     const badge = await screen.findByRole("button", { name: /This folder's rules: Price up to/ });
-    // On the path row, not inside a heading — the level's own heading is not drawn on its wall.
+    // On the path row, not inside a heading — the level's own heading is not drawn on its wall —
+    // and not in the page bar either: the row is the one the shelf toolbar stands at the end of.
     expect(badge.closest(`[${SHELF_HEADING_ATTR}]`)).toBeNull();
-    expect(crumbs.parentElement?.parentElement).toContainElement(badge);
+    const shelves = screen.getByRole("group", { name: "Shelves" });
+    expect(shelves.parentElement?.parentElement).toContainElement(badge);
   });
 
   it("draws no badge and no outline in a cabinet with no rules", async () => {

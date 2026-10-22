@@ -2,8 +2,9 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
 import type { CollectionSummary } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
+import { PageBar } from "@/components/PageBar";
 import { formatPrice } from "@/lib/prices";
-import { CollectionSummaryHeader } from "./CollectionSummary";
+import { CollectionPageFigures, CollectionSummaryHeader } from "./CollectionSummary";
 
 /**
  * A complete answer, which every story below varies one field of.
@@ -31,7 +32,9 @@ const meta = {
       description: {
         component:
           "What the collection adds up to: three figures in the data face, with no colour " +
-          "and no chrome, plus a fourth when there is a tradelist. **One Value figure, in " +
+          "and no chrome, plus a fourth when there is a tradelist. This band is the light " +
+          "app's phone face; the desktop page draws the same figures inline in its page bar " +
+          "(`CollectionPageFigures`, the `InPageBar` story). **One Value figure, in " +
           "the marketplace the reader picked** — it drew `Value (USD)` and `Value (EUR)` " +
           "side by side while there was no way to *say* which one you wanted, and two totals " +
           "for one collection is two answers to the question this row exists to answer. It " +
@@ -185,5 +188,34 @@ export const WithTradelist: Story = {
   play: async ({ canvasElement }) => {
     await expect(canvasElement.querySelectorAll("dd")).toHaveLength(4);
     await expect(within(canvasElement).getByText("For trade")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The desktop page's face of the same figures: inline in its page bar (2026-10-21), one quiet
+ * line on the title's baseline — the number in mono, then the word that follows it — with the
+ * value in gold.
+ *
+ * The `play` pins the two ways this line differs from the band above: its words are the
+ * lowercase ones that follow a number, and the value's word drops the band's `(USD)`, because the
+ * figure right before it carries its own sign. One gilded figure, and it is the money.
+ */
+export const InPageBar: Story = {
+  args: { summary: { ...SUMMARY, unpriced: 12 }, marketplace: MARKETPLACES.tcgplayer },
+  render: (args) => (
+    <PageBar
+      title="Collection"
+      figures={<CollectionPageFigures summary={args.summary} marketplace={args.marketplace} />}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("heading", { level: 2, name: "Collection" })).toBeInTheDocument();
+    await expect(canvas.getByText("value").closest("div")).toHaveTextContent(
+      formatPrice(SUMMARY.value, "usd"),
+    );
+    await expect(canvas.queryByText("Value (USD)")).toBeNull();
+    await expect(canvas.getByText("12 unpriced")).toBeInTheDocument();
+    await expect(canvasElement.querySelectorAll("dd.text-accent")).toHaveLength(1);
   },
 };

@@ -918,7 +918,9 @@ export function DeckDesk({
           // What {@link undocked} watches: once this line has left the page, the bar stands in.
           ref={setToolbarLine}
           className={cn(
-            "flex shrink-0 flex-wrap items-center gap-x-3 border-b border-border pb-3",
+            // 6px over the row and under it to its rule, not the desk's 12 (the owner's note,
+            // 2026-10-21): `-mt-1.5` takes half the gap back from the ledger's rule above.
+            "-mt-1.5 flex shrink-0 flex-wrap items-center gap-x-3 border-b border-border pb-1.5",
             tightHeader ? "gap-y-1.5" : "gap-y-2.5",
           )}
         >

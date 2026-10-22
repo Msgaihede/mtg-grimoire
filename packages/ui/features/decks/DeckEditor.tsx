@@ -4,6 +4,7 @@ import { Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { FILTER_FOCUS } from "@/components/FilterChips";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { PageRule } from "@/components/PageBar";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
@@ -69,6 +70,7 @@ import { DeckDescriptionPanel, shownDescription } from "./DeckDescriptionPanel";
 // in checklist mode, and this file names only the band.
 import { DeckTodosPanel } from "./DeckTodosPanel";
 import { notedOracleIds } from "./deckNotes";
+import { useDeckFolders } from "./useDeckFolders";
 import { useDeckNotes } from "./useDeckNotes";
 import { useHiddenStacks } from "./useHiddenStacks";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
@@ -403,6 +405,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * What the header's Share control publishes (issue #1032) — held still on the two fields it
    * reads, because the header is memoised and a fresh target per render would redraw it.
    */
+  /**
+   * The drawers this deck is filed in, root first — the header's trail (`Decks › <drawers> ›`).
+   * Held still on the folder list and the one field it reads, because the header is memoised.
+   * Walked by `parentId` and bounded by the folder count, so a parent cycle the backend never
+   * writes cannot spin it; a folder the list does not carry ends the walk, which files the deck
+   * at the top level until the list catches up — `DecksPage`'s `folderOf` does the same.
+   */
+  const deckFolders = useDeckFolders().folders;
+  const folderId = row?.folderId ?? null;
+  const folderTrail = useMemo(() => {
+    const byId = new Map(deckFolders.map((folder) => [folder.id, folder]));
+    const trail: { id: number; name: string }[] = [];
+    for (let at = folderId, steps = 0; at !== null && steps < byId.size; steps += 1) {
+      const folder = byId.get(at);
+      if (folder === undefined) break;
+      trail.unshift({ id: folder.id, name: folder.name });
+      at = folder.parentId;
+    }
+    return trail;
+  }, [deckFolders, folderId]);
   const shareName = row?.name ?? null;
   const shareUid = row?.syncUid ?? null;
   const share = useMemo(
@@ -1172,10 +1194,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // The caret comes here on the way in, once the deck's name is known so the region announces
   // which deck it is. The gallery's New deck button had the caret and unmounts the moment this
   // view takes over, and an element that disappears with focus on it drops it to `<body>`.
+  //
+  // **`preventScroll`** (the owner's note, 2026-10-21: the page "starts slightly scrolled down").
+  // The editor is taller than the window, so a plain `focus()` scrolled `main` to bring its top
+  // edge to the window's — 20px, `main`'s padding, every time a deck opened — and the page bar
+  // stood cut off at the top. The page opens at the top, as every other page does.
   useEffect(() => {
     if (tookFocus.current || loading) return;
     tookFocus.current = true;
-    editorRef.current?.focus();
+    editorRef.current?.focus({ preventScroll: true });
   }, [loading]);
 
   // Warm the pictures this deck's own views draw, exactly as `SearchPage` warms its wall.
@@ -3439,6 +3466,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <DeckEditorHeader
         backRef={backRef}
         closeDeck={closeDeck}
+        folders={folderTrail}
         name={row?.name ?? null}
         renameDeck={renameDeck}
         theoryEnabled={theoryEnabled}
@@ -3453,31 +3481,42 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         share={share}
       />
 
-      {row && (
-        // What the deck adds up to, and what the rules make of it — the second of the header's
-        // three lines. See {@link DeckLedger}, which owns the figures; the three controls at its
-        // right end are this file's, because each opens one of its layers.
-        <DeckLedger
-          cards={deck.cards}
-          marketplace={marketplace}
-          formatName={spec?.displayName ?? row.formatName ?? null}
-          gameChangers={gameChangers}
-          // The count is what the format will judge and the gate is what is on the desk, so the
-          // chip is drawn for a game changer parked in a switched-off pile and says only `Game
-          // Changers` for it. See both props for the split.
-          hasGameChangers={hasGameChangers}
-          gameChangersOnly={gcFilter}
-          onGameChangersOnlyToggle={toggleGcOnly}
-          missingOnly={missingFilter}
-          onMissingOnlyToggle={toggleMissingOnly}
-          tight={tightHeader}
-          // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
-          // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
-          tracksCollection={tracks}
-          check={check}
-          bracket={bracket}
-        />
-      )}
+      {/* **The ledger is a thin row, 6px off the rules either side of it** (the owner's note,
+          2026-10-21) rather than the desk's 12px gap: `-mt-1.5` takes half the gap back above it,
+          `gap-1.5` is the space under it to the rule. */}
+      <div className="-mt-1.5 flex shrink-0 flex-col gap-1.5">
+        {row && (
+          // What the deck adds up to, and what the rules make of it — the second of the header's
+          // three lines. See {@link DeckLedger}, which owns the figures; the three controls at its
+          // right end are this file's, because each opens one of its layers.
+          <DeckLedger
+            cards={deck.cards}
+            marketplace={marketplace}
+            formatName={spec?.displayName ?? row.formatName ?? null}
+            gameChangers={gameChangers}
+            // The count is what the format will judge and the gate is what is on the desk, so the
+            // chip is drawn for a game changer parked in a switched-off pile and says only `Game
+            // Changers` for it. See both props for the split.
+            hasGameChangers={hasGameChangers}
+            gameChangersOnly={gcFilter}
+            onGameChangersOnlyToggle={toggleGcOnly}
+            missingOnly={missingFilter}
+            onMissingOnlyToggle={toggleMissingOnly}
+            tight={tightHeader}
+            // Four terms rather than five on a Virtual deck — the `Owned` figure is the one thing
+            // on this line that is about a *binder* rather than about the deck. See {@link tracks}.
+            tracksCollection={tracks}
+            check={check}
+            bracket={bracket}
+          />
+        )}
+
+        {/* A rule under the ledger as well as the bar's over it (the owner's note, 2026-10-21):
+            the header's three lines — the deck, what it adds up to, how it is drawn — each ruled off
+            from the next. The ledger draws no border of its own, so no two lines ever stand one
+            over the other. */}
+        <PageRule />
+      </div>
     </>
   );
 

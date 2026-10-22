@@ -66,6 +66,12 @@ export interface ScanBarProps {
    * from inside another dialog is a stack the reader did not ask for.
    */
   onHistory?: (opener: HTMLElement) => void;
+  /**
+   * The row's first item — the Scanner view's title (`PageTitle`), so the view is named without
+   * a row of its own: every pixel of this view's height is the camera's. Absent over a trade,
+   * where the dialog's own title names it.
+   */
+  lead?: ReactNode;
 }
 
 // The three modes' words and the unrestricted filter are `readerText.ts`'s — shared with the light
@@ -124,6 +130,7 @@ export function ScanBar({
   onDeveloper,
   developerSwitch = true,
   onHistory,
+  lead,
 }: ScanBarProps) {
   const summary = filterSummary(filters);
   const conditionWords =
@@ -136,7 +143,11 @@ export function ScanBar({
   const cameraName = cameras.find((c) => c.deviceId === cameraId)?.label ?? "Default";
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    // Drawn as the page bar (`lead`), it keeps the bar's 12px above the row rather than `main`'s
+    // 20 — `PageBar`'s `-mt-2`.
+    <div className={cn("flex flex-wrap items-center gap-2", lead !== undefined && "-mt-2")}>
+      {/* `mr-3` makes the title's gap the page bar's 20px rather than the controls' 8px. */}
+      {lead !== undefined && <div className="mr-3 flex h-9 shrink-0 items-center">{lead}</div>}
       <button
         type="button"
         onClick={() => onScanning(!scanning)}

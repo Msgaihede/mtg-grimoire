@@ -205,7 +205,7 @@ const headingNamed = (canvas: ReturnType<typeof within>, name: string): HTMLElem
   if (box === null) throw new Error(`no heading box around ${name}`);
   return box;
 };
-/** A header figure's value — a `<dd>` beside its `<dt>`. */
+/** A page bar figure's value — the `<dd>` after its `<dt>` (drawn before it, by `order`). */
 const figureValue = (canvas: ReturnType<typeof within>, label: string) =>
   canvas.getByText(label).nextElementSibling as HTMLElement;
 /** The path row's Add folder — the one on no heading and not in the search column. */
@@ -250,10 +250,10 @@ export const Default: Story = {
     });
     await expect(loose).toHaveTextContent("5 cards · $163.96 · 1 unpriced");
     await waitFor(async () => {
-      await expect(figureValue(canvas, "Cards")).toHaveTextContent("13");
+      await expect(figureValue(canvas, "cards")).toHaveTextContent("13");
     });
-    await expect(canvas.getByText("Total cost (USD)")).toBeInTheDocument();
-    await expect(figureValue(canvas, "Total cost (USD)")).not.toHaveTextContent("—");
+    await expect(figureValue(canvas, "total cost")).toHaveTextContent("$");
+    await expect(figureValue(canvas, "total cost")).not.toHaveTextContent("—");
     await expect(canvas.queryByText("€94.62")).not.toBeInTheDocument();
 
     // Five wishes, five tiles. One per **wish** and never per card, which is the reverse of the
@@ -334,7 +334,9 @@ export const Shelves: Story = {
     await userEvent.click(within(ordered).getByRole("button", { name: "Open Ordered" }));
 
     const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
-    await expect(within(trail).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+    // The folder the reader is in is the page bar's title, and the trail is the levels above it.
+    await expect(canvas.getByRole("heading", { level: 2, name: "Ordered" })).toBeVisible();
+    await expect(within(trail).queryByText("Ordered")).toBeNull();
     await expect(await waitFor(() => headingNamed(canvas, "Backordered"))).toBeInTheDocument();
     await waitFor(async () => {
       await expect(canvas.queryByText("Ragavan, Nimble Pilferer")).toBeNull();
@@ -362,7 +364,7 @@ export const EverythingFiled: Story = {
     const canvas = within(canvasElement);
     const ordered = await waitFor(() => headingNamed(canvas, "Ordered"));
     await waitFor(async () => {
-      await expect(figureValue(canvas, "Cards")).toHaveTextContent("12");
+      await expect(figureValue(canvas, "cards")).toHaveTextContent("12");
     });
     await expect(headingNamed(canvas, "Not sorted")).toBeInTheDocument();
     await waitFor(async () => {
@@ -414,7 +416,9 @@ export const DeepNesting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
-    await expect(within(trail).getByText("Lands")).toHaveAttribute("aria-current", "page");
+    // The folder the reader is in is the page bar's title, and the trail is the levels above it.
+    await expect(canvas.getByRole("heading", { level: 2, name: "Lands" })).toBeVisible();
+    await expect(within(trail).queryByText("Lands")).toBeNull();
     const signed = await waitFor(() => headingNamed(canvas, "Signed"));
     const lead = within(signed)
       .getAllByRole("button")
@@ -490,7 +494,9 @@ export const AddingAFolder: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
-    await expect(within(trail).getByText("Someday")).toHaveAttribute("aria-current", "page");
+    // The folder the reader is in is the page bar's title, and the trail is the levels above it.
+    await expect(canvas.getByRole("heading", { level: 2, name: "Someday" })).toBeVisible();
+    await expect(within(trail).queryByText("Someday")).toBeNull();
 
     await userEvent.click(await waitFor(() => pathAddFolder(canvas)));
 

@@ -479,7 +479,8 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           **The app's status is this row's right-hand run since 2026-10-11** — the status line,
           the sync marker and Refresh, against the keyboard map. The 56px ribbon and the page
           heading it carried are gone (the heading stays for screen readers, in `main`), so the
-          mana line is directly under this row and the page directly under that.
+          mana line is directly under this row and the page directly under that — whose own top
+          row is its page bar since 2026-10-21, the visible title back at no cost in height.
 
           The data directory is the app's one piece of hidden state — it silently falls back to
           AppData when the folder beside the exe is not writable, and spec §3 asks for an
@@ -646,10 +647,15 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             removing it (measured: `main.scrollHeight` 742 → 1646). This line is the same rule
             applied to the outermost scroller, so a view that grows cannot reach the document. */}
           <main className="relative min-h-0 flex-1 overflow-auto p-5">
-            {/* The page's name, for the screen reader that navigates by headings and for nothing
-                else: the visible page header is gone (2026-10-11), and the rail's lit entry is
-                the sighted reader's copy. Inside `main` because `main` is `relative` — see
-                above for what an `sr-only` without a positioned ancestor costs. */}
+            {/* The view's name as the window's `<h1>`, for the screen reader that navigates by
+                headings. **Still `sr-only` now that pages draw a visible title again** (the page
+                bar, `components/PageBar.tsx`, 2026-10-21): the bar's title is the *page's* — a
+                folder, a deck, a trade, a settings section — and it is that page's own `<h2>` (or
+                a plain line where the page already has one), so the outline stays view › page.
+                Making the bar's title the `<h1>` would rename the window's heading every time a
+                reader opened a folder, and the views without a bar would have none. Inside `main`
+                because `main` is `relative` — see above for what an `sr-only` without a
+                positioned ancestor costs. */}
             <h1 className="sr-only">{title}</h1>
             <ReachContext.Provider value={reaches}>
               <PublishesContext.Provider value={edition.publishes}>
