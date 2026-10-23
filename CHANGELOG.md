@@ -30,6 +30,33 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.59.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.58.0...v0.59.0) (2026-10-22)
+
+
+### Features
+
+* **playtest:** thumbnails for cards played in part, and mark them red ([2b86511](https://github.com/Msgaihede/mtg-grimoire/commit/2b8651190d4c860a8f5bf8253162cfc8104e66ad))
+* **playtest:** thumbnails for cards played in part, and mark them red ([129e2e8](https://github.com/Msgaihede/mtg-grimoire/commit/129e2e8cd127f75ac9d04b67ad1ac241af10b2ed)), closes [#1325](https://github.com/Msgaihede/mtg-grimoire/issues/1325)
+* **scanner:** "No card in the picture" scans, and scans kept at full resolution ([1050dbf](https://github.com/Msgaihede/mtg-grimoire/commit/1050dbf637b640dd255f72d5b3aa82c709b1e134))
+* **scanner:** point-and-shoot mode — click to scan on desktop, hold on phone ([ef5b54b](https://github.com/Msgaihede/mtg-grimoire/commit/ef5b54b66e6bf7364c34516d43160552e63896f1))
+* **scanner:** point-and-shoot mode — click to scan on desktop, hold on phone ([be38389](https://github.com/Msgaihede/mtg-grimoire/commit/be3838981967a912428e1eb4c3a03b9330d11d89))
+* **scanner:** send "no card in the picture" scans, and keep scans at full resolution ([fe286f5](https://github.com/Msgaihede/mtg-grimoire/commit/fe286f51721d461b350d42f79ac7436f12ebe64c))
+* **ui:** page bar and section heading on every main page ([f34b849](https://github.com/Msgaihede/mtg-grimoire/commit/f34b849649d52c83380ce57f19f9e3f8ca6517e5))
+
+
+### Bug Fixes
+
+* **playtest:** let a creature wearing an attachment be clicked to attack ([48f078c](https://github.com/Msgaihede/mtg-grimoire/commit/48f078ccce99b041af8d208a0d8db8c5aacc013d))
+* **playtest:** let a creature wearing an attachment be clicked to attack ([0e8a07e](https://github.com/Msgaihede/mtg-grimoire/commit/0e8a07ee3b299124c0989f4f4b976b49a0a7fe60)), closes [#1364](https://github.com/Msgaihede/mtg-grimoire/issues/1364)
+* **playtest:** say which color a mana-color answer makes ([c27bc9b](https://github.com/Msgaihede/mtg-grimoire/commit/c27bc9b5661cb6aa727b9d86d32c60506c7a7ee9))
+* **playtest:** say which color a mana-color answer makes ([3775b21](https://github.com/Msgaihede/mtg-grimoire/commit/3775b21c32c47673187b3755973ea5be7a92a10a)), closes [#1363](https://github.com/Msgaihede/mtg-grimoire/issues/1363)
+* **release:** build jobs hold no write token; updates are verified against a compiled-in key ([2d1dded](https://github.com/Msgaihede/mtg-grimoire/commit/2d1dded0124ef749f5de142580b5d0af3b8d3a65))
+* **scanner:** a second printing laid on the decided card adds in Neural ([a82efa3](https://github.com/Msgaihede/mtg-grimoire/commit/a82efa3a59e8497039a98633f73abcc64ca46e0d))
+* **scanner:** a second printing laid on the decided card adds in Neural ([0585e85](https://github.com/Msgaihede/mtg-grimoire/commit/0585e85eebff749aa336697152c2346181d24922)), closes [#1359](https://github.com/Msgaihede/mtg-grimoire/issues/1359)
+* **ui:** a full-width grey rule under the page bar, not a fading gold one ([6c8fb95](https://github.com/Msgaihede/mtg-grimoire/commit/6c8fb95ea0d5090481694b55bf7d7a1140dc1c4f))
+* **ui:** a tighter, evenly spaced page bar, with folder trails in it ([5679b6d](https://github.com/Msgaihede/mtg-grimoire/commit/5679b6d1e76faadaa5960219def58234aefd9195))
+* **ui:** page bars span the page on Decks, Trade and Settings ([637142e](https://github.com/Msgaihede/mtg-grimoire/commit/637142eb778e731674f7fde264b8800cbca8116f))
+
 ## [0.58.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.57.1...v0.58.0) (2026-10-21)
 
 
