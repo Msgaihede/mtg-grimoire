@@ -1,22 +1,17 @@
-//! The Neural mode's frame: `card-neural`'s two CNNs and gallery, and its agreement, answering
-//! in the session's [`Verdict`] — so the page, the tray and every host take a Neural decision as
-//! they take a Fast or an Exact one. The contract: `docs/superpowers/plans/2026-10-20-neural-scan-mode.md` §2.
+//! The scanner's frame: `card-neural`'s two CNNs and gallery, and its agreement, answering in
+//! the session's [`Verdict`]. The contract: `docs/superpowers/plans/2026-10-20-neural-scan-mode.md` §2.
 //!
 //! A child of `session` (`#[path]`), so it shares the session's private bookkeeping.
 //!
-//! **A frame is a read and a vote, and nothing of the other two modes.** No edge detector, hash,
-//! quad lock or reader: the JPEG is decoded, [`card_neural::Recognizer::read`] finds, fingerprints
-//! and ranks every card in it under the filters' looks, and [`card_neural::Agreement`] counts the
-//! frame — two accepted frames of one card decide it, or three when some are only supported, or
-//! one instant frame. Its ages are read off the session's clock ([`crate::host::Stopwatch`],
-//! started at load), never off `Instant`.
+//! **A frame is a read and a vote.** The JPEG is decoded, [`card_neural::Recognizer::read`]
+//! finds, fingerprints and ranks every card in it under the filters' looks, and
+//! [`card_neural::Agreement`] counts the frame — two accepted frames of one card decide it, or
+//! three when some are only supported, or one instant frame. Its ages are read off the session's
+//! clock ([`crate::host::Stopwatch`], started at load), never off `Instant`.
 //!
-//! **What it answers, in the keys every reader of a verdict already reads:**
+//! **What it answers:**
 //!
-//! - `quad` and `quad_raw`: the card the frame votes for, in the frame's pixels — one quad, as
-//!   there is no lock to smooth it. `lock` is `None`, `search` is `full`, and no detail is asked
-//!   for: no text is read, so no collector line and no finish mark. The collector band is looked
-//!   at all the same, as a picture, by the printing evidence below.
+//! - `quad`: the card the frame votes for, in the frame's pixels.
 //! - `match`: that card's best looks, each as its pictured printing, with **`normalized` =
 //!   (1 − cosine) / 2 and `distance` that times 256**, so a panel or the scan inbox reading 0–256
 //!   bits still holds; `margin` is the lead over the best other card × 128.
@@ -30,28 +25,24 @@
 //!
 //! **A stretch break is the agreement forgetting**: five frames running with no card in front of
 //! the lens ([`card_neural::Read::present`]) drop the decision, so the same card shown again adds
-//! again — and, as a lock that lets go does in the other modes, clear the previous decision
-//! [`DecisionView::replaces_previous`] is asked against. A switch from Fast or Exact on the card
-//! still in hand keeps it, so the Neural decision on that card replaces the row.
+//! again — and clear the previous decision [`DecisionView::replaces_previous`] is asked against.
+//! A filter change on the card still in hand keeps it, so the decision on that card under the
+//! new filters replaces the row.
 //!
 //! **Another look of the decided card come to rest is a card laid on it** (#1359): the
-//! agreement decides it ([`card_neural::Decision::another_look`]), and, as a change the watch
-//! sees in the other modes, it is a second copy and adds — unless its printing is the one the
-//! last decision named, which is that card's own look wavering, a second opinion.
+//! agreement decides it ([`card_neural::Decision::another_look`]), and it is a second copy and
+//! adds — unless its printing is the one the last decision named, which is that card's own look
+//! wavering, a second opinion.
 
-use super::{FrameOptions, FrameSize, ScanMode, Session, Verdict};
-
-#[cfg(feature = "neural")]
-use super::{ChoiceView, DecisionView, Id, Outcome, StandingView, TrackedView, DECODE_ERROR_PREFIX};
-#[cfg(feature = "neural")]
-use crate::{
-    detect::DetectTimings,
-    host::Stopwatch,
-    index::{format_uuid, Mask, Section},
-    reference::{Candidate, MatchReport, Reference},
-    track::CommitRule,
+use super::{
+    ChoiceView, DecisionView, FrameSize, Outcome, Session, StandingView, TrackedView, Verdict,
+    DECODE_ERROR_PREFIX,
 };
-#[cfg(feature = "neural")]
+use crate::{
+    host::Stopwatch,
+    ids::{format_uuid, Id, Mask},
+    reference::{Candidate, MatchReport, Reference},
+};
 use card_neural::{
     gallery::Face,
     meta::EvidenceThresholds,
@@ -59,33 +50,30 @@ use card_neural::{
     EvidenceIndex, Glance,
 };
 
-/// A Neural frame's `error` when this build or this session has no Neural scanner: the crate was
-/// built without the `neural` feature, or no host has called [`Session::load_neural`].
+/// A frame's `error` when no host has called [`Session::load_neural`].
 ///
-/// **A failure ([`Verdict::failure`]), not "no card"**: the mode cannot read any frame, and a
+/// **A failure ([`Verdict::failure`]), not "no card"**: the scanner cannot read any frame, and a
 /// replay or a page that took it for an empty frame would score a scanner that never ran.
 pub const NEURAL_UNAVAILABLE_ERROR: &str = "the Neural scanner's models are not loaded";
 
-/// What a Neural frame's `error` starts with when the recogniser failed on it — a model that
+/// What a frame's `error` starts with when the recogniser failed on it — a model that
 /// would not run, or a frame too small to read. A failure, as an undecodable JPEG is.
 pub const NEURAL_ERROR_PREFIX: &str = "neural: ";
 
-/// What the Neural mode keeps on the session.
+/// What the recogniser keeps on the session.
 #[derive(Default)]
 pub(crate) struct NeuralMode {
-    #[cfg(feature = "neural")]
     loaded: Option<Loaded>,
 }
 
 /// The recogniser, its agreement across frames, the clock its frames are timed by, and what the
-/// mode has reported of the agreement.
-#[cfg(feature = "neural")]
+/// session has reported of the agreement.
 struct Loaded {
     recognizer: card_neural::Recognizer,
     agreement: card_neural::Agreement,
     /// Started at load; the agreement's ages are read off it, never off `Instant`.
     clock: Stopwatch,
-    /// The looks the filters admit — `Some(None)` for no filters. `None` until the first Neural
+    /// The looks the filters admit — `Some(None)` for no filters. `None` until the first
     /// frame after the filters changed, which builds it: one pass over every look's printings.
     admit: Option<Option<card_neural::Admit>>,
     /// [`card_neural::Agreement::decisions`] as the last frame saw it: a move is a new decision.
@@ -111,7 +99,6 @@ struct Loaded {
 }
 
 /// One voting frame of the card being counted, as the printing evidence weighs it.
-#[cfg(feature = "neural")]
 #[derive(Clone, Debug)]
 struct Seen {
     /// The card group the frame voted for.
@@ -124,8 +111,7 @@ struct Seen {
     glance: Option<Glance>,
 }
 
-/// What the evidence weighed for the last Neural decision — for the replay, not the page.
-#[cfg(feature = "neural")]
+/// What the evidence weighed for the last decision — for the replay, not the page.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct EvidenceReport {
     /// Every candidate printing, in the order the rule breaks ties by.
@@ -135,7 +121,6 @@ pub struct EvidenceReport {
 }
 
 /// One candidate printing and its scores.
-#[cfg(feature = "neural")]
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct CandidateReport {
     pub printing: String,
@@ -149,11 +134,10 @@ pub struct CandidateReport {
 }
 
 impl NeuralMode {
-    /// Forget the card: the agreement's votes and decision, and the decision this mode reported.
-    /// [`Session::forget_card`] calls it, so a mode switch, a filter change and a reset each start
-    /// the next Neural decision from nothing — `decision_seq` is the session's and keeps counting.
+    /// Forget the card: the agreement's votes and decision, and the decision reported.
+    /// [`Session::forget_card`] calls it, so a filter change and a reset each start the next
+    /// decision from nothing — `decision_seq` is the session's and keeps counting.
     pub(super) fn forget(&mut self) {
-        #[cfg(feature = "neural")]
         if let Some(l) = &mut self.loaded {
             l.agreement.reset();
             l.decided = None;
@@ -164,9 +148,8 @@ impl NeuralMode {
         }
     }
 
-    /// The filters changed: the looks they admit are worked out again on the next Neural frame.
+    /// The filters changed: the looks they admit are worked out again on the next frame.
     pub(super) fn filters_changed(&mut self) {
-        #[cfg(feature = "neural")]
         if let Some(l) = &mut self.loaded {
             l.admit = None;
         }
@@ -174,14 +157,13 @@ impl NeuralMode {
 }
 
 impl Session {
-    /// Give the Neural mode its files — `card_neural::bundled()` on a native host, what the page
-    /// fetched in the browser. A refusal is a sentence and leaves the mode unavailable.
+    /// Give the recogniser its files — `card_neural::bundled()` on a native host, what the page
+    /// fetched in the browser. A refusal is a sentence and leaves the scanner unavailable.
     ///
     /// A second call replaces the first, agreement and all: the decision count is the session's.
     /// **The first is dropped before the second is built**, so a browser's module — whose memory
     /// is never given back — does not hold two recognisers at once (measured: 37.8 MiB for one,
-    /// 66.1 MiB while the old one lived on). A refused second call leaves the mode unavailable.
-    #[cfg(feature = "neural")]
+    /// 66.1 MiB while the old one lived on). A refused second call leaves the scanner unavailable.
     pub fn load_neural(&mut self, files: card_neural::Files<'static>) -> Result<(), String> {
         self.neural.loaded = None;
         let recognizer = card_neural::Recognizer::load(files).map_err(|e| e.to_string())?;
@@ -202,14 +184,13 @@ impl Session {
         Ok(())
     }
 
-    /// Give the Neural mode its printing evidence — the set symbol and collector band networks
+    /// Give the recogniser its printing evidence — the set symbol and collector band networks
     /// and their galleries — after [`Session::load_neural`], whose `neural.json` must carry an
     /// `evidence` section to say how they are read and weighed.
     ///
     /// Refused (a sentence) before the recogniser, or without that section. **A refusal leaves
     /// today's behaviour**: whatever evidence an earlier call loaded is dropped first, as
     /// `load_neural` drops the old recogniser before building the new one.
-    #[cfg(feature = "neural")]
     pub fn load_neural_evidence(
         &mut self,
         files: card_neural::EvidenceFiles<'static>,
@@ -228,66 +209,47 @@ impl Session {
         Ok(())
     }
 
-    /// The last Neural decision's candidate printings and their scores, when evidence chose
+    /// The last decision's candidate printings and their scores, when evidence chose
     /// its printing — for the replay, not the page. `None` since a reset, or when the decision
     /// was made without evidence.
-    #[cfg(feature = "neural")]
     pub fn neural_evidence_report(&self) -> Option<EvidenceReport> {
         self.neural.loaded.as_ref().and_then(|l| l.report.clone())
     }
 
-    /// Whether a Neural frame can be read: the feature is on and the files loaded.
+    /// Whether a frame can be read: the files are loaded.
     pub fn has_neural(&self) -> bool {
-        #[cfg(feature = "neural")]
-        {
-            self.neural.loaded.is_some()
-        }
-        #[cfg(not(feature = "neural"))]
-        {
-            false
-        }
+        self.neural.loaded.is_some()
     }
 
-    /// Whether a Neural decision narrows the printing: the files loaded and
+    /// Whether a decision narrows the printing: the files loaded and
     /// [`Session::load_neural_evidence`] took the evidence. A host loads it after the files
     /// and logs a refusal, so this is how its tests see that it did.
-    #[cfg(feature = "neural")]
     pub fn has_neural_evidence(&self) -> bool {
         self.neural.loaded.as_ref().is_some_and(|l| l.index.is_some())
     }
 
-    /// One Neural frame, after `frame_inner` has switched the mode — see the module doc.
-    ///
-    /// `_opts` asks nothing of it: the sliders are the edge detector's and the tracker's, the
-    /// thresholds travel with the models (`neural.json`) and the agreement's rules are
-    /// `card-neural`'s own.
-    pub(super) fn neural_frame(&mut self, jpeg: &[u8], _opts: &FrameOptions) -> Verdict {
-        #[cfg(feature = "neural")]
+    /// One frame — see the module doc. The thresholds travel with the models (`neural.json`)
+    /// and the agreement's rules are `card-neural`'s own, so a frame takes no options.
+    pub(super) fn neural_frame(&mut self, jpeg: &[u8]) -> Verdict {
         if self.neural.loaded.is_some() {
             return self.neural_read(jpeg);
         }
-        #[cfg(not(feature = "neural"))]
-        let _ = jpeg;
         self.neural_unavailable()
     }
 
-    /// [`NEURAL_UNAVAILABLE_ERROR`]'s verdict. `matcher` is the mode's own: whether its
-    /// recogniser is there to match against.
+    /// [`NEURAL_UNAVAILABLE_ERROR`]'s verdict.
     fn neural_unavailable(&self) -> Verdict {
         Verdict::failed(
             NEURAL_UNAVAILABLE_ERROR.to_string(),
             FrameSize { w: 0, h: 0 },
             0.0,
             false,
-            ScanMode::Neural,
             self.decision_seq,
         )
     }
 
     /// Decode, read, and hand the read to [`Session::neural_verdict`]. A frame that fails here
-    /// is not counted: the agreement never hears of it, as Fast's tracker never hears of a JPEG
-    /// that would not decode.
-    #[cfg(feature = "neural")]
+    /// is not counted: the agreement never hears of it.
     fn neural_read(&mut self, jpeg: &[u8]) -> Verdict {
         let decode_started = Stopwatch::start();
         let source = match super::decode_frame(jpeg) {
@@ -342,16 +304,14 @@ impl Session {
         }
     }
 
-    #[cfg(feature = "neural")]
     fn neural_failed(&self, error: String, frame: FrameSize, decode_ms: f32) -> Verdict {
-        Verdict::failed(error, frame, decode_ms, true, ScanMode::Neural, self.decision_seq)
+        Verdict::failed(error, frame, decode_ms, true, self.decision_seq)
     }
 
     /// One read, counted by the agreement at `now_ms` and answered as a verdict — the decision
-    /// bookkeeping of the mode, apart from the models so it can be driven with reads made by hand.
+    /// bookkeeping of the scanner, apart from the models so it can be driven with reads made by hand.
     ///
     /// `seen` is what the read keeps for the printing evidence ([`keep`]), `None` without it.
-    #[cfg(feature = "neural")]
     fn neural_verdict(
         &mut self,
         read: &card_neural::Read,
@@ -465,11 +425,7 @@ impl Session {
         let tracked = TrackedView {
             committed,
             confidence: if committed { 1.0 } else { progress },
-            rule: CommitRule::Votes,
             decide_at,
-            lead: None,
-            frozen: false,
-            early: false,
             streak: votes as u32,
             frames: l.frames,
             misses: l.agreement.absent(),
@@ -479,11 +435,7 @@ impl Session {
         // The card the frame votes for, when one is in front of the lens.
         let best = read.best().filter(|_| read.present);
         let report = best.map(|b| MatchReport {
-            section: Section::Card,
             rotated: b.flipped,
-            view: 0,
-            views: 1,
-            hashes: read.crops,
             candidates: b
                 .top
                 .iter()
@@ -491,20 +443,14 @@ impl Session {
                 .map(|&(e, cos)| candidate(gallery, r, e, cos))
                 .collect(),
             margin: Some(cosine_bits(b.scored.margin, 128.0)),
-            // The read is the detector, the embedder and the search at once; it is timed whole.
-            hash_ms: read_ms,
-            search_ms: 0.0,
-            descriptors: Default::default(),
         });
         let quad = best.map(|b| b.quad.map(|p| (p.x, p.y)));
 
         if gone {
-            // A stretch break, as a lock that lets go is one in the other modes: the card has been
-            // away long enough for the agreement to forget it, so whatever is decided next is
-            // another copy, never a second opinion on this one.
+            // A stretch break: the card has been away long enough for the agreement to forget
+            // it, so whatever is decided next is another copy, never a second opinion on this one.
             self.previous_card = None;
             self.previous_printing = None;
-            self.laid_over = None;
         }
         if let Some(mut d) = fresh {
             self.decision_seq += 1;
@@ -521,14 +467,12 @@ impl Session {
         let decision = self.neural.loaded.as_ref().and_then(|l| l.decided.clone());
 
         let seq = self.decision_seq;
-        let mut v = Verdict::failed(String::new(), frame, decode_ms, true, ScanMode::Neural, seq);
+        let mut v = Verdict::failed(String::new(), frame, decode_ms, true, seq);
         v.ok = report.is_some();
         v.error = (!v.ok).then(|| "no card".to_string());
-        v.method = v.ok.then(|| "neural".to_string());
         v.quad = quad;
-        v.quad_raw = quad;
-        v.timings = Some(DetectTimings { total_ms: read_ms, ..Default::default() });
-        // The cards the detector found and the embedder read — the quads this mode weighed.
+        v.read_ms = read_ms;
+        // The cards the detector found and the embedder read.
         v.candidates_examined = Some(read.cards.len());
         v.r#match = report;
         v.tracked = Some(tracked);
@@ -539,7 +483,6 @@ impl Session {
 
 /// A cosine as the page's distances read it: **(1 − cos) / 2**, 0 for the picture itself and 1
 /// for its opposite — so a panel or the scan inbox that reads `distance` as 0–256 bits still holds.
-#[cfg(feature = "neural")]
 fn normalized(cos: f32) -> f32 {
     if cos.is_nan() {
         return 1.0;
@@ -548,7 +491,6 @@ fn normalized(cos: f32) -> f32 {
 }
 
 /// A cosine difference as bits of a `scale`-bit distance, never negative.
-#[cfg(feature = "neural")]
 fn cosine_bits(cos: f32, scale: f32) -> u32 {
     if cos.is_nan() {
         return 0;
@@ -558,7 +500,6 @@ fn cosine_bits(cos: f32, scale: f32) -> u32 {
 
 /// One of a card's best looks, as a match candidate: its pictured printing, the distance its
 /// cosine makes, and how many printings it stands for.
-#[cfg(feature = "neural")]
 fn candidate(
     gallery: &card_neural::Gallery,
     r: Option<&Reference>,
@@ -581,13 +522,10 @@ fn candidate(
 /// **The printing is the look's pictured one when the filters admit it, else its first admitted
 /// cover.** A look stands for every printing that photographs alike, so when the filters leave
 /// more than one of them the picture cannot say which: the decision is `ambiguous`, with those
-/// printings as its choices, the decided one first — as an Exact resolve offers a choice the
-/// collector line could not settle. One admitted printing is `resolved`, with no choices. Every
+/// printings as its choices, the decided one first. One admitted printing is `resolved`, with no choices. Every
 /// choice is the same picture, so each carries the look's own distance.
 ///
-/// Labels, oracle ids and finishes are the reference's when there is one; no collector line is
-/// read, so `finish_mark` is `None`.
-#[cfg(feature = "neural")]
+/// Labels, oracle ids and finishes are the reference's when there is one.
 fn neural_decision(
     gallery: &card_neural::Gallery,
     r: Option<&Reference>,
@@ -617,7 +555,6 @@ fn neural_decision(
 
 /// A decision on `printing`: `ambiguous` with `choices` (each with its distance) when there are
 /// any, `resolved` when there are none.
-#[cfg(feature = "neural")]
 fn decision_view(
     r: Option<&Reference>,
     printing: Id,
@@ -642,7 +579,6 @@ fn decision_view(
             .collect(),
         replaces_previous: false,
         finishes: finishes(&printing),
-        finish_mark: None,
     }
 }
 
@@ -657,7 +593,6 @@ fn decision_view(
 ///
 /// A crop that will not read drops the frame's glance, not the frame: its fingerprint still
 /// scores the card's looks.
-#[cfg(feature = "neural")]
 fn keep(
     read: &card_neural::Read,
     gallery: &card_neural::Gallery,
@@ -695,7 +630,6 @@ fn keep(
 ///   the choices, best first, each as far as its own look.
 ///
 /// The card is never changed: every candidate is a printing of the card the agreement decided.
-#[cfg(feature = "neural")]
 fn evidence_decision(
     gallery: &card_neural::Gallery,
     r: Option<&Reference>,
@@ -790,10 +724,6 @@ fn evidence_decision(
 mod tests {
     use super::*;
 
-    fn neural() -> FrameOptions {
-        FrameOptions { mode: ScanMode::Neural, ..Default::default() }
-    }
-
     /// A grey 320×240 JPEG: nothing in it a detector could take for a card.
     fn grey_jpeg() -> Vec<u8> {
         let img = image::RgbImage::from_pixel(320, 240, image::Rgb([128, 128, 128]));
@@ -805,28 +735,21 @@ mod tests {
     }
 
     #[test]
-    fn without_its_models_every_neural_frame_says_so_as_a_failure() {
-        let mut s = Session::new(None, None, 5);
+    fn without_its_models_every_frame_says_so_as_a_failure() {
+        let mut s = Session::new(None, 5);
         assert!(!s.has_neural());
-        let v = s.frame(&grey_jpeg(), &neural());
+        let v = s.frame(&grey_jpeg());
         assert!(!v.ok && !v.matcher, "no recogniser is no matcher");
-        assert_eq!(v.mode, ScanMode::Neural);
         assert_eq!(v.failure(), Some(NEURAL_UNAVAILABLE_ERROR));
         assert_eq!((v.decision_seq, v.decision.is_none(), v.tracked.is_none()), (0, true, true));
-        // The word parses in every build: a reader's stored prefs and the inbox's labels keep it.
-        let word: ScanMode = serde_json::from_str(r#""neural""#).expect("json");
-        assert_eq!(word, ScanMode::Neural);
-        assert_eq!(serde_json::to_value(ScanMode::Neural).expect("json"), "neural");
-        let opts: FrameOptions = serde_json::from_str(r#"{"mode":"neural"}"#).expect("json");
-        assert_eq!(opts.mode, ScanMode::Neural);
     }
 
     /// The models in git, with a session reading them: every test below runs the real
     /// recogniser's gallery, and the frame tests its networks.
-    #[cfg(feature = "neural")]
     mod loaded {
-        use super::super::super::tests as fast;
+        use super::super::super::tests as session_tests;
         use super::*;
+        use crate::filters::ScanFilters;
         use crate::reference::Label;
         use card_neural::detect::Detection;
         use card_neural::frame::{Point, Quad};
@@ -845,11 +768,10 @@ mod tests {
         }
         use card_neural::Files;
 
-        /// A session in Neural over `r`, its models loaded.
+        /// A session over `r`, its models loaded.
         fn session(r: Option<Reference>) -> Session {
-            let mut s = Session::new(r, None, 5);
+            let mut s = Session::new(r, 5);
             s.load_neural(shipped()).expect("the models in git load");
-            s.set_mode(ScanMode::Neural);
             s
         }
 
@@ -949,21 +871,21 @@ mod tests {
             let mut s = session(None);
             is_send(&s);
             assert!(s.has_neural());
-            let v = s.frame(&grey_jpeg(), &neural());
+            let v = s.frame(&grey_jpeg());
             assert!(!v.ok && v.matcher);
             assert_eq!(v.error.as_deref(), Some("no card"));
             assert_eq!(v.failure(), None, "an empty frame is not a failure");
-            assert!(v.r#match.is_none() && v.quad.is_none() && v.method.is_none());
-            assert!(v.decision.is_none() && v.lock.is_none() && !v.wants_detail);
+            assert!(v.r#match.is_none() && v.quad.is_none());
+            assert!(v.decision.is_none());
             assert_eq!((v.decision_seq, v.frame), (0, FrameSize { w: 320, h: 240 }));
             let t = v.tracked.expect("a tracked view on every read frame");
             assert!(!t.committed && t.standings.is_empty());
             assert_eq!((t.frames, t.misses, t.decide_at), (1, 1, 2.0));
 
-            // Bytes that are not a picture are the failure every mode reports, and not counted.
-            let bad = s.frame(b"not a jpeg", &neural());
+            // Bytes that are not a picture are a decode failure, and not counted.
+            let bad = s.frame(b"not a jpeg");
             assert!(bad.failure().is_some_and(|e| e.starts_with(DECODE_ERROR_PREFIX)), "{bad:?}");
-            let v = s.frame(&grey_jpeg(), &neural());
+            let v = s.frame(&grey_jpeg());
             assert_eq!(v.tracked.expect("tracked").frames, 2);
         }
 
@@ -987,7 +909,7 @@ mod tests {
             assert_eq!((d.outcome, d.choices.len()), (Outcome::Resolved, 0));
             assert!(!d.replaces_previous && d.oracle_id.is_none() && d.label.is_none());
             let t = decided.tracked.expect("tracked");
-            assert!(t.committed && t.confidence == 1.0 && t.rule == CommitRule::Votes);
+            assert!(t.committed && t.confidence == 1.0);
 
             // The frames after it: the same number, the same decision.
             for at in [200.0, 300.0] {
@@ -1043,15 +965,14 @@ mod tests {
             assert_eq!(feed(&mut s, &supported, 200.0).decision_seq, 1);
         }
 
-        /// "Fast said Forest, switch to Neural": one card in hand, one tray row.
+        /// "Narrow the filters to pin the printing": one card in hand, one tray row.
         #[test]
-        fn a_switch_from_fast_on_the_card_it_decided_replaces_that_decision() {
-            let (r, card, _) = fast::two_far_cards();
-            let mut s = fast::inline(r);
-            s.load_neural(shipped()).expect("the models in git load");
+        fn a_filter_change_on_the_card_it_decided_replaces_that_decision() {
+            let mut s = session(None);
             let a = single_looks(&s, 1)[0];
-            // The look the Neural frames name, labelled as the card Fast decides: card 20.
+            // The look the frames name, labelled as card 20 of set HOB.
             let printing = *gallery(&s).printing(a);
+            let mut r = session_tests::labelled();
             let label = Label {
                 name: "Card 20".into(),
                 set: "hob".into(),
@@ -1059,34 +980,36 @@ mod tests {
                 lang: "en".into(),
                 released: "2025-01-01".into(),
             };
-            std::sync::Arc::get_mut(s.reference.as_mut().expect("a reference"))
-                .expect("no resolve holds it")
-                .add_label(printing, Some(fast::id(20)), None, label);
-            let oracle = Some(format_uuid(&fast::id(20)));
-            let by_fast = fast::until_decided(&mut s, &card).decision.expect("Fast decided");
-            assert_eq!(by_fast.oracle_id, oracle);
+            r.add_label(printing, Some(session_tests::id(20)), label);
+            s.reference = Some(std::sync::Arc::new(r));
+            let oracle = Some(format_uuid(&session_tests::id(20)));
+            let first = decide(&mut s, a, 0.0).decision.expect("decided");
+            assert_eq!(first.oracle_id, oracle);
+            assert!(!first.replaces_previous);
 
-            s.set_mode(ScanMode::Neural);
-            let v = decide(&mut s, a, 0.0);
+            s.set_filters(ScanFilters { sets: vec!["hob".into()], ..Default::default() })
+                .expect("hob has printings");
+            assert!(vote(&mut s, a, 200.0).decision.is_none(), "a filter change kept the votes");
+            let v = vote(&mut s, a, 300.0);
             assert_eq!(v.decision_seq, 2);
             let d = v.decision.expect("decided");
             assert_eq!(d.oracle_id, oracle);
             assert_eq!(d.label.map(|l| l.name).as_deref(), Some("Card 20"));
             assert!(d.replaces_previous, "a second opinion on the card in hand added it twice");
-            let later = vote(&mut s, a, 200.0);
+            let later = vote(&mut s, a, 400.0);
             assert!(later.decision.expect("held").replaces_previous, "a later frame changed it");
 
             // A stretch break: the card away for five frames, and the same card is a new copy.
             for i in 0..5 {
-                feed(&mut s, &empty(), 300.0 + 100.0 * i as f64);
+                feed(&mut s, &empty(), 500.0 + 100.0 * i as f64);
             }
-            let again = decide(&mut s, a, 900.0);
+            let again = decide(&mut s, a, 1100.0);
             assert_eq!(again.decision_seq, 3);
             assert!(!again.decision.expect("decided").replaces_previous);
         }
 
         #[test]
-        fn a_reset_and_a_mode_switch_each_forget_the_neural_decision() {
+        fn a_reset_forgets_the_decision() {
             let mut s = session(None);
             let a = single_looks(&s, 1)[0];
             assert_eq!(decide(&mut s, a, 0.0).decision_seq, 1);
@@ -1096,14 +1019,6 @@ mod tests {
             let v = vote(&mut s, a, 300.0);
             assert_eq!(v.decision_seq, 2);
             assert!(!v.decision.expect("decided").replaces_previous, "a reset asks for news");
-
-            // Away and back: the agreement starts over, the previous decision is kept.
-            s.set_mode(ScanMode::Fast);
-            s.set_mode(ScanMode::Neural);
-            assert!(vote(&mut s, a, 400.0).decision.is_none());
-            let v = vote(&mut s, a, 500.0);
-            assert_eq!(v.decision_seq, 3);
-            assert!(v.decision.expect("decided").replaces_previous);
         }
 
         #[test]
@@ -1118,13 +1033,10 @@ mod tests {
             let mut s = session(None);
             let a = single_looks(&s, 1)[0];
             let v = vote(&mut s, a, 0.0);
-            assert_eq!(v.method.as_deref(), Some("neural"));
             assert_eq!(v.quad, Some(quad().map(|p| (p.x, p.y))));
-            assert_eq!(v.quad, v.quad_raw);
-            assert!(v.lock.is_none() && !v.wants_detail);
-            assert_eq!(v.search, crate::session::Search::Full);
+            assert_eq!(v.candidates_examined, Some(1));
             let m = v.r#match.expect("a match");
-            assert_eq!((m.section, m.view, m.views, m.hashes), (Section::Card, 0, 1, 1));
+            assert!(!m.rotated);
             assert_eq!(m.margin, Some(26), "0.2 of cosine is 26 of 128 bits");
             let c = &m.candidates;
             assert_eq!(c[0].id, pictured(&s, a));
@@ -1170,7 +1082,7 @@ mod tests {
         fn the_looks_the_filters_admit_are_worked_out_once_a_change() {
             let admit = |s: &Session| s.neural.loaded.as_ref().expect("loaded").admit.clone();
             let mut s = session(None);
-            s.frame(&grey_jpeg(), &neural());
+            s.frame(&grey_jpeg());
             assert_eq!(admit(&s), Some(None), "no filters, every look");
             let g = gallery(&s);
             let e = (0..g.len() as u32).find(|&e| g.covers(e).len() >= 2).expect("a look of two");
@@ -1180,7 +1092,7 @@ mod tests {
             s.neural.filters_changed();
             s.forget_card();
             assert_eq!(admit(&s), None);
-            s.frame(&grey_jpeg(), &neural());
+            s.frame(&grey_jpeg());
             let built = admit(&s).flatten().expect("an admit for the filters");
             assert!(built.admits(e), "a look is admitted by any printing it stands for");
             assert!(built.count() >= 1 && built.count() < gallery(&s).len());
@@ -1215,7 +1127,7 @@ mod tests {
             Look { printing, card, face: Face::Front, covers, name: "look".into() }
         }
 
-        /// A session over the three looks, in Neural, no evidence loaded. Against [`along`]'s
+        /// A session over the three looks, no evidence loaded. Against [`along`]'s
         /// fingerprint look A scores 0.80 and look B scores `b`.
         fn with_looks(b: f32) -> Session {
             with_looks_read_by(b, shipped().meta)
@@ -1232,9 +1144,8 @@ mod tests {
             let looks = [look(P, 1, vec![P, Q, R]), look(S, 1, vec![S]), look(T, 2, vec![T])];
             let g = Gallery::build(&rows, DIM, &looks).expect("a gallery");
             let files = Files { gallery: Cow::Owned(g.as_bytes().to_vec()), meta, ..shipped() };
-            let mut s = Session::new(None, None, 5);
+            let mut s = Session::new(None, 5);
             s.load_neural(files).expect("the shipped networks over a gallery made by hand");
-            s.set_mode(ScanMode::Neural);
             s
         }
 
@@ -1463,7 +1374,7 @@ mod tests {
         /// card to [`Session::replaces_previous`].
         fn one_oracle(b: f32) -> Session {
             let mut s = with_looks(b);
-            let (mut r, _, _) = fast::two_far_cards();
+            let mut r = Reference::new();
             for (printing, oracle, number) in
                 [(P, 30, "1"), (Q, 30, "2"), (R, 30, "3"), (S, 30, "4"), (T, 31, "5")]
             {
@@ -1474,7 +1385,7 @@ mod tests {
                     lang: "en".into(),
                     released: "2025-01-01".into(),
                 };
-                r.add_label(printing, Some(fast::id(oracle)), None, label);
+                r.add_label(printing, Some(session_tests::id(oracle)), label);
             }
             s.reference = Some(std::sync::Arc::new(r));
             s
@@ -1622,7 +1533,7 @@ mod tests {
                 symbols: Cow::Borrowed(b"not a gallery"),
                 bands: Cow::Borrowed(b"not a gallery"),
             };
-            let mut bare = Session::new(None, None, 5);
+            let mut bare = Session::new(None, 5);
             assert!(bare.load_neural_evidence(files()).is_err());
             // A neural.json from before the evidence models — the shipped one without its
             // section: no section, so no evidence.
