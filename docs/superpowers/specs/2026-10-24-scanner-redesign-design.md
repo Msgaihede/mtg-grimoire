@@ -15,7 +15,7 @@ controls a reader uses while feeding cards.
 **Developer** switch (the switch the scan bar carries today). Over a trade (the Trade page's scan
 dialog, `destination`) neither is drawn, as today.
 
-**Camera column**, about 40 rem wide (52.5 rem from a 150 rem view), the tray taking the rest:
+**Camera column**, about 40 rem wide (52.5 rem from a 140 rem page container — a 2560 px window), the tray taking the rest:
 
 - The **picture** fills the column's height.
 - Over the picture, top edge: the **match progress bar only** — a 4 px bar along the top edge

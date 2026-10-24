@@ -484,8 +484,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   return (
     // **`@container/scan` because the split answers this view's own width, never the window's** —
-    // there is no viewport branch in this app. The camera column is 40rem (52.5rem from a 150rem
-    // view) and gives way down to 22rem; the tray takes the rest and never less than 24rem. With
+    // there is no viewport branch in this app. The camera column is 40rem (52.5rem from a 140rem
+    // page container — a 2560 px window less the rail and padding) and gives way down to 22rem;
+    // the tray takes the rest and never less than 24rem. With
     // the developer panels on, below 88rem they stack under the tray in one scroller, and from
     // 88rem they get a column of their own beside it. A container is the containing block for
     // anything `fixed` inside it, so nothing that must cover the window may mount in here — and
@@ -525,7 +526,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         <div className="flex min-h-0 flex-1 gap-5">
           {/* The camera's column: the picture, with everything the scanner says drawn on it, and
               the dock of controls under it. */}
-          <div className="flex min-w-[22rem] flex-[0_1_40rem] flex-col gap-3 @min-[150rem]/scan:basis-[52.5rem]">
+          <div className="flex min-w-[22rem] flex-[0_1_40rem] flex-col gap-3 @min-[140rem]/scan:basis-[52.5rem]">
             {/* The column is the height, and the video box takes what the notes and the dock
                 under it leave. **Cropped rather than letterboxed** (`object-cover`, and
                 `Overlay`'s canvas with it): a column this shape is nearer square than 16:9, and a

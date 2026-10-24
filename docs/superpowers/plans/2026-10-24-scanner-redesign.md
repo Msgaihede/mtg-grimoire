@@ -181,7 +181,7 @@ far end. Row 2: `Finish` (an `AnchoredPopup` holding the finish list and its cap
 "Finish: <label>") and `Camera` (the existing CameraBody) triggers.
 
 - Page: header row = `PageTitle` + (no destination) `History` + `Developer` switch; `PageRule`.
-  Main row: camera column `flex: 0 1 40rem; min-width: 22rem` (`@min-[150rem]/scan` basis 52.5rem)
+  Main row: camera column `flex: 0 1 40rem; min-width: 22rem` (`@min-[140rem]/scan` basis 52.5rem)
   holding the picture (`flex-1`) and the dock; the tray `flex-1 min-w-[24rem]`; the developer panels
   column as today when on.
 - Picture: video, `Overlay`, `ScanHud variant="labelled"` (strip = `matchStrip(reading ? verdict : null, lastAdded)`,

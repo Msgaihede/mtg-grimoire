@@ -699,13 +699,13 @@ describe("ScannerPage", () => {
     expect(videoBox(container)).toHaveClass("flex-1");
     expect(videoBox(container).classList.contains("shrink-0")).toBe(false);
     expect(videoBox(container).style.aspectRatio).toBe("");
-    // The camera column about 40rem, giving way to 22rem and growing to 52.5rem in a 150rem
-    // view; the tray the rest of the width and never under 24rem.
+    // The camera column about 40rem, giving way to 22rem and growing to 52.5rem in a 140rem
+    // page container (a 2560 px window); the tray the rest of the width and never under 24rem.
     const column = videoBox(container).parentElement;
     expect(column).toHaveClass(
       "flex-[0_1_40rem]",
       "min-w-[22rem]",
-      "@min-[150rem]/scan:basis-[52.5rem]",
+      "@min-[140rem]/scan:basis-[52.5rem]",
     );
     const side = tray().closest<HTMLElement>(".min-w-\\[24rem\\]");
     expect(side).not.toBeNull();
