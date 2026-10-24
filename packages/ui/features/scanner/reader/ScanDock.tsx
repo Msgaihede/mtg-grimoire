@@ -4,9 +4,9 @@ import {
   ChevronDown,
   Crosshair,
   Funnel,
-  Layers,
   Play,
   Square,
+  SwatchBook,
   Video,
   X,
 } from "lucide-react";
@@ -177,7 +177,7 @@ export function ScanDock({
         <DockPopover
           caption="Finish"
           value={FINISH_PREF_LABEL[finish]}
-          icon={<Layers className="size-3.5 shrink-0" aria-hidden="true" />}
+          icon={<SwatchBook className="size-3.5 shrink-0" aria-hidden="true" />}
           active={false}
           refusal={null}
           panelLabel="Finish"
