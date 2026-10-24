@@ -18,6 +18,24 @@ import { barFill } from "../verdictText";
  */
 export const SCANNING_STOPPED = "Scanning stopped. Press Start scanning to begin.";
 
+/**
+ * The redesigned page's words, shared by both Scanner surfaces — the spec's "Words" section,
+ * verbatim. The camera's press, its two modes and the picture's two resting states.
+ */
+export const START = "Start";
+export const STOP = "Stop";
+export const SCAN_CARD = "Scan card";
+export const CANCEL_SCAN = "Cancel scan";
+export const CONTINUOUS = "Continuous";
+/** The picture while recognition is stopped: a title and the note under it. */
+export const STOPPED_TITLE = "Scanning stopped";
+export const STOPPED_NOTE = "Press Start to begin. The camera stays on.";
+/** The picture under point and shoot on the phone, where the press is a hold. */
+export const HOLD_TITLE = "Hold the picture to scan";
+export const HOLD_NOTE = "Scanning pauses the moment you let go.";
+/** The chip over the picture while a read is in flight. */
+export const SCANNING_CHIP = "Scanning";
+
 /** Point and shoot's name — the desktop bar's switch and the phone's options row. */
 export const POINT_AND_SHOOT = "Point & shoot";
 
@@ -33,7 +51,7 @@ export const SHOT_READY_HOLD = "Point at a card, then press and hold Scan.";
 export const POINT_AND_SHOOT_CLICK_HINT =
   "Read one card per press of Scan card, so moving the camera between cards reads nothing.";
 export const POINT_AND_SHOOT_HOLD_HINT =
-  "Hold Scan to read. The scanner pauses the moment you let go, so moving between cards reads nothing.";
+  "Hold the picture to read. The scanner pauses the moment you let go, so moving between cards reads nothing.";
 /** The other way, under its name on the phone's sheet. */
 export const CONTINUOUS_HINT = "Start once, and every card the camera sees is read until you stop.";
 

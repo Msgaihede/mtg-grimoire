@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { ScannerChoice, ScannerTracked, ScannerVerdict } from "@/lib/ipc";
 import { VERDICTS } from "../fixtures";
-import { filtering, filterSummary, matchStrip, NO_FILTERS, type LastAdded } from "./readerText";
+import {
+  CANCEL_SCAN,
+  CONTINUOUS,
+  filtering,
+  filterSummary,
+  HOLD_NOTE,
+  HOLD_TITLE,
+  matchStrip,
+  NO_FILTERS,
+  POINT_AND_SHOOT_HOLD_HINT,
+  SCAN_CARD,
+  SCANNING_CHIP,
+  START,
+  STOP,
+  STOPPED_NOTE,
+  STOPPED_TITLE,
+  type LastAdded,
+} from "./readerText";
 
 /** Three printings of Lightning Bolt one picture stands for — the shared ambiguous decision. */
 const boltChoices = VERDICTS.ambiguous.decision?.choices ?? [];
@@ -232,5 +249,25 @@ describe("filtering", () => {
     expect(filtering({ ...NO_FILTERS, exclude_promos: true })).toBe(true);
     expect(filtering({ ...NO_FILTERS, sets: ["hob"] })).toBe(true);
     expect(filtering({ ...NO_FILTERS, released_to: "2024-12-31" })).toBe(true);
+  });
+});
+
+describe("the redesigned page's words", () => {
+  it("say the spec's words verbatim", () => {
+    expect([START, STOP, SCAN_CARD, CANCEL_SCAN, CONTINUOUS, SCANNING_CHIP]).toEqual([
+      "Start",
+      "Stop",
+      "Scan card",
+      "Cancel scan",
+      "Continuous",
+      "Scanning",
+    ]);
+    expect(STOPPED_TITLE).toBe("Scanning stopped");
+    expect(STOPPED_NOTE).toBe("Press Start to begin. The camera stays on.");
+    expect(HOLD_TITLE).toBe("Hold the picture to scan");
+    expect(HOLD_NOTE).toBe("Scanning pauses the moment you let go.");
+    expect(POINT_AND_SHOOT_HOLD_HINT).toBe(
+      "Hold the picture to read. The scanner pauses the moment you let go, so moving between cards reads nothing.",
+    );
   });
 });

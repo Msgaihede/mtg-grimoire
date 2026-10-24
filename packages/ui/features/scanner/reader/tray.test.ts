@@ -9,6 +9,7 @@ import {
   headLanded,
   importItems,
   MAX_TRAY_ROWS,
+  needYouLabel,
   NO_FINISHED_ROWS,
   needsDecision,
   needsFinishCount,
@@ -700,5 +701,13 @@ describe("addBatch (issue #1374)", () => {
     );
     expect(() => addBatch(full, [batchLine({})], 1, keys())).toThrow(BATCH_WONT_FIT);
     expect(addBatch(full.slice(1), [batchLine({})], 1, keys()).rows).toHaveLength(MAX_TRAY_ROWS);
+  });
+});
+
+describe("needYouLabel", () => {
+  it("agrees with the count", () => {
+    expect(needYouLabel(1)).toBe("1 needs you");
+    expect(needYouLabel(2)).toBe("2 need you");
+    expect(needYouLabel(3)).toBe("3 need you");
   });
 });

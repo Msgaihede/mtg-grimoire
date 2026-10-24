@@ -545,6 +545,11 @@ export function addLabel(ready: number, needsFinish: number, where = "collection
   return `${add} · ${needsFinish} ${needsFinish === 1 ? "needs" : "need"} a finish`;
 }
 
+/** The tray header's count of cards still asking something: `1 needs you`, `2 need you`. */
+export function needYouLabel(n: number): string {
+  return `${n} ${n === 1 ? "needs" : "need"} you`;
+}
+
 /** The walk through the tray's open questions — the issue's words, and the press's name. */
 export const NEXT_DECISION_LABEL = "Next card needing a decision";
 

@@ -35,12 +35,20 @@ export type PriceTier = (typeof PRICE_TIERS)[number];
  * says only that it landed.
  */
 export function soundForPrice(price: number | null, sounds: ScanSounds): ScanSound {
-  if (price === null) return "ok";
+  return priceTier(price, sounds) ?? "ok";
+}
+
+/**
+ * The highest floor a price reaches, or `null` below the first or when unpriced — the ladder
+ * {@link soundForPrice} climbs, named for the page's price-coloured figures to share.
+ */
+export function priceTier(price: number | null, sounds: ScanSounds): PriceTier | null {
+  if (price === null) return null;
   for (let i = PRICE_TIERS.length - 1; i >= 0; i--) {
     const tier = PRICE_TIERS[i];
     if (price >= sounds[tier]) return tier;
   }
-  return "ok";
+  return null;
 }
 
 /**
