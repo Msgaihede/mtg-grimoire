@@ -24,8 +24,9 @@ describe("gridTrackCount", () => {
 
 /**
  * **jsdom lays nothing out and its observer never reports**, so what is pinned here is the wiring:
- * `0` until the observer says something, the count read off the grid's computed template each time
- * it does, and the observer given back when the element goes. The templates are stubbed by hand.
+ * `0` until the observer says something, the count read off the observed probe's computed template
+ * each time it does, and the observer given back — and `0` again — when the element goes. The
+ * templates are stubbed by hand.
  */
 describe("useGridColumns", () => {
   let callbacks: ResizeObserverCallback[] = [];
@@ -84,14 +85,24 @@ describe("useGridColumns", () => {
     expect(result.current[1]).toBe(2);
   });
 
-  it("gives the observer back when the element goes", () => {
+  /**
+   * **Back to unmeasured when the probe goes**, so a grid drawn again later — the layout toggled
+   * away and back — does not span from the count of a width it no longer has.
+   */
+  it("gives the observer back when the element goes, and answers 0 again", () => {
     const { result } = renderHook(() => useGridColumns<HTMLUListElement>());
+    template = "150px 150px 150px";
     let cleanup: void | (() => void) = undefined;
     act(() => {
       cleanup = result.current[0](document.createElement("ul"));
     });
+    fire();
+    expect(result.current[1]).toBe(3);
     expect(typeof cleanup).toBe("function");
-    (cleanup as unknown as () => void)();
+    act(() => {
+      (cleanup as unknown as () => void)();
+    });
     expect(disconnected).toBe(1);
+    expect(result.current[1]).toBe(0);
   });
 });

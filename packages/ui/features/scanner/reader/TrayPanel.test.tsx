@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import type { ScannerTrayRow } from "@/lib/ipc";
+import type { ScannerTrayLayout, ScannerTrayRow } from "@/lib/ipc";
 import { pickOption } from "@/test-dropdown";
 
 /**
@@ -1115,34 +1115,64 @@ describe("TrayPanel's grid", () => {
    * observer and the resolved template are stubbed here, and only a live pass can say a browser
    * resolves them so.
    */
-  it("spans a waiting tile over its printings and More printings…, never wider than the grid", () => {
-    const callbacks: ResizeObserverCallback[] = [];
+  /**
+   * The grid's columns, by hand — jsdom lays nothing out and its observer never reports, so only a
+   * live pass can say a browser resolves them so. `templates.probe` is what the empty column probe
+   * resolves to and `templates.grid` what the grid itself does: Chromium's, which lists the
+   * implicit tracks an oversized span makes. `fire()` is every live observer reporting.
+   */
+  function stubColumns() {
+    const live = new Set<ResizeObserverCallback>();
     vi.stubGlobal(
       "ResizeObserver",
       class {
+        private readonly callback: ResizeObserverCallback;
         constructor(callback: ResizeObserverCallback) {
-          callbacks.push(callback);
+          this.callback = callback;
+          live.add(callback);
         }
         observe() {}
         unobserve() {}
-        disconnect() {}
+        disconnect() {
+          live.delete(this.callback);
+        }
       },
     );
-    let template = "150px 150px 150px 150px 150px";
+    const templates = { probe: "", grid: "" };
     const real = window.getComputedStyle.bind(window);
-    // Only the grid's template is answered by hand; everything else asks jsdom.
+    // Only the two templates are answered by hand; everything else asks jsdom.
     const spy = vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
       const style = real(el, pseudo);
-      if (!(el instanceof HTMLUListElement)) return style;
+      const template = el.hasAttribute("data-column-probe")
+        ? templates.probe
+        : el instanceof HTMLUListElement
+          ? templates.grid
+          : null;
+      if (template === null) return style;
       return new Proxy(style, {
         get: (target, prop) =>
           prop === "gridTemplateColumns" ? template : Reflect.get(target, prop, target),
       });
     });
-    const fire = () =>
-      act(() => {
-        for (const callback of callbacks) callback([], {} as ResizeObserver);
-      });
+    return {
+      templates,
+      fire: () =>
+        act(() => {
+          for (const callback of live) callback([], {} as ResizeObserver);
+        }),
+      restore: () => {
+        spy.mockRestore();
+        vi.unstubAllGlobals();
+      },
+    };
+  }
+
+  /**
+   * **A waiting tile spans its candidates and *More printings…*, never more columns than the grid
+   * has** — the grid's explicit count, read off the empty probe as the grid resizes.
+   */
+  it("spans a waiting tile over its printings and More printings…, never wider than the grid", () => {
+    const columns = stubColumns();
     try {
       const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
       const orphan: ScannerTrayRow = {
@@ -1155,20 +1185,74 @@ describe("TrayPanel's grid", () => {
 
       // Five columns: three printings and More printings… take four of them, and a card with no
       // printings to open one less.
-      fire();
+      columns.templates.probe = columns.templates.grid = "150px 150px 150px 150px 150px";
+      columns.fire();
       expect(question.style.gridColumn).toBe("span 4");
       expect(other.style.gridColumn).toBe("span 3");
 
       // Two columns: never wider than the grid, the four cells two to a line inside it.
-      template = "180px 180px";
-      fire();
+      columns.templates.probe = "180px 180px";
+      columns.templates.grid = "180px 180px";
+      columns.fire();
       expect(question.style.gridColumn).toBe("span 2");
       expect(within(question).getByRole("group").style.gridTemplateColumns).toBe(
         "repeat(2, minmax(0, 1fr))",
       );
     } finally {
-      spy.mockRestore();
-      vi.unstubAllGlobals();
+      columns.restore();
+    }
+  });
+
+  /**
+   * **The count is the explicit one, never the grid's resolved template**: a span already wider
+   * than a narrowed grid makes an implicit track, Chromium lists it with the rest (measured in the
+   * review at 700 → 500px: `144px 144px 144px 17px`), and a count that included it answered the
+   * same span again — the tray scrolled sideways for good.
+   */
+  it("narrows a waiting tile when the grid narrows under it, never counting the track its span made", () => {
+    const columns = stubColumns();
+    try {
+      const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+      wrap(<TrayPanel {...grid({ rows: [waiting, newer] })} />);
+      const [question] = screen.getAllByRole("listitem");
+      columns.templates.probe = columns.templates.grid = "150px 150px 150px 150px 150px";
+      columns.fire();
+      expect(question.style.gridColumn).toBe("span 4");
+
+      columns.templates.probe = "144px 144px 144px";
+      columns.templates.grid = "144px 144px 144px 17px";
+      columns.fire();
+      expect(question.style.gridColumn).toBe("span 3");
+    } finally {
+      columns.restore();
+    }
+  });
+
+  it("starts unmeasured again when the grid is drawn again, not from the width it had", () => {
+    const columns = stubColumns();
+    try {
+      const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const tray = (layout: ScannerTrayLayout) => (
+        <QueryClientProvider client={client}>
+          <TooltipProvider>
+            <TrayPanel {...props({ rows: [waiting, newer], layout })} />
+          </TooltipProvider>
+        </QueryClientProvider>
+      );
+      const { rerender } = render(tray("grid"));
+      columns.templates.probe = "150px 150px 150px 150px 150px";
+      columns.fire();
+      expect(screen.getAllByRole("listitem")[0].style.gridColumn).toBe("span 4");
+
+      rerender(tray("list"));
+      rerender(tray("grid"));
+      // The whole width — the one span that is always safe — until the probe reports again.
+      expect(screen.getAllByRole("listitem")[0].style.gridColumn).toBe("1 / -1");
+      columns.fire();
+      expect(screen.getAllByRole("listitem")[0].style.gridColumn).toBe("span 4");
+    } finally {
+      columns.restore();
     }
   });
 

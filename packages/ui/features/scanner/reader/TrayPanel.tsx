@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
   Archive,
@@ -357,24 +357,10 @@ export function TrayPanel({
   // Read-only over `rows`, so it is free of `onRows`' rule: nothing here writes the tray.
   const [cursor, setCursor] = useState<string | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
-  // The grid's column count, for a waiting tile's span — read off the grid itself, since an
-  // `auto-fill` template decides it from the width (`useGridColumns`).
-  const [observeGrid, columns] = useGridColumns<HTMLUListElement>();
-  // **One element, two refs**: the walk and the landing scroll read `listRef` in either layout, and
-  // the grid's is also observed. Stable, so the grid is observed once rather than on every render;
-  // and the cleanup puts `listRef` down itself, because React calls a ref's returned cleanup *in
-  // place of* calling it with `null`.
-  const gridList = useCallback(
-    (el: HTMLUListElement | null) => {
-      listRef.current = el;
-      const stop = observeGrid(el);
-      return () => {
-        if (typeof stop === "function") stop();
-        listRef.current = null;
-      };
-    },
-    [observeGrid],
-  );
+  // The grid's explicit column count, for a waiting tile's span — read off an empty probe with the
+  // grid's template, since an `auto-fill` template decides it from the width and the grid's own
+  // resolved template counts the implicit tracks an oversized span makes (`useGridColumns`).
+  const [columnProbe, columns] = useGridColumns<HTMLLIElement>();
   // **A card that lands takes the tray back to its top** (issue #1320): the tray is newest first,
   // so a reader forty cards down would otherwise see nothing of the card they just scanned — not
   // its row, not its flash. A pick, a finish or a removal is no landing and scrolls nothing.
@@ -525,10 +511,24 @@ export function TrayPanel({
         // focus outline both need room inside the clip. `content-start` so a short tray's rows stay
         // at the top instead of being stretched down the column.
         <ul
-          ref={gridList}
+          ref={listRef}
           className="relative grid min-h-0 flex-1 content-start gap-x-3 gap-y-[18px] overflow-y-auto p-3.5"
           style={{ gridTemplateColumns: TILE_COLUMNS }}
         >
+          {/* **The column probe**: the grid's template and column gap on an empty box exactly as
+              wide as the grid's content — `inset-x-3.5` is the scroller's `p-3.5`, and an
+              absolute box's containing block here is the scroller's padding box, which already
+              leaves the scrollbar out. Empty, it makes no implicit tracks, so its count is the
+              grid's explicit one (`useGridColumns`). Out of flow, so it takes no cell; no height,
+              invisible and `aria-hidden`, so it is not a row to anyone. The three have to move
+              with the grid's. */}
+          <li
+            ref={columnProbe}
+            aria-hidden="true"
+            data-column-probe=""
+            className="pointer-events-none invisible absolute inset-x-3.5 top-0 grid h-0 gap-x-3"
+            style={{ gridTemplateColumns: TILE_COLUMNS }}
+          />
           {rows.map((row) => {
             const on = handlers(row);
             return row.choices.length > 0 ? (
@@ -684,7 +684,7 @@ function TrayActions({
         panelLabel="Tray actions"
         icon={<Ellipsis className="size-4" aria-hidden="true" />}
         // The layout toggle's square beside it, and its floor for a finger.
-        triggerClassName="size-8 coarse:min-w-[var(--target-min)]"
+        triggerClassName="size-8 coarse:min-h-[var(--target-min)] coarse:min-w-[var(--target-min)]"
         // Under the trigger rather than over its foot, and right-aligned: it is the header's last
         // control, so a panel opening rightwards would leave the tray.
         panelClassName="top-full mt-1 w-48 p-1"
@@ -1170,6 +1170,13 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
  * a question cut to `Unkn…` is not one — so on a tile too narrow for both on one line, which is
  * most of them, the stepper wraps under it. The basis is a fixed width rather than each label's
  * own, so every tile in a row wraps or not together and the row's chins stay one height.
+ *
+ * **Why not one row, as the design canvas draws it.** Measured 2026-10-24 in headless Edge, 12px
+ * Geist: `Unknown` is 51.67px, so the `sm` finish trigger holding it (its border, `px-2` and 14px
+ * chevron add 32) is 83.67px. A 149px tile's chin has 137px inside its border and padding; the
+ * `sm` stepper is 112px, and even `xs`'s 80px leaves the finish 52 — short of the trigger at any
+ * legible size (10px type and `px-1` still need 67px), and `xs`'s 20px buttons are under WCAG
+ * 2.5.8's 24px. The canvas fits because its stepper is a 56px strip this app has no size for.
  *
  * **The marks are the walls' own.** `CardArt`'s chip in the top-right says a foil or etched copy,
  * and a count laid on the top-left says more than one — `CountTag`, the bare number every surface

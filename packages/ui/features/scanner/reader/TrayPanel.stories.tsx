@@ -413,7 +413,12 @@ export const OntoADestination: Story = {
     const tray = canvas.getByRole("region", { name: "Scanned for their side" });
     await expect(within(tray).getByRole("note")).toHaveTextContent(/already in the scanner's tray/);
     await expect(within(tray).queryByRole("button", { name: /^Folder:/ })).toBeNull();
-    await expect(within(tray).queryByRole("button", { name: "Create deck…" })).toBeNull();
+    // The `⋯` offers no deck — asked with the menu open, where the row would be.
+    await userEvent.click(within(tray).getByRole("button", { name: "Tray actions" }));
+    const actions = within(tray).getByRole("dialog", { name: "Tray actions" });
+    await expect(within(actions).getByRole("button", { name: "Clear all…" })).toBeInTheDocument();
+    await expect(within(actions).queryByRole("button", { name: "Create deck…" })).toBeNull();
+    await userEvent.keyboard("{Escape}");
     await expect(within(tray).getByText("Scanned so far: 4 rows")).toBeInTheDocument();
     await userEvent.click(
       within(tray).getByRole("button", { name: "Add 5 to their side · 1 needs a finish" }),
