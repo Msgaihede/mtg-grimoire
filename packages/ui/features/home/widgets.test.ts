@@ -33,6 +33,7 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   collectionValue: true,
   valueHistory: true,
   wishlistValue: true,
+  wishlistValueHistory: true,
   activity: true,
   recentCards: true,
   setCompletion: true,
@@ -198,6 +199,16 @@ describe("WIDGETS", () => {
         chip: "split",
       },
       wishlistValue: { picks: { dimension, chart }, toggles: { figures: true }, chip: "dimension" },
+      // The collection graph's vocabulary exactly (issue #1378): one body reads both.
+      wishlistValueHistory: {
+        picks: {
+          split: { ids: ["total", "type", "color", "set"], dflt: "type" },
+          window: { ids: ["30d", "90d", "1y", "all"], dflt: "90d" },
+          measure: { ids: ["value", "change"], dflt: "change" },
+        },
+        toggles: { figures: true, markers: true },
+        chip: "split",
+      },
       decks: {
         picks: { scope: { ids: ["recent", "pinned", "archived"], dflt: undefined } },
         toggles: { art: true },
@@ -438,6 +449,30 @@ describe("WIDGETS", () => {
     expect(offered("split")).toEqual(Object.keys(EVERY_SPLIT).sort());
     expect(offered("window")).toEqual(Object.keys(EVERY_WINDOW).sort());
     expect(offered("measure")).toEqual(Object.keys(EVERY_MEASURE).sort());
+  });
+
+  /**
+   * The wishlist's graph (issue #1378): beside the widget it draws over time, off the default
+   * layout, and offering the collection graph's picks — the body's in-card chips read the
+   * collection row's options for both, so the two rows must be one list.
+   */
+  it("carries the wishlist graph beside the wishlist value, with the collection graph's picks", () => {
+    expect(isWidgetKind("wishlistValueHistory")).toBe(true);
+    expect(DEFAULT_LAYOUT.widgets.some((widget) => widget.kind === "wishlistValueHistory")).toBe(
+      false,
+    );
+    const order = WIDGETS.map((widget) => widget.kind);
+    expect(order.indexOf("wishlistValueHistory")).toBe(order.indexOf("wishlistValue") + 1);
+
+    const meta = widgetMeta("wishlistValueHistory");
+    expect(meta.label).toBe("Wishlist value graph");
+    expect({ def: meta.def, min: meta.min, max: meta.max }).toEqual({
+      def: [6, 3],
+      min: [2, 2],
+      max: [8, 6],
+    });
+    expect(meta.picks).toBe(widgetMeta("valueHistory").picks);
+    expect(meta.toggles.map((t) => t.label)).toEqual(["Show totals", "Mark wishlist changes"]);
   });
 });
 

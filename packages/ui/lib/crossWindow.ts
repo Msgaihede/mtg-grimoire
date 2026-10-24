@@ -240,6 +240,9 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   // `features/trade/useTrades`. Neither table syncs between devices.
   trade_lines: [["trade"]],
   trades: [["trade"]],
+  // The Wishlist value graph's history (user schema v66): `price_snapshots`' answer, written by the
+  // app's own snapshot and never by a press, so no other window has a write of it to hear.
+  wish_snapshots: [],
   // Every search row and every printing draws `wishlisted` (`["cards"]`, `["card"]` — the
   // *Clear wishlist* roots), and a deck's missing plan lists the wishes each shortfall could take
   // down — *Send missing to wishlist* settles `["decks"]` for it.

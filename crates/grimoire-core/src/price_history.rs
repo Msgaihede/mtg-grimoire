@@ -53,6 +53,12 @@
 //! * **A marketplace is the *priced* one**: [`crate::marketplace::MARKETPLACE_IDS`] mapped through
 //!   [`Marketplace::from_id`], so `cardtrader` — which quotes TCGplayer — is not a key of its own
 //!   and cannot store a second copy of every TCGplayer row. [`market_key`] is the spelling.
+//! * **…and the wishlist's holding, beside it (user schema v66).** A watched row has no
+//!   quantity and an any-printing wish no printing, so the Wishlist value graph cannot be read
+//!   from `price_snapshots`: the same snapshot, in the same transaction and by the same rules —
+//!   one day replaced, only the difference written, the same gate, the same thinning — records
+//!   every wish into `wish_snapshots` at the price the Wishlist value widget quotes it
+//!   ([`crate::wishlist::holding_sql`]). [`crate::value_history`] reads both tables.
 //! * **It is best-effort, everywhere it is called.** A missed day is a gap in a widget; nothing
 //!   that calls [`snapshot`] may fail because of it, and each caller logs or records the error and
 //!   carries on. Three callers: the launch (`maintenance::snapshot_prices`), a card ingest
@@ -306,6 +312,23 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
         )?;
         prune(&tx, floor.as_deref())?;
     }
+    // The wishlist's table keeps its own calendar, by the same rule and for the same reason: a
+    // reader who owns nothing and wishes for plenty has wish rows on days with no price row, and
+    // a probe of the other table would call every one of their snapshots the day's first.
+    let first_wish_day: bool = tx.query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM wish_snapshots WHERE day = ?1)",
+        params![today],
+        |r| r.get(0),
+    )?;
+    if first_wish_day {
+        let floor: Option<String> = tx.query_row(
+            "SELECT date(max(day), '-' || ?1 || ' days') FROM wish_snapshots
+              WHERE day < ?2",
+            params![DAILY_DAYS, today],
+            |r| r.get(0),
+        )?;
+        prune_wishes(&tx, floor.as_deref())?;
+    }
     // The watch list, read once inside the transaction and bound as `?3` into both statements.
     // A list of strings always serialises; the fallback is the type system's, not a case.
     let watch = serde_json::to_string(&watched(&tx)).unwrap_or_else(|_| "[]".to_owned());
@@ -325,6 +348,9 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
         // for a day in which nothing had changed.
         written += tx.execute(&stale_sql(&tx, *market), params![key, today, watch])?;
         written += tx.execute(&snapshot_sql(&tx, *market), params![key, today, watch])?;
+        // And the wishlist's holding, by the same two statements' rules.
+        written += tx.execute(&wish_stale_sql(*market), params![key, today])?;
+        written += tx.execute(&wish_snapshot_sql(*market), params![key, today])?;
     }
     tx.commit()?;
     Ok(written)
@@ -431,6 +457,81 @@ fn snapshot_sql(conn: &Connection, market: Marketplace) -> String {
              OR price_snapshots.copies IS NOT excluded.copies",
         held = held_cte(conn, market),
     )
+}
+
+/// **The wishlist's gate**, [`PRICES_SOMETHING_HELD`] over the wishes: a marketplace that prices
+/// none of them writes no wish row that day, for the reason that rule gives — the day it first
+/// prices something would otherwise read as the whole wishlist's value arriving in a price move.
+const PRICES_SOMETHING_WISHED: &str = "EXISTS (SELECT 1 FROM wished WHERE price IS NOT NULL)";
+
+/// One marketplace's delete of today's `wish_snapshots` rows (user schema v66) the wishlist no
+/// longer holds — [`stale_sql`] over the wishes. Bound: `?1` the marketplace key, `?2` today.
+///
+/// `wished` is [`crate::wishlist::holding_sql`], the Wishlist value widget's own arithmetic per
+/// wish, so the day holds what the wishlist cost at its last snapshot and nothing older: a wish
+/// bought or removed since the morning has no row.
+fn wish_stale_sql(market: Marketplace) -> String {
+    format!(
+        "WITH wished AS ({holding})
+         DELETE FROM wish_snapshots
+          WHERE day = ?2 AND marketplace = ?1
+            AND (NOT {PRICES_SOMETHING_WISHED}
+                 OR NOT EXISTS (SELECT 1 FROM wished h
+                                 WHERE h.wish = wish_snapshots.wish
+                                   AND h.finish = wish_snapshots.finish))",
+        holding = crate::wishlist::holding_sql(market),
+    )
+}
+
+/// One marketplace's upsert of today's wish rows, into a day [`wish_stale_sql`] has just trimmed
+/// — [`snapshot_sql`]'s rules: **a row that already says the same thing is not written**, and the
+/// gate's `WHERE` is also what lets SQLite parse the `ON CONFLICT`. Every wish is a row, priced or
+/// not, so a price that starts or stops being quoted on a wish the reader kept is a price move on
+/// the graph and never a wish arriving or leaving.
+fn wish_snapshot_sql(market: Marketplace) -> String {
+    format!(
+        "WITH wished AS ({holding})
+         INSERT INTO wish_snapshots (day, marketplace, wish, finish, card_id, price, copies)
+         SELECT ?2, ?1, wish, finish, card_id, price, copies
+           FROM wished
+          WHERE {PRICES_SOMETHING_WISHED}
+         ON CONFLICT (day, marketplace, wish, finish) DO UPDATE
+            SET card_id = excluded.card_id, price = excluded.price, copies = excluded.copies
+          WHERE wish_snapshots.card_id IS NOT excluded.card_id
+             OR wish_snapshots.price IS NOT excluded.price
+             OR wish_snapshots.copies IS NOT excluded.copies",
+        holding = crate::wishlist::holding_sql(market),
+    )
+}
+
+/// [`prune`] for `wish_snapshots`: nothing older than [`KEEP_DAYS`], and older than
+/// [`DAILY_DAYS`] (and no older than `floor`) the latest row per wish per seven-day bucket, by
+/// [`week_bucket`]. **One survivor per bucket, not two**: the graph reads the bucket's newest row
+/// priced or not, and no mover or price chart reads this table, so an older priced row is read
+/// by nobody.
+pub(crate) fn prune_wishes(conn: &Connection, floor: Option<&str>) -> rusqlite::Result<usize> {
+    let old = conn.execute(
+        "DELETE FROM wish_snapshots WHERE day < date('now', '-' || ?1 || ' days')",
+        params![KEEP_DAYS],
+    )?;
+    let thinned = conn.execute(
+        &format!(
+            "DELETE FROM wish_snapshots
+              WHERE day < date('now', '-' || ?1 || ' days')
+                AND day >= coalesce(?2, '')
+                AND EXISTS (
+                    SELECT 1 FROM wish_snapshots later
+                     WHERE later.marketplace = wish_snapshots.marketplace
+                       AND later.wish = wish_snapshots.wish
+                       AND later.finish = wish_snapshots.finish
+                       AND later.day > wish_snapshots.day
+                       AND {later} = {this})",
+            later = week_bucket("later.day"),
+            this = week_bucket("wish_snapshots.day"),
+        ),
+        params![DAILY_DAYS, floor],
+    )?;
+    Ok(old + thinned)
 }
 
 /// Keep the history inside its bounds: drop what is older than [`KEEP_DAYS`], and thin what is

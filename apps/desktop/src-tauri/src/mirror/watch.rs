@@ -1233,6 +1233,10 @@ mod tests {
                 // collection and wishlist rows they become.
                 "trade_lines",
                 "trades",
+                // The Wishlist value graph's history (user schema v66), `price_snapshots`'
+                // decision for its reasons: rewritten a day at a time by the app's own snapshot,
+                // quoted by no mirrored file, and `WITHOUT ROWID` besides.
+                "wish_snapshots",
             ],
             "a table added to the schema has to be decided about here"
         );

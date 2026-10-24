@@ -689,6 +689,7 @@ pub fn run() {
             // snapshots and the live collection — the day's `copies` are written beside the
             // price by that same snapshot, never by a command.
             value_history::collection_value_history,
+            value_history::wishlist_value_history,
             // The New printings widget: the feed, and the cursor that puts its gold dots out.
             // The read is two `SELECT`s on the read-only connection; the write takes its clock
             // from the caller, never `SystemTime::now()` — `recent_cards`' rule.

@@ -139,7 +139,7 @@ import { SetCompletionWidget } from "./widgets/SetCompletionWidget";
 import { StickyNotesWidget } from "./widgets/StickyNotesWidget";
 import { SummaryWidget, SummaryWidgetSettings } from "./widgets/SummaryWidget";
 import { ToReviewWidget } from "./widgets/ToReviewWidget";
-import { ValueHistoryWidget } from "./widgets/ValueHistoryWidget";
+import { ValueHistoryWidget, WishlistValueHistoryWidget } from "./widgets/ValueHistoryWidget";
 import {
   WishlistSavingsWidget,
   WishlistSavingsWidgetSettings,
@@ -239,6 +239,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <ValueHistoryWidget {...props} />;
     case "wishlistValue":
       return <WishlistValueWidget {...props} />;
+    case "wishlistValueHistory":
+      return <WishlistValueHistoryWidget {...props} />;
     case "activity":
       return <ActivityWidget {...props} />;
     case "recentCards":

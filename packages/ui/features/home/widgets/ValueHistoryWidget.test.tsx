@@ -10,16 +10,27 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import type { CollectionSummary, HomeWidget, ValueHistory, ValueSplit } from "@/lib/ipc";
+import type {
+  CollectionSummary,
+  HomeWidget,
+  ValueHistory,
+  ValueSplit,
+  WishlistSummary,
+} from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 
 import { makeFit, spanPx, type WidgetFit } from "../fit";
-import { collectionTotalKey, valueHistoryKey } from "../keys";
+import {
+  collectionTotalKey,
+  valueHistoryKey,
+  wishlistTotalKey,
+  wishlistValueHistoryKey,
+} from "../keys";
 import { DAY_SECONDS } from "../priceHistory/priceAnalytics";
 import { WidgetCard } from "../WidgetCard";
 import type { WidgetBodyProps } from "../widgetProps";
-import { ValueHistoryWidget } from "./ValueHistoryWidget";
+import { ValueHistoryWidget, WishlistValueHistoryWidget } from "./ValueHistoryWidget";
 
 /**
  * Nothing here mocks `@/lib/ipc` — `CollectionValueWidget.test.tsx`'s reason: a bare `vi.fn()`
@@ -505,5 +516,85 @@ describe("ValueHistoryWidget", () => {
     draw({ editing: true });
     expect(screen.queryByRole("slider")).toBeNull();
     expect(screen.getByText("$150.00")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The Wishlist value graph (issue #1378) — the same body over the wishlist's two reads. Only what
+ * differs is asserted here: the keys it reads under, the sentences that name its money, and what a
+ * step's non-price part is called.
+ */
+describe("WishlistValueHistoryWidget", () => {
+  function wishes(over: Partial<WishlistSummary> = {}): WishlistSummary {
+    return { wishes: 12, copies: 20, cost: 150, unpriced: 0, ...over };
+  }
+
+  function seedWishes(
+    history: ValueHistory = THREE_DAYS,
+    split: ValueSplit = "type",
+    total = wishes(),
+  ) {
+    client.setQueryData(wishlistTotalKey(MARKETPLACE), total);
+    client.setQueryData(wishlistValueHistoryKey(split, MARKETPLACE), history);
+  }
+
+  function wishWidget(config: unknown = null, w = 6, h = 3): HomeWidget {
+    return { id: "wishlistValueHistory", kind: "wishlistValueHistory", x: 0, y: 0, w, h, config };
+  }
+
+  function drawWishes(over: Partial<WidgetBodyProps> = {}) {
+    const p = props({ widget: wishWidget(), ...over });
+    return render(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <WishlistValueHistoryWidget {...p} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("draws inside its card from the wishlist's reads, never the collection's", () => {
+    seedWishes();
+    const p = props({ widget: wishWidget() });
+    render(
+      <QueryClientProvider client={client}>
+        <WidgetCard widget={p.widget} fit={p.fit} editing={false} onConfig={vi.fn()} onRemove={vi.fn()}>
+          <WishlistValueHistoryWidget {...p} />
+        </WidgetCard>
+      </QueryClientProvider>,
+    );
+    const card = within(screen.getByRole("region", { name: "Wishlist value graph" }));
+    expect(card.getByText("$150.00")).toBeInTheDocument();
+    expect(card.getByRole("slider")).toHaveAttribute(
+      "aria-valuetext",
+      "Today: Creature $110.00, total $150.00",
+    );
+    // Nothing was seeded under the collection's keys, and nothing asked for them.
+    expect(client.getQueryData(valueHistoryKey("type", MARKETPLACE))).toBeUndefined();
+  });
+
+  it("says the wishlist is empty when nothing is wished for", () => {
+    seedWishes({ buckets: [], points: [], today: TODAY }, "type", wishes({ wishes: 0, cost: 0 }));
+    drawWishes();
+    expect(screen.getByText("Nothing on your wishlist yet.")).toBeInTheDocument();
+  });
+
+  it("says the history could not be read, with the reason", () => {
+    client.setQueryData(wishlistTotalKey(MARKETPLACE), wishes());
+    seedRefusal(wishlistValueHistoryKey("type", MARKETPLACE), "database is locked");
+    drawWishes();
+    expect(
+      screen.getByText("Couldn't load price history. database is locked"),
+    ).toBeInTheDocument();
+  });
+
+  it("calls Total's non-price part wishlist changes, and says so under the rail", () => {
+    seedWishes(THREE_DAYS_TOTAL, "total");
+    drawWishes({ widget: wishWidget({ split: "total" }) });
+    const figures = within(screen.getByRole("group", { name: "Figures" }));
+    expect(figures.getByText("Wishlist changes").parentElement).toHaveTextContent("+$54.60");
+    expect(figures.getByText("Price moves").parentElement).toHaveTextContent("−$4.60");
+    expect(figures.queryByText("Collection changes")).toBeNull();
+    expect(screen.getByText(/wishlist changes$/)).toBeInTheDocument();
   });
 });

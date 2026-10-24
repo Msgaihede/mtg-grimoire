@@ -2360,6 +2360,14 @@ export interface FakeDb {
    */
   priceHistory: FakePriceSnapshot[];
   /**
+   * `wish_snapshots` — one row per day a price refresh saw a wish at a marketplace (user schema
+   * v66, issue #1378), what {@link readHandlers.wishlist_value_history} draws.
+   *
+   * **Derived by {@link makeDb} when a world says nothing** — {@link historyFromWishlist} — so a
+   * world with a wishlist has a line to draw and `empty` has none, {@link priceHistory}'s rule.
+   */
+  wishHistory: FakeWishSnapshot[];
+  /**
    * `app_meta.start_view` — which view the app opens on.
    *
    * A **stored string** and `null` for the row not being there, which is
@@ -2604,6 +2612,27 @@ export interface FakePriceSnapshot {
    * not `null`, which is how a world stands in *the line starts tomorrow* on a full collection.
    */
   copies: number | null;
+}
+
+/**
+ * One row of `wish_snapshots` (user schema v66, issue #1378): a wish the wishlist **held** when a
+ * refresh looked at one marketplace, how many copies it wanted, and what one cost there — the
+ * Wishlist value graph's history, as {@link FakePriceSnapshot} is the Collection value graph's.
+ *
+ * **Keyed by the wish, not the printing**: `wish` is the pinned printing's id, or `oracle:` and
+ * the oracle id for a wish for any printing, and `finish` is the wish's own or `any` — the crate's
+ * `wishlist::holding_sql`. `cardId` is the printing that priced it, for the buckets, and `null`
+ * where the corpus had none; `price` is `null` where nobody quoted it, and the row is written
+ * anyway, for {@link FakePriceSnapshot.price}'s reason.
+ */
+export interface FakeWishSnapshot {
+  marketplace: MarketplaceId;
+  wish: string;
+  finish: "nonfoil" | "foil" | "etched" | "any";
+  cardId: string | null;
+  price: number | null;
+  takenAt: number;
+  copies: number;
 }
 
 /**
@@ -3740,6 +3769,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     recentCards: [],
     priceWatch: [],
     priceHistory: [],
+    wishHistory: [],
     // **Empty, and derived from nothing** — which is what separates it from the two fields above
     // rather than an omission beside them. A collection implies cards the reader opened and
     // prices those cards have had; it implies no prose at all, because a sticky note exists only
@@ -3843,6 +3873,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
   // anything" on a full collection.
   if (init.recentCards === undefined) db.recentCards = recentFromCollection(db);
   if (init.priceHistory === undefined) db.priceHistory = historyFromCollection(db);
+  if (init.wishHistory === undefined) db.wishHistory = historyFromWishlist(db);
   // The third, and the one whose subject is the **decks** rather than the collection: how much of
   // the reprint feed this device has already looked at. Same rule as the two above — a world that
   // passes the field keeps it, `null` included.
@@ -3947,6 +3978,64 @@ export function historyFromCollection(db: FakeDb): FakePriceSnapshot[] {
 }
 
 /**
+ * `wishlist::holding_sql` — the wishlist's holding at one marketplace today, one row per wish key,
+ * priced exactly as {@link readHandlers.wishlist_summary} prices it: {@link wishCard}'s printing at
+ * {@link wishPriceAt}. Two wishes with one key — the same printing in one finish in two folders —
+ * are one row carrying both quantities, so `Σ copies × price` here is that summary's `cost`.
+ */
+function wishlistHolding(db: FakeDb, mp: MarketplaceId): Map<string, FakeWishSnapshot> {
+  const rows = new Map<string, FakeWishSnapshot>();
+  for (const w of db.wishlistEntries) {
+    const wish = w.cardId ?? `oracle:${w.oracleId ?? ""}`;
+    const finish = w.preferredFinish ?? "any";
+    const key = `${wish}:${finish}`;
+    const held = rows.get(key);
+    if (held) {
+      held.copies += w.quantity;
+      continue;
+    }
+    const card = wishCard(db, w);
+    rows.set(key, {
+      marketplace: mp,
+      wish,
+      finish,
+      cardId: card?.id ?? null,
+      price: wishPriceAt(db, card, w.preferredFinish, mp),
+      takenAt: CLOCK_BASE,
+      copies: w.quantity,
+    });
+  }
+  return rows;
+}
+
+/**
+ * `wish_snapshots` for a world with a wishlist (issue #1378) — {@link historyFromCollection}'s
+ * derivation over the wishes: one row per {@link HISTORY_DAYS} day for every wish at every priced
+ * marketplace, today's price walked back along {@link priceDrift}, and **today's quantities on
+ * every day**, so every step is price and nothing is marked as wished or bought. A story that
+ * wants the reader's own changes on the line passes a `wishHistory` whose counts differ by day.
+ */
+export function historyFromWishlist(db: FakeDb): FakeWishSnapshot[] {
+  const out: FakeWishSnapshot[] = [];
+  for (const { id: mp } of Object.values(MARKETPLACES).filter((m) => m.priced)) {
+    for (const row of wishlistHolding(db, mp).values()) {
+      const drift = priceDrift(row.wish, row.finish, mp);
+      for (const days of HISTORY_DAYS) {
+        out.push({
+          ...row,
+          price:
+            row.price === null
+              ? null
+              : Math.round(row.price * (1 - (drift * days) / 90) * 100) / 100,
+          takenAt: CLOCK_BASE - days * 86_400,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * `price_history::snapshot` — rewrite today's rows ({@link CLOCK_BASE}'s day) of every priced
  * marketplace with what the reader holds **or watches** now. What
  * {@link writeHandlers.set_price_watch} runs when the list changed (issue #1080), so a card chosen
@@ -4000,6 +4089,13 @@ function snapshotToday(db: FakeDb): void {
       (s) => s.marketplace !== mp || Math.floor(s.takenAt / 86_400) !== today,
     );
     if ([...rows.values()].some((r) => r.price !== null)) db.priceHistory.push(...rows.values());
+    // And the wishlist's holding (user schema v66), by the same gate: a marketplace that prices
+    // no wish keeps no wish rows for the day.
+    const wishes = [...wishlistHolding(db, mp).values()];
+    db.wishHistory = db.wishHistory.filter(
+      (s) => s.marketplace !== mp || Math.floor(s.takenAt / 86_400) !== today,
+    );
+    if (wishes.some((r) => r.price !== null)) db.wishHistory.push(...wishes);
   }
 }
 
@@ -9879,6 +9975,161 @@ function colorBucket(card: FakeCard | null): string {
 }
 
 /**
+ * One row a value graph's period or live point is made from — a snapshot row of
+ * {@link FakePriceSnapshot} or {@link FakeWishSnapshot}, or a live holding — reduced to what
+ * {@link valueHistoryFrom} reads. `key` is what a step is paired on: a printing and finish for the
+ * collection, a wish and its finish for the wishlist.
+ */
+interface ValueRow {
+  key: string;
+  cardId: string | null;
+  copies: number;
+  price: number | null;
+  takenAt: number;
+}
+
+/**
+ * `value_history::read` — the arithmetic both value graphs share, over one marketplace's
+ * `snapshots` (rows with a count, before the read decides which are kept) and `current`, today's
+ * live holding. {@link readHandlers.collection_value_history}'s doc is the rules'; this is the one
+ * place they are spelled, so the Collection value graph and the Wishlist value graph (issue #1378)
+ * cannot come to read one table two ways.
+ */
+function valueHistoryFrom(
+  db: FakeDb,
+  split: string,
+  bucketOf: ReturnType<typeof valueBucketer>,
+  snapshots: readonly ValueRow[],
+  current: readonly ValueRow[],
+  today: number,
+): ValueHistory {
+  const cardOf = (row: ValueRow) => (row.cardId === null ? null : cardById(db, row.cardId));
+  /** One point's arithmetic before it is aligned to the answer's lines. `present` is every
+   *  printing held at the point and its price, an unpriced one at `0` — what this step's
+   *  `moved` reads as *after*. `holding` is each printing's copies and price at a snapshot
+   *  period, priced the same way — what the *next* step's `moved` reads as *before* — and
+   *  `null` at the live point, which is always last and so is nobody's "before". */
+  interface Tally {
+    day: number;
+    total: number;
+    byBucket: Map<string, number>;
+    present: Map<string, number>;
+    holding: Map<string, { copies: number; price: number }> | null;
+  }
+  // `max()` over a bucket's non-null names, the breakdown's own aggregate: an orphan's `null`
+  // cannot blank a set the rest of whose printings know what it is called.
+  const names = new Map<string, string | null>();
+  const add = (t: Tally, card: FakeCard | null, amount: number) => {
+    t.total += amount;
+    if (bucketOf === null) return;
+    const [key, name] = bucketOf(card);
+    t.byBucket.set(key, (t.byBucket.get(key) ?? 0) + amount);
+    const had = names.get(key) ?? null;
+    names.set(key, name !== null && (had === null || cmp(name, had) > 0) ? name : had);
+  };
+
+  const horizon = today - DAILY_DAYS * 86_400;
+  const oldest = today - KEEP_DAYS * 86_400;
+  const periods = new Map<string, { day: number; rows: Map<string, ValueRow> }>();
+  for (const s of snapshots) {
+    const day = Math.floor(s.takenAt / 86_400) * 86_400;
+    if (day >= today || day < oldest) continue;
+    // **The week the daily horizon falls in is read from the horizon on and not before it.**
+    // The prune thins that week's older days against the newer rows in the daily band, so
+    // what survives there is only the printings that *left* during it — read as a period, it
+    // would be a stray low point on six days out of seven.
+    if (day < horizon && weekOf(day) >= weekOf(horizon)) continue;
+    const key = day >= horizon ? `day ${day}` : `week ${weekOf(day)}`;
+    const period = periods.get(key) ?? { day, rows: new Map<string, ValueRow>() };
+    period.day = Math.max(period.day, day);
+    // The latest row per printing and finish: by day, and inside a day by the instant — the
+    // crate's `INSERT OR REPLACE`, where a second snapshot on one afternoon replaced the first.
+    const printing = s.key;
+    const kept = period.rows.get(printing);
+    if (kept === undefined || s.takenAt > kept.takenAt) period.rows.set(printing, s);
+    periods.set(key, period);
+  }
+
+  const tallies: Tally[] = [...periods.values()]
+    .sort((a, b) => a.day - b.day)
+    .map((period) => {
+      const t: Tally = {
+        day: period.day,
+        total: 0,
+        byBucket: new Map(),
+        present: new Map(),
+        holding: new Map(),
+      };
+      for (const [printing, s] of period.rows) {
+        const copies = s.copies;
+        // Held but unpriced: worth nothing to the total, and present all the same.
+        if (s.price !== null) add(t, cardOf(s), copies * s.price);
+        const price = s.price ?? 0;
+        t.present.set(printing, price);
+        t.holding?.set(printing, { copies, price });
+      }
+      return t;
+    });
+  const live: Tally = {
+    day: today,
+    total: 0,
+    byBucket: new Map(),
+    present: new Map(),
+    holding: null,
+  };
+  for (const e of current) {
+    add(live, cardOf(e), e.copies * (e.price ?? 0));
+    live.present.set(e.key, e.price ?? 0);
+  }
+  tallies.push(live);
+
+  // The lines, and which of the tally's own buckets each one sums.
+  const lines: { bucket: ValueBucket; sums: string[] }[] = [];
+  if (bucketOf !== null) {
+    const keys = [...names.keys()].filter((key) =>
+      tallies.some((t) => (t.byBucket.get(key) ?? 0) !== 0),
+    );
+    if (split === "color") {
+      for (const key of VALUE_COLOR_ORDER) {
+        if (keys.includes(key)) lines.push({ bucket: { key, name: null }, sums: [key] });
+      }
+    } else {
+      const worth = (key: string) => live.byBucket.get(key) ?? 0;
+      const named = keys
+        .filter((key) => key !== "other")
+        .sort((a, b) => worth(b) - worth(a) || cmp(a, b));
+      for (const key of named.slice(0, MAX_NAMED_VALUE_BUCKETS)) {
+        lines.push({ bucket: { key, name: names.get(key) ?? null }, sums: [key] });
+      }
+      const folded = named.slice(MAX_NAMED_VALUE_BUCKETS);
+      if (keys.includes("other") || folded.length > 0) {
+        lines.push({ bucket: { key: "other", name: null }, sums: ["other", ...folded] });
+      }
+    }
+  }
+
+  const points: ValuePoint[] = tallies.map((t, i) => {
+    const before = i === 0 ? null : tallies[i - 1].holding;
+    let moved: number | null = null;
+    if (before !== null) {
+      moved = 0;
+      for (const [printing, then] of before) {
+        const now = t.present.get(printing);
+        if (now !== undefined) moved += then.copies * (now - then.price);
+      }
+    }
+    return {
+      day: t.day,
+      total: t.total,
+      values: lines.map((line) => line.sums.reduce((n, key) => n + (t.byBucket.get(key) ?? 0), 0)),
+      moved,
+      live: t === live,
+    };
+  });
+  return { buckets: lines.map((line) => line.bucket), points, today };
+}
+
+/**
  * Which line of the Collection value graph a printing is on under one `split` — the three bucket
  * expressions of `value_history.rs` — as a key and the name that travels with it, or `null` for
  * `total`, which draws no lines at all.
@@ -13208,135 +13459,43 @@ export function readHandlers(db: FakeDb) {
       const today = Math.floor(CLOCK_BASE / 86_400) * 86_400;
       const held = db.collectionEntries.filter((e) => e.quantity > 0);
       if (held.length === 0) return { buckets: [], points: [], today };
+      const snapshots: ValueRow[] = db.priceHistory.flatMap((s) =>
+        s.marketplace !== mp || s.copies === null
+          ? []
+          : [{ ...s, key: `${s.cardId}:${s.finish}`, copies: s.copies }],
+      );
+      const current: ValueRow[] = held.map((e) => ({
+        key: `${e.cardId}:${e.finish}`,
+        cardId: e.cardId,
+        copies: e.quantity,
+        price: heldPriceAt(db, cardById(db, e.cardId), e.finish, mp),
+        takenAt: CLOCK_BASE,
+      }));
+      return valueHistoryFrom(db, args.split, bucketOf, snapshots, current, today);
+    },
 
-      /** One point's arithmetic before it is aligned to the answer's lines. `present` is every
-       *  printing held at the point and its price, an unpriced one at `0` — what this step's
-       *  `moved` reads as *after*. `holding` is each printing's copies and price at a snapshot
-       *  period, priced the same way — what the *next* step's `moved` reads as *before* — and
-       *  `null` at the live point, which is always last and so is nobody's "before". */
-      interface Tally {
-        day: number;
-        total: number;
-        byBucket: Map<string, number>;
-        present: Map<string, number>;
-        holding: Map<string, { copies: number; price: number }> | null;
-      }
-      // `max()` over a bucket's non-null names, the breakdown's own aggregate: an orphan's `null`
-      // cannot blank a set the rest of whose printings know what it is called.
-      const names = new Map<string, string | null>();
-      const add = (t: Tally, card: FakeCard | null, amount: number) => {
-        t.total += amount;
-        if (bucketOf === null) return;
-        const [key, name] = bucketOf(card);
-        t.byBucket.set(key, (t.byBucket.get(key) ?? 0) + amount);
-        const had = names.get(key) ?? null;
-        names.set(key, name !== null && (had === null || cmp(name, had) > 0) ? name : had);
-      };
-
-      const horizon = today - DAILY_DAYS * 86_400;
-      const oldest = today - KEEP_DAYS * 86_400;
-      const periods = new Map<string, { day: number; rows: Map<string, FakePriceSnapshot> }>();
-      for (const s of db.priceHistory) {
-        if (s.marketplace !== mp || s.copies === null) continue;
-        const day = Math.floor(s.takenAt / 86_400) * 86_400;
-        if (day >= today || day < oldest) continue;
-        // **The week the daily horizon falls in is read from the horizon on and not before it.**
-        // The prune thins that week's older days against the newer rows in the daily band, so
-        // what survives there is only the printings that *left* during it — read as a period, it
-        // would be a stray low point on six days out of seven.
-        if (day < horizon && weekOf(day) >= weekOf(horizon)) continue;
-        const key = day >= horizon ? `day ${day}` : `week ${weekOf(day)}`;
-        const period = periods.get(key) ?? { day, rows: new Map<string, FakePriceSnapshot>() };
-        period.day = Math.max(period.day, day);
-        // The latest row per printing and finish: by day, and inside a day by the instant — the
-        // crate's `INSERT OR REPLACE`, where a second snapshot on one afternoon replaced the first.
-        const printing = `${s.cardId}:${s.finish}`;
-        const kept = period.rows.get(printing);
-        if (kept === undefined || s.takenAt > kept.takenAt) period.rows.set(printing, s);
-        periods.set(key, period);
-      }
-
-      const tallies: Tally[] = [...periods.values()]
-        .sort((a, b) => a.day - b.day)
-        .map((period) => {
-          const t: Tally = {
-            day: period.day,
-            total: 0,
-            byBucket: new Map(),
-            present: new Map(),
-            holding: new Map(),
-          };
-          for (const [printing, s] of period.rows) {
-            const copies = s.copies ?? 0;
-            // Held but unpriced: worth nothing to the total, and present all the same.
-            if (s.price !== null) add(t, cardById(db, s.cardId), copies * s.price);
-            const price = s.price ?? 0;
-            t.present.set(printing, price);
-            t.holding?.set(printing, { copies, price });
-          }
-          return t;
-        });
-      const live: Tally = {
-        day: today,
-        total: 0,
-        byBucket: new Map(),
-        present: new Map(),
-        holding: null,
-      };
-      for (const e of held) {
-        const card = cardById(db, e.cardId);
-        const unit = heldPriceAt(db, card, e.finish, mp);
-        add(live, card, e.quantity * (unit ?? 0));
-        live.present.set(`${e.cardId}:${e.finish}`, unit ?? 0);
-      }
-      tallies.push(live);
-
-      // The lines, and which of the tally's own buckets each one sums.
-      const lines: { bucket: ValueBucket; sums: string[] }[] = [];
-      if (bucketOf !== null) {
-        const keys = [...names.keys()].filter((key) =>
-          tallies.some((t) => (t.byBucket.get(key) ?? 0) !== 0),
-        );
-        if (args.split === "color") {
-          for (const key of VALUE_COLOR_ORDER) {
-            if (keys.includes(key)) lines.push({ bucket: { key, name: null }, sums: [key] });
-          }
-        } else {
-          const worth = (key: string) => live.byBucket.get(key) ?? 0;
-          const named = keys
-            .filter((key) => key !== "other")
-            .sort((a, b) => worth(b) - worth(a) || cmp(a, b));
-          for (const key of named.slice(0, MAX_NAMED_VALUE_BUCKETS)) {
-            lines.push({ bucket: { key, name: names.get(key) ?? null }, sums: [key] });
-          }
-          const folded = named.slice(MAX_NAMED_VALUE_BUCKETS);
-          if (keys.includes("other") || folded.length > 0) {
-            lines.push({ bucket: { key: "other", name: null }, sums: ["other", ...folded] });
-          }
-        }
-      }
-
-      const points: ValuePoint[] = tallies.map((t, i) => {
-        const before = i === 0 ? null : tallies[i - 1].holding;
-        let moved: number | null = null;
-        if (before !== null) {
-          moved = 0;
-          for (const [printing, then] of before) {
-            const now = t.present.get(printing);
-            if (now !== undefined) moved += then.copies * (now - then.price);
-          }
-        }
-        return {
-          day: t.day,
-          total: t.total,
-          values: lines.map((line) =>
-            line.sums.reduce((n, key) => n + (t.byBucket.get(key) ?? 0), 0),
-          ),
-          moved,
-          live: t === live,
-        };
-      });
-      return { buckets: lines.map((line) => line.bucket), points, today };
+    /**
+     * `value_history::wishlist_history` — the wishlist's value over time (issue #1378):
+     * {@link readHandlers.collection_value_history}'s every rule over {@link FakeDb.wishHistory},
+     * with {@link wishlistHolding} as the live point. So the last point is
+     * {@link readHandlers.wishlist_summary}'s `cost` to the cent, a step is paired on the wish
+     * rather than the printing that priced it, and an empty wishlist answers no points.
+     */
+    wishlist_value_history: (args: { split: string; marketplace?: string }): ValueHistory => {
+      const bucketOf = valueBucketer(args.split);
+      const asked = marketplaceOf(args.marketplace);
+      const mp = MARKETPLACES[asked].priced ? asked : DEFAULT_MARKETPLACE;
+      const today = Math.floor(CLOCK_BASE / 86_400) * 86_400;
+      if (db.wishlistEntries.length === 0) return { buckets: [], points: [], today };
+      const keyOf = (row: FakeWishSnapshot) => `${row.wish}:${row.finish}`;
+      const snapshots: ValueRow[] = db.wishHistory.flatMap((s) =>
+        s.marketplace !== mp ? [] : [{ ...s, key: keyOf(s) }],
+      );
+      const current: ValueRow[] = [...wishlistHolding(db, mp).values()].map((row) => ({
+        ...row,
+        key: keyOf(row),
+      }));
+      return valueHistoryFrom(db, args.split, bucketOf, snapshots, current, today);
     },
 
     /**

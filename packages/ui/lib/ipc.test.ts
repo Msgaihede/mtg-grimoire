@@ -3727,6 +3727,23 @@ describe("ipc argument names match the Rust command signatures", () => {
     declares("marketplace");
   });
 
+  /** The Wishlist value graph's read (issue #1378) — the case above, for its sibling command. */
+  it("sends the wishlist graph's split and marketplace under the names its command declares", async () => {
+    const declares = (param: string) =>
+      expect(valueHistoryRs, `\`wishlist_value_history\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn wishlist_value_history\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    invoke.mockResolvedValue({ buckets: [], points: [], today: 0 });
+    await ipc.wishlistValueHistory("set", "cardmarket");
+    expect(invoke).toHaveBeenCalledWith("wishlist_value_history", {
+      split: "set",
+      marketplace: "cardmarket",
+    });
+    declares("split");
+    declares("marketplace");
+  });
+
   /**
    * **Round two's three reads** (2026-09-26) — Deck completion, To review's deck-card count and
    * Coming soon — pinned on the day they were written, one case because they are one page's worth.
