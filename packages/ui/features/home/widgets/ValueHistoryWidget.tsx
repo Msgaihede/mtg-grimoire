@@ -3,6 +3,11 @@
  * line lit and the rest as context, a list of the lines beside or under it, and a readout of every
  * figure the hovered day holds.
  *
+ * **Two kinds, one body** (issue #1378): `ValueHistoryWidget` is the Collection value graph and
+ * `WishlistValueHistoryWidget` the Wishlist value graph. Each reads its own value widget's summary
+ * and hands the body a {@link ValueSource} — the history's read and key, and the words that name
+ * the money — so the drawing, the fit and the picks cannot drift apart between the two.
+ *
  * **A body, not a card.** `WidgetCard` draws the title, the chip that says *Card type*, and the
  * settings popover where the split, the range, the measure and the two switches are chosen — the
  * registry rows `split`, `window`, `measure`, `figures` and `markers` in `widgets.ts`. **The in-card
@@ -43,20 +48,31 @@
  * the body inert as well; this is the half that holds for a body drawn on its own.
  */
 import { useMemo, useState, type CSSProperties, type ReactElement } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryKey } from "@tanstack/react-query";
 
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count, plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError, type CollectionSummary, type ValueSplit } from "@/lib/ipc";
-import type { Currency } from "@/lib/marketplace";
+import {
+  ipc,
+  ipcError,
+  type CollectionSummary,
+  type ValueHistory,
+  type ValueSplit,
+} from "@/lib/ipc";
+import type { Currency, MarketplaceId } from "@/lib/marketplace";
 import { PRESS, PRESS_SOFT } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 
 import type { WidgetFit } from "../fit";
-import { collectionTotalKey, valueHistoryKey } from "../keys";
+import {
+  collectionTotalKey,
+  valueHistoryKey,
+  wishlistTotalKey,
+  wishlistValueHistoryKey,
+} from "../keys";
 import { DAY_SECONDS, formatDay } from "../priceHistory/priceAnalytics";
 import {
   collectionChange,
@@ -68,6 +84,7 @@ import {
   type Rect,
   type Series,
   type ValueMeasure,
+  type ValueSubject,
   type ValueWindow,
 } from "../valueHistory/model";
 import { ValueChart } from "../valueHistory/ValueChart";
@@ -187,13 +204,110 @@ function Pip({ fill, small = false }: { fill: string; small?: boolean }): ReactE
   );
 }
 
-export function ValueHistoryWidget({
+/**
+ * Whose value a graph draws (issue #1378): the read, its key, and the sentences that name it.
+ * **Everything else is one body**, because the arithmetic, the drawing and the registry's picks
+ * are one — the two graphs differ in which table Rust reads and what a step's non-price part is.
+ */
+interface ValueSource {
+  subject: ValueSubject;
+  /** The money's name, capitalised, as a sentence or a chart label opens with it. */
+  noun: string;
+  /** What the card says when Rust answers no points — there is nothing to value. */
+  empty: string;
+  /** The rail foot's word for the markers, lowercase. */
+  markers: string;
+  key: (split: ValueSplit, marketplace: MarketplaceId) => QueryKey;
+  read: (split: ValueSplit, marketplace: MarketplaceId) => Promise<ValueHistory>;
+}
+
+const COLLECTION_SOURCE: ValueSource = {
+  subject: "collection",
+  noun: "Collection value",
+  empty: "Nothing in your collection yet.",
+  markers: "collection changes",
+  key: valueHistoryKey,
+  read: (split, marketplace) => ipc.collectionValueHistory(split, marketplace),
+};
+
+const WISHLIST_SOURCE: ValueSource = {
+  subject: "wishlist",
+  noun: "Wishlist value",
+  empty: "Nothing on your wishlist yet.",
+  markers: "wishlist changes",
+  key: wishlistValueHistoryKey,
+  read: (split, marketplace) => ipc.wishlistValueHistory(split, marketplace),
+};
+
+/** The two facts the history cannot say, from the value widget's own summary read: whether there
+ *  is anything to value at all, and how much of it nobody prices. */
+interface SummaryFacts {
+  empty: boolean;
+  unpriced: number;
+}
+
+/** The Collection value graph — `CollectionValueWidget`'s summary read beside the history. */
+export function ValueHistoryWidget(props: WidgetBodyProps): ReactElement {
+  const { marketplace } = useMarketplace();
+  const summary = useQuery({
+    queryKey: collectionTotalKey(marketplace.id),
+    // `CollectionValueWidget`'s read, word for word: every copy, and `limit: 0` makes it a count.
+    queryFn: (): Promise<CollectionSummary> =>
+      ipc.collectionSummary({ limit: 0, offset: 0, marketplace: marketplace.id }),
+  });
+  const facts =
+    summary.data === undefined
+      ? undefined
+      : { empty: summary.data.totalCards === 0, unpriced: summary.data.unpriced };
+  return (
+    <ValueHistoryBody
+      {...props}
+      source={COLLECTION_SOURCE}
+      summary={facts}
+      summaryError={summary.error}
+    />
+  );
+}
+
+/**
+ * The Wishlist value graph (issue #1378) — `WishlistValueWidget`'s summary read beside
+ * `wishlist_value_history`. Its `unpriced` counts wishes rather than copies, which is that
+ * widget's note and so this one's.
+ */
+export function WishlistValueHistoryWidget(props: WidgetBodyProps): ReactElement {
+  const { marketplace } = useMarketplace();
+  const summary = useQuery({
+    queryKey: wishlistTotalKey(marketplace.id),
+    queryFn: () => ipc.wishlistSummary(marketplace.id),
+  });
+  const facts =
+    summary.data === undefined
+      ? undefined
+      : { empty: summary.data.wishes === 0, unpriced: summary.data.unpriced };
+  return (
+    <ValueHistoryBody
+      {...props}
+      source={WISHLIST_SOURCE}
+      summary={facts}
+      summaryError={summary.error}
+    />
+  );
+}
+
+function ValueHistoryBody({
   widget,
   fit,
   editing,
   still,
   onConfig,
-}: WidgetBodyProps): ReactElement {
+  source,
+  summary,
+  summaryError,
+}: WidgetBodyProps & {
+  source: ValueSource;
+  summary: SummaryFacts | undefined;
+  summaryError: unknown;
+}): ReactElement {
   const { marketplace, currency } = useMarketplace();
   const split = splitOf(pickOf(widget, "split"));
   const range = windowOf(pickOf(widget, "window"));
@@ -223,15 +337,9 @@ export function ValueHistoryWidget({
     if (followed !== null && followed.split !== split) setFollowed(null);
   }
 
-  const summary = useQuery({
-    queryKey: collectionTotalKey(marketplace.id),
-    // `CollectionValueWidget`'s read, word for word: every copy, and `limit: 0` makes it a count.
-    queryFn: (): Promise<CollectionSummary> =>
-      ipc.collectionSummary({ limit: 0, offset: 0, marketplace: marketplace.id }),
-  });
   const history = useQuery({
-    queryKey: valueHistoryKey(split, marketplace.id),
-    queryFn: () => ipc.collectionValueHistory(split, marketplace.id),
+    queryKey: source.key(split, marketplace.id),
+    queryFn: () => source.read(split, marketplace.id),
   });
 
   // The split and the range are read again inside, off the widget itself, rather than closed over:
@@ -258,28 +366,29 @@ export function ValueHistoryWidget({
   const hot = live && hover !== null && hover < n ? hover : null;
   const at = hot ?? n - 1;
   const readout = useMemo(
-    () => (view === null || n === 0 ? null : readoutAt(view, at, litKey, currency)),
-    [view, n, at, litKey, currency],
+    () =>
+      view === null || n === 0 ? null : readoutAt(view, at, litKey, currency, source.subject),
+    [view, n, at, litKey, currency, source.subject],
   );
 
   // Three sentences and the order is what keeps them apart — `CollectionValueWidget`'s: a refusal
   // wins, because a card that went on saying *reading* over a read that will never answer is the
   // one failure a reader cannot act on.
-  const failure = summary.error ?? history.error;
-  if (failure !== null) {
+  const failure = summaryError ?? history.error;
+  if (failure !== null && failure !== undefined) {
     return (
       <WidgetMessage tone="destructive">
         Couldn't load price history. {ipcError(failure)}
       </WidgetMessage>
     );
   }
-  if (summary.data === undefined || history.data === undefined || view === null) {
+  if (summary === undefined || history.data === undefined || view === null) {
     return <WidgetMessage>Loading price history…</WidgetMessage>;
   }
-  // Rust answers no points at all for an empty collection, and the live point is always inside
-  // the range, so `n === 0` and *nothing owned* are one state.
-  if (summary.data.totalCards === 0 || n === 0 || readout === null) {
-    return <WidgetMessage>Nothing in your collection yet.</WidgetMessage>;
+  // Rust answers no points at all for an empty collection or wishlist, and the live point is
+  // always inside the range, so `n === 0` and *nothing to value* are one state.
+  if (summary.empty || n === 0 || readout === null) {
+    return <WidgetMessage>{source.empty}</WidgetMessage>;
   }
 
   const layout = layoutFor(fit, { split, figures: figuresOn, bucketCount: view.series.length });
@@ -288,7 +397,7 @@ export function ValueHistoryWidget({
   const firstDay = history.data.points.length === 1;
   const lit = view.series.find((s) => s.key === litKey) ?? view.series[0];
   const litRow = readout.rows.find((row) => row.key === litKey) ?? null;
-  const unpriced = summary.data.unpriced;
+  const unpriced = summary.unpriced;
   const tile = fit.tier === 0;
   const inRail = layout.rail !== null;
 
@@ -330,11 +439,10 @@ export function ValueHistoryWidget({
   const spanWord = view.historyShort
     ? `the last ${plural(spanDays, "day")}`
     : WINDOW_WORD[range];
-  const subject =
-    split === "total" ? "Collection value" : `Collection value by ${SPLIT_WORD[split]}`;
+  const subject = split === "total" ? source.noun : `${source.noun} by ${SPLIT_WORD[split]}`;
   const chartLabel =
     split === "total"
-      ? `Collection value, ${spanWord}`
+      ? `${source.noun}, ${spanWord}`
       : `Value by ${SPLIT_WORD[split]}, ${spanWord}`;
   const valueText =
     `${readout.date}: ` +
@@ -459,7 +567,8 @@ export function ValueHistoryWidget({
           currency={currency}
           rowHandlers={rowHandlers}
           rowFigure={rowFigure}
-          foot={`${marketplace.label} prices${markersOn ? " · ◇ collection changes" : ""}`}
+          foot={`${marketplace.label} prices${markersOn ? ` · ◇ ${source.markers}` : ""}`}
+          subject={source.subject}
         />
       )}
 
@@ -698,6 +807,7 @@ function RailList({
   rowHandlers,
   rowFigure,
   foot,
+  subject,
 }: {
   rect: Rect;
   rows: number;
@@ -709,6 +819,7 @@ function RailList({
   rowHandlers: (key: string) => RowHandlers;
   rowFigure: (key: string) => ReactElement | null;
   foot: string;
+  subject: ValueSubject;
 }): ReactElement {
   let drawn: ReactElement[];
   if (split !== "total") {
@@ -731,7 +842,7 @@ function RailList({
       );
     }
   } else {
-    drawn = totalFacts(view, at, currency).slice(0, rows);
+    drawn = totalFacts(view, at, currency, subject).slice(0, rows);
   }
   const used = drawn.length === 0 ? 0 : drawn.length * ROW_PITCH - 3;
   return (
@@ -759,7 +870,12 @@ function RailList({
 /** Total's rail: the change over the range to the hovered day, split into what the reader did and
  *  what prices did — the two sum to it exactly, because the second is the first less the other —
  *  and the range's high and low. */
-function totalFacts(view: HistoryView, at: number, currency: Currency): ReactElement[] {
+function totalFacts(
+  view: HistoryView,
+  at: number,
+  currency: Currency,
+  subject: ValueSubject,
+): ReactElement[] {
   const n = view.days.length;
   const change = n > 0 ? view.totals[at] - view.totals[0] : 0;
   let collection = 0;
@@ -777,7 +893,7 @@ function totalFacts(view: HistoryView, at: number, currency: Currency): ReactEle
     <PlainRow key="prices" label="Price moves" value={signed(prices, currency)} chip />,
     <PlainRow
       key="collection"
-      label="Collection changes"
+      label={subject === "wishlist" ? "Wishlist changes" : "Collection changes"}
       value={Math.round(Math.abs(collection) * 100) === 0 ? "none" : signed(collection, currency)}
     />,
     <PlainRow

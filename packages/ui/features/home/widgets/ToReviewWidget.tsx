@@ -309,10 +309,11 @@ export function ToReviewWidget({ widget, fit, still }: WidgetBodyProps): ReactEl
    */
   const tile = fit.tier === 0;
   const captioned = tile || !fit.compact;
-  const shown = rows.slice(0, fit.rowsFit(captioned ? ROW_CAPTIONED : ROW_BARE));
+  const rowH = captioned ? ROW_CAPTIONED : ROW_BARE;
+  const shown = rows.slice(0, fit.rowsFit(rowH));
 
   return (
-    <WidgetRowList fit={fit}>
+    <WidgetRowList fit={fit} layout={fit.listLayout(shown.length, rowH)}>
       {shown.map((row) => {
         const onPress = still ? undefined : () => open(row);
         // What this box draws under the name and at the right — and so what the press is named.

@@ -36,6 +36,7 @@
   "sync_state",
   "trade_lines",
   "trades",
+  "wish_snapshots",
   "wishlist_entries",
   "wishlist_folders"
 ]

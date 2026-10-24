@@ -239,8 +239,22 @@ decision named**, which is the card's own look wavering, and replaces its row. T
 other look are kept for the printing evidence, so it chooses the second printing on them. Not
 measured on readers' scans.
 
-**What it cannot see**: a second copy of the same printing laid on the first — nothing about it
-looks different. Lift the first away for five frames, or use the tray's quantity stepper.
+**Another copy of the same printing laid on the decided card adds (#1375).** Two copies of one
+look look alike, so nothing about the second card says it is there — but laying it does. While a
+card is decided the agreement remembers where it was on its last vote, and counts the frames
+running with a card in front of the lens that vote for no look of it: the hand and the card being
+laid over it. After **two** (`Rules::relaid_after`), the decided card agreed again **somewhere
+else** — its bounds overlapping where it lay by less than **0.92** (`Rules::relaid_overlap`, about
+4% of its width) — is decided again (`Decision::relaid`). Both halves are needed: a hand
+passing over the card leaves it where it lay, and a card held and moved is never hidden from the
+lens. Frames with no card at all neither count nor end the run, so a card fumbled out of sight is
+still the stretch break's to judge. The session takes the new decision as the one standing — the
+same look, so the same printing, and no frame of the copy is kept for the evidence — with
+`replaces_previous` false, so the tray bumps the row it filed (`addDecision`: a resolved decision
+on the newest row's printing, in the same known finish). **Neither number was measured on a
+camera**; the test is a pile dropped card by card. What it cannot see: a copy laid exactly where
+the first lay, and a copy whose laying never hid the first from the detector — the stretch break
+and the tray's quantity stepper are still the answers there.
 
 ## 5. The decision
 
@@ -856,6 +870,35 @@ delete question is a `Dialog` at `layer="stacked"`. Neither table syncs and the 
 On the phone face both are rows of the tray footer's `⋯` sheet, and the history is
 `scanner/HistorySheet.tsx`, an `ActionSheet` whose question is a page, not a second dialog.
 
+### Put back in tray (issue #1374, 2026-10-24)
+
+**A past scan can go back into the tray**, so a pile filed by mistake and taken out of the
+collection again (or archived when it was meant to be filed) is not lost: the batch's lines land
+in the tray and the reader files or archives them again with the tray's own presses — into the
+folder, and at the condition, the Defaults say now. The press is _Put back in tray_: a button
+beside _Delete…_ in `ScanHistoryDialog`'s batch header, and a sheet row above _Rename_ in the
+phone's `HistorySheet`. Each face hands the batch to its page (`onPutBack`), which closes the
+history, hands the caret back to the press that opened it, and toasts _Put N cards from “Scan 4”
+back in the tray_.
+
+**It is the page's, not the engine's**: the tray is the page's to write, whole, so no command
+writes for it. `history/putBack.ts` reads `tray.latest()` (every tray writer's rule) and writes
+through `setRows`, so the rows are stored by the same debounced write as any other change and
+filed by nothing until Add. The rows are `reader/tray.ts`'s `addBatch`: one settled row per line
+(no pick to make), at the head of the tray in the batch's order, never bumping the newest row,
+with the line's finish fitted to the printing's finishes as they are now (`fitFinish` — a finish
+the printing no longer has asks again). A tray that would pass `MAX_TRAY_ROWS` (5,000, the store's
+`scanner::MAX_TRAY_ROWS`) is refused before anything is built.
+
+**`scan_history_get` answers the two facts a row needs that a line does not store**: each line's
+`finishes`, read from `cards` now, and `printingGone` — the printing has left `cards` since the
+batch was written. Such a line still reads in the history but is left out of a put-back (no Add
+could file it), and the toast's body says how many copies were. A batch whose every printing has
+gone puts back nothing and says so (`NOTHING_TO_PUT_BACK`).
+
+**The batch is not touched**: it stays the record of what was put away then, and the next Add or
+Archive of those rows writes a batch of its own.
+
 ### The Developer switch
 
 **The panels sit behind a Developer switch at the end of the bar, stored in `scanner_prefs`.** Off,
@@ -1050,6 +1093,41 @@ stay in the tray: creating a deck writes its list, and **Add to collection** rec
   scrim would land in a tray the reader cannot see. Closing it resumes exactly what was running.
 - **The row is `tray.ts`'s `addPicked`**: settled, newest first, bumping the newest row by
   `addDecision`'s rule, and landed with a scan's marks. No toast: the tray is staging.
+
+## Scan sounds
+
+**A card that lands in the tray plays a short sound, and a valuable one plays a bigger one**
+(2026-10-24). Six files in `features/scanner/sounds/`, renamed from the owner's set so their names
+say what decides them rather than a dollar figure the reader can move: `scan-ok.wav`,
+`scan-needs-input.wav`, `price-tier-1.wav`, `price-tier-2.wav`, `price-tier-3.wav` and
+`jackpot.wav` (44.1 kHz mono PCM, 0.26–3.3 s, 670 KB together; Vite emits each under `assets/`, so
+the web build precaches them with the shell).
+
+- **Which sound is `scanSounds.ts`'s** (pure): a landing that asks the reader something — a pick,
+  or an `unknown` finish (`landingNeedsInput`) — plays `needs-input` whatever it costs; anything
+  else plays the highest tier its price reaches (`soundForPrice`, each floor *at least*), and
+  `ok` below the first or unpriced. **A row the reader settles** — a printing picked, a finish
+  named, a printing found through *More printings…* — plays its tier then (`settledRows`: same key,
+  same `addedAt`, asked before and not now; a second opinion is a landing, so it is not counted
+  twice). Two rows settled by one write play the dearer one's.
+- **The price is the tray's own read** (`trayPricesQuery`, at the tray's marketplace — a trade's
+  over one), so the figure over the camera and the figure the jingle is judged by are one.
+- **`useScanSounds`** plays them, called by both faces' pages beside `useTrayLanding`: keyed on
+  `landed` (a new object per landing) and on the tray's rows, never on the first render. Only the
+  newest event plays — a price read answering after a later card landed is dropped.
+- **The player is Web Audio** (`player.ts`), not a media element: Android's WebView refuses an
+  `<audio>`'s `play()` without a fresh gesture, and a card lands seconds after the last press. One
+  `AudioContext`, each file fetched and decoded once (preloaded as the page mounts), resumed on any
+  press if the platform suspended it; one sound at a time, a new one stopping the last. A host
+  without Web Audio, or a file that will not decode, is a silent scan, never an error.
+- **The setting is `scansounds.rs`**: one `app_meta` row (`scan_sounds`) — on or off, and the four
+  floors, default 1, 10, 100 and 1000 **in the reader's marketplace currency**, never converted.
+  The write refuses a ladder that does not climb (`TIERS_MUST_CLIMB`; the page's `ladderRefusal`
+  says the same words) and the read treats one as the defaults. **It takes no scanner lease** —
+  unlike `set_scanner_prefs` it is written from Settings, which holds no scanner. The page's entry
+  is `["scanSounds"]` (`useScanSoundSettings`), followed across windows (`FOLLOW_LIVE_APP_META`).
+- **Settings → Scanner → Scan sounds** (`ScanSoundsPanel`, both editions): the switch, a row per
+  sound with a Play to preview it, and a *From* box per tier, stored when left or on Enter.
 
 ## Sending a scan to the inbox
 

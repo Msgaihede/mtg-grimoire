@@ -129,10 +129,11 @@ export function SetCompletionWidget({ widget, fit }: WidgetBodyProps): ReactElem
   const bare = fit.compact || fit.tier === 0;
   // A tile's figure is its caption; a wider bare row has none.
   const captioned = fit.tier === 0 || !bare;
-  const shown = sortSets(query.data, order).slice(0, fit.rowsFit(rowPx(captioned, bars)));
+  const rowH = rowPx(captioned, bars);
+  const shown = sortSets(query.data, order).slice(0, fit.rowsFit(rowH));
 
   return (
-    <WidgetRowList fit={fit} label="Sets">
+    <WidgetRowList fit={fit} label="Sets" layout={fit.listLayout(shown.length, rowH)}>
       {shown.map((set) => {
         const measurable = set.size !== null && set.size > 0;
         // Floored like the figure, so a track never reaches the end of its rail beside a `99%`.

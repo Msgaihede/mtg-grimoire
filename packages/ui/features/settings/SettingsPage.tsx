@@ -10,6 +10,7 @@ import { LabelsPanel } from "@/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
 import { PrivacyLink } from "@/features/settings/PrivacyLink";
 import { ReviewPanel } from "@/features/settings/ReviewPanel";
+import { ScanSoundsPanel } from "@/features/settings/ScanSoundsPanel";
 import { SettingsNav } from "@/features/settings/SettingsNav";
 import { StartViewPanel } from "@/features/settings/StartViewPanel";
 import { SyncPanel } from "@/features/settings/SyncPanel";
@@ -441,6 +442,11 @@ export function SettingsPage({ update }: { update: Update }) {
               dialogs already read, so a hook here would be a second reader of one cached answer and
               threading it down would buy a prop. */}
           {shown("labels") && <LabelsPanel />}
+
+          {/* **`Scanner`'s one panel**: whether a scan beeps, and the prices its jingles start at.
+              It reaches the backend itself, `StartViewPanel`'s rule — `useScanSoundSettings` is
+              the one `["scanSounds"]` entry the Scanner reads as it plays. */}
+          {shown("scan-sounds") && <ScanSoundsPanel />}
 
           {/* **The two facts that reached the reader at exactly one place each, and that place was a
               hover tooltip** on the ribbon's status line — `ChromeStatus.tsx` names the folder and

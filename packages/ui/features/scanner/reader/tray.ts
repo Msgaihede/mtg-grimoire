@@ -15,6 +15,7 @@
 import type { Condition } from "@/lib/conditions";
 import type {
   CollectionImportItem,
+  ScanBatchLine,
   ScannerDecision,
   ScannerTrayChoice,
   ScannerTrayFinish,
@@ -227,6 +228,59 @@ export function addPicked(
   return { rows: [row, ...rows], bumped: false };
 }
 
+/**
+ * The most rows the tray's store keeps — `scanner::MAX_TRAY_ROWS`, spelled again so a pile put
+ * back from the history ({@link addBatch}) is refused before the write that would refuse it.
+ */
+export const MAX_TRAY_ROWS = 5_000;
+
+/** {@link addBatch}'s refusal: the pile would take the tray past {@link MAX_TRAY_ROWS}. */
+export const BATCH_WONT_FIT =
+  "That scan won't fit in the tray — add or archive what is in it first.";
+
+/**
+ * **A past scan back into the tray** — *Put back in tray* (issue #1374), the way back from a pile
+ * filed by mistake and taken out of the collection again, or archived when it was meant to be
+ * filed. The batch's lines land as rows at the head of the tray, in the order the batch holds them
+ * (the tray's own order when it was put away, newest first), and the reader files or archives
+ * them again with the tray's own presses — into whichever folder, at whichever condition, the
+ * Defaults now say.
+ *
+ * **Each line is one row, settled**: its printing is the one the reader filed, so nothing waits
+ * on a pick, and its finish is the one it was filed in, fitted to the printing's finishes as they
+ * are now ({@link fitFinish}) — a printing whose finishes have changed since asks again rather than
+ * filing a word it no longer has. **No row is bumped**: a pile put back is many rows at once, not
+ * the second copy of the card just scanned that {@link addDecision}'s bump is for.
+ *
+ * **A line whose printing has left the card database is left out** and counted in `left`, so the
+ * caller can say so: a row naming it is a row no Add could file. It throws {@link BATCH_WONT_FIT}
+ * rather than build a tray the store would refuse.
+ */
+export function addBatch(
+  rows: readonly ScannerTrayRow[],
+  lines: readonly ScanBatchLine[],
+  now: number,
+  newKey: () => string,
+): { rows: ScannerTrayRow[]; copies: number; left: number } {
+  const kept = lines.filter((line) => !line.printingGone);
+  if (rows.length + kept.length > MAX_TRAY_ROWS) throw new Error(BATCH_WONT_FIT);
+  const back = kept.map((line): ScannerTrayRow => ({
+    key: newKey(),
+    cardId: line.cardId,
+    oracleId: line.oracleId,
+    name: line.name,
+    setCode: line.setCode,
+    collectorNumber: line.collectorNumber,
+    finish: fitFinish(line.finish, line.finishes),
+    finishes: line.finishes,
+    quantity: line.quantity,
+    choices: [],
+    addedAt: now,
+  }));
+  const gone = lines.filter((line) => line.printingGone);
+  return { rows: [...back, ...rows], copies: totalCopies(back), left: totalCopies(gone) };
+}
+
 /** The one row a write is about, changed by `change`; every other row is the same object. */
 function update(
   rows: readonly ScannerTrayRow[],
@@ -393,7 +447,7 @@ export function trayLayoutOf(stored: string): ScannerTrayLayout {
 }
 
 /** Copies, not rows: a bumped row of three is three cards going into the collection. */
-export function totalCopies(rows: readonly ScannerTrayRow[]): number {
+export function totalCopies(rows: readonly Pick<ScannerTrayRow, "quantity">[]): number {
   return rows.reduce((sum, row) => sum + row.quantity, 0);
 }
 

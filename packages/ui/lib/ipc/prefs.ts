@@ -1,5 +1,5 @@
 /**
- * Stored preferences: the marketplace, zooms, list layouts, mark colours, search columns, deck search widths, shelf folds, hidden stacks, deck sorting and the folder pane, and the start view.
+ * Stored preferences: the marketplace, zooms, list layouts, mark colours, search columns, deck search widths, shelf folds, hidden stacks, deck sorting and the folder pane, the start view, and the scanner's sounds.
  *
  * **One domain of `../ipc.ts`, split out on 2026-10-11 (issue #557).** Nothing outside
  * `packages/ui/lib/ipc*` imports this file: every page, hook, story and test goes through
@@ -35,6 +35,23 @@ export interface DeckFolderPane {
   width: number | null;
   /** Whether the tree is folded to its rail. `false` on a database nobody has folded it in. */
   collapsed: boolean;
+}
+
+/**
+ * Whether the scanner plays a sound as a card lands, and the four prices its louder sounds start
+ * at — `scansounds::ScanSounds`, one `app_meta` row written whole.
+ *
+ * **The figures are in the reader's marketplace currency**, never converted: a threshold is "a
+ * card worth this much at the prices I see", and the scanner compares it with exactly those. The
+ * crate refuses a ladder that does not climb (each figure positive and above the one before), and
+ * reads one as the defaults — on, at 1, 10, 100 and 1000.
+ */
+export interface ScanSounds {
+  enabled: boolean;
+  tier1: number;
+  tier2: number;
+  tier3: number;
+  jackpot: number;
 }
 
 /** The prefs commands — spread into `ipc` by `../ipc.ts`, which is the only reader of this object. */
@@ -398,4 +415,16 @@ export const prefCommands = {
    * word is trimmed on the way in. Answers `collection::BUSY` under a running sync.
    */
   setStartView: (view: string) => invoke<void>("set_start_view", { view }),
+
+  /**
+   * The scanner's sounds — infallible at the far end: a missing or unreadable row, and one whose
+   * figures do not climb, answer the defaults.
+   */
+  scanSounds: () => invoke<ScanSounds>("scan_sounds"),
+  /**
+   * Remember them, whole. Refuses a ladder that does not climb in `scansounds::TIERS_MUST_CLIMB`,
+   * and answers `collection::BUSY` under a running sync. **Takes no scanner lease** — it is
+   * written from Settings, unlike `setScannerPrefs`.
+   */
+  setScanSounds: (sounds: ScanSounds) => invoke<void>("set_scan_sounds", { sounds }),
 };

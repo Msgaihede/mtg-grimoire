@@ -1,7 +1,7 @@
 /**
- * The wishlist's three shelf pieces that take a drop — a heading, the sticky bar, and an empty
- * folder's dashed box — each the shared `features/shelves` component, wired through
- * `features/shelves/useShelfDrag` with this page's payload reader and filing policy.
+ * The wishlist's shelf pieces that take a drop — a heading, the sticky bar, an empty folder's
+ * dashed box and a shelf's tiles (issue #1377) — each the shared `features/shelves` component,
+ * wired through `features/shelves/useShelfDrag` with this page's payload reader and filing policy.
  *
  * **Through `useShelfDrag` and never through `useWishDropTarget` directly**, because that is where
  * the shelves opt into `armOnMount`: a virtualised heading mounts as it scrolls in, a folder drag
@@ -17,10 +17,12 @@
 import { useCallback, useRef } from "react";
 import { Layers } from "lucide-react";
 import { EmptyShelf } from "@/features/shelves/EmptyShelf";
+import { ShelfContents } from "@/features/shelves/ShelfContents";
 import { useTakeHeadingCaret, type HeadingCaret } from "@/features/shelves/headingCaret";
 import { ShelfHeading, type ShelfHeadingProps } from "@/features/shelves/ShelfHeading";
 import { ShelfStickyBar } from "@/features/shelves/ShelfStickyBar";
 import {
+  useShelfContentsDropTarget,
   useShelfDragSource,
   useShelfDropTarget,
   useShelfStickyDropTarget,
@@ -135,6 +137,24 @@ export function WishShelfSticky({
 export function WishEmptyShelf({ cards }: { cards?: CardDrops }) {
   const drop = useShelfDropTarget({ read: readWishDrop, ...(cards ?? NO_CARDS) });
   return <EmptyShelf dropRef={drop.attach} dropMark={drop.mark} />;
+}
+
+/**
+ * **The key a shelf's contents targets share** — `useShelfContentsDropTarget`'s `shelf`, so every
+ * table row of one shelf lights while a card is over any of them. Scoped to this cabinet, since
+ * the collection's shelf ids are a different table's.
+ */
+export function wishContentsKey(shelf: Shelf): string {
+  return `wishlist:${shelf.id}`;
+}
+
+/**
+ * A shelf's tiles (issue #1377) — the box the wall lays behind them, a card target filing into
+ * that shelf exactly as its heading does.
+ */
+export function WishShelfContents({ shelf, cards }: { shelf: Shelf; cards: CardDrops }) {
+  const drop = useShelfContentsDropTarget({ read: readWishDrop, ...cards }, wishContentsKey(shelf));
+  return <ShelfContents dropRef={drop.attach} over={drop.over} />;
 }
 
 /** How a test or a live probe finds a managed folder's empty box. */

@@ -108,10 +108,10 @@ import { cardTreatments, treatmentName } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 
 import { AppScale } from "../AppScale";
-import type { WidgetFit } from "../fit";
+import { footerLinePx, type WidgetFit } from "../fit";
 import { deckListKey, newPrintingsKey, NEW_PRINTINGS_ROOT } from "../keys";
 import { widgetConfig } from "../layout";
-import { WidgetFooter, WidgetMessage, WidgetRowList } from "../WidgetParts";
+import { WidgetFooterLine, WidgetMessage, WidgetRowList } from "../WidgetParts";
 import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
 import { pickOf, toggleOnOf } from "../widgetSettings";
 import { widgetMeta } from "../widgets";
@@ -128,8 +128,6 @@ const THUMB_PX = 33;
 const HEADER_PX = 16;
 /** The gap between two day groups — the body's `gap-2`. */
 const GROUP_GAP_PX = 8;
-/** What the footer takes off the body before rows are counted, gap included. */
-const FOOTER_PX = 22;
 /** A month rule, and the `Seen already` rule: 20px, over a row gap. */
 const RULE_PX = 20;
 /** The closing line: 34px, gap included. */
@@ -642,7 +640,9 @@ export function NewPrintingsWidget({ widget, fit, still }: WidgetBodyProps): Rea
      */
     const exhaustible = answer.printings.length < NEW_PRINTINGS_READ && answer.oldest !== null;
     const closing = fit.h >= CLOSING_FROM_H && exhaustible;
-    const base = FOOTER_PX + (closing ? CLOSING_PX : 0);
+    // The footer is one line, reserved at what one draws: it truncates rather than wrapping onto a
+    // second line nothing reserved (issue #1379).
+    const base = footerLinePx(fit) + (closing ? CLOSING_PX : 0);
     const ruleOpts = {
       months: fit.h >= MONTH_RULE_FROM_H,
       seen: fit.h >= SEEN_RULE_FROM_H,
@@ -686,9 +686,7 @@ export function NewPrintingsWidget({ widget, fit, still }: WidgetBodyProps): Rea
             period.
           </p>
         )}
-        <WidgetFooter>
-          {footerLine(fit.tier, answer.decksWatched, days, langs, flags)}
-        </WidgetFooter>
+        <WidgetFooterLine line={footerLine(fit.tier, answer.decksWatched, days, langs, flags)} />
       </>
     );
   })();

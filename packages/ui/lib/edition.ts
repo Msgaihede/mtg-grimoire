@@ -47,6 +47,7 @@ export type LightView = (typeof LIGHT_VIEWS)[number];
  *   edition draws with its tags (spec §4, Search). A hide with no way back would be a trap.
  * - **`theory-marks`** and **`labels`** — the light deck editor draws both marks (spec §4, Decks),
  *   so the place a reader recolours or deletes them comes with it.
+ * - **`scan-sounds`** — the phone scans as the desktop does, and beeps by the same ladder.
  * - **`cache`** — *the image cache*, and with it the combo list's clear, the one optional feed
  *   that has no panel of its own.
  * - **`errors`** — the log is rows in the reader's own database, written by the same fetches on
@@ -71,6 +72,7 @@ export const LIGHT_SETTINGS = [
   "hidden-tags",
   "theory-marks",
   "labels",
+  "scan-sounds",
   "cache",
   "errors",
   "danger",

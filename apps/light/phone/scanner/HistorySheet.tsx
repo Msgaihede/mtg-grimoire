@@ -1,11 +1,12 @@
 import { useEffect, useId, useState } from "react";
-import { Archive, ChevronRight, FolderInput, Pencil, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronRight, FolderInput, Pencil, Trash2 } from "lucide-react";
 import { FinishMark } from "@grimoire/ui/components/FinishMark";
 import {
   batchLine,
   batchStatusWords,
   deleteSentence,
   EMPTY_HISTORY,
+  PUT_BACK_LABEL,
   SCAN_HISTORY_TITLE,
   scanWhen,
 } from "@grimoire/ui/features/scanner/history/historyWords";
@@ -45,6 +46,10 @@ const LIST: Page = { kind: "list" };
  * rename for a trade. **The delete question is a page, not a second dialog** — one sheet is one
  * Back step (`sheetHistory.ts`), and a question stacked over it would need a rung of its own.
  *
+ * **And *Put back in tray*** (issue #1374), a row above the record's two writes: it hands the batch
+ * to the page (`onPutBack`), which lands its lines in the tray and closes the sheet — the desktop
+ * dialog's press, for a pile filed by mistake and taken out again.
+ *
  * **Not a place**: the history is a record to glance at between piles, and nothing in it is worth
  * a link, so the URL does not change. Back closes the sheet, as it closes every sheet; either way
  * out starts it on the list next time.
@@ -57,8 +62,12 @@ export function HistorySheet({
   open,
   onClose,
   onDismiss,
+  onPutBack,
 }: {
   open: boolean;
+  /** *Put back in tray*: the page lands the batch's lines in its tray, says so, and closes this —
+   *  answering whether they landed. */
+  onPutBack: (batch: ScanBatch) => boolean;
   /** A press on the scrim. */
   onClose: () => void;
   /** Escape and the ✕: the page hands the caret back to the press that opened the sheet. */
@@ -83,7 +92,15 @@ export function HistorySheet({
         (page.kind === "list" ? (
           <BatchList onPick={(id) => setPage({ kind: "batch", id })} />
         ) : (
-          <BatchPages page={page} onPage={setPage} />
+          <BatchPages
+            page={page}
+            onPage={setPage}
+            onPutBack={(batch) => {
+              // Landed, the sheet has closed: the next open starts on the list, `leave`'s rule. A
+              // refusal is a toast, and the reader is left on the batch they pressed.
+              if (onPutBack(batch)) setPage(LIST);
+            }}
+          />
         ))}
     </ActionSheet>
   );
@@ -172,9 +189,11 @@ function StatusWords({ batch }: { batch: Pick<ScanBatchSummary, "status" | "fold
 function BatchPages({
   page,
   onPage,
+  onPutBack,
 }: {
   page: Exclude<Page, { kind: "list" }>;
   onPage: (page: Page) => void;
+  onPutBack: (batch: ScanBatch) => void;
 }) {
   const batch = useScanBatch(page.id);
   const gone = batch.data === null;
@@ -220,6 +239,7 @@ function BatchPages({
           {back}
           <BatchView
             batch={batch.data}
+            onPutBack={onPutBack}
             onRename={() => onPage({ kind: "rename", id: summary.id })}
             onDelete={() => onPage({ kind: "delete", id: summary.id })}
           />
@@ -231,10 +251,12 @@ function BatchPages({
 /** One batch, read-only: its name, when and where it went, its two writes, and its lines. */
 function BatchView({
   batch,
+  onPutBack,
   onRename,
   onDelete,
 }: {
   batch: ScanBatch;
+  onPutBack: (batch: ScanBatch) => void;
   onRename: () => void;
   onDelete: () => void;
 }) {
@@ -249,6 +271,7 @@ function BatchView({
         <StatusWords batch={summary} />
       </header>
       <ul className="border-y border-border">
+        <SheetRow label={PUT_BACK_LABEL} Icon={ArchiveRestore} onPress={() => onPutBack(batch)} />
         <SheetRow label="Rename" Icon={Pencil} opens onPress={onRename} />
         <SheetRow label="Delete…" Icon={Trash2} destructive onPress={onDelete} />
       </ul>

@@ -394,8 +394,9 @@ const inRepo = (spec: string): boolean =>
  */
 // `md` is text and nothing else: the light edition's release notes are a glob of
 // `changelog/*.md` read as strings (`packages/ui/lib/bundledReleases.ts`), and no Markdown file
-// can import a module.
-const ASSET_EXTENSION = /\.(?:css|json|md|svg|png|jpe?g|webp|woff2?)$/i;
+// can import a module. `wav` is the scanner's sounds (`features/scanner/sounds/player.ts`), a
+// URL to a file of samples and nothing that runs.
+const ASSET_EXTENSION = /\.(?:css|json|md|svg|png|jpe?g|webp|woff2?|wav)$/i;
 const isAsset = (spec: string): boolean => spec.includes("?") || ASSET_EXTENSION.test(spec);
 
 /** A specifier as a key of `files`, or `null` for one this walk cannot follow. */

@@ -24,8 +24,17 @@
 //! the deciding frame's (neither is among the other's twins, [`crate::scanner::TWIN_GAP`])
 //! decide that look, [`Decision::another_look`]. More frames than a card takes, because a held
 //! card's best look can waver where its twins do not reach, and a change made in error adds a
-//! row. Two copies of one look are still one decision — nothing about the second looks
-//! different.
+//! row.
+//!
+//! **Or until another copy of it is laid on it** (#1375), ours too. Two copies of one look look
+//! alike, so nothing about the second card tells it from the first — but laying it does. While
+//! the card is decided, [`Rules::relaid_after`] frames with a card in front of the lens that do
+//! not vote for the decided card (the hand and the falling card over it) and then the decided
+//! card agreed again **somewhere else** — its bounds overlapping where it lay by less than
+//! [`Rules::relaid_overlap`] — decide it again, [`Decision::relaid`]. Both halves are needed: a
+//! hand passing over a card leaves it where it lay, and a held card wobbling is never hidden.
+//! Frames with no card in front of the lens neither count toward it nor end it, so a card
+//! fumbled out of sight and shown again is still the card decided, until the stretch break.
 
 use crate::frame::{bounds_iou, Quad};
 use crate::scanner::{Read, Scored};
@@ -44,6 +53,15 @@ pub struct Rules {
     /// Accepted frames running, each naming another look of the decided card than the deciding
     /// frame's, that decide it: a second printing laid on the first.
     pub another_look: usize,
+    /// Frames running with a card in front of the lens but no vote for the decided card that
+    /// leave the place it lay open to another copy of it: the hand, and the card being laid.
+    pub relaid_after: u32,
+    /// Bounds IoU under which the decided card agreed again after [`Rules::relaid_after`] is
+    /// lying somewhere else: another copy laid on it, not the card the hand passed over. Not
+    /// measured on a camera — a card's corners jitter by a percent or so at rest, and a card
+    /// dropped on a pile lands a few millimetres off the last (a shift of 4% of its width is
+    /// about 0.92).
+    pub relaid_overlap: f32,
 }
 
 impl Default for Rules {
@@ -56,6 +74,8 @@ impl Default for Rules {
             same_place: 0.35,
             forget_after: 5,
             another_look: 3,
+            relaid_after: 2,
+            relaid_overlap: 0.92,
         }
     }
 }
@@ -82,6 +102,9 @@ pub struct Decision {
     /// Another look of the card decided before it, come to rest with no break between: a second
     /// printing laid on the first, where the card alone says nothing changed.
     pub another_look: bool,
+    /// The same look of the card decided before it, laid again: the decided card hidden for
+    /// [`Rules::relaid_after`] frames and agreed again in another place — another copy.
+    pub relaid: bool,
 }
 
 /// Two looks the picture cannot tell apart: the same look, or either among the other's twins.
@@ -103,6 +126,13 @@ pub struct Agreement {
     decisions: usize,
     /// Frames running with no card in front of the lens.
     absent: u32,
+    /// Where the decided card was on its last vote — what a copy laid on it is told apart by.
+    held: Option<Quad>,
+    /// Frames running with a card in front of the lens and no vote for the decided card.
+    away: u32,
+    /// Where the decided card lay when it went [`Rules::relaid_after`] frames unseen: the next
+    /// agreement on it is another copy when it is somewhere else. `None` until then.
+    left: Option<Quad>,
 }
 
 impl Agreement {
@@ -119,6 +149,13 @@ impl Agreement {
         self.decision = None;
         self.look = None;
         self.absent = 0;
+        self.forget_place();
+    }
+
+    fn forget_place(&mut self) {
+        self.held = None;
+        self.away = 0;
+        self.left = None;
     }
 
     pub fn decision(&self) -> Option<&Decision> {
@@ -173,10 +210,24 @@ impl Agreement {
             if self.absent >= self.rules.forget_after {
                 self.decision = None;
                 self.look = None;
+                self.forget_place();
             }
         }
         let best = r.best();
         let vote = r.accepted || r.supported;
+        // Whether the decided card is still in sight: a frame voting for it — any look, since a
+        // held card's best look wavers — says so, and where; one with another card or none
+        // recognised in front of the lens says not. An empty frame says nothing.
+        let decided = self.decision.as_ref().map(|d| d.card);
+        if vote && best.is_some_and(|b| Some(b.scored.card) == decided) {
+            self.away = 0;
+            self.held = best.map(|b| b.quad);
+        } else if r.present && decided.is_some() {
+            self.away = self.away.saturating_add(1);
+            if self.away >= self.rules.relaid_after && self.left.is_none() {
+                self.left = self.held;
+            }
+        }
         let last = self.votes.last().cloned();
         if !vote {
             // A weak frame of the counted card, in the same place, inside the gap: hold.
@@ -243,6 +294,8 @@ impl Agreement {
             }
             self.decisions += 1;
             self.look = Some((entry, twins.clone()));
+            self.held = Some(b.quad);
+            self.left = None;
             self.decision = Some(Decision {
                 entry,
                 card,
@@ -250,6 +303,7 @@ impl Agreement {
                 twins: twins.clone(),
                 how: "agreed",
                 another_look: true,
+                relaid: false,
             });
             return true;
         }
@@ -260,6 +314,12 @@ impl Agreement {
         if !(agreed || instant) {
             return false;
         }
+        let previous = self.decision.as_ref().filter(|d| d.card == card);
+        // The decided card agreed again after it went unseen, somewhere else: another copy.
+        let relaid = previous.is_some()
+            && self
+                .left
+                .is_some_and(|from| bounds_iou(&b.quad, &from) < self.rules.relaid_overlap);
         let decision = Decision {
             entry: b.scored.entry,
             card: b.scored.card,
@@ -267,15 +327,16 @@ impl Agreement {
             twins: b.scored.twins.clone(),
             how: if agreed { "agreed" } else { "instant" },
             // Later frames of a decision repeat what its first said.
-            another_look: self
-                .decision
-                .as_ref()
-                .is_some_and(|d| d.card == card && d.another_look),
+            another_look: !relaid && previous.is_some_and(|d| d.another_look),
+            relaid: relaid || previous.is_some_and(|d| d.relaid),
         };
-        if self.decision.as_ref().map(|d| d.card) != Some(decision.card) {
+        if previous.is_none() || relaid {
             self.decisions += 1;
             self.look = Some((entry, twins.clone()));
         }
+        self.held = Some(b.quad);
+        self.away = 0;
+        self.left = None;
         self.decision = Some(decision);
         true
     }
@@ -504,6 +565,81 @@ mod tests {
         for i in 0..4 {
             assert!(!s.observe(&supported, 200.0 + 100.0 * i as f64));
         }
+        assert_eq!(s.decisions(), 1);
+    }
+
+    /// A frame with a card in front of the lens that votes for none: a hand over the pile.
+    fn covered() -> Read {
+        Read {
+            present: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn another_copy_laid_on_the_decided_card_is_a_new_decision() {
+        // Card 1 decided at x 0, hidden two frames, then at rest a fifth of a card over (#1375).
+        let mut s = Agreement::default();
+        s.observe(&accepted(1), 0.0);
+        assert!(s.observe(&accepted(1), 100.0));
+        s.observe(&covered(), 200.0);
+        s.observe(&covered(), 300.0);
+        let laid = || frame(1, 12.0, true, false, false, false);
+        assert!(!s.observe(&laid(), 400.0), "one frame of it is not agreed");
+        assert_eq!(s.decisions(), 1);
+        assert!(s.observe(&laid(), 500.0));
+        let d = s.decision().expect("decided");
+        assert_eq!((d.card, d.relaid, d.another_look), (1, true, false));
+        assert_eq!(s.decisions(), 2);
+        // More of it is the same decision, and it says the same.
+        assert!(s.observe(&laid(), 600.0));
+        assert_eq!(s.decisions(), 2);
+        assert!(s.decision().expect("held").relaid);
+        // And a third copy laid on the second, back at x 0, is another.
+        s.observe(&covered(), 700.0);
+        s.observe(&covered(), 800.0);
+        s.observe(&accepted(1), 900.0);
+        s.observe(&accepted(1), 1000.0);
+        assert_eq!(s.decisions(), 3);
+    }
+
+    #[test]
+    fn a_card_hidden_where_it_lay_or_moved_in_sight_is_the_card_decided() {
+        // A hand passing over it: hidden, and back where it lay.
+        let mut s = Agreement::default();
+        s.observe(&accepted(1), 0.0);
+        s.observe(&accepted(1), 100.0);
+        for at in [200.0, 300.0, 400.0] {
+            s.observe(&covered(), at);
+        }
+        s.observe(&frame(1, 1.0, true, false, false, false), 500.0);
+        assert!(s.observe(&frame(1, 1.0, true, false, false, false), 600.0));
+        assert_eq!(s.decisions(), 1);
+        assert!(!s.decision().expect("held").relaid);
+
+        // A held card moved in sight of the lens, one frame hidden on the way.
+        let mut s = Agreement::default();
+        s.observe(&accepted(1), 0.0);
+        s.observe(&accepted(1), 100.0);
+        s.observe(&frame(1, 10.0, true, false, false, false), 200.0);
+        s.observe(&covered(), 300.0);
+        for (i, x) in [20.0, 30.0, 30.0].into_iter().enumerate() {
+            s.observe(
+                &frame(1, x, true, false, false, false),
+                400.0 + 100.0 * i as f64,
+            );
+        }
+        assert_eq!(s.decisions(), 1);
+
+        // Fumbled out of sight, the stretch break's to judge: empty frames say nothing.
+        let mut s = Agreement::default();
+        s.observe(&accepted(1), 0.0);
+        s.observe(&accepted(1), 100.0);
+        for at in [200.0, 300.0, 400.0, 500.0] {
+            s.observe(&nothing(), at);
+        }
+        s.observe(&frame(1, 20.0, true, false, false, false), 600.0);
+        s.observe(&frame(1, 20.0, true, false, false, false), 700.0);
         assert_eq!(s.decisions(), 1);
     }
 

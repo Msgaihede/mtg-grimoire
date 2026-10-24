@@ -13632,7 +13632,8 @@ describe("the busy fault", () => {
     // after a merge.
     // 147 → 148 on 2026-10-14 with `share_auto_update` (issue #1025), which republishes changed
     // shares on the write connection and reaches `refuseIfBusy` first. Count again after a merge.
-    expect(names).toHaveLength(148);
+    // 148 → 149 on 2026-10-24 with `set_scan_sounds`, the scanner's sounds, through `with_write`.
+    expect(names).toHaveLength(149);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -22584,6 +22585,56 @@ describe("the value history", () => {
 });
 
 /**
+ * `wishlist_value_history` — the Wishlist value graph's read (issue #1378): the collection
+ * graph's every rule over `wish_snapshots`, with the wishlist's holding as its live point.
+ */
+describe("the wishlist value history", () => {
+  const ask = (db: FakeDb, split = "total", marketplace?: string) =>
+    readHandlers(db).wishlist_value_history({ split, marketplace });
+
+  it("ends on a live point worth exactly what the wishlist summary says, under every split", () => {
+    const db = seed("starter");
+    expect(db.wishlistEntries.length).toBeGreaterThan(0);
+    for (const marketplace of ["tcgplayer", "cardmarket", "cardkingdom", "manapool"] as const) {
+      const summary = readHandlers(db).wishlist_summary({ marketplace });
+      for (const split of ["total", "type", "color", "set"]) {
+        const got = ask(db, split, marketplace);
+        const last = got.points[got.points.length - 1];
+        expect(last.live).toBe(true);
+        expect(last.total).toBeCloseTo(summary.cost, 2);
+        if (split !== "total") {
+          expect(last.values.reduce((n, v) => n + v, 0)).toBeCloseTo(last.total, 2);
+        }
+      }
+    }
+  });
+
+  it("draws the derived history with every step a price move", () => {
+    const got = ask(seed("starter"));
+    expect(got.points.length).toBeGreaterThan(1);
+    expect(got.points[0].moved).toBeNull();
+    for (let i = 1; i < got.points.length; i++) {
+      const p = got.points[i];
+      expect(p.total - got.points[i - 1].total - p.moved!).toBeCloseTo(0, 2);
+    }
+  });
+
+  it("reads its own table: a wish's snapshot is on the wishlist's line and not the collection's", () => {
+    const db = seed("starter");
+    db.wishHistory = [];
+    expect(ask(db).points).toHaveLength(1);
+    expect(
+      readHandlers(db).collection_value_history({ split: "total" }).points.length,
+    ).toBeGreaterThan(1);
+  });
+
+  it("answers nothing for an empty wishlist and refuses a split it does not know", () => {
+    expect(ask(seed("empty")).points).toEqual([]);
+    expect(() => ask(seed("starter"), "rarity")).toThrow();
+  });
+});
+
+/**
  * `new_printings` — the reprints of what the watched decks hold, and the cursor beside them.
  *
  * **The corpus is the test's own here where every other block in this file reads the fixture's**,
@@ -25049,6 +25100,9 @@ describe("scan history", () => {
         layout: BOLT.layout,
         finish: "foil",
         quantity: 2,
+        // Read off `cards` now, for a tray row put back from the line (issue #1374).
+        finishes: JSON.parse(BOLT.finishes),
+        printingGone: false,
       },
       {
         id: 1,
@@ -25062,6 +25116,8 @@ describe("scan history", () => {
         layout: null,
         finish: "nonfoil",
         quantity: 1,
+        finishes: [],
+        printingGone: true,
       },
     ]);
     expect(r.scan_history_get({ id: 8 })).toBeNull();

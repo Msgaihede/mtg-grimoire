@@ -79,6 +79,7 @@ describe("the editions' Settings entries", () => {
       "hidden-tags",
       "theory-marks",
       "labels",
+      "scan-sounds",
       "cache",
       "errors",
       "danger",
@@ -98,6 +99,7 @@ describe("the editions' Settings entries", () => {
       "sync",
       "tags",
       "appearance",
+      "scanner",
       "storage",
       "errors",
     ]);

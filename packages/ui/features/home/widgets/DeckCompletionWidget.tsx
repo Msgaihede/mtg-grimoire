@@ -530,10 +530,8 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
   const captioned = tile || fullCaption || planLine;
   const footer = completionFooter(inScope, currency);
   const footerShown = fit.tier >= 1 && footer.text !== "";
-  const shown = sortCompletions(listed, order).slice(
-    0,
-    fit.rowsFit(rowPx(captioned), footerShown ? footerLinePx(fit) : 0),
-  );
+  const reserved = footerShown ? footerLinePx(fit) : 0;
+  const shown = sortCompletions(listed, order).slice(0, fit.rowsFit(rowPx(captioned), reserved));
 
   /**
    * **`decks` is one view with two states**, told apart by `openDeckId` — and `setActiveView`
@@ -546,7 +544,11 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
 
   return (
     <>
-      <WidgetRowList fit={fit} label="Decks">
+      <WidgetRowList
+        fit={fit}
+        label="Decks"
+        layout={fit.listLayout(shown.length, rowPx(captioned), reserved)}
+      >
         {shown.map((row) => {
           const caption = countCaption(row);
           // A complete deck has nothing to buy, so it draws no figure at all rather than a `$0.00`.

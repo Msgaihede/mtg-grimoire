@@ -557,6 +557,14 @@ export const homeCommands = {
   collectionValueHistory: (split: ValueSplit, marketplace: MarketplaceId) =>
     invoke<ValueHistory>("collection_value_history", { split, marketplace }),
   /**
+   * The wishlist's value over time at `marketplace`, cut by `split` — the Wishlist value graph's
+   * read (issue #1378), {@link collectionValueHistory}'s every rule over user schema v66's
+   * `wish_snapshots`. Its live point is `wishlist_summary`'s `cost`, and a step's remainder after
+   * `moved` is wishes added, bought or removed. See {@link ValueHistory}.
+   */
+  wishlistValueHistory: (split: ValueSplit, marketplace: MarketplaceId) =>
+    invoke<ValueHistory>("wishlist_value_history", { split, marketplace }),
+  /**
    * Every sticky note, `ORDER BY sort_order, id` — see {@link StickyNote}.
    *
    * **Takes no arguments and cannot fail**: the read is `#[tauri::command(async)]` on a *sync*

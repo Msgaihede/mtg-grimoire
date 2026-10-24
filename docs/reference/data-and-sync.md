@@ -20,7 +20,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   and **25**, and again 2026-10-07 at v60: **34** and **25** (v59's `deck_todo_lists` and v60's
   `sync_orphans`), and 2026-10-11 at v61: **35** and **25** (`sync_heard`), and the same day at v63: **37** and **25**
   (`trades` and `trade_lines`), and 2026-10-14 at v65: **39** and **25** (`scan_batches` and
-  `scan_batch_lines`); **a bare `grep -c 'Side::User'`
+  `scan_batch_lines`), and 2026-10-24 at v66: **40** and **25** (`wish_snapshots`); **a bare `grep -c 'Side::User'`
   over-counts** — 37 against 32 at v54 and 39 against 34 at v60, because `mod tests` matches the
   enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
@@ -1468,6 +1468,17 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `["scanHistory"]` root. The byte-identity figure went **96 → 99** (39 tables, 57 indexes, 3
   autoindexes), `UNDO_V65` heads every rewind chain, and the rung creates both empty — the stored
   tray is not history. [card-scanner.md](card-scanner.md)'s *Scan history* is the record.
+  **v66 adds `wish_snapshots`, the wishlist's holding per day** (2026-10-24, issue #1378) — one
+  row per wish per marketplace, keyed by the wish (the pinned printing, or `oracle:` and the
+  oracle id for any printing) and its finish (or `any`), with the printing that priced it, the
+  Wishlist value widget's unit price (NULL where unquoted) and the copies wanted. Written by
+  `price_history::snapshot` beside `price_snapshots`, in one transaction and by its rules, and
+  read by `value_history::wishlist_history` for the home page's Wishlist value graph.
+  `price_snapshots`' footing: `WITHOUT ROWID`, one index (`idx_wish_snapshots_wish`, the
+  thinning's probe), not synced, on the mirror's ignored list and the desktop's
+  `WRITTEN_BY_THE_APP`. The byte-identity figure went **99 → 101** (40 tables, 58 indexes, 3
+  autoindexes), `UNDO_V66` heads every rewind chain, and the rung creates it empty.
+  [home-page.md](home-page.md) §14 is the record.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

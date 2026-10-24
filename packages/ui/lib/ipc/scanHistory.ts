@@ -34,6 +34,12 @@ export interface ScanBatchLine {
   layout: string | null;
   finish: Finish;
   quantity: number;
+  /** The finishes the printing exists in, as the card database has them now — what a tray row
+   *  put back from this line offers. Empty when unknown or gone, which constrains nothing. */
+  finishes: string[];
+  /** The printing has left the card database since the batch was written: the line still reads,
+   *  but cannot go back into the tray, because no Add could file it (issue #1374). */
+  printingGone: boolean;
 }
 
 /** One batch in the history list. */
@@ -66,7 +72,8 @@ export interface ScanBatch {
 }
 
 export const scanHistoryCommands = {
-  /** Every batch, newest first. */
+  /** Every batch, newest first. *Put back in tray* (issue #1374) is the page's alone: it reads a
+   *  batch here and lands its lines in the tray, which is the page's to write. */
   scanHistoryList: () => invoke<ScanBatchSummary[]>("scan_history_list"),
   /** One batch with its lines, or `null` when it is gone. */
   scanHistoryGet: (id: number) => invoke<ScanBatch | null>("scan_history_get", { id }),

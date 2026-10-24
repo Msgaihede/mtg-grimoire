@@ -1,6 +1,7 @@
 import {
   createContext,
   memo,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -16,7 +17,10 @@ import { RarityGem } from "@/components/RarityGem";
 import { TABLE_BAND_HEIGHT, VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { SHELF_CONTENTS_ATTR } from "@/features/shelves/ShelfContents";
 import { shelfColumn } from "@/features/shelves/ShelfPlace";
+import { useShelfContentsDropTarget } from "@/features/shelves/useShelfDrag";
+import { DROP_OVER } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import { RULE_BREAK, RULE_BREAK_EDGE } from "@/lib/folderRules";
 import type { FolderNode } from "@/lib/folderTree";
@@ -30,7 +34,8 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
 import { printingOf, wishLabel } from "./wish";
-import { wishDraggable } from "./wishDrag";
+import { readWishDrop, wishDraggable } from "./wishDrag";
+import type { CardDrops } from "./WishShelfHeading";
 import { ElsewhereMark } from "./wishMarks";
 import { isBand, type ShelfBandRow, type WishTableRow } from "./wishShelfPlan";
 
@@ -433,6 +438,12 @@ export interface WishTableBands {
   sticky: (index: number) => ReactNode;
   /** How many levels a wish's shelf is indented — its rails and its step-in. */
   indentOf: (row: WishRow) => number;
+  /**
+   * **The shelf a wish's row files a card into, and its policy** (issue #1377) — `undefined` for a
+   * row whose shelf takes none. Every row of such a shelf is a card target, as its heading is, and
+   * all of them light while a card is over any one. Absent: no row is a target.
+   */
+  contentsOf?: (row: WishRow) => { key: string; cards: CardDrops } | undefined;
 }
 
 /**
@@ -541,6 +552,7 @@ function DraggableRow({
   name,
   typeLine,
   fixed = false,
+  dropRef,
   children,
   ...rest
 }: {
@@ -552,8 +564,21 @@ function DraggableRow({
   /** A wish in a deck's managed folder, which is **not** a drag source — the wall's `tileDrag`
    *  answers `null` for the same row, and carries the reason. */
   fixed?: boolean;
-} & ComponentProps<"div">) {
+  /** A drop target on the same element — {@link ShelfRow}'s. */
+  dropRef?: (element: HTMLElement | null) => () => void;
+} & Omit<ComponentProps<"div">, "ref">) {
   const ref = useRef<HTMLDivElement>(null);
+  const attach = useCallback(
+    (element: HTMLDivElement | null) => {
+      ref.current = element;
+      const release = dropRef?.(element);
+      return () => {
+        ref.current = null;
+        release?.();
+      };
+    },
+    [dropRef],
+  );
   useEffect(() => {
     const element = ref.current;
     if (!element || fixed) return;
@@ -569,10 +594,44 @@ function DraggableRow({
     });
   }, [wishId, folderId, cardId, name, typeLine, fixed]);
   return (
-    <div ref={ref} {...rest}>
+    <div ref={attach} {...rest}>
       {children}
     </div>
   );
+}
+
+/**
+ * A wish's row on a shelf that takes a card (issue #1377): {@link DraggableRow}, and a card target
+ * on the same element filing into the row's shelf with the heading's own policy. The row being
+ * carried is in its own folder, which that policy refuses.
+ *
+ * **A wash and no ring** while a card is over any row of the shelf: the rows are flush, so a ring
+ * per row would draw a stack of boxes where the reader should see one shelf.
+ */
+function ShelfRow({
+  contents,
+  className,
+  ...row
+}: ComponentProps<typeof DraggableRow> & { contents: { key: string; cards: CardDrops } }) {
+  const drop = useShelfContentsDropTarget({ read: readWishDrop, ...contents.cards }, contents.key);
+  return (
+    <DraggableRow
+      {...row}
+      {...{ [SHELF_CONTENTS_ATTR]: drop.over ? "over" : "" }}
+      dropRef={drop.attach}
+      className={cn(className, drop.over && DROP_OVER)}
+    />
+  );
+}
+
+/** {@link ShelfRow} where the row's shelf takes a card, a plain {@link DraggableRow} elsewhere. */
+function WishTableRowOf({
+  contents,
+  ...row
+}: ComponentProps<typeof DraggableRow> & {
+  contents: { key: string; cards: CardDrops } | undefined;
+}) {
+  return contents ? <ShelfRow {...row} contents={contents} /> : <DraggableRow {...row} />;
 }
 
 /**
@@ -758,7 +817,8 @@ export const WishlistTable = memo(function WishlistTable({
       renderRow={(props, row) =>
         // A band never reaches `renderRow` (rule 1); the first arm is for the type.
         isBand(row) ? null : row.cardId ? (
-          <DraggableRow
+          <WishTableRowOf
+            contents={bands?.contentsOf?.(row)}
             {...props}
             aria-description={ruleBreaks?.has(row.id) ? RULE_BREAK : undefined}
             wishId={row.id}
@@ -788,7 +848,8 @@ export const WishlistTable = memo(function WishlistTable({
             className={cn(props.className, "cursor-pointer")}
           />
         ) : (
-          <DraggableRow
+          <WishTableRowOf
+            contents={bands?.contentsOf?.(row)}
             {...props}
             aria-description={ruleBreaks?.has(row.id) ? RULE_BREAK : undefined}
             wishId={row.id}

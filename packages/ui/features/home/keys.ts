@@ -252,6 +252,18 @@ export function valueHistoryKey(split: ValueSplit, marketplace: MarketplaceId) {
 }
 
 /**
+ * The wishlist's value over time, one way split — `ipc.wishlistValueHistory`, the Wishlist value
+ * graph's read (issue #1378).
+ *
+ * {@link valueHistoryKey}'s shape under `["wishlist"]`, for the same two reasons: every wishlist
+ * write already invalidates that root and moves the live point, and `invalidatePricedQueries`
+ * sweeps it when a feed lands. The range and the measure are absent for that key's reason.
+ */
+export function wishlistValueHistoryKey(split: ValueSplit, marketplace: MarketplaceId) {
+  return ["wishlist", "valueHistory", split, marketplace] as const;
+}
+
+/**
  * The root the recently viewed strip is filed under — the module doc's second exception, and the
  * prefix `CardDetailModal`'s recorder invalidates. A root of its own because its one writer is
  * not a collection, wishlist or deck write; see the module doc.

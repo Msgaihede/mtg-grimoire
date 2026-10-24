@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HeadingCaret } from "@/features/shelves/headingCaret";
+import { SHELF_CONTENTS_ATTR } from "@/features/shelves/ShelfContents";
 import { SHELF_HEADING_ATTR } from "@/features/shelves/ShelfHeading";
 import { SHELF_STICKY_ATTR } from "@/features/shelves/ShelfStickyBar";
 import { dndDraggable } from "@/lib/dndTarget";
@@ -9,6 +10,7 @@ import { boxed, startPointerDrag } from "@/test-drag";
 import { collectionDragData } from "./collectionDrag";
 import {
   CollectionEmptyShelf,
+  CollectionShelfContents,
   CollectionShelfHeading,
   CollectionShelfSticky,
   type CardTarget,
@@ -242,6 +244,132 @@ describe("the collection's shelf targets", () => {
     await held.drop();
 
     expect(cards.onDrop).toHaveBeenCalledWith(expect.objectContaining({ kind: "entry" }), null);
+  });
+
+  /**
+   * **A shelf's contents take a card** (issue #1377) — the box behind its tiles files the copy into
+   * that shelf, exactly as the heading does, and only the box the pointer is in says so.
+   */
+  it("files a copy let go on a folder's tiles into that folder", async () => {
+    const cards = target();
+    const { container } = render(<CollectionShelfContents shelf={SEALED} cards={cards} />);
+    const box = boxed(container.querySelector<HTMLElement>(`[${SHELF_CONTENTS_ATTR}]`)!, 200, 300);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 380);
+    expect(box).toHaveAttribute(SHELF_CONTENTS_ATTR, "over");
+    await held.drop();
+
+    expect(cards.onDrop).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "entry" }),
+      SEALED.id,
+    );
+    expect(box).toHaveAttribute(SHELF_CONTENTS_ATTR, "");
+  });
+
+  it("files a copy let go on Not sorted's tiles at the root", async () => {
+    const cards = target();
+    const { container } = render(<CollectionShelfContents shelf={NOT_SORTED} cards={cards} />);
+    boxed(container.querySelector<HTMLElement>(`[${SHELF_CONTENTS_ATTR}]`)!, 200, 300);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 380);
+    await held.drop();
+
+    expect(cards.onDrop).toHaveBeenCalledWith(expect.objectContaining({ kind: "entry" }), null);
+  });
+
+  /** No `armed` wash: every shelf's contents would take nearly every drag, and a wall that lit
+   *  from top to bottom the moment a card was lifted would say nothing. */
+  it("draws no mark on a shelf's tiles until the pointer is over them", async () => {
+    const cards = target();
+    const { container } = render(<CollectionShelfContents shelf={SEALED} cards={cards} />);
+    const box = boxed(container.querySelector<HTMLElement>(`[${SHELF_CONTENTS_ATTR}]`)!, 200, 300);
+    const held = await startPointerDrag(copy());
+
+    await held.leave();
+    expect(box).toHaveAttribute(SHELF_CONTENTS_ATTR, "");
+    expect(box.className).not.toMatch(/accent/);
+    await held.cancel();
+  });
+
+  it("takes nothing its policy refuses — a copy over its own folder's tiles", async () => {
+    const cards = { canDrop: (): boolean => false, onDrop: vi.fn<CardTarget["onDrop"]>() };
+    const { container } = render(<CollectionShelfContents shelf={BINDER} cards={cards} />);
+    const box = boxed(container.querySelector<HTMLElement>(`[${SHELF_CONTENTS_ATTR}]`)!, 200, 300);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 380);
+    expect(box).toHaveAttribute(SHELF_CONTENTS_ATTR, "");
+    await held.drop();
+
+    expect(cards.onDrop).not.toHaveBeenCalled();
+  });
+
+  /** The contents sit flush against the next shelf's heading: each takes only what the pointer is
+   *  inside, never its neighbour's drop by the carried card's shape. */
+  it("keeps a copy let go at the foot of a shelf's tiles from the heading below", async () => {
+    const tiles = target();
+    const below = target();
+    const { container } = render(
+      <>
+        <CollectionShelfContents shelf={SEALED} cards={tiles} />
+        <CollectionShelfHeading
+          shelf={BINDER}
+          stat=""
+          peek={[]}
+          onToggle={vi.fn()}
+          onOpen={vi.fn()}
+          menu={menu}
+          cards={below}
+        />
+      </>,
+    );
+    boxed(container.querySelector<HTMLElement>(`[${SHELF_CONTENTS_ATTR}]`)!, 200, 300);
+    boxed(document.querySelector<HTMLElement>(`[${SHELF_HEADING_ATTR}]`)!, 500, 40);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 495);
+    await held.drop();
+
+    expect(tiles.onDrop).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "entry" }),
+      SEALED.id,
+    );
+    expect(below.onDrop).not.toHaveBeenCalled();
+  });
+
+  /** Two targets of one shelf — a table's rows — light together while the pointer is in either. */
+  it("marks every target of one shelf while the pointer is over any of them", async () => {
+    const cards = target();
+    const { container } = render(
+      <>
+        <CollectionShelfContents shelf={SEALED} cards={cards} />
+        <CollectionShelfContents shelf={SEALED} cards={cards} />
+        <CollectionShelfContents shelf={BINDER} cards={cards} />
+      </>,
+    );
+    const [a, b, other] = container.querySelectorAll<HTMLElement>(`[${SHELF_CONTENTS_ATTR}]`);
+    boxed(a, 200, 44);
+    boxed(b, 244, 44);
+    boxed(other, 400, 44);
+    const held = await startPointerDrag(copy());
+
+    await held.moveTo(100, 220);
+    expect([a, b, other].map((el) => el.getAttribute(SHELF_CONTENTS_ATTR))).toEqual([
+      "over",
+      "over",
+      "",
+    ]);
+    await held.moveTo(100, 260);
+    expect([a, b, other].map((el) => el.getAttribute(SHELF_CONTENTS_ATTR))).toEqual([
+      "over",
+      "over",
+      "",
+    ]);
+    await held.leave();
+    expect([a, b, other].map((el) => el.getAttribute(SHELF_CONTENTS_ATTR))).toEqual(["", "", ""]);
+    await held.cancel();
   });
 
   /**

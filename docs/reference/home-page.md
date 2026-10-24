@@ -164,6 +164,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `collectionValue` | the collection's total and its split along one dimension, as bars or a list | `{ dimension, chart: bars·list, figures }` |
 | `valueHistory` | the same money over time — one line per bucket with one lit, the buckets beside or under it, and a readout of the hovered day (§14) | `{ split: total·type·color·set, window: 30d·90d·1y·all, measure: value·change, figures, markers }` |
 | `wishlistValue` | the same over the wishlist — a separate component, because the two lists' empty states and notes differ | `{ dimension, chart, figures }` |
+| `wishlistValueHistory` | the wishlist's money over time — `valueHistory`'s body over the wishlist's history, its last point the `wishlistValue` figure (§14, *The Wishlist value graph*) | `{ split: total·type·color·set, window: 30d·90d·1y·all, measure: value·change, figures, markers }` |
 | `activity` | recent actions grouped by local calendar day, each day headed by its `+7 / −6` roll-up | `{ limit: 25·50·100, times }` |
 | `recentCards` | the cards this device opened last, as a strip of card faces that open the card | `{ count: 4·6·8, names }` |
 | `setCompletion` | every set the reader holds a card from, and how much of it | `{ sort: complete·cards·name, bars }` |
@@ -559,6 +560,7 @@ Each goes **in the module its data lives in** — `search.rs` is the pattern.
 | `price_movers` | `price_history.rs` | `{ movers, since, days }` (§11) |
 | `price_history` | `price_history.rs` | `{ points, now, today }` — one copy's kept snapshots, for the mover popup (§11) |
 | `collection_value_history` | `value_history.rs` | `{ buckets, points, today }` — the collection's value per kept period plus a live point for today, split one way, each point carrying its price-only part (§14) |
+| `wishlist_value_history` | `value_history.rs` | the same shape over user schema v66's `wish_snapshots` — the wishlist's value per kept period plus a live point at `wishlist_summary`'s `cost` (§14) |
 | `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
 | `deck_completion` | `deck_completion.rs` | `[{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }]` — under `compare: collection` every deck that is not virtual, its live list against its own group; under `theory` every deck that keeps a plan, its live list against that plan (§15) |
 | `deck_review_count` | `deck_completion.rs` | how many `deck_cards` rows carry a `needs_review` sentence (§15) |
@@ -1582,6 +1584,43 @@ than aliasing a DTO. No test count is written here; the build answers it.
 **Out of scope, deliberately:** dragging the card is the page's, Customize gains nothing beyond the
 registry row, and there is no backfill.
 
+### The Wishlist value graph — user schema v66, `wish_snapshots` (issue #1378, 2026-10-24)
+
+Kind `wishlistValueHistory`, labelled **Wishlist value graph**, directly after `wishlistValue` in
+the catalogue and not in the default layout. **The same widget over another table**: the same
+body (`ValueHistoryWidget.tsx` exports both `ValueHistoryWidget` and `WishlistValueHistoryWidget`,
+which differ only in their two reads and their sentences), the same registry picks
+(`VALUE_HISTORY_PICKS` in `widgets.ts`, one list for both rows), and the same read in Rust —
+`value_history::wishlist_history` is `history` with another `Source`.
+
+**Why a table of its own.** `price_snapshots` already records a wished printing (issue #906), but
+as a *watch*: at `copies = 0`, only where it is priced, and never an any-printing wish. A wish is
+also not priced as a printing is — one naming no finish is priced across the printing's finishes,
+and one naming no printing at its oracle card's cheapest. So v66 adds `wish_snapshots`, one row
+per **wish** per marketplace per day: `wish` is the pinned printing's id, or `oracle:` and the
+oracle id for an any-printing wish; `finish` is the wish's own or `any`; `card_id` is the printing
+that priced it (for the type, colour and set buckets) and `price` the Wishlist value widget's unit
+price, NULL where nobody quotes it. `wishlist::holding_sql` is the one statement of that holding,
+and it is `summarise_wishlist`'s arithmetic grouped, so the graph's last point is that widget's
+figure to the cent. Keyed by the wish rather than the printing, **a cheaper reprint taking over an
+any-printing wish is a price move**, never one wish leaving and another arriving.
+
+**Written by the same snapshot**, in the same transaction and by `price_snapshots`' rules — a day
+replaced by its last snapshot, only the difference written, a marketplace that prices no wish
+writing nothing, the same thinning (`prune_wishes`, one survivor per wish per week, since no mover
+or price chart reads the table) on the table's own first snapshot of a day. The rung creates it
+empty, v50's argument: the graph starts on the upgrade day. Not synced, `WITHOUT ROWID`, on the
+desktop's `WRITTEN_BY_THE_APP` list, the mirror's ignored list, and in `TABLE_KEYS` with no keys.
+
+**What differs on screen** is words: *Nothing on your wishlist yet.*, *Wishlist value* in the
+chart's label and summary, and a step's non-price part — wishes added, bought or removed — is
+**Wishlist changes** in the readout and the rail and *of wishes added/removed* in the note
+(`readoutAt`'s `subject`). The key is `wishlistValueHistoryKey`,
+`["wishlist", "valueHistory", split, marketplace]`, under the root every wishlist write and
+`invalidatePricedQueries` already reach. The summary beside it is `wishlist_summary`, whose
+`unpriced` counts wishes rather than copies. The fake keeps `wishHistory` beside `priceHistory`,
+derives it from the wishlist the same way, and reads both through one `valueHistoryFrom`.
+
 ---
 
 ## 15. Home widgets, round two (2026-09-26)
@@ -1648,8 +1687,8 @@ beside the `aria-hidden` line — and its reservation is **computed rather than 
 also reads its gap from, so a body cannot reserve a gap the card does not draw. The short wording is
 what keeps the ellipsis rare: `1 more: no Cardmarket price`, `58 more save €101.60`,
 `2 complete · $221.70 to finish · 14 unpriced`. Deck completion and Wishlist savings are the two
-that draw footers; To review and Coming soon draw none. **The older kinds' footers still reserve a
-22px `WidgetFooter` that can wrap** — a follow-up outside this round, not measured here.
+that draw footers; To review and Coming soon draw none. The older kinds' footers reserved a 22px
+`WidgetFooter` that could wrap until issue #1379 (§17), which moved every one of them onto this rule.
 
 ### Deck completion — `deck_completion.rs`, `DeckCompletionWidget.tsx`
 
@@ -2276,3 +2315,74 @@ everything would be told they never wrote a to-do. And `ALL_DONE` alone was fals
 still open. Both sentences read the switch's name off the registry, so neither can point at a
 renamed row. A read still in flight is *Loading to-dos…*, and a refused one is `WidgetMessage`'s
 destructive sentence.
+
+## 17. Filling the box — issue #1379 (2026-10-24)
+
+[Issue #1379](https://github.com/Msgaihede/mtg-grimoire/issues/1379): widgets left large empty
+space or drew needless scrollbars when resized. **Measured before any change**, every kind at every
+footprint its registry row allows, comfortable and compact, on 76 and 107px cells, in Storybook's
+fake (`starter`, `waiting`, `needsReview`) under headless Chromium: each body's scroller, every inner
+scroller, and the gap between the lowest drawn pixel and the body's foot. What it found, by cause:
+
+* **Summary drew a fixed number of figures in one small line at the top**, whatever the box: a
+  two-cell tile drew two figures at every height, so a 2 × 3 drew two numbers over ~200px of empty
+  card with room for all four.
+* **Recently viewed was one row sized off the height alone, and scrolled sideways.** Almost every
+  footprint clipped its last tile at the edge, and a 2 × 3 drew one tall card, a sliver of the next
+  and a scrollbar.
+* **A list was always drawn in all `listColumns`**, one per ~240px of card, however few rows it had —
+  three decks across two 200px tracks of a tall card, every name truncated over an empty lower half;
+  two announced sets in two of four tracks.
+* **A whole-row cut always leaves a sliver**, up to one row tall, under the last row.
+* **The value cards' figure note ran under the next figure** at three cells wide:
+  `$1,101.28 2 unprice21`.
+* **A body with nothing to show drew its one sentence in the top-left corner** of the card.
+* The older kinds' wrapping footers (§15) — not caught by the fake's short sentences, but the cause
+  the 2026-09-26 live pass measured.
+
+**What changed, and where.**
+
+* `fit.ts`' **`listLayout(count, rowH, reserved)`** answers a list's columns — **the fewest that hold
+  its rows**, never more than `listColumns` — and whether it is **full**: its tallest column reaches
+  the last whole row the box holds. `WidgetRowList` takes it as `layout`; a full list grows into the
+  body (`flex-1`, `grid-auto-rows: 1fr`) so its rows share the sliver, and a row (`WidgetRow`'s
+  `h-full`) fills its track. **A list that ran out of rows first is drawn at its rows' own height**:
+  three rows stretched over an empty card would read as a broken card. `1fr` is `minmax(auto, 1fr)`,
+  so a row is never squeezed below its content and an estimate a few pixels out still scrolls rather
+  than clipping. Every list cut to whole rows passes one: Decks, Folders, Set completion, Price
+  movers, Deck completion, To review, Wishlist savings, Coming soon, and the value cards' list form.
+  New printings' per-day lists do not — its groups are budgeted in two passes (§13) and stretching
+  one group's rows would push the next group's header out of its reservation.
+* `WidgetBars` takes `fill` for the same sliver, spread between the bars (`justify-between`) when
+  they were cut to every whole bar that fits.
+* `WidgetFigures` takes `fill`, which only Summary passes: **`figureGrid`** tries every arrangement
+  of the figures in rows and keeps the one drawing the numbers largest (18, 22, 28 or 34px), a size
+  being taken only where the label and the number fit the cell's height and the number — mono, so a
+  product of its characters — and the label fit its width. Ties go to fewer rows. Summary draws
+  **every figure some arrangement holds**, so its old tier cap is gone. Outside `fill`, a figure's
+  note truncates beside a number that never shrinks.
+* Recently viewed's **`tileGrid`** does the same for tiles: every row count, each tile as large as
+  the tighter axis allows at 5:7 with its caption line, ties to fewer rows, one tile fewer while the
+  best is under `MIN_TILE_PX` (40). The tiles always fit, so the strip clips and no longer scrolls,
+  and `STRIP_BAR_PX` (the bar it budgeted for) is gone with it.
+* `WidgetFooter` is gone. Decks, Price movers, both value cards and New printings draw
+  `WidgetFooterLine` and reserve `footerLinePx` — 24 comfortable, 21 compact — where each reserved
+  a guessed 22.
+* A `WidgetMessage` that is a body's **only** child is centred in the card (`WidgetCard` keys on its
+  `data-widget-message` mark); beside a figure line or a list it stays where it was put.
+
+**After**, the same sweep at 68, 76, 107 and 130px cells: **no body scrollbar and no inner scroller
+at any footprint of any kind.** The empty space that remains is the fixture's: three decks, eight
+sets and two announced sets cannot fill a 2 × 6, and nothing here invents rows to fill one. One
+horizontal overflow was found and left: Activity at 2 × 8, compact, 68px cells, two pixels of a
+truncated line's text — clipped by the body, so it draws no bar, and identical before this change.
+
+**Row heights were left as written.** The sweep measured a captioned row at 48px and a bare one at
+32 (34 with a delta chip) against the 51 and 36 most bodies count with; the over-count can drop a
+row at a knife-edge height, and a full list's stretch now takes up the difference visually. Moving
+the constants is a change to every body's row arithmetic and its suite, outside this fix.
+
+**Not yet driven in the shipped window** — the sweep is Storybook under headless Chromium on Linux,
+not WebView2. Geist is bundled, so the type metrics are the app's, but the next live pass should
+resize Summary, Recently viewed and a full list across a few footprints.
+

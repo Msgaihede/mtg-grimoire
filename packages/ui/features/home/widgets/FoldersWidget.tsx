@@ -619,7 +619,11 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     <>
       {messages}
       {rows.length > 0 && (
-        <WidgetRowList fit={fit} label={LIST_LABEL[cabinets]}>
+        <WidgetRowList
+          fit={fit}
+          label={LIST_LABEL[cabinets]}
+          layout={fit.listLayout(rows.length, rowH, reserved)}
+        >
           {rows.map((row) => (
             <WidgetRow
               key={row.key}

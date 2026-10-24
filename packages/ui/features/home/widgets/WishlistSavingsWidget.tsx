@@ -400,12 +400,21 @@ export function WishlistSavingsWidget({ widget, fit, still }: WidgetBodyProps): 
 
   const tile = fit.tier === 0;
   const captioned = tile || !fit.compact;
+  const rowPx = captioned ? ROW_CAPTIONED : ROW_BARE;
   const layout = savingsLayout(fit, {
     priced: priced.length,
     lines: (unpriced > 0 ? 1 : 0) + (skipped > 0 ? 1 : 0),
-    rowPx: captioned ? ROW_CAPTIONED : ROW_BARE,
+    rowPx,
   });
   const shown = priced.slice(0, layout.rows);
+  // What the rows were counted under — the figure and every line drawn — so the list's columns and
+  // its stretch are asked of the same box its rows were cut to.
+  const listLayout = fit.listLayout(
+    shown.length,
+    rowPx,
+    (fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX) +
+      (layout.lines + (layout.cut ? 1 : 0)) * footerLinePx(fit),
+  );
   const cutWords = layout.cut ? cutFooter(priced.slice(layout.rows), currency) : null;
   // The other lines in their drawing order, as many as the box holds.
   const lines: FooterWords[] = [
@@ -446,7 +455,7 @@ export function WishlistSavingsWidget({ widget, fit, still }: WidgetBodyProps): 
       />
       {/* No list at all when no row fits: an empty one would still take the body's gap. */}
       {shown.length > 0 && (
-        <WidgetRowList fit={fit} label="Wishlist cards that could be cheaper">
+        <WidgetRowList fit={fit} label="Wishlist cards that could be cheaper" layout={listLayout}>
           {shown.map((move) => {
             const saved = formatPrice(move.saved, currency);
             const caption = moveCaption(move, currency);

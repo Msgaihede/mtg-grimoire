@@ -82,6 +82,7 @@ import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 
+import { footerLinePx } from "../fit";
 import { priceMoversKey } from "../keys";
 import {
   measuresChosen,
@@ -94,7 +95,7 @@ import {
 import {
   DOWN_FILL,
   UP_FILL,
-  WidgetFooter,
+  WidgetFooterLine,
   WidgetMessage,
   WidgetRow,
   WidgetRowList,
@@ -110,8 +111,6 @@ export const PRICE_MOVERS_READ = 100;
 /** A row's height with its caption, and without — the design's two. */
 const ROW_PX = 51;
 const BARE_ROW_PX = 36;
-/** What the footer line takes off the body, gap included. */
-const FOOTER_PX = 22;
 
 /** The minus sign every signed figure draws — never a hyphen. */
 const MINUS = "−";
@@ -268,16 +267,20 @@ export function PriceMoversWidget({ widget, fit, still }: WidgetBodyProps): Reac
 
   const bare = fit.compact || fit.tier === 0;
   const footer = fit.tier >= 2 && fit.h >= 2;
-  const shown = query.data.movers.slice(
-    0,
-    // A tile is bare and still carries a caption — its move goes under the name — so it is counted
-    // at the captioned height, the rule `SetCompletionWidget.rowPx` writes down.
-    fit.rowsFit(bare && fit.tier !== 0 ? BARE_ROW_PX : ROW_PX, footer ? FOOTER_PX : 0),
-  );
+  // A tile is bare and still carries a caption — its move goes under the name — so it is counted
+  // at the captioned height, the rule `SetCompletionWidget.rowPx` writes down.
+  const rowH = bare && fit.tier !== 0 ? BARE_ROW_PX : ROW_PX;
+  // The footer is one line, reserved at what one draws (issue #1379).
+  const reserved = footer ? footerLinePx(fit) : 0;
+  const shown = query.data.movers.slice(0, fit.rowsFit(rowH, reserved));
 
   return (
     <>
-      <WidgetRowList fit={fit} label="Price movers">
+      <WidgetRowList
+        fit={fit}
+        label="Price movers"
+        layout={fit.listLayout(shown.length, rowH, reserved)}
+      >
         {shown.map((mover) => (
           <MoverRow
             key={`${mover.cardId}:${mover.finish}`}
@@ -295,10 +298,11 @@ export function PriceMoversWidget({ widget, fit, still }: WidgetBodyProps): Reac
         ))}
       </WidgetRowList>
       {footer && (
-        <WidgetFooter>
-          {marketplace.label} prices{chosen ? " of what you chose" : ""}{" "}
-          {range === "all" ? "since the oldest price kept" : `over ${windowPhrase(range)}`}.
-        </WidgetFooter>
+        <WidgetFooterLine
+          line={`${marketplace.label} prices${chosen ? " of what you chose" : ""} ${
+            range === "all" ? "since the oldest price kept" : `over ${windowPhrase(range)}`
+          }.`}
+        />
       )}
     </>
   );

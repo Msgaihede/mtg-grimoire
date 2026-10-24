@@ -2074,6 +2074,16 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
   draw one. Not sorted's box files at the root, as its heading does, and it joined with issue #597:
   an open heading with nothing under it reads as a shelf that failed to load, and the box is what
   says a card can be dropped there.
+- **A shelf's contents take a card too** (issue #1377, 2026-10-24): a card let go anywhere on a
+  shelf's tiles, or on any of its rows in the table, files into that shelf exactly as its heading
+  would — the same `shelfCards` answer (`CollectionPage.tsx`), so a deck group's and `Recently
+  removed`'s contents take nothing. On the wall it is one box per shelf laid *behind* its tile rows
+  (`GridSections.renderContents`, `CardGrid`'s `ShelfContentsBoxes`, `features/shelves/ShelfContents.tsx`),
+  pointer-events-none, so every press on a tile still reaches the tile; in the table each row is
+  a target of its own (`CollectionTableShelves.cardsFor`). Both register through
+  `useShelfContentsDropTarget` (`features/shelves/useShelfDrag.ts`): pointer-inside like every
+  shelf target, and marked only while the pointer is in it — never `armed`, since nearly every
+  shelf takes nearly every drag — with every target of one shelf washing together.
 
 **The path row** is the breadcrumb on the left and `ShelfToolbar` on the right — **Add folder**,
 **Expand all**, **Collapse all** — with Add folder gated by

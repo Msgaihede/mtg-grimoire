@@ -335,6 +335,7 @@ on mount, and the sticky bar is a permanent target.
 | a heading | a folder | before / inside / after by edge zone (`useFolderDropTarget`, vertical) |
 | an empty shelf's dashed box | a card | files it there |
 | the sticky bar | a card | files it into the shelf the reader is inside |
+| a shelf's contents — its tiles, its table rows (issue #1377, 2026-10-24) | a card | files it into that shelf, as its heading does; one box behind all of a shelf's tile rows on the wall, and every row of the shelf in the table, pointer-inside, marked only while the pointer is in it |
 | a segment of the path row | a card, **and now a folder** | files / moves it there — the folder half is what `ParentFolderCard`'s "Up one level" did. A heading's lead segments and the sticky bar's segments are buttons only: the heading and the bar are each one target, for their own folder |
 
 Headings of the reader's folders are drag sources for folders (`folderDraggable`), and dragging one

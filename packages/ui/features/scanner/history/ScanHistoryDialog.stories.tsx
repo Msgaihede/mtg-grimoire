@@ -1,14 +1,15 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, waitFor, within } from "storybook/test";
-import { EMPTY_HISTORY } from "./historyWords";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import type { ScanBatch } from "@/lib/ipc";
+import { EMPTY_HISTORY, PUT_BACK_LABEL } from "./historyWords";
 import { ScanHistoryDialog } from "./ScanHistoryDialog";
 
 /**
  * The dialog open, with the button that opened it — so a close hands the caret back to something,
  * and a reader in the workbench can open it again. The page holds the same two things.
  */
-function Opened() {
+function Opened({ onPutBack }: { onPutBack: (batch: ScanBatch) => void }) {
   const [open, setOpen] = useState(true);
   return (
     <>
@@ -21,6 +22,10 @@ function Opened() {
       </button>
       <ScanHistoryDialog
         open={open}
+        onPutBack={(batch) => {
+          onPutBack(batch);
+          setOpen(false);
+        }}
         onDismiss={() => setOpen(false)}
         onClose={() => setOpen(false)}
       />
@@ -32,8 +37,8 @@ const meta = {
   title: "Scanner/Scan history",
   component: ScanHistoryDialog,
   tags: ["autodocs"],
-  render: () => <Opened />,
-  args: { open: true, onDismiss: () => {}, onClose: () => {} },
+  render: (args) => <Opened onPutBack={args.onPutBack} />,
+  args: { open: true, onPutBack: fn(), onDismiss: () => {}, onClose: () => {} },
   parameters: {
     // `packages/fake/`'s `scanHistory` world: `starter` with two piles filed (one at the root,
     // one into `Binder`) and one archived under a name the reader typed.
@@ -89,6 +94,23 @@ export const Rename: Story = {
     await userEvent.type(field, "Friday pile{Enter}");
     await waitFor(() =>
       expect(within(dialog).getByRole("heading", { name: "Friday pile" })).toBeInTheDocument(),
+    );
+  },
+};
+
+/**
+ * *Put back in tray* (issue #1374): the picked batch handed to the page whole, which lands its
+ * lines in the tray and closes the history — the way back from a pile filed by mistake.
+ */
+export const PutBack: Story = {
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: "Scan history" });
+    await within(dialog).findByRole("list", { name: "Cards in Bob's binder" });
+    await userEvent.click(within(dialog).getByRole("button", { name: PUT_BACK_LABEL }));
+    await waitFor(() => expect(args.onPutBack).toHaveBeenCalledTimes(1));
+    await expect(args.onPutBack).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.objectContaining({ name: "Bob's binder" }) }),
     );
   },
 };

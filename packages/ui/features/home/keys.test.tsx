@@ -43,6 +43,7 @@ import {
   stickyNotesKey,
   upcomingSetsKey,
   valueHistoryKey,
+  wishlistValueHistoryKey,
   wishlistBreakdownKey,
   wishlistReviewCountKey,
   wishlistSavingsKey,
@@ -140,6 +141,16 @@ describe("shape", () => {
     // Each of the two arguments is part of the question, so each has to change the key.
     expect(valueHistoryKey("set", "cardmarket")).not.toEqual(key);
     expect(valueHistoryKey("type", "tcgplayer")).not.toEqual(key);
+  });
+
+  // The wishlist's graph (issue #1378): the same shape under the root every wishlist write
+  // invalidates, and never the collection's entry.
+  it("files the wishlist graph under the wishlist root, carrying the split and the marketplace only", () => {
+    const key = wishlistValueHistoryKey("type", "cardmarket");
+    expect(key).toEqual(["wishlist", "valueHistory", "type", "cardmarket"]);
+    expect(key).not.toEqual(valueHistoryKey("type", "cardmarket"));
+    expect(wishlistValueHistoryKey("set", "cardmarket")).not.toEqual(key);
+    expect(wishlistValueHistoryKey("type", "tcgplayer")).not.toEqual(key);
   });
 
   // The second exception: a root with one writer, the card modal's recorder, which invalidates

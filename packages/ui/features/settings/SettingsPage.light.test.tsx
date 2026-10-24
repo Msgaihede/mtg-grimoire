@@ -86,6 +86,7 @@ describe("Settings in the light edition", () => {
       "Sync",
       "Tags",
       "Appearance",
+      "Scanner",
       "Storage and data",
       "Errors",
     ]);

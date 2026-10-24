@@ -85,12 +85,17 @@ pub const MARKED_BY_COMMAND: &[&str] =
 /// **`sync_heard` is here on the same plain footing** (user schema v61): `sync_engine::apply`
 /// writes it by hand — what it remembers of other devices' writes to each row — and reads it back
 /// on every later apply. No press, no trigger, no window.
+///
+/// **`wish_snapshots` is here on `price_snapshots`' footing** (user schema v66): the same snapshot
+/// writes it in the same transaction, a day at a time, and no press does — the Wishlist value
+/// graph reads it under the `["wishlist"]` root every wishlist write already invalidates.
 pub const WRITTEN_BY_THE_APP: &[&str] = &[
     "price_snapshots",
     "sync_gone",
     "sync_heard",
     "sync_orphans",
     "sync_peers",
+    "wish_snapshots",
 ];
 
 /// One bit per user table, and the bell the commit hook rings.

@@ -1,12 +1,17 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { TooltipContext, type TooltipApi } from "@/components/tooltip/useTooltip";
+import { SHELF_CONTENTS_ATTR } from "@/features/shelves/ShelfContents";
 import { CONDITION_LABEL, CONDITION_NOT_SET } from "@/lib/conditions";
+import { dndDraggable } from "@/lib/dndTarget";
 import type { CollectionRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { SHELF_INDENT_PX, SHELF_RAIL_OFFSET_PX, layoutShelves } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
+import { boxed, startPointerDrag } from "@/test-drag";
+import { collectionDragData } from "./collectionDrag";
+import type { CardTarget } from "./CollectionShelfParts";
 import { CollectionTable, type CollectionTableShelves } from "./CollectionTable";
 
 /**
@@ -856,5 +861,108 @@ describe("CollectionTable's heading bands", () => {
       if (scrollTo) Object.defineProperty(HTMLElement.prototype, "scrollTo", scrollTo);
       delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
     }
+  });
+});
+
+/**
+ * **A shelf's rows take a card** (issue #1377) — the table's half of the wall's contents target: a
+ * copy let go on any row of a shelf that takes one files into that shelf, as its heading would, and
+ * every row of the shelf washes while the pointer is on any of them. A shelf the page gives no
+ * policy (a deck's group) is not a target at all.
+ */
+describe("CollectionTable's shelf rows as drop targets", () => {
+  const shelf = (over: Partial<Shelf> & Pick<Shelf, "id" | "name">): Shelf => ({
+    kind: "folder",
+    group: "own",
+    pathIds: [over.id],
+    path: [over.name],
+    depth: 0,
+    indent: 0,
+    lead: [],
+    leadIds: [],
+    headless: false,
+    collapsed: false,
+    locked: false,
+    ...over,
+  });
+  const binder = shelf({ id: 4, name: "Trade binder" });
+  const deck = shelf({ id: DECK_FOLDER_ID, name: "Burn", kind: "deck", group: "decks" });
+  const bolt = { ...ROW, id: 51, folderId: 4, folderName: "Trade binder" };
+  const growth = { ...ROW, id: 52, cardId: "c3", folderId: 4, name: "Giant Growth" };
+
+  const undo: (() => void)[] = [];
+  afterEach(() => undo.splice(0).forEach((stop) => stop()));
+
+  /** A copy filed in Not sorted, in the air from a box of its own far above the table. */
+  const copy = () => {
+    const element = boxed(document.createElement("div"), -400);
+    document.body.append(element);
+    const stop = dndDraggable({
+      element,
+      data: () => collectionDragData({ entryId: 9, name: "Shock", folderId: null }),
+    });
+    undo.push(() => {
+      stop();
+      element.remove();
+    });
+    return element;
+  };
+
+  function shelvedTable(onDrop: CardTarget["onDrop"]) {
+    const cards: CardTarget = { canDrop: (_, to) => to !== null, onDrop };
+    renderTable([], {
+      shelves: {
+        layout: layoutShelves(
+          [
+            { shelf: binder, tileCount: 2 },
+            { shelf: deck, tileCount: 1 },
+          ],
+          1,
+        ).rows,
+        rowsOf: (id) => (id === binder.id ? [bolt, growth] : id === deck.id ? [IN_A_DECK] : []),
+        complete: true,
+        renderHeading: (s) => <span>{`${s.name} heading`}</span>,
+        renderLabel: (group) => <span>{`${group} label`}</span>,
+        renderEmpty: (s) => <span>{`${s.name} is empty`}</span>,
+        renderSticky: () => null,
+        cardsFor: (s) => (s.kind === "folder" ? cards : undefined),
+      },
+    });
+    const rowNamed = (name: string) =>
+      screen.getAllByRole("row").find((row) => row.textContent?.includes(name))!;
+    const rows = {
+      bolt: boxed(rowNamed("Lightning Bolt"), 100, 44),
+      growth: boxed(rowNamed("Giant Growth"), 144, 44),
+      counterspell: boxed(rowNamed("Counterspell"), 232, 44),
+    };
+    return rows;
+  }
+
+  it("files a copy let go on a folder's row into that folder, washing all its rows", async () => {
+    const onDrop = vi.fn<CardTarget["onDrop"]>();
+    const rows = shelvedTable(onDrop);
+    const held = await startPointerDrag(copy());
+
+    await held.over(rows.growth);
+    expect(rows.bolt).toHaveAttribute(SHELF_CONTENTS_ATTR, "over");
+    expect(rows.growth).toHaveAttribute(SHELF_CONTENTS_ATTR, "over");
+    expect(rows.bolt).toHaveClass("bg-accent/15");
+    await held.drop();
+
+    expect(onDrop).toHaveBeenCalledWith(expect.objectContaining({ kind: "entry" }), binder.id);
+    expect(rows.bolt).toHaveAttribute(SHELF_CONTENTS_ATTR, "");
+  });
+
+  it("takes nothing on a row of a shelf the page gives no policy", async () => {
+    const onDrop = vi.fn<CardTarget["onDrop"]>();
+    const rows = shelvedTable(onDrop);
+    const held = await startPointerDrag(copy());
+
+    await held.over(rows.counterspell);
+    expect(rows.counterspell).not.toHaveAttribute(SHELF_CONTENTS_ATTR);
+    expect(rows.bolt).toHaveAttribute(SHELF_CONTENTS_ATTR, "");
+    await held.drop();
+
+    expect(onDrop).not.toHaveBeenCalled();
   });
 });

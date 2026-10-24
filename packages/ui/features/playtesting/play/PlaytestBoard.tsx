@@ -8,7 +8,16 @@ import {
   type JSX,
   type MouseEvent,
 } from "react";
-import { ArrowRight, ChevronLeft, LoaderCircle, Menu, SkipForward } from "lucide-react";
+import {
+  ArrowRight,
+  ChevronLeft,
+  LoaderCircle,
+  Menu,
+  SkipForward,
+  Volume1,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import type {
   GameCard,
   GamePlace,
@@ -37,6 +46,8 @@ import { HelpPanel, LogPanel } from "../table/Panels";
 import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../table/ZonePile";
 import { dropAction, type DropAim, type TableAim, type TableDrag } from "../table/tableDrag";
 import { useLandingOf } from "../table/landing";
+import { useTableSoundsMuted } from "../sound/muted";
+import { useTableSoundsVolume } from "../sound/volume";
 import { useUndoKeys } from "../undo";
 import { ASPECT, acrossTables, handRow, type ZoneSize } from "../table/layout";
 import type { LogLine } from "../table/log";
@@ -193,6 +204,63 @@ const CHROME_BUTTON = cn(
   PRESS,
   FOCUS,
 );
+
+/**
+ * The board's sounds, beside help and the log: a speaker that turns them on or off, crossed out
+ * while silent, and under it — while the pointer rests on it or focus is in it — a slider for how
+ * loud they are. The sounds themselves are `PlaytestPage`'s (`../sound/useTableSounds`); this only
+ * sets the remembered settings (`../sound/muted`, `../sound/volume`), which every board shares.
+ *
+ * The slider hangs below the band rather than beside the speaker, so the opponent's plate box
+ * keeps its 160 px. Moving it while muted turns the sounds back on: the reader is asking to hear
+ * them, and the level they move to is the one they will hear.
+ */
+function SoundControls(): JSX.Element {
+  const muted = useTableSoundsMuted((s) => s.muted);
+  const setMuted = useTableSoundsMuted((s) => s.setMuted);
+  const volume = useTableSoundsVolume((s) => s.volume);
+  const setVolume = useTableSoundsVolume((s) => s.setVolume);
+  const Icon = muted || volume === 0 ? VolumeX : volume < 50 ? Volume1 : Volume2;
+  return (
+    <div className="group relative">
+      <button
+        type="button"
+        aria-label={muted ? "Turn sounds on" : "Turn sounds off"}
+        onClick={() => setMuted(!muted)}
+        className={cn(CHROME_BUTTON, "size-9 rounded-full", muted && "text-dim")}
+      >
+        <Icon className="size-[18px]" aria-hidden="true" />
+      </button>
+      <div className="absolute top-full left-1/2 hidden -translate-x-1/2 pt-2 group-focus-within:block group-hover:block">
+        <div className="flex h-9 items-center gap-2 rounded-full border border-border bg-surface px-3">
+          <input
+            type="range"
+            aria-label="Sound volume"
+            aria-valuetext={`${volume}%`}
+            min={0}
+            max={100}
+            step={5}
+            value={volume}
+            onChange={(e) => {
+              setVolume(Number(e.target.value));
+              if (muted) setMuted(false);
+            }}
+            className={cn("block w-24 accent-accent", muted && "opacity-60", FOCUS)}
+          />
+          <span
+            aria-hidden="true"
+            className={cn(
+              "w-9 text-right text-[13px] tabular-nums",
+              muted ? "text-dim" : "text-text",
+            )}
+          >
+            {volume}%
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * Which side of the board a pointed card is on — a zone of that player — or `loose`: a spell on
@@ -554,6 +622,10 @@ export function PlaytestBoard({
   const lookYou = (l: ZoneLook) => setLook({ look: l, side: "you" });
   const lookOpponent = (l: ZoneLook) => setLook({ look: l, side: "opponent" });
   const lookedAt = look === null || view === null ? undefined : seatOfPlayer(view, look.side);
+  /** A zone's dialog is open. A library is looked through only with the sandbox's moves working;
+   *  a graveyard or exile is public, and opens read-only without them. */
+  const looking =
+    look !== null && lookedAt !== undefined && (look.look.zone !== "library" || edits);
   const goldfish = view?.goldfish ?? false;
   /** The goldfish's life has reached 0 on this turn of the reader's; `null` while it is above. */
   const deadOn = goldfish ? (opponent?.deadOn ?? null) : null;
@@ -789,11 +861,11 @@ export function PlaytestBoard({
           <div className="absolute top-0 left-1/2 -translate-x-1/2">
             <OpponentHand count={handCount} />
           </div>
-          {/* Right of their hand, and never under the help and log buttons: the box ends 116 px
-              from the edge, and a plate wider than it (a long deck name, the sandbox's stepper)
-              shortens its title rather than running under them. */}
+          {/* Right of their hand, and never under the sound, help and log buttons: the box ends
+              160 px from the edge, and a plate wider than it (a long deck name, the sandbox's
+              stepper) shortens its title rather than running under them. */}
           <div
-            className="absolute top-[5px] right-[116px] flex min-w-0"
+            className="absolute top-[5px] right-[160px] flex min-w-0"
             style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 64}px)` }}
           >
             <PlateFrame
@@ -840,6 +912,7 @@ export function PlaytestBoard({
       )}
 
       <div className={cn("absolute top-1.5 right-3 flex gap-2", LAYER.raised)}>
+        <SoundControls />
         <button
           type="button"
           aria-label="How to play"
@@ -1133,7 +1206,12 @@ export function PlaytestBoard({
         </>
       )}
 
-      <Inspect pointed={current?.pointed ?? null} width={previewWidth} onResize={setPreviewWidth} />
+      <Inspect
+        pointed={current?.pointed ?? null}
+        width={previewWidth}
+        onResize={setPreviewWidth}
+        overDialog={looking}
+      />
 
       {panel === "help" && (
         <HelpPanel heading="Playing a game" onClose={() => setPanel(null)}>
@@ -1142,9 +1220,7 @@ export function PlaytestBoard({
       )}
       {panel === "log" && <LogPanel log={log} onClose={() => setPanel(null)} />}
 
-      {/* A library is looked through only with the sandbox's moves working; a graveyard or exile
-          is public, and opens read-only without them. */}
-      {look !== null && lookedAt !== undefined && (look.look.zone !== "library" || edits) && (
+      {looking && (
         <LibraryDialog
           look={look.look}
           view={lookedAt}
@@ -1152,7 +1228,12 @@ export function PlaytestBoard({
           opponent={look.side !== "you"}
           owner={playerPossessive(look.side, opponentCount)}
           onAct={onAct}
-          onClose={() => setLook(null)}
+          onPoint={look.side === "you" ? pointYou : pointThem[look.side]}
+          onUnpoint={unpoint}
+          onClose={() => {
+            setLook(null);
+            unpoint();
+          }}
         />
       )}
     </div>

@@ -868,6 +868,35 @@ For a seat that is not the reader's, and for the sandbox:
 The views these pieces take are narrowed to `Pick<…>`s of the fields they read, so any seat's
 `PlaytestSeat` fits.
 
+### Sounds (2026-10-24)
+
+`packages/ui/features/playtesting/sound/`. **Every sound is synthesized by Web Audio**
+(`synth.ts`), with no sample files: 36 sounds for the facts the engine reports and for the
+reader's pass, undo and redo. The owner chose them by ear on a preview page, and asked for the magical ones to
+be darker and flatter: keep, cast, mana, activate, exile, tokens, life and the turn are low, muted
+notes, never a bell. The busiest (draw, play, cast, tap, a counter, damage) have three takes and
+several others two. A play never repeats the take it played last, and each play nudges pitch and
+level by up to 3%, against fatigue.
+
+**Heard per beat, as the pops are** (`cues.ts`, `useTableSounds.ts` in `PlaytestPage`): each new
+`lastHappened` list is mapped one sound per fact, 0.12 s apart, at most three of one sound and five
+in all (the least telling dropped). A skip or a returning board sets the empty list, so it is
+silent. The reader's undo, redo, pass and choice sound at the press. A `tapped` fact from the
+reader's `tapForMana`, and a `counters` fact from a `counters` action with a negative delta, are
+told apart by the action that led to the beat. The audio context is made on the first sound and
+woken from a press, since a webview starts a context made outside a gesture suspended.
+
+**The speaker button** (top right, beside help and the log) mutes every board. It is remembered per
+device in `localStorage` (`grimoire.playtest.muted`) and never synced. The opponent's plate box
+ends 160 px from the edge to leave it room.
+
+**The volume slider** (issue #1390) hangs under the speaker while the pointer rests on it or focus
+is in it, so it takes none of the band's width. Its level, 0–100 in steps of 5, is remembered the
+same way (`grimoire.playtest.volume`, absent at full) and apart from mute, so unmuting returns to
+it; moving the slider while muted unmutes. The synth plays it as one gain after the compressor, at
+the level's square (loudness as heard), eased over 15 ms so a drag never clicks. The speaker shows
+a low-volume glyph under 50 and is crossed out at 0.
+
 ## What is not there yet
 
 - **Holding priority over your own spell.** The reader's own spell on top never stops them, so

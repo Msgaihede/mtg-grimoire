@@ -413,8 +413,29 @@ function isTotal(v: HistoryView): boolean {
   return v.series.length === 1 && v.series[0].key === "total";
 }
 
+/**
+ * Whose money a graph draws — the Collection value graph's or the Wishlist value graph's (issue
+ * #1378). The arithmetic is one; only what a step's non-price part is called differs: copies the
+ * reader added or removed, or wishes they made, bought or dropped.
+ */
+export type ValueSubject = "collection" | "wishlist";
+
+/** What a step's non-price part is called, per subject — the readout's fact label and its note's
+ *  noun. */
+const SUBJECT_WORDS: Record<ValueSubject, { changes: string; things: string }> = {
+  collection: { changes: "Collection changes", things: "cards" },
+  wishlist: { changes: "Wishlist changes", things: "wishes" },
+};
+
 /** Everything the hovered point holds, as the readout writes it. */
-export function readoutAt(v: HistoryView, i: number, litKey: string, currency: Currency): Readout {
+export function readoutAt(
+  v: HistoryView,
+  i: number,
+  litKey: string,
+  currency: Currency,
+  subject: ValueSubject = "collection",
+): Readout {
+  const words = SUBJECT_WORDS[subject];
   const n = v.days.length;
   if (n === 0) {
     return {
@@ -457,7 +478,7 @@ export function readoutAt(v: HistoryView, i: number, litKey: string, currency: C
       facts.push(
         { label: `Change ${per}`, value: signed(step, currency) },
         {
-          label: `Collection changes ${per}`,
+          label: `${words.changes} ${per}`,
           value: change === 0 ? "none" : signed(change, currency),
         },
         { label: `Price moves ${per}`, value: signed(step - change, currency) },
@@ -481,7 +502,7 @@ export function readoutAt(v: HistoryView, i: number, litKey: string, currency: C
   const note =
     change === 0
       ? null
-      : `${signed(change, currency)} of cards ${change > 0 ? "added" : "removed"} ${per}`;
+      : `${signed(change, currency)} of ${words.things} ${change > 0 ? "added" : "removed"} ${per}`;
   return { ...head, since: `change since ${start}`, rows, facts: [], note };
 }
 

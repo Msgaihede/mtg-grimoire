@@ -221,6 +221,9 @@ pub mod share;
 pub mod shelffolds;
 pub use grimoire_core::slug;
 pub use grimoire_core::sorting;
+/// **The scanner's sounds** — `grimoire-core`'s module and its two `#[tauri::command]`
+/// wrappers: one `app_meta` row, on or off and the four prices a louder sound starts at.
+pub mod scansounds;
 /// **How wide the reader dragged a deck's card search column** (issue #932) — [`stackhide`]'s
 /// shape with a width per deck. No filesystem, no clock and no network.
 pub mod searchwidth;
@@ -273,7 +276,8 @@ pub mod update;
 /// **The home page's Collection value graph** — user schema v50's `price_snapshots.copies`
 /// multiplied back out into what the collection was worth each day, split four ways, with a live
 /// point for today. One read over the table [`price_history`] writes and the collection
-/// [`collection`] summarises; its only clock is SQLite's `date('now')`.
+/// [`collection`] summarises; its only clock is SQLite's `date('now')`. And the Wishlist value
+/// graph, the same read over user schema v66's `wish_snapshots` (issue #1378).
 pub mod value_history;
 /// **What size a window opens at, and where** — the first one's, and every one
 /// [`window::open_new`] opens behind a relaunch or Ctrl+Shift+N.

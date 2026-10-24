@@ -64,9 +64,10 @@ import { sortOptions } from "@/lib/options";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { footerLinePx } from "../fit";
 import { deckListKey, deckValuesKey } from "../keys";
 import { widgetConfig } from "../layout";
-import { WidgetFooter, WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
+import { WidgetFooterLine, WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
 import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
 import { pickOf, toggleOn } from "../widgetSettings";
 import { widgetMeta } from "../widgets";
@@ -88,8 +89,6 @@ const NONE: readonly DeckRow[] = [];
 const ROW_WITH_ART = 60;
 const ROW_WITH_CAPTION = 51;
 const ROW_BARE = 36;
-/** What the price note under the rows takes off the body before rows are counted. */
-const FOOTER_ROOM = 22;
 
 const LOADING = "Loading decks…";
 const EMPTY = "No decks found. Build a deck on the Decks page to see it here.";
@@ -230,7 +229,10 @@ export function DecksWidget({ widget, fit, still }: WidgetBodyProps): ReactEleme
    * not have. The ordinary note is a band's furniture and is drawn from four cells wide.
    */
   const footerShown = valuesQuery.isError || fit.tier >= 2;
-  const rows = listed.slice(0, fit.rowsFit(rowH, footerShown ? FOOTER_ROOM : 0));
+  // One line, reserved at what one draws (`footerLinePx`) — the note truncates rather than wrapping
+  // onto a second line nothing reserved (issue #1379).
+  const reserved = footerShown ? footerLinePx(fit) : 0;
+  const rows = listed.slice(0, fit.rowsFit(rowH, reserved));
 
   const values = new Map<number, DeckValue>(
     (valuesQuery.data ?? []).map((row) => [row.deckId, row]),
@@ -257,7 +259,7 @@ export function DecksWidget({ widget, fit, still }: WidgetBodyProps): ReactEleme
 
   return (
     <>
-      <WidgetRowList fit={fit}>
+      <WidgetRowList fit={fit} layout={fit.listLayout(rows.length, rowH, reserved)}>
         {rows.map((deck) => {
           const caption = deckCaption(deck);
           // `null` while `deck_values` is still out as well as for a deck it priced nothing in —
@@ -302,7 +304,7 @@ export function DecksWidget({ widget, fit, still }: WidgetBodyProps): ReactEleme
           );
         })}
       </WidgetRowList>
-      {footerShown && <WidgetFooter>{footer}</WidgetFooter>}
+      {footerShown && <WidgetFooterLine line={footer} />}
     </>
   );
 }
