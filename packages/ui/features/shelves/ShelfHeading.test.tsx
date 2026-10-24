@@ -378,23 +378,33 @@ describe("ShelfHeading", () => {
   });
 
   /**
-   * **Which folder a new one goes into** (issue #1058): the button stands a whole hairline away
-   * from the name it belongs to, so pointing at it or keying to it lights the row, the hairline
-   * and the name — and its name says the parent in words.
+   * **Which folder a control belongs to** (issue #1058, widened by issue #1376): the trailing
+   * controls stand a whole hairline away from the name they belong to, so pointing at or keying to
+   * any of them — not Add folder alone — lights the row, the hairline and the name.
    */
-  it("ties Add folder to its own heading while it is pointed at or focused", () => {
-    mount({ onAddFolder });
+  it("ties every trailing control to its own heading while it is pointed at or focused", () => {
+    mount({ onAddFolder, onRename: vi.fn(), menu: MENU });
 
-    const add = screen.getByRole("button", { name: "Add folder in Trade binder" });
-    expect(add).toHaveAttribute("data-shelf-add");
-    expect(marked(row(), "group-has-[[data-shelf-add]:hover]/shelf:bg-surface/50")).toBe(true);
+    for (const name of [
+      "Add folder in Trade binder",
+      "Rename Trade binder",
+      "Manage Trade binder",
+      "Open Trade binder",
+    ]) {
+      expect(screen.getByRole("button", { name })).toHaveAttribute("data-shelf-control");
+    }
+    // The fold controls are tied to the name already — the chevron lights from it — and stay out.
+    expect(screen.getByRole("button", { name: "Collapse Trade binder" })).not.toHaveAttribute(
+      "data-shelf-control",
+    );
+    expect(marked(row(), "group-has-[[data-shelf-control]:hover]/shelf:bg-surface/50")).toBe(true);
     expect(
-      marked(row(), "group-has-[[data-shelf-add]:focus-visible]/shelf:bg-surface/50"),
+      marked(row(), "group-has-[[data-shelf-control]:focus-visible]/shelf:bg-surface/50"),
     ).toBe(true);
     const title = screen.getByRole("button", { name: "Trade binder" });
-    expect(marked(title, "group-has-[[data-shelf-add]:hover]/shelf:text-accent")).toBe(true);
+    expect(marked(title, "group-has-[[data-shelf-control]:hover]/shelf:text-accent")).toBe(true);
     const rule = row().querySelector<HTMLElement>("span.h-px")!;
-    expect(marked(rule, "group-has-[[data-shelf-add]:hover]/shelf:bg-accent")).toBe(true);
+    expect(marked(rule, "group-has-[[data-shelf-control]:hover]/shelf:bg-accent")).toBe(true);
   });
 
   it("folds Not sorted from its name by pointer and keyboard", async () => {
