@@ -4,14 +4,15 @@
 //! **What every scanner command does is here, once** (the light app's step 7.3, 2026-10-07): the
 //! session's five doors on [`ScannerState`] ([`ScannerState::status`], [`ScannerState::frame`],
 //! [`ScannerState::reset`], [`ScannerState::set_filters`], [`ScannerState::capture`]), the four
-//! writes ([`save_prefs`], [`save_tray`], [`commit_tray`], [`archive_tray`]), and what a capture
-//! is read out of ([`capture_from`] — a body and a header lookup, so a host hands over whatever
-//! it calls a header). A frame is the body alone: the JPEG, and nothing beside it. **Two
-//! callers, and each only fetches what is its own**: the command table (`commands.rs`), for a
-//! host with one page, which admits [`PAGE`] on the lease and reads the capture's header out of
-//! the call's arguments; and the desktop's `#[tauri::command]` wrappers (`src-tauri`'s `scanner`
+//! writes ([`save_prefs`], [`save_tray`], [`commit_tray`], [`archive_tray`]), and what a frame
+//! and a capture are read out of ([`frame_from`], [`capture_from`] — a body and a header lookup,
+//! so a host hands over whatever it calls a header). A frame is the JPEG, and — when the last
+//! verdict asked for it — the same picture at full resolution behind it ([`FULL_HEADER`]).
+//! **Two callers, and each only fetches what is its own**: the command table (`commands.rs`),
+//! for a host with one page, which admits [`PAGE`] on the lease and reads the headers out of the
+//! call's arguments; and the desktop's `#[tauri::command]` wrappers (`src-tauri`'s `scanner`
 //! module, over a glob re-export of this one), which admit the calling webview's label and read
-//! the header out of Tauri's raw request.
+//! the headers out of Tauri's raw request.
 //!
 //! **A field of [`crate::state::State`], `State.scanner`**, built empty from the data directory —
 //! since the extraction's seventh step (2026-10-03); it was the desktop's own managed state,
@@ -519,13 +520,16 @@ impl ScannerState {
         self.session(|loaded| loaded.status.clone())
     }
 
-    /// `scanner_frame`'s work: one frame in, one verdict out, on the loaded session. The frame
-    /// is the call's whole body, a JPEG.
+    /// `scanner_frame`'s work: one frame in, one verdict out, on the loaded session — with the
+    /// same picture at full resolution beside it when the page sent one ([`frame_from`]).
     ///
-    /// **The caller has admitted its window first** ([`ScannerState::admit`]) and holds that
-    /// guard across this call — the lease is the caller's because the label is.
-    pub fn frame(&self, jpeg: &[u8]) -> Result<Verdict, String> {
-        self.session(|loaded| loaded.session.frame(jpeg))
+    /// The recogniser reads `jpeg` alone; `full` is only cut for the card's collector band, for
+    /// the finish mark (`card_scanner::session::Session::frame_with_full`), so carrying one the
+    /// session did not ask for costs the copy and a decode at most. **The caller has admitted
+    /// its window first** ([`ScannerState::admit`]) and holds that guard across this call — the
+    /// lease is the caller's because the label is.
+    pub fn frame(&self, jpeg: &[u8], full: Option<&[u8]>) -> Result<Verdict, String> {
+        self.session(|loaded| loaded.session.frame_with_full(jpeg, full))
     }
 
     /// `scanner_reset`'s work: forget the card in front of the lens.
@@ -934,12 +938,16 @@ fn write_capture_at(
 
 /// The header a capture carries its [`Sidecar`] in, as JSON.
 pub const CAPTURE_HEADER: &str = "x-scanner-capture";
+/// The header that says a frame's body is **two** JPEGs back to back, and where the first ends:
+/// the decimal byte length of the frame, with its full-resolution copy as everything after it.
+/// Absent, the body is the frame alone. See [`frame_from`].
+pub const FULL_HEADER: &str = "x-scanner-full";
 
 /// One header of a raw-body call, as far as the host that received it could read it.
 ///
-/// **Three states, because a sidecar that is there and unreadable is a refusal and one that was
-/// not sent is not** ([`capture_from`]) — so "could not be read" may not be folded into "was not
-/// sent". Each host fills it from what it calls a header: the desktop from Tauri's `HeaderMap`,
+/// **Three states, because a sidecar or a frame length that is there and unreadable is a refusal
+/// and one that was not sent is not** ([`capture_from`], [`frame_from`]) — so "could not be read"
+/// may not be folded into "was not sent". Each host fills it from what it calls a header: the desktop from Tauri's `HeaderMap`,
 /// where a value outside visible ASCII is the unreadable one; the command table from the call's
 /// arguments ([`Header::of_json`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -953,7 +961,8 @@ pub enum Header<'a> {
 impl<'a> Header<'a> {
     /// A header as a call through the command table carries it: **the call's arguments are the
     /// headers**, an object of strings, exactly as `packages/ui/lib/core/table.ts` and the web
-    /// host's `protocol.ts` send a `Uint8Array` call — `{"x-scanner-capture": "<json>"}`. A key
+    /// host's `protocol.ts` send a `Uint8Array` call — `{"x-scanner-capture": "<json>"}`, or
+    /// `{"x-scanner-full": "<n>"}` for a frame with its full-resolution copy behind it. A key
     /// that is missing or `null` was not sent; a value that is not a string is there and
     /// unreadable, as a header of raw bytes is on the desktop.
     pub fn of_json(value: Option<&'a serde_json::Value>) -> Header<'a> {
@@ -963,6 +972,53 @@ impl<'a> Header<'a> {
             Some(_) => Header::Unreadable("it is not a string".to_owned()),
         }
     }
+}
+
+/// What [`frame_from`] reads out of one call: the frame, and its full-resolution copy if one
+/// came. Borrowed from the body — a host that hands the work to another thread copies them.
+pub type FrameParts<'b> = (&'b [u8], Option<&'b [u8]>);
+
+/// The frame from a call's body, and the full-resolution copy behind it if [`FULL_HEADER`] says
+/// there is one. `header` answers one header by name.
+///
+/// **Why one body carrying two JPEGs rather than a second command or a second header.** The
+/// full frame has to be the *same video frame* as the one the recogniser reads — the card's
+/// corners found in the small picture are scaled onto the large one to cut its collector band,
+/// so a large picture one frame later is a card that has moved by however far the reader's hand
+/// did. One request is what makes the pair arrive together or not at all; a raw body is the only
+/// way bytes cross the desktop's boundary without a base64 step; and a header is the only place
+/// left to say where one ends.
+///
+/// **A length that is present and wrong is a refusal, never a guess.** A mis-split body hands
+/// the decoder the first half of a JPEG as the frame and a tail of it as the full frame, and the
+/// verdict that comes back describes neither. So a length that is not a number, is zero, runs
+/// past the body, or leaves nothing behind it for the full frame says so in words, and the
+/// page's loop shows the sentence and sends the next frame. An **absent** header is the body
+/// whole, as the frame — the shape every frame had before the full copy existed.
+pub fn frame_from<'b, 'h>(
+    body: &'b [u8],
+    header: &dyn Fn(&str) -> Header<'h>,
+) -> Result<FrameParts<'b>, String> {
+    let text = match header(FULL_HEADER) {
+        Header::Absent => return Ok((body, None)),
+        Header::Unreadable(e) => return Err(format!("the frame's length did not parse: {e}")),
+        Header::Text(text) => text,
+    };
+    let n: usize = text
+        .parse()
+        .map_err(|_| format!("the frame's length is not a number: {text:?}"))?;
+    if n == 0 {
+        return Err("the frame's length is zero, so there is no frame before the full one".into());
+    }
+    if n >= body.len() {
+        return Err(format!(
+            "the frame's length is {n} bytes but the body is {} — there is no full frame behind \
+             the frame",
+            body.len()
+        ));
+    }
+    let (jpeg, full) = body.split_at(n);
+    Ok((jpeg, Some(full)))
 }
 
 /// The capture from a call's body and its sidecar from [`CAPTURE_HEADER`].
@@ -1206,7 +1262,7 @@ mod tests {
     fn a_carried_neural_scanner_is_the_one_the_session_loads() {
         let dir = tempfile::tempdir().expect("tempdir");
         let bare = ScannerState::new(dir.path().to_path_buf());
-        let verdict = bare.frame(&[0xFF, 0xD8, 0xFF]).expect("a verdict");
+        let verdict = bare.frame(&[0xFF, 0xD8, 0xFF], None).expect("a verdict");
         assert_eq!(
             verdict.error.as_deref(),
             Some(card_scanner::session::NEURAL_UNAVAILABLE_ERROR)
@@ -1996,6 +2052,62 @@ mod tests {
         assert!(matches!(header("list"), Header::Unreadable(_)));
     }
 
+    /// The desktop's body tests (`src-tauri`'s `scanner::tests`), over the table's wire: the
+    /// same reader, handed a call's arguments where the desktop hands it request headers.
+    #[test]
+    fn a_body_with_no_header_is_the_frame_alone() {
+        let args = serde_json::json!({});
+        let (jpeg, full) = frame_from(&[1, 2, 3], &carried(&args)).expect("payload");
+        // No length header is the body exactly as it was before the full copy existed.
+        assert_eq!((jpeg, full), (&[1u8, 2, 3][..], None));
+        // And a call that carried no arguments at all reads the same.
+        let none = serde_json::Value::Null;
+        let (jpeg, full) = frame_from(&[1, 2, 3], &carried(&none)).expect("payload");
+        assert_eq!((jpeg, full), (&[1u8, 2, 3][..], None));
+    }
+
+    /// The page's own shape: the frame, then its full-resolution copy, one body, with the frame's
+    /// length in the header.
+    #[test]
+    fn a_full_header_splits_the_body_into_the_frame_and_the_full_frame() {
+        let args = serde_json::json!({ FULL_HEADER: "3" });
+        let body = [1, 2, 3, 7, 8, 9, 10];
+        let (jpeg, full) = frame_from(&body, &carried(&args)).expect("payload");
+        assert_eq!(jpeg, [1, 2, 3]);
+        assert_eq!(full, Some(&[7u8, 8, 9, 10][..]));
+    }
+
+    /// Every wrong length is a sentence rather than a split somewhere else: a mis-split body is a
+    /// frame decoded from half a JPEG, and the verdict for it would describe neither picture.
+    #[test]
+    fn a_frame_length_that_cannot_split_the_body_is_a_sentence() {
+        let body = [1, 2, 3, 4];
+        let refused = |value: serde_json::Value| {
+            let args = serde_json::json!({ FULL_HEADER: value });
+            let refusal = frame_from(&body, &carried(&args)).err();
+            refusal.expect("a length that cannot split is refused")
+        };
+        let err = refused("three".into());
+        assert!(err.contains("not a number"), "{err}");
+        let err = refused("-1".into());
+        assert!(err.contains("not a number"), "{err}");
+        let err = refused("0".into());
+        assert!(err.contains("zero"), "{err}");
+        // Past the end, and exactly at it — the second leaves an empty full frame.
+        let err = refused("9".into());
+        assert!(err.contains("no full frame"), "{err}");
+        let err = refused("4".into());
+        assert!(err.contains("no full frame"), "{err}");
+        // A number where the wire is a string is there and unreadable — a refusal, with the
+        // desktop's own opening words, and never the whole body taken as the frame.
+        let err = refused(3.into());
+        assert_eq!(err, "the frame's length did not parse: it is not a string");
+        // One byte short of the end is still a split, however small the full frame.
+        let args = serde_json::json!({ FULL_HEADER: "3" });
+        let (jpeg, full) = frame_from(&body, &carried(&args)).expect("payload");
+        assert_eq!((jpeg, full), (&[1u8, 2, 3][..], Some(&[4u8][..])));
+    }
+
     #[test]
     fn a_capture_reads_its_sidecar_from_the_header() {
         let args = serde_json::json!({ CAPTURE_HEADER: r#"{"expected":"Plains","votes":"8.0"}"# });
@@ -2126,7 +2238,7 @@ mod tests {
             let refused = Some(NOT_IN_A_BROWSER_YET.to_owned());
             assert_eq!(not_in_a_browser_yet().err(), refused);
             assert_eq!(state.status().err(), refused);
-            assert_eq!(state.frame(&[1, 2, 3]).err(), refused);
+            assert_eq!(state.frame(&[1, 2, 3], None).err(), refused);
             assert_eq!(state.reset().err(), refused);
             assert_eq!(state.set_filters(ScanFilters::default()).err(), refused);
             assert_eq!(

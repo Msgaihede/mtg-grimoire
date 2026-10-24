@@ -71,9 +71,10 @@ export type GrabFrame = (
 ) => Promise<Uint8Array | null>;
 
 /**
- * One video frame as the pump wants it when it keeps full frames for a run: the frame it sends,
- * and `kept`, the same draw at the camera's resolution up to {@link EVIDENCE_MAX_WIDTH} wide —
- * `null` where that encode produced nothing, and the run then keeps the pump's own frame.
+ * One video frame as the pump wants it when it keeps full frames for a run, or when a verdict
+ * asked for a full frame (`wants_full`): the frame it sends, and `kept`, the same draw at the
+ * camera's resolution up to {@link EVIDENCE_MAX_WIDTH} wide — `null` where that encode produced
+ * nothing, and the run then keeps the pump's own frame and the scanner gets the frame alone.
  */
 export interface GrabbedKept {
   frame: Uint8Array;
@@ -193,6 +194,13 @@ const standingCard = viewMemory<string | null>("scanner.standing-card");
  * picture kept and the picture judged are one moment of the video. That costs one more encode a
  * frame, which is why a page that cannot send pays none of it. Nothing is turned into text until
  * a reader presses.
+ *
+ * **And it sends the scanner a full-resolution copy when a verdict asks** (`wants_full`): the
+ * finish mark — the collector line's ★ or • — is measured on the camera's own pixels, because in
+ * the pump's frame the separator is three or four pixels across. The frame after such a verdict
+ * goes with its full copy behind it, out of the same draw: the copy the run keeps where the page
+ * keeps them, or one {@link GrabKept} grab for that frame alone where it does not — which the run
+ * does not keep, since a run is one size of picture. Every other frame is sent alone, as before.
  */
 export function useScanLoop({
   videoRef,
@@ -205,7 +213,10 @@ export function useScanLoop({
   videoRef: RefObject<HTMLVideoElement | null>;
   live: boolean;
   grabFrame?: GrabFrame;
-  /** The grab every frame uses while `keepFullFrames` is on. Injectable for {@link GrabFrame}'s reason. */
+  /**
+   * The grab every frame uses while `keepFullFrames` is on, and the frame after a verdict's
+   * `wants_full` uses while it is off. Injectable for {@link GrabFrame}'s reason.
+   */
   grabKept?: GrabKept;
   /**
    * Keep each frame of the run at full resolution — the page's word that *Send scan…* may be
@@ -248,6 +259,12 @@ export function useScanLoop({
 
   const inFlightRef = useRef(false);
   const tripsRef = useRef<number[]>([]);
+  /**
+   * The last taken verdict's `wants_full`: the next frame goes with its full-resolution copy. A
+   * ref for `lastSeqRef`'s reason. `false` at a start and wherever the evidence is cleared — the
+   * session has just forgotten the card it was asking about, and its next verdict says again.
+   */
+  const wantsFullRef = useRef(false);
   /**
    * The `decision_seq` of the last verdict this loop took, or `null` before the first one since the
    * camera started — which makes that first number a baseline when the start's reset was refused
@@ -322,6 +339,7 @@ export function useScanLoop({
     evidenceRef.current += 1;
     setVerdict(null);
     sinceDecisionRef.current = Infinity;
+    wantsFullRef.current = false;
     // A reader who pressed Reset asked for the next decision to be news — the card in front of
     // the lens included.
     heldRef.current = null;
@@ -373,6 +391,8 @@ export function useScanLoop({
     // A camera that has just started has seen no number yet; see `lastSeqRef`.
     lastSeqRef.current = null;
     sinceDecisionRef.current = Infinity;
+    // Nor has it been asked for a full frame: the start's reset forgets the card that asked.
+    wantsFullRef.current = false;
     // Nor has it sent a frame: a run is one stream's, start to press.
     runRef.current = [];
     // The card the last stream stopped on, which this one must not file again.
@@ -412,6 +432,12 @@ export function useScanLoop({
         const evidence = evidenceRef.current;
         /** The full-resolution copy the run keeps, where the page keeps one. */
         let full: Uint8Array | null = null;
+        /**
+         * The full-resolution copy this frame is sent with, when the last verdict asked for one
+         * (`wants_full`) — read once, here, so the grab and the send agree on it.
+         */
+        const wantsFull = wantsFullRef.current;
+        let sendFull: Uint8Array | null = null;
         // Which size of picture the grab is for — see `keptSizeRef`.
         const keptSize = keptSizeRef.current;
         // When this frame is the video's: both grabs draw it on the call and encode afterwards,
@@ -423,6 +449,18 @@ export function useScanLoop({
             const got = await grabKeptRef.current(video, SEND_PX, PUMP_QUALITY);
             bytes = got?.frame ?? null;
             full = got?.kept ?? null;
+            // **A copy, never the run's own array.** The web host transfers what it is handed
+            // to its scanner's Worker, which detaches it; the run would be left holding an empty
+            // frame where its full copy was. One copy, once in a while — the frames after a
+            // verdict that asked, not every frame.
+            if (wantsFull) sendFull = full?.slice() ?? null;
+          } else if (wantsFull) {
+            // A page that keeps no full frames draws this one's — frame and copy out of one draw
+            // of the video, so the copy is the picture the frame was cut from — and sends it. The
+            // run keeps the pump's frame, as it does for every frame of a page like this.
+            const got = await grabKeptRef.current(video, SEND_PX, PUMP_QUALITY);
+            bytes = got?.frame ?? null;
+            sendFull = got?.kept ?? null;
           } else {
             bytes = await grabRef.current(video, SEND_PX, PUMP_QUALITY);
           }
@@ -451,9 +489,10 @@ export function useScanLoop({
         // zero-length the moment the call is made. A ring that kept `bytes` would be full of
         // frames on the desktop and full of nothing in a browser, with no error anywhere — so it
         // keeps a copy, on every host alike. A frame's worth of bytes copied nine times a second,
-        // which is small beside the encode that made them. **The full-resolution frame needs no
-        // copy**: it is never sent to the scanner, so nothing can detach it; and one grabbed
-        // across a change of `keepFullFrames` is not this run's size, and is kept out of it.
+        // which is small beside the encode that made them. **The full-resolution frame is kept
+        // as it is**: what goes to the scanner beside a frame is a copy of it (`sendFull`, above),
+        // so nothing can detach the run's; and one grabbed across a change of `keepFullFrames` is
+        // not this run's size, and is kept out of it.
         const sameSize = keptSize === keptSizeRef.current;
         const kept = full ?? bytes.slice();
         // Which run this frame is sent into — see `runEpochRef`. Noted here, as it goes out, and
@@ -461,7 +500,12 @@ export function useScanLoop({
         const epoch = runEpochRef.current;
         const t0 = performance.now();
         try {
-          const answer = await ipc.scannerFrame(bytes);
+          // The frame alone, as every frame was before the finish mark — or with its full copy
+          // behind it, on the frame after a verdict that asked.
+          const answer =
+            sendFull === null
+              ? await ipc.scannerFrame(bytes)
+              : await ipc.scannerFrame(bytes, sendFull);
           const ms = performance.now() - t0;
           const trips = tripsRef.current;
           trips.push(ms);
@@ -471,6 +515,7 @@ export function useScanLoop({
           setRoundTripMs(ms);
           setRate((1000 * trips.length) / trips.reduce((a, b) => a + b, 0));
           setVerdict(answer);
+          wantsFullRef.current = answer.wants_full;
           // The frame joins the run exactly where its verdict is taken, and nowhere else: a
           // frame whose answer was dropped above, or refused below, was never part of what the
           // scanner is seen to have said. Nor does one that was on the wire across `breakRun`:

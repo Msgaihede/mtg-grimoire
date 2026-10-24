@@ -10,6 +10,7 @@
 //! a tray — the filters, the labels, the decision count and the hand-over between hosts.
 
 pub mod filters;
+pub mod finish;
 pub mod host;
 pub mod ids;
 pub mod labels;

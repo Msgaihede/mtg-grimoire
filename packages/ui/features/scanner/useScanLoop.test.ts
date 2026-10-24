@@ -5,16 +5,18 @@ import { RUN_MAX_AGE_MS, RUN_MAX_BYTES, RUN_MAX_FRAMES, runClock } from "./submi
 import type { ScannerDecision, ScannerVerdict } from "./types";
 import { SEND_PX, useScanLoop, type GrabbedKept, type RunFrame } from "./useScanLoop";
 
-const scannerFrame = vi.fn<(jpeg: Uint8Array) => Promise<ScannerVerdict>>();
+const scannerFrame =
+  vi.fn<(jpeg: Uint8Array, full?: Uint8Array | null) => Promise<ScannerVerdict>>();
 const scannerReset = vi.fn<() => Promise<void>>();
 
 // Only the frame and reset calls are replaced. `ipcError` stays the real one, because what the
 // error path owes is *its* sentence — a stub would let the hook return anything and still pass. The
-// arguments are forwarded as they came, so a test can see a frame is the JPEG and nothing else.
+// arguments are forwarded as they came, so a test can see a frame is the JPEG and nothing else —
+// or the JPEG and its full-resolution copy, on the frame after a verdict that asked for one.
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
   ipc: {
-    scannerFrame: (...args: [Uint8Array]) => scannerFrame(...args),
+    scannerFrame: (...args: [Uint8Array, (Uint8Array | null)?]) => scannerFrame(...args),
     scannerReset: () => scannerReset(),
   },
 }));
@@ -1088,7 +1090,7 @@ describe("the run useScanLoop keeps", () => {
       expect(grabKept.mock.calls[0]).toEqual([expect.anything(), SEND_PX, 0.72]);
       // The scanner was given the small frames, and nothing beside them…
       const sent = scannerFrame.mock.calls.slice(0, 3);
-      expect(sent.map((call) => call.map((jpeg) => Array.from(jpeg)))).toEqual([
+      expect(sent.map((call) => call.map((jpeg) => Array.from(jpeg ?? [])))).toEqual([
         [[0xff, 0xd8, 1]],
         [[0xff, 0xd8, 2]],
         [[0xff, 0xd8, 3]],
@@ -1270,5 +1272,173 @@ describe("the run useScanLoop keeps, across the session's own break", () => {
     await tick();
     await act(async () => gates[0].resolve(VERDICTS.voting));
     expect(numbers(result.current.recent())).toEqual([1]);
+  });
+});
+
+/**
+ * **The finish mark is measured on the camera's own pixels** (2026-10-24): the session asks for
+ * them with `wants_full`, and the pump sends the next frame with its full-resolution copy behind
+ * it — out of the same draw — and every other frame alone.
+ */
+describe("a full frame, when a verdict asks for one", () => {
+  const ASKS: ScannerVerdict = { ...VERDICTS.voting, wants_full: true };
+
+  /** A kept grab whose two pictures are told apart: `ff d8 n` small, `ff d9 n` full. */
+  function keptGrab() {
+    let n = 0;
+    return vi.fn(async (): Promise<GrabbedKept | null> => {
+      n += 1;
+      return { frame: new Uint8Array([0xff, 0xd8, n]), kept: new Uint8Array([0xff, 0xd9, n]) };
+    });
+  }
+
+  /** Gates for the first `count` frames, answered when a test chooses; later frames park. */
+  function gated(count: number) {
+    const gates = Array.from({ length: count }, () => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(
+      () => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise,
+    );
+    return gates;
+  }
+
+  /** Each call as the bytes it carried: one array for a frame alone, two for a pair. */
+  const calls = () =>
+    scannerFrame.mock.calls.map((call) => call.map((bytes) => Array.from(bytes ?? [])));
+
+  it("sends every frame alone while no verdict asks", async () => {
+    const gates = gated(2);
+    const grabKept = keptGrab();
+    mount({ grabKept });
+    await tick();
+    await act(async () => gates[0].resolve(VERDICTS.voting));
+    await act(async () => gates[1].resolve(VERDICTS.decided));
+    expect(grabKept).not.toHaveBeenCalled();
+    expect(scannerFrame).toHaveBeenCalledTimes(3);
+    for (const call of scannerFrame.mock.calls) expect(call).toHaveLength(1);
+  });
+
+  describe("on a page that keeps no full frames", () => {
+    it("draws the next frame with its full copy, sends both, and goes back to single frames", async () => {
+      const gates = gated(3);
+      const grabKept = keptGrab();
+      const { result, grabFrame } = mount({ grabKept });
+      await tick();
+      await act(async () => gates[0].resolve(ASKS));
+      // The frame after the asking verdict: one draw, two pictures, both sent.
+      expect(grabKept).toHaveBeenCalledTimes(1);
+      expect(grabKept.mock.calls[0]).toEqual([expect.anything(), SEND_PX, 0.72]);
+      expect(calls()[1]).toEqual([
+        [0xff, 0xd8, 1],
+        [0xff, 0xd9, 1],
+      ]);
+      await act(async () => gates[1].resolve(VERDICTS.voting));
+      // Asked no more: the plain grab again, and the frame alone.
+      expect(grabKept).toHaveBeenCalledTimes(1);
+      expect(grabFrame).toHaveBeenCalledTimes(2);
+      expect(scannerFrame.mock.calls[2]).toEqual([BYTES]);
+      await act(async () => gates[2].resolve(VERDICTS.voting));
+
+      // **The run is one size of picture**: it keeps the pump's frame of the pair, never the
+      // full copy that went beside it.
+      const run = result.current.recent();
+      expect(run.map((frame) => Array.from(frame.jpeg))).toEqual([
+        Array.from(BYTES),
+        [0xff, 0xd8, 1],
+        Array.from(BYTES),
+      ]);
+    });
+
+    it("sends the frame alone where the full copy did not encode", async () => {
+      const gates = gated(1);
+      const grabKept = vi.fn(async (): Promise<GrabbedKept | null> => ({
+        frame: PAIR_FRAME,
+        kept: null,
+      }));
+      mount({ grabKept });
+      await tick();
+      await act(async () => gates[0].resolve(ASKS));
+      expect(grabKept).toHaveBeenCalledTimes(1);
+      expect(scannerFrame.mock.calls[1]).toEqual([PAIR_FRAME]);
+    });
+
+    it("asks on every frame for as long as the verdicts do", async () => {
+      const gates = gated(3);
+      mount({ grabKept: keptGrab() });
+      await tick();
+      await act(async () => gates[0].resolve(ASKS));
+      await act(async () => gates[1].resolve(ASKS));
+      await act(async () => gates[2].resolve(VERDICTS.voting));
+      expect(
+        calls()
+          .slice(0, 4)
+          .map((call) => call.length),
+      ).toEqual([1, 2, 2, 1]);
+    });
+  });
+
+  describe("on a page that keeps full frames", () => {
+    it("sends a copy of the kept full frame, and the run keeps its own", async () => {
+      const gates = gated(2);
+      const grabKept = keptGrab();
+      const { result } = mount({ grabKept, keepFullFrames: true });
+      await tick();
+      // The first frame: no verdict has asked yet, so the scanner gets the frame alone.
+      expect(calls()[0]).toEqual([[0xff, 0xd8, 1]]);
+      await act(async () => gates[0].resolve(ASKS));
+      expect(calls()[1]).toEqual([
+        [0xff, 0xd8, 2],
+        [0xff, 0xd9, 2],
+      ]);
+      await act(async () => gates[1].resolve(VERDICTS.voting));
+      expect(calls()[2]).toEqual([[0xff, 0xd8, 3]]);
+      // No extra grab for it: the kept grab already drew the full copy.
+      expect(grabKept).toHaveBeenCalledTimes(3);
+
+      // What was sent beside the frame is not the run's array.
+      const sentFull = scannerFrame.mock.calls[1][1];
+      const [, second] = result.current.recent();
+      expect(Array.from(second.jpeg)).toEqual([0xff, 0xd9, 2]);
+      expect(sentFull).not.toBe(second.jpeg);
+    });
+
+    /**
+     * **The web host transfers what it is sent, which detaches it** (`lib/core/web/scanner.ts`).
+     * The run keeps the full copies; were the copy sent beside a frame the run's own array, the
+     * frame after every asking verdict would leave an empty picture in the run.
+     */
+    it("keeps every full frame whole when the host empties the copy it was sent", async () => {
+      scannerFrame.mockImplementation((jpeg, full) => {
+        structuredClone(jpeg.buffer, { transfer: [jpeg.buffer as ArrayBuffer] });
+        if (full != null) structuredClone(full.buffer, { transfer: [full.buffer as ArrayBuffer] });
+        return answersIn(10, ASKS);
+      });
+      const { result } = mount({ grabKept: keptGrab(), keepFullFrames: true });
+      await tick(35);
+
+      // The premise: frames after the first went with a full copy, and the host emptied it.
+      const pairs = scannerFrame.mock.calls.filter((call) => call.length === 2);
+      expect(pairs.length).toBeGreaterThan(1);
+      for (const [, full] of pairs) expect(full?.length).toBe(0);
+
+      const run = result.current.recent();
+      expect(run.length).toBeGreaterThan(2);
+      run.forEach((frame, i) => expect(Array.from(frame.jpeg)).toEqual([0xff, 0xd9, i + 1]));
+    });
+  });
+
+  it("forgets the ask when the reads are cleared, and takes none from an answer thrown away", async () => {
+    const gates = gated(2);
+    const { result } = mount({ grabKept: keptGrab() });
+    await tick();
+    await act(async () => gates[0].resolve(ASKS));
+    // The pair is on its way when the reader clears the evidence…
+    expect(scannerFrame.mock.calls[1]).toHaveLength(2);
+    act(() => result.current.clearReads());
+    // …and its answer, which asks again, is about a card the reader asked to forget.
+    await act(async () => gates[1].resolve(ASKS));
+    await tick();
+    expect(scannerFrame).toHaveBeenCalledTimes(3);
+    expect(scannerFrame.mock.calls[2]).toEqual([BYTES]);
   });
 });

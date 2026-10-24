@@ -212,6 +212,35 @@ describe("scanner_frame over the fake", () => {
     expect(last?.decision?.printing).toBe(FAKE_PILE[0].id);
   });
 
+  /**
+   * **The full frame is accepted and changes nothing**: the call `ipc.scannerFrame` makes when a
+   * verdict asked for one — the two JPEGs back to back, the frame's length in a header — is the
+   * script's next frame, as a frame alone is, and the fake never asks for another.
+   */
+  it("answers a frame with its full-resolution copy behind it as it answers a frame alone", async () => {
+    vi.useFakeTimers();
+    const alone = allHandlers(makeDb());
+    const paired = allHandlers(makeDb());
+    for (let i = 0; i < FRAMES_PER_CARD; i++) {
+      const plain = alone.scanner_frame(new Uint8Array([1, 2, 3]));
+      const full = paired.scanner_frame(new Uint8Array([1, 2, 3, 7, 7]), {
+        headers: { "x-scanner-full": "3" },
+      });
+      await vi.advanceTimersByTimeAsync(FAKE_FRAME_MS);
+      const verdict = await full;
+      expect(verdict).toEqual(await plain);
+      expect(verdict.wants_full).toBe(false);
+      expect(verdict.decision?.finish_mark ?? null).toBeNull();
+    }
+  });
+
+  it("refuses a frame length that cannot split the body, in the engine's words", async () => {
+    const handlers = allHandlers(makeDb());
+    await expect(
+      handlers.scanner_frame(new Uint8Array([1, 2]), { headers: { "x-scanner-full": "0" } }),
+    ).rejects.toThrow("the frame's length is zero, so there is no frame before the full one");
+  });
+
   it("finds nothing to name under scannerMissing", async () => {
     vi.useFakeTimers();
     const handlers = allHandlers(makeDb({ fault: "scannerMissing" }));

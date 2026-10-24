@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import scannerRs from "../../../../../crates/grimoire-core/src/scanner.rs?raw";
 import {
+  FULL_HEADER,
   frameMessage,
   isUnsupported,
   loadFactsOf,
@@ -59,32 +60,93 @@ describe("the Neural evidence files, as the message the scanner's Worker is sent
 });
 
 describe("a frame, as the message the scanner's Worker is sent", () => {
+  /** Answered from the result type: a refusal is a sentence, and a test of a frame wants the frame. */
+  const sent = (outgoing: ReturnType<typeof frameMessage>) => {
+    if (typeof outgoing === "string") throw new Error(outgoing);
+    return outgoing;
+  };
+
   /**
-   * **A frame is its JPEG and nothing beside it** — the engine reads no header for one any more,
-   * so none is named there either (2026-10-24: the options and the detail frame went with the old
-   * scanner).
+   * **One header, as the engine names it** — the frame's length when its full-resolution copy
+   * rides behind it. The options header went with the old scanner (2026-10-24), and is named
+   * nowhere.
    */
-  it("reads no header, as the engine reads none", () => {
+  it("names the full frame's header as the engine names it, and no other", () => {
+    expect(scannerRs).toContain(`pub const FULL_HEADER: &str = "${FULL_HEADER}";`);
     expect(scannerRs).not.toContain('"x-scanner-options"');
     expect(scannerRs).not.toContain('"x-scanner-detail"');
   });
 
-  it("is the whole body, transferred", () => {
+  it("is the whole body when there is no full frame, transferred", () => {
     const body = new Uint8Array([0xff, 0xd8, 1, 2]);
-    const { message, transfer } = frameMessage(7, body);
-    expect(message).toEqual({ kind: "frame", id: 7, jpeg: body });
+    const { message, transfer } = sent(frameMessage(7, body, undefined));
+    expect(message).toEqual({ kind: "frame", id: 7, jpeg: body, full: null });
+    expect(transfer).toEqual([body.buffer]);
+    // A header that is not this one is nobody's business.
+    const other = sent(frameMessage(7, body, { "x-scanner-options": "{}" }));
+    expect(other.message).toEqual({ kind: "frame", id: 7, jpeg: body, full: null });
+  });
+
+  it("splits the body at the full header without copying a byte", () => {
+    const body = new Uint8Array([1, 2, 3, 9, 9]);
+    const { message, transfer } = sent(frameMessage(1, body, { [FULL_HEADER]: "3" }));
+    if (message.kind !== "frame") throw new Error("not a frame");
+    expect([...message.jpeg]).toEqual([1, 2, 3]);
+    expect([...(message.full ?? [])]).toEqual([9, 9]);
+    // Two views of the one buffer, and the buffer handed over once.
+    expect(message.jpeg.buffer).toBe(body.buffer);
+    expect(message.full?.buffer).toBe(body.buffer);
     expect(transfer).toEqual([body.buffer]);
   });
 
   it("copies a body that is only part of its buffer, and leaves the rest of that memory alone", () => {
     const memory = new Uint8Array([0, 1, 2, 3, 4, 5]);
     const body = memory.subarray(1, 5);
-    const { message, transfer } = frameMessage(1, body);
+    const { message, transfer } = sent(frameMessage(1, body, undefined));
     if (message.kind !== "frame") throw new Error("not a frame");
     expect([...message.jpeg]).toEqual([1, 2, 3, 4]);
     expect(transfer).toHaveLength(1);
     expect(transfer[0]).not.toBe(memory.buffer);
     expect([...memory]).toEqual([0, 1, 2, 3, 4, 5]);
+    // And split, the same.
+    const split = sent(frameMessage(1, body, { [FULL_HEADER]: "2" }));
+    if (split.message.kind !== "frame") throw new Error("not a frame");
+    expect([...split.message.jpeg]).toEqual([1, 2]);
+    expect([...(split.message.full ?? [])]).toEqual([3, 4]);
+    expect(split.transfer).toHaveLength(1);
+    expect(split.transfer[0]).not.toBe(memory.buffer);
+  });
+
+  it("refuses a frame length the body cannot be split at, in the engine's own sentences", () => {
+    const body = new Uint8Array(4);
+    const refusals = [
+      frameMessage(1, body, { [FULL_HEADER]: "abc" }),
+      frameMessage(1, body, { [FULL_HEADER]: "0" }),
+      frameMessage(1, body, { [FULL_HEADER]: "4" }),
+      frameMessage(1, body, { [FULL_HEADER]: "-1" }),
+    ];
+    expect(refusals).toEqual([
+      `the frame's length is not a number: "abc"`,
+      "the frame's length is zero, so there is no frame before the full one",
+      "the frame's length is 4 bytes but the body is 4 — there is no full frame behind the frame",
+      `the frame's length is not a number: "-1"`,
+    ]);
+    // As Rust's `usize` parse reads a number: a `+` in front is one, a space or a sign is not.
+    const plus = sent(frameMessage(1, new Uint8Array([1, 2, 3]), { [FULL_HEADER]: "+2" }));
+    expect(plus.message).toMatchObject({ kind: "frame", jpeg: new Uint8Array([1, 2]) });
+    for (const not of [" 2", "2 ", "2.0", "0x2", ""]) {
+      expect(frameMessage(1, new Uint8Array(4), { [FULL_HEADER]: not }), not).toMatch(
+        /is not a number/,
+      );
+    }
+    // Held to the Rust they repeat (`scanner::frame_from`).
+    expect(scannerRs).toContain("the frame's length is not a number: {text:?}");
+    expect(scannerRs).toContain(
+      "the frame's length is zero, so there is no frame before the full one",
+    );
+    expect(scannerRs.replace(/\\\s+/g, "")).toContain(
+      "the frame's length is {n} bytes but the body is {} — there is no full frame behind the frame",
+    );
   });
 });
 

@@ -551,7 +551,11 @@ bare "Emblem".
 ## The setup page
 
 `packages/ui/features/playtesting/PlaytestSetup.tsx`, under the Playtesting rail entry: a game
-lobby (redesigned 2026-10-21 from the "Playtest Lobby Redesign" canvas, option A). Two halves:
+lobby (redesigned 2026-10-21 from the "Playtest Lobby Redesign" canvas, option A). Its top row is
+the page bar (`components/PageBar.tsx`), across both halves as on the Decks page: the trail
+`Playtesting ›` and the drawers above the open one, the level on screen as the title ("All decks",
+"Every deck" or the folder), its counts, and "Picking for" and "View all" at the right end — the
+wall's own heading row, drawn as the bar rather than as a row of its own under it. Two halves:
 
 - **The wall, on the left** — the reader's decks drawn and walked exactly as the Decks page draws
   them, with every managing hand taken off. The tiles are `DeckPickTile`, `DeckFolderPickCard` and
@@ -560,7 +564,8 @@ lobby (redesigned 2026-10-21 from the "Playtest Lobby Redesign" canvas, option A
   tracks and each deck's colour band and bracket pill are `features/decks/deckWall.ts`'
   (`wallStyle`, `useDeckWallMarks`), shared with the gallery; the order is the gallery's
   remembered sort, the zoom its `cardZoom.deckGallery`. Folders are walked by their cards, the
-  "Up one level" tile and a path over the wall (`Folder path`). **Typing a name or pressing a
+  "Up one level" tile and the page bar's trail (`Page trail`), whose `Playtesting` crumb goes back
+  to the top level. **Typing a name or pressing a
   format searches every deck**, folders left out (the gallery narrows the drawer on screen
   instead): the reader is looking for one deck to play. Archived decks are left off.
 - **The table, on the right** — **Gamemode** (three tiles: "Goldfish", "Duel", the default, and

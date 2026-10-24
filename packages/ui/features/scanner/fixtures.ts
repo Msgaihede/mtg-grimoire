@@ -1,6 +1,7 @@
 import type {
   ScannerCandidate,
   ScannerChoice,
+  ScannerFinishMark,
   ScannerLabel,
   ScannerPrefs,
   ScannerStanding,
@@ -82,6 +83,25 @@ const hierarchCandidate: ScannerCandidate = {
   printings: null,
 };
 
+/**
+ * The collector line's separator, measured three ways — `finish::finish_mark`'s three answers.
+ *
+ * The figures sit inside the ranges the crate's first calibration measured (2026-10-01, twelve
+ * crops of LTR and HOB cards): a non-foil's dot at height 0.41–0.62 and area 0.12–0.17 of the
+ * letter height, solidity 1.04–1.12; a foil's star at 0.80–0.84 and 0.33–0.44, solidity 0.91–0.99.
+ * `unmeasured` is no separator found at all — every figure `null`, which is a different fact from
+ * a mark found and measured between the two.
+ */
+const dotMark: ScannerFinishMark = { reading: "nonfoil", height: 0.52, area: 0.14, solidity: 1.08 };
+const starMark: ScannerFinishMark = { reading: "foil", height: 0.84, area: 0.44, solidity: 0.95 };
+const unmeasuredMark: ScannerFinishMark = {
+  reading: "unknown",
+  height: null,
+  area: null,
+  solidity: null,
+};
+export const MARKS = { dot: dotMark, star: starMark, unmeasured: unmeasuredMark };
+
 /** Every field an in-frame card shares; each fixture below overrides its own. */
 const baseVerdict: ScannerVerdict = {
   ok: true,
@@ -104,6 +124,7 @@ const baseVerdict: ScannerVerdict = {
   tracked: null,
   decision_seq: 0,
   decision: null,
+  wants_full: false,
 };
 
 /** The agreement on its way: the leader's votes at five eighths of the bar. */
@@ -140,6 +161,7 @@ const decided: ScannerVerdict = {
     choices: [],
     replaces_previous: false,
     finishes: ["nonfoil", "foil"],
+    finish_mark: null,
   },
   match: {
     rotated: false,
@@ -202,6 +224,7 @@ const noCard: ScannerVerdict = {
   },
   decision_seq: 0,
   decision: null,
+  wants_full: false,
 };
 
 /** A frame the scanner panicked on — `session::PANIC_ERROR`, verbatim. */
@@ -218,6 +241,7 @@ const panicked: ScannerVerdict = {
   tracked: null,
   decision_seq: 0,
   decision: null,
+  wants_full: false,
 };
 
 /* ------------------------------------------------------------------------ Printings ---- */
@@ -314,6 +338,7 @@ const resolved: ScannerVerdict = {
     replaces_previous: false,
     // Alpha was printed in one finish, so Detect needs nothing else to file it.
     finishes: ["nonfoil"],
+    finish_mark: null,
   },
   match: {
     rotated: false,
@@ -348,6 +373,7 @@ const ambiguous: ScannerVerdict = {
     choices: boltChoices,
     replaces_previous: false,
     finishes: ["nonfoil", "foil"],
+    finish_mark: null,
   },
   match: {
     rotated: false,

@@ -57,8 +57,8 @@ export type ToScanner =
       symbols: Uint8Array;
       bands: Uint8Array;
     }
-  /** One frame: a JPEG. */
-  | { kind: "frame"; id: number; jpeg: Uint8Array }
+  /** One frame: a JPEG, and the same frame at the camera's resolution or `null`. */
+  | { kind: "frame"; id: number; jpeg: Uint8Array; full: Uint8Array | null }
   | { kind: "reset"; id: number }
   | { kind: "filters"; id: number; filters: string }
   /** The module's linear memory in bytes — a high-water mark, which only ending the Worker lowers. */
@@ -147,18 +147,56 @@ export function neuralEvidenceMessage(
   };
 }
 
+/** The header that says how many of the body's bytes are the frame — `scanner::FULL_HEADER`. */
+export const FULL_HEADER = "x-scanner-full";
+
 /**
- * The `frame` a `scanner_frame` call becomes. **The body is the JPEG, and nothing rides beside
- * it** — the desktop's rule (`scanner::scanner_frame`).
+ * The `frame` a `scanner_frame` call becomes, or the sentence it is refused with.
  *
- * **Nothing is copied.** The body's buffer is what is handed over, so a frame's bytes cross once.
- * Only a body that is itself a view of part of something is copied first — `protocol.ts`'s rule
- * for the engine's calls.
+ * **The body is the JPEG, or the JPEG with its full-resolution copy behind it**, split at
+ * {@link FULL_HEADER}'s number — the desktop's rule (`scanner::frame_from`), and its sentences
+ * word for word: a length that is no number, zero, or not short of the body is a refusal,
+ * because a frame judged with the wrong half of its bytes is the quieter failure.
+ *
+ * **Nothing is copied.** The two halves are views of the one body and the body's buffer is what
+ * is handed over, so a frame's bytes cross once — and the buffer is detached on this side, so
+ * a caller that means to keep a picture sends a copy of it (`ipc.scannerFrame` builds the pair
+ * into a new array). Only a body that is itself a view of part of something is copied first —
+ * `protocol.ts`'s rule for the engine's calls.
  */
-export function frameMessage(id: number, body: Uint8Array): ScanOutgoing {
+export function frameMessage(
+  id: number,
+  body: Uint8Array,
+  headers: Record<string, string> | undefined,
+): ScanOutgoing | string {
   const whole = body.buffer instanceof ArrayBuffer && body.byteLength === body.buffer.byteLength;
-  const jpeg = whole ? body : body.slice();
-  return { message: { kind: "frame", id, jpeg }, transfer: buffersOf([jpeg]) };
+  const bytes = whole ? body : body.slice();
+  const length = headers?.[FULL_HEADER];
+  if (length === undefined) {
+    return {
+      message: { kind: "frame", id, jpeg: bytes, full: null },
+      transfer: buffersOf([bytes]),
+    };
+  }
+  // As Rust's `usize` parse reads one (`scanner::frame_from`): digits, with a `+` allowed in
+  // front and nothing else — no sign, no space, no fraction.
+  const n = /^\+?\d+$/.test(length) ? Number(length) : NaN;
+  if (!Number.isSafeInteger(n)) {
+    return `the frame's length is not a number: ${JSON.stringify(length)}`;
+  }
+  if (n === 0) return "the frame's length is zero, so there is no frame before the full one";
+  if (n >= bytes.byteLength) {
+    return (
+      `the frame's length is ${n} bytes but the body is ${bytes.byteLength} — there is no ` +
+      "full frame behind the frame"
+    );
+  }
+  const jpeg = bytes.subarray(0, n);
+  const full = bytes.subarray(n);
+  return {
+    message: { kind: "frame", id, jpeg, full },
+    transfer: buffersOf([jpeg, full]),
+  };
 }
 
 /** What an unreadable answer is called, with the text that was not one. */
