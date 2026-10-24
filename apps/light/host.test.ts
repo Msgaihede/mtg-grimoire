@@ -467,10 +467,10 @@ describe("the privacy policy's page", () => {
     const hosts = [...new Set([...policy.matchAll(/(?:https|wss):\/\/([a-z0-9.-]+)/g)].map((m) => m[1]))];
     expect(hosts.length).toBeGreaterThanOrEqual(6);
     for (const host of hosts) expect(privacyPage, host).toContain(`<td>${host}</td>`);
-    // And the two the Android host asks that a browser may not: Mana Pool's price list, and
-    // GitHub for the scanner's files (`scanner_assets::RELEASES`, a reader's press — step 7.4).
+    // And the one the Android host asks that a browser may not: Mana Pool's price list. GitHub
+    // is no longer one: the scanner's files are built into the Android app (2026-10-24).
     expect(privacyPage).toContain("<td>manapool.com</td>");
-    expect(privacyPage).toContain("<td>github.com</td>");
+    expect(privacyPage).not.toContain("<td>github.com</td>");
   });
 
   it("offers nothing to pay for", () => {

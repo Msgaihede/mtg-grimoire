@@ -171,8 +171,8 @@ export const CHOOSE_ITS_FINISH = "Choose its finish.";
  * screen, and every one of them is theirs to look through first.
  *
  * **Every clause is a promise the engine keeps**: the submission is the pictures, the
- * printing's id and finish, what the scanner had answered and how it was set — its mode, and the
- * sets and dates it was narrowed to (`ScannerSubmission` in `lib/ipc.ts`) — and the app's version
+ * printing's id and finish, what the scanner had answered and how it was set — the sets and dates
+ * it was narrowed to (`ScannerSubmission` in `lib/ipc.ts`) — and the app's version
  * and which app it is, which the engine adds (`Label` in `scanner_submit.rs`); nothing of the
  * collection rides with it. **It lists what is sent rather
  * than saying "nothing else"**, because there is a little else and a reader is owed the list.
