@@ -9,8 +9,8 @@ import { AddCardDialog, CHOOSE_A_PRINTING } from "./AddCardDialog";
  *
  * The same two questions *Send scan…* asks — the exact printing, and its finish — over the
  * workbench's fake: the four Lightning Bolts of its corpus come back as four tiles. A printing
- * sold one way has its finish chosen for the reader; so does the Defaults popover's fixed finish
- * where the printing comes in it.
+ * sold one way has its finish chosen for the reader; so does a fixed Finish choice (the dock's
+ * Finish menu) where the printing comes in it.
  *
  * **Each docs story has a frame of its own**: a dialog covers the window it is in.
  */

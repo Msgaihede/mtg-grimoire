@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import { VERDICTS } from "../fixtures";
+import { ShotReadyPill } from "./PictureNotes";
 import { matchStrip, type LastAdded } from "./readerText";
 import { ScanHud, type ScanHudProps } from "./ScanHud";
 
@@ -87,6 +88,48 @@ export const Icon: Story = {
       "aria-label",
       "Send scan…",
     );
+  },
+};
+
+/** The desktop's camera column at its 22rem floor — the narrowest it is ever drawn. */
+function AtTheFloor(args: ScanHudProps) {
+  return (
+    <div className="relative h-[28rem] w-[22rem] overflow-hidden rounded-lg bg-black">
+      <ScanHud {...args} />
+    </div>
+  );
+}
+
+/**
+ * Both labelled presses at the column's floor, and a sentence to say: beside them the chip would
+ * have 47px, a word to a line, so it drops to a row of its own under them.
+ */
+export const ChipAtTheFloor: Story = {
+  args: { strip: matchStrip({ ...VERDICTS.noCard, matcher: false }, null) },
+  render: (args) => <AtTheFloor {...args} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("alert")).toHaveTextContent(
+      "The card recognizer isn't loaded, so cards can't be identified.",
+    );
+    await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Send scan…" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * Point and shoot between two shots at the column's floor: the pill is the HUD's notice, drawn
+ * under the corner row, so *Reset evidence* never stands on it. Send scan… is not offered between
+ * shots — a run lives only as long as its shot.
+ */
+export const BetweenShots: Story = {
+  args: { live: false, onSend: undefined },
+  render: (args) => <AtTheFloor {...args} notice={<ShotReadyPill />} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Point at a card, then press Scan card.")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Send scan…" })).toBeNull();
   },
 };
 

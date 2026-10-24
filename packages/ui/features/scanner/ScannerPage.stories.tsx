@@ -91,12 +91,13 @@ type Story = StoryObj<typeof meta>;
  * this view be tested apart. No "Scanning stopped" veil either — the camera's sentence stands
  * where the picture would be, and a veil over it would be two sentences on top of each other.
  *
- * **One press is not here, and its absence is the rule**: *Send scan…* stands beside *Reset
- * evidence* only while a camera is live and the scanner is running — a scan is the last couple
- * of seconds of frames it was shown, and a refused camera has shown it none — and only on a
- * supporter's device, which this story's world is not either (`submit/useMaySendScans`). Its
- * dialog is storied by itself (`Scanner/Reader/Send scan dialog`), since no story has a camera
- * to open.
+ * **Neither of the picture's two presses is here, and their absence is the rule**: they stand
+ * over a live picture alone, as on the phone. *Reset evidence* has no evidence to throw away over
+ * a camera that never opened, and *Send scan…* stands only while the scanner is running besides —
+ * a scan is the last couple of seconds of frames it was shown, and a refused camera has shown it
+ * none — and only on a supporter's device, which this story's world is not either
+ * (`submit/useMaySendScans`). Its dialog is storied by itself (`Scanner/Reader/Send scan
+ * dialog`), since no story has a camera to open.
  */
 export const CameraRefused: Story = {
   play: async ({ canvasElement }) => {
@@ -104,7 +105,7 @@ export const CameraRefused: Story = {
     await expect(
       await canvas.findByText("MTG Grimoire needs camera access to scan a card."),
     ).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Reset evidence" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "Send scan…" })).toBeNull();
     // The page's header: the title, then the history and the way back to the panels.
     await expect(canvas.getByRole("button", { name: "History" })).toBeInTheDocument();

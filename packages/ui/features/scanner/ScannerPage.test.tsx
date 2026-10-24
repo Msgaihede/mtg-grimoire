@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CardSummary,
   CollectionFolder,
+  PrintingPrices,
   ScanBatch,
   ScanBatchSummary,
   ScannerPrefs,
@@ -13,6 +14,7 @@ import type {
   SearchResponse,
   SupporterStatus,
 } from "@/lib/ipc";
+import type { ConfettiBurst, TierConfettiProps } from "./reader/TierConfetti";
 import { useNotifications } from "@/lib/notifications";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import { DEFAULT_SCANNER_PREFS, NEEDS_A_FINISH_ROW, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
@@ -92,6 +94,31 @@ vi.mock("@/lib/ipc", async (orig) => {
       deckLastFormat: vi.fn(async () => null),
       formatSpecs: vi.fn(async () => []),
       deckFolderList: vi.fn(async () => []),
+      // The tray's and the popup's prices. **Refused by default**, as the unmocked command was
+      // here (there is no host to answer it), so no figure is drawn; the confetti's test quotes.
+      printingPrices: vi.fn(
+        async (): Promise<PrintingPrices[]> => Promise.reject("no prices in this suite"),
+      ),
+    },
+  };
+});
+/**
+ * Every burst the page hands the confetti, render by render — the real `TierConfetti` drawn under
+ * a wrapper that writes its prop down. jsdom lays nothing out, so the component itself throws
+ * nothing here (its canvas is 0×0); what the page owes it is the burst, and this is where a test
+ * reads it. Emptied after each test.
+ */
+const confetti = vi.hoisted(() => ({ bursts: [] as (ConfettiBurst | null)[] }));
+/** The burst the page handed the confetti on its latest render. */
+const lastBurst = () => confetti.bursts[confetti.bursts.length - 1];
+vi.mock("./reader/TierConfetti", async (orig) => {
+  const real = await orig<typeof import("./reader/TierConfetti")>();
+  const { createElement } = await import("react");
+  return {
+    ...real,
+    TierConfetti: (props: TierConfettiProps) => {
+      confetti.bursts.push(props.burst);
+      return createElement(real.TierConfetti, props);
     },
   };
 });
@@ -348,6 +375,7 @@ const COMMANDS = [
   ipc.scanHistoryDelete,
   ipc.collectionImportCommit,
   ipc.collectionFolderList,
+  ipc.printingPrices,
 ];
 
 let restoreCanvas = () => {};
@@ -364,6 +392,7 @@ afterEach(() => {
   COMMANDS.forEach((command) => vi.mocked(command).mockReset());
   Object.defineProperty(navigator, "mediaDevices", { value: undefined, configurable: true });
   parkedStore.set({ paused: false, released: false });
+  confetti.bursts.length = 0;
 });
 
 describe("ScannerPage", () => {
@@ -608,13 +637,42 @@ describe("ScannerPage", () => {
   /** The live region says nothing while stopped — the veil does — and the strip's words once
    *  recognition runs. */
   it("announces what the scanner is doing once it is reading, and nothing before", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // The first frame never answers: the strip stays on what it says before any verdict.
+    frames();
+    try {
+      mount();
+      await screen.findByRole("button", { name: "Start" });
+      expect(statusLine()).toHaveTextContent("");
+      await start();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Point the camera at a card"));
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **The HUD's presses and its bar stand over a live picture alone**, as on the phone: a refused
+   * camera is a sentence where the picture would be, with nothing to reset, nothing to send and
+   * nothing being matched — so no press, no bar, and an empty announcement even once Start is
+   * pressed. The note's region stays mounted (`keeps the note's region on the picture…` says why).
+   */
+  it("draws no press and no bar over a refused camera, Start pressed or not", async () => {
     refused();
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
-    mount();
-    await screen.findByRole("button", { name: "Start" });
-    expect(statusLine()).toHaveTextContent("");
+    const { container } = mount();
+    await screen.findByText("MTG Grimoire needs camera access to scan a card.");
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+
     await start();
-    await waitFor(() => expect(statusLine()).toHaveTextContent("Point the camera at a card"));
+    await screen.findByRole("button", { name: "Stop" });
+    expect(screen.queryByRole("progressbar", { name: "Match progress" })).toBeNull();
+    expect(statusLine()).toHaveTextContent("");
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
+    expect(hudNote(container)).toHaveTextContent("");
   });
 
   it("keeps the frame's own refusal out of the note, developer panels or not", async () => {
@@ -729,13 +787,21 @@ describe("ScannerPage", () => {
     );
   });
 
-  /** Beside the bar for every reader since #740 — not behind the Developer switch. */
+  /**
+   * Beside the bar for every reader since #740 — not behind the Developer switch — and over a
+   * stopped picture too, where the phone draws none: a live camera is the one condition.
+   */
   it("hands the reset press straight to the command, with the Developer panels off", async () => {
-    refused();
-    mount();
-    expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
-    expect(vi.mocked(ipc.scannerReset)).toHaveBeenCalled();
+    const restore = shimVideo();
+    opens();
+    try {
+      mount();
+      expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
+      await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
+      expect(vi.mocked(ipc.scannerReset)).toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 
   /**
@@ -744,27 +810,43 @@ describe("ScannerPage", () => {
    * that visibly did nothing — the evidence stayed on screen with no sentence anywhere.
    */
   it("puts a refused reset in the note over the picture", async () => {
-    refused();
-    vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
-    const { container } = mount();
-    await start();
-    await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
-    await waitFor(() =>
-      expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned"),
-    );
+    const restore = shimVideo();
+    opens();
+    paced();
+    try {
+      const { container } = mount();
+      await start();
+      // The pump's start resets the session itself (issue #1318); the refusal is the press's.
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
+      await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
+      await waitFor(() =>
+        expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned"),
+      );
+    } finally {
+      restore();
+    }
   });
 
   it("puts a refused reset in the note while stopped too", async () => {
-    refused();
-    vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
-    const { container } = mount();
-    await start();
-    await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
-    await waitFor(() =>
-      expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned"),
-    );
-    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
-    expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned");
+    const restore = shimVideo();
+    opens();
+    paced();
+    try {
+      const { container } = mount();
+      await start();
+      // The pump's start resets the session itself (issue #1318); the refusal is the press's.
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
+      await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
+      await waitFor(() =>
+        expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned"),
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+      expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned");
+    } finally {
+      restore();
+    }
   });
 
   it("files a capture under the five fields the sidecar has, read off the last verdict", async () => {
@@ -915,6 +997,37 @@ describe("ScannerPage", () => {
     }
   });
 
+  /**
+   * **The pill between shots stands under *Reset evidence*, never on it.** Centred on its own at
+   * the picture's top, the 274px pill met the 143px press in any column under 584px — the light
+   * web app's desktop face at 1024px is about 372px. It is the HUD's notice, in the HUD's top
+   * flow after the corner row, so it is placed below whatever that row holds: the presses, and a
+   * chip dropped under them.
+   */
+  it("draws the pill between shots under the corner's presses, in the HUD's own flow", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ pointAndShoot: true });
+    try {
+      const { container } = mount();
+      await screen.findByRole("button", { name: "Scan card" });
+      const reset = await screen.findByRole("button", { name: "Reset evidence" });
+      const pill = within(videoBox(container)).getByText(SHOT_READY_CLICK).closest("p");
+      const corner = reset.closest("[data-hud-corner]");
+      if (pill === null || corner === null) throw new Error("no pill or no corner row");
+      // Not positioned by itself: a block in the flow the corner row heads.
+      expect(pill).toHaveAttribute("role", "status");
+      expect(pill.className).not.toMatch(/\babsolute\b|\btop-/);
+      const flow = corner.parentElement;
+      expect(flow).toHaveAttribute("data-hud-top");
+      expect(flow).toHaveClass("flex", "flex-col");
+      expect(pill.parentElement).toBe(flow);
+      expect(corner.compareDocumentPosition(pill)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    } finally {
+      restore();
+    }
+  });
+
   it("stores point and shoot from How scanning runs, and lands stopped", async () => {
     refused();
     mount();
@@ -948,6 +1061,75 @@ describe("ScannerPage", () => {
       await waitFor(() => expect(videoBox(container)).toHaveTextContent("Added to scanned cards"));
       expect(videoBox(container)).toHaveTextContent("Storm of Saruman");
       expect(videoBox(container)).toHaveTextContent("LTR · 72 · Nonfoil");
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **The landing's price reaches the popup and the confetti by the sound's own ladder**
+   * (`useLandedTier`, Settings → Scanner — $1, $10, $100, $1000 on a fresh install): a card
+   * priced past a rung wears its figure bold gold and throws one burst at that rung, keyed on its
+   * landing. A card that lands asking for a printing is quoted as the span of its candidates,
+   * plain, and throws none — a price for a card the reader has not said they hold is no tier.
+   */
+  it("throws confetti at the tier a landed card's price reaches, its figure gold, and none for a pick", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ finish: "nonfoil" });
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    const bolts = VERDICTS.ambiguous.decision?.choices ?? [];
+    expect(bolts).toHaveLength(3);
+    vi.mocked(ipc.printingPrices).mockResolvedValue([
+      { cardId: "storm-of-saruman-ltr-72", finishPrices: { nonfoil: 12, foil: 30, etched: null } },
+      ...bolts.map((choice, n) => ({
+        cardId: choice.id,
+        finishPrices: { nonfoil: [1.5, 3, 40][n] ?? null, foil: null, etched: null },
+      })),
+    ]);
+    // The decided card lands and lies there past the loop's gap between two decisions
+    // (`DECISION_GAP_FRAMES`), each frame a few milliseconds late (`paced`'s reason); then a
+    // frame waits for the test to lay the pick down, and every frame after it is parked.
+    const shown: ScannerVerdict[] = [
+      VERDICTS.voting,
+      ...Array<ScannerVerdict>(5).fill(VERDICTS.decided),
+    ];
+    let next: ((verdict: ScannerVerdict) => void) | undefined;
+    let asked = 0;
+    vi.mocked(ipc.scannerFrame).mockImplementation(() => {
+      const at = asked++;
+      const verdict = shown[at];
+      if (verdict !== undefined) {
+        return new Promise((resolve) => setTimeout(() => resolve(verdict), 5));
+      }
+      if (at === shown.length) return new Promise((resolve) => (next = resolve));
+      return new Promise(() => {});
+    });
+    /** The landings thrown so far: one stamp a burst, whatever the renders in between. */
+    const thrown = () => new Set(confetti.bursts.flatMap((burst) => (burst ? [burst] : [])));
+    const figure = (container: HTMLElement) =>
+      videoBox(container).querySelector<HTMLElement>("[data-landed-price]");
+    try {
+      const { container } = mount();
+      await start();
+      await waitFor(() => expect(figure(container)).toHaveTextContent(/12\.00/));
+      expect(figure(container)).toHaveClass("font-semibold", "text-accent");
+      await waitFor(() => expect(lastBurst()).toMatchObject({ tier: "tier2" }));
+      const stamps = new Set([...thrown()].map((burst) => burst.stamp));
+      expect(stamps.size).toBe(1);
+
+      await waitFor(() => expect(next).toBeDefined());
+      await act(async () => next?.(VERDICTS.ambiguous));
+      await waitFor(() => expect(figure(container)).toHaveTextContent(/1\.50 – \$?40\.00/));
+      expect(videoBox(container).querySelector("[data-landed]")).toHaveAttribute(
+        "data-landed",
+        "pick",
+      );
+      expect(figure(container)).toHaveClass("text-text");
+      expect(figure(container)).not.toHaveClass("text-accent");
+      // The pick's renders hand the confetti nothing, and no second landing was thrown.
+      expect(lastBurst()).toBeNull();
+      expect(new Set([...thrown()].map((burst) => burst.stamp))).toEqual(stamps);
     } finally {
       restore();
     }
@@ -1663,12 +1845,15 @@ describe("ScannerPage sending a scan", () => {
     vi.spyOn(runClock, "now").mockImplementation(() => (at += 10));
   });
 
-  /** No live picture, no press: the box under the strip is already saying why. */
+  /**
+   * No live picture, no press — and no *Reset evidence* beside it either, as on the phone: the box
+   * under the HUD is already saying why.
+   */
   it("does not offer the press while the camera is refused", async () => {
     refused();
     mount();
     await screen.findByText("MTG Grimoire needs camera access to scan a card.");
-    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
   });
 
@@ -2451,6 +2636,10 @@ describe("ScannerPage on a host with no scanner session", () => {
       const said = await screen.findByText(SCANNER_NOT_IN_A_BROWSER_YET);
       expect(said).toHaveAttribute("role", "alert");
       expect(videoBox(container)).toContainElement(said);
+      // No HUD over that sentence, as on the phone: no status that would say *Point the camera at
+      // a card*, and no Reset asking a session that is not there.
+      expect(screen.queryByRole("status", { name: "Scanner status" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
       // Long enough for a pump to have gone round many times, had one started.
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(getUserMedia).not.toHaveBeenCalled();

@@ -11,9 +11,19 @@ describe("PictureNotes", () => {
     expect(screen.getByText("Scanning stopped").classList.contains("font-heading")).toBe(true);
   });
 
-  it("asks for a card between two shots", () => {
+  /**
+   * Not positioned by itself — it is the HUD's notice, laid under the corner row (`ScanHud`) — and
+   * its words are a flex item of their own that can shrink, so in a column narrower than the pill
+   * they wrap inside it rather than run out of it.
+   */
+  it("asks for a card between two shots, in a pill that wraps rather than overflows", () => {
     render(<ShotReadyPill />);
-    expect(screen.getByRole("status")).toHaveTextContent("Point at a card, then press Scan card.");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Point at a card, then press Scan card.");
+    expect(status.className).not.toMatch(/\babsolute\b/);
+    const words = screen.getByText("Point at a card, then press Scan card.");
+    expect(words).toHaveClass("min-w-0");
+    expect(words.parentElement).toHaveClass("inline-flex", "max-w-full", "text-center");
   });
 
   it("says how the picture is held, in full and compact", () => {

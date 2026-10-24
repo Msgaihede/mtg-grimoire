@@ -28,7 +28,8 @@ import { fitFinish, isKnownFinish, offeredFinishes } from "./trayFinish";
  * What a new row starts as that the decision itself cannot say.
  *
  * `finish` is already a conclusion — `trayFinish.ts`'s answer for this decision, `unknown`
- * included — so the reducer never learns that the Defaults popover can say `detect`.
+ * included — so the reducer never learns that the reader's finish choice (the desktop dock's
+ * Finish menu, the phone's options sheet) can say `detect`.
  */
 export interface RowDefaults {
   finish: ScannerTrayFinish;
@@ -244,7 +245,7 @@ export const BATCH_WONT_FIT =
  * filed. The batch's lines land as rows at the head of the tray, in the order the batch holds them
  * (the tray's own order when it was put away, newest first), and the reader files or archives
  * them again with the tray's own presses — into whichever folder, at whichever condition, the
- * Defaults now say.
+ * tray's *File into* and *Condition* now say.
  *
  * **Each line is one row, settled**: its printing is the one the reader filed, so nothing waits
  * on a pick, and its finish is the one it was filed in, fitted to the printing's finishes as they
@@ -473,7 +474,8 @@ function stillWaiting(waiting: number): string {
 /**
  * The tray as `collection_import_commit`'s lines.
  *
- * **One condition for the whole commit**, the Defaults popover's, because a tray row records none:
+ * **One condition for the whole commit** — the reader's *Condition*, in the tray's footer on the
+ * desktop and the options sheet on the phone — because a tray row records none:
  * condition is a judgement a reader makes about a pile they are holding, not something a camera
  * reads off a card. **It throws while any row is unresolved** rather than dropping those rows —
  * a commit that quietly left three cards behind is one the reader would believe had taken them,
@@ -543,6 +545,16 @@ export function addLabel(ready: number, needsFinish: number, where = "collection
   const add = `Add ${ready} to ${where}`;
   if (needsFinish === 0) return add;
   return `${add} · ${needsFinish} ${needsFinish === 1 ? "needs" : "need"} a finish`;
+}
+
+/**
+ * How many rows still ask the reader something — a printing or a finish ({@link needsDecision}):
+ * **rows, not copies**, one stop of the walk each. The one count behind every *N need you* —
+ * the desktop tray's header, the phone's peek, its tray sheet and its list — so they agree by
+ * construction.
+ */
+export function needYouCount(rows: readonly ScannerTrayRow[]): number {
+  return rows.filter(needsDecision).length;
 }
 
 /** The tray header's count of cards still asking something: `1 needs you`, `2 need you`. */

@@ -30,7 +30,7 @@ export interface LandedCard {
   name: string;
   setCode: string;
   collectorNumber: string;
-  /** `unknown` when the scanner could not read it — the strip then says `Unknown finish`. */
+  /** `unknown` when the scanner could not read it — the printing line then says `Unknown finish`. */
   finish: ScannerTrayFinish;
   /** The row's quantity after the landing — the `×N` an `again` landing shows. */
   quantity: number;
@@ -382,9 +382,11 @@ function Preview({ card }: { card: LandedCard }) {
 /**
  * One card picture. **The whole card, never the `art` crop** — the tray's reason (`TrayPanel`):
  * the printed frame carries the artist's credit, and nothing else on the Scanner names one.
- * `object-contain`, so no edge of the card is cropped at the slot's. `grid` rather than `thumb` is
- * from when the slot was 76px — 152 device pixels at 200%, past `thumb`'s 146. The slots are 44px
- * and smaller since the redesign, which `thumb` covers even at 300%.
+ * `object-contain`, so no edge of the card is cropped at the slot's. **`grid` rather than `thumb`,
+ * though the slots are 44px and smaller since the redesign** (which `thumb`'s 146 would cover even
+ * at 300%), because it is the picture the desktop tray is already drawing: the card that just
+ * landed is a tile in the tray's grid (`TrayPanel`'s `TILE_VARIANT`, its default layout), so the
+ * popup reuses that tile's cached image instead of fetching a second, smaller one of the same card.
  */
 function Slot({ cardId, className }: { cardId: string; className: string }) {
   return (

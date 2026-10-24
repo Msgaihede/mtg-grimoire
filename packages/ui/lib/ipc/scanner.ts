@@ -387,7 +387,8 @@ export interface ScannerPrefs {
 }
 
 /**
- * What the Defaults popover's finish can say: one of the collection's three finishes, stamped on
+ * What the reader's Finish choice can say (the desktop dock's Finish menu, the phone's options
+ * sheet): one of the collection's three finishes, stamped on
  * every new row as it lands, or **`detect`** — `scanner::DETECT_FINISH` — which asks the scanner.
  *
  * `detect` is a *policy* and never a finish, so it can never reach a tray row or the collection:

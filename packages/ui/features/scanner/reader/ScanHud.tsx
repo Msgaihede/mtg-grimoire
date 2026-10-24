@@ -70,6 +70,13 @@ export interface ScanHudProps {
    * reason every other sentence is moot.
    */
   note?: string | null;
+  /**
+   * What the picture says at its top centre — the desktop's point and shoot pill between shots
+   * (`ShotReadyPill`) — or nothing. **Drawn in the HUD's own top flow, under the corner row**, so
+   * it can never run under a press or the chip however narrow the column: centred on its own over
+   * a 22rem column, the 274px pill met the 143px *Reset evidence* below a 584px column.
+   */
+  notice?: ReactNode;
 }
 
 /**
@@ -88,8 +95,19 @@ export interface ScanHudProps {
  *
  * **The note chip's region is always mounted too, and only its words come and go**: a region
  * that first appears with its sentence already inside announces nothing.
+ *
+ * **The bar's fill is a transform, not a width**: its value moves on almost every frame, and a
+ * `scaleX` from the left edge is composited where a width would lay the box out again each time.
  */
-export function ScanHud({ strip, live, variant, onReset, onSend, note = null }: ScanHudProps) {
+export function ScanHud({
+  strip,
+  live,
+  variant,
+  onReset,
+  onSend,
+  note = null,
+  notice = null,
+}: ScanHudProps) {
   const leaning = strip.tone === "progress";
   const hidden = leaning ? true : undefined;
   const chip = strip.tone === "error" ? strip.sentence : note;
@@ -108,10 +126,10 @@ export function ScanHud({ strip, live, variant, onReset, onSend, note = null }: 
         >
           <div
             className={cn(
-              "h-full transition-[width] motion-reduce:transition-none",
+              "h-full origin-left transition-transform motion-reduce:transition-none",
               strip.committed ? "bg-accent" : "bg-dim",
             )}
-            style={{ width: `${strip.fill * 100}%` }}
+            style={{ transform: `scaleX(${strip.fill})` }}
           />
         </div>
       )}
@@ -143,38 +161,47 @@ export function ScanHud({ strip, live, variant, onReset, onSend, note = null }: 
         )}
       </p>
 
-      {/* The corner row, under the bar: the chip takes what the presses leave and wraps in it, so
-          a long sentence never runs under a button. */}
-      <div className="absolute inset-x-3 top-3 flex items-start gap-2">
-        <p role="alert" className="min-w-0 flex-1">
-          {chip !== null && (
-            // An error may carry a path, which is one unbreakable word.
-            <span className="inline-block max-w-full rounded bg-bg/85 px-2 py-1 text-xs leading-snug break-words text-text">
-              {chip}
-            </span>
+      {/* The top of the picture under the bar, in one flow: the corner row, then the page's
+          notice — which so stands below whatever that row holds, and never under it. */}
+      <div data-hud-top="" className="absolute inset-x-3 top-3 flex flex-col gap-2">
+        {/* The corner row: the presses against the right edge, the chip in what they leave and
+            wrapping in it, so a long sentence never runs under a button. **Reversed and
+            wrapping, the presses first**: where the room beside them is under the chip's 12rem
+            (both labelled presses leave it 47px in a 22rem column), the chip drops to a row of
+            its own under them rather than stand a word to a line. An empty chip asks for no room,
+            so it never wraps a row of nothing. */}
+        <div data-hud-corner="" className="flex flex-row-reverse flex-wrap items-start gap-2">
+          {(onReset !== undefined || onSend !== undefined) && (
+            <div className="flex shrink-0 items-center gap-2">
+              {onReset !== undefined && (
+                <CornerPress
+                  words={RESET_EVIDENCE}
+                  glyph={<RotateCcw aria-hidden className="size-4" />}
+                  labelled={labelled}
+                  onClick={onReset}
+                />
+              )}
+              {onSend !== undefined && (
+                <CornerPress
+                  words={SEND_SCAN}
+                  glyph={<Send aria-hidden className="size-4" />}
+                  labelled={labelled}
+                  opensDialog
+                  onClick={(e) => onSend(e.currentTarget)}
+                />
+              )}
+            </div>
           )}
-        </p>
-        {(onReset !== undefined || onSend !== undefined) && (
-          <div className="flex shrink-0 items-center gap-2">
-            {onReset !== undefined && (
-              <CornerPress
-                words={RESET_EVIDENCE}
-                glyph={<RotateCcw aria-hidden className="size-4" />}
-                labelled={labelled}
-                onClick={onReset}
-              />
+          <p role="alert" className={cn("min-w-0 grow", chip !== null && "basis-48")}>
+            {chip !== null && (
+              // An error may carry a path, which is one unbreakable word.
+              <span className="inline-block max-w-full rounded bg-bg/85 px-2 py-1 text-xs leading-snug break-words text-text">
+                {chip}
+              </span>
             )}
-            {onSend !== undefined && (
-              <CornerPress
-                words={SEND_SCAN}
-                glyph={<Send aria-hidden className="size-4" />}
-                labelled={labelled}
-                opensDialog
-                onClick={(e) => onSend(e.currentTarget)}
-              />
-            )}
-          </div>
-        )}
+          </p>
+        </div>
+        {notice}
       </div>
     </div>
   );

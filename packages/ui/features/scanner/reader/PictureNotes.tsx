@@ -6,7 +6,8 @@
  * **Every one of them lets a press through** (`pointer-events-none`): under the phone's point and
  * shoot the picture itself is what a finger holds, and a note that caught the touch would be a
  * dead spot in the middle of it. None takes a `LAYER` rung either; DOM order puts each over the
- * video and the detector's overlay, and the HUD's presses (`ScanHud`) stay above them.
+ * video and the detector's overlay, and the HUD's presses (`ScanHud`) stay above them — save the
+ * desktop's pill between shots, which the page hands the HUD to draw in its own top flow.
  *
  * Three of the four are `role="status"`: each stands where the one stopped sentence under the
  * camera used to, and says what the reader is to do next. The held chip says only what the reader
@@ -44,16 +45,18 @@ export function StoppedVeil() {
  * Point and shoot between two shots, on the desktop: a pill at the top centre naming the press
  * that takes the next one. Over the picture rather than dimming it — between shots the reader is
  * lining the next card up, and wants to see it.
+ *
+ * **Not positioned by itself**: it is the HUD's `notice` (`ScanHud`), laid in the HUD's top flow
+ * under the corner row, so *Reset evidence* in the top-right corner never stands on it. Centred in
+ * whatever width it is given, and **wrapping rather than overflowing** — the words are a flex item
+ * of their own that can shrink — where a column is narrower than its 274px.
  */
 export function ShotReadyPill() {
   return (
-    <p
-      role="status"
-      className="pointer-events-none absolute inset-x-0 top-4 flex justify-center px-3"
-    >
-      <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-bg/80 px-3.5 py-1.5 text-[13px] text-text">
+    <p role="status" className="pointer-events-none flex justify-center">
+      <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-bg/80 px-3.5 py-1.5 text-center text-[13px] text-text">
         <Crosshair aria-hidden className="size-4 shrink-0 text-accent" />
-        {SHOT_READY_CLICK}
+        <span className="min-w-0">{SHOT_READY_CLICK}</span>
       </span>
     </p>
   );

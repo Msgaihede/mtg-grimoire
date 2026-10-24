@@ -475,6 +475,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // not the reader's: the Developer panels carry it, and in the chip it would blink frame by
   // frame in an assertive alert.
   const hudNote = (reading ? (loop.error ?? resetError ?? submit.error) : resetError) || null;
+  // **The HUD's presses stand over a live picture alone** — the phone page's rule: not over the
+  // camera's own refusal, nor over a host with no session, each of which is a sentence where the
+  // picture would be, and a Reset there would ask a session that has no picture to weigh. Unlike
+  // the phone's, *Reset evidence* stays drawn stopped and between shots, as the spec's corner
+  // has it — the note above says why a reset refused there is still said.
+  const pictureLive = camera.kind === "live" && unavailable === null;
 
   return (
     // **`@container/scan` because the split answers this view's own width, never the window's** —
@@ -534,11 +540,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               {!pointAndShoot && !scanning && camera.kind !== "error" && unavailable === null && (
                 <StoppedVeil />
               )}
-              {/* Point and shoot between two shots: what the next one is taken with. */}
-              {pointAndShoot &&
-                !shot.shooting &&
-                camera.kind !== "error" &&
-                unavailable === null && <ShotReadyPill />}
               {/* Before the popup, so the pieces leave from behind the card; thrown only for a
                   landing the popup is showing, at a price tier. A `null` burst throws nothing and
                   stops nothing, so a jackpot still in the air when the popup goes finishes. */}
@@ -575,18 +576,31 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                   along the top edge, *Reset evidence* and *Send scan…* in the top-right corner, the
                   one error it has to say under the bar, and the visually hidden live region that
                   announces what the old Match strip said. Last, and on its own layer, so its
-                  presses stay above everything else in the box. */}
-              <ScanHud
-                strip={matchStrip(reading ? loop.verdict : null, lastAdded)}
-                live={reading}
-                variant="labelled"
-                onReset={onReset}
-                // Offered only where `sendable` says: a run to send, the Scanner view itself, and
-                // a supporter's device. Without a live camera, or stopped, the picture is already
-                // saying why not; of the membership nothing is said at all.
-                onSend={sendable ? submit.open : undefined}
-                note={hudNote}
-              />
+                  presses stay above everything else in the box. **Not drawn on a host with no
+                  session**, as on the phone: its status would say *Point the camera at a card*
+                  under a sentence saying there is no scanner. */}
+              {unavailable === null && (
+                <ScanHud
+                  strip={matchStrip(reading ? loop.verdict : null, lastAdded)}
+                  // No bar over the camera's own refusal: nothing is being matched there.
+                  live={reading && camera.kind === "live"}
+                  variant="labelled"
+                  onReset={pictureLive ? onReset : undefined}
+                  // Offered only where `sendable` says: a run to send, the Scanner view itself,
+                  // and a supporter's device. Without a live camera, or stopped, the picture is
+                  // already saying why not; of the membership nothing is said at all.
+                  onSend={sendable ? submit.open : undefined}
+                  note={hudNote}
+                  // Point and shoot between two shots: what the next one is taken with — in the
+                  // HUD's own flow, under *Reset evidence*, which it would otherwise run under in
+                  // a column narrower than 584px.
+                  notice={
+                    pointAndShoot && !shot.shooting && camera.kind !== "error" ? (
+                      <ShotReadyPill />
+                    ) : null
+                  }
+                />
+              )}
             </div>
             {/* Whatever the status still has to say — the recogniser's files, there and not
                 loaded. */}

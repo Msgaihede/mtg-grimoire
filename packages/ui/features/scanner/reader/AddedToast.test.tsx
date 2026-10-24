@@ -190,8 +190,8 @@ describe("AddedToast", () => {
   });
 
   /**
-   * The Match strip is the view's live region and says the same thing; two live regions for one
-   * landing would read every scan twice.
+   * The HUD's hidden live region (`ScanHud`'s `Scanner status`) says the same thing; two live
+   * regions for one landing would read every scan twice.
    */
   it("keeps the whole overlay out of the accessibility tree", () => {
     const { container } = render(

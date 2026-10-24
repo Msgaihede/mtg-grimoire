@@ -1,6 +1,7 @@
 /**
- * What the reader's half of the Scanner says: the Match strip above the camera — where the
- * scanner has got to with the card in front of it — and what the filters are narrowing it to.
+ * What the reader's half of the Scanner says: the HUD over the camera picture (`ScanHud`, whose
+ * hidden live region says what the old Match strip did) — where the scanner has got to with the
+ * card in front of it — the notes on the picture, and what the filters are narrowing it to.
  *
  * `verdictText.ts` is the developer panels' vocabulary — votes, distances — and **none of those
  * words may reach here**. The reader's view never shows a vote or a distance; it

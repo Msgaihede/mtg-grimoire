@@ -50,8 +50,9 @@ const FLASH_RADIUS = 320;
 const GLOW_DEPTH = 44;
 
 /**
- * **Decorative and `aria-hidden`**: the Match strip is the view's live region and says what landed;
- * the confetti says only how much it was worth, which the popup's price already says in words.
+ * **Decorative and `aria-hidden`**: the HUD's live region (`ScanHud`'s `Scanner status`) says what
+ * landed; the confetti says only how much it was worth, which the popup's price already says in
+ * words.
  * `pointer-events-none`, so nothing under it stops answering a press.
  *
  * Plays once per new `stamp`; a new stamp while a burst is in the air starts the new one, at its
@@ -100,7 +101,8 @@ export function TierConfetti({ burst, originBottom = 64 }: TierConfettiProps) {
  *
  * **Measured at the burst, not observed**: the canvas's bitmap is set to its box's CSS size times
  * the device pixel ratio as each burst starts, so the pieces are sharp on a 200 % display. A burst
- * lasts five seconds at most, and the box does not change size while a reader is scanning.
+ * lasts 5.2 seconds at most — the jackpot's last raindrop, dropped 1.9 s in and falling for 3.3 s
+ * (`RAIN`) — and the box does not change size while a reader is scanning.
  */
 function play(
   canvas: HTMLCanvasElement,

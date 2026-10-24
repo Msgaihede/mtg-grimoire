@@ -9,6 +9,7 @@ import {
   headLanded,
   importItems,
   MAX_TRAY_ROWS,
+  needYouCount,
   needYouLabel,
   NO_FINISHED_ROWS,
   needsDecision,
@@ -511,6 +512,19 @@ describe("tray", () => {
       expect(needsDecision(known)).toBe(false);
       expect(needsDecision(pick)).toBe(true);
       expect(needsDecision(finish)).toBe(true);
+    });
+
+    /**
+     * The one count behind every *N need you*: rows, one stop of the walk each — a row of unknown
+     * finish bumped to three copies is still one question — so the chip, the sheet's line and the
+     * desktop's header agree by construction.
+     */
+    it("counts the rows still asking something, not their copies", () => {
+      expect(needYouCount([])).toBe(0);
+      expect(needYouCount([known])).toBe(0);
+      expect(needYouCount([pick, known, finish])).toBe(2);
+      expect(needYouCount([{ ...finish, quantity: 3 }, known])).toBe(1);
+      expect(needYouLabel(needYouCount([pick, known, finish]))).toBe("2 need you");
     });
 
     it("walks the waiting rows in the tray's order, skipping the settled ones, and wraps", () => {

@@ -56,8 +56,8 @@ import {
   addRefusal,
   deckRefusal,
   EMPTY_REASON,
-  needsDecision,
   needsFinishCount,
+  needYouCount,
   needYouLabel,
   NEXT_DECISION_LABEL,
   nextDecisionKey,
@@ -343,7 +343,7 @@ export function TrayPanel({
   const copies = totalCopies(rows);
   // The rows still asking the reader something — a printing or a finish — which is what the
   // header's *N need you* counts and its walk stops at, one row per stop.
-  const asking = rows.filter(needsDecision).length;
+  const asking = needYouCount(rows);
   const ready = totalCopies(readyRows(rows));
   const needsFinish = needsFinishCount(rows);
   // The order `commitPlan` refuses in, so the drawing and the press agree.

@@ -50,6 +50,24 @@ describe("ScanHud", () => {
     expect(bar.firstElementChild?.classList.contains("bg-dim")).toBe(true);
   });
 
+  /**
+   * The value moves on almost every frame, so the fill is a transform from the left edge — a
+   * composited scale — and never a width, which would lay the bar out again each time.
+   */
+  it("fills the bar by scaling it from the left edge, not by its width", () => {
+    const { rerender } = render(<ScanHud {...props()} />);
+    const fill = () =>
+      screen.getByRole("progressbar", { name: "Match progress" }).firstElementChild as HTMLElement;
+    expect(matching.fill).toBeGreaterThan(0);
+    expect(matching.fill).toBeLessThan(1);
+    expect(fill().style.transform).toBe(`scaleX(${matching.fill})`);
+    expect(fill().style.width).toBe("");
+    expect(fill()).toHaveClass("origin-left", "transition-transform");
+
+    rerender(<ScanHud {...props({ strip: matched })} />);
+    expect(fill().style.transform).toBe("scaleX(1)");
+  });
+
   it("fills the bar and turns it gold once the scanner has settled", () => {
     render(<ScanHud {...props({ strip: matched })} />);
     const bar = screen.getByRole("progressbar", { name: "Match progress" });
@@ -135,6 +153,45 @@ describe("ScanHud", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "The card recognizer isn't loaded, so cards can't be identified.",
     );
+  });
+
+  /**
+   * Where the room beside the presses is under the chip's 12rem — both labelled presses leave it
+   * 47px in the desktop's 22rem column, a word to a line — the chip drops to a row of its own
+   * under them. The row wraps, reversed with the presses first so they keep the corner and the
+   * chip is what moves; an empty chip asks for no room, so no empty row is ever wrapped.
+   */
+  it("lets the chip drop under the presses rather than squeeze beside them", () => {
+    const presses = { onReset: vi.fn(), onSend: vi.fn() };
+    const { rerender } = render(<ScanHud {...props({ ...presses, note: "A busy database" })} />);
+    const chip = screen.getByRole("alert");
+    expect(chip.parentElement).toHaveClass("flex", "flex-row-reverse", "flex-wrap");
+    const reset = screen.getByRole("button", { name: "Reset evidence" });
+    expect(chip.compareDocumentPosition(reset)).toBe(Node.DOCUMENT_POSITION_PRECEDING);
+    expect(chip).toHaveClass("min-w-0", "grow", "basis-48");
+
+    rerender(<ScanHud {...props({ ...presses, note: null })} />);
+    expect(screen.getByRole("alert")).toHaveClass("grow");
+    expect(screen.getByRole("alert")).not.toHaveClass("basis-48");
+  });
+
+  /**
+   * The page's notice — the desktop's pill between shots — is laid in the HUD's top flow after
+   * the corner row, so it stands below the presses and any chip, never under them.
+   */
+  it("draws the page's notice under the corner row, in the same flow", () => {
+    render(
+      <ScanHud {...props({ live: false, onReset: vi.fn(), notice: <p>Line the card up</p> })} />,
+    );
+    const notice = screen.getByText("Line the card up");
+    const corner = screen
+      .getByRole("button", { name: "Reset evidence" })
+      .closest("[data-hud-corner]");
+    expect(corner).not.toBeNull();
+    const flow = corner?.parentElement;
+    expect(flow).toHaveClass("absolute", "top-3", "flex", "flex-col");
+    expect(notice.parentElement).toBe(flow);
+    expect(corner?.compareDocumentPosition(notice)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   /** Always mounted, so a sentence that arrives is announced; only its words come and go. */
