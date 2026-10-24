@@ -1,9 +1,10 @@
 # Integration data access — how a server-side reader gets at a collection
 
-**Status: options analysis, 2026-10-24. Nothing here is decided and nothing is built.** The owner
-asked for a reconsideration of how cloud-side components reach a reader's data, prompted by four
-issues and by the expectation of more integrations after them. This document weighs the ways of
-doing that and recommends one. The decision is the owner's, and §9 lists what it has to settle.
+**Status: decided, 2026-10-24. Nothing here is built.** The owner asked for a reconsideration of
+how cloud-side components reach a reader's data, prompted by four issues and by the expectation of
+more integrations after them. This document weighs the ways of doing that and recommends one; **the
+owner chose the recommendation, option B (§4), the same day.** The tracking issue carries the
+implementation brief and the defaults taken for §9's remaining knobs.
 
 The issues: [#1395](https://github.com/Msgaihede/mtg-grimoire/issues/1395) (an MCP server over the
 collection and decks), [#1096](https://github.com/Msgaihede/mtg-grimoire/issues/1096) /
@@ -354,7 +355,10 @@ a protocol level.
   The branch is 406 commits behind `main`; whatever is kept is re-applied as fresh commits, not
   merged.
 
-## 9. What the owner has to settle
+## 9. What the owner had to settle
+
+**Settled 2026-10-24: item 1, option B, by the owner.** Items 2–6 are taken as the defaults the
+tracking issue names, each overridable there.
 
 1. **The substrate.** A server-readable, reader-curated projection as the thing every integration
    reads (B), reversing the 2026-10-17 shape — or the group key in the cloud behind one hub device
