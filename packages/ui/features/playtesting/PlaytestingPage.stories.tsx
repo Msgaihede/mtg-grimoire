@@ -145,7 +145,7 @@ export const InAFolder: Story = {
     const wall = await canvas.findByRole("list", { name: "Your decks" });
     const [folder] = within(wall).getAllByRole("button", { name: /folder, [1-9]\d* decks?$/ });
     await userEvent.click(folder);
-    await expect(canvas.getByRole("navigation", { name: "Folder path" })).toBeVisible();
+    await expect(canvas.getByRole("navigation", { name: "Page trail" })).toBeVisible();
     await expect(canvas.getByRole("button", { name: /^Up one level/ })).toBeVisible();
   },
 };
