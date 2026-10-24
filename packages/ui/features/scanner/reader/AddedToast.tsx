@@ -16,6 +16,7 @@ import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
 import type { ScannerTrayChoice, ScannerTrayFinish, ScannerTrayRow } from "@/lib/ipc";
 import { DURATION, EASE, TRANSITION, landed, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import type { PriceTier } from "../sounds/scanSounds";
 import { TRAY_FINISH_LABEL } from "./trayFinish";
 
 /** What kind of landing it was — which is what the card's label line says. */
@@ -111,6 +112,19 @@ export interface AddedToastProps {
    * (`useLandedPrice`, issue #1321). Absent draws nothing: no read has answered yet.
    */
   price?: string;
+  /**
+   * The rung of the sound ladder that price reaches (`priceTier`), or `null` below the first rung
+   * or unpriced. **From the first rung up the figure is bold gold** — the same line the landing's
+   * sound crosses (Settings → Scanner), so what a reader hears and what they see agree; below it,
+   * plain. Absent is `null`.
+   */
+  tier?: PriceTier | null;
+  /**
+   * One line rather than three — the picture, the landing's mark, the name, the printing and the
+   * price — for a picture too short for the full card: a phone on its side. No label line: the
+   * mark beside the name is what kind of landing it was.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -123,7 +137,7 @@ export interface AddedToastProps {
  * landing, and the page answers it by passing `null`, which is what lets the card leave through
  * its exit animation.
  */
-export function AddedToast({ card, onDone, price }: AddedToastProps) {
+export function AddedToast({ card, onDone, price, tier = null, compact = false }: AddedToastProps) {
   // Latched rather than a dependency, so a caller passing a fresh arrow each render does not
   // restart the hold on every render — only a new landing does.
   const done = useRef(onDone);
@@ -157,7 +171,12 @@ export function AddedToast({ card, onDone, price }: AddedToastProps) {
       {/* A one-cell grid rather than a centred flex row: a card that lands while the last one is
           still up enters as the old one exits, and in a flex row the two would sit side by side
           for the length of the crossover. In one cell they stack, sharing a bottom edge. */}
-      <div className="absolute inset-x-0 bottom-5 grid grid-cols-[minmax(0,1fr)] items-end justify-items-center px-4">
+      <div
+        className={cn(
+          "absolute inset-x-0 grid grid-cols-[minmax(0,1fr)] items-end justify-items-center",
+          compact ? "bottom-3 px-3" : "bottom-5 px-4",
+        )}
+      >
         <AnimatePresence>
           {card !== null && (
             <motion.div
@@ -165,37 +184,75 @@ export function AddedToast({ card, onDone, price }: AddedToastProps) {
               {...landed}
               data-landed={card.kind}
               className={cn(
-                "col-start-1 row-start-1 flex max-w-full items-center gap-3.5 rounded-lg border bg-surface/95 py-2.5 pr-5 pl-2.5",
+                "col-start-1 row-start-1 flex max-w-full items-center rounded-lg border bg-surface/95",
+                compact ? "gap-2.5 py-1.5 pr-3.5 pl-1.5" : "gap-3.5 py-2.5 pr-5 pl-2.5",
                 // The design canvas's own shadow: over a live camera picture Tailwind's stock
                 // extra-large one, at a tenth of black, lifts the card off nothing.
                 "shadow-[0_16px_40px_rgb(0_0_0/0.5)]",
                 card.kind === "pick" ? "border-accent/50" : "border-border",
               )}
             >
-              <Preview card={card} />
-              <div className="flex min-w-0 flex-col gap-[5px]">
-                <Label card={card} />
-                <span className="max-w-80 truncate font-heading text-[22px] leading-tight">{card.name}</span>
-                {/* The price closes the line and never truncates — the printing gives way to it,
-                    because the figure is what a glance is for here. */}
-                <span className="flex min-w-0 items-baseline gap-2 text-xs">
-                  {card.kind === "pick" ? (
-                    <span className="truncate text-dim">{pickLine(card.choices.length)}</span>
-                  ) : (
-                    <span className="truncate font-mono text-dim">{printingLine(card)}</span>
-                  )}
-                  {price !== undefined && (
-                    <span data-landed-price="" className="ml-auto shrink-0 font-mono text-text tabular-nums">
-                      {price}
+              {compact ? (
+                // Every part a child of the one row. The name and the line after it give way, the
+                // price never does — the figure is what a glance is for here.
+                <>
+                  <Slot cardId={card.cardId} className="h-9 w-[26px] shrink-0" />
+                  <KindMark card={card} />
+                  <span className="min-w-0 truncate font-heading text-[15px] leading-tight">
+                    {card.name}
+                  </span>
+                  <Detail card={card} />
+                  {price !== undefined && <Price price={price} tier={tier} />}
+                </>
+              ) : (
+                <>
+                  <Preview card={card} />
+                  <div className="flex min-w-0 flex-col gap-[5px]">
+                    <Label card={card} />
+                    <span className="max-w-80 truncate font-heading text-lg leading-tight">
+                      {card.name}
                     </span>
-                  )}
-                </span>
-              </div>
+                    {/* The price closes the line and never truncates — the printing gives way to
+                        it, because the figure is what a glance is for here. */}
+                    <span className="flex min-w-0 items-baseline gap-2 text-xs">
+                      <Detail card={card} />
+                      {price !== undefined && <Price price={price} tier={tier} />}
+                    </span>
+                  </div>
+                </>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
       </div>
     </div>
+  );
+}
+
+/**
+ * The line under the name, or after it on one line: the printing, or — for a row still waiting on
+ * a pick, whose printing is a guess — where the question is answered.
+ */
+function Detail({ card }: { card: LandedCard }) {
+  return card.kind === "pick" ? (
+    <span className="min-w-0 truncate text-xs text-dim">{pickLine(card.choices.length)}</span>
+  ) : (
+    <span className="min-w-0 truncate font-mono text-xs text-dim">{printingLine(card)}</span>
+  );
+}
+
+/** The figure, bold gold from the sound ladder's first rung up (`tier`), plain below it. */
+function Price({ price, tier }: { price: string; tier: PriceTier | null }) {
+  return (
+    <span
+      data-landed-price=""
+      className={cn(
+        "ml-auto shrink-0 font-mono tabular-nums",
+        tier !== null ? "font-semibold text-accent" : "text-text",
+      )}
+    >
+      {price}
+    </span>
   );
 }
 
@@ -250,6 +307,23 @@ function Label({ card }: { card: LandedCard }) {
 }
 
 /**
+ * The landing's mark without its words — the compact line's, which has no label line to carry
+ * them: the tick for a card filed, and the label's own glyph, in the accent, for one to look at
+ * again.
+ */
+function KindMark({ card }: { card: LandedCard }) {
+  switch (card.kind) {
+    case "added":
+    case "again":
+      return <AddedBadge />;
+    case "updated":
+      return <RefreshCw className="size-4.5 shrink-0 text-accent" />;
+    case "pick":
+      return <CircleHelp className="size-4.5 shrink-0 text-accent" />;
+  }
+}
+
+/**
  * A filled `ok` circle with a dark tick: the circle pops from a third of its size, then the tick is
  * drawn onto it.
  *
@@ -293,23 +367,24 @@ function Preview({ card }: { card: LandedCard }) {
   if (card.kind === "pick" && card.choices.length >= 2) {
     const [first, second] = card.choices;
     return (
-      <span className="relative h-[106px] w-[84px] shrink-0">
-        <Slot cardId={first.cardId} className="absolute top-1 left-0 w-[68px] -rotate-6" />
+      <span className="relative h-[62px] w-[50px] shrink-0">
+        <Slot cardId={first.cardId} className="absolute top-0.5 left-0 w-[40px] -rotate-6" />
         <Slot
           cardId={second.cardId}
-          className="absolute top-1 right-0 w-[68px] rotate-5 shadow-[-4px_0_10px_rgb(0_0_0/0.5)]"
+          className="absolute top-0.5 right-0 w-[40px] rotate-5 shadow-[-3px_0_8px_rgb(0_0_0/0.5)]"
         />
       </span>
     );
   }
-  return <Slot cardId={card.cardId} className="w-[76px] shrink-0" />;
+  return <Slot cardId={card.cardId} className="w-[44px] shrink-0" />;
 }
 
 /**
  * One card picture. **The whole card, never the `art` crop** — the tray's reason (`TrayPanel`):
  * the printed frame carries the artist's credit, and nothing else on the Scanner names one.
- * `object-contain`, so no edge of the card is cropped at the slot's. `grid` rather than `thumb`: a
- * 76px slot is 152 device pixels on a display at 200%, which `thumb`'s 146 falls short of.
+ * `object-contain`, so no edge of the card is cropped at the slot's. `grid` rather than `thumb` is
+ * from when the slot was 76px — 152 device pixels at 200%, past `thumb`'s 146. The slots are 44px
+ * and smaller since the redesign, which `thumb` covers even at 300%.
  */
 function Slot({ cardId, className }: { cardId: string; className: string }) {
   return (

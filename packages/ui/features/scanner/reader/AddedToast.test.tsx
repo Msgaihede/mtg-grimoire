@@ -131,6 +131,49 @@ describe("AddedToast", () => {
     expect(screen.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
   });
 
+  /** Bold gold from the sound ladder's first tier up; below it, or unpriced, plain. */
+  it("draws the price in gold once it reaches a price tier", () => {
+    const { rerender } = render(
+      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} price="$4.00" tier="tier1" />,
+    );
+    const price = () => screen.getByText("$4.00");
+    expect(price().classList.contains("text-accent")).toBe(true);
+    expect(price().classList.contains("font-semibold")).toBe(true);
+
+    rerender(<AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} price="$4.00" tier={null} />);
+    expect(price().classList.contains("text-accent")).toBe(false);
+    expect(price().classList.contains("text-text")).toBe(true);
+  });
+
+  /**
+   * On a phone on its side the picture is short, so the card is one line: the picture, the
+   * badge, the name, the printing and the price — no label line over them.
+   */
+  it("lays a compact landing out on one line, with no label line", () => {
+    const { container } = render(
+      <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} price="$4.00" compact />,
+    );
+    expect(screen.queryByText("Added to scanned cards")).toBeNull();
+    const name = screen.getByText("Oliphaunt");
+    const line = container.querySelector("[data-landed]");
+    // Every word is a child of the one row, none of them stacked in a column under another.
+    expect(name.parentElement).toBe(line);
+    expect(screen.getByText("LTR · 426 · Nonfoil").parentElement).toBe(line);
+    expect(screen.getByText("$4.00").parentElement).toBe(line);
+    expect(name.classList.contains("text-[15px]")).toBe(true);
+    // The tick badge stays, and one small picture rather than the full form's.
+    expect(container.querySelector("svg circle")).not.toBeNull();
+    expect(container.querySelectorAll("img")).toHaveLength(1);
+  });
+
+  /** A compact pick still names no printing it has not got: the line says where the question is. */
+  it("asks for a pick in a compact landing too", () => {
+    render(<AddedToast card={landedFrom(waiting, false, false)} onDone={vi.fn()} compact />);
+    expect(screen.queryByText("Pick a printing")).toBeNull();
+    expect(screen.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
+    expect(screen.queryByText(/LTR · 256/)).toBeNull();
+  });
+
   /** Absent is "not answered yet" (`useLandedPrice`): no dash, no figure, no empty slot. */
   it("draws no price slot while the price has not been answered", () => {
     const { container } = render(<AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />);
