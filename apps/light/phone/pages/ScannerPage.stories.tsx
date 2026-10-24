@@ -288,7 +288,8 @@ export const FolderSheet: Story = {
 
 /**
  * The tray's other acts, behind the tray header's `⋯` (the list's on its side, the tray sheet's
- * upright): *Archive* (issue #989) — the rows Add would take, kept in the scan history and filed
+ * upright): on its side *Add card…* first — the list's one-line header has no room for it —
+ * then *Archive* (issue #989) — the rows Add would take, kept in the scan history and filed
  * nowhere — *Create deck…*, *Clear all…*, and the way into the *Scan history*. Each refused act
  * stays drawn and says why on its second line.
  *
@@ -305,7 +306,13 @@ export const TrayActions: Story = {
       .getAllByRole("button")
       .map((row) => row.querySelector("span.truncate")?.textContent)
       .filter((label) => label !== undefined);
-    await expect(rows).toEqual(["Archive", "Create deck…", "Clear all…", "Scan history"]);
+    await expect(rows).toEqual([
+      "Add card…",
+      "Archive",
+      "Create deck…",
+      "Clear all…",
+      "Scan history",
+    ]);
     await expect(within(sheet).getByRole("button", { name: "Archive" })).not.toHaveAttribute(
       "aria-disabled",
     );
