@@ -167,7 +167,7 @@ describe("the words", () => {
 
 describe("ComingSoonWidget", () => {
   describe("what it draws", () => {
-    it("draws the two figures and a row per set, soonest first, in the card's columns", () => {
+    it("draws the two figures and a row per set, soonest first, in the fewest columns", () => {
       qc.setQueryData(upcomingSetsKey(90), ANSWER);
 
       draw();
@@ -184,9 +184,11 @@ describe("ComingSoonWidget", () => {
         }),
       ).toBeInTheDocument();
       // The inline template `WidgetRowList` writes — read off `.style`, as
-      // `DeckNotesPanel.test.tsx` does, rather than through a computed style jsdom lays out.
+      // `DeckNotesPanel.test.tsx` does, rather than through a computed style jsdom lays out. The
+      // card is wide enough for two columns, and three rows fit in one: so one, where each row has
+      // the card's whole width rather than half of it (issue #1379).
       expect(screen.getByRole("list", { name: "Announced sets" }).style.gridTemplateColumns).toBe(
-        "repeat(2, minmax(0, 1fr))",
+        "repeat(1, minmax(0, 1fr))",
       );
       expect(ROOMY.listColumns).toBe(2);
     });

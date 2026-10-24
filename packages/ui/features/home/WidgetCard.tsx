@@ -290,10 +290,17 @@ export function WidgetCard({
           testing, so a press lands on the scroller and bubbles to the card's drag handler, while
           the wheel still scrolls a body taller than its card. A still preview is inert too — nine
           previews in a catalogue must not be nine sets of tab stops.
+
+          A `WidgetMessage` that is the body's only child is centred in the card rather than left
+          in its top-left corner (issue #1379). Keyed on the message's own mark, so a message drawn
+          beside a figure line or a list stays where its body put it.
         */}
         <div
           inert={customizing || still}
-          className="flex flex-auto flex-col"
+          className={cn(
+            "flex flex-auto flex-col",
+            "[&>[data-widget-message]:only-child]:m-auto [&>[data-widget-message]:only-child]:max-w-[36ch] [&>[data-widget-message]:only-child]:text-center",
+          )}
           style={{ gap }}
         >
           {children}

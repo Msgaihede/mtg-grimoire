@@ -40,11 +40,12 @@ import { MANA_FILL, MANA_KEYS, MANA_LABEL, type ManaKey } from "@/lib/mana";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { footerLinePx } from "../fit";
 import { collectionBreakdownKey, collectionTotalKey } from "../keys";
 import {
   WidgetBars,
   WidgetFigures,
-  WidgetFooter,
+  WidgetFooterLine,
   WidgetMessage,
   WidgetRow,
   WidgetRowList,
@@ -97,9 +98,6 @@ const TWO_LINE_ROW_PX = 48;
 /** The figure line's height, comfortable and compact — the design's two numbers. */
 const FIGURES_PX = 74;
 const FIGURES_COMPACT_PX = 62;
-
-/** The footer's line and the gap above it. */
-const FOOTER_PX = 22;
 
 /** The folded bar's key. Not a value any backend dimension answers with — the four vocabularies
  *  are rarity words, colour letters, set codes and finishes — so it cannot collide with a bucket. */
@@ -343,8 +341,10 @@ export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactEl
   const withFooter = fit.tier >= 2 && fit.h >= 2;
   const reserved =
     (withFigures ? (fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX) : 0) +
-    (withFooter ? FOOTER_PX : 0);
-  const rowsOfRoom = fit.fitCount(twoLine ? TWO_LINE_ROW_PX : ROW_PX, reserved);
+    // One line, reserved at what one draws: the footer truncates rather than wrapping (issue #1379).
+    (withFooter ? footerLinePx(fit) : 0);
+  const rowH = twoLine ? TWO_LINE_ROW_PX : ROW_PX;
+  const rowsOfRoom = fit.fitCount(rowH, reserved);
   // A list is laid out in `listColumns`, so each whole row holds that many buckets; bars are one
   // to a row whatever the width.
   const room = asList ? rowsOfRoom * fit.listColumns : rowsOfRoom;
@@ -399,7 +399,7 @@ export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactEl
         // is a card that says nothing at all.
         <WidgetMessage>Nothing in your collection yet.</WidgetMessage>
       ) : !charted ? null : asList ? (
-        <WidgetRowList fit={fit}>
+        <WidgetRowList fit={fit} layout={fit.listLayout(bars.length, rowH, reserved)}>
           {bars.map((bar) =>
             // On a two-cell tile a name and a figure do not fit side by side, so the money moves
             // under the name in body ink — `WidgetRow`'s own rule for the tile.
@@ -411,14 +411,16 @@ export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactEl
           )}
         </WidgetRowList>
       ) : (
-        <WidgetBars bars={bars} fit={fit} />
+        // Cut to every whole bar the body holds: spread them over it rather than leaving the sliver
+        // a whole-bar cut leaves under the last one.
+        <WidgetBars bars={bars} fit={fit} fill={bars.length >= rowsOfRoom} />
       )}
       {charted && withFooter && (
-        <WidgetFooter>
-          {/* The provenance sentence with the split word riding after it as a clause, so the
-              sentence's own full stop is dropped rather than left in the middle of the line. */}
-          {pricesAsOf(marketplace).replace(/\.$/, "")} · split by {dimensionWord}
-        </WidgetFooter>
+        <WidgetFooterLine
+          // Where the money came from, then the cut — the provenance sentence's own full stop
+          // dropped so the clause can ride after it.
+          line={`${pricesAsOf(marketplace).replace(/\.$/, "")} · split by ${dimensionWord}`}
+        />
       )}
     </>
   );

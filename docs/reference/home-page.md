@@ -1648,8 +1648,8 @@ beside the `aria-hidden` line — and its reservation is **computed rather than 
 also reads its gap from, so a body cannot reserve a gap the card does not draw. The short wording is
 what keeps the ellipsis rare: `1 more: no Cardmarket price`, `58 more save €101.60`,
 `2 complete · $221.70 to finish · 14 unpriced`. Deck completion and Wishlist savings are the two
-that draw footers; To review and Coming soon draw none. **The older kinds' footers still reserve a
-22px `WidgetFooter` that can wrap** — a follow-up outside this round, not measured here.
+that draw footers; To review and Coming soon draw none. The older kinds' footers reserved a 22px
+`WidgetFooter` that could wrap until issue #1379 (§17), which moved every one of them onto this rule.
 
 ### Deck completion — `deck_completion.rs`, `DeckCompletionWidget.tsx`
 
@@ -2276,3 +2276,74 @@ everything would be told they never wrote a to-do. And `ALL_DONE` alone was fals
 still open. Both sentences read the switch's name off the registry, so neither can point at a
 renamed row. A read still in flight is *Loading to-dos…*, and a refused one is `WidgetMessage`'s
 destructive sentence.
+
+## 17. Filling the box — issue #1379 (2026-10-24)
+
+[Issue #1379](https://github.com/Msgaihede/mtg-grimoire/issues/1379): widgets left large empty
+space or drew needless scrollbars when resized. **Measured before any change**, every kind at every
+footprint its registry row allows, comfortable and compact, on 76 and 107px cells, in Storybook's
+fake (`starter`, `waiting`, `needsReview`) under headless Chromium: each body's scroller, every inner
+scroller, and the gap between the lowest drawn pixel and the body's foot. What it found, by cause:
+
+* **Summary drew a fixed number of figures in one small line at the top**, whatever the box: a
+  two-cell tile drew two figures at every height, so a 2 × 3 drew two numbers over ~200px of empty
+  card with room for all four.
+* **Recently viewed was one row sized off the height alone, and scrolled sideways.** Almost every
+  footprint clipped its last tile at the edge, and a 2 × 3 drew one tall card, a sliver of the next
+  and a scrollbar.
+* **A list was always drawn in all `listColumns`**, one per ~240px of card, however few rows it had —
+  three decks across two 200px tracks of a tall card, every name truncated over an empty lower half;
+  two announced sets in two of four tracks.
+* **A whole-row cut always leaves a sliver**, up to one row tall, under the last row.
+* **The value cards' figure note ran under the next figure** at three cells wide:
+  `$1,101.28 2 unprice21`.
+* **A body with nothing to show drew its one sentence in the top-left corner** of the card.
+* The older kinds' wrapping footers (§15) — not caught by the fake's short sentences, but the cause
+  the 2026-09-26 live pass measured.
+
+**What changed, and where.**
+
+* `fit.ts`' **`listLayout(count, rowH, reserved)`** answers a list's columns — **the fewest that hold
+  its rows**, never more than `listColumns` — and whether it is **full**: its tallest column reaches
+  the last whole row the box holds. `WidgetRowList` takes it as `layout`; a full list grows into the
+  body (`flex-1`, `grid-auto-rows: 1fr`) so its rows share the sliver, and a row (`WidgetRow`'s
+  `h-full`) fills its track. **A list that ran out of rows first is drawn at its rows' own height**:
+  three rows stretched over an empty card would read as a broken card. `1fr` is `minmax(auto, 1fr)`,
+  so a row is never squeezed below its content and an estimate a few pixels out still scrolls rather
+  than clipping. Every list cut to whole rows passes one: Decks, Folders, Set completion, Price
+  movers, Deck completion, To review, Wishlist savings, Coming soon, and the value cards' list form.
+  New printings' per-day lists do not — its groups are budgeted in two passes (§13) and stretching
+  one group's rows would push the next group's header out of its reservation.
+* `WidgetBars` takes `fill` for the same sliver, spread between the bars (`justify-between`) when
+  they were cut to every whole bar that fits.
+* `WidgetFigures` takes `fill`, which only Summary passes: **`figureGrid`** tries every arrangement
+  of the figures in rows and keeps the one drawing the numbers largest (18, 22, 28 or 34px), a size
+  being taken only where the label and the number fit the cell's height and the number — mono, so a
+  product of its characters — and the label fit its width. Ties go to fewer rows. Summary draws
+  **every figure some arrangement holds**, so its old tier cap is gone. Outside `fill`, a figure's
+  note truncates beside a number that never shrinks.
+* Recently viewed's **`tileGrid`** does the same for tiles: every row count, each tile as large as
+  the tighter axis allows at 5:7 with its caption line, ties to fewer rows, one tile fewer while the
+  best is under `MIN_TILE_PX` (40). The tiles always fit, so the strip clips and no longer scrolls,
+  and `STRIP_BAR_PX` (the bar it budgeted for) is gone with it.
+* `WidgetFooter` is gone. Decks, Price movers, both value cards and New printings draw
+  `WidgetFooterLine` and reserve `footerLinePx` — 24 comfortable, 21 compact — where each reserved
+  a guessed 22.
+* A `WidgetMessage` that is a body's **only** child is centred in the card (`WidgetCard` keys on its
+  `data-widget-message` mark); beside a figure line or a list it stays where it was put.
+
+**After**, the same sweep at 68, 76, 107 and 130px cells: **no body scrollbar and no inner scroller
+at any footprint of any kind.** The empty space that remains is the fixture's: three decks, eight
+sets and two announced sets cannot fill a 2 × 6, and nothing here invents rows to fill one. One
+horizontal overflow was found and left: Activity at 2 × 8, compact, 68px cells, two pixels of a
+truncated line's text — clipped by the body, so it draws no bar, and identical before this change.
+
+**Row heights were left as written.** The sweep measured a captioned row at 48px and a bare one at
+32 (34 with a delta chip) against the 51 and 36 most bodies count with; the over-count can drop a
+row at a knife-edge height, and a full list's stretch now takes up the difference visually. Moving
+the constants is a change to every body's row arithmetic and its suite, outside this fix.
+
+**Not yet driven in the shipped window** — the sweep is Storybook under headless Chromium on Linux,
+not WebView2. Geist is bundled, so the type metrics are the app's, but the next live pass should
+resize Summary, Recently viewed and a full list across a few footprints.
+

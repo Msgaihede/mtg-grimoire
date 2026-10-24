@@ -102,6 +102,36 @@ export interface WidgetFit {
   linesFit: (rowH: number, reserved?: number) => number;
   /** {@link linesFit} across every list column: how many rows of a multi-column list fit. */
   rowsFit: (rowH: number, reserved?: number) => number;
+  /**
+   * How `count` rows `rowH` tall are laid out in this body — `WidgetRowList`'s `layout`. See
+   * {@link ListLayout}.
+   */
+  listLayout: (count: number, rowH: number, reserved?: number) => ListLayout;
+}
+
+/**
+ * How a list's rows are laid out in the box it was cut for (issue #1379).
+ *
+ * **`columns` is the fewest columns that hold the rows, never more than `listColumns`.** A list
+ * that fits in one column is drawn in one: three decks split across two 200px tracks of a tall
+ * card truncated every name while the card's lower half stood empty. `listColumns` is the most a
+ * width can carry, not a quota.
+ *
+ * **`full` is whether the tallest column reaches the last whole row that fits.** A list cut to
+ * whole rows always leaves a sliver under it, up to one row tall; a full list stretches its rows
+ * over that sliver rather than leaving it empty. A list that ran out of rows first is drawn at
+ * its rows' own height — stretching three rows over an empty card would read as a broken card.
+ */
+export interface ListLayout {
+  columns: number;
+  full: boolean;
+}
+
+/** {@link ListLayout} for `count` rows over a body with room for `lines` whole rows a column. */
+export function listLayoutFor(count: number, lines: number, maxColumns: number): ListLayout {
+  if (count <= 0 || lines <= 0) return { columns: Math.max(1, maxColumns), full: false };
+  const columns = Math.min(Math.max(1, maxColumns), Math.ceil(count / lines));
+  return { columns, full: Math.ceil(count / columns) >= lines };
 }
 
 /** `WidgetCard`'s border, on each edge. */
@@ -195,5 +225,7 @@ export function makeFit({
     fitCount,
     linesFit,
     rowsFit: (rowH, reserved) => linesFit(rowH, reserved) * listColumns,
+    listLayout: (count, rowH, reserved) =>
+      listLayoutFor(count, fitCount(rowH, reserved), listColumns),
   };
 }
