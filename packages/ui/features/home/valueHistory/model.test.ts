@@ -544,6 +544,10 @@ describe("readoutAt — a split", () => {
 
   it("notes cards removed, with a real minus sign", () => {
     expect(readoutAt(v, 2, "land", "usd").note).toBe("−$20.00 of cards removed that day");
+    // The Wishlist value graph's words for the same step (issue #1378).
+    expect(readoutAt(v, 1, "land", "usd", "wishlist").note).toBe(
+      "+$74.60 of wishes added that day",
+    );
   });
 
   it("notes nothing where the collection did not change, and nothing on the first point", () => {
@@ -668,6 +672,12 @@ describe("readoutAt — Total", () => {
       label: "Collection changes that day",
       value: "none",
     });
+  });
+
+  it("calls the step's non-price part a wishlist change on the wishlist's graph", () => {
+    const r = readoutAt(v, 1, "total", "usd", "wishlist");
+    expect(r.facts[3]).toEqual({ label: "Wishlist changes that day", value: "+$74.60" });
+    expect(r.facts[4]).toEqual({ label: "Price moves that day", value: "+$5.40" });
   });
 
   it("has no step on the first point", () => {

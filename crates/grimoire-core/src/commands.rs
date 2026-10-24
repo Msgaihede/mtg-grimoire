@@ -1235,6 +1235,9 @@ commands! {
     read collection_value_history in value_history(split: String, marketplace: Option<Marketplace>) = |conn| {
         history(conn, &split, marketplace.unwrap_or_default())
     };
+    read wishlist_value_history in value_history(split: String, marketplace: Option<Marketplace>) = |conn| {
+        wishlist_history(conn, &split, marketplace.unwrap_or_default())
+    };
 
     // wishlist
     read wishlist_breakdown in wishlist(dimension: String, marketplace: crate::sorting::Marketplace) = |conn| {

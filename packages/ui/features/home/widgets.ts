@@ -46,6 +46,7 @@ export type WidgetKind =
   | "collectionValue"
   | "valueHistory"
   | "wishlistValue"
+  | "wishlistValueHistory"
   | "activity"
   | "recentCards"
   | "setCompletion"
@@ -160,6 +161,45 @@ const VALUE_PICKS: readonly WidgetPick[] = [
 ];
 
 /**
+ * The two value graphs' picks — `valueHistory`'s and `wishlistValueHistory`'s — one list, so the
+ * Collection value graph and the Wishlist value graph offer the same splits, ranges and measures
+ * in the same words, and the body's in-card chips read either row's options as the same words.
+ */
+const VALUE_HISTORY_PICKS: readonly WidgetPick[] = [
+  {
+    key: "split",
+    label: "Split by",
+    dflt: "type",
+    options: [
+      { id: "total", label: "Total" },
+      { id: "type", label: "Card type" },
+      { id: "color", label: "Color" },
+      { id: "set", label: "Set" },
+    ],
+  },
+  {
+    key: "window",
+    label: "Range",
+    dflt: "90d",
+    options: [
+      { id: "30d", label: "30 days" },
+      { id: "90d", label: "90 days" },
+      { id: "1y", label: "1 year" },
+      { id: "all", label: "All" },
+    ],
+  },
+  {
+    key: "measure",
+    label: "Measure",
+    dflt: "change",
+    options: [
+      { id: "value", label: "Value" },
+      { id: "change", label: "Change" },
+    ],
+  },
+];
+
+/**
  * Every kind's meta, keyed by the kind.
  *
  * **A `Record<WidgetKind, …>` rather than an array, and that is the fence**: a new member on
@@ -202,44 +242,11 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   valueHistory: {
     label: "Collection value graph",
-    description:
-      "Collection value over time, in total or broken down by card type, color, or set.",
+    description: "Collection value over time, in total or broken down by card type, color, or set.",
     def: [6, 3],
     min: [2, 2],
     max: [8, 6],
-    picks: [
-      {
-        key: "split",
-        label: "Split by",
-        dflt: "type",
-        options: [
-          { id: "total", label: "Total" },
-          { id: "type", label: "Card type" },
-          { id: "color", label: "Color" },
-          { id: "set", label: "Set" },
-        ],
-      },
-      {
-        key: "window",
-        label: "Range",
-        dflt: "90d",
-        options: [
-          { id: "30d", label: "30 days" },
-          { id: "90d", label: "90 days" },
-          { id: "1y", label: "1 year" },
-          { id: "all", label: "All" },
-        ],
-      },
-      {
-        key: "measure",
-        label: "Measure",
-        dflt: "change",
-        options: [
-          { id: "value", label: "Value" },
-          { id: "change", label: "Change" },
-        ],
-      },
-    ],
+    picks: VALUE_HISTORY_PICKS,
     toggles: [
       { key: "figures", label: "Show totals" },
       { key: "markers", label: "Mark collection changes" },
@@ -255,6 +262,26 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     picks: VALUE_PICKS,
     toggles: [{ key: "figures", label: "Show totals" }],
     chip: "dimension",
+  },
+  /**
+   * The wishlist's value over time (issue #1378) — `valueHistory`'s widget over the wishlist, and
+   * **directly after `wishlistValue`** for that row's reason: this is that widget's number drawn
+   * as a line. The same picks and toggles in the same words, read by the same body; only the read
+   * (`wishlist_value_history`, under `wishlistValueHistoryKey`) and the sentences differ. Not in
+   * {@link DEFAULT_LAYOUT}, for `valueHistory`'s reason.
+   */
+  wishlistValueHistory: {
+    label: "Wishlist value graph",
+    description: "Wishlist value over time, in total or broken down by card type, color, or set.",
+    def: [6, 3],
+    min: [2, 2],
+    max: [8, 6],
+    picks: VALUE_HISTORY_PICKS,
+    toggles: [
+      { key: "figures", label: "Show totals" },
+      { key: "markers", label: "Mark wishlist changes" },
+    ],
+    chip: "split",
   },
   decks: {
     label: "Decks",
@@ -594,7 +621,8 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   deckCompletion: {
     label: "Deck completion",
-    description: "How close your decks are to complete, against your collection or their theory lists.",
+    description:
+      "How close your decks are to complete, against your collection or their theory lists.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],

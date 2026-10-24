@@ -31,3 +31,23 @@ pub async fn collection_value_history(
     .await
     .map_err(|e| format!("the collection's value history could not be read: {e}"))?
 }
+
+/// The Wishlist value graph's read (issue #1378) — [`collection_value_history`]'s footing exactly,
+/// over the wishlist's history.
+#[tauri::command]
+pub async fn wishlist_value_history(
+    state: tauri::State<'_, Arc<AppState>>,
+    split: String,
+    marketplace: Option<Marketplace>,
+) -> Result<ValueHistory, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        wishlist_history(
+            &crate::sync::lock_db_read(&state),
+            &split,
+            marketplace.unwrap_or_default(),
+        )
+    })
+    .await
+    .map_err(|e| format!("the wishlist's value history could not be read: {e}"))?
+}

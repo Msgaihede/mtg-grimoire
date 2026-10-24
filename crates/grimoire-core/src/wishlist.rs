@@ -1888,6 +1888,44 @@ pub fn summarise_wishlist(
     .map_err(|e| e.to_string())
 }
 
+/// The wishlist's **holding** at `marketplace`, as a `SELECT` of `(wish, finish, card_id, price,
+/// copies)` — one row per wish key, what [`crate::price_history`]'s snapshot records into
+/// `wish_snapshots` (user schema v66) and what [`crate::value_history`]'s Wishlist value graph
+/// reads as its live point.
+///
+/// **[`summarise_wishlist`]'s arithmetic, grouped**: the same [`priced_wishes`] join and the same
+/// [`crate::sorting::row_price_expr`] over [`WISH_PREFERRED_FINISH`], so `Σ copies × price` over
+/// these rows is that summary's `cost` to the cent and the graph's last point is the number the
+/// Wishlist value widget prints.
+///
+/// * **`wish` is what the reader wished for, not the printing that prices it**: the pinned
+///   printing's id, or `oracle:` and the oracle id for a wish for any printing. An any-printing
+///   wish is priced at its oracle card's cheapest printing, and which printing that is moves with
+///   the prices — keyed by the printing, a cheaper reprint would read as one wish removed and
+///   another added, where it is the wish's price moving.
+/// * **`finish` is the wish's own, or `any`** — a wish that names none is priced across the
+///   printing's finishes, which is a different price from any one of them.
+/// * **`card_id` is the printing priced**, for the graph's type, colour and set buckets; NULL when
+///   the corpus has none, which also leaves `price` NULL — a wish nobody quotes, never a zero.
+/// * Two wishes with one key — the same printing wished in two folders — are one row carrying
+///   both quantities. They resolve to the same printing at the same price, so `max` is a pick
+///   and not a choice.
+pub(crate) fn holding_sql(marketplace: crate::sorting::Marketplace) -> String {
+    let price = crate::sorting::row_price_expr(marketplace, WISH_PREFERRED_FINISH);
+    format!(
+        "SELECT wish, finish, max(card_id) AS card_id, max(price) AS price,
+                sum(copies) AS copies
+           FROM (SELECT coalesce(w.card_id, 'oracle:' || w.oracle_id) AS wish,
+                        coalesce(w.preferred_finish, 'any') AS finish,
+                        c.id AS card_id,
+                        {price} AS price,
+                        w.quantity AS copies
+                   FROM {from})
+          GROUP BY wish, finish",
+        from = priced_wishes(&price)
+    )
+}
+
 /// What [`breakdown`] says to a dimension it has never heard of.
 ///
 /// A sentence rather than a constraint failure, this crate's rule wherever a command parameter

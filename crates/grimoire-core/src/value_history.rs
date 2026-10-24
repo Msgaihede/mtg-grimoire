@@ -1,5 +1,15 @@
 //! What the reader's collection has been worth on each day this app has looked — in total, or
-//! split by card type, colour or set — for the home page's Collection value graph.
+//! split by card type, colour or set — for the home page's Collection value graph; and what the
+//! wishlist would have cost, the same way, for its Wishlist value graph.
+//!
+//! **The wishlist's read is [`wishlist_history`], and it is this module's every rule over another
+//! table** (issue #1378): `wish_snapshots` (user schema v66), which the same snapshot writes, one
+//! row per *wish* rather than per printing — the pinned printing, or `oracle:` and the oracle id
+//! for a wish for any printing, so a cheaper reprint taking over is a price move — at the price
+//! the Wishlist value widget quotes it, with the printing that priced it beside it for the
+//! buckets. Its live point is [`crate::wishlist::holding_sql`] and its total
+//! [`crate::wishlist::summarise_wishlist`]'s `cost`. Below, read "holding" as "wish" and
+//! "collection change" as "wishlist change" for that graph; nothing else differs.
 //!
 //! **One read, [`history`], over the table [`crate::price_history`] writes.** Since user schema
 //! v50 each `price_snapshots` row is a **holding** — a printing the reader held that day, with
@@ -127,6 +137,64 @@ pub struct ValueHistory {
     pub today: i64,
 }
 
+/// Whose value the graph is of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// What the reader holds: `price_snapshots` rows with a count of at least one, and
+    /// `collection_entries` live.
+    Collection,
+    /// What the reader wishes for (issue #1378): `wish_snapshots` (user schema v66), and
+    /// [`crate::wishlist::holding_sql`] live.
+    Wishlist,
+}
+
+impl Source {
+    /// The snapshot rows a period is made from, as the `FROM … WHERE` that opens `src`, with
+    /// `item` — the identity a step is paired on — beside the printing that buckets it.
+    ///
+    /// The collection's item **is** its printing. A wish's is the wish's own key, since a wish
+    /// for any printing is priced at whichever printing is cheapest that day, and a reprint
+    /// taking over must read as its price moving rather than as one wish leaving.
+    fn rows(self) -> &'static str {
+        match self {
+            Source::Collection => {
+                "SELECT p.day AS day, p.card_id AS item, p.finish AS finish,
+                        p.card_id AS card_id, p.copies AS copies, p.price AS price
+                   FROM price_snapshots p
+                  WHERE p.copies > 0"
+            }
+            // `copies` is `NOT NULL CHECK (copies > 0)` there: every row is a holding.
+            Source::Wishlist => {
+                "SELECT p.day AS day, p.wish AS item, p.finish AS finish,
+                        p.card_id AS card_id, p.copies AS copies, p.price AS price
+                   FROM wish_snapshots p
+                  WHERE true"
+            }
+        }
+    }
+
+    /// Today's holding as the `live` CTE's body — `(item, finish, card_id, copies, price, at)`.
+    fn live(self, market: Marketplace) -> String {
+        match self {
+            Source::Collection => format!(
+                "SELECT e.card_id AS item, e.finish AS finish, e.card_id AS card_id,
+                        sum(e.quantity) AS copies, max({price}) AS price, ?2 AS at
+                   FROM collection_entries e
+                   LEFT JOIN cards c ON c.id = e.card_id
+                  WHERE e.quantity > 0
+                  GROUP BY e.card_id, e.finish",
+                price = sorting::held_price_expr(market, "e.finish"),
+            ),
+            Source::Wishlist => format!(
+                "SELECT h.wish AS item, h.finish AS finish, h.card_id AS card_id,
+                        h.copies AS copies, h.price AS price, ?2 AS at
+                   FROM ({holding}) h",
+                holding = crate::wishlist::holding_sql(market),
+            ),
+        }
+    }
+}
+
 /// The four ways the value can be cut.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Split {
@@ -195,52 +263,45 @@ fn type_key() -> String {
 /// keep horizon — all four read once, by [`history`]'s first statement, so a read straddling UTC
 /// midnight cannot put a row on both sides of a line.
 ///
-/// * `src` — rows with a count, before today and inside [`KEEP_DAYS`], priced or not — and a
-///   count of at least one, so a watched printing's `copies = 0` row (issue #906) is never a
-///   holding and a row from before v50 (NULL) is never read; a daily
+/// * `src` — [`Source::rows`], before today and inside [`KEEP_DAYS`], priced or not — for the
+///   collection a count of at least one, so a watched printing's `copies = 0` row (issue #906)
+///   is never a holding and a row from before v50 (NULL) is never read; a daily
 ///   row's period is its day, an older one's its week, and the horizon's own week is read only
 ///   from the horizon on (the module doc says why).
-/// * `kept` — one row per printing per period, its latest, and the period's day as `at`.
-/// * `live` — `collection_entries` per printing and finish, at `sorting::held_price_expr` over the
-///   entry's own finish; every printing with a copy is present today, a NULL price included.
-/// * `paired` — `lag` over each printing's own sequence of periods; the step counts toward
+/// * `kept` — one row per item per period, its latest, and the period's day as `at`.
+/// * `live` — [`Source::live`]: `collection_entries` per printing and finish, at
+///   `sorting::held_price_expr` over the entry's own finish, or the wishlist's holding at the
+///   Wishlist value widget's own price; every item is present today, a NULL price included.
+/// * `paired` — `lag` over each item's own sequence of periods; the step counts toward
 ///   `moved` only when that previous period is the one immediately before, and a NULL price on
 ///   either side is 0 there, where in a total it is simply not summed.
-fn periods_sql(key: &str, name: &str, market: Marketplace) -> String {
+fn periods_sql(source: Source, key: &str, name: &str, market: Marketplace) -> String {
     format!(
         "WITH src AS (
-             SELECT p.day AS day, p.card_id AS card_id, p.finish AS finish,
-                    p.copies AS copies, p.price AS price,
-                    CASE WHEN p.day >= ?3 THEN p.day
+             SELECT r.day AS day, r.item AS item, r.finish AS finish, r.card_id AS card_id,
+                    r.copies AS copies, r.price AS price,
+                    CASE WHEN r.day >= ?3 THEN r.day
                          ELSE 'week ' || ({row_week}) END AS period
-               FROM price_snapshots p
-              WHERE p.marketplace = ?1
-                AND p.copies > 0
-                AND p.day < ?2
-                AND p.day >= ?4
-                AND (p.day >= ?3 OR {row_week} < {horizon_week})
+               FROM ({rows}
+                       AND p.marketplace = ?1
+                       AND p.day < ?2
+                       AND p.day >= ?4
+                       AND (p.day >= ?3 OR {p_week} < {horizon_week})) r
          ),
          kept AS (
-             SELECT card_id, finish, copies, price,
+             SELECT item, finish, card_id, copies, price,
                     max(day) OVER (PARTITION BY period) AS at
                FROM (SELECT s.*,
-                            row_number() OVER (PARTITION BY period, card_id, finish
+                            row_number() OVER (PARTITION BY period, item, finish
                                                ORDER BY day DESC) AS nth
                        FROM src s)
               WHERE nth = 1
          ),
-         live AS (
-             SELECT e.card_id AS card_id, e.finish AS finish,
-                    sum(e.quantity) AS copies, max({price}) AS price, ?2 AS at
-               FROM collection_entries e
-               LEFT JOIN cards c ON c.id = e.card_id
-              WHERE e.quantity > 0
-              GROUP BY e.card_id, e.finish
-         ),
+         live AS ({live}),
          every AS (
-             SELECT card_id, finish, copies, price, at FROM kept
+             SELECT item, finish, card_id, copies, price, at FROM kept
              UNION ALL
-             SELECT card_id, finish, copies, price, at FROM live
+             SELECT item, finish, card_id, copies, price, at FROM live
          ),
          seq AS (
              SELECT v.*, dense_rank() OVER (ORDER BY v.at) AS idx FROM every v
@@ -251,7 +312,7 @@ fn periods_sql(key: &str, name: &str, market: Marketplace) -> String {
                     lag(q.copies) OVER w AS prev_copies,
                     lag(q.price) OVER w AS prev_price
                FROM seq q
-             WINDOW w AS (PARTITION BY q.card_id, q.finish ORDER BY q.idx)
+             WINDOW w AS (PARTITION BY q.item, q.finish ORDER BY q.idx)
          )
          SELECT x.at, unixepoch(x.at), x.bucket, max(x.name),
                 sum(x.copies * x.price),
@@ -264,9 +325,11 @@ fn periods_sql(key: &str, name: &str, market: Marketplace) -> String {
                    LEFT JOIN cards c ON c.id = q.card_id) x
           GROUP BY x.idx, x.bucket
           ORDER BY x.idx, x.bucket",
-        row_week = week_bucket("p.day"),
+        rows = source.rows(),
+        row_week = week_bucket("r.day"),
+        p_week = week_bucket("p.day"),
         horizon_week = week_bucket("?3"),
-        price = sorting::held_price_expr(market, "e.finish"),
+        live = source.live(market),
     )
 }
 
@@ -290,6 +353,30 @@ pub fn history(
     split: &str,
     market: Marketplace,
 ) -> Result<ValueHistory, String> {
+    read(conn, Source::Collection, split, market)
+}
+
+/// The wishlist's value over time at `market` (issue #1378) — [`history`] over `wish_snapshots`,
+/// every rule the same, for the home page's Wishlist value graph.
+///
+/// **Its live total is [`crate::wishlist::summarise_wishlist`]'s `cost`**, called rather than
+/// respelled, so the graph's last point is the Wishlist value widget's figure; `moved` is what
+/// prices did to the wishes kept at both points, and the rest of a step is wishes added, bought
+/// or removed. An empty wishlist answers no buckets and no points.
+pub fn wishlist_history(
+    conn: &Connection,
+    split: &str,
+    market: Marketplace,
+) -> Result<ValueHistory, String> {
+    read(conn, Source::Wishlist, split, market)
+}
+
+fn read(
+    conn: &Connection,
+    source: Source,
+    split: &str,
+    market: Marketplace,
+) -> Result<ValueHistory, String> {
     let split = Split::parse(split)?;
     let (key, name) = split.columns()?;
 
@@ -302,16 +389,25 @@ pub fn history(
         )
         .map_err(|e| e.to_string())?;
 
-    // The Collection value widget's own call — `ipc.collectionSummary` with nothing but the
-    // marketplace — so the two can never print different numbers for today.
-    let summary = crate::collection::summarise(
-        conn,
-        &crate::collection::CollectionQuery {
-            marketplace: market,
-            ..Default::default()
-        },
-    )?;
-    if summary.total_cards == 0 {
+    // The value widget's own call — `ipc.collectionSummary` with nothing but the marketplace, or
+    // `ipc.wishlistSummary` — so the two can never print different numbers for today.
+    let (empty, value) = match source {
+        Source::Collection => {
+            let summary = crate::collection::summarise(
+                conn,
+                &crate::collection::CollectionQuery {
+                    marketplace: market,
+                    ..Default::default()
+                },
+            )?;
+            (summary.total_cards == 0, summary.value)
+        }
+        Source::Wishlist => {
+            let summary = crate::wishlist::summarise_wishlist(conn, market)?;
+            (summary.wishes == 0, summary.cost)
+        }
+    };
+    if empty {
         return Ok(ValueHistory {
             buckets: Vec::new(),
             points: Vec::new(),
@@ -323,7 +419,7 @@ pub fn history(
     let mut names: HashMap<String, Option<String>> = HashMap::new();
     {
         let mut stmt = conn
-            .prepare(&periods_sql(&key, name, market))
+            .prepare(&periods_sql(source, &key, name, market))
             .map_err(|e| e.to_string())?;
         let mut rows = stmt
             .query(params![market_key(market), day, horizon, keep])
@@ -352,10 +448,10 @@ pub fn history(
         }
     }
 
-    // Today's period is present whenever a copy is held, priced or not — which the check above
-    // has just established — so the `None` arm is defence rather than a state: the live point
-    // below is drawn from `summary` either way, and an unpriced collection's is a zero rather
-    // than a missing day.
+    // Today's period is present whenever a copy is held or wished, priced or not — which the
+    // check above has just established — so the `None` arm is defence rather than a state: the
+    // live point below is drawn from the summary either way, and an unpriced collection's is a
+    // zero rather than a missing day.
     let live = match periods.last() {
         Some(p) if p.at == day => periods.pop(),
         _ => None,
@@ -390,7 +486,7 @@ pub fn history(
     let first = points.is_empty();
     points.push(ValuePoint {
         day: today,
-        total: summary.value,
+        total: value,
         values: place(live.as_ref().map(|p| p.values.as_slice()).unwrap_or(&[])),
         moved: (!first).then(|| live.as_ref().map(|p| p.moved).unwrap_or(0.0)),
         live: true,
@@ -1127,5 +1223,279 @@ mod tests {
                 "today": 1_800_000_000
             })
         );
+    }
+
+    // ---- the wishlist's graph (issue #1378) ----
+
+    /// One wish. `card_id: None` is a wish for any printing of `oracle_id`; `finish: None` names
+    /// no finish.
+    fn wish(
+        conn: &Connection,
+        oracle_id: &str,
+        card_id: Option<&str>,
+        finish: Option<&str>,
+        quantity: i64,
+    ) {
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id, card_id, name, quantity, preferred_finish,
+                                           created_at, updated_at)
+             VALUES (?1, ?2, 'A wish', ?3, ?4, 0, 0)",
+            params![oracle_id, card_id, quantity, finish],
+        )
+        .unwrap();
+    }
+
+    /// A TCGplayer `wish_snapshots` row `ago` days back, written by hand.
+    fn wished(
+        conn: &Connection,
+        ago: i64,
+        key: &str,
+        finish: &str,
+        card_id: Option<&str>,
+        price: Option<f64>,
+        copies: i64,
+    ) {
+        conn.execute(
+            "INSERT OR REPLACE INTO wish_snapshots (day, marketplace, wish, finish, card_id,
+                                                    price, copies)
+             VALUES (date('now', '-' || ?1 || ' days'), 'tcgplayer', ?2, ?3, ?4, ?5, ?6)",
+            params![ago, key, finish, card_id, price, copies],
+        )
+        .unwrap();
+    }
+
+    fn wishes(conn: &Connection, split: &str) -> ValueHistory {
+        wishlist_history(conn, split, Marketplace::Tcgplayer).unwrap()
+    }
+
+    /// **Today's live point is the Wishlist value widget's number**, to the cent, at every priced
+    /// marketplace and under every split — over a pinned wish in a named finish, one in no finish,
+    /// a wish for any printing, a wish nobody prices and a wish whose printing has left the
+    /// corpus. And the buckets add up to it.
+    #[test]
+    fn the_wishlist_live_point_is_the_wishlist_summarys_cost() {
+        let conn = conn();
+        wish(&conn, "o1", Some("bolt"), Some("foil"), 2);
+        wish(&conn, "o1", Some("bolt"), None, 1);
+        wish(&conn, "o2", None, None, 1);
+        wish(&conn, "o3", Some("free"), None, 3);
+        wish(&conn, "o4", Some("elf"), Some("nonfoil"), 4);
+        wish(&conn, "gone", Some("gone"), None, 1);
+        // The same printing wished in two folders, in one finish, is one key carrying both
+        // quantities.
+        conn.execute(
+            "INSERT INTO wishlist_folders (id, name, sort_order, created_at, updated_at)
+             VALUES (7, 'Later', 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id, card_id, name, quantity, preferred_finish,
+                                           folder_id, created_at, updated_at)
+             VALUES ('o4', 'elf', 'A wish', 1, 'nonfoil', 7, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        for market in crate::price_history::priced_markets() {
+            let summary = crate::wishlist::summarise_wishlist(&conn, market).unwrap();
+            for split in ["total", "type", "color", "set"] {
+                let h = wishlist_history(&conn, split, market).unwrap();
+                let live = h.points.last().unwrap();
+                assert!(live.live);
+                assert!(
+                    cents(live.total, summary.cost),
+                    "{market:?} {split}: {} against {}",
+                    live.total,
+                    summary.cost
+                );
+                if split != "total" {
+                    let sum: f64 = live.values.iter().sum();
+                    assert!(cents(sum, live.total), "{market:?} {split}: {sum}");
+                }
+            }
+        }
+        // 2 × 50 (foil) + 10 (no finish: the chain's nonfoil) + 100 (Sol Ring) + 5 × 3 — the
+        // elves' two rows are one key.
+        let keys: i64 = conn
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM ({})",
+                    crate::wishlist::holding_sql(Marketplace::Tcgplayer)
+                ),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(keys, 6);
+        assert_eq!(
+            wishes(&conn, "total").points[0].total,
+            100.0 + 10.0 + 100.0 + 15.0
+        );
+    }
+
+    /// **The price part and the reader's part of a wishlist's step.** Two copies wished at 8, then
+    /// 9, then a third wished at 9, and today all three at 10: `moved` is what the wish kept at
+    /// both points did, and the rest is the copy the reader added.
+    #[test]
+    fn a_wishlist_step_splits_into_what_prices_moved_and_what_the_reader_wished() {
+        let conn = conn();
+        wish(&conn, "o1", Some("bolt"), Some("nonfoil"), 3); // live 10.00 each
+        wished(&conn, 3, "bolt", "nonfoil", Some("bolt"), Some(8.0), 2);
+        wished(&conn, 2, "bolt", "nonfoil", Some("bolt"), Some(9.0), 2);
+        wished(&conn, 1, "bolt", "nonfoil", Some("bolt"), Some(9.0), 3);
+
+        let h = wishes(&conn, "total");
+
+        assert_eq!(totals(&h), [16.0, 18.0, 27.0, 30.0]);
+        assert_eq!(moved(&h), [None, Some(2.0), Some(0.0), Some(3.0)]);
+        assert_eq!(changes(&h), [0.0, 9.0, 0.0]);
+        assert!(h.points[3].live && !h.points[2].live);
+    }
+
+    /// **A cheaper reprint taking over a wish for any printing is a price move**, never one wish
+    /// leaving and another arriving: the row is keyed by the wish, and the printing that priced it
+    /// is only beside it.
+    #[test]
+    fn a_reprint_taking_over_an_any_printing_wish_is_a_price_move() {
+        let conn = conn();
+        wish(&conn, "o1", None, None, 1); // live: bolt, the only printing, at 10
+        wished(&conn, 1, "oracle:o1", "any", Some("older"), Some(12.0), 1);
+
+        let h = wishes(&conn, "total");
+
+        assert_eq!(totals(&h), [12.0, 10.0]);
+        assert_eq!(moved(&h), [None, Some(-2.0)]);
+        assert_eq!(changes(&h), [0.0]);
+    }
+
+    /// **An empty wishlist answers nothing**, whatever history the table keeps — the collection's
+    /// rule.
+    #[test]
+    fn an_empty_wishlist_answers_no_points() {
+        let conn = conn();
+        wished(&conn, 1, "bolt", "nonfoil", Some("bolt"), Some(9.0), 2);
+        let h = wishes(&conn, "type");
+        assert!(h.points.is_empty() && h.buckets.is_empty(), "{h:?}");
+    }
+
+    /// **The two graphs read two tables.** A collection's history draws nothing on the wishlist's
+    /// and a wishlist's nothing on the collection's.
+    #[test]
+    fn the_collection_and_the_wishlist_read_their_own_history() {
+        let conn = conn();
+        own(&conn, "ring", "nonfoil", "NM", 1);
+        past(&conn, 1, "ring", "nonfoil", 90.0, Some(1));
+        wish(&conn, "o1", Some("bolt"), Some("nonfoil"), 1);
+        wished(&conn, 1, "bolt", "nonfoil", Some("bolt"), Some(9.0), 1);
+
+        assert_eq!(totals(&tcg(&conn, "total")), [90.0, 100.0]);
+        assert_eq!(totals(&wishes(&conn, "total")), [9.0, 10.0]);
+    }
+
+    /// **What the snapshot writes is what the graph reads.** Today's snapshot records each wish at
+    /// the widget's price; read back as yesterday's, the step to today is no change at all.
+    #[test]
+    fn a_snapshot_records_the_wishlist_the_graph_reads() {
+        let conn = conn();
+        wish(&conn, "o1", Some("bolt"), Some("foil"), 2);
+        wish(&conn, "o2", None, None, 1);
+        wish(&conn, "o3", Some("free"), None, 1);
+
+        crate::price_history::snapshot(&conn).unwrap();
+        let rows: Vec<(String, String, Option<String>, Option<f64>, i64)> = conn
+            .prepare(
+                "SELECT wish, finish, card_id, price, copies FROM wish_snapshots
+                  WHERE marketplace = 'tcgplayer' AND day = date('now') ORDER BY wish",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "bolt".into(),
+                    "foil".into(),
+                    Some("bolt".into()),
+                    Some(50.0),
+                    2
+                ),
+                ("free".into(), "any".into(), Some("free".into()), None, 1),
+                (
+                    "oracle:o2".into(),
+                    "any".into(),
+                    Some("ring".into()),
+                    Some(100.0),
+                    1
+                ),
+            ],
+            "every wish is a row, an unpriced one included"
+        );
+        assert_eq!(
+            crate::price_history::snapshot(&conn).unwrap(),
+            0,
+            "a second snapshot of an unchanged day writes nothing"
+        );
+
+        conn.execute("UPDATE wish_snapshots SET day = date('now', '-1 day')", [])
+            .unwrap();
+        let h = wishes(&conn, "total");
+        assert_eq!(totals(&h), [200.0, 200.0]);
+        assert_eq!(changes(&h), [0.0]);
+
+        // A wish bought since is gone from the next snapshot's day.
+        conn.execute("DELETE FROM wishlist_entries WHERE oracle_id = 'o2'", [])
+            .unwrap();
+        crate::price_history::snapshot(&conn).unwrap();
+        let today: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM wish_snapshots WHERE day = date('now') AND wish = 'oracle:o2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(today, 0);
+    }
+
+    /// **A thinned wish table reads as the un-thinned one did**, and keeps one row per wish per
+    /// week beyond the daily band.
+    #[test]
+    fn a_thinned_wish_table_reads_the_same() {
+        let conn = conn();
+        wish(&conn, "o2", Some("ring"), Some("nonfoil"), 1);
+        wish(&conn, "o1", None, None, 1);
+        for ago in 1..=90 {
+            wished(&conn, ago, "ring", "nonfoil", Some("ring"), Some(100.0), 1);
+            let price = (ago % 3 != 0).then_some(ago as f64);
+            wished(&conn, ago, "oracle:o1", "any", Some("bolt"), price, 1);
+        }
+
+        let before = wishes(&conn, "total");
+        crate::price_history::prune_wishes(&conn, None).unwrap();
+        let after = wishes(&conn, "total");
+
+        assert_eq!(before, after);
+        assert!(changes(&after).iter().all(|c| c.abs() < 0.005));
+        let thinned: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM wish_snapshots
+                  WHERE wish = 'ring' AND day < date('now', '-' || ?1 || ' days')",
+                [DAILY_DAYS],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // The horizon's own week keeps none of its older rows: a newer one in the daily band
+        // shares the bucket.
+        let horizon = bucket(&conn, DAILY_DAYS);
+        let weeks: BTreeSet<i64> = (DAILY_DAYS + 1..=90)
+            .map(|ago| bucket(&conn, ago))
+            .filter(|week| *week < horizon)
+            .collect();
+        assert_eq!(thinned, weeks.len() as i64, "one row per wish per week");
     }
 }
