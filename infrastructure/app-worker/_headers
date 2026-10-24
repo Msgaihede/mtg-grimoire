@@ -140,30 +140,16 @@
   ! Cache-Control
   Cache-Control: no-cache
 
-# --- The card scanner's three files -------------------------------------------------------------
-#
-# `scanner-assets/card-hashes.bin`, the two `.rten` models and `manifest.json`
-# (`scripts/scanner-assets.ts --web` fetches them; the web build copies them in). STABLE NAMES
-# WHOSE BYTES CHANGE: the bundle of card hashes is rebuilt with every set and shipped again at
-# each release under the name it always had. So they are revalidated and never kept by the HTTP
-# cache — the default's value, restated so that loosening `/*` cannot take this with it. The page
-# asks for them `no-store` in any case and keeps what it has checked in Cache Storage, by the
-# manifest's digest (`packages/ui/lib/core/web/scanStore.ts`); nothing asks for them before a reader
-# presses Download, and the service worker neither precaches nor answers them.
-/scanner-assets/*
-  ! Cache-Control
-  Cache-Control: no-cache
-
 # --- The Neural scanner's eight files -----------------------------------------------------------
 #
 # `scanner-neural/<set>/detector.onnx`, `embedder.onnx`, `gallery.bin` and `neural.json` — the
-# Neural mode's two networks, its gallery and their constants — and the printing evidence beside
+# scanner's two networks, its gallery and their constants — and the printing evidence beside
 # them, `symbol.onnx`, `band.onnx`, `symbols.bin` and `bands.bin` (the set symbol and collector
 # band networks and their galleries). In git under `crates/card-neural/models/` and copied in by
-# the web build. CONTENT-ADDRESSED, unlike the three above: `<set>` is a hash of the eight
+# the web build. CONTENT-ADDRESSED: `<set>` is a hash of the eight
 # (`packages/ui/lib/core/web/assets.ts`, `NEURAL_PREFIX`), so a new gallery is a new address and
 # these are kept a year like the two trees at the top. The page asks for the first four the first
-# time a Neural frame is due and for the evidence's four after them, and the service worker keeps
+# time a frame is due and for the evidence's four after them, and the service worker keeps
 # them in the scanner's Cache Storage then; neither precaches them. Each is under the host's
 # 25 MiB a file, which the build checks.
 /scanner-neural/*

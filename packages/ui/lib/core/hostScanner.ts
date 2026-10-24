@@ -11,26 +11,18 @@
  *
  * The engine's own refusal — `scanner::NOT_IN_A_BROWSER_YET`, what its table says if a session
  * command reaches it on a page — is read the same way and lives in `verdictText.ts`, pinned to
- * the Rust text by `ipc.test.ts`. The two here are the web host's (`./web/scanner.ts`), which
- * imports them from this file: one source, so there is nothing to drift.
+ * the Rust text by `ipc.test.ts`. The one here is the web host's (`./web/scanner.ts`), which
+ * imports it from this file: one source, so there is nothing to drift.
  */
 
 /**
  * The scanner's module is built with WebAssembly SIMD (`simd128`) and a browser without it
  * will not compile the bytes. Known before anything is fetched — the web host probes with
- * thirty-one bytes — so a reader is never offered an eighteen-megabyte download for a scanner
- * that cannot start.
+ * thirty-one bytes — so a reader's browser never fetches the scanner's module and its
+ * twenty-seven megabytes of models for a scanner that cannot start.
  */
 export const SCANNER_NEEDS_SIMD =
   "The card scanner cannot run in this browser: it needs WebAssembly SIMD, which this browser does not have.";
 
-/**
- * The origin serves no scanner files, and this browser holds none: a build made without them
- * (`pnpm scanner:assets --web` was not run before `pnpm web:build`). A release never
- * is; a developer's build may be.
- */
-export const SCANNER_NOT_SHIPPED =
-  "This build of MTG Grimoire was made without the card scanner's files.";
-
 /** Every sentence a host refuses the scanner's session with when it has none to offer. */
-export const HOST_SCANNER_UNAVAILABLE: readonly string[] = [SCANNER_NEEDS_SIMD, SCANNER_NOT_SHIPPED];
+export const HOST_SCANNER_UNAVAILABLE: readonly string[] = [SCANNER_NEEDS_SIMD];

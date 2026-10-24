@@ -4,7 +4,7 @@
 
 import type { Results, Run, Score } from "./results.ts";
 
-export const PASSES = ["As scanned", "Fast", "Exact", "Neural"] as const;
+export const PASSES = ["As scanned", "Neural"] as const;
 
 export type Tally = {
   n: number;
@@ -14,8 +14,6 @@ export type Tally = {
   card: number;
   wrong: number;
   undecided: number;
-  /** Of the undecided: Exact passes too short to try to resolve, which is no miss of the scanner. */
-  unresolved: number;
   /** Of the undecided: a decision was made, then nothing was held at the end. */
   lost: number;
   /** Could not be replayed; left out of every percentage. */
@@ -41,7 +39,7 @@ function median(values: number[]): number | null {
 }
 
 export function tally(runs: Run[], pass: string): Tally {
-  const out: Tally = { n: 0, printing: 0, card: 0, wrong: 0, undecided: 0, unresolved: 0, lost: 0, error: 0, ambiguous: 0, resolvedRight: 0, resolvedWrongPrinting: 0, medianChoices: null, meanChoices: null, medianFrames: null };
+  const out: Tally = { n: 0, printing: 0, card: 0, wrong: 0, undecided: 0, lost: 0, error: 0, ambiguous: 0, resolvedRight: 0, resolvedWrongPrinting: 0, medianChoices: null, meanChoices: null, medianFrames: null };
   const frames: number[] = [];
   const choices: number[] = [];
   for (const run of runs) {
@@ -54,7 +52,6 @@ export function tally(runs: Run[], pass: string): Tally {
     if (p.score === "undecided") out.undecided += 1;
     const decidedAt = typeof p.decision_frame === "number";
     if (p.score === "undecided" && decidedAt) out.lost += 1;
-    if (p.score === "undecided" && !decidedAt && p.resolve_ran === false) out.unresolved += 1;
     if (p.score === "error") out.error += 1;
     if (p.settled === "right_printing") out.resolvedRight += 1;
     if (p.settled === "wrong_printing") out.resolvedWrongPrinting += 1;
@@ -82,7 +79,6 @@ export function breakdowns(runs: Run[]): { by: string; value: string; runs: Run[
     ["finish", (r) => r.finish],
     ["platform", (r) => r.platform],
     ["mode", (r) => r.mode],
-    ["detail", (r) => (r.detail ? "yes" : "no")],
   ];
   return keys.flatMap(([by, of]) => {
     const groups = new Map<string, Run[]>();
@@ -137,12 +133,12 @@ export const cell = (value: unknown): string =>
     .replaceAll("|", "\\|");
 
 const HEAD =
-  "| pass | n | printing ✓ % | card ✓ % | wrong card | undecided % | errors | resolved right | resolved wrong printing | ambiguous | median choices | mean choices | median frames | never resolved | decided then lost |\n" +
-  "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+  "| pass | n | printing ✓ % | card ✓ % | wrong card | undecided % | errors | resolved right | resolved wrong printing | ambiguous | median choices | mean choices | median frames | decided then lost |\n" +
+  "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
 
 function row(name: string, runs: Run[], pass: string): string {
   const t = tally(runs, pass);
-  return `| ${cell(name)} | ${t.n} | ${percent(t.printing, t)} | ${percent(t.card, t)} | ${t.wrong} | ${percent(t.undecided, t)} | ${t.error} | ${t.resolvedRight} | ${t.resolvedWrongPrinting} | ${t.ambiguous} | ${t.medianChoices ?? "—"} | ${t.meanChoices === null ? "—" : t.meanChoices.toFixed(1)} | ${t.medianFrames ?? "—"} | ${t.unresolved} | ${t.lost} |`;
+  return `| ${cell(name)} | ${t.n} | ${percent(t.printing, t)} | ${percent(t.card, t)} | ${t.wrong} | ${percent(t.undecided, t)} | ${t.error} | ${t.resolvedRight} | ${t.resolvedWrongPrinting} | ${t.ambiguous} | ${t.medianChoices ?? "—"} | ${t.meanChoices === null ? "—" : t.meanChoices.toFixed(1)} | ${t.medianFrames ?? "—"} | ${t.lost} |`;
 }
 
 const flips = (title: string, list: Flip[]) =>
@@ -153,9 +149,9 @@ export function summaryMarkdown(now: Results, base: Results | null): string {
     "# Scanner replay",
     "",
     "Readers' scans, replayed: real frames, labelled by the reader who sent them. A replay starts",
-    "with no earlier evidence and no detail pictures, so *then* is what the scanner said live.",
+    "with no earlier evidence, so *then* is what the scanner said live.",
     "",
-    `${now.runs.length} scans, ${now.skipped.length} skipped; commit \`${cell(now.commit ?? "unknown")}\`, bundle of ${cell(now.bundle_printings)} printings.`,
+    `${now.runs.length} scans, ${now.skipped.length} skipped; commit \`${cell(now.commit ?? "unknown")}\`.`,
     "",
     HEAD,
     ...PASSES.map((pass) => row(pass, now.runs, pass)),
@@ -175,9 +171,6 @@ export function summaryMarkdown(now: Results, base: Results | null): string {
   if (base) {
     const delta = compare(now, base);
     lines.push(`## Against \`${cell(base.commit ?? "unknown")}\``, "");
-    if (base.bundle_printings !== now.bundle_printings) {
-      lines.push(`The baseline ran against another bundle (${base.bundle_printings} printings then, ${now.bundle_printings} now), so a change here may be the bundle's.`, "");
-    }
     lines.push(...flips("Fixed", delta.fixed), ...flips("Broken", delta.broken), ...flips("Moved", delta.moved));
     if (!delta.fixed.length && !delta.broken.length && !delta.moved.length) lines.push("No scan changed.", "");
     if (delta.added.length) lines.push(`${delta.added.length} scans are new since the baseline.`, "");

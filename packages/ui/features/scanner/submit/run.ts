@@ -2,9 +2,6 @@ import { toBase64 } from "@/lib/base64";
 import type { Finish } from "@/lib/finish";
 import type {
   ScanFilters,
-  ScanMode,
-  ScannerLockPhase,
-  ScannerStatus,
   ScannerSubmission,
   ScannerSubmissionFrame,
   ScannerVerdict,
@@ -12,8 +9,8 @@ import type {
 
 /**
  * **A scan is a run of frames, never one picture** (the owner's rule: *all the frames or
- * nothing at all*). The scanner decides over a run — two frames that agree, a tally
- * that reaches its bar, a read on the frame after a lock — so one picture cannot say what it
+ * nothing at all*). The scanner decides over a run — frames that agree on one card — so one
+ * picture cannot say what it
  * did, and a picture taken *after* the press is not one it was ever shown. What is sent is
  * therefore the last couple of seconds **the scanner was actually given**, each frame beside what
  * it answered — **at full resolution**: the very draw of the video the pump made its own smaller
@@ -101,25 +98,12 @@ export interface RunFrame {
   at: number;
   /** `ScannerVerdict.ok`: whether a card was found in it at all. */
   ok: boolean;
-  /** The lock's phase on this frame, or `null` where the verdict carried no lock. */
-  lock: ScannerLockPhase | null;
-  /** The tracker's confidence after this frame, or `null` with no tracker. */
+  /** The agreement's confidence after this frame, or `null` with none. */
   confidence: number | null;
-  /** The best candidate's distance in bits on this frame, or `null` with no match. */
+  /** The best candidate's distance on this frame, or `null` with no match. */
   distance: number | null;
   /** The printing the scanner had decided on by this frame, or `null`. */
   decided: string | null;
-  /** A detail image went to the scanner with this frame. It is not kept, and never sent. */
-  detail: boolean;
-  /**
-   * The mode the scanner judged this frame in — `ScannerVerdict.mode`, the session's own word
-   * for it and not the page's switch, which moves a frame before the session does.
-   *
-   * **The ring's, and not the wire's.** A run is judged in one mode or it is not a run — the
-   * session forgets the card on the first frame it is sent in another — so the ring starts over
-   * where this changes ({@link pushRunFrame}) and a submission says the mode once, for all of it.
-   */
-  mode: ScanMode;
 }
 
 /**
@@ -131,22 +115,14 @@ export interface RunFrame {
  * ({@link scanRun}): a standing's id is the oracle card its evidence pooled on, an id of another
  * kind than the printing a reader chooses.
  */
-export function runFrameOf(
-  jpeg: Uint8Array,
-  at: number,
-  verdict: ScannerVerdict,
-  detail: boolean,
-): RunFrame {
+export function runFrameOf(jpeg: Uint8Array, at: number, verdict: ScannerVerdict): RunFrame {
   return {
     jpeg,
     at,
     ok: verdict.ok,
-    lock: verdict.lock?.phase ?? null,
     confidence: verdict.tracked?.confidence ?? null,
     distance: verdict.match?.candidates[0]?.distance ?? null,
     decided: verdict.decision?.printing ?? null,
-    detail,
-    mode: verdict.mode,
   };
 }
 
@@ -155,18 +131,11 @@ export function runFrameOf(
  * {@link RUN_MAX_FRAMES}, {@link RUN_MAX_BYTES}, and nothing grabbed more than
  * {@link RUN_MAX_AGE_MS} before the frame being added.
  *
- * **A frame judged in another mode than the one before it starts the ring over.** The session
- * drops its tracker on the first frame it is sent in a new mode, so everything the ring held was
- * said of evidence that frame's answer no longer rests on. This is the one break the pump
- * cannot see for itself — a mode is an option on the frame, not a call of its own — so it is
- * read here, off what the scanner answered.
- *
  * In place, because the ring is the pump's own and nothing else holds it — a reader of it is
  * handed a copy. A frame that is over the byte budget by itself leaves the ring empty, which is
  * the honest answer: there is no run of such frames that could be sent.
  */
 export function pushRunFrame(ring: RunFrame[], frame: RunFrame): void {
-  if (ring.length > 0 && ring[ring.length - 1].mode !== frame.mode) ring.length = 0;
   ring.push(frame);
   let bytes = ring.reduce((sum, one) => sum + one.jpeg.length, 0);
   while (
@@ -248,13 +217,12 @@ function msBefore(at: number, pressedAt: number): number {
  * moment. Pure, so each rung below is a fixture's worth of test.
  *
  * **What the scanner had said is read off the run's last frame, and never off the verdict a
- * render was holding.** `reported`, `confidence`, `distance` and `mode` are that frame's
- * `decided`, `confidence`, `distance` and `mode`. A press reads the ring as it stands and the
- * verdict as the last render had it, and the ring is a frame ahead of the render whenever an
- * answer has landed since: figures taken from the verdict would then sit beside a last frame
- * that says otherwise, in one submission. So the press-level figures *are* the last frame's, and
- * the two cannot disagree. The `mode` handed in is the page's, and stands only for a run with no
- * frame in it — which no press sends.
+ * render was holding.** `reported`, `confidence` and `distance` are that frame's `decided`,
+ * `confidence` and `distance`. A press reads the ring as it stands and the verdict as the last
+ * render had it, and the ring is a frame ahead of the render whenever an answer has landed
+ * since: figures taken from the verdict would then sit beside a last frame that says otherwise,
+ * in one submission. So the press-level figures *are* the last frame's, and the two cannot
+ * disagree.
  *
  * **`reported` is the printing the scanner had decided on, and `null` while it had decided
  * nothing.** Never the tracker's leader: a standing's `id` is what its evidence pooled on — the
@@ -272,20 +240,17 @@ function msBefore(at: number, pressedAt: number): number {
  * one — `matchStrip` names a card by the same order, so the box opens on the name the reader was
  * just shown — else the card the tracker is leaning towards, whose label is its best printing's.
  *
- * `bundle` is how many cards the scanner could have answered with, off the status — `null` where
- * the status has not answered, which is "not asked", never "none". `filters` are the sets and
- * dates it was narrowed to, which decide what it could have answered at all.
+ * `filters` are the sets and dates the scanner was narrowed to, which decide what it could have
+ * answered at all.
  *
- * **A frame goes out field by field, and its `mode` and its clock do not go at all**: the wire
- * says the mode once for the run, and `ms` in place of `at`. Spelled out rather than spread, so
- * a field the ring gains for its own bookkeeping cannot reach the inbox by default.
+ * **A frame goes out field by field, and its clock does not go at all**: the wire says `ms` in
+ * place of `at`. Spelled out rather than spread, so a field the ring gains for its own
+ * bookkeeping cannot reach the inbox by default.
  */
 export function scanRun(
   ring: readonly RunFrame[],
   pressedAt: number,
   verdict: ScannerVerdict | null,
-  mode: ScanMode,
-  status: ScannerStatus | null,
   filters: ScanFilters,
 ): ScanRun {
   const lead = verdict?.tracked?.standings[0];
@@ -295,18 +260,14 @@ export function scanRun(
       jpeg: toBase64(frame.jpeg),
       ms: msBefore(frame.at, pressedAt),
       ok: frame.ok,
-      lock: frame.lock,
       confidence: frame.confidence,
       distance: frame.distance,
       decided: frame.decided,
-      detail: frame.detail,
     })),
     said: {
       reported: last?.decided ?? null,
-      mode: last?.mode ?? mode,
       confidence: last?.confidence ?? null,
       distance: last?.distance ?? null,
-      bundle: status?.labels ?? null,
       filters,
     },
     leadName: verdict?.decision?.label?.name ?? lead?.label?.name ?? "",

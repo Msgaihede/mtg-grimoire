@@ -36,8 +36,6 @@ function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
     onPointAndShoot: vi.fn(),
     shooting: false,
     onShoot: vi.fn(),
-    mode: "fast",
-    onMode: vi.fn(),
     filters: { sets: [], released_from: null, released_to: null },
     onFilters: vi.fn(),
     filterError: null,
@@ -121,9 +119,13 @@ describe("ScanBar", () => {
     const user = userEvent.setup();
     const onFinish = vi.fn();
     wrap(<ScanBar {...props({ onFinish })} />);
-    await user.click(screen.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }));
+    await user.click(
+      screen.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }),
+    );
     expect(
-      screen.getByText("The scanner reads each card's finish. A card it can't tell waits in the tray for you to pick."),
+      screen.getByText(
+        "A card printed in one finish takes it. One printed in several waits in the tray for you to pick.",
+      ),
     ).toBeInTheDocument();
     const finish = screen.getByRole("button", { name: "Finish" });
     expect(finish).toHaveTextContent("Detect");
@@ -145,34 +147,12 @@ describe("ScanBar", () => {
     expect(screen.getByText("Each new card starts in this finish.")).toBeInTheDocument();
   });
 
-  it("switches to Exact", async () => {
-    const user = userEvent.setup();
-    const onMode = vi.fn();
-    wrap(<ScanBar {...props({ onMode })} />);
-    expect(screen.getByRole("button", { name: "Fast" })).toHaveAttribute("aria-pressed", "true");
-    await user.click(screen.getByRole("button", { name: "Exact" }));
-    expect(onMode).toHaveBeenCalledWith("exact");
-  });
-
-  it("draws three modes, Neural last, and switches to it", async () => {
-    const user = userEvent.setup();
-    const onMode = vi.fn();
-    wrap(<ScanBar {...props({ onMode })} />);
-    const group = screen.getByRole("group", { name: "Scan mode" });
-    expect(
-      within(group)
-        .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual(["Fast", "Exact", "Neural"]);
-    await user.click(within(group).getByRole("button", { name: "Neural" }));
-    expect(onMode).toHaveBeenCalledWith("neural");
-  });
-
-  it("lights Neural when the reader is scanning in it", () => {
-    wrap(<ScanBar {...props({ mode: "neural" })} />);
-    expect(screen.getByRole("button", { name: "Neural" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Fast" })).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByRole("button", { name: "Exact" })).toHaveAttribute("aria-pressed", "false");
+  it("draws no mode switch: the scanner has one way of reading", () => {
+    wrap(<ScanBar {...props()} />);
+    expect(screen.queryByRole("group", { name: "Scan mode" })).toBeNull();
+    for (const name of ["Fast", "Exact", "Neural"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
   });
 
   it("says any set on the Filters button for empty filters", () => {
@@ -183,14 +163,20 @@ describe("ScanBar", () => {
 
   it("names the narrowing on the Filters button", () => {
     wrap(
-      <ScanBar {...props({ filters: { sets: ["hob"], released_from: "2023-06-23", released_to: null } })} />,
+      <ScanBar
+        {...props({ filters: { sets: ["hob"], released_from: "2023-06-23", released_to: null } })}
+      />,
     );
-    expect(screen.getByRole("button", { name: "Filters: HOB · from 2023-06-23" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Filters: HOB · from 2023-06-23" }),
+    ).toBeInTheDocument();
   });
 
   it("refuses the Filters popover with a reason, and keeps the button in reach", async () => {
     const user = userEvent.setup();
-    wrap(<ScanBar {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />);
+    wrap(
+      <ScanBar {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />,
+    );
     const filters = screen.getByRole("button", { name: "Filters: Any set" });
     expect(filters).toHaveAttribute("aria-disabled", "true");
     expect(filters).not.toBeDisabled();
@@ -205,8 +191,12 @@ describe("ScanBar", () => {
     await user.click(screen.getByRole("button", { name: "Filters: Any set" }));
     expect(await screen.findByRole("dialog", { name: "Filters" })).toBeInTheDocument();
 
-    rerender(<ScanBar {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />);
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument());
+    rerender(
+      <ScanBar {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />,
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument(),
+    );
 
     rerender(<ScanBar {...props()} />);
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -228,7 +218,10 @@ describe("ScanBar", () => {
     const onFilters = vi.fn();
     wrap(
       <ScanBar
-        {...props({ onFilters, filters: { sets: ["hob", "ltr"], released_from: "2023-01-01", released_to: null } })}
+        {...props({
+          onFilters,
+          filters: { sets: ["hob", "ltr"], released_from: "2023-01-01", released_to: null },
+        })}
       />,
     );
     await user.click(screen.getByRole("button", { name: /^Filters:/ }));
@@ -288,12 +281,16 @@ describe("ScanBar", () => {
 
   it("names the live camera on the Camera button", () => {
     wrap(<ScanBar {...props()} />);
-    expect(screen.getByRole("button", { name: /^Camera:/ })).toHaveAccessibleName("Camera: Logitech BRIO");
+    expect(screen.getByRole("button", { name: /^Camera:/ })).toHaveAccessibleName(
+      "Camera: Logitech BRIO",
+    );
   });
 
   it("reads Default when the open camera is not one the list knows", () => {
     wrap(<ScanBar {...props({ cameraId: null })} />);
-    expect(screen.getByRole("button", { name: /^Camera:/ })).toHaveAccessibleName("Camera: Default");
+    expect(screen.getByRole("button", { name: /^Camera:/ })).toHaveAccessibleName(
+      "Camera: Default",
+    );
   });
 
   it("lists the cameras alphabetically as radios, with the live one checked", async () => {
@@ -323,7 +320,9 @@ describe("ScanBar", () => {
     await user.click(trigger);
     await user.click(await screen.findByRole("radio", { name: "Integrated Camera" }));
     expect(onCamera).toHaveBeenCalledExactlyOnceWith("cam-integrated");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Camera" })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Camera" })).not.toBeInTheDocument(),
+    );
     expect(trigger).toHaveFocus();
   });
 
@@ -363,14 +362,23 @@ describe("ScanBar", () => {
     const user = userEvent.setup();
     const onFilters = vi.fn();
     wrap(
-      <ScanBar {...props({ onFilters, filters: { sets: [], released_from: "2023-06-23", released_to: null } })} />,
+      <ScanBar
+        {...props({
+          onFilters,
+          filters: { sets: [], released_from: "2023-06-23", released_to: null },
+        })}
+      />,
     );
     await user.click(screen.getByRole("button", { name: /^Filters:/ }));
     // `fireEvent` rather than `user.clear`: a date field has no text selection for user-event to
     // drive, and what is under test is what the row does with the value the field reports.
     const from = await screen.findByLabelText("Released from");
     fireEvent.change(from, { target: { value: "" } });
-    expect(onFilters).toHaveBeenLastCalledWith({ sets: [], released_from: null, released_to: null });
+    expect(onFilters).toHaveBeenLastCalledWith({
+      sets: [],
+      released_from: null,
+      released_to: null,
+    });
     fireEvent.change(screen.getByLabelText("Released to"), { target: { value: "2024-12-31" } });
     expect(onFilters).toHaveBeenLastCalledWith({
       sets: [],

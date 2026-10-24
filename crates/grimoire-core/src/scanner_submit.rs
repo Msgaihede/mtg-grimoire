@@ -7,8 +7,8 @@
 //! chosen by hand. Nothing here runs on a launch, on a schedule or on a frame — the scanner
 //! itself still examines every picture where it was taken and keeps none.
 //!
-//! **A scan is a run of frames and never one picture.** The scanner decides over a run — a lock
-//! that settles, evidence that pools, a vote that crosses a bar — so a single frame cannot say
+//! **A scan is a run of frames and never one picture.** The scanner decides over a run — reads
+//! that agree, evidence that pools, a vote that crosses a bar — so a single frame cannot say
 //! what it did, and a still taken for the purpose is a picture the scanner never judged. What is
 //! sent is the frames it *was* given, byte for byte and in order, each beside what it answered
 //! for it: put back through the scanner, that is the scan again. So [`pictures`] takes a whole
@@ -114,6 +114,9 @@ pub const MAX_LABEL_CHARS: usize = 8192;
 /// The label's shape. A second shape is a second number, and an inbox deployed for it.
 pub const LABEL_VERSION: u8 = 1;
 
+/// The scanner a label says read the run — the only one there is ([`LabelScanner`]).
+const MODE: &str = "neural";
+
 /// The finishes a card comes in, as `cards.finishes` and the page both spell them.
 const FINISHES: [&str; 3] = ["nonfoil", "foil", "etched"];
 
@@ -162,13 +165,13 @@ pub const HALF_AN_ANSWER: &str =
 /// What a reader says a scan shows, and what the scanner had said — the page's half of a
 /// [`Label`], mirrored as `ScannerSubmission` in `packages/ui/lib/ipc.ts`.
 ///
-/// The four after `finish` are the scanner's side at the press, each absent when it had none.
+/// The three after `finish` are the scanner's side at the press, each absent when it had none.
 /// They are taken as the page gives them and tidied in [`label_for`]: nothing in them is a
 /// reason to turn a submission away, because a run the scanner made nothing of is as much
 /// worth having as one it named wrongly.
 ///
 /// **`reported` is the printing the scanner had decided on, and absent while it had decided
-/// nothing** — never the card it was only leaning towards. The tracker's leader is keyed by
+/// nothing** — never the card it was only leaning towards. The agreement's leader is keyed by
 /// what its evidence pooled on, which is an oracle id: sent here it would be an id of another
 /// kind beside `card_id`, and "the scanner got it right" could never be read off the two.
 ///
@@ -182,10 +185,8 @@ pub struct Submission {
     pub card_id: Option<String>,
     pub finish: Option<String>,
     pub reported: Option<String>,
-    pub mode: String,
     pub confidence: Option<f64>,
     pub distance: Option<u32>,
-    pub bundle: Option<u32>,
     pub filters: ScanFilters,
     pub run: Vec<SubmissionFrame>,
 }
@@ -204,11 +205,9 @@ pub struct SubmissionFrame {
     pub jpeg: String,
     pub ms: f64,
     pub ok: bool,
-    pub lock: Option<String>,
     pub confidence: Option<f64>,
     pub distance: Option<u32>,
     pub decided: Option<String>,
-    pub detail: bool,
 }
 
 /// A scan the inbox took, and the reference it filed it under — `ScannerSubmitted` in `ipc.ts`.
@@ -251,6 +250,10 @@ pub struct LabelCard {
 
 /// The scanner's side at the press. An absent figure is `null` on the wire and never left out:
 /// the inbox tells "it had none" from "this build does not send it" by the key being there.
+///
+/// **`mode` is always [`MODE`] and `bundle` always `null`** since the Fast and Exact modes and
+/// their hash bundle went: both stay on the wire because the shape is [`LABEL_VERSION`]'s, and
+/// the inbox is another deploy.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LabelScanner {
     pub reported: Option<String>,
@@ -278,7 +281,8 @@ pub struct LabelApp {
 
 /// One frame of the run: where it is in the body, how big it is, and what the scanner answered
 /// for it. `bytes`, `width` and `height` are facts read off the frame here; the rest is the
-/// page's, tidied.
+/// page's, tidied — but `lock`, always `null`, and `detail`, always `false`, which are the
+/// algorithmic scanner's and stay for [`LabelScanner`]'s reason.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LabelFrame {
     pub ms: i32,
@@ -403,16 +407,6 @@ fn jpeg_size(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
-/// A scan mode's name, a lock's phase, or anything shaped like one: a short lower-case word,
-/// which is what the inbox takes. Not the list of either, so a third mode is not a submission
-/// refused.
-fn is_word(text: &str) -> bool {
-    (1..=16).contains(&text.len())
-        && text
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
-}
-
 /// A Scryfall id as this app spells one: thirty-two lower-case hex digits in the five groups
 /// of a UUID. `label.ts`'s `UUID`, which is what the inbox takes for the two ids the scanner
 /// supplies.
@@ -435,9 +429,6 @@ fn tidy_id(id: Option<&str>) -> Option<String> {
         .filter(|id| is_uuid(id))
         .map(str::to_owned)
 }
-
-/// How many cards a bundle can hold, as far as the inbox believes one: `label.ts`'s bound.
-const MAX_BUNDLE_LABELS: u32 = 10_000_000;
 
 /// A share of the evidence, so between nothing and all of it — and to three places, which is
 /// more than the figure means and keeps twenty of them inside a header.
@@ -497,11 +488,11 @@ fn tidy_frame(frame: &SubmissionFrame, measured: Measured) -> LabelFrame {
         width: measured.width,
         height: measured.height,
         ok: frame.ok,
-        lock: frame.lock.clone().filter(|phase| is_word(phase)),
+        lock: None,
         confidence: tidy_confidence(frame.confidence),
         distance: tidy_distance(frame.distance),
         decided: tidy_id(frame.decided.as_deref()),
-        detail: frame.detail,
+        detail: false,
     }
 }
 
@@ -523,9 +514,6 @@ pub fn label_for(
     let (card_id, finish) = match (&submission.card_id, &submission.finish) {
         (Some(card_id), Some(finish)) => (card_id, finish.as_str()),
         (None, None) => {
-            if !is_word(&submission.mode) {
-                return Err(format!("{} is not a scan mode.", submission.mode));
-            }
             // No card is nothing to read out of the card data, and nothing to hold a finish to.
             return Ok(label_of(submission, frames, None, None));
         }
@@ -533,9 +521,6 @@ pub fn label_for(
     };
     if !FINISHES.contains(&finish) {
         return Err(format!("{finish} is not a finish a card comes in."));
-    }
-    if !is_word(&submission.mode) {
-        return Err(format!("{} is not a scan mode.", submission.mode));
     }
 
     let printing = conn
@@ -598,12 +583,10 @@ fn label_of(
         finish,
         scanner: LabelScanner {
             reported: tidy_id(submission.reported.as_deref()),
-            mode: submission.mode.clone(),
+            mode: MODE.to_owned(),
             confidence: tidy_confidence(submission.confidence),
             distance: tidy_distance(submission.distance),
-            bundle: submission
-                .bundle
-                .filter(|cards| *cards <= MAX_BUNDLE_LABELS),
+            bundle: None,
             filters: tidy_filters(&submission.filters),
         },
         app: LabelApp {
@@ -675,7 +658,6 @@ fn build_http() -> http::Client {
         user_agent: crate::scryfall::USER_AGENT,
         connect_timeout: Some(Duration::from_secs(10)),
         read_timeout: Some(Duration::from_secs(300)),
-        https_only: false,
     })
     .deadline(Duration::from_secs(330))
 }
@@ -819,11 +801,9 @@ mod tests {
             jpeg: base64_of(bytes),
             ms,
             ok: false,
-            lock: None,
             confidence: None,
             distance: None,
             decided: None,
-            detail: false,
         }
     }
 
@@ -839,10 +819,8 @@ mod tests {
             card_id: Some(card_id.to_owned()),
             finish: Some(finish.to_owned()),
             reported: Some(SHOCK.to_owned()),
-            mode: "fast".to_owned(),
             confidence: Some(0.82),
             distance: Some(31),
-            bundle: Some(98_000),
             filters: ScanFilters::default(),
             run: run_of(MIN_RUN_FRAMES),
         }
@@ -910,7 +888,7 @@ mod tests {
             finish: Some("foil".to_owned()),
             scanner: LabelScanner {
                 reported: None,
-                mode: "exact".to_owned(),
+                mode: MODE.to_owned(),
                 confidence: None,
                 distance: None,
                 bundle: None,
@@ -1050,10 +1028,11 @@ mod tests {
         );
         assert_eq!(label.finish.as_deref(), Some("foil"));
         assert_eq!(label.scanner.reported.as_deref(), Some(SHOCK));
-        assert_eq!(label.scanner.mode, "fast");
+        // The one scanner there is, and no bundle: the wire's shape outlived both.
+        assert_eq!(label.scanner.mode, "neural");
         assert_eq!(label.scanner.confidence, Some(0.82));
         assert_eq!(label.scanner.distance, Some(31));
-        assert_eq!(label.scanner.bundle, Some(98_000));
+        assert_eq!(label.scanner.bundle, None);
         assert_eq!(label.app.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(label.app.platform, "desktop");
     }
@@ -1065,11 +1044,9 @@ mod tests {
         sent.run = run_of(6);
         sent.run[5] = SubmissionFrame {
             ok: true,
-            lock: Some("locked".to_owned()),
             confidence: Some(0.9126),
             distance: Some(12),
             decided: Some(BOLT.to_owned()),
-            detail: true,
             ..frame_of(TINY_JPEG, 0.0)
         };
         let label = labelled(&state, &sent).expect("a label");
@@ -1093,7 +1070,8 @@ mod tests {
                 detail: false,
             }
         );
-        // …and the frame it decided on carries what it said.
+        // …and the frame it decided on carries what it said — with no lock and no detail
+        // image, which no scanner has any more.
         assert_eq!(
             label.run[5],
             LabelFrame {
@@ -1102,11 +1080,11 @@ mod tests {
                 width: 160,
                 height: 120,
                 ok: true,
-                lock: Some("locked".to_owned()),
+                lock: None,
                 confidence: Some(0.913),
                 distance: Some(12),
                 decided: Some(BOLT.to_owned()),
-                detail: true,
+                detail: false,
             }
         );
     }
@@ -1155,11 +1133,9 @@ mod tests {
         sent.reported = Some("   ".to_owned());
         sent.confidence = Some(1.4);
         sent.distance = Some(900);
-        sent.bundle = None;
         // One frame with every figure outside its own range.
         sent.run[0] = SubmissionFrame {
             ms: 250.4,
-            lock: Some("Locked On".to_owned()),
             confidence: Some(f64::INFINITY),
             distance: Some(257),
             decided: Some("an id\nwith a line in it".to_owned()),
@@ -1169,7 +1145,7 @@ mod tests {
         sent.run[2].ms = -9_000_000.0;
         sent.run[3].ms = -219.6;
         sent.run[3].confidence = Some(-0.2);
-        // An id of another kind — the tracker's leader is an oracle card, by a name like this
+        // An id of another kind — the agreement's leader is an oracle card, by a name like this
         // one in a test — is not a printing the scanner decided on.
         sent.run[3].decided = Some("c-bolt".to_owned());
         sent.run[4].decided = Some(BOLT.to_uppercase());
@@ -1177,14 +1153,12 @@ mod tests {
         assert_eq!(label.scanner.reported, None);
         assert_eq!(label.scanner.confidence, Some(1.0));
         assert_eq!(label.scanner.distance, None);
-        assert_eq!(label.scanner.bundle, None);
         // A frame is never after the press, never a fraction and never further back than a
         // minute; a clock that read nothing is the press itself.
         assert_eq!(label.run[0].ms, 0);
         assert_eq!(label.run[1].ms, 0);
         assert_eq!(label.run[2].ms, -60_000);
         assert_eq!(label.run[3].ms, -220);
-        assert_eq!(label.run[0].lock, None);
         assert_eq!(label.run[0].confidence, None);
         assert_eq!(label.run[0].distance, None);
         assert_eq!(label.run[0].decided, None);
@@ -1193,24 +1167,14 @@ mod tests {
         assert_eq!(label.run[4].decided, None);
         // And an id that is one, with a space the page left round it, is kept.
         sent.reported = Some(format!(" {SHOCK} "));
-        sent.bundle = Some(MAX_BUNDLE_LABELS + 1);
         let kept = labelled(&state, &sent).expect("a label");
         assert_eq!(kept.scanner.reported.as_deref(), Some(SHOCK));
-        assert_eq!(kept.scanner.bundle, None);
         sent.reported = Some("   ".to_owned());
-        sent.bundle = None;
 
         sent.confidence = Some(f64::NAN);
         assert_eq!(
             labelled(&state, &sent).expect("a label").scanner.confidence,
             None
-        );
-
-        // A mode is a short word; anything else is a build that has drifted.
-        sent.mode = "Fast Mode".to_owned();
-        assert_eq!(
-            labelled(&state, &sent).unwrap_err(),
-            "Fast Mode is not a scan mode."
         );
     }
 
@@ -1301,11 +1265,9 @@ mod tests {
         let worst = SubmissionFrame {
             ms: -59_999.0,
             ok: false,
-            lock: Some("a".repeat(16)),
             confidence: Some(0.123_456),
             distance: Some(256),
             decided: Some(id.clone()),
-            detail: false,
             ..frame_of(TINY_JPEG, 0.0)
         };
         let widest = Measured {
@@ -1323,10 +1285,10 @@ mod tests {
         });
         label.scanner = LabelScanner {
             reported: Some(id),
-            mode: "a".repeat(16),
+            mode: MODE.to_owned(),
             confidence: Some(0.123),
             distance: Some(256),
-            bundle: Some(MAX_BUNDLE_LABELS),
+            bundle: None,
             filters: tidy_filters(&ScanFilters {
                 sets: (0..200).map(|n| format!("set{n:05}")).collect(),
                 released_from: Some("1993-08-05".to_owned()),
@@ -1350,6 +1312,10 @@ mod tests {
     /// every submission with both suites green. So one header, exactly as this side writes it,
     /// is kept beside the source — and `infrastructure/scan-worker`'s `label.test.ts` reads the
     /// same file and holds `readLabel` to taking it whole.
+    ///
+    /// **Its figures are an older build's** — an Exact scan, with the lock's phases and a detail
+    /// frame — kept so the file both suites read did not move when the Fast and Exact modes went.
+    /// The shape and the spelling are what it holds, and those are this side's today.
     #[test]
     fn the_label_on_the_wire_is_the_one_the_inbox_is_tested_against() {
         let golden = include_str!("__golden__/scan-label.txt").trim_end();
@@ -1450,15 +1416,9 @@ mod tests {
         assert_eq!(label.finish, None);
         // Everything else is as it is for a card: what the scanner said, and every frame.
         assert_eq!(label.scanner.reported.as_deref(), Some(SHOCK));
-        assert_eq!(label.scanner.mode, "fast");
+        assert_eq!(label.scanner.mode, "neural");
         assert_eq!(label.run.len(), MIN_RUN_FRAMES);
         assert_eq!(label.run[0].width, TINY.width);
-        // A mode that is no word is refused here as it is beside a card.
-        sent.mode = "Fast!".to_owned();
-        assert_eq!(
-            labelled(&state, &sent).unwrap_err(),
-            "Fast! is not a scan mode."
-        );
     }
 
     #[test]

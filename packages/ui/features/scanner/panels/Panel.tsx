@@ -10,12 +10,12 @@ import { cn } from "@/lib/utils";
  * `bg-surface` body — with a fold on every panel but `match`.
  *
  * **The heading is the disclosure button**, `aria-expanded` on it and — *while it is open* —
- * `aria-controls` to the body, so a screen reader hears "Controls, collapsed, button" rather
+ * `aria-controls` to the body, so a screen reader hears "Frame budget, collapsed, button" rather
  * than a heading and an unrelated toggle.
  *
  * **The `aria-controls` comes and goes with the body, and that is the whole of why it is
  * conditional.** This panel unmounts its body rather than hiding it, so a folded heading
- * pointing at `scanner-controls-body` names an element that is not in the document — a dangling
+ * pointing at `scanner-budget-body` names an element that is not in the document — a dangling
  * IDREF, which is an ARIA conformance error and is the kind a screen reader resolves to
  * *nothing* rather than to an error. The attribute is dropped while folded instead. Everything
  * a reader needs in that state is already on the button: `aria-expanded="false"` says there is
@@ -57,8 +57,8 @@ export function Panel({
       {/* **`h3`, one level under the view's own `h2`.** `ScannerPage` mounts an `sr-only`
           `<h2>Scanner</h2>` and every panel here is *inside* that view, so an `h2` on a panel
           would make "Scanner" and "Match" siblings — a screen reader's heading list would then
-          read six views where there is one. Nothing visual moves: the size is `text-lg` either
-          way. `ReadoutsPanel`'s tier headings sit under this one at `h4`. */}
+          read two views where there is one. Nothing visual moves: the size is `text-lg` either
+          way. */}
       <h3 id={headingId} className={cn(SECTION_TITLE, "flex items-center gap-3")}>
         {id === "match" ? (
           <>

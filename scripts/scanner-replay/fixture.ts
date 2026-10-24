@@ -1,8 +1,8 @@
 // Invented results for the summary's and the report's suites. No real scan is in the tree.
 
-import type { Pass, Results, Run, Score, Slice } from "./results.ts";
+import type { Pass, Results, Run, Score } from "./results.ts";
 
-const NAMES = ["As scanned", "Fast", "Exact"];
+const NAMES = ["As scanned", "Neural"];
 
 /** The card every fixture run expects; real-shaped, as Scryfall's ids are. */
 export const CARD_ID = "c0c0c0c0-0000-4000-8000-000000000001";
@@ -16,14 +16,9 @@ const GOT_IDS: Record<Score, string> = {
 /** The id a fixture pass "matched" when it scored `score`. */
 export const gotId = (score: Score) => GOT_IDS[score];
 
-export function slice(over: Partial<Slice> & Pick<Slice, "frame" | "kind" | "file">): Slice {
-  return { raw: null, normalized: null, matched: null, tried: [], more: 0, mark: null, edits: null, ...over };
-}
-
 export function pass(name: string, score: Score, over: Partial<Pass> = {}): Pass {
   const made: Pass = {
     name,
-    mode: name === "Exact" ? "exact" : name === "Neural" ? "neural" : "fast",
     score,
     ambiguous: false,
     settled: score === "printing" ? "right_printing" : score === "card" ? "wrong_printing" : "other",
@@ -33,14 +28,11 @@ export function pass(name: string, score: Score, over: Partial<Pass> = {}): Pass
     first_decision_frame: score === "undecided" || score === "error" ? null : 9,
     decision_frame: null,
     decisions: 1,
-    resolve_ran: true,
-    locked_frames: 5,
     confidence: 0.8,
     distance: 33,
-    frames: [{ ok: true, lock: "locked", confidence: 0.8, distance: 33, decided: null, error: null }],
-    tiers: [],
-    slices: [],
+    frames: [{ ok: true, confidence: 0.8, distance: 33, decided: null, error: null }],
     error: score === "error" ? "the run broke" : null,
+    evidence: null,
     ...over,
   };
   // Unless a test says otherwise, the one decision is the first and the last.
@@ -48,8 +40,8 @@ export function pass(name: string, score: Score, over: Partial<Pass> = {}): Pass
   return made;
 }
 
-export function run(over: Partial<Run> & { scores?: [Score, Score, Score] } = {}): Run {
-  const { scores = ["printing", "printing", "printing"], ...rest } = over;
+export function run(over: Partial<Run> & { scores?: [Score, Score] } = {}): Run {
+  const { scores = ["printing", "printing"], ...rest } = over;
   return {
     id: "20261011T101500Z-0000000000000001",
     received_at: "2026-10-11T10:15:00.000Z",
@@ -57,19 +49,18 @@ export function run(over: Partial<Run> & { scores?: [Score, Score, Score] } = {}
     finish: "nonfoil",
     platform: "desktop",
     version: "0.48.0",
-    mode: "fast",
+    mode: "neural",
     filtered: false,
-    detail: false,
     frames: 12,
     known: true,
     then: { score: "printing", got: CARD_ID },
     decided_differs: 0,
-    then_frames: [{ ms: 0, ok: true, lock: "locked", decided: null, detail: false }],
+    then_frames: [{ ms: 0, ok: true, decided: null }],
     passes: NAMES.map((name, i) => pass(name, scores[i])),
     ...rest,
   };
 }
 
 export function results(runs: Run[], over: Partial<Results> = {}): Results {
-  return { v: 1, commit: "abc1234", bundle_printings: 113494, runs, skipped: [], ...over };
+  return { v: 2, commit: "abc1234", runs, skipped: [], ...over };
 }

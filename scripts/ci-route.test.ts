@@ -255,7 +255,6 @@ describe("the arms", () => {
     ["Cargo.lock", T, T, T, F, F, T, T],
     [".cargo/config.toml", T, T, T, F, F, T, T],
     [".github/workflows/release.yml", T, F, F, F, F, F, F],
-    [".github/workflows/scanner-bundle.yml", T, F, F, F, F, F, F],
     // A measurement on an emulator, outside the gate (step 4.5): its pins and its toolchain are
     // `frontend`'s to check, and its script sits in `scripts/` like the router itself.
     [".github/workflows/android-emulator.yml", T, F, F, F, F, F, F],
@@ -335,7 +334,6 @@ describe("the arms", () => {
     ["scripts/web-smoke.ts", T, F, F, F, F, F, T],
     ["scripts/web-sync-smoke.ts", T, F, F, F, F, F, T],
     ["scripts/web-scanner-smoke.ts", T, F, F, F, F, F, T],
-    ["scripts/scanner-assets.ts", T, F, F, F, F, F, T],
     ["scripts/web-smoke/default-cards.jsonl", T, F, F, F, F, F, T],
     // What both browser runs are written in, beside the fixtures it answers from.
     ["scripts/web-smoke/harness.ts", T, F, F, F, F, F, T],
@@ -497,7 +495,6 @@ describe("the arms", () => {
     ["scripts/web-smoke.ts", "scripts/*"],
     ["scripts/web-sync-smoke.ts", "scripts/*"],
     ["scripts/web-scanner-smoke.ts", "scripts/*"],
-    ["scripts/scanner-assets.ts", "scripts/*"],
     ["scripts/web-smoke/*", "scripts/*"],
     ["packages/fake/aliases.ts", ".storybook/*"],
   ])("puts `%s` above `%s`", (file, tree) => {

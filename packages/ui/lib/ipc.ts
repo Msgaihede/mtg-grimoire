@@ -50,26 +50,17 @@
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
  * `ScannerCaptured`/`ScannerPrefs`/
  * `ScannerTrayRow`/`ScannerTrayChoice`             — `crates/grimoire-core/src/scanner.rs`
- * `ScannerAssetsOwed`/`ScannerAssetsProgress`      — `crates/grimoire-core/src/scanner_assets.rs`
  * `ScannerSubmission`/`ScannerSubmitted`           — `crates/grimoire-core/src/scanner_submit.rs`
- * `ScannerAssetDue`                                — `crates/grimoire-core/src/downloads.rs`
- * `ScannerOptions`/`ScannerVerdict`/`ScannerFrameSize`/
- * `ScannerStages`/`ScannerStanding`/`ScannerTracked`/
- * `ScannerCollectorTry`/`ScannerCollector`/`ScannerOcr`/
- * `ScannerDecision`                                — `crates/card-scanner/src/session.rs`
- * `ScannerFinishMark`/`ScannerMarkReading`         — `crates/card-scanner/src/ocr.rs`
- * `ScannerChoice`/`ScannerTier`/`ScannerResolution` — `crates/card-scanner/src/resolve.rs`
+ * `ScannerVerdict`/`ScannerFrameSize`/
+ * `ScannerStanding`/`ScannerTracked`/
+ * `ScannerDecision`/`ScannerChoice`                — `crates/card-scanner/src/session.rs`
  * `ScanFilters`                                    — `crates/card-scanner/src/filters.rs`
  * `ScannerLabel`/`ScannerCandidate`/`ScannerMatch`  — `crates/card-scanner/src/reference.rs`
- * `ScannerLock`                                    — `crates/card-scanner/src/lock.rs`
- * `ScannerScore`/`ScannerTimings`                  — `crates/card-scanner/src/detect.rs`
- * `ScannerCardness`                                — `crates/card-scanner/src/cardness.rs`
- * `ScannerTrim`                                    — `crates/card-scanner/src/trim.rs`
  *
  * **The scanner's shapes are the one block here that is _not_ camelCase**, and they are the
  * exception rather than an oversight: the detector crate carries no
- * `#[serde(rename_all = "camelCase")]`, because its JSON was the standalone debug page's before
- * it was this app's and that page reads `decide_at` and `best_distance` by those names. The
+ * `#[serde(rename_all = "camelCase")]`, because its JSON was a standalone debug page's before
+ * it was this app's (that page went with the old scanner, 2026-10-24) and the names stayed. The
  * mirror keeps the Rust spelling verbatim; `ipc.test.ts`'s `snakeMirrors` is the table that
  * compares them with no camel step. **Three of the block are camelCase after all** —
  * `ScannerPrefs`, `ScannerTrayRow` and `ScannerTrayChoice` — because they are this app's stored

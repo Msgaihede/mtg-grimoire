@@ -1,10 +1,14 @@
 import { RotateCcw, Send } from "lucide-react";
 import { useTooltip } from "@grimoire/ui/components/tooltip/useTooltip";
-import { MatchBar, STRIP_PILL, STRIP_SENTENCE } from "@grimoire/ui/features/scanner/reader/MatchStrip";
+import {
+  MatchBar,
+  STRIP_PILL,
+  STRIP_SENTENCE,
+} from "@grimoire/ui/features/scanner/reader/MatchStrip";
 import { matchStrip, type LastAdded } from "@grimoire/ui/features/scanner/reader/readerText";
 import { SEND_SCAN } from "@grimoire/ui/features/scanner/submit/submitText";
 import { FOCUS } from "@grimoire/ui/lib/focus";
-import type { ScanMode, ScannerResolution, ScannerVerdict } from "@grimoire/ui/lib/ipc";
+import type { ScannerVerdict } from "@grimoire/ui/lib/ipc";
 import { PRESS } from "@grimoire/ui/lib/motion";
 import { cn } from "@grimoire/ui/lib/utils";
 
@@ -39,19 +43,12 @@ import { cn } from "@grimoire/ui/lib/utils";
  */
 export function MatchLine({
   verdict,
-  mode,
   lastAdded,
-  hasBundle,
-  lastResolution,
   onReset,
   onSend,
 }: {
   verdict: ScannerVerdict | null;
-  mode: ScanMode;
   lastAdded: LastAdded;
-  /** `false` only once the status has answered that no bundle loaded — unknown is not absent. */
-  hasBundle: boolean;
-  lastResolution: ScannerResolution | null;
   onReset: () => void;
   /**
    * *Send scan…* — the desktop strip's press and its rule: handed the press for the caret, and
@@ -64,7 +61,7 @@ export function MatchLine({
   onSend?: (opener: HTMLElement) => void;
 }) {
   const tip = useTooltip();
-  const strip = matchStrip(verdict, mode, lastAdded, hasBundle, lastResolution);
+  const strip = matchStrip(verdict, lastAdded);
   const leaning = strip.tone === "progress";
   const hidden = leaning ? true : undefined;
 

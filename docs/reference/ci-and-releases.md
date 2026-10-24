@@ -2,12 +2,13 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-- Six workflows — the third, **`scanner-bundle.yml`** (2026-09-15), builds and publishes the
-  card scanner's embedded assets and is recorded in [card-scanner.md](card-scanner.md) §10; the
-  fourth, **`android-emulator.yml`** (2026-10-03), measures the light app's first run and has one
-  bullet below, beside the `android` job; the fifth and sixth, **`neural-train.yml`** and
-  **`neural-deliver.yml`** (2026-10-20), retrain the Neural scanner's models and are the last
-  section of this page; this page covers the other two.
+- Five workflows — **`android-emulator.yml`** (2026-10-03) measures the light app's first run and
+  has one bullet below, beside the `android` job; **`neural-train.yml`** and
+  **`neural-deliver.yml`** (2026-10-20) retrain the Neural scanner's models and are the last
+  section of this page; this page covers the other two. A sixth, **`scanner-bundle.yml`**
+  (2026-09-15), built and published the card scanner's hash bundle and OCR models every week for
+  the release builds to embed; it was removed on 2026-10-24 with the Fast and Exact modes, and
+  where it appears below it is history.
   **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
   matrix (below — one leg for `pnpm build` and `lint`, four for `test:run --shard`), a
@@ -16,12 +17,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   on both, everything `--locked` — over both members of the cargo workspace since 2026-10-02,
   below — **and since 2026-09-08 the `card-scanner` crate's own suite
   on the Linux leg** — `cargo test --locked --features cli --manifest-path
-  crates/card-scanner/Cargo.toml`, and since 2026-09-15 a second command in the same step,
-  `cargo test --locked --features builder --bins` against the same manifest, because `cli` does
-  not compile the `build-hashes` and `eval` binaries and a break in either surfaced only in
-  `scanner-bundle.yml` — tests only, because that crate is not rustfmt-clean and
-  carries four pre-existing clippy warnings, both listed in
-  [card-scanner.md](card-scanner.md) §8; until that step `session::tests` was fenced by
+  crates/card-scanner/Cargo.toml`, and since 2026-10-24 the same with no feature beside it (the
+  crate as the browser's module links it; the `builder` lines that tested the removed bundle
+  builder and evaluation, from 2026-09-15, and the frame bench's went with them) — tests only,
+  because that crate is not rustfmt-clean and carries clippy warnings
+  ([card-scanner.md](card-scanner.md) §8); until that step `session::tests` was fenced by
   `pnpm verify` and by nothing in CI), a `core` matrix (below, 2026-10-02), an `android`
   job (below, 2026-10-03), a `web` job (below, 2026-10-04) and a `powershell` job (below). The
   `wasm` and `android` compile gates went with the first web and Android builds, which were
@@ -45,7 +45,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **`rust-toolchain.toml` and `.github/actions/rust-toolchain/`** → `frontend`, `rust` and,
   since 2026-10-02, `core`; **the cargo workspace's own files at the root — `Cargo.toml`,
   `Cargo.lock`, `.cargo/**`** → the same three (2026-10-02, below);
-  **`release.yml`, `scanner-bundle.yml` and `.github/dependabot.yml` → `frontend`**, because
+  **`release.yml` and `.github/dependabot.yml` → `frontend`** (and `scanner-bundle.yml`, until it was removed on 2026-10-24), because
   `scripts/toolchain.test.ts` and `scripts/actions-pinned.test.ts` read them (below); `.nvmrc`
   → the jobs that bundle the page (`frontend`, `storybook` and, since 2026-10-04, `web`;
   `android` installs Node too and is not routed by it, because every arm that sets `android`
@@ -267,7 +267,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **`persist-credentials: false` on every `actions/checkout`**. Checked job by job
     first: nothing after a checkout runs `git` against the remote — `changes` diffs history the
     checkout already fetched, and every upload is `gh` or tauri-action, each handed its token.
-  - **Workflow-level `permissions: {}`** in `release.yml` and `scanner-bundle.yml`, with each job
+  - **Workflow-level `permissions: {}`** in `release.yml` (and `scanner-bundle.yml` until 2026-10-24), with each job
     naming its own (`ci.yml` stays `contents: read`, which grants nothing to write).
     `release-please` keeps `contents`/`issues`/`pull-requests: write`; `publish` gets
     `contents: write` alone, as did `build` until 2026-10-21 (*The build holds no token*, below),
@@ -339,12 +339,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **`card-scanner` stays outside**, `exclude`d by name because a path dependency under the
     workspace root would otherwise become a member by itself. It keeps its own `Cargo.lock`
     and its own `target/`, and **every scripted run of it from the root passes
-    `--target-dir crates/card-scanner/target`** — the test lines in `ci.yml`, the one in
-    `verify`, both `cargo run` lines in `scanner-bundle.yml`. Cargo reads its config from the
-    working directory, never from `--manifest-path`, so without the flag those runs would
-    follow the root's config into `src-tauri/target` (now `target`, since 2026-10-08); in
-    `scanner-bundle.yml` that is also a tree its `rust-cache` (`workspaces: crates/card-scanner`)
-    never saves.
+    `--target-dir crates/card-scanner/target`** — the test lines in `ci.yml` and the one in
+    `verify` (and `scanner-bundle.yml`'s two `cargo run` lines, until 2026-10-24). Cargo reads its
+    config from the working directory, never from `--manifest-path`, so without the flag those
+    runs would follow the root's config into `src-tauri/target` (now `target`, since 2026-10-08).
   - **`Swatinem/rust-cache` takes `workspaces: ". -> target"`** in `ci.yml` and
     `release.yml` — where the lockfile is, then where the artifacts are. (It read `". ->
     src-tauri/target"` until 2026-10-08, when the build tree moved to the root.)
@@ -386,7 +384,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the pinned toolchain, the gate and the fail-safe, and `crates/*` — `card-scanner`, which the
   engine depends on since the scanner's session glue moved on 2026-10-03, the day that arm gained
   `core` as it said it would — and never `apps/desktop/src-tauri/**`, which the engine does not depend on.
-  Both legs therefore compile `card-scanner`, `ocrs`, `rten` and `image` too. Every arm that sets
+  Both legs therefore compile `card-scanner`, `card-neural`, `rten` and `image` too (`ocrs` as well, until 2026-10-24). Every arm that sets
   `core` sets `rust` too, and `ci-route.test.ts` holds the router to that.
   **None of the job's own details were measured on it when this was written; its first run is
   the PR that adds it.** They are the removed `wasm` and `android` jobs' (the first attempt,
@@ -1593,8 +1591,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the action. Now:
   - **`build` is `contents: read` with no token in any step.** tauri-action is given no
     `releaseId` and no `tagName`, so it builds and uploads nothing (`src/index.ts` at the pinned
-    SHA); `pnpm scanner:assets` lost its `GH_TOKEN`, which the script never read (it fetches a
-    public release with `fetch`). A step collects the four bundles and the portable zip into
+    SHA); `pnpm scanner:assets` lost its `GH_TOKEN`, which the script never read (it fetched a
+    public release with `fetch`; the script and its step went on 2026-10-24). A step collects the four bundles and the portable zip into
     `desktop-out/` under their **dotted** names — what GitHub renames a space to on upload, and
     the name the updater asks for `<name>.minisig` by — and fails a leg that built fewer than
     two bundles (tauri-action ends green on none). They leave as `desktop-<os>`, seven days.
@@ -1609,8 +1607,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **`relay-deploy`, `web-deploy` and `publish` need `attach` where they needed `build`**, so
     a missing key stops a release before anything deploys, and the draft is never left with live
     Workers ahead of it for that reason.
-  - **`scanner-bundle.yml` has the same split**: `build` reads, `publish` writes and builds
-    nothing ([card-scanner.md](card-scanner.md) §10).
+  - **`scanner-bundle.yml` had the same split**, until the workflow was removed on 2026-10-24:
+    `build` read, `publish` wrote and built nothing.
   - **Fences**: `scripts/actions-pinned.test.ts` refuses any job in any workflow that is granted
     a write and sets up a toolchain, restores a cache, installs, or runs cargo, pnpm or
     tauri-action; `scripts/release-rule.test.ts` holds `build`'s read grant and empty

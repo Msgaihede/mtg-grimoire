@@ -50,12 +50,12 @@ const COLUMN_WIDTH = "25rem";
 const THIRD_WIDTH = "36rem";
 
 /**
- * A row waiting on a pick, built the way the page builds one — out of the Exact fixture's
- * ambiguous decision, through the reducer — rather than written out, so the story cannot draw a
+ * A row waiting on a pick, built the way the page builds one — out of the fixture's ambiguous
+ * decision, through the reducer — rather than written out, so the story cannot draw a
  * waiting row the scanner could never produce.
  */
 const waiting = rowFromDecision(
-  VERDICTS.exactAmbiguous.decision!,
+  VERDICTS.ambiguous.decision!,
   { finish: "nonfoil" },
   1_757_900_000_000,
   "waiting",

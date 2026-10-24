@@ -1,5 +1,5 @@
 import { RotateCcw, Send } from "lucide-react";
-import type { ScanMode, ScannerResolution, ScannerVerdict } from "@/lib/ipc";
+import type { ScannerVerdict } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { SEND_SCAN } from "../submit/submitText";
@@ -7,15 +7,10 @@ import { matchStrip, type LastAdded, type StripState, type StripTone } from "./r
 
 export interface MatchStripProps {
   verdict: ScannerVerdict | null;
-  mode: ScanMode;
   lastAdded: LastAdded;
-  /** `false` only once the status has answered that no bundle loaded — unknown is not absent. */
-  hasBundle: boolean;
-  /** The page's latch of the last resolve, cleared when a frame has no card in it. */
-  lastResolution: ScannerResolution | null;
   /**
-   * Throw away the evidence the scanner is holding — the tracker's in the crate and the page's
-   * latched reads — so the next card is weighed from nothing.
+   * Throw away the evidence the scanner is holding — the agreement's in the crate and the page's
+   * last verdict — so the next card is weighed from nothing.
    */
   onReset: () => void;
   /**
@@ -78,7 +73,7 @@ export const STRIP_SENTENCE: Record<StripTone, string> = {
  * the card it is leaning towards or has settled on, and a bar for how close it is.
  *
  * **Pure** — everything it draws is one {@link matchStrip} value, so a story or a test can stand
- * up any state from the five props alone. The other two are the presses it carries.
+ * up any state from the two props alone. The other two are the presses it carries.
  *
  * **The row is the view's live region**, always mounted and named `Scanner status` as the one line
  * under the camera it replaces was, so a screen reader is watching it before the first card lands.
@@ -101,17 +96,9 @@ export const STRIP_SENTENCE: Record<StripTone, string> = {
  * Developer column's *Add frame to dataset*: that one writes a file beside the app for the
  * person running it, and this one sends a scan to somebody else, after a dialog that says so.
  */
-export function MatchStrip({
-  verdict,
-  mode,
-  lastAdded,
-  hasBundle,
-  lastResolution,
-  onReset,
-  onSend,
-}: MatchStripProps) {
-  const strip = matchStrip(verdict, mode, lastAdded, hasBundle, lastResolution);
-  // **The leader is drawn and not announced.** While the tracker is still weighing, its leader can
+export function MatchStrip({ verdict, lastAdded, onReset, onSend }: MatchStripProps) {
+  const strip = matchStrip(verdict, lastAdded);
+  // **The leader is drawn and not announced.** While the agreement is still weighing, its leader can
   // change from one frame to the next, and a live region re-reading a new card name on every flip
   // is noise over the one thing a reader needs to hear — hold steady. The name joins the
   // announcement when the card is matched, which is the moment it is news.
@@ -141,8 +128,8 @@ export function MatchStrip({
         </span>{" "}
         {strip.name === null ? (
           // No card to name, so the sentence stands where the name would, at the size a sentence
-          // on its own is read at. It may wrap — the long one is the no-hashes sentence, which is a
-          // state that holds rather than one that flickers.
+          // on its own is read at. It may wrap — the long one is the no-recognizer sentence, which
+          // is a state that holds rather than one that flickers.
           <span className="min-w-0 text-[15px] text-text">{strip.sentence}</span>
         ) : (
           <>
@@ -224,16 +211,9 @@ export function MatchBar({ strip }: { strip: StripState }) {
         )}
         style={{ width: `${strip.fill * 100}%` }}
       />
-      {/* The line the bar has to cross — drawn only while it is being crossed. Empty, there is
-          nothing approaching it; full, it has been crossed, and a dim mark at 70% of a gold bar
-          under the confidence rule would read as a bar that stopped short. */}
-      {leaning && (
-        <span
-          aria-hidden="true"
-          className="absolute inset-y-0 w-px bg-dim"
-          style={strip.threshold === "end" ? { right: 0 } : { left: `${strip.threshold * 100}%` }}
-        />
-      )}
+      {/* The line the bar has to cross — its right-hand end — drawn only while it is being
+          crossed. Empty, there is nothing approaching it; full, it has been crossed. */}
+      {leaning && <span aria-hidden="true" className="absolute inset-y-0 right-0 w-px bg-dim" />}
     </div>
   );
 }

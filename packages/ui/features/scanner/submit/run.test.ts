@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STATUS, VERDICTS } from "../fixtures";
+import { VERDICTS } from "../fixtures";
 import type { ScanFilters, ScannerVerdict } from "../types";
 import {
   pushRunFrame,
@@ -18,12 +18,12 @@ const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: nu
 
 /** A ring entry whose one byte is `n` — `AQ==`, `Ag==`, … as text — grabbed at `at`. */
 function frame(n: number, at: number, over: Partial<RunFrame> = {}): RunFrame {
-  return { ...runFrameOf(new Uint8Array([n]), at, VERDICTS.voting, false), ...over };
+  return { ...runFrameOf(new Uint8Array([n]), at, VERDICTS.voting), ...over };
 }
 
 /** A ring entry of `bytes` zeroes, told apart by when it was grabbed. */
 const heavy = (at: number, bytes: number): RunFrame =>
-  runFrameOf(new Uint8Array(bytes), at, VERDICTS.voting, false);
+  runFrameOf(new Uint8Array(bytes), at, VERDICTS.voting);
 
 describe("the bounds of a run", () => {
   /**
@@ -46,66 +46,43 @@ describe("the bounds of a run", () => {
 describe("runFrameOf", () => {
   it("reads the scanner's answer for the frame off its verdict", () => {
     const jpeg = new Uint8Array([1, 2, 3]);
-    expect(runFrameOf(jpeg, 1234.5, VERDICTS.decided, false)).toEqual({
+    expect(runFrameOf(jpeg, 1234.5, VERDICTS.decided)).toEqual({
       jpeg,
       at: 1234.5,
       ok: true,
-      lock: "locked",
       confidence: 1,
-      distance: 30,
+      distance: 11,
       decided: "storm-of-saruman-ltr-72",
-      detail: false,
-      mode: "fast",
     });
   });
 
-  /** The session's own word for it, off the verdict — the page's switch moves a frame sooner. */
-  it("says which mode the scanner judged the frame in", () => {
-    expect(VERDICTS.voting.mode).toBe("fast");
-    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.voting, false).mode).toBe("fast");
-    expect(VERDICTS.exactAmbiguous.mode).toBe("exact");
-    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.exactAmbiguous, false).mode).toBe("exact");
-    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.neuralAmbiguous, false).mode).toBe("neural");
-  });
-
-  /**
-   * Neural keeps no quad lock, so its frames say no lock rather than a phase; the rest is read as
-   * for any mode — its distance is the `MatchReport`'s 0–256 bits, as the inbox reads it.
-   */
-  it("reads a Neural frame with no lock, its distance in bits and its decided printing", () => {
-    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.neuralDecided, false)).toMatchObject({
+  it("reads a frame on a real printing: its distance and its decided printing", () => {
+    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.resolved)).toMatchObject({
       ok: true,
-      lock: null,
       confidence: 1,
       distance: 16,
-      decided: VERDICTS.neuralDecided.decision?.printing,
-      mode: "neural",
+      decided: VERDICTS.resolved.decision?.printing,
     });
   });
 
-  it("says nothing was found, locked, weighed or decided for a frame with no card in it", () => {
-    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.noCard, false)).toMatchObject({
+  it("says nothing was found, weighed or decided for a frame with no card in it", () => {
+    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.noCard)).toMatchObject({
       ok: false,
-      lock: "idle",
-      confidence: null,
+      confidence: 0,
       distance: null,
       decided: null,
     });
-    // A verdict with no lock at all — a frame the detector gave up on.
-    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.panicked, false).lock).toBeNull();
+    // A verdict with no agreement at all — a frame the scanner gave up on.
+    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.panicked).confidence).toBeNull();
   });
 
   /** A standing's id is an oracle id: it is never what a frame is said to have decided. */
   it("takes the decision's printing, never the leader's id, for what was decided", () => {
     expect(VERDICTS.voting.tracked?.standings[0]?.id).toBeTruthy();
-    const weighing = runFrameOf(new Uint8Array([9]), 0, VERDICTS.voting, false);
+    const weighing = runFrameOf(new Uint8Array([9]), 0, VERDICTS.voting);
     expect(weighing.decided).toBeNull();
     expect(weighing.confidence).toBe(0.625);
-    expect(weighing.distance).toBe(74);
-  });
-
-  it("carries whether a detail image went with the frame", () => {
-    expect(runFrameOf(new Uint8Array([9]), 0, VERDICTS.voting, true).detail).toBe(true);
+    expect(weighing.distance).toBe(23);
   });
 });
 
@@ -143,33 +120,6 @@ describe("pushRunFrame", () => {
     const ring: RunFrame[] = [frame(1, 100)];
     pushRunFrame(ring, heavy(2, RUN_MAX_BYTES + 1));
     expect(ring).toEqual([]);
-  });
-
-  /**
-   * **The session forgets the card on the first frame it is sent in another mode**, so a frame
-   * answered in a mode the one before it was not is the first of a new run: what came before was
-   * said of evidence this answer does not rest on.
-   */
-  it("starts over at a frame judged in another mode than the one before it", () => {
-    const ring: RunFrame[] = [];
-    for (let n = 1; n <= 6; n++) pushRunFrame(ring, frame(n, n * 100));
-    expect(ring).toHaveLength(6);
-
-    pushRunFrame(ring, frame(7, 700, { mode: "exact" }));
-    expect(ring.map((one) => one.jpeg[0])).toEqual([7]);
-    // …and goes on from there, in the new mode.
-    pushRunFrame(ring, frame(8, 800, { mode: "exact" }));
-    pushRunFrame(ring, frame(9, 900, { mode: "exact" }));
-    expect(ring.map((one) => one.jpeg[0])).toEqual([7, 8, 9]);
-    // Back again is a break too: it is the change that forgets, whichever way it goes.
-    pushRunFrame(ring, frame(10, 1000));
-    expect(ring.map((one) => one.jpeg[0])).toEqual([10]);
-    // And Neural is a mode like the others: into it, and out of it to Exact, each start over.
-    pushRunFrame(ring, frame(11, 1100, { mode: "neural" }));
-    pushRunFrame(ring, frame(12, 1200, { mode: "neural" }));
-    expect(ring.map((one) => one.jpeg[0])).toEqual([11, 12]);
-    pushRunFrame(ring, frame(13, 1300, { mode: "exact" }));
-    expect(ring.map((one) => one.jpeg[0])).toEqual([13]);
   });
 
   /**
@@ -246,11 +196,11 @@ describe("runAtPress", () => {
 describe("scanRun", () => {
   /** The ring as a press finds it: five frames a hundred and ten milliseconds apart. */
   const RING: RunFrame[] = [
-    frame(1, 1000, { ok: false, lock: "idle", confidence: null, distance: null }),
-    frame(2, 1110, { lock: "acquiring" }),
+    frame(1, 1000, { ok: false, confidence: null, distance: null }),
+    frame(2, 1110),
     frame(3, 1220),
-    frame(4, 1330, { detail: true }),
-    frame(5, 1440, { decided: "storm-of-saruman-ltr-72", confidence: 1, distance: 30 }),
+    frame(4, 1330),
+    frame(5, 1440, { decided: "storm-of-saruman-ltr-72", confidence: 1, distance: 11 }),
   ];
 
   /** Four frames of the scanner weighing, and then the one `verdict` was the answer to. */
@@ -260,18 +210,18 @@ describe("scanRun", () => {
       frame(2, 1110),
       frame(3, 1220),
       frame(4, 1330),
-      runFrameOf(new Uint8Array([5]), 1440, verdict, false),
+      runFrameOf(new Uint8Array([5]), 1440, verdict),
     ];
   }
 
   it("carries every frame as base64 with no scheme in front of it, oldest first", () => {
-    const run = scanRun(RING, 1450, null, "fast", null, NO_FILTERS);
+    const run = scanRun(RING, 1450, null, NO_FILTERS);
     expect(run.frames.map((one) => one.jpeg)).toEqual(["AQ==", "Ag==", "Aw==", "BA==", "BQ=="]);
     for (const one of run.frames) expect(one.jpeg.startsWith("data:")).toBe(false);
   });
 
   it("counts each frame back from the press, in whole milliseconds", () => {
-    const run = scanRun(RING, 1450.4, null, "fast", null, NO_FILTERS);
+    const run = scanRun(RING, 1450.4, null, NO_FILTERS);
     expect(run.frames.map((one) => one.ms)).toEqual([-450, -340, -230, -120, -10]);
     for (const one of run.frames) expect(Number.isInteger(one.ms)).toBe(true);
   });
@@ -282,47 +232,38 @@ describe("scanRun", () => {
    * not the negative one a rounding leaves, which a strict reader of the wire tells apart.
    */
   it("never puts a frame after the press, and says the press itself as a plain zero", () => {
-    const late = scanRun([frame(1, 1000), frame(2, 1100.2)], 1100, null, "fast", null, NO_FILTERS);
+    const late = scanRun([frame(1, 1000), frame(2, 1100.2)], 1100, null, NO_FILTERS);
     expect(late.frames.map((one) => one.ms)).toEqual([-100, 0]);
     expect(Object.is(late.frames[1].ms, 0)).toBe(true);
-    const ahead = scanRun([frame(1, 2000)], 1100, null, "fast", null, NO_FILTERS);
+    const ahead = scanRun([frame(1, 2000)], 1100, null, NO_FILTERS);
     expect(Object.is(ahead.frames[0].ms, 0)).toBe(true);
   });
 
-  /**
-   * The mode is the run's and is said once (`said.mode`); a frame that carried one of its own
-   * would be a field the engine's struct does not have.
-   */
-  it("sends what the scanner answered for each frame, and neither its bytes, its clock nor its mode", () => {
-    const run = scanRun(RING, 1450, null, "fast", null, NO_FILTERS);
-    for (const one of RING) expect(one).toHaveProperty("mode", "fast");
-    for (const one of run.frames) expect(one).not.toHaveProperty("mode");
+  it("sends what the scanner answered for each frame, and neither its bytes nor its clock", () => {
+    const run = scanRun(RING, 1450, null, NO_FILTERS);
     expect(run.frames[0]).toEqual({
       jpeg: "AQ==",
       ms: -450,
       ok: false,
-      lock: "idle",
       confidence: null,
       distance: null,
       decided: null,
-      detail: false,
     });
-    expect(run.frames[3].detail).toBe(true);
     expect(run.frames[4]).toMatchObject({
       decided: "storm-of-saruman-ltr-72",
       confidence: 1,
-      distance: 30,
+      distance: 11,
     });
     for (const one of run.frames) {
       expect(Object.keys(one).sort()).toEqual(
-        ["confidence", "decided", "detail", "distance", "jpeg", "lock", "ms", "ok"].sort(),
+        ["confidence", "decided", "distance", "jpeg", "ms", "ok"].sort(),
       );
     }
   });
 
   it("leaves the ring it was handed as it was", () => {
     const before = RING.map((one) => ({ ...one }));
-    scanRun(RING, 1450, VERDICTS.decided, "fast", STATUS.present, NO_FILTERS);
+    scanRun(RING, 1450, VERDICTS.decided, NO_FILTERS);
     expect(RING).toEqual(before);
   });
 
@@ -330,27 +271,24 @@ describe("scanRun", () => {
    * **What the scanner had said is the last frame's, whatever verdict the press was holding.** A
    * press reads the ring as it stands and the verdict as the last render had it, and the ring is
    * a frame ahead whenever an answer has landed since. Here the render still holds the frame
-   * before the decision, in another mode even: nothing of it is sent.
+   * before the decision: nothing of it is sent.
    */
-  it("takes the reported printing, the two figures and the mode off the run's last frame, not off the verdict", () => {
+  it("takes the reported printing and the two figures off the run's last frame, not off the verdict", () => {
     expect(RING[4]).toMatchObject({
       decided: "storm-of-saruman-ltr-72",
       confidence: 1,
-      distance: 30,
-      mode: "fast",
+      distance: 11,
     });
-    // The verdict in hand: still weighing, at other figures, and judged in Exact.
-    const stale: ScannerVerdict = { ...VERDICTS.voting, mode: "exact" };
+    // The verdict in hand: still weighing, at other figures.
+    const stale: ScannerVerdict = VERDICTS.voting;
     expect(stale.decision).toBeNull();
     expect(stale.tracked?.confidence).toBe(0.625);
 
-    const run = scanRun(RING, 1450, stale, "exact", STATUS.present, NO_FILTERS);
+    const run = scanRun(RING, 1450, stale, NO_FILTERS);
     expect(run.said).toEqual({
       reported: "storm-of-saruman-ltr-72",
-      mode: "fast",
       confidence: 1,
-      distance: 30,
-      bundle: 117630,
+      distance: 11,
       filters: NO_FILTERS,
     });
     // …and so the press-level figures are the last frame's own, to the field.
@@ -364,51 +302,35 @@ describe("scanRun", () => {
 
   /** The other way about: the render is ahead of nothing, and has simply decided since. */
   it("reports nothing for a run whose last frame had decided nothing, though the verdict has", () => {
-    const run = scanRun(
-      endingOn(VERDICTS.voting),
-      1450,
-      VERDICTS.decided,
-      "fast",
-      null,
-      NO_FILTERS,
-    );
-    expect(run.said).toMatchObject({ reported: null, confidence: 0.625, distance: 74 });
+    const run = scanRun(endingOn(VERDICTS.voting), 1450, VERDICTS.decided, NO_FILTERS);
+    expect(run.said).toMatchObject({ reported: null, confidence: 0.625, distance: 23 });
   });
 
   it("says nothing for the scanner when the last frame had nothing in it", () => {
-    const run = scanRun(endingOn(VERDICTS.noCard), 1450, null, "fast", null, NO_FILTERS);
+    const run = scanRun(endingOn(VERDICTS.noCard), 1450, null, NO_FILTERS);
     expect(run.said).toEqual({
       reported: null,
-      mode: "fast",
-      confidence: null,
+      confidence: 0,
       distance: null,
-      bundle: null,
       filters: NO_FILTERS,
     });
     expect(run.leadName).toBe("");
   });
 
-  it("says nothing was named for a card it had not found, and still counts the cards it could have named", () => {
-    const run = scanRun(
-      endingOn(VERDICTS.noCard),
-      1450,
-      VERDICTS.noCard,
-      "fast",
-      STATUS.present,
-      NO_FILTERS,
-    );
-    expect(run.said).toMatchObject({
+  it("says nothing for the scanner when the last frame carried no agreement at all", () => {
+    const run = scanRun(endingOn(VERDICTS.panicked), 1450, VERDICTS.panicked, NO_FILTERS);
+    expect(run.said).toEqual({
       reported: null,
       confidence: null,
       distance: null,
-      bundle: STATUS.present.labels,
+      filters: NO_FILTERS,
     });
     expect(run.leadName).toBe("");
   });
 
   /**
-   * **A leader is not a report.** A standing's `id` is what the tracker's evidence pooled on —
-   * the *oracle* id (`track.rs`' `Standing`) — so it is an id of another kind than the printing a
+   * **A leader is not a report.** A standing's `id` is what the agreement's evidence pooled on —
+   * so it is an id of another kind than the printing a
    * reader chooses, and beside one it could never read as "the scanner got it right". While the
    * scanner is still weighing, it has reported nothing; how far it had got is in the two figures.
    * (The fixture's standing wears a printing-shaped id, which is how this was once missed.)
@@ -416,20 +338,11 @@ describe("scanRun", () => {
   it("reports nothing while the scanner is still weighing, and opens the search on the leader's name", () => {
     expect(VERDICTS.voting.decision).toBeNull();
     expect(VERDICTS.voting.tracked?.standings[0]?.id).toBeTruthy();
-    const run = scanRun(
-      endingOn(VERDICTS.voting),
-      1450,
-      VERDICTS.voting,
-      "fast",
-      STATUS.present,
-      NO_FILTERS,
-    );
+    const run = scanRun(endingOn(VERDICTS.voting), 1450, VERDICTS.voting, NO_FILTERS);
     expect(run.said).toEqual({
       reported: null,
-      mode: "fast",
       confidence: 0.625,
-      distance: 74,
-      bundle: 117630,
+      distance: 23,
       filters: NO_FILTERS,
     });
     // The name is a word for the search box, never a label — and for that a leader will do.
@@ -437,40 +350,30 @@ describe("scanRun", () => {
   });
 
   it("reports the decided printing once there is one", () => {
-    const run = scanRun(
-      endingOn(VERDICTS.decided),
-      1450,
-      VERDICTS.decided,
-      "fast",
-      STATUS.present,
-      NO_FILTERS,
-    );
+    const run = scanRun(endingOn(VERDICTS.decided), 1450, VERDICTS.decided, NO_FILTERS);
     expect(run.said).toEqual({
       reported: "storm-of-saruman-ltr-72",
-      mode: "fast",
       confidence: 1,
-      distance: 30,
-      bundle: 117630,
+      distance: 11,
       filters: NO_FILTERS,
     });
     expect(run.leadName).toBe("Storm of Saruman");
   });
 
   /**
-   * In Exact the resolve can pin another printing than the one the hash tracker leads with, and a
-   * Fast title read can name another card. The decision is what the strip showed the reader and
-   * what the tray filed, so it is what was "reported".
+   * The decision can name another printing than the one the agreement leads with. The decision is
+   * what the strip showed the reader and what the tray filed, so it is what was "reported".
    */
   it("takes the decision over the leader when the two differ", () => {
-    const decision = VERDICTS.exactResolved.decision;
+    const decision = VERDICTS.resolved.decision;
     if (decision === null) throw new Error("the fixture carries a decision");
     const verdict: ScannerVerdict = { ...VERDICTS.voting, decision };
-    const run = scanRun(endingOn(verdict), 1450, verdict, "exact", STATUS.present, NO_FILTERS);
+    const run = scanRun(endingOn(verdict), 1450, verdict, NO_FILTERS);
     expect(run.said.reported).toBe(decision.printing);
     expect(run.leadName).toBe("Black Lotus");
-    // The figures stay the tracker's and the match's: they are what was measured.
+    // The figures stay the agreement's and the match's: they are what was measured.
     expect(run.said.confidence).toBe(0.625);
-    expect(run.said.distance).toBe(74);
+    expect(run.said.distance).toBe(23);
   });
 
   it("reports a decision that has no label by its id, and names nothing for the search", () => {
@@ -481,34 +384,20 @@ describe("scanRun", () => {
       decision: { ...decision, label: null },
       tracked: null,
     };
-    const run = scanRun(endingOn(verdict), 1450, verdict, "fast", null, NO_FILTERS);
+    const run = scanRun(endingOn(verdict), 1450, verdict, NO_FILTERS);
     expect(run.said.reported).toBe("storm-of-saruman-ltr-72");
     expect(run.said.confidence).toBeNull();
     expect(run.leadName).toBe("");
   });
 
-  /**
-   * **The mode a run is sent under is the one its frames were judged in.** A reader who has just
-   * switched to Exact holds a page that says Exact and a ring of frames the session judged in
-   * Fast — the switch reaches the session with the next frame, and that frame starts the ring
-   * over. Until it lands, what there is to send is a Fast run, and it says so.
-   */
-  it("takes the mode from the run's last frame, not from the page", () => {
-    expect(scanRun(RING, 1450, VERDICTS.voting, "exact", null, NO_FILTERS).said.mode).toBe("fast");
-    const exact = RING.map((one) => ({ ...one, mode: "exact" as const }));
-    expect(scanRun(exact, 1450, VERDICTS.voting, "fast", null, NO_FILTERS).said.mode).toBe("exact");
-  });
-
   /** No press sends one — a run has five frames at least — but the function is total. */
-  it("falls back to the page's mode, and says nothing else, for a run with no frame in it", () => {
-    const run = scanRun([], 1450, VERDICTS.decided, "exact", STATUS.present, NO_FILTERS);
+  it("says nothing for the scanner for a run with no frame in it", () => {
+    const run = scanRun([], 1450, VERDICTS.decided, NO_FILTERS);
     expect(run.frames).toEqual([]);
     expect(run.said).toEqual({
       reported: null,
-      mode: "exact",
       confidence: null,
       distance: null,
-      bundle: 117630,
       filters: NO_FILTERS,
     });
   });
@@ -520,7 +409,7 @@ describe("scanRun", () => {
       released_from: "2023-01-01",
       released_to: null,
     };
-    expect(scanRun(RING, 1450, null, "fast", null, narrowed).said.filters).toEqual(narrowed);
+    expect(scanRun(RING, 1450, null, narrowed).said.filters).toEqual(narrowed);
   });
 });
 
@@ -528,11 +417,9 @@ describe("submissionOf", () => {
   it("puts the reader's two answers beside what the scanner said and the whole run", () => {
     const narrowed: ScanFilters = { sets: ["ltr"], released_from: null, released_to: null };
     const run = scanRun(
-      [frame(1, 1000), runFrameOf(new Uint8Array([2]), 1110, VERDICTS.decided, false)],
+      [frame(1, 1000), runFrameOf(new Uint8Array([2]), 1110, VERDICTS.decided)],
       1120,
       VERDICTS.decided,
-      "fast",
-      STATUS.present,
       narrowed,
     );
     const sent = submissionOf(run, {
@@ -543,21 +430,19 @@ describe("submissionOf", () => {
       cardId: "b14fae63-2e82-49c1-8e62-d84a65f27479",
       finish: "etched",
       reported: "storm-of-saruman-ltr-72",
-      mode: "fast",
       confidence: 1,
-      distance: 30,
-      bundle: 117630,
+      distance: 11,
       filters: narrowed,
       run: run.frames,
     });
-    // Exactly the wire's nine fields, and the frames are the run's own, in its order.
-    expect(Object.keys(sent)).toHaveLength(9);
+    // Exactly the wire's seven fields, and the frames are the run's own, in its order.
+    expect(Object.keys(sent)).toHaveLength(7);
     expect(sent.run.map((one) => one.ms)).toEqual([-120, -10]);
   });
 
   it("sends no card as a null id and a null finish, and everything else as it is", () => {
     const ring = [1, 2, 3, 4, 5].map((n) => frame(n, 1000 + n * 100));
-    const run = scanRun(ring, 1550, null, "fast", null, NO_FILTERS);
+    const run = scanRun(ring, 1550, null, NO_FILTERS);
     const sent = submissionOf(run, null);
     expect(sent.cardId).toBeNull();
     expect(sent.finish).toBeNull();
@@ -566,6 +451,6 @@ describe("submissionOf", () => {
       cardId: null,
       finish: null,
     });
-    expect(Object.keys(sent)).toHaveLength(9);
+    expect(Object.keys(sent)).toHaveLength(7);
   });
 });

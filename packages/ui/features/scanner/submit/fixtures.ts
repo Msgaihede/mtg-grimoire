@@ -1,4 +1,4 @@
-import { STATUS, VERDICTS } from "../fixtures";
+import { VERDICTS } from "../fixtures";
 import type { ScanFilters, ScannerSubmissionFrame } from "../types";
 import type { ScanRun } from "./run";
 
@@ -21,27 +21,27 @@ export const RUN_PICTURES = [
 /** No narrowing — the reader's filters as a fresh install has them. */
 const ANY_PRINTING: ScanFilters = { sets: [], released_from: null, released_to: null };
 
-/** The printing Exact led with in the first run below — one of three it could not split. */
-const LED_WITH = VERDICTS.exactAmbiguous.decision?.printing ?? null;
+/** The printing the scanner led with in the first run below — one of three one picture stands for. */
+const LED_WITH = VERDICTS.ambiguous.decision?.printing ?? null;
 
 /**
  * What the scanner answered for each of the six pictures as the card came in: nothing found, a
- * card it was still locking on to, one it was weighing, the frame it read with a detail image
- * beside it, and two it had decided on. About nine a second, counted back from the press.
+ * card it had only just seen, two it was weighing, and two it had decided on. About nine a second,
+ * counted back from the press.
  */
 const ANSWERS: Omit<ScannerSubmissionFrame, "jpeg">[] = [
-  { ms: -563, ok: false, lock: "idle", confidence: null, distance: null, decided: null, detail: false },
-  { ms: -452, ok: true, lock: "acquiring", confidence: 0, distance: 58, decided: null, detail: false },
-  { ms: -340, ok: true, lock: "locked", confidence: 0.41, distance: 44, decided: null, detail: false },
-  { ms: -229, ok: true, lock: "locked", confidence: 0.78, distance: 38, decided: null, detail: true },
-  { ms: -117, ok: true, lock: "locked", confidence: 1, distance: 36, decided: LED_WITH, detail: false },
-  { ms: -6, ok: true, lock: "locked", confidence: 1, distance: 36, decided: LED_WITH, detail: false },
+  { ms: -563, ok: false, confidence: null, distance: null, decided: null },
+  { ms: -452, ok: true, confidence: 0, distance: 58, decided: null },
+  { ms: -340, ok: true, confidence: 0.41, distance: 44, decided: null },
+  { ms: -229, ok: true, confidence: 0.78, distance: 38, decided: null },
+  { ms: -117, ok: true, confidence: 1, distance: 36, decided: LED_WITH },
+  { ms: -6, ok: true, confidence: 1, distance: 36, decided: LED_WITH },
 ];
 
 /**
  * What a press on *Send scan…* froze, two ways.
  *
- * - `wrongPrinting` — Exact could not split three reprints of Lightning Bolt and led with one.
+ * - `wrongPrinting` — the scanner could not split three reprints of Lightning Bolt and led with one.
  *   The state the press exists for, and the one whose search finds printings in the workbench's
  *   corpus: its four Bolts are sold one, two, one and three ways, which is every shape the
  *   finish group takes.
@@ -53,10 +53,8 @@ export const RUNS = {
     frames: RUN_PICTURES.map((jpeg, index) => ({ jpeg, ...ANSWERS[index] })),
     said: {
       reported: LED_WITH,
-      mode: "exact",
       confidence: 1,
       distance: 36,
-      bundle: STATUS.present.labels,
       filters: ANY_PRINTING,
     },
     leadName: "Lightning Bolt",
@@ -66,18 +64,14 @@ export const RUNS = {
       jpeg,
       ms: ANSWERS[index].ms,
       ok: false,
-      lock: "idle" as const,
       confidence: null,
       distance: null,
       decided: null,
-      detail: false,
     })),
     said: {
       reported: null,
-      mode: "fast",
       confidence: null,
       distance: null,
-      bundle: null,
       filters: ANY_PRINTING,
     },
     leadName: "",

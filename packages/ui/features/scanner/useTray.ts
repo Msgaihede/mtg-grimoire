@@ -44,7 +44,13 @@ const queues = new WeakMap<QueryClient, WriteQueue>();
 function queueFor(qc: QueryClient): WriteQueue {
   let queue = queues.get(qc);
   if (queue === undefined) {
-    queue = { tail: Promise.resolve(), pending: 0, writeWaiting: false, retry: null, refused: false };
+    queue = {
+      tail: Promise.resolve(),
+      pending: 0,
+      writeWaiting: false,
+      retry: null,
+      refused: false,
+    };
     queues.set(qc, queue);
   }
   return queue;
@@ -71,7 +77,7 @@ registerUnsavedCheck(TRAY_KEY, hasUnsavedTray);
 /**
  * How long the tray has to stay unchanged before it is written.
  *
- * The tray is stored whole, and a stepper held down or a pile swept in Fast mode is several
+ * The tray is stored whole, and a stepper held down or a pile swept quickly is several
  * changes a second — so the store gets the tray once the reader pauses, and gets the last one.
  * Short enough that a crash loses at most the card that landed in the last moment.
  */

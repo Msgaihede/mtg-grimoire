@@ -13,7 +13,13 @@ import { isUnsupported, scanAnswerOf, type FromScanner, type ToScanner } from ".
 /** The module's seven calls — its exports, less the initialiser. */
 export type ScanGlue = Pick<
   typeof ScanModule,
-  "load" | "load_neural" | "load_neural_evidence" | "frame" | "reset" | "set_filters" | "memory_bytes"
+  | "load"
+  | "load_neural"
+  | "load_neural_evidence"
+  | "frame"
+  | "reset"
+  | "set_filters"
+  | "memory_bytes"
 >;
 
 /** A refusal or nothing — the two Neural hand-overs' answer — in the envelope every other has. */
@@ -63,17 +69,24 @@ export function createScanSession(
         // Ahead of the load, so the module owes them to it. What became of them is the load's
         // to say (`unapplied_filters`), so this answer is not read.
         if (message.filters !== null) glue.set_filters(message.filters);
-        return glue.load(message.bundle, message.labels, message.detection, message.recognition);
+        return glue.load(message.labels);
       case "neural":
         // The two exports with no value to carry: a refusal, or nothing. Put in the envelope
         // here, so the page hears them as it hears every other answer.
-        return enveloped(glue.load_neural(message.detector, message.embedder, message.gallery, message.meta));
+        return enveloped(
+          glue.load_neural(message.detector, message.embedder, message.gallery, message.meta),
+        );
       case "neural-evidence":
         return enveloped(
-          glue.load_neural_evidence(message.symbolNet, message.bandNet, message.symbols, message.bands),
+          glue.load_neural_evidence(
+            message.symbolNet,
+            message.bandNet,
+            message.symbols,
+            message.bands,
+          ),
         );
       case "frame":
-        return glue.frame(message.jpeg, message.detail, message.options);
+        return glue.frame(message.jpeg);
       case "reset":
         return glue.reset();
       case "filters":
@@ -88,7 +101,12 @@ export function createScanSession(
       const { id } = message;
       const module = await loaded();
       if (!("glue" in module)) {
-        return post({ kind: "unloaded", id, unsupported: module.unsupported, message: module.message });
+        return post({
+          kind: "unloaded",
+          id,
+          unsupported: module.unsupported,
+          message: module.message,
+        });
       }
       if (trapped) return post({ kind: "trapped", id, message: AFTER_A_TRAP });
       let text: string;

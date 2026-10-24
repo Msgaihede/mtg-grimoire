@@ -1,12 +1,11 @@
 // The pure bits of `scripts/scanner-replay.ts`: its arguments, the name a baseline may have, and
-// which bundle to use. Nothing here touches a file, so the wrapper stays thin and this is tested.
+// what the results are stamped with. Nothing here touches a file, so the wrapper stays thin and
+// this is tested.
 
 export type Args = {
   baseline: string | null;
   saveBaseline: string | null;
   only: string[];
-  bundle: string | null;
-  models: string | null;
   corpus: string | null;
   jobs: string | null;
   neuralEvidence: string | null;
@@ -14,7 +13,7 @@ export type Args = {
   noBuild: boolean;
 };
 
-const WITH_VALUE = ["--baseline", "--save-baseline", "--only", "--bundle", "--models", "--corpus", "--jobs", "--neural-evidence", "--neural-evidence-meta"] as const;
+const WITH_VALUE = ["--baseline", "--save-baseline", "--only", "--corpus", "--jobs", "--neural-evidence", "--neural-evidence-meta"] as const;
 
 /** A baseline is a file name in the corpus folder: no separators, no leading dot. */
 const BASELINE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
@@ -35,8 +34,6 @@ export function parseArgs(argv: string[]): Args {
     baseline: null,
     saveBaseline: null,
     only: [],
-    bundle: null,
-    models: null,
     corpus: null,
     jobs: null,
     neuralEvidence: null,
@@ -62,12 +59,6 @@ export function parseArgs(argv: string[]): Args {
       case "--only":
         args.only.push(value);
         break;
-      case "--bundle":
-        args.bundle = value;
-        break;
-      case "--models":
-        args.models = value;
-        break;
       case "--corpus":
         args.corpus = value;
         break;
@@ -86,16 +77,6 @@ export function parseArgs(argv: string[]): Args {
     }
   }
   return args;
-}
-
-/** The newest `card-hashes-v<n>.bin` among a folder's file names, or null when it holds none. */
-export function newestBundle(names: string[]): string | null {
-  const versioned = names.flatMap((name) => {
-    const m = /^card-hashes-v(\d+)\.bin$/.exec(name);
-    return m ? [{ name, version: Number(m[1]) }] : [];
-  });
-  versioned.sort((a, b) => b.version - a.version);
-  return versioned[0]?.name ?? null;
 }
 
 /** The commit a results file is stamped with: `+dirty` for a changed scanner crate, `+nobuild` when the binary was not rebuilt, so it may not be this commit's. */

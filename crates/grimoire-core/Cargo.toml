@@ -48,22 +48,15 @@ testing = []
 [dependencies]
 # The card scanner, for `scanner`'s session glue (the extraction's seventh step). Declared as
 # `src-tauri` declares it — a plain path dependency on a standalone package the workspace
-# excludes on purpose (the root `Cargo.toml` says why), with the app's two features: `corpus` for
-# the labels out of `corpus.db`, `ocr` for the two readers. **It was measured on wasm32 before it
-# came here** — the core with it checks and builds clean, and libsqlite3-sys is not in that tree
-# at all, so the crate's `bundled` asks nothing of a browser build; Android is CI's `core` job to
-# compile, as for everything here. **It runs in a browser since the light app's step 7.1
-# (2026-10-07)**: the crate's threads, its clock and its panic guard are behind one module,
-# `card_scanner::host`, which runs each of them where it stands on a host with one thread —
-# `ScannerState::new` hands it this crate's clock — and a module of the crate alone put frames
-# through a session in a Worker, readers and all (`docs/reference/card-scanner.md` §11).
-# **Nothing in this crate's command table calls its session there yet**, a panic in one is a
-# trap that ends the instance, and a read costs fifteen to thirty times a desktop's as this
-# module is built today: that section has all three. `neural` is the Neural mode's recogniser
-# (`crates/card-neural`), loaded from the files a host carries (`scanner::Embedded::neural`);
-# like the readers it is reached only through the session, which `not_in_a_browser_yet` keeps
-# out of the web module, so the engine's WASM does not grow by it.
-card-scanner = { path = "../card-scanner", features = ["corpus", "ocr", "neural"] }
+# excludes on purpose (the root `Cargo.toml` says why) — with `corpus`, for the labels out of
+# `corpus.db`. The recogniser (`crates/card-neural`) comes with it, loaded from the files a host
+# carries (`scanner::Embedded::neural`). **It compiles for every target and runs on none but a
+# native host here**: its clock and its panic guard are behind one module, `card_scanner::host`
+# — `ScannerState::new` hands it this crate's clock — and the session is reached only through
+# `scanner::not_in_a_browser_yet`, a constant refusal on `wasm32`, so fat LTO leaves the session
+# and its network runtime out of the engine's module. A browser's session is a Worker on a
+# module of its own (`crates/grimoire-scan`).
+card-scanner = { path = "../card-scanner", features = ["corpus"] }
 # What makes two label names the same name. `deck_labels` is one global list since schema v21
 # and its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode
 # lowercase, then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining
@@ -221,6 +214,6 @@ httpmock = "0.8"
 # `platform::socket`'s and `sync_engine::live`'s tests stand in for the relay with.
 tokio = { version = "1", features = ["macros", "net", "rt", "sync", "test-util"] }
 # The Neural scanner's files as the desktop and Android carry them (`bundled`), for `scanner`'s
-# tests of a load with them built in. A test dependency only: this crate carries no file of its
-# own — a host says what its binary carries (`ScannerState::carry`).
+# and `commands`' tests of a session with them built in. A test dependency only: this crate
+# carries no file of its own — a host says what its binary carries (`ScannerState::carry`).
 card-neural = { path = "../card-neural", features = ["bundled"] }

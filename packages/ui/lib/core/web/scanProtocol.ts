@@ -15,11 +15,8 @@
 
 /** What the module's `load` says it found — `Loaded` in `crates/grimoire-scan/src/scanner.rs`. */
 export interface LoadFacts {
-  bundle: { loaded: boolean; entries: number; error: string | null };
   /** Labels attached. Zero is a session that answers ids with no names. */
   labels: number;
-  /** The two readers, which load as a pair or not at all. */
-  models: { loaded: boolean; error: string | null };
   /** Filters this session would not take, in the crate's words; `null` when none is owed. */
   unapplied_filters: string | null;
 }
@@ -27,24 +24,16 @@ export interface LoadFacts {
 /** Page → scanner Worker. Every message carries the id its answer comes back under. */
 export type ToScanner =
   /**
-   * Build the session from bytes. Each of the four is `null` where the page has none.
+   * Build the session, with the engine's labels or `null` where it gave none.
    * **`filters` is what the session before this one was searching under** — or what the page
    * set before there was a session — as `ScanFilters` JSON: handed to the module ahead of the
    * load, which owes them to it and says in `unapplied_filters` if they were not taken.
    */
-  | {
-      kind: "load";
-      id: number;
-      filters: string | null;
-      bundle: Uint8Array | null;
-      labels: Uint8Array | null;
-      detection: Uint8Array | null;
-      recognition: Uint8Array | null;
-    }
+  | { kind: "load"; id: number; filters: string | null; labels: Uint8Array | null }
   /**
-   * The Neural mode's four files, into the session the `load` built — posted once per Worker,
-   * before its first Neural frame (`scanner.ts`). Answered `ok` with `null`, or `err` with the
-   * crate's sentence for files that would not load.
+   * The recogniser's four files, into the session the `load` built — posted once per Worker,
+   * before its first frame (`scanner.ts`). Answered `ok` with `null`, or `err` with the crate's
+   * sentence for files that would not load.
    */
   | {
       kind: "neural";
@@ -55,7 +44,7 @@ export type ToScanner =
       meta: Uint8Array;
     }
   /**
-   * The Neural mode's printing evidence — the set symbol and collector band networks and their
+   * The recogniser's printing evidence — the set symbol and collector band networks and their
    * galleries — into the session whose recogniser has taken the four: posted once per Worker,
    * in the background, after the `neural` hand-over has answered `ok` (`scanner.ts`). Answered
    * as that one is.
@@ -68,8 +57,8 @@ export type ToScanner =
       symbols: Uint8Array;
       bands: Uint8Array;
     }
-  /** One frame: a JPEG, the same frame at the camera's resolution or `null`, the options' JSON. */
-  | { kind: "frame"; id: number; jpeg: Uint8Array; detail: Uint8Array | null; options: string }
+  /** One frame: a JPEG. */
+  | { kind: "frame"; id: number; jpeg: Uint8Array }
   | { kind: "reset"; id: number }
   | { kind: "filters"; id: number; filters: string }
   /** The module's linear memory in bytes — a high-water mark, which only ending the Worker lowers. */
@@ -113,30 +102,25 @@ function buffersOf(views: readonly (Uint8Array | null)[]): ArrayBuffer[] {
     if (!(buffer instanceof ArrayBuffer)) continue;
     found.set(buffer, (found.get(buffer) ?? 0) + view.byteLength);
   }
-  // Covered end to end by the views named: the one whole view, or a frame and its detail.
+  // Covered end to end by the views named.
   return [...found].filter(([buffer, covered]) => covered === buffer.byteLength).map(([b]) => b);
 }
 
-/** The `load` a session is built by. **Every array is handed over**: eighteen megabytes of files
- *  and six of labels are in one place at a time, and the page keeps none of them. */
+/** The `load` a session is built by. **The labels are handed over**: six megabytes with a full
+ *  corpus, which the page keeps no copy of. */
 export function loadMessage(
   id: number,
   filters: string | null,
-  files: {
-    bundle: Uint8Array | null;
-    labels: Uint8Array | null;
-    detection: Uint8Array | null;
-    recognition: Uint8Array | null;
-  },
+  labels: Uint8Array | null,
 ): ScanOutgoing {
   return {
-    message: { kind: "load", id, filters, ...files },
-    transfer: buffersOf([files.bundle, files.labels, files.detection, files.recognition]),
+    message: { kind: "load", id, filters, labels },
+    transfer: buffersOf([labels]),
   };
 }
 
 /**
- * The message that hands the Worker the Neural mode's four files. **Every array is handed over**:
+ * The message that hands the Worker the recogniser's four files. **Every array is handed over**:
  * twenty-seven megabytes, which the page fetched for this post and keeps none of.
  */
 export function neuralMessage(
@@ -150,7 +134,7 @@ export function neuralMessage(
 }
 
 /**
- * The message that hands the Worker the Neural mode's printing evidence. **Every array is handed
+ * The message that hands the Worker the recogniser's printing evidence. **Every array is handed
  * over**, as {@link neuralMessage}'s are: the page fetched them for this post and keeps none.
  */
 export function neuralEvidenceMessage(
@@ -164,78 +148,17 @@ export function neuralEvidenceMessage(
 }
 
 /**
- * Whether a frame's options ask for the Neural mode — `FrameOptions::mode`, `"neural"` as serde
- * writes `ScanMode::Neural`. Options that are not JSON, or not an object, are the defaults to the
- * module, and the default mode is Fast: no.
+ * The `frame` a `scanner_frame` call becomes. **The body is the JPEG, and nothing rides beside
+ * it** — the desktop's rule (`scanner::scanner_frame`).
+ *
+ * **Nothing is copied.** The body's buffer is what is handed over, so a frame's bytes cross once.
+ * Only a body that is itself a view of part of something is copied first — `protocol.ts`'s rule
+ * for the engine's calls.
  */
-export function isNeuralFrame(options: string): boolean {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(options);
-  } catch {
-    return false;
-  }
-  return (
-    typeof parsed === "object" &&
-    parsed !== null &&
-    (parsed as { mode?: unknown }).mode === "neural"
-  );
-}
-
-/** The header a frame's options ride in — `scanner::OPTIONS_HEADER`. */
-export const OPTIONS_HEADER = "x-scanner-options";
-/** The header that says how many of the body's bytes are the frame — `scanner::DETAIL_HEADER`. */
-export const DETAIL_HEADER = "x-scanner-detail";
-
-/**
- * The `frame` a `scanner_frame` call becomes, or the sentence it is refused with.
- *
- * **The body is the JPEG, or the JPEG with the detail image behind it**, split at
- * {@link DETAIL_HEADER}'s number — the desktop's rule (`scanner::frame_from`), and its
- * sentences word for word: a length that is no number, zero, or not short of the body is a
- * refusal, because a frame judged with the wrong half of its bytes is the quieter failure.
- *
- * **Nothing is copied.** The two halves are views of the one body and the body's buffer is
- * what is handed over, so a read frame's megabyte crosses once. Only a body that is itself a
- * view of part of something is copied first — `protocol.ts`'s rule for the engine's calls.
- *
- * `options` is the header's text as it came. The module reads it, and an unreadable one is the
- * defaults there as it is on the desktop.
- */
-export function frameMessage(
-  id: number,
-  body: Uint8Array,
-  headers: Record<string, string> | undefined,
-): ScanOutgoing | string {
+export function frameMessage(id: number, body: Uint8Array): ScanOutgoing {
   const whole = body.buffer instanceof ArrayBuffer && body.byteLength === body.buffer.byteLength;
-  const bytes = whole ? body : body.slice();
-  const options = headers?.[OPTIONS_HEADER] ?? "";
-  const length = headers?.[DETAIL_HEADER];
-  if (length === undefined) {
-    return {
-      message: { kind: "frame", id, jpeg: bytes, detail: null, options },
-      transfer: buffersOf([bytes]),
-    };
-  }
-  // As Rust's `usize` parse reads one (`scanner::split_detail`): digits, with a `+` allowed
-  // in front and nothing else — no sign, no space, no fraction.
-  const n = /^\+?\d+$/.test(length) ? Number(length) : NaN;
-  if (!Number.isSafeInteger(n)) {
-    return `the frame's detail length is not a number: ${JSON.stringify(length)}`;
-  }
-  if (n === 0) return "the frame's detail length is zero, so there is no frame before it";
-  if (n >= bytes.byteLength) {
-    return (
-      `the frame's detail length is ${n} bytes but the body is ${bytes.byteLength} — there is ` +
-      "no detail image behind the frame"
-    );
-  }
-  const jpeg = bytes.subarray(0, n);
-  const detail = bytes.subarray(n);
-  return {
-    message: { kind: "frame", id, jpeg, detail, options },
-    transfer: buffersOf([jpeg, detail]),
-  };
+  const jpeg = whole ? body : body.slice();
+  return { message: { kind: "frame", id, jpeg }, transfer: buffersOf([jpeg]) };
 }
 
 /** What an unreadable answer is called, with the text that was not one. */
@@ -264,21 +187,10 @@ export function scanAnswerOf(id: number, text: string): FromScanner {
 /** A `load`'s answer, read: the facts, or `null` for anything that is not them. */
 export function loadFactsOf(value: unknown): LoadFacts | null {
   if (typeof value !== "object" || value === null) return null;
-  const { bundle, labels, models, unapplied_filters } = value as Record<string, unknown>;
-  const fact = (asset: unknown): { loaded: boolean; error: string | null } | null => {
-    if (typeof asset !== "object" || asset === null) return null;
-    const { loaded, error } = asset as Record<string, unknown>;
-    if (typeof loaded !== "boolean") return null;
-    return { loaded, error: typeof error === "string" ? error : null };
-  };
-  const bundleFact = fact(bundle);
-  const modelsFact = fact(models);
-  if (bundleFact === null || modelsFact === null || typeof labels !== "number") return null;
-  const entries = (bundle as Record<string, unknown>).entries;
+  const { labels, unapplied_filters } = value as Record<string, unknown>;
+  if (typeof labels !== "number") return null;
   return {
-    bundle: { ...bundleFact, entries: typeof entries === "number" ? entries : 0 },
     labels,
-    models: modelsFact,
     unapplied_filters: typeof unapplied_filters === "string" ? unapplied_filters : null,
   };
 }

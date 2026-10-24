@@ -1,18 +1,12 @@
-import {
-  neuralPath,
-  SCANNER_ASSETS_PREFIX,
-  type NeuralEvidenceFile,
-  type NeuralFile,
-} from "./assets";
-import type { NeuralSource } from "./scanNeural";
-import type { Answered, ScanManifest, StoreEnv } from "./scanStore";
+import { neuralPath, type NeuralEvidenceFile, type NeuralFile } from "./assets";
+import type { Answered, NeuralEnv, NeuralSource } from "./scanNeural";
 import type { CacheLike, CachesLike } from "./sw/pictures";
 
 /**
- * **What the scanner's two suites stand a browser in with** (`scanStore.test.ts`,
- * `scanner.test.ts`): a Cache Storage, an origin that serves the three files, and a clock whose
- * timers the test fires. Not a test file — it has no cases — and nothing but those suites
- * imports it.
+ * **What the scanner's suites stand a browser in with** (`scanner.test.ts`,
+ * `sw/scanner.test.ts`): a Cache Storage, an origin that serves the Neural scanner's files, and a
+ * clock whose timers the test fires. Not a test file — it has no cases — and nothing but those
+ * suites imports it.
  */
 
 const ORIGIN = "https://mtg-grimoire.app";
@@ -54,39 +48,6 @@ export class FakeCaches implements CachesLike {
   }
 }
 
-/** SHA-256 of nothing a test needs to be real: a digest that differs when the bytes do. */
-export const digestOf = (bytes: Uint8Array): string => {
-  let sum = 0;
-  for (const byte of bytes) sum = (sum * 31 + byte) >>> 0;
-  return sum.toString(16).padStart(8, "0").repeat(8);
-};
-
-/** The three files as an origin serves them: small, and each unlike the others. */
-export const FILES: Record<string, Uint8Array> = {
-  "card-hashes.bin": Uint8Array.from({ length: 700 }, (_, i) => i % 251),
-  "text-detection.rten": Uint8Array.from({ length: 300 }, (_, i) => (i * 7) % 256),
-  "text-recognition.rten": Uint8Array.from({ length: 500 }, (_, i) => (i * 13) % 256),
-};
-
-export const MANIFEST: ScanManifest = {
-  formatVersion: 3,
-  files: [
-    { key: "bundle", name: "card-hashes.bin", bytes: 700, sha256: digestOf(FILES["card-hashes.bin"]) },
-    {
-      key: "detectionModel",
-      name: "text-detection.rten",
-      bytes: 300,
-      sha256: digestOf(FILES["text-detection.rten"]),
-    },
-    {
-      key: "recognitionModel",
-      name: "text-recognition.rten",
-      bytes: 500,
-      sha256: digestOf(FILES["text-recognition.rten"]),
-    },
-  ],
-};
-
 /** The Neural scanner's four as an origin serves them: small, each unlike the others. */
 export const NEURAL_TEST_FILES: Record<NeuralFile, Uint8Array> = {
   "detector.onnx": Uint8Array.from({ length: 400 }, (_, i) => (i * 3) % 256),
@@ -127,7 +88,9 @@ export function answered(
   return {
     ok: status >= 200 && status < 300,
     status,
-    headers: { get: (name) => (name.toLowerCase() === "content-type" ? (init.type ?? null) : null) },
+    headers: {
+      get: (name) => (name.toLowerCase() === "content-type" ? (init.type ?? null) : null),
+    },
     body: {
       getReader: () => ({
         read: async () => {
@@ -145,32 +108,27 @@ export function answered(
 
 /**
  * A browser the test owns: a Cache Storage, a clock whose timers run when the test says, and an
- * origin answering the manifest, the three files and the Neural scanner's eight — each of which a
- * test can replace. `asked` is every path fetched, and `modes` the cache mode each was asked with.
+ * origin answering the Neural scanner's eight files — each of which a test can replace. `asked` is every path fetched, and `modes` the cache mode each was asked with.
  */
-export function fakeBrowser(over: Partial<Record<string, () => Answered | Promise<Answered>>> = {}) {
+export function fakeBrowser(
+  over: Partial<Record<string, () => Answered | Promise<Answered>>> = {},
+) {
   const caches = new FakeCaches();
   const asked: string[] = [];
   const modes: string[] = [];
   let now = Date.UTC(2026, 9, 7, 12);
   const timers: { at: number; run: () => void }[] = [];
   const served: Record<string, () => Answered | Promise<Answered>> = {
-    [`${SCANNER_ASSETS_PREFIX}manifest.json`]: () =>
-      answered(JSON.stringify(MANIFEST), { type: "application/json" }),
     ...Object.fromEntries(
-      Object.entries(FILES).map(([name, bytes]) => [
-        `${SCANNER_ASSETS_PREFIX}${name}`,
-        () => answered(bytes),
-      ]),
-    ),
-    ...Object.fromEntries(
-      Object.entries({ ...NEURAL_TEST_FILES, ...NEURAL_EVIDENCE_TEST_FILES }).map(([name, bytes]) => [
-        neuralPath(NEURAL_SOURCE.set, name),
-        () => answered(bytes, { type: "application/octet-stream" }),
-      ]),
+      Object.entries({ ...NEURAL_TEST_FILES, ...NEURAL_EVIDENCE_TEST_FILES }).map(
+        ([name, bytes]) => [
+          neuralPath(NEURAL_SOURCE.set, name),
+          () => answered(bytes, { type: "application/octet-stream" }),
+        ],
+      ),
     ),
   };
-  const env: StoreEnv = {
+  const env: NeuralEnv = {
     caches,
     fetch: async (path, init) => {
       asked.push(path);
@@ -178,7 +136,6 @@ export function fakeBrowser(over: Partial<Record<string, () => Answered | Promis
       const answer = over[path] ?? served[path];
       return answer ? answer() : answered("Not found", { status: 404, type: "text/plain" });
     },
-    digest: async (bytes) => digestOf(bytes),
     after: (ms, run) => void timers.push({ at: now + ms, run }),
     now: () => now,
   };

@@ -7,36 +7,18 @@ export type Score = "printing" | "card" | "wrong" | "undecided" | "error";
  * as a printing it only guessed.
  */
 export type Settled = "right_printing" | "wrong_printing" | "ambiguous" | "other";
-export type Mode = "fast" | "exact" | "neural";
 export type Card = { id: string; set: string; number: string; lang: string; name: string };
 export type Got = { id: string; name: string | null; set: string | null; number: string | null };
 export type FrameNow = {
   ok: boolean;
-  lock: string | null;
   confidence: number | null;
   distance: number | null;
   decided: string | null;
-  /** Set only for a frame the session could not process: a panic, a decode, a failed resolve. */
+  /** Set only for a frame the session could not process: a panic or an undecodable JPEG. */
   error: string | null;
 };
-export type FrameThen = { ms: number; ok: boolean; lock: string | null; decided: string | null; detail: boolean };
-export type Slice = {
-  frame: number;
-  kind: "rectified" | "binary" | "title" | "collector";
-  file: string;
-  raw: string | null;
-  normalized: string | null;
-  matched: string | null;
-  /** Collector slices: the (set, number) pairings tried, in order; else empty. */
-  tried: { set: string; number: string; matched: string | null }[];
-  /** Pairings tried beyond the ones listed. */
-  more: number;
-  /** The finish mark the scanner saw: an arbitrary JSON value as the crate serialises it. */
-  mark: unknown;
-  /** Title slices: edit distance from the matched name. */
-  edits: number | null;
-};
-/** One candidate printing of a Neural decision and what the evidence scored it. */
+export type FrameThen = { ms: number; ok: boolean; decided: string | null };
+/** One candidate printing of a decision and what the evidence scored it. */
 export type EvidenceCandidate = {
   printing: string;
   look: number;
@@ -47,7 +29,7 @@ export type EvidenceCandidate = {
   /** The collector band's score; null likewise. */
   band: number | null;
 };
-/** What the evidence weighed for the last Neural decision. */
+/** What the evidence weighed for the last decision. */
 export type Evidence = {
   candidates: EvidenceCandidate[];
   /** The printing the evidence was sure of; null left the decision ambiguous. */
@@ -55,7 +37,6 @@ export type Evidence = {
 };
 export type Pass = {
   name: string;
-  mode: Mode;
   score: Score;
   ambiguous: boolean;
   settled: Settled;
@@ -71,17 +52,12 @@ export type Pass = {
    */
   decision_frame: number | null;
   decisions: number;
-  /** False when an Exact pass was too short to try to resolve at all. */
-  resolve_ran: boolean;
-  locked_frames: number;
   confidence: number | null;
   distance: number | null;
   frames: FrameNow[];
-  tiers: { tier: string; survivors: number; detail: string }[];
-  slices: Slice[];
   error: string | null;
-  /** A Neural pass replayed with `--neural-evidence`; null otherwise, and absent in older results. */
-  evidence?: Evidence | null;
+  /** A pass replayed with the evidence files loaded; null otherwise. */
+  evidence: Evidence | null;
 };
 export type Run = {
   id: string;
@@ -90,9 +66,9 @@ export type Run = {
   finish: string;
   platform: string;
   version: string;
-  mode: Mode;
+  /** The mode the scan was sent in, as its label says: `fast` and `exact` before 2026-10-24, `neural` since. */
+  mode: string;
   filtered: boolean;
-  detail: boolean;
   frames: number;
   known: boolean;
   then: { score: Score; got: string | null };
@@ -102,15 +78,14 @@ export type Run = {
   passes: Pass[];
 };
 export type Results = {
-  v: 1;
+  v: 2;
   commit: string | null;
-  bundle_printings: number;
   runs: Run[];
   skipped: { id: string; why: string }[];
 };
 
 export function parseResults(text: string): Results {
   const results = JSON.parse(text) as Results;
-  if (results.v !== 1) throw new Error(`results version ${String(results.v)} is not 1`);
+  if (results.v !== 2) throw new Error(`results version ${String(results.v)} is not 2`);
   return results;
 }
