@@ -128,8 +128,8 @@ export interface AddedToastProps {
 }
 
 /**
- * **The whole overlay is `aria-hidden`.** The Match strip above the camera is the view's live
- * region and already says what landed; a second live region announcing the same card would have a
+ * **The whole overlay is `aria-hidden`.** The HUD's `Scanner status` live region over the camera
+ * (`ScanHud`) already says what landed; a second live region announcing the same card would have a
  * screen reader read every scan twice. Nothing in here is pressable either — the tray is where a
  * landing is acted on, which is why the layer is `pointer-events-none` throughout.
  *

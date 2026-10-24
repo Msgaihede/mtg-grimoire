@@ -14,11 +14,11 @@
 //
 //   1. the page opens the camera once its prefs have loaded, and shapes the picture's box by the
 //      stream — inside the screen, with the status line and the tray's heading still on it;
-//   2. the page opens stopped (issue #1317) — no frame goes out until *Start scanning* is pressed;
+//   2. the page opens stopped (issue #1317) — no frame goes out until *Start* is pressed;
 //      then frames go out as the JPEG alone, **with no options and no detail picture**, and each
 //      card the script decides lands in the tray once — the second copy of a card counts onto
 //      its row;
-//   3. *Stop scanning* stops the frames and keeps the picture;
+//   3. *Stop* stops the frames and keeps the picture;
 //   4. a quantity steps, a folder is chosen from the sheet and stored;
 //   5. nothing scrolls sideways, every control is at least 44px under the coarse pointer, and the
 //      footer — the destination and Add — is on screen and pressable with 5 rows and with 40;
@@ -409,7 +409,7 @@ async function phone(send: Send, width: number, height: number) {
   await page.until(`window.seen.prefs.at(-1)?.finish === 'nonfoil'`, "the finish to be stored");
   await page.evaluate(`smoke.press(smoke.button('Close scanner options'), 'close')`);
   await page.until(`smoke.sheet() === null`, "the sheet to close");
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(`smoke.rows().length >= 1`, "the first card to land");
   const first = await page.evaluate<{ status: string; row: string }>(
     `({ status: smoke.status(), row: smoke.rows()[0].textContent })`,
@@ -431,7 +431,7 @@ async function phone(send: Send, width: number, height: number) {
   }
 
   // ------------------------------------------------ 3. stop ------------------------------
-  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Stop'), 'Stop')`);
   await sleep(400);
   const stopped = await page.evaluate<number>(`window.seen.frames.length`);
   await sleep(900);
@@ -605,13 +605,13 @@ async function phone(send: Send, width: number, height: number) {
   // ------------------------------------------------ 8. a card with a question ------------
   await page.go("/scanner");
   await page.until(`${TRACK}?.readyState === 'live'`, "the camera again");
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(
     `smoke.rows().some((row) => /Pick a printing/.test(row.textContent))`,
     "the card the scanner cannot pin to one printing",
     30_000,
   );
-  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Stop'), 'Stop')`);
   const asking = await page.evaluate<
     Measurement & { rows: number; choices: string[]; status: string }
   >(`(() => {
@@ -678,7 +678,7 @@ async function phone(send: Send, width: number, height: number) {
     });
     return true;
   })()`);
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(`window.answered >= 8`, "a device with no membership to scan on", 30_000);
   const stranger = await page.evaluate<{ sends: string[]; said: boolean }>(`(() => {
     const main = document.querySelector('main');
@@ -694,7 +694,7 @@ async function phone(send: Send, width: number, height: number) {
   await page.go("/scanner?fault=patreonGroupEntitled");
   await page.until(`${TRACK}?.readyState === 'live'`, "a supporter's camera");
   await page.until(
-    `smoke.button('Start scanning') !== undefined`,
+    `smoke.button('Start') !== undefined`,
     "a supporter's scanner to open stopped",
   );
   await sleep(400);
@@ -733,7 +733,7 @@ async function phone(send: Send, width: number, height: number) {
     });
     return true;
   })()`);
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(
     `smoke.button('Send scan…') !== undefined`,
     "Send scan… to be offered over a running scanner",
@@ -1076,9 +1076,9 @@ async function sideways(send: Send, width: number, height: number) {
     `${TRACK}?.readyState === 'live' && document.querySelector('video').videoWidth > 0`,
     "the camera",
   );
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(`smoke.rows().length >= 2`, "three cards");
-  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Stop'), 'Stop')`);
   await sleep(300);
   const m = await page.evaluate<
     Measurement & {

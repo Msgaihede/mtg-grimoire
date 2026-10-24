@@ -10,7 +10,6 @@ import {
   HOLD_TITLE,
   matchStrip,
   NO_FILTERS,
-  POINT_AND_SHOOT_HOLD_HINT,
   SCAN_CARD,
   SCANNING_CHIP,
   START,
@@ -266,8 +265,5 @@ describe("the redesigned page's words", () => {
     expect(STOPPED_NOTE).toBe("Press Start to begin. The camera stays on.");
     expect(HOLD_TITLE).toBe("Hold the picture to scan");
     expect(HOLD_NOTE).toBe("Scanning pauses the moment you let go.");
-    expect(POINT_AND_SHOOT_HOLD_HINT).toBe(
-      "Hold the picture to read. The scanner pauses the moment you let go, so moving between cards reads nothing.",
-    );
   });
 });

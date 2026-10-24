@@ -4,8 +4,8 @@ import {
   ChevronDown,
   Crosshair,
   Funnel,
+  Layers,
   Play,
-  Sparkles,
   Square,
   Video,
   X,
@@ -177,7 +177,7 @@ export function ScanDock({
         <DockPopover
           caption="Finish"
           value={FINISH_PREF_LABEL[finish]}
-          icon={<Sparkles className="size-3.5 shrink-0" aria-hidden="true" />}
+          icon={<Layers className="size-3.5 shrink-0" aria-hidden="true" />}
           active={false}
           refusal={null}
           panelLabel="Finish"

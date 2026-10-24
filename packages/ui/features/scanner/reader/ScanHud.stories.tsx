@@ -36,7 +36,7 @@ function bar(canvasElement: HTMLElement) {
 }
 
 const meta = {
-  title: "Scanner/Reader/ScanHud",
+  title: "Scanner/Reader/Scan HUD",
   component: ScanHud,
   tags: ["autodocs"],
   render: (args) => <InCamera {...args} />,

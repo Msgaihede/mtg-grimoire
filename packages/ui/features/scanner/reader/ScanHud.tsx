@@ -2,10 +2,10 @@
  * What the Scanner draws **on** the camera picture rather than above it: how close the scanner is
  * to a card, the two presses a reader reaches for mid-pile, and the one error it has to say.
  *
- * The redesign's replacement for the Match strip (`MatchStrip`): the strip's pill, name and
+ * The redesign's replacement for the old Match strip above the camera: its pill, name and
  * sentence are gone from view — the Added popup names the card that landed — and what is left is
  * a 4px bar along the picture's top edge, the presses in its top-right corner and a chip under
- * the bar at the top-left. **The strip's accessibility arrangement comes with it unchanged**: the
+ * the bar at the top-left. **The strip's accessibility arrangement carried over unchanged**: the
  * same `Scanner status` live region, always mounted and now visually hidden, the leaning leader
  * kept out of what it announces, and the bar and the presses outside it.
  */
@@ -183,7 +183,7 @@ export function ScanHud({ strip, live, variant, onReset, onSend, note = null }: 
 /**
  * One corner press in the HUD's shape. Labelled, its words are drawn beside the glyph and are its
  * name. As an icon the words are the accessible name and the pointer's hint (`describes: false`,
- * since the name already says them) — the phone strip's arrangement (`MatchLine`); a finger sees
+ * since the name already says them) — the phone's arrangement too; a finger sees
  * neither, and the glyph is the one a reader already knows from the desktop.
  */
 function CornerPress({

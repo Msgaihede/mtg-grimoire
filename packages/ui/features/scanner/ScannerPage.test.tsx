@@ -270,8 +270,7 @@ function row(container: HTMLElement): HTMLElement {
 
 /**
  * The note chip's region, under the progress bar at the picture's top-left (`ScanHud`) — where the
- * loop's error, a refused reset, a *Send scan…* pressed too soon and, for a Developer reader, the
- * detector's own sentence are said. Found through the HUD's live region, so it is also an
+ * loop's error, a refused reset and a *Send scan…* pressed too soon are said. Found through the HUD's live region, so it is also an
  * assertion that the HUD is drawn on the picture.
  */
 function hudNote(container: HTMLElement): HTMLElement {
@@ -618,7 +617,7 @@ describe("ScannerPage", () => {
     await waitFor(() => expect(statusLine()).toHaveTextContent("Point the camera at a card"));
   });
 
-  it("prints the frame's own refusal in the note once the developer panels are on", async () => {
+  it("keeps the frame's own refusal out of the note, developer panels or not", async () => {
     const restore = shimVideo();
     opens();
     storedPrefs({ developer: true });
@@ -626,9 +625,9 @@ describe("ScannerPage", () => {
     try {
       const { container } = mount();
       await start();
-      await waitFor(() =>
-        expect(hudNote(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""),
-      );
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Point the camera at a card"));
+      // The detector's sentence is a developer's, and in the chip it would blink frame by frame.
+      expect(hudNote(container)).toHaveTextContent("");
     } finally {
       restore();
     }
@@ -753,6 +752,19 @@ describe("ScannerPage", () => {
     await waitFor(() =>
       expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned"),
     );
+  });
+
+  it("puts a refused reset in the note while stopped too", async () => {
+    refused();
+    vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
+    const { container } = mount();
+    await start();
+    await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
+    await waitFor(() =>
+      expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned"),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned");
   });
 
   it("files a capture under the five fields the sidecar has, read off the last verdict", async () => {
@@ -1970,10 +1982,10 @@ describe("ScannerPage sending a scan", () => {
   });
 
   /**
-   * With the Developer panels on, the line over the camera is the detector's own on every frame
-   * with no card in it — and a press that opened nothing still has to be heard over that.
+   * With the Developer panels on, frames with no card in them still leave the note to the
+   * reader's own failures — and a press that opened nothing has to be heard.
    */
-  it("says a press came too soon over the detector's own sentence, with the Developer panels on", async () => {
+  it("says a press came too soon, with the Developer panels on", async () => {
     const restore = shimVideo();
     opens();
     storedPrefs({ developer: true });
@@ -1982,9 +1994,7 @@ describe("ScannerPage sending a scan", () => {
     try {
       const { container } = mount();
       await start();
-      await waitFor(() =>
-        expect(hudNote(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""),
-      );
+      await screen.findByRole("button", { name: "Send scan…" });
 
       await user.click(screen.getByRole("button", { name: "Send scan…" }));
       expect(hudNote(container)).toHaveTextContent(SCAN_TOO_SHORT);

@@ -19,9 +19,9 @@ function thisFrame(verdict: ScannerVerdict | null): string {
 }
 
 /**
- * The figures behind the Match strip: how sure the scanner is, and what is still arguing with it.
+ * The figures behind the HUD: how sure the scanner is, and what is still arguing with it.
  *
- * **The card's name and the bar are not here any more** — `reader/MatchStrip` draws both above
+ * **The card's name and the bar are not here any more** — `reader/ScanHud` draws both over
  * the camera for every reader, a developer included, so a head row and a bar here would be the
  * same answer twice on one screen. What stays is what the strip deliberately never says: the
  * tally, the distances and the standings.

@@ -48,7 +48,7 @@ function Replay({ originBottom }: Pick<TierConfettiProps, "originBottom">) {
 }
 
 const meta = {
-  title: "Scanner/Reader/TierConfetti",
+  title: "Scanner/Reader/Tier confetti",
   component: TierConfetti,
   tags: ["autodocs"],
   render: (args) => <Replay originBottom={args.originBottom} />,

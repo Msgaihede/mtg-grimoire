@@ -109,7 +109,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const { prefs, update, inForce, filterError, loaded, unavailable } = useScannerPrefs();
   // The developer panels are the Scanner view's own; a destination's host draws none of them.
   const developer = destination === undefined && prefs.developer;
-  // **Stopped until the reader presses Start scanning** (issue #1317): opening the view turns the
+  // **Stopped until the reader presses Start** (issue #1317): opening the view turns the
   // camera on, not recognition. Session-only: a Start or Stop survives minimize/restore, and a new
   // visit starts stopped again.
   const [scanning, setScanning] = useState(false);
@@ -468,18 +468,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     });
   };
 
-  // The scanner's own refusal of a frame is a developer's sentence — no card found in it —
-  // and the reader has the live region for what it means to them. The loop's failures, a refused
-  // reset and a *Send scan…* pressed too soon are not the detector's, and every reader gets
-  // those. **A press that opened nothing is never silent**: it takes the note over from the
-  // detector's own sentence, which a Developer reader is otherwise shown on every frame with no
-  // card in it. It is not said while recognition is stopped, where the picture's note is the
-  // stopped veil's: the press is not drawn there, and the hook drops its sentence with the press.
-  const detectorSentence =
-    developer && loop.verdict?.ok === false && submit.error === null
-      ? (loop.verdict.error ?? "")
-      : (loop.error ?? resetError ?? submit.error ?? "");
-  const hudNote = reading && detectorSentence !== "" ? detectorSentence : null;
+  // What the HUD's note chip says. The loop's failures and a *Send scan…* pressed too soon are
+  // said only while recognition runs; **a refused reset is said stopped too**, because Reset is a
+  // press the reader can make over a stopped picture and a press that opened nothing is never
+  // silent. The scanner's own refusal of a frame (no card found in it) is the detector's sentence,
+  // not the reader's: the Developer panels carry it, and in the chip it would blink frame by
+  // frame in an assertive alert.
+  const hudNote = (reading ? (loop.error ?? resetError ?? submit.error) : resetError) || null;
 
   return (
     // **`@container/scan` because the split answers this view's own width, never the window's** —
@@ -540,7 +535,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 <StoppedVeil />
               )}
               {/* Point and shoot between two shots: what the next one is taken with. */}
-              {pointAndShoot && !shot.shooting && <ShotReadyPill />}
+              {pointAndShoot &&
+                !shot.shooting &&
+                camera.kind !== "error" &&
+                unavailable === null && <ShotReadyPill />}
               {/* Before the popup, so the pieces leave from behind the card; thrown only for a
                   landing the popup is showing, at a price tier. A `null` burst throws nothing and
                   stops nothing, so a jackpot still in the air when the popup goes finishes. */}

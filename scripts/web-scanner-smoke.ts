@@ -20,7 +20,7 @@
 //   1. the app opens and ingests a card file that has the card in it
 //   2. the Scanner opens stopped, and **none of the Neural scanner's files has left the host**,
 //      and none of the scanner's is in the service worker's shell
-//   3. Start scanning: the Neural files are fetched, once each, **the card is recognised and
+//   3. Start: the Neural files are fetched, once each, **the card is recognised and
 //      lands in the tray**, by name
 //   4. the session says so — the Neural files and the labels loaded — and the service worker
 //      keeps the module and the files in the scanner's Cache Storage
@@ -38,7 +38,7 @@
 //      Worker or in the service worker; no request went to a host with no fixture
 //
 //  11. **the phone face**, in a browser and a profile of its own at 360 × 800 under the same
-//      camera: a first run again, Start scanning, the card in the tray with nothing scrolling
+//      camera: a first run again, Start, the card in the tray with nothing scrolling
 //      sideways, Add, and an empty tray
 //
 // **The card's picture is not in this repository** — card image bytes never are — so it is the
@@ -314,7 +314,10 @@ function scannerChunk() {
   return `/assets/${name}`;
 }
 
-const ADD = `[...document.querySelectorAll("button")].find((b) => /^Add \\d+ to collection/.test(b.innerText.trim()))`;
+/** What a button is called: the phone draws `Add 1`, and its name is the whole sentence. */
+const NAMED = `(b) => (b.getAttribute("aria-label") || b.innerText).trim()`;
+const ADD = `[...document.querySelectorAll("button")].find((b) => /^Add \\d+ to collection/.test((${NAMED})(b)))`;
+const ADD_TEXT = `(${NAMED})(${ADD})`;
 /** A row of the desktop shell's sidebar, by its word. */
 const sidebar = (word: string) =>
   `[...document.querySelectorAll("button")].find((b) => b.innerText.trim() === ${JSON.stringify(word)})`;
@@ -407,43 +410,43 @@ async function phoneFace(
   const before = site.asked.length;
 
   await page.press("the Scanner tab", `${TABS}.querySelector('a[href="/scanner"]')`);
-  await page.until("the phone's Scanner opened", `!!${buttonSaying("Start scanning")}`);
+  await page.until("the phone's Scanner opened", `!!${buttonSaying("Start")}`);
   const sideways = () =>
     page.evaluate<number>(
       `document.documentElement.scrollWidth - document.documentElement.clientWidth`,
     );
   if ((await sideways()) > 0)
     fail(`at ${PHONE[0]}px the Scanner scrolls ${await sideways()}px sideways`);
-  if (await page.evaluate(`!!${ADD} && !/^Add 0 /.test(${ADD}.innerText.trim())`)) {
+  if (await page.evaluate(`!!${ADD} && !/^Add 0 /.test(${ADD_TEXT})`)) {
     fail("the phone's tray held a card before a frame was sent");
   }
   const early = site.asked.slice(before).filter((path) => path.startsWith(NEURAL_PREFIX));
   if (early.length > 0)
     fail(
-      `on the phone face the Neural files were asked for before Start scanning: ${early.join(", ")}`,
+      `on the phone face the Neural files were asked for before Start: ${early.join(", ")}`,
     );
 
-  // The page opens stopped (issue #1317): nothing is read until Start scanning is pressed.
-  await page.press("Start scanning", buttonSaying("Start scanning"));
+  // The page opens stopped (issue #1317): nothing is read until Start is pressed.
+  await page.press("Start", buttonSaying("Start"));
   await page.until(
     "on the phone face, the card was recognised and landed in the tray",
-    `!!${ADD} && /^Add 1 to collection$/.test(${ADD}.innerText.trim())`,
+    `!!${ADD} && /^Add 1 to collection$/.test(${ADD_TEXT})`,
     120_000,
   );
   if ((await sideways()) > 0)
     fail(`with a card in the tray the phone's Scanner scrolls ${await sideways()}px sideways`);
-  await page.press("Stop scanning", buttonSaying("Stop scanning"));
+  await page.press("Stop", buttonSaying("Stop"));
   await page.press("Add", ADD);
   await page.until(
     "on the phone face, the tray was filed",
-    `!${ADD} || !/^Add 1 /.test(${ADD}.innerText.trim())`,
+    `!${ADD} || !/^Add 1 /.test(${ADD_TEXT})`,
     30_000,
   );
   hosts.check();
   const thrown = page.thrown();
   if (thrown.length > 0) fail(`the phone's page threw:\n${thrown.join("\n")}`);
   console.log(
-    `ok  on the phone face at ${PHONE[0]}px: Start scanning, ${CARD.name} in the tray and filed, ` +
+    `ok  on the phone face at ${PHONE[0]}px: Start, ${CARD.name} in the tray and filed, ` +
       "nothing scrolling sideways and the policy refusing nothing",
   );
   await close();
@@ -544,10 +547,10 @@ async function main() {
 
   // ---- 2. the Scanner, stopped, and nothing of Neural's fetched ----------------------------------
   await page.press("the sidebar's Scanner", sidebar("Scanner"));
-  await page.until("the Scanner opened", `!!${buttonSaying("Start scanning")}`);
+  await page.until("the Scanner opened", `!!${buttonSaying("Start")}`);
   const early = site.asked.filter((path) => path.startsWith(NEURAL_PREFIX));
   if (early.length > 0)
-    fail(`the Neural files were asked for before Start scanning: ${early.join(", ")}`);
+    fail(`the Neural files were asked for before Start: ${early.join(", ")}`);
   const before = await page.evaluate<Record<string, string[]>>(CACHES);
   const inShell = Object.entries(before)
     .filter(([name]) => name.startsWith(SHELL_PREFIX))
@@ -560,12 +563,12 @@ async function main() {
   );
 
   // ---- 3. the card --------------------------------------------------------------------------------
-  // The view opens stopped (issue #1317): a frame goes out only once Start scanning is pressed.
+  // The view opens stopped (issue #1317): a frame goes out only once Start is pressed.
   const pressed = performance.now();
-  await page.press("Start scanning", buttonSaying("Start scanning"));
+  await page.press("Start", buttonSaying("Start"));
   await page.until(
     "the card was recognised and landed in the tray",
-    `!!${ADD} && /^Add 1 to collection$/.test(${ADD}.innerText.trim()) && document.body.innerText.includes(${JSON.stringify(CARD.name)})`,
+    `!!${ADD} && /^Add 1 to collection$/.test(${ADD_TEXT}) && document.body.innerText.includes(${JSON.stringify(CARD.name)})`,
     120_000,
   );
   const recognisers = site.asked.filter(isRecognisers);
@@ -579,7 +582,7 @@ async function main() {
   );
   // Stopped before anything else: the camera is one picture on a loop, and the agreement goes on
   // deciding while it runs — on a corpus of seven cards, often a printing these cards lack.
-  await page.press("Stop scanning", buttonSaying("Stop scanning"));
+  await page.press("Stop", buttonSaying("Stop"));
 
   // ---- 4. the session -------------------------------------------------------------------------
   const status = await engine("scanner_status");
@@ -609,7 +612,7 @@ async function main() {
   await page.press("Add", ADD);
   await page.until(
     "the tray was filed",
-    `!${ADD} || !/^Add 1 /.test(${ADD}.innerText.trim())`,
+    `!${ADD} || !/^Add 1 /.test(${ADD_TEXT})`,
     30_000,
   );
 
@@ -724,15 +727,15 @@ async function main() {
   await page.evaluate(`location.assign("/scanner")`);
   await page.until(
     "offline, the Scanner opened again",
-    `!!${buttonSaying("Start scanning")} || ${ALERT}`,
+    `!!${buttonSaying("Start")} || ${ALERT}`,
     60_000,
   );
   const refusedOffline = await page.evaluate(ALERT);
   if (refusedOffline) fail(`offline, the app did not open:\n${refusedOffline}`);
-  await page.press("Start scanning", buttonSaying("Start scanning"));
+  await page.press("Start", buttonSaying("Start"));
   await page.until(
     "offline, the card was recognised and landed in the tray",
-    `!!${ADD} && /^Add 1 /.test(${ADD}.innerText.trim()) && document.body.innerText.includes(${JSON.stringify(CARD.name)})`,
+    `!!${ADD} && /^Add 1 /.test(${ADD_TEXT}) && document.body.innerText.includes(${JSON.stringify(CARD.name)})`,
     60_000,
   );
   // What was asked of a host that was not there: the worker's own script by the browser — a

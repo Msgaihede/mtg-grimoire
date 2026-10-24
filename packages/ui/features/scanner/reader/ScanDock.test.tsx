@@ -277,7 +277,7 @@ describe("ScanDock", () => {
     expect(panel).toBeInTheDocument();
   });
 
-  it("switches promos off beside the set picker, keeping the other filters, and says so on the bar", async () => {
+  it("switches promos off beside the set picker, keeping the other filters, and says so on the dock", async () => {
     const user = userEvent.setup();
     const onFilters = vi.fn();
     const filters = { sets: ["hob"], released_from: null, released_to: null };
