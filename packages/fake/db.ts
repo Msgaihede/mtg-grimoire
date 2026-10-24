@@ -121,6 +121,7 @@ import { typeBucket } from "@grimoire/ui/features/decks/deckBuckets";
 import { DEFAULT_SORT_BY } from "@grimoire/ui/features/decks/sorting";
 import { SPECS } from "@grimoire/ui/features/decks/validation/fixtures";
 import { DEFAULT_SCANNER_PREFS, STATUS } from "@grimoire/ui/features/scanner/fixtures";
+import { frameMessage } from "@grimoire/ui/lib/core/web/scanProtocol";
 import {
   DEFAULT_SCAN_SOUNDS,
   ladderRefusal,
@@ -27621,8 +27622,22 @@ export function scannerHandlers(db: FakeDb) {
      * points the fake back at a world that is not standing (`scope.ts`' `standing`): before that,
      * the next test's unscoped calls went to this one's world. A test that opens a camera still
      * answers its own frames — a hundred milliseconds a frame is a slow test.
+     *
+     * **A frame with its full-resolution copy behind it is answered the same** — the body and
+     * the `x-scanner-full` header `ipc.scannerFrame` sends when a verdict asked for one — once
+     * the body has been split as the engine splits it (`scanner::frame_from`, through the web
+     * host's `frameMessage`, which repeats its sentences): a length that cannot split it is
+     * refused at once, in those words. The fake measures no separator, so none of its verdicts
+     * asks (`wants_full: false`, `finish_mark: null`).
      */
-    scanner_frame: async (): Promise<ScannerVerdict> => {
+    scanner_frame: async (
+      body?: Uint8Array,
+      options?: { headers?: Record<string, string> },
+    ): Promise<ScannerVerdict> => {
+      if (body instanceof Uint8Array) {
+        const split = frameMessage(0, body, options?.headers);
+        if (typeof split === "string") throw refuse(split);
+      }
       await new Promise((answered) => setTimeout(answered, FAKE_FRAME_MS));
       return scanStep(script, db.fault === "scannerMissing");
     },

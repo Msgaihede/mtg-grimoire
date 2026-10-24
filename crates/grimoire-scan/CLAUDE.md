@@ -19,7 +19,7 @@ Eight synchronous functions (`src/glue.rs`). Every string answered is `{"ok": �
 | `load(labels?)` | The labels the engine encoded, or nothing | `{"ok": <facts>}`: what the labels came to, and the filters the new session could not take (`unapplied_filters`) |
 | `load_neural(detector, embedder, gallery, meta)` | `card-neural`'s four files (`detector.onnx`, `embedder.onnx`, `gallery.bin`, `neural.json`), as the page fetched them from `/scanner-neural/<id>/` | `undefined`, or the crate's sentence. Into the session `load` built: a later `load` lets them go with it, so the page loads each Worker once and the Neural files after that |
 | `load_neural_evidence(symbol_net, band_net, symbols, bands)` | `card-neural`'s evidence files (`symbol.onnx`, `band.onnx`, `symbols.bin`, `bands.bin`), from the same folder | `undefined`, or the crate's sentence (before the recogniser, no `evidence` section in its `neural.json`, files that are not them). The page posts them in the background once `load_neural` answered, and a refusal leaves the recogniser reading as it did |
-| `frame(jpeg)` | A JPEG — the whole frame; there are no options and no detail frame since 2026-10-24 | `{"ok": <Verdict>}` |
+| `frame(jpeg, full?)` | A JPEG — the whole frame — and, when the last verdict's `wants_full` asked, the same frame at the camera's resolution, cut only for the finish mark (none, or no bytes, is none); there are no options since 2026-10-24 | `{"ok": <Verdict>}` |
 | `reset()` | — | `{"ok":null}` |
 | `set_filters(filters)` | `ScanFilters` as JSON | `{"ok":null}`, or `{"err": …}` with the crate's own sentence |
 | `memory_bytes()` | — | The module's linear memory in bytes (a high-water mark) |

@@ -10,6 +10,7 @@ export type Args = {
   jobs: string | null;
   neuralEvidence: string | null;
   neuralEvidenceMeta: string | null;
+  neuralFinish: boolean;
   noBuild: boolean;
 };
 
@@ -38,10 +39,15 @@ export function parseArgs(argv: string[]): Args {
     jobs: null,
     neuralEvidence: null,
     neuralEvidenceMeta: null,
+    neuralFinish: false,
     noBuild: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
+    if (flag === "--neural-finish") {
+      args.neuralFinish = true;
+      continue;
+    }
     if (flag === "--no-build") {
       args.noBuild = true;
       continue;

@@ -180,6 +180,8 @@ function decisionOf(card: PileCard): ScannerDecision {
     choices: ambiguous ? lookOf(card) : [],
     replaces_previous: false,
     finishes: finishesOf(card.id),
+    // The fake measures no separator: its verdicts never ask for a full frame.
+    finish_mark: null,
   };
 }
 

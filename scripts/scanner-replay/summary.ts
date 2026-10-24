@@ -2,7 +2,7 @@
 // and the comparison with a baseline. `summary.md` and the report both read these, so the
 // two cannot count a scan differently.
 
-import type { Results, Run, Score } from "./results.ts";
+import type { MarkReading, Pass, Results, Run, Score } from "./results.ts";
 
 export const PASSES = ["As scanned", "Neural"] as const;
 
@@ -144,6 +144,68 @@ function row(name: string, runs: Run[], pass: string): string {
 const flips = (title: string, list: Flip[]) =>
   list.length ? [`**${title}** (${list.length})`, "", ...list.map((f) => `- ${cell(f.name)} — ${cell(f.pass)}: ${cell(f.from)} → ${cell(f.to)} (\`${cell(f.id)}\`)`), ""] : [];
 
+/** What one way of reading the finish said, against the reader's finish: right, wrong, unknown, none. */
+export type FinishTally = { right: number; wrong: number; unknown: number; none: number };
+
+/**
+ * The finish marks of `pass` over the runs whose reader said foil or nonfoil, split by that
+ * finish. `read` picks the mark off the pass: the decision's, or the full-frame bands'.
+ */
+export function finishTally(
+  runs: Run[],
+  pass: string,
+  read: (p: Pass) => MarkReading | null | undefined,
+): Record<"foil" | "nonfoil", FinishTally> {
+  const out = {
+    foil: { right: 0, wrong: 0, unknown: 0, none: 0 },
+    nonfoil: { right: 0, wrong: 0, unknown: 0, none: 0 },
+  };
+  for (const run of runs) {
+    if (run.finish !== "foil" && run.finish !== "nonfoil") continue;
+    const p = run.passes.find((one) => one.name === pass);
+    if (!p) continue;
+    const mark = read(p) ?? null;
+    const t = out[run.finish];
+    if (mark === null) t.none++;
+    else if (mark === "unknown") t.unknown++;
+    else if (mark === run.finish) t.right++;
+    else t.wrong++;
+  }
+  return out;
+}
+
+const FINISH_HEAD =
+  "| read by | foils | right | read nonfoil | unknown | none | nonfoils | right | read foil | unknown | none |\n" +
+  "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+
+function finishRow(name: string, t: Record<"foil" | "nonfoil", FinishTally>): string {
+  const n = (x: FinishTally) => x.right + x.wrong + x.unknown + x.none;
+  const { foil: f, nonfoil: o } = t;
+  return `| ${cell(name)} | ${n(f)} | ${f.right} | ${f.wrong} | ${f.unknown} | ${f.none} | ${n(o)} | ${o.right} | ${o.wrong} | ${o.unknown} | ${o.none} |`;
+}
+
+/**
+ * The finish section: each pass's decision mark and its full-frame bands. Empty for results that
+ * carry no mark — written before the mark was recorded.
+ */
+export function finishLines(runs: Run[]): string[] {
+  const carries = runs.some((run) => run.passes.some((p) => p.finish_mark !== undefined));
+  if (!carries) return [];
+  return [
+    "## Finish mark",
+    "",
+    "The collector line's separator (★ foil, • nonfoil), measured on the full frames, against the",
+    "finish the reader named. A wrong foil files a card in the wrong finish, so that column is the floor.",
+    "",
+    FINISH_HEAD,
+    ...PASSES.flatMap((pass) => [
+      finishRow(`${pass}, decision`, finishTally(runs, pass, (p) => p.finish_mark)),
+      finishRow(`${pass}, full-frame bands`, finishTally(runs, pass, (p) => p.finish?.reading)),
+    ]),
+    "",
+  ];
+}
+
 export function summaryMarkdown(now: Results, base: Results | null): string {
   const lines = [
     "# Scanner replay",
@@ -162,6 +224,7 @@ export function summaryMarkdown(now: Results, base: Results | null): string {
   const unknown = now.runs.filter((run) => run.decided_differs === null).length;
   lines.push(`Then: the shipped scanner had the reader's printing on ${then} of ${now.runs.length}. ` +
     `${differs} replayed with a different decision on at least one frame${unknown ? `; ${unknown} not comparable frame by frame` : ""}.`, "");
+  lines.push(...finishLines(now.runs));
   lines.push("## As scanned, by kind", "", HEAD.replace("| pass |", "| kind |"));
   for (const part of breakdowns(now.runs)) lines.push(row(`${part.by}: ${part.value}`, part.runs, "As scanned"));
   lines.push("");

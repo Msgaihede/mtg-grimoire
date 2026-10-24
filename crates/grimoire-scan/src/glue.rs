@@ -86,11 +86,15 @@ pub fn load(labels: Option<Vec<u8>>) -> String {
     with(|scanner| scanner.load_json(labels))
 }
 
-/// `frame(jpeg): string` — one frame through the session. Answers `{"ok": <Verdict>}`. See
-/// [`Scanner::frame`].
+/// `frame(jpeg, full?): string` — one frame through the session, with the same frame at the
+/// camera's resolution beside it when the last verdict's `wants_full` asked for one. Answers
+/// `{"ok": <Verdict>}`. See [`Scanner::frame`].
+///
+/// `full` is taken rather than borrowed: `Option<&[u8]>` is no argument type the bindings
+/// accept, and the copy into this module's memory happens either way.
 #[wasm_bindgen]
-pub fn frame(jpeg: &[u8]) -> String {
-    with(|scanner| scanner.frame(jpeg))
+pub fn frame(jpeg: &[u8], full: Option<Vec<u8>>) -> String {
+    with(|scanner| scanner.frame(jpeg, full.as_deref()))
 }
 
 /// `load_neural(detector, embedder, gallery, meta): string | undefined` — give the session the

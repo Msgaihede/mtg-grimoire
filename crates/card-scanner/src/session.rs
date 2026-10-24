@@ -101,6 +101,10 @@ pub struct DecisionView {
     /// The finishes the printing exists in, from the corpus — `nonfoil`, `foil`, `etched` — and
     /// empty when it did not say. See [`Reference::finishes_of`].
     pub finishes: Vec<String>,
+    /// The collector line's separator, measured on full-resolution frames of the card — a foil's
+    /// ★ or a non-foil's • ([`crate::finish`]). `None` unless [`Session::set_neural_finish`] is
+    /// on and a full frame of the card came; then what its frames agree on.
+    pub finish_mark: Option<crate::finish::FinishMark>,
 }
 
 /// What one frame came to.
@@ -130,6 +134,26 @@ pub struct Verdict {
     pub decision_seq: u64,
     /// The decided card, on every committed frame. See [`DecisionView`].
     pub decision: Option<DecisionView>,
+    /// **Send the next frame with its full-resolution copy** ([`Session::frame_with_full`]): a
+    /// card is in front of the lens and undecided, or just decided, and its collector line is
+    /// read off the full frame for the finish mark. A prediction; a full frame that was not
+    /// asked for is read all the same, and one that was asked for and did not come costs only
+    /// the mark.
+    pub wants_full: bool,
+}
+
+/// How many times the frame's width a full-resolution copy may be. A page sends a ~960 px frame
+/// and keeps its copy at up to 1920; anything far past that is not the same picture.
+pub const MAX_FULL_SCALE: f32 = 6.0;
+
+/// How many times a frame's width and height a full-resolution copy of it is — or `None` when it
+/// cannot be the same picture: smaller, past [`MAX_FULL_SCALE`], or of another aspect.
+pub(crate) fn full_scale((fw, fh): (u32, u32), (dw, dh): (u32, u32)) -> Option<(f32, f32)> {
+    let (kx, ky) = (dw as f32 / fw.max(1) as f32, dh as f32 / fh.max(1) as f32);
+    if !(1.0..=MAX_FULL_SCALE).contains(&kx) || (kx - ky).abs() > 0.02 * kx {
+        return None;
+    }
+    Some((kx, ky))
 }
 
 /// What a frame's `error` says when the scanner panicked on it (see [`Session::guarded`]).
@@ -198,6 +222,7 @@ impl Verdict {
             tracked: None,
             decision_seq,
             decision: None,
+            wants_full: false,
         }
     }
 }
@@ -241,7 +266,8 @@ pub struct Session {
 #[path = "neural_mode.rs"]
 mod neural_mode;
 pub use neural_mode::{
-    CandidateReport, EvidenceReport, NEURAL_ERROR_PREFIX, NEURAL_UNAVAILABLE_ERROR,
+    CandidateReport, EvidenceReport, FinishReport, MARK_WAIT, NEURAL_ERROR_PREFIX,
+    NEURAL_UNAVAILABLE_ERROR,
 };
 
 impl Session {
@@ -384,7 +410,21 @@ impl Session {
     /// image crates or the network runtime assert on answers [`PANIC_ERROR`], and the session
     /// carries on.
     pub fn frame(&mut self, jpeg: &[u8]) -> Verdict {
-        self.guarded(|s| s.neural_frame(jpeg))
+        self.frame_with_full(jpeg, None)
+    }
+
+    /// One frame, with the same picture at the camera's resolution beside it — the copy a page
+    /// keeps of every frame for *Send scan…*, at up to 1920 px wide.
+    ///
+    /// **The recogniser never sees `full`**: it reads `jpeg`, as [`Session::frame`] does, so a
+    /// frame's answer does not change with what came beside it. Only the voted-for card's
+    /// collector band is cut out of `full`, through the corners found in `jpeg` scaled onto it,
+    /// for the finish mark ([`crate::finish`]) — and only on a frame with a card in front of the
+    /// lens. A `full` that cannot be the same picture (smaller, past [`MAX_FULL_SCALE`], or of
+    /// another aspect) or will not decode is ignored. A page sends one when the previous verdict's
+    /// [`Verdict::wants_full`] asked.
+    pub fn frame_with_full(&mut self, jpeg: &[u8], full: Option<&[u8]>) -> Verdict {
+        self.guarded(|s| s.neural_frame(jpeg, full))
     }
 
     /// The guard itself, taking the body rather than being written inline in [`Session::frame`],

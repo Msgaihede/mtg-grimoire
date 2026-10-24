@@ -309,10 +309,42 @@ describe("a session", () => {
     await settle();
     const { message, transfer } = ports[0].posted[ports[0].posted.length - 1]!;
     if (message.kind !== "frame") throw new Error("not a frame");
-    expect(message).toEqual({ kind: "frame", id: message.id, jpeg: body });
+    expect(message).toEqual({ kind: "frame", id: message.id, jpeg: body, full: null });
     expect(transfer).toEqual([buffer]);
     ports[0].answer({ ok: true, decision_seq: 4 });
     expect(await verdict).toEqual({ ok: true, decision_seq: 4 });
+  });
+
+  /**
+   * **The full frame rides behind the frame, split where the length header says** — the call
+   * `ipc.scannerFrame` makes when the last verdict asked for it, as the desktop's
+   * `scanner::frame_from` reads it. One buffer, handed over once.
+   */
+  it("splits a frame from its full-resolution copy at the length header", async () => {
+    const { core, ports } = await ready();
+    const body = new Uint8Array([1, 2, 3, 7, 7, 7, 7]);
+    const buffer = body.buffer;
+    const verdict = core.call("scanner_frame", body, { headers: { "x-scanner-full": "3" } });
+    await settle();
+    const { message, transfer } = ports[0].posted[ports[0].posted.length - 1]!;
+    if (message.kind !== "frame") throw new Error("not a frame");
+    expect([...message.jpeg]).toEqual([1, 2, 3]);
+    expect([...(message.full ?? [])]).toEqual([7, 7, 7, 7]);
+    expect(transfer).toEqual([buffer]);
+    ports[0].answer({ ok: true, decision_seq: 4, wants_full: false });
+    expect(await verdict).toEqual({ ok: true, decision_seq: 4, wants_full: false });
+  });
+
+  it("refuses a length that cannot split the body in the engine's sentence, posting nothing", async () => {
+    const { core, ports, refusal } = await ready();
+    const before = ports[0].posted.length;
+    const said = await refusal(
+      core.call("scanner_frame", new Uint8Array([1, 2]), { headers: { "x-scanner-full": "2" } }),
+    );
+    expect(said).toBe(
+      "the frame's length is 2 bytes but the body is 2 — there is no full frame behind the frame",
+    );
+    expect(ports[0].posted).toHaveLength(before);
   });
 
   it("refuses a frame that is not bytes, and passes the module's own refusal on", async () => {

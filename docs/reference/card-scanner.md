@@ -288,9 +288,15 @@ lens since: the reader changed a filter with one physical card on the mat throug
 break (§4) or a reset forgets the previous decision, so the same card presented again is `false`
 and adds; a filter change keeps it, which is the whole point of it. Asked once per decision.
 
-**No text is read, so the finish is the corpus's**: a printing that exists in one finish takes it
-on the tray row; one sold in several lands `unknown` under the Defaults' *Detect* policy
-(`scanner::DETECT_FINISH`) for the reader to settle.
+**Under the Defaults' *Detect* policy (`scanner::DETECT_FINISH`) a row's finish is
+`reader/trayFinish.ts`'s, in three rungs, first answer wins**: a printing that exists in one finish
+takes it; otherwise the decision's `finish_mark` (§10, *The finish mark*), when it read `foil` or
+`nonfoil` and the printing exists in that finish — a corpus that lists no finishes constrains
+nothing, and a contradiction is a misread that asks; otherwise `unknown`, for the reader to settle.
+An ambiguous decision skips the first rung and the contradiction check, since its finishes are a
+provisional printing's, and is read by its mark alone. The mark never says etched. **Until a host
+turns the session's finish switch on, `finish_mark` is always `null`**, so in practice the first
+rung and `unknown` are the whole rule.
 
 **Two rules on the page's side** (`useScanLoop`):
 
@@ -419,7 +425,7 @@ with its measurement in the comment above the block. Read it; a list restated in
 | Command | In | Out |
 | --- | --- | --- |
 | `scanner_status` | — | `ScannerStatus` |
-| `scanner_frame` | the JPEG, as the raw body | `Verdict` |
+| `scanner_frame` | the JPEG, as the raw body — and its full-resolution copy behind it when the last verdict asked, the frame's length in `x-scanner-full` | `Verdict` |
 | `scanner_reset` | — | `()` |
 | `scanner_set_filters` | `ScanFilters` | `()`, or the session's sentence |
 | `scanner_capture` | a full-resolution frame, its `Sidecar` in the `x-scanner-capture` header | `Captured { saved }` |
@@ -447,9 +453,19 @@ unqualified `FROM cards`. The printing evidence is loaded after the recogniser; 
 and leaves the recogniser deciding without it. No labels is not a broken scanner: it recognises and
 answers ids, and refuses a filter.
 
-**A frame is the JPEG body alone.** `scanner_frame` takes it as `InvokeBody::Raw` on the desktop;
-a JSON body is refused with a sentence. **`scanner_capture` is the one command with a header**:
-the JPEG raw, the sidecar as JSON in `x-scanner-capture`. An `x-scanner-capture` that is **present
+**A frame is the JPEG body — alone, or with its full-resolution copy behind it.** `scanner_frame`
+takes it as `InvokeBody::Raw` on the desktop; a JSON body is refused with a sentence. When the last
+verdict's `wants_full` asked (§10, *The finish mark*), the page puts the same video frame at up to
+1920 px wide behind the JPEG and says where the frame ends in `x-scanner-full`, the frame's decimal
+byte length; no header is the body whole, as the frame. One body rather than two calls, because the
+full copy must be the *same* video frame — the card's corners found in the small one are scaled onto
+it. The core's `scanner::frame_from` splits it for every host, and **a length that cannot split the
+body is a refusal, never a guess**, in these words: *the frame's length did not parse: …* (a header
+that is there and not text), *the frame's length is not a number: "…"*, *the frame's length is zero,
+so there is no frame before the full one*, and *the frame's length is N bytes but the body is M —
+there is no full frame behind the frame* (a length at or past the end). The web host's
+`scanProtocol.ts` repeats them word for word. **`scanner_capture` carries the other header**: the
+JPEG raw, the sidecar as JSON in `x-scanner-capture`. An `x-scanner-capture` that is **present
 and unreadable** is refused, because a defaulted sidecar writes a JPEG with five empty fields and
 reports success — an *unlabelled* capture the reader believes they labelled; an absent one is
 `Sidecar::default()`. **The page escapes every non-ASCII character in that header's JSON as
@@ -534,10 +550,10 @@ seen — no event reports it.
 `Record<string, unknown> | Uint8Array` and `CallOptions` carries `headers`; the Tauri core passes
 both to `invoke`. **A light host's wire: the headers ride as the arguments** (step 7.3):
 
-| Host | The body | The capture's header |
+| Host | The body | The headers |
 | --- | --- | --- |
-| Desktop (`tauriCore`) | the raw IPC body, `InvokeBody::Raw` | a request header, off Tauri's `HeaderMap` |
-| Android (`tableCore`, `packages/ui/lib/core/table.ts`) | base64 text in `core_call`'s `body`, decoded by the host — Tauri takes no raw body on Android | `core_call`'s `args`, `{"x-scanner-capture": "<json>"}`; a frame's are `{}` |
+| Desktop (`tauriCore`) | the raw IPC body, `InvokeBody::Raw` | request headers, off Tauri's `HeaderMap` |
+| Android (`tableCore`, `packages/ui/lib/core/table.ts`) | base64 text in `core_call`'s `body`, decoded by the host — Tauri takes no raw body on Android | `core_call`'s `args`: `{"x-scanner-capture": "<json>"}`, `{"x-scanner-full": "<n>"}` for a frame with its full copy, `{}` for a frame alone |
 | Web (`protocol.ts`) | a transferred buffer | the call message's `args`, the same object |
 
 On the last two the call is answered by the core's command table, where `scanner_frame` and
@@ -552,7 +568,7 @@ engine's table and in its shapes — `packages/ui/lib/core/web/scanner.ts`, over
 | Command | What the web host does with it |
 | --- | --- |
 | `scanner_status` | Builds the session if there is none — the labels out of the engine's Worker (`scanner_labels`), the recogniser's files from the app's origin (§10, *Where the files come from*), each buffer transferred to the scanner's Worker — and composes `ScannerStatus` from what loaded, `neural.source` `store` |
-| `scanner_frame` | The JPEG's buffer transferred; the verdict is the crate's own serialisation |
+| `scanner_frame` | The body split at `x-scanner-full` as the core splits it (`scanProtocol.ts`' `frameMessage`, the same refusals), the frame and its full copy — two views of one buffer — transferred, and handed to the module's `frame(jpeg, full?)`; the verdict is the crate's own serialisation |
 | `scanner_reset`, `scanner_set_filters` | The scanner's Worker; a refusal is the crate's sentence. With no session the filters are owed to the first one built, and a reset is nothing |
 | `scanner_capture` | Refused: a page keeps no files |
 | the prefs, the tray, its commit and archive, `scanner_hold`, `scanner_elsewhere`, `scanner_submit` | The engine, unchanged. `scanner_hold` is heard on its way past: it is how the web host knows the Scanner is open |
@@ -595,7 +611,7 @@ that does not exist trains a reader to disbelieve the table.
 | File | Owns |
 | --- | --- |
 | `ScannerPage.tsx` | The view: the Match strip over the camera, the tray beside it, and the developer column |
-| `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (with a `catch` of its own — a throwing `drawImage`/`toBlob` outside one froze the loop with `error` still `null`), the reset on start and the decision gap (§5), and the run a Send takes |
+| `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (with a `catch` of its own — a throwing `drawImage`/`toBlob` outside one froze the loop with `error` still `null`), the reset on start and the decision gap (§5), the run a Send takes, and the full-resolution copy sent on the frame after a verdict's `wants_full` — the run's kept copy, copied, where the page keeps them, and one `grabKept` draw for that frame alone where it does not |
 | `useCamera.ts` | The stream: `getUserMedia`, or the reader's camera by `deviceId: { exact }` falling back to the default when it has gone; one `stopAll` every exit goes through; the wait for `loadedmetadata`. It opens nothing while its `deviceId` is `undefined`, which holds the camera shut until the stored choice has loaded. `useCameraDevices` lists the `videoinput`s, re-read on `devicechange` and once a camera is live |
 | `useScannerHold.ts`, `useScannerElsewhere.ts`, `useParked.ts`, `useWindowParked.ts` | The lease's heartbeat and gate; pause at once and let go after `PARK_GRACE_MS` |
 | `useScannerStatus.ts` | `scanner_status` once a session, and what a surface draws from it |
@@ -726,6 +742,40 @@ matched these figures exactly; its `printing ✓` fell 112 → 110 on placeholde
 tray never files `choices[0]` of an ambiguous decision (`unresolvedCount` stops the commit until the
 reader picks). A sharper frame is the way on for the 9: the design's follow-up cuts the crops from a
 larger frame once the scan inbox stores one.
+
+### The finish mark
+
+**2026-10-24, built and off.** Foil or not is the collector line's separator — `LTR ★ EN` on a
+foil, `LTR • EN` on a non-foil — and the session measures it (`src/finish.rs`, the removed OCR
+reader's `finish_mark` ported without the recogniser or `imageproc`): the band's two text lines are
+found by a projection, the second binarized at its Otsu level, and the mark after the set code's
+letters is a star (tall, large, not solid), a dot (short, small) or Unknown between them.
+**Only on a full-resolution frame**: in the ~960 px frame the recogniser reads, a card is about 300
+px tall and the separator three or four pixels, and on the 124 readers' scans the mark measured
+there read 1 of 15 foils and called 6 non-foils foil (the scanner lab's
+`docs\neural-improvements-2026-10-22.md`). So:
+
+- **A verdict asks for the next frame's full-resolution copy** (`wants_full`) while a card is in
+  front of the lens and undecided, and for `MARK_WAIT` (2) frames after each decision — with labels
+  loaded, which say how long the printing's set code is. The page sends the copy it keeps for
+  *Send scan…* (up to 1920 px wide) beside the frame (`Session::frame_with_full`); a page that
+  keeps none — a device that cannot send — draws a full copy for that one frame and keeps it
+  nowhere. The recogniser
+  never sees it: the card's collector band (`finish::COLLECTOR_BAND`, at 520×192) is cut from it
+  through the corners found in the small frame, scaled onto it, and kept with the card it is of.
+- **The mark is what the decided card's bands agree on** — the reading more of them gave, Unknown
+  on a tie — measured against the decided printing's set code when the decision is made, and again
+  on each later full frame of that card.
+- **It reaches a decision only with `Session::set_neural_finish` on, and no host turns it on**: it
+  waits on readers' scans kept at full resolution (from 2026-10-22). With it on, a decision whose
+  printing exists in more than one finish, or that is ambiguous, **waits** for a full frame — given
+  on the frame its mark comes, or `MARK_WAIT` frames later without one, `tracked.committed` false
+  meanwhile; a printing of one finish is decided at once. Off, the decision is made as before and
+  the marks are only reported (`Session::neural_finish_report`), which the replay scores.
+- **What the wait costs**, measured on the 124 readers' scans (2026-10-24), which are kept at the
+  pump's own size and so give no full frame: with the mark on, no outcome changed and 114 of the 119
+  decisions came two frames later — every printing but a single-finish one waits the whole
+  `MARK_WAIT` when no full frame comes; with one it is usually a frame.
 
 ### Where the files come from on each host
 
@@ -919,6 +969,7 @@ whatever the accuracy, 1 when nothing could be replayed.
 replay --corpus-dir <dir> --corpus <corpus.db> --out <dir>
        [--commit <sha>] [--only <text>]... [--jobs N]
        [--neural-models <dir>] [--neural-evidence <dir>] [--neural-evidence-meta <json>]
+       [--neural-finish]
 ```
 
 **Two passes a run, a fresh `Session` each**: **As scanned**, under the label's filters, and
@@ -944,6 +995,18 @@ was among them, `first_decision_frame` and `decision_frame` (1-based) with `deci
 loaded, each pass records `evidence`**: every candidate printing of the last decision, its look, its
 whole-card, symbol and band scores (`null` where the galleries hold no row, or no crop was read), and
 the printing the evidence decided.
+
+**The finish mark (2026-10-24).** A frame the verdict before asked a full copy for (`wants_full`) is
+fed with the frame as the inbox keeps it beside its pump-size copy (`Session::frame_with_full`), as a
+page sends its kept copy, and the frame says so (`full`). Each pass records `finish_mark`, the mark the
+decision held at the last frame carries, and `finish`, the marks measured on the decided card's
+full-frame bands and what they agree on, whether or not the decision carries them.
+**`--neural-finish`** (`pnpm scanner:replay --neural-finish`) turns `Session::set_neural_finish` on, so
+the decision carries the mark and waits for it (*The finish mark* above); the first-decision frames it
+moves are the wait's cost. The summary's **Finish mark** table scores both against the finish the
+reader named — right, the other finish, Unknown, none — and a wrong foil is the floor, as a wrong
+printing is. A run kept at the pump's own size has no full frame, so only scans received from
+2026-10-22 on can be measured; results written before the mark was recorded have no table.
 
 **The models are `crates/card-neural/models/`**, or `--neural-models`. The evidence is
 `--neural-evidence <dir>`, or — left out — the models' folder when it holds all four files and its
@@ -1174,7 +1237,11 @@ would be the scanner grading itself.
   and the page hearing it can send the last frame or two under the old filter's name.
 - **Never older than four seconds** (`RUN_MAX_AGE_MS`), at the ring and again at the press.
 - **A copy of each frame's bytes, taken before the call**: the web host *transfers* a frame's buffer to
-  its Worker, which leaves the page's array detached the moment `scanner_frame` is called.
+  its Worker, which leaves the page's array detached the moment `scanner_frame` is called. **And the
+  full copy a frame is sent with is a copy too** (`wants_full`, §10): where the run keeps full
+  frames, the pump sends a copy of the kept one, so the send never empties the ring. Where it does
+  not, the full copy drawn for that one frame goes to the scanner and the run keeps the pump's frame,
+  because a run is one size of picture.
 - **In memory only**, and gone when the pump stops. The privacy policy says so (*The camera*).
 
 A press reads the ring and the page's state in one synchronous step (`useScanSubmit`). **Recognition

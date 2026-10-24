@@ -15,9 +15,11 @@ import type { CallArgs, CallOptions, Core } from "./types";
  *   **its headers ride as the call's `args`**, an object of strings under the desktop's own
  *   header names. That is the shape the table takes — settled in phase 7's step 7.3, when the
  *   scanner's frame and capture joined it as its two `bytes` entries: `scanner_frame` is
- *   `{ name, args: {}, body }` — a frame is its JPEG and nothing beside it — and `scanner_capture`
- *   `{ name, args: { "x-scanner-capture": "<json>" }, body }`, whose key the engine reads with the
- *   reader the desktop hands its request headers to (`grimoire_core::scanner::capture_from`). The
+ *   `{ name, args: {}, body }` for a frame alone, or `{ name, args: { "x-scanner-full": "<n>" },
+ *   body }` for a frame with its full-resolution copy behind it, and `scanner_capture`
+ *   `{ name, args: { "x-scanner-capture": "<json>" }, body }`, whose keys the engine reads with
+ *   the readers the desktop hands its request headers to (`grimoire_core::scanner::frame_from`,
+ *   `capture_from`). The
  *   web host's `protocol.ts` sends the same `args` beside a transferred buffer.
  * - **Events are Tauri's own**: the host forwards every engine event with `app.emit`, so
  *   subscribing is the desktop's `listen` exactly.
