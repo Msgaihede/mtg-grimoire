@@ -339,6 +339,44 @@ personal API token is a consumer. A webhook ("your collection changed") fires on
 partner integration gets a scope. Each is a token and a handler; none is a device, a pairing or
 a protocol level.
 
+### 7.5 Shares, and why they do not move onto the store (owner, 2026-10-24)
+
+Asked directly: should shared folders read from the projection too? **No for the storage and the
+trust boundary; yes for the projector and the publish trigger.**
+
+- **The boundaries differ.** A share is public — anyone with the link, no auth, in the clear by
+  decision. The store is private — authenticated consumers, sealed payload, locked folders and
+  any opted-in notes inside. A public route served from the private store would leak a locked
+  folder or a note on one filter bug in the Worker. Today that cannot happen, because the device
+  filters and the share Worker only ever holds what the device sent: the "absence, not a switch"
+  fence is on the device, and it stays there.
+- **Sharing must not require a whole-collection copy.** A reader who shares one binder exposes one
+  binder. A share rendered from the store would force the integrations switch on and put the
+  entire collection on the server for a feature many readers use with no integration at all.
+- **Public reads belong on the static path.** R2 behind the edge cache is what survives a Discord
+  unfurl storm; one single-threaded Durable Object per group is not.
+- **The share Worker's blast-radius sentence keeps holding**: a compromise of its R2 is every
+  shared binder and nothing else.
+
+What is unified instead:
+
+- **One projector in grimoire-core.** The share snapshot becomes a filtered output of the same
+  projection code: folder subtree, locked excluded, the share's field policy applied on the
+  device. One Rust module, one golden discipline, one TypeScript mirror. The share's wire format
+  stays `ShareSnapshot v1` — the web viewer already handles a version it does not know — and
+  converging it onto a `Projection v1` subset is a later, optional step with no reader-visible
+  gain of its own.
+- **One publish trigger.** Share refresh moves off the desktop-only five-minute timer
+  (`useShareAutoUpdate.ts:26`; `publish.rs:765-830` refreshes only shares this device published)
+  and onto the end of a successful sync trip, beside the projection publisher, in the core. That
+  closes a real gap: a change made on the phone never reaches a share until the desktop is on.
+  Any syncing device then refreshes any live share of the group.
+
+Where the store *does* fit sharing: the part of #1059 that asks to share a folder **with a specific
+reader** rather than with anyone holding a link is a consumer of the projection — a friend-scoped
+token with a folder scope, read through the authenticated routes. Public shares stay on R2;
+private, reader-to-reader sharing rides the store.
+
 ## 8. What becomes of `integrations/discord`
 
 - **Reuse**: `infrastructure/discord-worker/` (re-targeted at the store), the Settings →
