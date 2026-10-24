@@ -35,6 +35,7 @@ export type PanelId =
   | "start-view"
   | "theory-marks"
   | "labels"
+  | "scan-sounds"
   | "data-folder"
   | "backup"
   | "cache"
@@ -48,6 +49,7 @@ export type GroupId =
   | "sync"
   | "tags"
   | "appearance"
+  | "scanner"
   | "storage"
   | "errors";
 
@@ -170,6 +172,18 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     group: "appearance",
     keywords: "colour color rename recolour recolor delete swatch dot cut candidate deck card",
   },
+  /**
+   * **The scanner's sounds, under an entry of their own** — the first Settings panel about the
+   * Scanner. Its ladder is prices, but `Card data` is where those prices come from, not what a
+   * scan does with them; and a reader looking for "why does it beep" looks for the Scanner.
+   */
+  "scan-sounds": {
+    title: "Scan sounds",
+    group: "scanner",
+    keywords:
+      "scanner scan sound sounds audio beep jingle jackpot chime noise mute volume tier " +
+      "tiers price threshold expensive valuable",
+  },
   "data-folder": {
     title: "Data folder",
     group: "storage",
@@ -263,6 +277,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
   sync: { label: "Sync", badge: "review" },
   tags: { label: "Tags" },
   appearance: { label: "Appearance" },
+  scanner: { label: "Scanner" },
   storage: { label: "Storage and data" },
   errors: { label: "Errors", badge: "errors" },
 };

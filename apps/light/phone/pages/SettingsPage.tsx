@@ -9,6 +9,7 @@ import { LabelsPanel } from "@grimoire/ui/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@grimoire/ui/features/settings/MarketplacePanel";
 import { PrivacyLink } from "@grimoire/ui/features/settings/PrivacyLink";
 import { ReviewPanel } from "@grimoire/ui/features/settings/ReviewPanel";
+import { ScanSoundsPanel } from "@grimoire/ui/features/settings/ScanSoundsPanel";
 import { SyncPanel } from "@grimoire/ui/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@grimoire/ui/features/settings/TheoryMarksPanel";
 import { VersionPanel } from "@grimoire/ui/features/settings/VersionPanel";
@@ -79,6 +80,8 @@ function Panel({ id, log }: { id: LightPanel; log: ErrorLog }): JSX.Element {
       return <TheoryMarksPanel />;
     case "labels":
       return <LabelsPanel />;
+    case "scan-sounds":
+      return <ScanSoundsPanel />;
     case "cache":
       return <Cache />;
     case "errors":

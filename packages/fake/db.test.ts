@@ -13632,7 +13632,8 @@ describe("the busy fault", () => {
     // after a merge.
     // 147 → 148 on 2026-10-14 with `share_auto_update` (issue #1025), which republishes changed
     // shares on the write connection and reaches `refuseIfBusy` first. Count again after a merge.
-    expect(names).toHaveLength(148);
+    // 148 → 149 on 2026-10-24 with `set_scan_sounds`, the scanner's sounds, through `with_write`.
+    expect(names).toHaveLength(149);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

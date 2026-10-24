@@ -127,6 +127,10 @@ import { typeBucket } from "@grimoire/ui/features/decks/deckBuckets";
 import { DEFAULT_SORT_BY } from "@grimoire/ui/features/decks/sorting";
 import { SPECS } from "@grimoire/ui/features/decks/validation/fixtures";
 import { DEFAULT_SCANNER_PREFS, STATUS } from "@grimoire/ui/features/scanner/fixtures";
+import {
+  DEFAULT_SCAN_SOUNDS,
+  ladderRefusal,
+} from "@grimoire/ui/features/scanner/sounds/scanSounds";
 // The app's own list of the four sizes the cache stores, borrowed rather than re-spelled for
 // `hasVariableCost`'s reason below: `card_image_uri` refuses a variant that is not one of them,
 // and a second hand-typed list here would let the workbench and the window disagree about which
@@ -263,6 +267,7 @@ import type {
   ScannerCaptured,
   ScannerSubmission,
   ScannerSubmitted,
+  ScanSounds,
   ScannerPrefs,
   ScannerStatus,
   ScannerTrayRow,
@@ -2370,6 +2375,12 @@ export interface FakeDb {
    */
   startView: string | null;
   /**
+   * `app_meta.scan_sounds` — whether the scanner beeps, and the four prices its louder sounds
+   * start at; `null` for the row not being there, which reads as `ScanSounds::default()`. See
+   * {@link readHandlers.scan_sounds} and {@link writeHandlers.set_scan_sounds}.
+   */
+  scanSounds: ScanSounds | null;
+  /**
    * `app_meta.new_printings_seen` — when this device last looked at the New printings feed, in
    * unix seconds, or `null` for **never**.
    *
@@ -3739,6 +3750,8 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // landing view. `start_view` answers `home` for it, which is what the app opens on out of
     // the box and what every story that says nothing about the setting is standing in.
     startView: null,
+    // A reader who has never touched the scan sounds: on, at 1, 10, 100 and 1000.
+    scanSounds: null,
     // The third field in this function whose default depends on the world rather than on this
     // line — **derived below** by {@link newPrintingsSeenFromDecks}, beside the two above. A
     // `null` here would be *never*, which draws a dot on every row of the New printings feed and
@@ -13497,6 +13510,10 @@ export function readHandlers(db: FakeDb) {
      *
      * A read, so it answers through every second of a sync — the write does not.
      */
+    /** `scansounds::stored` — the reader's scan sounds, or the defaults. A read, so it answers
+     *  through a sync. */
+    scan_sounds: (): ScanSounds => throughJson(db.scanSounds ?? DEFAULT_SCAN_SOUNDS),
+
     start_view: (): string =>
       db.startView !== null && db.startView.trim() !== "" ? db.startView : DEFAULT_START_VIEW,
 
@@ -24047,6 +24064,18 @@ export function writeHandlers(db: FakeDb) {
      * It honours `busy` like every other ordinary write — `startview.rs` takes the write
      * connection through `sync::with_write`, and the lock comes first.
      */
+    /**
+     * `scansounds::store` — remember the scan sounds, whole. One refusal,
+     * `scansounds::TIERS_MUST_CLIMB` (the page's `ladderRefusal` holds the same words), and `busy`
+     * like every ordinary write.
+     */
+    set_scan_sounds: (args: { sounds: ScanSounds }): void => {
+      refuseIfBusy(db);
+      const refusal = ladderRefusal(args.sounds);
+      if (refusal !== null) throw refuse(refusal);
+      db.scanSounds = throughJson(args.sounds);
+    },
+
     set_start_view: (args: { view: string }): void => {
       refuseIfBusy(db);
       const view = args.view.trim();
