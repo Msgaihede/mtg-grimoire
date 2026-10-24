@@ -111,8 +111,7 @@ Data © Scryfall**.
 
 ### Third-party data and models
 
-Release builds embed the card scanner's two text models from
-[ocrs](https://github.com/robertknight/ocrs) —
-[ocrs-models](https://github.com/robertknight/ocrs-models), trained on the HierText dataset and
-licensed **CC-BY-SA 4.0**. The `ocrs` and `rten` crates that run them are
-ordinary dependencies under their own licences.
+The card scanner's networks (`crates/card-neural/models/`) are this project's own weights,
+trained from timm's ImageNet MobileNet checkpoints (Apache-2.0);
+[`crates/card-neural/models/README.md`](crates/card-neural/models/README.md) has each file's
+provenance. The `rten` crate that runs them is an ordinary dependency under its own licence.

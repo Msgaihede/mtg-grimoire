@@ -68,15 +68,13 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   hosting's own headers** — the local server to drive under the shipped policy; `web:smoke`
   serves under it too since 2026-10-04, and fails on a refusal.
   **`web:wasm` refuses an engine module over its ceiling** (10 000 000 B; `scripts/build-wasm.ts`
-  has why, and how to raise it): the card scanner's OCR runtime linked into the engine is three
-  megabytes nothing else would notice. **A full `web:wasm` empties `dist-wasm/`**, the scanner's
-  files with it — run `scanner:assets --web` after it, not before.
-  **`pnpm web:scanner-smoke`** scans a card in the built app: `pnpm scanner:assets
-  --web` first (the scanner's three files into `dist-wasm/scanner-assets/`, which `web:build`
-  then ships; without them the page says the build has no scanner), then a headless Chromium
-  whose camera is a file showing one real card, on the desktop face — the offer, Download,
-  the tray, the collection, offline, a staged fault, and the Worker ended on leaving — and
-  again on the phone face at 360px, in a profile of its own. The
+  has why, and how to raise it): the card scanner's session and network runtime linked into the
+  engine are megabytes nothing else would notice. **A full `web:wasm` empties `dist-wasm/`.**
+  **`pnpm web:scanner-smoke`** scans a card in the built app: a headless Chromium whose camera
+  is a file showing one real card, on the desktop face — the tray, the collection, offline, a
+  staged fault, and the Worker ended on leaving — and again on the phone face at 360px, in a
+  profile of its own. The Neural scanner's files are served from the build's own origin (they
+  are in git, `crates/card-neural/models/`); nothing is fetched first. The
   card's picture is fetched from Scryfall's CDN once by the script and kept in the temp
   folder; `SCAN_CARD_PICTURE=<file>` runs it with no request at all.
   **`pnpm web:sync-smoke`** is live sync end to end: two headless Chromium profiles (the
@@ -98,17 +96,6 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   paged pull it measures now). Nothing runs it —
   half a minute at a thousand ops, five at fifty thousand.
   **`verify` runs none of them** — CI's `web` job runs the two smokes. See [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md).
-- `pnpm scanner:bench` — what a frame costs the card scanner as WASM in a Worker: builds
-  `crates/card-scanner/bench` (needs the `wasm-bindgen` CLI at that package's lockfile's version;
-  no clang), serves its page and runs it in headless Chromium, printing a JSON summary.
-  `--native` runs the same frames through the native runner too, `--sizes` reports the
-  module with and without the readers, `--simd` builds and runs it with WASM SIMD,
-  `--dir <inputs>` takes a directory `bench-prep` made (the default is invented inputs: no
-  real bundle, no models, so no readers), and `--serve --port 8787` leaves the page up for a
-  phone over `adb reverse`. A measurement, not a check — though it exits 1 when a mode saw no
-  card at all, or when `--native`'s hosts disagree about a decision or a read: no lock, no
-  network, and **`verify` and CI do not run it** — CI runs the package's own unit tests and
-  compiles it for WASM and Android. [card-scanner.md](../reference/card-scanner.md) §11.
 - `pnpm scanner:corpus status|pull [--drain]` — readers' scans, from the scan inbox to the private
   corpus bucket and down to `.scanner-corpus/` in the main checkout. Needs `R2_ACCOUNT_ID`,
   `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`. **Never run `scanner:corpus pull` unasked**:
@@ -119,7 +106,8 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   `--yes` it is a dry run that lists where each id is and deletes nothing; **never run
   `remove --yes` unasked**. The report's *Copy remove command* button builds the line.
   `pnpm scanner:replay [--baseline <name>] [--save-baseline <name>] [--only <text>]` replays that
-  mirror through the scanner (release build of `replay`, a few minutes the first time) and writes
+  mirror through the Neural scanner — two passes a scan, as scanned and unfiltered — (a release
+  build of `replay`, a few minutes the first time) and writes
   `summary.md` and `report.html` beside it; it asks no network and takes no lock. The mirror and
   the report are readers' photographs: none of it goes in git. [card-scanner.md](../reference/card-scanner.md)
   §10, *The replay*.

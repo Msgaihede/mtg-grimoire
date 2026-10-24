@@ -52,7 +52,7 @@
 # asks `rusqlite` for a different feature set than the desktop's does.
 resolver = "2"
 # **`crates/grimoire-scan` is the scanner as a module of its own for a browser** (the light
-# app's step 7.5): `card-scanner` with `ocr` and without `corpus`, and nothing of the engine.
+# app's step 7.5): `card-scanner` without `corpus`, and nothing of the engine.
 # A member for the lockfile — one `wasm-bindgen` for both of the web host's modules — and for
 # the `wasm` profile below. ⚠️ **It is only that crate alone when it is built alone**:
 # `cargo build -p grimoire-scan` resolves the features of its own graph, while any build that
@@ -107,24 +107,17 @@ debug = "line-tables-only"
 # Every crate that is not a member of the workspace — `crates/card-scanner` among them.
 debug = false
 
-# **The scanner's crates at full optimisation in a debug build.** The `image`/`imageproc`
-# overrides live in `crates/card-scanner/Cargo.toml` too, and there they do nothing for this
-# package: cargo reads `[profile.*]` from the build root only. Measured 2026-09-08 on the debug
-# server: one rectification 2022 ms against 48 ms in release, a 960 px JPEG decode 230 ms
-# against 3–4, so a `tauri dev` scanner without these is a slideshow.
+# **The scanner's crates at full optimisation in a debug build.** The `image` override lives in
+# `crates/card-scanner/Cargo.toml` too, and there it does nothing for this package: cargo reads
+# `[profile.*]` from the build root only. Measured 2026-09-08: a 960 px JPEG decode 230 ms in a
+# debug build against 3–4 in release, so a `tauri dev` scanner without these is a slideshow.
 #
-# **The crate itself and the OCR runtime are on the list because the first live pass measured
-# them in** (2026-09-08, `tauri dev` with only the two image crates optimised): the pump's
-# budget read rectify 1 829 ms and 5 012 ms of unitemised hash, search and reader time per
-# frame — 7.0 s a frame, 0.1 frames a second. The warp is `imageproc`'s, so what stayed slow
-# was `card-scanner`'s own loops (cardness, trim, the descriptor) and `rten`'s inference. Every
-# `rten-*` crate in the lock file is named, because a graph with one unoptimised member inherits
-# its speed. **`zune-jpeg` is the JPEG decoder `image` 0.25 delegates to**, and it is the same
-# lesson one crate down: with `image` alone optimised, a 960 px frame still decoded in 117 ms
-# against release's 3–4.
+# **The crate itself and the network runtime are on the list for the same reason**: what is slow
+# unoptimised is the scanner's own loops and `rten`'s inference. Every `rten-*` crate in the lock
+# file is named, because a graph with one unoptimised member inherits its speed. **`zune-jpeg`
+# is the JPEG decoder `image` 0.25 delegates to**, and it is the same lesson one crate down: with
+# `image` alone optimised, a 960 px frame still decoded in 117 ms against release's 3–4.
 [profile.dev.package.image]
-opt-level = 3
-[profile.dev.package.imageproc]
 opt-level = 3
 [profile.dev.package.zune-jpeg]
 opt-level = 3
@@ -136,15 +129,11 @@ opt-level = 3
 # card — run at release speed in a debug build for the reason `card-scanner`'s do.
 [profile.dev.package.card-neural]
 opt-level = 3
-[profile.dev.package.ocrs]
-opt-level = 3
 [profile.dev.package.rten]
 opt-level = 3
 [profile.dev.package.rten-base]
 opt-level = 3
 [profile.dev.package.rten-gemm]
-opt-level = 3
-[profile.dev.package.rten-imageproc]
 opt-level = 3
 [profile.dev.package.rten-model-file]
 opt-level = 3
@@ -172,19 +161,16 @@ opt-level = 3
 #   reaches is dropped rather than carried. **That is the whole of how the card scanner stays
 #   out of this module**: the core links it on every target, no command in the table reaches
 #   its session *on this target* — since step 7.3 the table names the scanner's commands, and
-#   each is shut on a page by a refusal that is a constant here (`scanner::not_in_a_browser_yet`;
-#   an `async fn` needs `platform::host::with_files` for the same effect, which step 7.5
-#   measured: 9 961 418 B with the OCR runtime still linked, 7 030 970 B without) — and so its
-#   detection, its hashes, `ocrs`, the eleven `rten*` crates and the
-#   image codecs are all dropped at link time — read off the name section on 2026-10-04, what
-#   is left of the scanner is 35 583 B of code: the review tray's and the preferences' reads
-#   and writes, which a browser does call, and the drop glue of what they name. ⚠️ **An export is a root, and that is how it went wrong
-#   once**: `ocrs`'s default `export-wasm` feature is a `#[wasm_bindgen]` API of its own, its
-#   seven classes were exports of *this* module, and they kept the whole OCR runtime — 1 882 984 B
-#   — in a build that calls none of it. `crates/card-scanner/Cargo.toml` takes `ocrs` without
-#   its defaults since step 5.5; the glue now exports `reqwest`'s three stream classes and
-#   nothing else that is not ours. **A new class in `dist-wasm/grimoire_web.js` is the symptom
-#   to look for**, and no build fails on one.
+#   each is shut on a page by a refusal that is a constant here (`scanner::not_in_a_browser_yet`)
+#   — and so the session, its recogniser, the `rten*` crates and the image codecs are all
+#   dropped at link time. Read off the name section on 2026-10-04, what was left of the scanner
+#   was 35 583 B of code: the review tray's and the preferences' reads and writes, which a
+#   browser does call, and the drop glue of what they name. ⚠️ **An export is a root, and that is
+#   how it went wrong once**: a dependency's own `#[wasm_bindgen]` API (the OCR runtime's
+#   `export-wasm` feature, when the scanner had one) made its classes exports of *this* module,
+#   and they kept the whole runtime — 1 882 984 B — in a build that calls none of it. The glue
+#   exports `reqwest`'s three stream classes and nothing else that is not ours. **A new class in
+#   `dist-wasm/grimoire_web.js` is the symptom to look for**, and no build fails on one.
 # - `panic = "abort"` — what this target does anyway (there is no unwinding on
 #   `wasm32-unknown-unknown`), said, so no landing pad is emitted for one.
 # - **`opt-level` is left at `release`'s 3.** SQLite's C is compiled at the profile's level

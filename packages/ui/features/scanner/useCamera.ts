@@ -37,8 +37,8 @@ function errorName(err: unknown): string {
 }
 
 /**
- * What `getUserMedia` is asked for. `null` is the debug page's request verbatim
- * (`crates/card-scanner/src/bin/live.html`): `facingMode: { ideal: "environment" }` at an *ideal*
+ * What `getUserMedia` is asked for. `null` is the old debug page's request verbatim (it went with
+ * the old scanner, 2026-10-24): `facingMode: { ideal: "environment" }` at an *ideal*
  * 1080p, so a webcam that has no rear lens and no 1080p mode still opens rather than failing the
  * whole request. A named camera swaps the facing for its `exact` id and keeps the ideal size.
  * `audio: false` is not decoration — asking for a track this app never plays would light a

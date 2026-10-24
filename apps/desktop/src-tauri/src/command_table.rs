@@ -146,9 +146,9 @@ const NOT_YET: &[&str] = &[
 ///   object *is* the headers (`commands::Carried`), so a named one would be a key the desktop's
 ///   wrapper has nowhere to read.
 ///
-/// What a header is called and how it is read is one definition, not two to compare: both
-/// callers hand `grimoire_core::scanner::frame_from` and `capture_from` a lookup by the core's
-/// own three names. The page's spelling of those names is `ipc.test.ts`'s to pin.
+/// What a header is called and how it is read is one definition, not two to compare: a frame
+/// carries none, and both callers hand a capture to `grimoire_core::scanner::capture_from` with
+/// a lookup by the core's own name. The page's spelling of that name is `ipc.test.ts`'s to pin.
 const RAW_BODY: &[&str] = &["scanner_capture", "scanner_frame"];
 
 /// The commands `generate_handler!` registers, by their last path segment — the name a page

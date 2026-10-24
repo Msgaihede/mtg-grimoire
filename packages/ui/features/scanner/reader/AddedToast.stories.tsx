@@ -20,7 +20,8 @@ function Held(args: AddedToastProps) {
   const [landings, setLandings] = useState(0);
   // A fresh stamp per press is exactly what a real landing is, so the replay runs the component's
   // own path — the flash, the entrance and a restarted hold.
-  const card = args.card === null ? null : { ...args.card, stamp: `${args.card.stamp}#${landings}` };
+  const card =
+    args.card === null ? null : { ...args.card, stamp: `${args.card.stamp}#${landings}` };
   return (
     <div className="flex flex-col items-start gap-3">
       <div className="relative h-[28rem] w-[46rem] max-w-full overflow-hidden rounded-lg bg-black">
@@ -88,7 +89,7 @@ export const AddedAgain: Story = {
   },
 };
 
-/** Exact re-read the card Fast had just filed and pinned its printing: the row changed, not the count. */
+/** A changed filter re-read the card just filed as another printing: the row changed, not the count. */
 export const PrintingUpdated: Story = {
   args: { card: landedFrom(foil, false, true) },
   play: async ({ canvasElement }) => {

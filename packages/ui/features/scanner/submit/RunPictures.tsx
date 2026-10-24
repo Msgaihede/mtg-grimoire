@@ -33,8 +33,8 @@ export const PLAY_STEP_MS = 110;
  * Each picture is `ScannerSubmissionFrame.jpeg` behind a `data:` scheme — the string the dialog
  * sends, not a second encode of the frame. A `data:` address and never an object URL: the shipped
  * policy's image sources allow the first on every host and the second on none. Bare image
- * elements for `RectifiedPanel`'s reason — these are camera frames, keyed on nothing and fetched
- * from nowhere, and `CardImage` is for a card's picture, which these are not.
+ * elements, because these are camera frames, keyed on nothing and fetched from nowhere, and
+ * `CardImage` is for a card's picture, which these are not.
  *
  * ## Every picture is mounted, and one is shown
  *

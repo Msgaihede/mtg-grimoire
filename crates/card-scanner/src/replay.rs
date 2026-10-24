@@ -7,7 +7,6 @@
 //! and everything here is tested under any feature set.
 
 use crate::filters::ScanFilters;
-use crate::session::ScanMode;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -23,8 +22,8 @@ const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
 pub const NO_CARD: &str =
     "the reader said there is no card in the last frame; the replay does not score those yet";
 
-/// The long edge the app's pump sends its scanner a frame at — `DEFAULT_SEND_PX` in
-/// `packages/ui/features/scanner/scannerOptions.ts`.
+/// The long edge the app's pump sends its scanner a frame at — `SEND_PX` in
+/// `packages/ui/features/scanner/useScanLoop.ts`.
 pub const SENT_LONG_EDGE: u32 = 960;
 /// The JPEG quality the pump sends at — `PUMP_QUALITY` in `useScanLoop.ts`.
 pub const SENT_QUALITY: u8 = 72;
@@ -54,7 +53,9 @@ pub struct LabelCard {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LabelScanner {
     pub reported: Option<String>,
-    pub mode: ScanMode,
+    /// The mode the scanner ran in when the scan was sent — `fast` or `exact` on a scan sent
+    /// before the Neural scanner became the only one, `neural` since. Kept as the word it was.
+    pub mode: String,
     pub confidence: Option<f32>,
     pub distance: Option<f32>,
     pub bundle: Option<u64>,
@@ -285,7 +286,7 @@ mod tests {
     fn reads_the_inboxes_label_nulls_and_whole_numbers_included() {
         let label = parse_label(&label_text(5, 7)).expect("parses");
         assert_eq!(label.card.name, "Lightning Bolt");
-        assert_eq!(label.scanner.mode, ScanMode::Fast);
+        assert_eq!(label.scanner.mode, "fast");
         assert_eq!(label.scanner.reported, None);
         assert_eq!(label.scanner.distance, Some(31.0));
         assert_eq!(label.run[0].confidence, None);

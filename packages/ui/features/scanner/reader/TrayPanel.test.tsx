@@ -67,8 +67,8 @@ import { VERDICTS } from "../fixtures";
 import { NO_FINISHED_ROWS, rowFromDecision } from "./tray";
 import { addLabel, NEXT_DECISION_LABEL, TrayPanel, type TrayPanelProps } from "./TrayPanel";
 
-const resolved = VERDICTS.exactResolved.decision!;
-const ambiguous = VERDICTS.exactAmbiguous.decision!;
+const resolved = VERDICTS.resolved.decision!;
+const ambiguous = VERDICTS.ambiguous.decision!;
 
 /** A resolved row with names this file controls, so an assertion can spell them — of a printing
  *  made in every finish, so a test about the controls is not one about the corpus. */

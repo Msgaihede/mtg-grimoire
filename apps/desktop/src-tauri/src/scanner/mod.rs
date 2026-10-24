@@ -3,14 +3,13 @@
 //! `crates/grimoire-core/src/scanner.rs`, and the state is the core's `State.scanner`.
 //!
 //! **What is still here names this host, and nothing else is** (the light app's step 7.3,
-//! 2026-10-07 — until then the commands' bodies and the body parsing were here too). The assets
-//! `build.rs` embeds, under `cfg(scanner_assets)`, and the Neural scanner's, on every build,
-//! which [`compiled`] hands the core's `ScannerState::carry` as the app starts. **The raw
-//! request** a frame and a capture arrive in: [`frame_payload`] and `capture_payload` take
-//! Tauri's `InvokeBody` and `HeaderMap`, refuse a
-//! JSON body in words, and hand the bytes and a header lookup to the core's `frame_from` and
-//! `capture_from`, which do the reading — the three header names, the detail split and every
-//! sentence are the core's, shared with the command table. And **the `#[tauri::command]`s**,
+//! 2026-10-07 — until then the commands' bodies and the body parsing were here too). The Neural
+//! scanner's files, built in on every build, which [`compiled`] hands the core's
+//! `ScannerState::carry` as the app starts. **The raw request** a frame and a capture arrive in:
+//! [`frame_payload`] and `capture_payload` take Tauri's `InvokeBody` (and, for a capture, its
+//! `HeaderMap`), refuse a JSON body in words, and hand the bytes on — a frame's whole body is the
+//! JPEG, and a capture's sidecar is read by the core's `capture_from`, whose header name and
+//! sentences are shared with the command table. And **the `#[tauri::command]`s**,
 //! each of which fetches what only Tauri can give it — the state, the calling webview's label
 //! for the core's lease, the request — and calls the core function the table's entry of the
 //! same name calls. The lease is admitted here, on the IPC task and before the body is read,
@@ -23,49 +22,22 @@ pub use grimoire_core::scanner::*;
 use std::sync::Arc;
 
 use card_scanner::filters::ScanFilters;
-use card_scanner::session::{FrameOptions, Verdict};
+use card_scanner::session::Verdict;
 use grimoire_core::scanner_submit::Submission;
 use tauri::http::HeaderMap;
 use tauri::ipc::InvokeBody;
 
 use crate::sync::AppState;
 
-#[cfg(scanner_assets)]
-const EMBEDDED_BUNDLE: &[u8] = include_bytes!("../../scanner-assets/card-hashes.bin");
-#[cfg(scanner_assets)]
-const EMBEDDED_DETECTION: &[u8] = include_bytes!("../../scanner-assets/text-detection.rten");
-#[cfg(scanner_assets)]
-const EMBEDDED_RECOGNITION: &[u8] = include_bytes!("../../scanner-assets/text-recognition.rten");
-
-/// What this build carries, for the core's [`ScannerState::carry`]. `build.rs` sets
-/// `cfg(scanner_assets)` only when all three files are present, so a bundle is never embedded
-/// without its models or the reverse. **The Neural scanner's files and their printing evidence
-/// are carried by every build**, whatever that `cfg` says: they are in git
-/// (`crates/card-neural/models/`), so there is no build without them.
-#[cfg(scanner_assets)]
-pub fn compiled() -> Embedded {
-    Embedded {
-        bundle: Some(EMBEDDED_BUNDLE),
-        models: Some((EMBEDDED_DETECTION, EMBEDDED_RECOGNITION)),
-        neural: Some(card_neural::bundled()),
-        neural_evidence: Some(card_neural::bundled_evidence()),
-    }
-}
-
-/// What this build carries: the Neural scanner's files and their evidence and nothing else,
-/// because `apps/desktop/src-tauri/scanner-assets/` was not filled.
-#[cfg(not(scanner_assets))]
+/// What this build carries, for the core's [`ScannerState::carry`]: **the Neural scanner's files
+/// and their printing evidence, on every build** — they are in git (`crates/card-neural/models/`),
+/// so there is no build without them.
 pub fn compiled() -> Embedded {
     Embedded {
         neural: Some(card_neural::bundled()),
         neural_evidence: Some(card_neural::bundled_evidence()),
-        ..Embedded::none()
     }
 }
-
-/// What [`frame_payload`] reads out of one request: the frame, the detail image if one came, and
-/// the options — owned, because the decode runs on another thread than the request lives on.
-pub type FramePayload = (Vec<u8>, Option<Vec<u8>>, FrameOptions);
 
 /// One header of Tauri's request, as the core's payload readers take one: absent, text, or
 /// there and not text. `HeaderValue::to_str` is what decides the third — it refuses any byte
@@ -81,28 +53,22 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Header<'a> {
     }
 }
 
-/// The frame from the request body, the detail image behind it if [`DETAIL_HEADER`] says there
-/// is one, and the options from [`OPTIONS_HEADER`] — the core's [`frame_from`] over Tauri's
-/// request, which has the reasons: one body carrying two JPEGs, and a detail header that is
-/// present and wrong being a refusal where an unreadable options header is a shrug.
+/// The frame: the request body, whole — a JPEG, owned, because the decode runs on another thread
+/// than the request lives on.
 ///
 /// **What is this host's is the refusal of a JSON body**: Tauri hands a command its arguments
 /// either way, and a frame sent as JSON is a page that built the call wrong — said in words
 /// rather than read as an empty frame.
-pub fn frame_payload(body: &InvokeBody, headers: &HeaderMap) -> Result<FramePayload, String> {
+pub fn frame_payload(body: &InvokeBody) -> Result<Vec<u8>, String> {
     match body {
-        InvokeBody::Raw(bytes) => {
-            let (jpeg, detail, opts) = frame_from(bytes, &|name| header(headers, name))?;
-            Ok((jpeg.to_vec(), detail.map(<[u8]>::to_vec), opts))
-        }
+        InvokeBody::Raw(bytes) => Ok(bytes.clone()),
         InvokeBody::Json(_) => Err("the frame has to arrive as a raw request body".to_string()),
     }
 }
 
 /// The capture from the request body and its sidecar from [`CAPTURE_HEADER`] — the core's
 /// [`capture_from`] over Tauri's request, which has the reason a sidecar header that is there
-/// and unreadable is a refusal where an unreadable options header in [`frame_payload`] is a
-/// shrug. A JSON body is refused here, for [`frame_payload`]'s reason.
+/// and unreadable is a refusal. A JSON body is refused here, for [`frame_payload`]'s reason.
 fn capture_payload(body: &InvokeBody, headers: &HeaderMap) -> Result<(Vec<u8>, Sidecar), String> {
     match body {
         InvokeBody::Raw(bytes) => {
@@ -133,15 +99,11 @@ pub async fn scanner_frame(
     // with its camera already open would otherwise pay one per frame to be told no. The guard is
     // held through the decode, so a slow frame cannot let the lease lapse under itself.
     let _lease = state.scanner.admit(webview.label())?;
-    let (jpeg, detail, opts) = frame_payload(request.body(), request.headers())?;
+    let jpeg = frame_payload(request.body())?;
     let state = state.inner().clone();
-    // The detail image is decoded only on a frame whose reads run, so carrying one the session
-    // did not ask for costs the copy and nothing else.
-    tauri::async_runtime::spawn_blocking(move || {
-        state.scanner.frame(&jpeg, detail.as_deref(), &opts)
-    })
-    .await
-    .map_err(|e| format!("the scanner thread failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || state.scanner.frame(&jpeg))
+        .await
+        .map_err(|e| format!("the scanner thread failed: {e}"))?
 }
 
 #[tauri::command]
@@ -310,45 +272,14 @@ pub async fn scanner_tray_archive(
         .map_err(|e| format!("the scan history could not be written: {e}"))?
 }
 
-/// What this install lacks of the scanner's three files, and what fetching them costs — the
-/// core's `scanner_assets::owed`. **Nothing, on a build that embeds them** ([`compiled`]), which
-/// is every release: the page draws no offer and nothing is ever requested. A build without them
-/// — a developer's — is offered the download a phone is.
-///
-/// On the blocking pool for [`scanner_status`]'s reason: it asks the status, and the first ask
-/// loads the session.
-#[tauri::command]
-pub async fn scanner_assets(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<grimoire_core::scanner_assets::Owed, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || grimoire_core::scanner_assets::owed(&state))
-        .await
-        .map_err(|e| format!("the scanner thread failed: {e}"))?
-}
-
-/// Download every file this install owes into `<data>/scanner/`, each checked before it takes
-/// its name, and let the loaded session go so the next scanner command reads them — the core's
-/// `scanner_assets::fetch`, which has the rules. It reports itself through
-/// `scanner_assets::PROGRESS_EVENT`, which the state's sink forwards to every window.
-///
-/// **No lease, and no webview**: who holds the scanner is one question and what is loaded is
-/// another, and the fetch outlives the view that pressed. Only a reader's press calls it.
-#[tauri::command]
-pub async fn scanner_assets_fetch(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<grimoire_core::scanner_assets::Owed, String> {
-    let state = state.inner().clone();
-    grimoire_core::scanner_assets::fetch(&state.core).await
-}
-
 /// Send one scan — the last couple of seconds of camera frames, and the card a reader says they
 /// show — to the scan inbox: the core's `scanner_submit::submit`, which has the rules: what is
 /// sent, what is refused before any request (a single picture among it), and that nothing in it
 /// says who sent it. **The one command that sends a picture off this computer, and only a
 /// reader's press on Send calls it.**
 ///
-/// **No lease, and no webview**, for [`scanner_assets_fetch`]'s reason. The pictures are base64
+/// **No lease, and no webview**: who holds the scanner and what a reader chooses to send are two
+/// questions, and the send outlives the view that pressed. The pictures are base64
 /// inside `submission`, an ordinary argument, so this wrapper takes no raw request and is on no
 /// list in `command_table` but the table's own.
 #[tauri::command]
@@ -396,78 +327,17 @@ mod tests {
         }
     }
 
+    /// The frame is the body, byte for byte.
     #[test]
-    fn a_raw_body_with_no_header_uses_the_default_options() {
+    fn a_raw_body_is_the_frame() {
         let body = InvokeBody::Raw(vec![1, 2, 3]);
-        let (jpeg, detail, opts) = frame_payload(&body, &HeaderMap::new()).expect("payload");
-        assert_eq!(jpeg, vec![1, 2, 3]);
-        // No detail header is the body exactly as it was before the detail image existed.
-        assert_eq!(detail, None);
-        assert_eq!(opts, FrameOptions::default());
-    }
-
-    #[test]
-    fn a_raw_body_reads_its_options_from_the_header() {
-        let body = InvokeBody::Raw(vec![9]);
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            OPTIONS_HEADER,
-            r#"{"decide_at":12,"method":"otsu"}"#.parse().expect("value"),
-        );
-        let (_, _, opts) = frame_payload(&body, &headers).expect("payload");
-        assert_eq!(opts.decide_at, 12.0);
-        assert_eq!(opts.method, card_scanner::session::Method::Otsu);
-    }
-
-    /// The page's own shape: the frame, then the detail image, one body, with the frame's length
-    /// in the header. The options header still reads beside it.
-    #[test]
-    fn a_detail_header_splits_the_body_into_the_frame_and_the_detail() {
-        let body = InvokeBody::Raw(vec![1, 2, 3, 7, 8, 9, 10]);
-        let mut headers = HeaderMap::new();
-        headers.insert(DETAIL_HEADER, "3".parse().expect("value"));
-        headers.insert(
-            OPTIONS_HEADER,
-            r#"{"decide_at":12}"#.parse().expect("value"),
-        );
-        let (jpeg, detail, opts) = frame_payload(&body, &headers).expect("payload");
-        assert_eq!(jpeg, vec![1, 2, 3]);
-        assert_eq!(detail, Some(vec![7, 8, 9, 10]));
-        assert_eq!(opts.decide_at, 12.0);
-    }
-
-    /// Every wrong length is a sentence rather than a split somewhere else: a mis-split body is a
-    /// frame decoded from half a JPEG, and the verdict for it would describe neither image.
-    #[test]
-    fn a_detail_length_that_cannot_split_the_body_is_a_sentence() {
-        let body = InvokeBody::Raw(vec![1, 2, 3, 4]);
-        let refused = |value: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(DETAIL_HEADER, value.parse().expect("value"));
-            frame_payload(&body, &headers).expect_err(value)
-        };
-        let err = refused("three");
-        assert!(err.contains("not a number"), "{err}");
-        let err = refused("-1");
-        assert!(err.contains("not a number"), "{err}");
-        let err = refused("0");
-        assert!(err.contains("zero"), "{err}");
-        // Past the end, and exactly at it — the second leaves an empty detail image.
-        let err = refused("9");
-        assert!(err.contains("no detail image"), "{err}");
-        let err = refused("4");
-        assert!(err.contains("no detail image"), "{err}");
-        // One byte short of the end is still a split, however small the detail.
-        let mut headers = HeaderMap::new();
-        headers.insert(DETAIL_HEADER, "3".parse().expect("value"));
-        let (jpeg, detail, _) = frame_payload(&body, &headers).expect("payload");
-        assert_eq!((jpeg, detail), (vec![1, 2, 3], Some(vec![4])));
+        assert_eq!(frame_payload(&body).expect("payload"), vec![1, 2, 3]);
     }
 
     #[test]
     fn a_json_body_is_a_sentence_not_a_panic() {
         let body = InvokeBody::Json(serde_json::json!({ "jpeg": "AQID", "options": {} }));
-        let err = frame_payload(&body, &HeaderMap::new()).expect_err("a json frame");
+        let err = frame_payload(&body).expect_err("a json frame");
         assert!(err.contains("raw request body"), "{err}");
         let err = capture_payload(&body, &HeaderMap::new()).expect_err("a json capture");
         assert!(err.contains("raw request body"), "{err}");

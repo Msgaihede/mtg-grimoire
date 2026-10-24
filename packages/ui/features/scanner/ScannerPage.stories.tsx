@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ipc } from "@/lib/ipc";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "./fixtures";
 import { ScannerPage } from "./ScannerPage";
@@ -107,32 +107,21 @@ export const CameraRefused: Story = {
 };
 
 /**
- * The three scanner assets absent, which is a build without them embedded — a phone, or a
- * developer's build — until they are fetched. The host says it owes them (`scanner_assets`), so
- * the reader's view draws the offer to download them, with its measured size, under the camera:
- * a reader who cannot scan anything is owed the way out without a switch to find. `ScannerAssets`'
- * own stories press it.
- *
- * It stands where the instruction to place a file at a path and restart was; the Developer
- * panels still name the path. With no bundle there are no labels either, so the Filters trigger
- * is out of reach and says why.
+ * A build with nothing to scan with — no Neural models built in, and no card names beside them.
+ * Nothing is offered and no path is named: the recogniser is never a reader's to place. With no
+ * card names the Filters trigger is out of reach and says why; once a camera is live, every frame
+ * fails in the crate's sentence and the strip says nothing can be identified.
  */
-export const AssetsMissing: Story = {
+export const RecognizerMissing: Story = {
   parameters: { fake: { fault: "scannerMissing" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const offer = await canvas.findByRole("region", { name: "Scanner files" });
-    await expect(
-      within(offer).getByText("The scanner needs its card data — about 19 MB."),
-    ).toBeInTheDocument();
-    await expect(within(offer).getByRole("button", { name: "Download" })).toBeInTheDocument();
-    await expect(canvas.queryByText(/No reference bundle\. Put/)).not.toBeInTheDocument();
-    await expect(await canvas.findByRole("status", { name: "Scanner status" })).toHaveTextContent(
-      "Card hashes aren't loaded",
-    );
+    const filters = await canvas.findByRole("button", { name: "Filters: Any set" });
+    // Greyed once the status has answered, which is after the bar is first drawn.
+    await waitFor(() => expect(filters).toHaveAttribute("aria-disabled", "true"));
+    await expect(canvas.queryByRole("region", { name: "Scanner files" })).toBeNull();
   },
 };
-
 /**
  * A session mid-pile: four rows, newest first — a Lightning Bolt still waiting on one of three
  * printings, a playset-in-progress of Urza's Saga at ×3, a foil Ancient Tomb, and the Black Lotus
@@ -173,7 +162,7 @@ export const CreateDeckFromTray: Story = {
 };
 
 /**
- * The Developer switch on: today's panels and the Tiers panel, under the tray in the same column.
+ * The Developer switch on: the Match and Frame budget panels, under the tray in the same column.
  *
  * Stored rather than pressed, which is the state a reader who left it on comes back to — the
  * switch is a pref, so the page opens with the panels already there.
@@ -184,7 +173,7 @@ export const Developer: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("region", { name: "Match" })).toBeInTheDocument();
-    await expect(canvas.getByRole("region", { name: "Tiers" })).toBeInTheDocument();
+    await expect(canvas.getByRole("region", { name: "Frame budget" })).toBeInTheDocument();
     await expect(canvas.getByRole("region", { name: "Scanned cards" })).toBeInTheDocument();
     await expect(canvas.getByRole("switch", { name: "Developer" })).toHaveAttribute(
       "aria-checked",

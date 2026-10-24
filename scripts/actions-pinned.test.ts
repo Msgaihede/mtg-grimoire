@@ -73,7 +73,7 @@ describe("every workflow and composite action", () => {
       expect.arrayContaining([
         "/.github/workflows/ci.yml",
         "/.github/workflows/release.yml",
-        "/.github/workflows/scanner-bundle.yml",
+        "/.github/workflows/neural-deliver.yml",
         "/.github/actions/rust-toolchain/action.yml",
       ]),
     );
@@ -131,7 +131,7 @@ describe("every job granted a write", () => {
         "/.github/workflows/release.yml release-please",
         "/.github/workflows/release.yml attach",
         "/.github/workflows/release.yml publish",
-        "/.github/workflows/scanner-bundle.yml publish",
+        "/.github/workflows/neural-deliver.yml publish",
       ]),
     );
   });
@@ -140,12 +140,12 @@ describe("every job granted a write", () => {
     expect(job).not.toMatch(BUILDS);
   });
 
-  // The two jobs that build the release's own files, and that were granted the write until
-  // 2026-10-21, are not among them.
+  // The job that builds the release's own files, granted the write until 2026-10-21, is not
+  // among them; nor is the one that builds the Neural models' pull request.
   it("leaves out the jobs that build what is published", () => {
     const names = writers.map(([name]) => name);
     expect(names).not.toContain("/.github/workflows/release.yml build");
-    expect(names).not.toContain("/.github/workflows/scanner-bundle.yml build");
+    expect(names).not.toContain("/.github/workflows/neural-deliver.yml build");
   });
 });
 

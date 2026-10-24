@@ -1,13 +1,7 @@
-import type {
-  ScannerAsset,
-  ScannerAssetDue,
-  ScannerAssetsOwed,
-  ScannerAssetsProgress,
-  ScannerStatus,
-} from "@/lib/ipc";
-import { SCANNER_NEEDS_SIMD, SCANNER_NOT_SHIPPED } from "../hostScanner";
+import type { ScannerAsset, ScannerStatus } from "@/lib/ipc";
+import { SCANNER_NEEDS_SIMD } from "../hostScanner";
 import type { CallArgs, CallOptions, Core } from "../types";
-import { neuralBytesOf, SCANNER_ASSETS_PREFIX } from "./assets";
+import { neuralBytesOf } from "./assets";
 import { webCore } from "./index";
 import { LABELS_COMMAND } from "./protocol";
 import {
@@ -16,11 +10,12 @@ import {
   NEURAL_PATH,
   neuralKept,
   shipsEvidence,
+  type Answered,
+  type NeuralEnv,
   type NeuralSource,
 } from "./scanNeural";
 import {
   frameMessage,
-  isNeuralFrame,
   loadFactsOf,
   loadMessage,
   neuralEvidenceMessage,
@@ -30,43 +25,23 @@ import {
   type ScanOutgoing,
   type ToScanner,
 } from "./scanProtocol";
-import {
-  ALREADY_FETCHING,
-  createScanStore,
-  EMPTY_BUNDLE,
-  MODEL_SHA256,
-  owedRows,
-  PROGRESS_STEP,
-  SCAN_FILES,
-  UNREACHABLE,
-  type Answered,
-  type ScanKey,
-  type ScanManifest,
-  type StoreEnv,
-} from "./scanStore";
 
 /**
  * **The web host's card scanner: the page's half** (the light app's step 7.5).
  *
  * On the desktop and on Android the scanner's commands are answered by the engine
  * (`grimoire_core::scanner`). In a browser the session cannot live there — it is a Worker and
- * a module of its own (`scanWorker.ts` has the three reasons) — so **the session's commands
- * and the two for its files are answered here, in front of the engine's `Core`**, in the shapes
+ * a module of its own (`scanWorker.ts` has the three reasons) — so **the session's commands are
+ * answered here, in front of the engine's `Core`**, in the shapes
  * the engine answers them in. `packages/ui/lib/ipc.ts` calls the same names on every host, and nothing
  * above `@/lib/core` learns which host answered. What is a row or a mutex — the prefs, the
  * tray, its commit and the lease — passes through to the engine untouched.
  *
- * - **The Worker is made by the first command that needs a session, and only when there is
- *   something to load.** With none of the three files in this browser's store, no Worker is
- *   made and the scanner's module is never asked for: the status says all three are absent,
- *   the filters the page pushes are kept as owed, and a frame is refused in a sentence. So
- *   neither the module nor any of its three files is fetched until a reader has pressed
- *   Download. **The manifest is**: opening the Scanner asks `/scanner-assets/manifest.json`,
- *   six hundred bytes, to learn what an offer would cost — on every visit, past every cache.
- * - **A session build** reads the three files out of Cache Storage, asks the engine for every
- *   printing's label — the one thing this ever asks of the engine's Worker — and hands all four
- *   to the scanner's Worker, each buffer transferred. Nothing is cached between builds: the
- *   files are in the store and the labels are a second's work for the engine.
+ * - **The Worker is made by the first command that needs a session** — the status the Scanner
+ *   asks as it opens. Nothing of the scanner is fetched before a reader has opened it.
+ * - **A session build** asks the engine for every printing's label — the one thing this ever
+ *   asks of the engine's Worker — and hands them to the scanner's Worker, transferred. Nothing is
+ *   cached between builds: the labels are a second's work for the engine.
  * - **The Worker is ended when the reader has left the Scanner**, which is the only way its
  *   memory is given back — a WASM memory never shrinks. The mounted view sends `scanner_hold`
  *   once a second and stops when it unmounts or its window is parked; those calls pass through
@@ -78,8 +53,8 @@ import {
  *   Whatever was in flight is refused in one sentence ({@link STOPPED}).
  * - **A build that fails is not tried again at once, and each failure waits longer.** A phone
  *   that cannot grow the module's memory traps on every load; built again by the next frame,
- *   that was eighteen megabytes read out of the store, every label asked of the engine, a
- *   Worker made and a module compiled, once a second, for as long as the Scanner stayed open.
+ *   that was every label asked of the engine, a Worker made and a module compiled, once a
+ *   second, for as long as the Scanner stayed open.
  *   So a build that ends in a trap, an error or a deadline sets a wait — five seconds, then
  *   ten, to a minute ({@link RETRY_AFTER_MS}, {@link RETRY_MAX_MS}) — which a load that
  *   answers clears, and meanwhile says one sentence ({@link COULD_NOT_START}).
@@ -90,44 +65,37 @@ import {
  *   load), a watch ticks once a second for as long as there is a Worker, and one past its
  *   deadline ends the Worker as a trap does.
  * - **A browser that cannot run the module is told before anything is fetched** — thirty-one
- *   bytes of SIMD handed to `WebAssembly.validate` — and every session command and both file
- *   commands are refused there in `hostScanner.ts`'s sentence, which the page reads as no
- *   scanner at all.
+ *   bytes of SIMD handed to `WebAssembly.validate` — and every session command is refused there
+ *   in `hostScanner.ts`'s sentence, which the page reads as no scanner at all.
  * - **A refusal that would repeat is paced.** The page's frame loop sends the next frame the
- *   moment the last is answered, so a frame refused at once — no files yet, a module that will
- *   not arrive — would be refused again as fast as a JPEG can be encoded. Those refusals are
- *   answered {@link REFUSAL_PACE_MS} late, which is the page's own heartbeat.
- * - **The Neural mode's four files are fetched by its first frame, once per Worker** — a frame
- *   whose options say `"mode":"neural"`, and no other: a Fast or Exact reader never asks for
- *   them. That frame waits while the four are read from the app's origin (`scanNeural.ts`: the
- *   HTTP cache and the service worker keep them, the page keeps nothing) and handed to the
- *   Worker, transferred, then is sent. A Worker ended and made again has none, and its first
- *   Neural frame posts them again. A fetch or a load that fails is that frame's refusal, paced,
- *   and is waited out as a build that failed is — five seconds doubling to a minute — so a phone
- *   whose memory will not take them is not handed twenty-seven megabytes a second; meanwhile a
- *   Neural frame says the last failure's sentence and a Fast one is untouched.
+ *   moment the last is answered, so a frame refused at once — a module that will not arrive,
+ *   files that will not load — would be refused again as fast as a JPEG can be encoded. Those
+ *   refusals are answered {@link REFUSAL_PACE_MS} late, which is the page's own heartbeat.
+ * - **The recogniser's four files are fetched by the first frame, once per Worker.** That frame
+ *   waits while the four are read from the app's origin (`scanNeural.ts`: the HTTP cache and the
+ *   service worker keep them, the page keeps nothing) and handed to the Worker, transferred, then
+ *   is sent. A Worker ended and made again has none, and its first frame posts them again. A
+ *   fetch or a load that fails is that frame's refusal, paced, and is waited out as a build that
+ *   failed is — five seconds doubling to a minute — so a phone whose memory will not take them is
+ *   not handed twenty-seven megabytes a second; meanwhile a frame says the last failure's
+ *   sentence.
  * - **The printing evidence follows them, and no frame waits for it.** Once a Worker's recogniser
  *   has answered that it took the four, the evidence's four (`assets.ts`' `NEURAL_EVIDENCE_FILES`)
  *   are fetched in the background and posted when they arrive; the frames meanwhile are sent as
  *   they come and decide without it. A fetch or a refusal that fails is logged and nothing else
  *   — no frame is refused and the status says nothing — and the next Worker asks again. A
  *   hand-over that traps or passes its deadline, which ends the Worker and the recogniser with
- *   it, is not tried again while this page lives: Neural reads on with the recogniser alone. A
- *   build that ships no evidence is asked for none.
+ *   it, is not tried again while this page lives: the scanner reads on with the recogniser
+ *   alone. A build that ships no evidence is asked for none.
  */
 
-/** The seven commands answered here, and the one this listens to on its way past. */
+/** The five commands answered here, and the one this listens to on its way past. */
 export const STATUS_COMMAND = "scanner_status";
 export const FRAME_COMMAND = "scanner_frame";
 export const RESET_COMMAND = "scanner_reset";
 export const FILTERS_COMMAND = "scanner_set_filters";
 export const CAPTURE_COMMAND = "scanner_capture";
-export const ASSETS_COMMAND = "scanner_assets";
-export const ASSETS_FETCH_COMMAND = "scanner_assets_fetch";
 export const HOLD_COMMAND = "scanner_hold";
-
-/** The fetch's progress — `scanner_assets::PROGRESS_EVENT`. Emitted here; the engine never does. */
-export const ASSETS_EVENT = "scanner:assets";
 
 /**
  * The scanner module's memory in bytes, or `null` when no Worker is alive. **Not a command**
@@ -168,18 +136,20 @@ export const WATCH_MS = 1_000;
 export const FRAME_DEADLINE_MS = 30_000;
 
 /**
- * The same for a load, which is longer work: the module's compile, a bundle parsed, every
- * label attached and both readers built. **Two minutes.** With a full corpus's 118 601
+ * The same for a load, which is longer work: the module's compile and every label attached —
+ * and for a hand-over of the recogniser's files, two networks parsed and a gallery taken.
+ * **Two minutes.** With a full corpus's 118 601
  * labels a whole build — the labels' read included, which is not under this deadline — was
  * 1.4–1.8 s on a desk (light-app.md §11.5), so this is some seventy times the slowest seen.
  */
 export const LOAD_DEADLINE_MS = 120_000;
 
 /** What everything in flight is refused with when the Worker stopped under it. */
-export const STOPPED = "The card scanner stopped unexpectedly. It starts again with the next frame.";
+export const STOPPED =
+  "The card scanner stopped unexpectedly. It starts again with the next frame.";
 
-/** What a frame in flight is refused with when a download ended and the session was let go. */
-export const RELOADING = "The card scanner is loading the files that just arrived.";
+/** What a call in flight is refused with when the session was let go under it to be built again. */
+export const RELOADING = "The card scanner is starting again.";
 
 /** What a session command is refused with when the scanner's module did not arrive. */
 export const COULD_NOT_LOAD = "The card scanner could not be loaded. Check your connection.";
@@ -192,24 +162,18 @@ export const COULD_NOT_LOAD = "The card scanner could not be loaded. Check your 
 export const COULD_NOT_START =
   "The card scanner could not start on this device. It will try again in a moment.";
 
-/** What a frame is refused with while this browser holds none of the scanner's files. */
-export const NOT_DOWNLOADED = "The scanner's card data has not been downloaded yet.";
-
 /**
- * What a Neural frame is refused with when the Worker trapped, or passed its deadline, taking
- * the Neural files — and while that is waited out. Not the reader's connection: the files came.
+ * What a frame is refused with when the Worker trapped, or passed its deadline, taking the
+ * recogniser's files — and while that is waited out. Not the reader's connection: the files came.
  */
 export const NEURAL_COULD_NOT_START =
-  "The Neural scanner could not start on this device. It will try again in a moment.";
+  "The card recognizer could not start on this device. It will try again in a moment.";
 
-/** The start of what a Neural frame says when the module refused the files, before its words. */
-export const NEURAL_REFUSED = "The Neural scanner's files would not load:";
+/** The start of what a frame says when the module refused the recogniser's files, before its words. */
+export const NEURAL_REFUSED = "The card recognizer's files would not load:";
 
 /** `scanner_capture` on a page: the Developer panel's capture writes files, and a page has none. */
 export const CAPTURE_REFUSED = "A browser keeps no files, so a frame cannot be captured here.";
-
-/** What a bundle's `error` says beside `loaded: true` when the engine had no labels to give. */
-export const NO_LABELS = "labels: the card database had no cards to name them from";
 
 /**
  * Thirty-one bytes: a module with one function that uses a SIMD instruction. `WebAssembly.validate`
@@ -231,61 +195,35 @@ export interface ScanPort {
 }
 
 /** What the scanner asks of the browser. Handed in, so the suite owns the Worker and the clock. */
-export interface ScanEnv extends StoreEnv {
+export interface ScanEnv extends NeuralEnv {
   /** Make the scanner's Worker. Called once per session built, never at import. */
   spawn(): ScanPort;
   /** Whether this browser compiles WebAssembly SIMD. */
   simd(): boolean;
-  /** `card_scanner::index::FORMAT_VERSION` as this build's scanner module reads a bundle. */
-  format: number;
-  /**
-   * The digest each fixed file must have — the two models' (`scanStore.ts`'s `MODEL_SHA256`).
-   * A field so the suite's small stand-ins can have digests of their own.
-   */
-  pinned: Readonly<Partial<Record<ScanKey, string>>>;
-  /** The Neural scanner's four files as this build serves them: their set, and their lengths. */
+  /** The recogniser's files as this build serves them: their set, and their lengths. */
   neural: NeuralSource;
 }
 
-/** What a manifest for another build's bundle is refused with. A reload takes the update. */
-export const OTHER_FORMAT =
-  "The scanner's card data on the server is for another version of MTG Grimoire. " +
-  "Reload to update, then try again.";
+/** A session as built: a Worker, and what it said. */
+interface Live {
+  port: ScanPort;
+  facts: LoadFacts;
+  /** Whether a status has been answered from this session — see `status`. */
+  reported: boolean;
+  /**
+   * The recogniser's files in this Worker: loaded, being fetched and handed over (the one
+   * promise every frame meanwhile waits on), or neither. Each Worker starts with none.
+   * `evidence` is whether the evidence has been asked for in it — once a Worker, whatever
+   * became of it.
+   */
+  neural: { loaded: boolean; loading: Promise<void> | null; evidence: boolean };
+}
 
-/** A session as built: none, because there was nothing to load — or a Worker and what it said. */
-type Built =
-  | { kind: "empty" }
-  | {
-      kind: "live";
-      port: ScanPort;
-      facts: LoadFacts;
-      /** Which files the store held when this was built: the bundle, and both models. */
-      had: { bundle: boolean; models: boolean };
-      /** Whether a status has been answered from this session — see `status`. */
-      reported: boolean;
-      /**
-       * Why this session has no card names, when the engine *refused* to hand them over — its
-       * read failed, or gave up on a corpus that kept changing. `null` for names that came,
-       * and for an empty corpus, which is an answer and has a sentence of its own.
-       */
-      nameless: string | null;
-      /**
-       * The Neural files in this Worker: loaded, being fetched and handed over (the one
-       * promise every Neural frame meanwhile waits on), or neither. Each Worker starts with none.
-       * `evidence` is whether the evidence has been asked for in it — once a Worker, whatever
-       * became of it.
-       */
-      neural: { loaded: boolean; loading: Promise<void> | null; evidence: boolean };
-    };
-
-/** A session that was built: a Worker, and what it said. */
-type Live = Extract<Built, { kind: "live" }>;
-
-/** What the page knows of the Neural files beside any one Worker — for the status. */
+/** What the page knows of the recogniser's files beside any one Worker — for the status. */
 export interface NeuralFacts {
   /** The four are in this browser: fetched whole by this page, or kept from an earlier visit. */
   present: boolean;
-  /** Why the last fetch or hand-over did not take, in the sentence a Neural frame said. */
+  /** Why the last fetch or hand-over did not take, in the sentence a frame said. */
   error: string | null;
 }
 
@@ -296,7 +234,7 @@ interface Pending {
   due: number;
   /** Whether it is a session's load: one that fails is a build that failed. */
   load: boolean;
-  /** Whether it hands over the Neural files: one that fails is waited out before the next. */
+  /** Whether it hands over the recogniser's files: one that fails is waited out before the next. */
   neural: boolean;
   /** Whether it hands over the evidence: one that ends the Worker is not tried again. */
   evidence: boolean;
@@ -306,78 +244,49 @@ interface Pending {
 const sentenceOf = (error: unknown): string =>
   typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
 
-/** A file of the store as the status describes it. `path` is where a build serves it from. */
-function asset(key: ScanKey, present: boolean, loaded: boolean, error: string | null): ScannerAsset {
-  const name = SCAN_FILES.find((file) => file.key === key)?.name ?? key;
-  return { path: `${SCANNER_ASSETS_PREFIX}${name}`, present, loaded, error, source: "store" };
-}
-
 /**
  * `scanner_status`' answer, **composed on the page from what the module's `load` said** — the
- * core's `ScannerStatus`, field for field. Every asset is `store`: this host has no folder a
- * reader could put a file in, so none is ever `absent` in the sense the page reads that word.
+ * core's `ScannerStatus`, field for field. The recogniser is `store`: this host has no folder a
+ * reader could put a file in, so it is never `absent` in the sense the page reads that word.
  *
- * **`neural` is the four Neural files as one asset**, as the core's is: `present` when this
- * browser holds them, `loaded` when this session's Worker has taken them — which it does on its
- * first Neural frame, so a session that has read none says `false` — and `error` the sentence the
- * last fetch or hand-over failed with.
+ * **`neural` is the four files as one asset**, as the core's is: `present` when this browser
+ * holds them, `loaded` when this session's Worker has taken them — which it does on its first
+ * frame, so a session that has read none says `false` — and `error` the sentence the last fetch
+ * or hand-over failed with.
  */
-export function statusOf(built: Built, neural: NeuralFacts = { present: false, error: null }): ScannerStatus {
-  const neuralAsset = (loaded: boolean): ScannerAsset => ({
+export function statusOf(
+  built: Live,
+  neural: NeuralFacts = { present: false, error: null },
+): ScannerStatus {
+  const loaded = built.neural.loaded;
+  const asset: ScannerAsset = {
     path: NEURAL_PATH,
     present: neural.present || loaded,
     loaded,
     error: loaded ? null : neural.error,
     source: "store",
-  });
-  if (built.kind === "empty") {
-    return {
-      bundle: asset("bundle", false, false, null),
-      detection_model: asset("detectionModel", false, false, null),
-      recognition_model: asset("recognitionModel", false, false, null),
-      neural: neuralAsset(false),
-      labels: 0,
-      scans_dir: "",
-      unapplied_filters: null,
-    };
-  }
-  const { facts, had } = built;
-  // **A bundle that parses and holds no card did not load**, as the core refuses one at its
-  // fetch: put to use it would name nothing, and say nothing was wrong.
-  const empty = facts.bundle.loaded && facts.bundle.entries === 0;
-  // A bundle that loaded with no names is its own state, and the page has a sentence for it:
-  // the module says nothing of labels it was never handed, so this says it.
-  const unnamed = facts.bundle.loaded && facts.labels === 0 && facts.bundle.error === null;
-  const bundleError = empty
-    ? EMPTY_BUNDLE
-    : unnamed
-      ? (built.nameless ?? NO_LABELS)
-      : facts.bundle.error;
+  };
   return {
-    bundle: asset("bundle", had.bundle, facts.bundle.loaded && !empty, bundleError),
-    detection_model: asset("detectionModel", had.models, facts.models.loaded, facts.models.error),
-    recognition_model: asset("recognitionModel", had.models, facts.models.loaded, facts.models.error),
-    neural: neuralAsset(built.neural.loaded),
-    labels: facts.labels,
+    neural: asset,
+    labels: built.facts.labels,
     scans_dir: "",
-    unapplied_filters: facts.unapplied_filters,
+    unapplied_filters: built.facts.unapplied_filters,
   };
 }
 
 /**
- * `inner`, with the scanner's session and its files answered on the page.
+ * `inner`, with the scanner's session answered on the page.
  *
  * `spawn` lives in `env` so that nothing is created at import: the module doc has when a
  * Worker is made, and when it is ended.
  */
 export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Core {
-  const store = createScanStore(env);
   let nextId = 1;
   const pending = new Map<number, Pending>();
   /** The Worker there is — one being loaded, or one loaded. */
   let port: ScanPort | undefined;
   /** The build in flight or done. Unset whenever the next command must build afresh. */
-  let building: Promise<Built> | undefined;
+  let building: Promise<Live> | undefined;
   /** Moves each time the session is let go, so a build that was overtaken installs nothing. */
   let generation = 0;
   /**
@@ -395,31 +304,17 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
   /** When the Scanner was last known to be open, and whether a look at that is scheduled. */
   let seen = env.now();
   let watching = false;
-  /** Whether a fetch of the files is running, and what it has still to bring. */
-  let fetching = false;
-  let stillOwed: ScannerAssetDue[] = [];
   /**
-   * The Neural files beside any one Worker: whether this browser holds them, and why the last
-   * fetch or hand-over did not take. A Worker's own are on its session (`Built`'s `neural`).
+   * The recogniser's files beside any one Worker: whether this browser holds them, and why the last
+   * fetch or hand-over did not take. A Worker's own are on its session (`Live`'s `neural`).
    */
   let neuralHeld = false;
   let neuralError: string | null = null;
-  /** A Neural fetch or hand-over failed: none is tried again before this moment. */
+  /** A fetch or hand-over of the recogniser's files failed: none is tried again before this moment. */
   let neuralRetryAt = 0;
   let neuralFailures = 0;
   /** A hand-over of the evidence ended its Worker: no Worker is handed it again. */
   let evidenceDropped = false;
-  const listeners = new Set<(payload: never) => void>();
-
-  const emit = (payload: ScannerAssetsProgress): void => {
-    for (const handler of [...listeners]) {
-      try {
-        handler(payload as never);
-      } catch (error) {
-        console.error(`A subscriber to ${ASSETS_EVENT} threw.`, error);
-      }
-    }
-  };
 
   const paced = <T>(sentence: string): Promise<T> =>
     new Promise<T>((_, reject) => env.after(REFUSAL_PACE_MS, () => reject(sentence)));
@@ -442,7 +337,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     waiting = sentence;
   }
 
-  /** A Neural fetch or hand-over failed. Waited out as a build is; a Fast frame is not held. */
+  /** A fetch or hand-over of the recogniser's files failed. Waited out as a build is. */
   function neuralBackOff(sentence: string): void {
     neuralRetryAt = env.now() + Math.min(RETRY_AFTER_MS * 2 ** neuralFailures, RETRY_MAX_MS);
     neuralFailures += 1;
@@ -451,7 +346,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
 
   /**
    * The Worker failed under what was pending — a trap, its own error, a deadline. A hand-over of
-   * the Neural files among it is the Neural files' failure: a phone whose memory will not take
+   * the recogniser's files among it is those files' failure: a phone whose memory will not take
    * them would otherwise be handed them again by the next frame's new Worker, and again.
    *
    * **The evidence when it is to blame** — `evidenceFailed`: a trap names its call by id, and
@@ -461,10 +356,13 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
    * is not handed to a Worker again: each one it ended took the recogniser with it.
    */
   function failedUnder(evidenceFailed: boolean): void {
-    if ([...pending.values()].some((waiter) => waiter.neural)) neuralBackOff(NEURAL_COULD_NOT_START);
+    if ([...pending.values()].some((waiter) => waiter.neural))
+      neuralBackOff(NEURAL_COULD_NOT_START);
     if (evidenceFailed && !evidenceDropped) {
       evidenceDropped = true;
-      console.warn("MTG Grimoire: the Neural scanner goes on without its printing evidence, which ended its Worker.");
+      console.warn(
+        "MTG Grimoire: the card scanner goes on without its printing evidence, which ended its Worker.",
+      );
     }
   }
 
@@ -530,9 +428,9 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
    * post that throws is that call's failure.
    *
    * **Never to a Worker that is no longer the one.** A caller holds the session it awaited,
-   * and another caller's turn can end that session in between — a status that builds again, a
-   * download landing — so the port in hand may already be terminated, and a message posted to
-   * it is one nobody answers.
+   * and another caller's turn can end that session in between — a status that builds again, the
+   * reader leaving — so the port in hand may already be terminated, and a message posted to it
+   * is one nobody answers.
    */
   function ask(to: ScanPort, { message, transfer }: ScanOutgoing): Promise<unknown> {
     if (to !== port) return Promise.reject(STOPPED);
@@ -553,40 +451,17 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     });
   }
 
-  async function build(mine: number): Promise<Built> {
-    // A model kept under a digest that is not the pinned one is not the model: not read, and
-    // so not handed to the module. (What is kept was checked against its digest as it landed.)
-    const kept = await store.kept();
-    const model = (key: ScanKey): Promise<Uint8Array | null> =>
-      env.pinned[key] !== undefined && kept[key]?.sha256 !== env.pinned[key]
-        ? Promise.resolve(null)
-        : store.read(key);
-    const [bundle, detection, recognition] = await Promise.all([
-      store.read("bundle"),
-      model("detectionModel"),
-      model("recognitionModel"),
-    ]);
-    if (bundle === null && detection === null && recognition === null) {
-      // Nothing to load, so no Worker — and no module asked for. Whether there is anything to
-      // fetch is the origin's to say: a build made without the files has no scanner at all.
-      if ((await store.manifest()).kind === "missing") throw SCANNER_NOT_SHIPPED;
-      return { kind: "empty" };
-    }
+  async function build(mine: number): Promise<Live> {
     // The names are the engine's: it holds the corpus. No labels is an answer — a corpus still
     // on its way — and so, here, is an engine that would not say: the session then answers ids.
     // **A refusal is not an empty corpus**: the engine's read failed, or gave up on a corpus
     // that kept changing under it (a launch's feeds). The names are there to be had a moment
-    // later, so the session says why it has none and the next status asks again.
-    let nameless: string | null = null;
-    const labels =
-      bundle === null
-        ? null
-        : await inner.call<Uint8Array>(LABELS_COMMAND).catch((error: unknown) => {
-            nameless = `labels: ${sentenceOf(error)}`;
-            console.warn(`MTG Grimoire: the card scanner got no card names. ${sentenceOf(error)}`);
-            return null;
-          });
-    // Let go while the files were being read — a download ended, or the reader left.
+    // later, and the next status asks again (see `status`).
+    const labels = await inner.call<Uint8Array>(LABELS_COMMAND).catch((error: unknown) => {
+      console.warn(`MTG Grimoire: the card scanner got no card names. ${sentenceOf(error)}`);
+      return null;
+    });
+    // Let go while the names were being read — the reader left.
     if (mine !== generation) throw RELOADING;
     const made = env.spawn();
     port = made;
@@ -604,8 +479,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     made.addEventListener("messageerror", broke("A message from it could not be read."));
     // From now, not from the load's answer: a load that never ends is what the watch is for.
     watch();
-    const files = { bundle, labels, detection, recognition };
-    const facts = loadFactsOf(await ask(made, loadMessage(nextId++, filters, files)));
+    const facts = loadFactsOf(await ask(made, loadMessage(nextId++, filters, labels)));
     if (facts === null) {
       backOff(COULD_NOT_START);
       end(STOPPED);
@@ -613,19 +487,16 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     }
     failures = 0;
     return {
-      kind: "live",
       port: made,
       facts,
-      had: { bundle: bundle !== null, models: detection !== null && recognition !== null },
       reported: false,
-      nameless,
       neural: { loaded: false, loading: null, evidence: false },
     };
   }
 
   /**
-   * The Neural files in `built`'s Worker: there already, on their way — the one promise every
-   * Neural frame meanwhile waits on — or fetched now and handed over. Rejects with one sentence,
+   * The recogniser's files in `built`'s Worker: there already, on their way — the one promise
+   * every frame meanwhile waits on — or fetched now and handed over. Rejects with one sentence,
    * and a failure that is not the Worker ending under it is waited out ({@link neuralBackOff}).
    */
   function neuralIn(built: Live): Promise<void> {
@@ -642,7 +513,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
         const sentence = sentenceOf(error);
         if (sentence === STOPPED || sentence === RELOADING) throw sentence;
         // The module's own refusal: files it could not make a recogniser of.
-        console.warn(`MTG Grimoire: the Neural scanner's files would not load. ${sentence}`);
+        console.warn(`MTG Grimoire: the card recognizer's files would not load. ${sentence}`);
         throw `${NEURAL_REFUSED} ${sentence}`;
       });
     };
@@ -656,7 +527,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
         },
         (error: unknown) => {
           const sentence = sentenceOf(error);
-          // A Worker ended under it is the Worker's: the next Neural frame's asks afresh. (A
+          // A Worker ended under it is the Worker's: the next frame asks afresh. (A
           // trap or a deadline has already set the wait — `failedUnder`.)
           if (sentence !== STOPPED && sentence !== RELOADING) neuralBackOff(sentence);
           return Promise.reject(sentence);
@@ -671,7 +542,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
   /**
    * The printing evidence into `built`'s Worker, whose recogniser has taken the four: fetched and
    * posted in the background, once a Worker. **Nothing waits on it** — the frames meanwhile are
-   * sent as they come — and a failure is logged and nothing else: Neural reads on without it.
+   * sent as they come — and a failure is logged and nothing else: the scanner reads on without it.
    */
   function evidenceInto(built: Live): void {
     if (evidenceDropped || built.neural.evidence || !shipsEvidence(env.neural)) return;
@@ -687,19 +558,21 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
       const sentence = sentenceOf(error);
       // A Worker ended under it is the Worker's, and a trap or a deadline has said so already.
       if (sentence === STOPPED || sentence === RELOADING) return;
-      console.warn(`MTG Grimoire: the Neural scanner goes on without its printing evidence. ${sentence}`);
+      console.warn(
+        `MTG Grimoire: the card scanner goes on without its printing evidence. ${sentence}`,
+      );
     });
   }
 
   /** The session, built on first use. Rejects with one sentence. */
-  function ensure(): Promise<Built> {
+  function ensure(): Promise<Live> {
     if (unsupported || !env.simd()) return Promise.reject(SCANNER_NEEDS_SIMD);
     if (building !== undefined) return building;
     if (env.now() < retryAt) return Promise.reject(waiting);
     const mine = generation;
     const made = build(mine).catch((error: unknown) => {
       if (building === made) building = undefined;
-      return Promise.reject<Built>(sentenceOf(error));
+      return Promise.reject<Live>(sentenceOf(error));
     });
     building = made;
     return made;
@@ -708,45 +581,38 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
   async function status(): Promise<ScannerStatus> {
     touch();
     let built = await ensure();
-    // A session built while the card database was empty names nothing, and would for as long
-    // as it lived. So a status asked of one that has already said so — the next visit to the
-    // Scanner — builds again, and asks the engine for the names again.
-    const unnamed = (now: Built): boolean =>
-      now.kind === "live" && now.facts.bundle.loaded && now.facts.labels === 0;
-    // (An empty corpus and a read the engine gave up on alike: `nameless` only says which.)
-    if (built.kind === "live" && built.reported && unnamed(built)) {
+    // A session built while the card database was empty — or while the engine would not read
+    // it — names nothing, and would for as long as it lived. So a status asked of one that has
+    // already said so — the next visit to the Scanner, or a sync that brought the names —
+    // builds again, and asks the engine for the names again.
+    if (built.reported && built.facts.labels === 0) {
       end(RELOADING);
       built = await ensure();
     }
-    if (built.kind === "live") built.reported = true;
+    built.reported = true;
     // Kept by the service worker on an earlier visit counts: they are in this browser.
     if (!neuralHeld && (await neuralKept(env, env.neural))) neuralHeld = true;
     return statusOf(built, { present: neuralHeld, error: neuralError });
   }
 
-  async function frame(args: CallArgs | undefined, options: CallOptions | undefined): Promise<unknown> {
+  async function frame(args: CallArgs | undefined): Promise<unknown> {
     touch();
     if (!(args instanceof Uint8Array)) return Promise.reject("A scanner frame is bytes.");
-    let built: Built;
+    let built: Live;
     try {
       built = await ensure();
     } catch (error) {
       return paced(sentenceOf(error));
     }
-    if (built.kind === "empty") return paced(NOT_DOWNLOADED);
-    const outgoing = frameMessage(nextId++, args, options?.headers);
-    if (typeof outgoing === "string") return Promise.reject(outgoing);
-    // A Neural frame waits for the Neural files in this Worker — fetched and handed over by the
-    // first, once. Nothing is posted until they are: the frame's bytes are only handed over by
-    // its own post.
-    if (outgoing.message.kind === "frame" && isNeuralFrame(outgoing.message.options)) {
-      try {
-        await neuralIn(built);
-      } catch (error) {
-        return paced(sentenceOf(error));
-      }
+    // Every frame waits for the recogniser's files in this Worker — fetched and handed over by
+    // the first, once. Nothing is posted until they are: the frame's bytes are only handed over
+    // by its own post.
+    try {
+      await neuralIn(built);
+    } catch (error) {
+      return paced(sentenceOf(error));
     }
-    return ask(built.port, outgoing);
+    return ask(built.port, frameMessage(nextId++, args));
   }
 
   async function reset(): Promise<null> {
@@ -755,7 +621,8 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     touch();
     // Nothing is built for a reset: with no session there is no card to forget.
     const built = await building?.catch(() => undefined);
-    if (built?.kind === "live") await ask(built.port, { message: { kind: "reset", id: nextId++ }, transfer: [] });
+    if (built !== undefined)
+      await ask(built.port, { message: { kind: "reset", id: nextId++ }, transfer: [] });
     return null;
   }
 
@@ -764,140 +631,23 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     const pushed = args instanceof Uint8Array ? undefined : args?.filters;
     const text = JSON.stringify(pushed ?? {});
     const built = await ensure();
-    if (built.kind === "empty") {
-      // No session to ask. Owed to the first one built, which says what became of them.
-      filters = text;
-      return null;
-    }
     // The crate's own sentence when it refuses, and then the filters in force stand.
-    await ask(built.port, { message: { kind: "filters", id: nextId++, filters: text }, transfer: [] });
+    await ask(built.port, {
+      message: { kind: "filters", id: nextId++, filters: text },
+      transfer: [],
+    });
     filters = text;
     built.facts.unapplied_filters = null;
     return null;
   }
 
-  /**
-   * What the store lacks, and the manifest it lacks it by — or a rejection in one sentence.
-   *
-   * **With no manifest to be had, the store alone answers**, and `manifest` is `null`: a
-   * reader offline with all three in hand owes nothing and scans; one with a file missing is
-   * owed it at the size the core writes down for it ({@link SCAN_FILES}' `about`), so the offer
-   * is drawn and its press is what says the files cannot be reached. Refused, the page drew
-   * no offer and no reason — an offline reader who had never downloaded was shown a camera and
-   * a sentence about data, with nothing to press.
-   */
-  async function owedNow(): Promise<{
-    manifest: ScanManifest | null;
-    rows: ScannerAssetDue[];
-    unreachable: string | null;
-  }> {
-    const [answer, kept] = await Promise.all([store.manifest(), store.kept()]);
-    if (answer.kind === "missing") throw SCANNER_NOT_SHIPPED;
-    if (answer.kind === "unreachable") {
-      const held = (key: ScanKey): boolean =>
-        kept[key] !== null && (env.pinned[key] === undefined || kept[key]?.sha256 === env.pinned[key]);
-      const rows = SCAN_FILES.filter((file) => !held(file.key)).map((file) => ({
-        key: file.key,
-        label: file.label,
-        bytes: file.about,
-      }));
-      return { manifest: null, rows, unreachable: answer.message };
-    }
-    if (answer.manifest.formatVersion !== env.format) throw OTHER_FORMAT;
-    // The models are fixed files with digests written down. A manifest naming another for
-    // either describes files this version does not read, whatever length they are.
-    for (const file of answer.manifest.files) {
-      const pinned = env.pinned[file.key];
-      if (pinned !== undefined && file.sha256 !== pinned) throw OTHER_FORMAT;
-    }
-    return { manifest: answer.manifest, rows: owedRows(answer.manifest, kept), unreachable: null };
-  }
-
-  const owedOf = (rows: ScannerAssetDue[], running: boolean): ScannerAssetsOwed => ({
-    owed: rows,
-    bytes: rows.reduce((sum, row) => sum + row.bytes, 0),
-    fetching: running,
-  });
-
-  async function assets(): Promise<ScannerAssetsOwed> {
-    if (unsupported || !env.simd()) throw SCANNER_NEEDS_SIMD;
-    // While a fetch runs it is the one that knows: the store is changing under any other look.
-    if (fetching) return owedOf(stillOwed, true);
-    return owedOf((await owedNow()).rows, false);
-  }
-
-  async function assetsFetch(): Promise<ScannerAssetsOwed> {
-    if (unsupported || !env.simd()) throw SCANNER_NEEDS_SIMD;
-    if (fetching) throw ALREADY_FETCHING;
-    fetching = true;
-    stillOwed = [];
-    let done = 0;
-    let total = 0;
-    try {
-      const now = await owedNow();
-      const rows = now.rows;
-      stillOwed = rows;
-      // Something is owed and there is no manifest to fetch it by: the press is where the
-      // reader is told the files cannot be reached.
-      if (now.manifest === null && rows.length > 0) throw now.unreachable ?? UNREACHABLE;
-      total = rows.reduce((sum, row) => sum + row.bytes, 0);
-      let said = 0;
-      let landed = 0;
-      /** The models this run brought, in order: the pair is checked once more when it has. */
-      const models: string[] = [];
-      const say = (phase: ScannerAssetsProgress["phase"], file: string | null): void =>
-        emit({ phase, file, done, total, message: null });
-      try {
-        for (const row of rows) {
-          const file = now.manifest?.files.find((entry) => entry.key === row.key);
-          if (file === undefined) continue;
-          say("downloading", row.key);
-          await store.fetch(
-            file,
-            (bytes) => {
-              done += bytes;
-              if (done - said >= PROGRESS_STEP) {
-                said = done;
-                say("downloading", row.key);
-              }
-            },
-            () => say("checking", row.key),
-          );
-          landed += 1;
-          if (row.key !== "bundle") models.push(row.key);
-          stillOwed = stillOwed.filter((left) => left.key !== row.key);
-        }
-        // The core's sequence, so the offer's bar reads the same on every host: after each
-        // file's own check, one more for the pair of models, named for the last of them. There
-        // the pair is loaded as a reader; here the next session's load is what says so.
-        if (models.length > 0) say("checking", models[models.length - 1] ?? null);
-      } finally {
-        // The session there is was built from the store as it was. Let go, so the next command
-        // builds from what has landed — a file that arrived before a later one failed included.
-        if (landed > 0) end(RELOADING);
-      }
-      done = total;
-      say("done", null);
-    } catch (error) {
-      const message = sentenceOf(error);
-      // Said on the console, where a bug report can carry it. **Not in the error log**, where a
-      // host with a folder writes one: that log is the engine's, and its table has a command
-      // to read it and one to clear it and none a page could write a row through.
-      console.warn(`MTG Grimoire: the scanner's files were not fetched. ${message}`);
-      // Nothing counted and no file named, as the core's own failure event is.
-      emit({ phase: "error", file: null, done: 0, total: 0, message });
-      throw message;
-    } finally {
-      fetching = false;
-      stillOwed = [];
-    }
-    return assets().catch(() => owedOf([], false));
-  }
-
   async function memory(): Promise<number | null> {
     const built = await building?.catch(() => undefined);
-    if (built?.kind !== "live") return null;
-    const bytes = await ask(built.port, { message: { kind: "memory", id: nextId++ }, transfer: [] });
+    if (built === undefined) return null;
+    const bytes = await ask(built.port, {
+      message: { kind: "memory", id: nextId++ },
+      transfer: [],
+    });
     return typeof bytes === "number" ? bytes : null;
   }
 
@@ -911,17 +661,13 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
         case STATUS_COMMAND:
           return said(status());
         case FRAME_COMMAND:
-          return said(frame(args, options));
+          return said(frame(args));
         case RESET_COMMAND:
           return said(reset());
         case FILTERS_COMMAND:
           return said(setFilters(args));
         case CAPTURE_COMMAND:
           return Promise.reject(CAPTURE_REFUSED);
-        case ASSETS_COMMAND:
-          return said(assets());
-        case ASSETS_FETCH_COMMAND:
-          return said(assetsFetch());
         case MEMORY_COMMAND:
           return said(memory());
         case HOLD_COMMAND:
@@ -934,16 +680,13 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     },
 
     listen<T>(event: string, handler: (payload: T) => void): () => void {
-      if (event !== ASSETS_EVENT) return inner.listen(event, handler);
-      const entry = handler as (payload: never) => void;
-      listeners.add(entry);
-      return () => void listeners.delete(entry);
+      return inner.listen(event, handler);
     },
   };
 }
 
 /**
- * The page's own: Cache Storage, `fetch`, `crypto.subtle`, and the scanner's Worker.
+ * The page's own: Cache Storage, `fetch`, and the scanner's Worker.
  *
  * **Each global is reached inside a `try`**, as `index.ts`'s `pageBrowser` does and for its
  * reason. **The `new Worker(new URL(…))` is here and nowhere else**, which is what puts the
@@ -958,22 +701,13 @@ function pageScanEnv(): ScanEnv {
       return undefined;
     }
   };
-  const subtle = reach(() => globalThis.crypto.subtle);
   return {
     caches: reach(() => globalThis.caches),
     fetch: (path, init): Promise<Answered> => globalThis.fetch(path, init),
-    digest: subtle
-      ? async (bytes) =>
-          [...new Uint8Array(await subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>))]
-            .map((byte) => byte.toString(16).padStart(2, "0"))
-            .join("")
-      : undefined,
     after: (ms, run) => void setTimeout(run, ms),
     now: () => Date.now(),
     spawn: () => new Worker(new URL("./scanWorker.ts", import.meta.url), { type: "module" }),
     simd: () => reach(() => WebAssembly.validate(SIMD_PROBE)) === true,
-    format: Number(import.meta.env.VITE_SCANNER_FORMAT),
-    pinned: MODEL_SHA256,
     // The set's id and the files' lengths, as `apps/light/vite.config.ts` found them.
     neural: {
       set: String(import.meta.env.VITE_NEURAL_SET),
@@ -986,6 +720,6 @@ function pageScanEnv(): ScanEnv {
  * The page's one: the engine's `Core` with the scanner answered in front of it. **A module
  * singleton**, like `webCore` and for its reason — one scanner Worker per page whatever mounts
  * or unmounts above it — and nothing is made here but the closure: the Worker is `spawn`'s, on
- * the first command that has something to load.
+ * the first command that needs a session.
  */
 export const scanningCore: Core = answeringScanner(webCore);

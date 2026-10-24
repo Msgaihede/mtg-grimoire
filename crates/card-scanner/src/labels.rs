@@ -1,10 +1,10 @@
 //! The labels, as bytes — for a host that has a session and no database to read them from.
 //!
-//! [`Reference::load_labels`] reads twelve columns of every row of `corpus.db`'s `cards` and
+//! [`Reference::load_labels`] reads eleven columns of every row of `corpus.db`'s `cards` and
 //! attaches each as a [`Label`]. A browser's scanner runs in a Worker of its own, on a module
 //! of this crate alone (`crates/grimoire-scan`, the light app's step 7.5): the corpus is the
 //! engine's, in another Worker, behind the one connection its storage permits. So the engine
-//! reads the same twelve columns, writes them down here ([`Encoder`], [`read_page`]), and hands
+//! reads the same eleven columns, writes them down here ([`Encoder`], [`read_page`]), and hands
 //! the bytes across; the scanner's module reads them back ([`decode`]) and attaches them
 //! ([`attach`]) through the same two calls `load_labels` makes, in the same order.
 //!
@@ -12,7 +12,7 @@
 //! it is the one this exists to avoid. [`Row`], [`Encoder`], [`decode`] and [`attach`] are
 //! plain code; only [`read_page`], which reads a connection, is behind `corpus`.
 //!
-//! ## The layout — version 3
+//! ## The layout — version 4
 //!
 //! ```text
 //! "MTGL"                      4 bytes
@@ -21,13 +21,12 @@
 //! six string tables, in this order: name, set, collector number, language, release date, finish
 //!     entries                 varint
 //!     entries ×  length       varint, then that many bytes of UTF-8
-//! two id tables, in this order: oracle, illustration
+//! one id table: oracle
 //!     entries                 varint
 //!     entries ×  id           16 bytes
 //! rows ×
 //!     id                      16 bytes
 //!     oracle                  varint: 0 for none, else 1 + its place in the oracle table
-//!     illustration            varint: the same, in the illustration table
 //!     name, set, number,      five varints, each a place in its own table
 //!       language, released
 //!     finishes                varint n, then n varints, each a place in the finish table
@@ -35,8 +34,9 @@
 //!                               [`TOKEN`] for a token or an emblem ([`is_token`]); no other bit
 //! ```
 //!
-//! Version 1 had no promo byte; version 2's last byte was the promo alone, 0 or 1, and version 3
-//! made it the flags, for the tokens a session leaves out (issue #1323). Both ends of a hand-over
+//! Version 1 had no promo byte; version 2's last byte was the promo alone, 0 or 1, version 3
+//! made it the flags, for the tokens a session leaves out (issue #1323), and version 4 dropped
+//! the illustration ids, which only the hash bundle's art search read. Both ends of a hand-over
 //! are one build, so an older file is never met and is refused like any other.
 //!
 //! A varint is LEB128, least significant group first, ten bytes at most. Nothing follows the
@@ -44,18 +44,17 @@
 //!
 //! **Tables, because a label is mostly words it shares.** Counted on the dev corpus
 //! (2026-10-07, 118 475 printings): 38 260 names, 1 052 sets, 16 833 collector numbers, 19
-//! languages, 1 288 release dates, 38 705 oracle ids and 51 236 illustration ids. Written a row
-//! at a time with every word spelled out the file would be some 10.6 MB; with each word
-//! written once and a row naming it by its place it is 5 998 193 B — against 21.6 MB for the
-//! same rows as the JSON the frame bench carries. A table is in first-seen order, so the
-//! encoder is one pass over the rows and holds none of them.
+//! languages, 1 288 release dates and 38 705 oracle ids. Written a row at a time with every
+//! word spelled out the file would be some 10.6 MB; with each word written once and a row naming
+//! it by its place it was 5 998 193 B in version 3, which also carried 51 236 illustration ids.
+//! A table is in first-seen order, so the encoder is one pass over the rows and holds none of
+//! them.
 //!
 //! **A release date that was `NULL` is the empty string**, as `load_labels` reads it, and a
 //! printing with no finishes has none here. Rows are in the order they were pushed, which for
 //! [`read_page`] is `rowid` order — the order a scan of `cards` walks, so what is attached
-//! first here is what `load_labels` attaches first. That order is behaviour: the first printing
-//! of a card, the first label under an artwork and the order of two cards under one name all
-//! follow it.
+//! first here is what `load_labels` attaches first — and a printing met twice keeps its later
+//! label either way.
 //!
 //! **The decoder trusts nothing.** The bytes cross from another Worker, and a module that
 //! panics is a module that has ended (`host::guard` guards nothing where a panic aborts). Every
@@ -63,14 +62,14 @@
 //! place against its table, every string against UTF-8, and [`attach`] reads the whole file
 //! before it attaches the first row — a refusal leaves the reference exactly as it was.
 
-use crate::index::ID_LEN;
+use crate::ids::ID_LEN;
 use crate::reference::{Label, Reference};
 use std::collections::HashMap;
 
 /// The first four bytes of a labels file.
 pub const MAGIC: [u8; 4] = *b"MTGL";
 /// The layout above. A number is never reused, as the bundle's is not.
-pub const VERSION: u8 = 3;
+pub const VERSION: u8 = 4;
 
 /// A row's flags: the corpus marks the printing a promo.
 pub const PROMO: u8 = 1;
@@ -86,20 +85,15 @@ const RELEASED: usize = 4;
 const FINISH: usize = 5;
 const STRING_TABLES: [&str; 6] =
     ["name", "set", "collector number", "language", "release date", "finish"];
-/// The id tables, in the order the file holds them.
-const ORACLE: usize = 0;
-const ILLUSTRATION: usize = 1;
-const ID_TABLES: [&str; 2] = ["oracle", "illustration"];
-
-/// The fewest bytes a row can be: its id, two absent ids, five places, no finishes and its flags.
-const MIN_ROW: usize = ID_LEN + 2 + 5 + 1 + 1;
+/// The fewest bytes a row can be: its id, an absent oracle, five places, no finishes and its
+/// flags.
+const MIN_ROW: usize = ID_LEN + 1 + 5 + 1 + 1;
 
 /// One printing, as `corpus.db` has it: what [`Reference::load_labels`] reads from one row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub id: [u8; ID_LEN],
     pub oracle: Option<[u8; ID_LEN]>,
-    pub illustration: Option<[u8; ID_LEN]>,
     pub label: Label,
     /// The finishes the printing exists in, in the order the corpus lists them.
     pub finishes: Vec<String>,
@@ -119,7 +113,7 @@ impl Row {
         reference.set_finishes(self.id, self.finishes);
         reference.set_promo(self.id, self.promo);
         reference.set_token(self.id, self.token);
-        reference.add_label(self.id, self.oracle, self.illustration, self.label);
+        reference.add_label(self.id, self.oracle, self.label);
     }
 }
 
@@ -151,10 +145,10 @@ pub fn is_token(layout: &str, type_line: Option<&str>) -> bool {
         })
 }
 
-/// The twelve columns a label is read from, in the order [`Row::from_sql`] reads them.
+/// The eleven columns a label is read from, in the order [`Row::from_sql`] reads them.
 #[cfg(feature = "corpus")]
-pub const COLUMNS: &str = "id, illustration_id, name, set_code, collector_number, lang, \
-                           released_at, oracle_id, finishes, promo, layout, type_line";
+pub const COLUMNS: &str = "id, name, set_code, collector_number, lang, released_at, \
+                           oracle_id, finishes, promo, layout, type_line";
 
 #[cfg(feature = "corpus")]
 impl Row {
@@ -163,24 +157,22 @@ impl Row {
     /// wrong type, which it has always skipped too.
     pub(crate) fn from_sql(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<Option<Row>> {
         let id: String = r.get(at)?;
-        let illustration: Option<String> = r.get(at + 1)?;
         let label = Label {
-            name: r.get(at + 2)?,
-            set: r.get(at + 3)?,
-            number: r.get(at + 4)?,
-            lang: r.get(at + 5)?,
-            released: r.get::<_, Option<String>>(at + 6)?.unwrap_or_default(),
+            name: r.get(at + 1)?,
+            set: r.get(at + 2)?,
+            number: r.get(at + 3)?,
+            lang: r.get(at + 4)?,
+            released: r.get::<_, Option<String>>(at + 5)?.unwrap_or_default(),
         };
-        let oracle: Option<String> = r.get(at + 7)?;
-        let finishes: Option<String> = r.get(at + 8)?;
-        let promo: Option<i64> = r.get(at + 9)?;
-        let layout: Option<String> = r.get(at + 10)?;
-        let type_line: Option<String> = r.get(at + 11)?;
-        let Some(id) = crate::index::parse_uuid(&id) else { return Ok(None) };
+        let oracle: Option<String> = r.get(at + 6)?;
+        let finishes: Option<String> = r.get(at + 7)?;
+        let promo: Option<i64> = r.get(at + 8)?;
+        let layout: Option<String> = r.get(at + 9)?;
+        let type_line: Option<String> = r.get(at + 10)?;
+        let Some(id) = crate::ids::parse_uuid(&id) else { return Ok(None) };
         Ok(Some(Row {
             id,
-            oracle: oracle.as_deref().and_then(crate::index::parse_uuid),
-            illustration: illustration.as_deref().and_then(crate::index::parse_uuid),
+            oracle: oracle.as_deref().and_then(crate::ids::parse_uuid),
             label,
             finishes: crate::reference::parse_finishes(finishes.as_deref().unwrap_or("")),
             promo: promo.is_some_and(|p| p != 0),
@@ -242,7 +234,7 @@ pub fn read_page(
 pub struct Encoder {
     count: u64,
     strings: [Strings; 6],
-    ids: [Ids; 2],
+    oracles: Ids,
     rows: Vec<u8>,
 }
 
@@ -304,10 +296,8 @@ impl Encoder {
     pub fn push(&mut self, row: &Row) {
         self.count += 1;
         self.rows.extend_from_slice(&row.id);
-        let oracle = self.ids[ORACLE].place(row.oracle.as_ref());
+        let oracle = self.oracles.place(row.oracle.as_ref());
         put_varint(&mut self.rows, oracle);
-        let illustration = self.ids[ILLUSTRATION].place(row.illustration.as_ref());
-        put_varint(&mut self.rows, illustration);
         let l = &row.label;
         for (table, word) in
             [(NAME, &l.name), (SET, &l.set), (NUMBER, &l.number), (LANG, &l.lang), (RELEASED, &l.released)]
@@ -334,14 +324,15 @@ impl Encoder {
             .strings
             .iter()
             .map(|t| t.seen.len())
-            .chain(self.ids.iter().map(|t| t.seen.len()))
+            .chain(std::iter::once(self.oracles.seen.len()))
             .map(|n| {
                 let mut v = Vec::with_capacity(4);
                 put_varint(&mut v, n as u64);
                 v
             })
             .collect();
-        let tables = self.strings.iter().map(|t| &t.bytes).chain(self.ids.iter().map(|t| &t.bytes));
+        let tables =
+            self.strings.iter().map(|t| &t.bytes).chain(std::iter::once(&self.oracles.bytes));
         let size = head.len()
             + counts.iter().map(Vec::len).sum::<usize>()
             + tables.clone().map(Vec::len).sum::<usize>()
@@ -461,7 +452,7 @@ impl<'a> Cursor<'a> {
 pub struct Labels<'a> {
     rows: usize,
     strings: [Vec<&'a str>; 6],
-    ids: [&'a [u8]; 2],
+    oracles: &'a [u8],
     /// At the first row.
     body: Cursor<'a>,
 }
@@ -470,7 +461,6 @@ pub struct Labels<'a> {
 struct Parts<'a> {
     id: [u8; ID_LEN],
     oracle: Option<[u8; ID_LEN]>,
-    illustration: Option<[u8; ID_LEN]>,
     words: [&'a str; 5],
     finishes: usize,
     /// At the first finish.
@@ -497,21 +487,17 @@ impl<'a> Labels<'a> {
         (0..self.rows).map_while(move |_| self.parts(&mut at).ok()).map(|p| self.row(&p))
     }
 
-    fn id_at(&self, table: usize, place: usize) -> [u8; ID_LEN] {
+    fn oracle_at(&self, place: usize) -> [u8; ID_LEN] {
         let mut id = [0u8; ID_LEN];
-        id.copy_from_slice(&self.ids[table][place * ID_LEN..(place + 1) * ID_LEN]);
+        id.copy_from_slice(&self.oracles[place * ID_LEN..(place + 1) * ID_LEN]);
         id
     }
 
-    fn optional_id(
-        &self,
-        table: usize,
-        at: &mut Cursor<'a>,
-    ) -> Result<Option<[u8; ID_LEN]>, LabelsError> {
-        let entries = self.ids[table].len() / ID_LEN;
+    fn oracle(&self, at: &mut Cursor<'a>) -> Result<Option<[u8; ID_LEN]>, LabelsError> {
+        let entries = self.oracles.len() / ID_LEN;
         // One past the table, because 0 is "none" and an id's place is written as 1 + itself.
         let place = at.place(entries + 1, "a row's place in an id table")?;
-        Ok(place.checked_sub(1).map(|p| self.id_at(table, p)))
+        Ok(place.checked_sub(1).map(|p| self.oracle_at(p)))
     }
 
     fn word(&self, table: usize, at: &mut Cursor<'a>) -> Result<&'a str, LabelsError> {
@@ -521,8 +507,7 @@ impl<'a> Labels<'a> {
 
     fn parts(&self, at: &mut Cursor<'a>) -> Result<Parts<'a>, LabelsError> {
         let id = at.id("a row's id")?;
-        let oracle = self.optional_id(ORACLE, at)?;
-        let illustration = self.optional_id(ILLUSTRATION, at)?;
+        let oracle = self.oracle(at)?;
         let mut words = [""; 5];
         for (table, word) in words.iter_mut().enumerate() {
             *word = self.word(table, at)?;
@@ -538,7 +523,7 @@ impl<'a> Labels<'a> {
             return Err(before.damaged("a flag this build does not know"));
         }
         let (promo, token) = (flags & PROMO != 0, flags & TOKEN != 0);
-        Ok(Parts { id, oracle, illustration, words, finishes, finishes_at, promo, token })
+        Ok(Parts { id, oracle, words, finishes, finishes_at, promo, token })
     }
 
     fn row(&self, p: &Parts<'a>) -> Row {
@@ -550,7 +535,6 @@ impl<'a> Labels<'a> {
         Row {
             id: p.id,
             oracle: p.oracle,
-            illustration: p.illustration,
             label: Label {
                 name: p.words[NAME].to_owned(),
                 set: p.words[SET].to_owned(),
@@ -596,13 +580,10 @@ pub fn decode(bytes: &[u8]) -> Result<Labels<'_>, LabelsError> {
             table.push(word);
         }
     }
-    let mut ids: [&[u8]; 2] = [&[], &[]];
-    for (table, name) in ids.iter_mut().zip(ID_TABLES) {
-        let entries = at.count(ID_LEN, name)?;
-        *table = at.take(entries * ID_LEN, name)?;
-    }
+    let entries = at.count(ID_LEN, "oracle")?;
+    let oracles = at.take(entries * ID_LEN, "oracle")?;
 
-    let labels = Labels { rows, strings, ids, body: at };
+    let labels = Labels { rows, strings, oracles, body: at };
     for _ in 0..rows {
         labels.parts(&mut at)?;
     }
@@ -628,8 +609,6 @@ pub fn attach(reference: &mut Reference, bytes: &[u8]) -> Result<usize, LabelsEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::HashKind;
-    use crate::index::BundleBuilder;
 
     fn id(n: u8) -> [u8; ID_LEN] {
         let mut raw = [0u8; ID_LEN];
@@ -641,7 +620,6 @@ mod tests {
     fn row(
         n: u8,
         oracle: Option<u8>,
-        illustration: Option<u8>,
         name: &str,
         set: &str,
         number: &str,
@@ -652,7 +630,6 @@ mod tests {
         Row {
             id: id(n),
             oracle: oracle.map(id),
-            illustration: illustration.map(id),
             label: Label {
                 name: name.into(),
                 set: set.into(),
@@ -674,22 +651,22 @@ mod tests {
         Row { token: true, ..row }
     }
 
-    /// Rows that between them use every shape a row has: an id with and without an oracle and
-    /// an illustration, a shared oracle, a shared illustration, a split name, a name outside
+    /// Rows that between them use every shape a row has: an id with and without an oracle, a
+    /// shared oracle, a split name, a name outside
     /// ASCII, an empty release date, no finishes and all three, a set and number two languages
     /// share, a promo, a token, and one printing pushed twice.
     fn rows() -> Vec<Row> {
         vec![
-            row(1, Some(10), Some(50), "Forest", "blb", "280", "en", "2024-08-02", &["nonfoil", "foil"]),
-            row(2, Some(10), Some(50), "Forest", "ltr", "0270", "en", "2023-06-23", &["nonfoil"]),
-            row(3, Some(20), None, "Shock", "m21", "159", "ja", "2020-07-03", &["foil"]),
-            row(4, Some(20), Some(51), "Shock", "m21", "159", "en", "2020-07-03", &[]),
-            row(5, None, None, "Virtue of Knowledge // Vantress Visions", "woe", "76", "en", "", &["etched"]),
-            row(6, Some(30), Some(52), "Lim-Dûl's Vault", "all", "107★", "en", "1996-06-10", &["nonfoil", "foil", "etched"]),
-            row(7, Some(40), Some(53), "Memory Lapse // Memory Lapse", "astx", "66", "en", "2021-04-23", &["nonfoil"]),
-            promo(row(8, Some(41), Some(53), "Memory Lapse", "sld", "2142", "en", "2025-12-01", &["foil"])),
-            token(row(9, Some(42), Some(54), "Ornithopter", "tdmu", "3", "en", "2022-09-09", &["nonfoil"])),
-            row(1, Some(10), Some(50), "Forest", "blb", "280", "en", "2024-08-02", &["nonfoil", "foil"]),
+            row(1, Some(10), "Forest", "blb", "280", "en", "2024-08-02", &["nonfoil", "foil"]),
+            row(2, Some(10), "Forest", "ltr", "0270", "en", "2023-06-23", &["nonfoil"]),
+            row(3, Some(20), "Shock", "m21", "159", "ja", "2020-07-03", &["foil"]),
+            row(4, Some(20), "Shock", "m21", "159", "en", "2020-07-03", &[]),
+            row(5, None, "Virtue of Knowledge // Vantress Visions", "woe", "76", "en", "", &["etched"]),
+            row(6, Some(30), "Lim-Dûl's Vault", "all", "107★", "en", "1996-06-10", &["nonfoil", "foil", "etched"]),
+            row(7, Some(40), "Memory Lapse // Memory Lapse", "astx", "66", "en", "2021-04-23", &["nonfoil"]),
+            promo(row(8, Some(41), "Memory Lapse", "sld", "2142", "en", "2025-12-01", &["foil"])),
+            token(row(9, Some(42), "Ornithopter", "tdmu", "3", "en", "2022-09-09", &["nonfoil"])),
+            row(1, Some(10), "Forest", "blb", "280", "en", "2024-08-02", &["nonfoil", "foil"]),
         ]
     }
 
@@ -703,7 +680,7 @@ mod tests {
     }
 
     fn bare() -> Reference {
-        Reference::new(BundleBuilder::new(HashKind::DHash, 256).finish(0))
+        Reference::new()
     }
 
     #[test]
@@ -720,7 +697,7 @@ mod tests {
     #[test]
     fn no_rows_is_a_file_too() {
         let bytes = Encoder::new().finish();
-        assert_eq!(bytes, [b'M', b'T', b'G', b'L', VERSION, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'M', b'T', b'G', b'L', VERSION, 0, 0, 0, 0, 0, 0, 0, 0]);
         let labels = decode(&bytes).expect("decode");
         assert!(labels.is_empty());
         assert_eq!(attach(&mut bare(), &bytes), Ok(0));
@@ -739,7 +716,7 @@ mod tests {
         // And the snapshot is of something: nine printings, one pushed twice.
         assert_eq!(through.label_count(), 9);
         assert_eq!(through.finishes_of(&id(6)), ["nonfoil", "foil", "etched"]);
-        assert_eq!(through.lookup_by_name("memory lapse"), Some((id(8), 0)));
+        assert_eq!(through.label_for(&id(8)).map(|l| l.set), Some("sld".into()));
         assert!(through.is_promo(&id(8)) && !through.is_promo(&id(7)));
         assert!(through.is_token(&id(9)) && !through.is_token(&id(8)));
     }
@@ -754,7 +731,7 @@ mod tests {
         newer[4] = VERSION + 1;
         let refused = decode(&newer).err().expect("a version this build does not read");
         assert_eq!(refused, LabelsError::BadVersion { found: VERSION + 1, expected: VERSION });
-        assert_eq!(refused.to_string(), "labels format version 4, but this build understands 3");
+        assert_eq!(refused.to_string(), "labels format version 5, but this build understands 4");
         let mut longer = bytes.clone();
         longer.push(0);
         assert!(matches!(decode(&longer), Err(LabelsError::Damaged { .. })), "a byte too many");
@@ -822,7 +799,7 @@ mod tests {
 
     #[test]
     fn a_word_that_is_not_utf8_is_refused() {
-        let bytes = encoded(&[row(1, None, None, "Forest", "blb", "280", "en", "", &[])]);
+        let bytes = encoded(&[row(1, None, "Forest", "blb", "280", "en", "", &[])]);
         let at = bytes.windows(6).position(|w| w == b"Forest").expect("the name");
         let mut bad = bytes.clone();
         bad[at + 1] = 0xff;
@@ -836,11 +813,11 @@ mod tests {
 
     #[test]
     fn a_place_outside_its_table_is_refused() {
-        let bytes = encoded(&[row(1, None, None, "Forest", "blb", "280", "en", "", &[])]);
-        // The row is the last 25 bytes: an id, two absent ids, five places, no finishes, and
+        let bytes = encoded(&[row(1, None, "Forest", "blb", "280", "en", "", &[])]);
+        // The row is the last 24 bytes: an id, an absent oracle, five places, no finishes, and
         // the flags.
         let body = bytes.len() - MIN_ROW;
-        for (offset, what) in [(ID_LEN, "id"), (ID_LEN + 2, "string"), (ID_LEN + 6, "string")] {
+        for (offset, what) in [(ID_LEN, "id"), (ID_LEN + 1, "string"), (ID_LEN + 5, "string")] {
             let mut bad = bytes.clone();
             bad[body + offset] = 5;
             let refused = decode(&bad).err().unwrap_or_else(|| panic!("{what} place let through"));
@@ -850,7 +827,7 @@ mod tests {
 
     #[test]
     fn the_flags_are_the_promo_and_the_token_and_nothing_else() {
-        let forest = || row(1, None, None, "Forest", "blb", "280", "en", "", &[]);
+        let forest = || row(1, None, "Forest", "blb", "280", "en", "", &[]);
         for (r, byte) in [
             (forest(), 0),
             (promo(forest()), PROMO),
@@ -938,7 +915,7 @@ mod tests {
             // A reprint under the same artwork, and a set and number a Japanese printing shares.
             [Some(B), Some(I1), Some("Forest"), Some("ltr"), Some("0270"), Some("ja"), Some("2023-06-23"), Some(O1), Some(r#"["foil"]"#)],
             [Some(C), Some(I2), Some("Forest"), Some("ltr"), Some("270"), Some("en"), Some("2023-06-23"), Some(O1), Some("[]")],
-            // No oracle, no illustration, no date, no finishes column.
+            // No oracle, no date, no finishes column.
             [Some(D), None, Some("Virtue of Knowledge // Vantress Visions"), Some("woe"), Some("76"), Some("en"), None, None, None],
             [Some(E), Some("not an id"), Some("Lim-Dûl's Vault"), Some("all"), Some("107★"), Some("en"), Some("1996-06-10"), Some(O2), Some(r#"["etched","glossy","nonfoil"]"#)],
             // Skipped: an id that is not one, and a row with no name.
@@ -995,18 +972,17 @@ mod tests {
         let (bytes, _) = read_all(&conn, 500);
         let mut r = bare();
         attach(&mut r, &bytes).expect("attach");
-        let e = crate::index::parse_uuid("0000cd57-91fe-411f-b798-646e965eec37").expect("id");
+        let e = crate::ids::parse_uuid("0000cd57-91fe-411f-b798-646e965eec37").expect("id");
         assert_eq!(r.finishes_of(&e), ["etched", "nonfoil"], "the unknown word is dropped");
-        let c = crate::index::parse_uuid("00006596-1166-4a79-8443-ca9f82e6db4e").expect("id");
-        assert_eq!(r.lookup_pair("ltr", "270"), Some(c), "English wins a shared set and number");
+        let c = crate::ids::parse_uuid("00006596-1166-4a79-8443-ca9f82e6db4e").expect("id");
+        assert_eq!(r.label_for(&c).map(|l| l.lang), Some("en".into()));
         assert!(r.finishes_of(&c).is_empty());
-        let d = crate::index::parse_uuid("0000a54c-a511-4925-92dc-01b937f9afad").expect("id");
+        let d = crate::ids::parse_uuid("0000a54c-a511-4925-92dc-01b937f9afad").expect("id");
         assert_eq!(r.label_for(&d).map(|l| l.released), Some(String::new()));
         assert_eq!(r.oracle_id_of(&d), None);
-        assert_eq!(r.lookup_by_name("vantress visions"), Some((d, 0)));
-        let g = crate::index::parse_uuid("0001f1ef-b957-4a55-b47f-14839cdbab6f").expect("id");
+        let g = crate::ids::parse_uuid("0001f1ef-b957-4a55-b47f-14839cdbab6f").expect("id");
         assert!(r.is_promo(&g) && !r.is_promo(&c));
-        let b = crate::index::parse_uuid("0000579f-7b35-4ed3-b44c-db2a538066fe").expect("id");
+        let b = crate::ids::parse_uuid("0000579f-7b35-4ed3-b44c-db2a538066fe").expect("id");
         assert!(r.is_token(&b) && !r.is_token(&c));
     }
 

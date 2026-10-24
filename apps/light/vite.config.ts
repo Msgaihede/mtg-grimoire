@@ -25,17 +25,14 @@ import {
   neuralPath,
   neuralTable,
   NOT_A_PLACE,
-  SCANNER_ASSETS_PREFIX,
   SCANNER_DIR,
   SCANNER_GLUE_FILE,
-  SCANNER_MANIFEST,
   SCANNER_WASM_FILE,
   WASM_FILE,
   wasmContentType,
   wasmFileOf,
   wasmPath,
 } from "../../packages/ui/lib/core/web/assets.ts";
-import { readManifest } from "../../packages/ui/lib/core/web/scanStore.ts";
 import { serviceWorker } from "./vite.sw.ts";
 
 /** The light app's document, from the root — which is this folder (`root`, below). */
@@ -170,37 +167,22 @@ interface Built {
 }
 
 /**
- * The folder of `dist-wasm/` the scanner's three files and their manifest are fetched into —
- * `scripts/scanner-assets.ts --web`. Beside the two modules because everything said of that
- * folder is true of these: ignored, written by a script of its own, and no build's but this one.
+ * What `dist-wasm/` holds, **as the two things it is**: the engine's two files at its root, and
+ * the scanner's two in a folder of their own. Kept apart from the first read, because each has
+ * an address of its own: a hash of the engine's bytes, and a hash of the scanner module's.
  */
-const SCANNER_ASSETS_DIR = SCANNER_ASSETS_PREFIX.slice(1);
-
-/**
- * What `dist-wasm/` holds, **as the three things it is**: the engine's two files at its root,
- * the scanner's two in a folder of their own, and the scanner's three files with their manifest
- * in another. Kept apart from the first read, because each has an address of its own: a hash of
- * the engine's bytes, a hash of the scanner module's, and — for the files — none.
- */
-function builtFiles(): { engine: Built[]; scanner: Built[]; assets: Built[] } {
+function builtFiles(): { engine: Built[]; scanner: Built[] } {
   const all: Built[] = !existsSync(ENGINE_DIR)
     ? []
     : (readdirSync(ENGINE_DIR, { recursive: true }) as string[])
         .map((name) => name.replaceAll("\\", "/"))
-        // wasm-bindgen writes declarations beside the glue; nothing loads them. A download
-        // still on its way is a `.part` (`scripts/scanner-assets.ts`).
-        .filter(
-          (name) =>
-            !name.endsWith(".d.ts") &&
-            !name.endsWith(".part") &&
-            statSync(ENGINE_DIR + name).isFile(),
-        )
+        // wasm-bindgen writes declarations beside the glue; nothing loads them.
+        .filter((name) => !name.endsWith(".d.ts") && statSync(ENGINE_DIR + name).isFile())
         .map((name) => ({ name, bytes: readFileSync(ENGINE_DIR + name) }));
   const under = (dir: string) => (file: Built) => file.name.startsWith(`${dir}/`);
   return {
     engine: all.filter((file) => !file.name.includes("/")),
     scanner: all.filter(under(SCANNER_DIR)),
-    assets: all.filter((file) => file.name.startsWith(SCANNER_ASSETS_DIR)),
   };
 }
 
@@ -216,58 +198,6 @@ const scannerBuilt = (files: { name: string }[]): boolean =>
 const SCANNER_MISSING =
   `The card scanner's module has not been built: dist-wasm/ has no ${SCANNER_GLUE_FILE} and ` +
   `${SCANNER_WASM_FILE}. Run \`pnpm web:wasm\` first.`;
-
-/** `card_scanner::index::FORMAT_VERSION`, read from the crate as `scripts/scanner-assets.ts` reads it. */
-function scannerFormat(): number {
-  const source = readFileSync(
-    fileURLToPath(new URL("../../crates/card-scanner/src/index.rs", import.meta.url)),
-    "utf8",
-  );
-  const declared = /pub const FORMAT_VERSION: u16 = (\d+);/.exec(source);
-  if (!declared) throw new Error("crates/card-scanner/src/index.rs declares no FORMAT_VERSION.");
-  return Number(declared[1]);
-}
-
-/**
- * The scanner's three files as this build ships them, or the reason it ships none.
- *
- * **Held to their own manifest before a byte is emitted**: the three names and no other, each
- * the manifest's length and digest, and the bundle's format the one this tree's scanner reads.
- * A folder that fails any of it is a folder some other checkout or some earlier week wrote, and
- * shipping it would be a download every reader's browser then refuses.
- */
-function scannerAssets(files: Built[], format: number): { ship: Built[] } | { why: string } {
-  const fetchIt = "Run `pnpm scanner:assets --web`.";
-  const named = (name: string): Built | undefined =>
-    files.find((file) => file.name === `${SCANNER_ASSETS_DIR}${name}`);
-  const manifestFile = named(SCANNER_MANIFEST);
-  if (!manifestFile) return { why: `dist-wasm/${SCANNER_ASSETS_DIR} has no manifest. ${fetchIt}` };
-  let parsed: unknown = null;
-  try {
-    parsed = JSON.parse(new TextDecoder().decode(manifestFile.bytes));
-  } catch {
-    // Read as no manifest, below.
-  }
-  const manifest = readManifest(parsed);
-  if (manifest === null) return { why: `the scanner files' manifest is unreadable. ${fetchIt}` };
-  if (manifest.formatVersion !== format) {
-    return {
-      why:
-        `the scanner files are format ${manifest.formatVersion} and this tree's scanner reads ` +
-        `${format}. ${fetchIt}`,
-    };
-  }
-  const ship: Built[] = [manifestFile];
-  for (const entry of manifest.files) {
-    const file = named(entry.name);
-    const digest = file && createHash("sha256").update(file.bytes).digest("hex");
-    if (!file || file.bytes.length !== entry.bytes || digest !== entry.sha256) {
-      return { why: `${entry.name} is not the file its manifest describes. ${fetchIt}` };
-    }
-    ship.push(file);
-  }
-  return { ship };
-}
 
 /**
  * **The web app's engine, served and shipped** — one of the `web` mode's three plugins, with
@@ -352,72 +282,6 @@ function webEngine(
 }
 
 /**
- * **The card scanner's three files, served and shipped** — the bundle of card hashes and the
- * two OCR models, with the manifest that says what each is (`scripts/scanner-assets.ts --web`
- * fetches them into `dist-wasm/scanner-assets/`).
- *
- * A browser gets them from the app's own origin: the release they are published on sends no
- * CORS header, so a page cannot read it. They are fetched when a reader presses Download in the
- * Scanner and by nothing before (`packages/ui/lib/core/web/scanStore.ts`), so they are in no
- * precache.
- *
- * - **In dev**, `/scanner-assets/<name>` is answered from the folder as it is at that moment,
- *   uncached; a file that is not there is a 404, which the page reads as a build made without
- *   them and says so.
- * - **In a build**, the folder is held to its own manifest ({@link scannerAssets}) and emitted
- *   under the same address — or, where it is absent or stale, **nothing is emitted and the
- *   build says why**: a developer's build still builds, and the page says the scanner's files
- *   are not part of it rather than offering a download that would 404. **A build that is
- *   going to be deployed, or smoke-tested as one, may not** — CI's `web` job and
- *   `release.yml`'s set `GRIMOIRE_SCANNER_ASSETS=required`, and there the same finding fails
- *   the build: a web app released without its scanner is a regression nobody would see until
- *   a reader pressed Download.
- */
-function webScanner(files: Built[], format: number): Plugin {
-  // Node's `process`, in a file nothing type-checks (this file's first comment).
-  const required = process.env.GRIMOIRE_SCANNER_ASSETS === "required";
-  return {
-    name: "web:scanner",
-    configureServer(server) {
-      server.middlewares.use((request, response, next) => {
-        const path = pathOf(request as unknown as Asked);
-        if (!path.startsWith(SCANNER_ASSETS_PREFIX)) return next();
-        const res = response as unknown as Answer;
-        const name = path.slice(SCANNER_ASSETS_PREFIX.length);
-        const onDisk = ENGINE_DIR + SCANNER_ASSETS_DIR + name;
-        const plain = /^[\w.-]+$/.test(name) && !/^\.+$/.test(name);
-        if (!plain || !existsSync(onDisk) || !statSync(onDisk).isFile()) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.setHeader("Cache-Control", "no-store");
-          res.end("The scanner's files are not here. Run `pnpm scanner:assets --web`.");
-          return;
-        }
-        res.statusCode = 200;
-        res.setHeader(
-          "Content-Type",
-          name.endsWith(".json") ? "application/json" : "application/octet-stream",
-        );
-        res.setHeader("Cache-Control", "no-store");
-        res.end(readFileSync(onDisk));
-      });
-    },
-    generateBundle() {
-      const found = scannerAssets(files, format);
-      if ("why" in found) {
-        const said = `The card scanner's files are not in this build: ${found.why}`;
-        if (required) this.error(said);
-        this.warn(said);
-        return;
-      }
-      for (const { name, bytes } of found.ship) {
-        this.emitFile({ type: "asset", fileName: name, source: bytes });
-      }
-    },
-  };
-}
-
-/**
  * `crates/card-neural/models/`: the Neural scanner's eight files, **in git** (the owner's decision,
  * 2026-10-20) — so a build needs no script to fetch them and no manifest to trust them by. Read
  * from where they are, and resolved against this file.
@@ -442,7 +306,7 @@ function neuralFiles(read: boolean): { name: string; size: number; bytes: Uint8A
 /**
  * **The Neural scanner's eight files, served and shipped** — `card-neural`'s detector, embedder,
  * gallery and `neural.json`, which the page fetches from `/scanner-neural/<set>/` the first time a
- * Neural frame is due (`packages/ui/lib/core/web/scanNeural.ts`), and never before; and the
+ * frame is due (`packages/ui/lib/core/web/scanNeural.ts`), and never before; and the
  * printing evidence's four (the set symbol and collector band networks and their galleries),
  * which it fetches after the recogniser has taken the first four.
  *
@@ -455,7 +319,11 @@ function neuralFiles(read: boolean): { name: string; size: number; bytes: Uint8A
  *   `scanner-neural/<set>/`, where the set is a hash of the eight and `_headers` keeps them a
  *   year. In no precache (`sw/shell.ts`).
  */
-function webNeural(set: string, files: { name: string; bytes: Uint8Array }[], building: boolean): Plugin {
+function webNeural(
+  set: string,
+  files: { name: string; bytes: Uint8Array }[],
+  building: boolean,
+): Plugin {
   return {
     name: "web:neural",
     configureServer(server) {
@@ -549,9 +417,7 @@ function webHosting(): Plugin {
     name: "web:hosting",
     configurePreviewServer(server) {
       if (!existsSync(`${WEB_BUILD}/_headers`)) {
-        throw new Error(
-          "apps/light/dist-web/_headers is missing. Run `pnpm web:build` first.",
-        );
+        throw new Error("apps/light/dist-web/_headers is missing. Run `pnpm web:build` first.");
       }
       const rules = parseHeaders(readFileSync(`${WEB_BUILD}/_headers`, "utf8"));
       server.middlewares.use((request, response, next) => {
@@ -608,13 +474,12 @@ export default defineConfig(({ mode, command, isPreview }) => {
    */
   const web = mode === "web";
   const building = command === "build";
-  const built = web && building ? builtFiles() : { engine: [], scanner: [], assets: [] };
+  const built = web && building ? builtFiles() : { engine: [], scanner: [] };
   const engine = built.engine;
   // A build's id is its engine's bytes; a dev server has one engine and serves it uncached.
   // The scanner's module has an id of its own, so neither module's change moves the other.
   const engineBuild = building ? buildIdOf(engine) : "dev";
   const scannerBuild = building ? buildIdOf(built.scanner) : "dev";
-  const format = web ? scannerFormat() : 0;
   // The Neural scanner's eight files: read whole by a build, which ships them under a set of their
   // own bytes; measured only by a dev server, which serves them uncached from where they are.
   const neural = web ? neuralFiles(building) : [];
@@ -640,7 +505,6 @@ export default defineConfig(({ mode, command, isPreview }) => {
         ? [
             webHosting(),
             webEngine(engineBuild, engine, building, { build: scannerBuild, files: built.scanner }),
-            webScanner(built.assets, format),
             webNeural(neuralSet, neural, building),
             // From the repository root, which is how `vite.sw.ts` reads it.
             serviceWorker(`apps/light/${WEB_DIR}`),
@@ -670,14 +534,12 @@ export default defineConfig(({ mode, command, isPreview }) => {
     optimizeDeps: mode === "fake" ? { exclude: FAKE_UNBUNDLED } : {},
     // How the Worker is told where its engine is. `define` reaches the Worker's bundle as it
     // reaches the page's, and an `import.meta.env` key is replaced by the dev server too.
-    // The scanner's Worker is told its module's id the same way, and the page the bundle
-    // format that module reads — which a manifest for another format is refused by — and the
-    // Neural files' set and lengths, which each is held to as it arrives.
+    // The scanner's Worker is told its module's id the same way, and the page the Neural files'
+    // set and lengths, which each is held to as it arrives.
     define: web
       ? {
           "import.meta.env.VITE_ENGINE_BUILD": JSON.stringify(engineBuild),
           "import.meta.env.VITE_SCANNER_BUILD": JSON.stringify(scannerBuild),
-          "import.meta.env.VITE_SCANNER_FORMAT": JSON.stringify(String(format)),
           "import.meta.env.VITE_NEURAL_SET": JSON.stringify(neuralSet),
           "import.meta.env.VITE_NEURAL_BYTES": JSON.stringify(JSON.stringify(neuralBytes)),
         }

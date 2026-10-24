@@ -23,8 +23,9 @@
 // none of the engine.
 //
 // **The scanner's module is built with `-C target-feature=+simd128`, and the engine's is not.**
-// `rten`, which runs the two OCR models, compiles its WebAssembly kernels only under that
-// feature: without it a title read is 0.9–1.6 s, with it 0.3 s. A browser without fixed-width
+// `rten`, which runs the Neural scanner's networks, compiles its WebAssembly kernels only under
+// that feature: without it inference is scalar (measured on the OCR models it ran until
+// 2026-10-24: a title read was 0.9–1.6 s without, 0.3 s with). A browser without fixed-width
 // SIMD cannot compile such a module at all, which is why the flag is the scanner's alone — the
 // rest of the app must not come to depend on it. So:
 //
@@ -156,13 +157,14 @@ const KEEP_NAMES = process.argv.includes("--names");
  * refuses one that is over.
  *
  * The engine links `card-scanner` on every target and is kept clear of its session — the
- * detector, the hashes, `ocrs` and the `rten` crates — only by nothing in the module reaching
+ * recogniser, `card-neural`, and the `rten` crate under it — only by nothing in the module reaching
  * them (`Cargo.toml`'s `[profile.wasm]`). That held by accident for one step: step 7.3 put the
  * scanner's commands in the table, each shut on a page by a refusal at *run* time, and the
  * linker kept what an `async fn` could still reach — 9 961 355 B where the module had been
  * 6 902 679 B, three megabytes of an OCR runtime the engine can never run, on every reader's
  * first visit. Nothing measured it, so nothing was red (step 7.5 found it by reading a size
- * this script had printed all along; `platform::host::with_files` is the fix).
+ * this script had printed all along; the async door it came through went with the scanner's
+ * asset download on 2026-10-24).
  *
  * So the size is held. **7 291 289 B on 2026-10-08**; the ceiling is 709 kB over that — a
  * little under a tenth. The engine's own growth is what the headroom is for, and it is not
@@ -471,7 +473,7 @@ function build(name: keyof typeof MODULES) {
             "without fixed-width SIMD could not compile it. Is the flag in RUSTFLAGS, or in a\n" +
             "`.cargo/config.toml`? It belongs to the scanner's build alone."
         : `${wasm} was not built with \`${SIMD}\`, and the ${name}'s module must be: without\n` +
-            "it the readers' inference is scalar, and a title read takes three times as long.",
+            "it the recogniser's inference is scalar, and every frame is slower for it.",
     );
   }
 
@@ -482,7 +484,7 @@ function build(name: keyof typeof MODULES) {
     refuse(
       `${wasm} is ${size} bytes, over the engine module's ceiling of ${ENGINE_CEILING_BYTES}.\n` +
         "The likeliest cause is code the engine can never run being linked into it — the card\n" +
-        "scanner's session and its OCR runtime, kept by a command that refuses only at run time.\n" +
+        "scanner's session and its network runtime, kept by a command that refuses only at run time.\n" +
         "Read what grew (`--only engine --names`); this script's header says how to raise the\n" +
         "ceiling when the growth is the engine's own.",
     );

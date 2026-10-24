@@ -30,7 +30,6 @@ import type {
   DeckDetail,
   DeckRow,
   EntryChange,
-  ScannerAssetsProgress,
   SearchResponse,
 } from "@grimoire/ui/lib/ipc";
 
@@ -153,7 +152,9 @@ describe("per-story isolation", () => {
     installWorld({ fault: "pairOnly" });
     await expect(invoke("membership_elsewhere")).resolves.toBe(PAIR_ONLY_SENTENCE);
     expect(PAIR_ONLY_SENTENCE).toMatch(/paired with one that already syncs/);
-    expect(PAIR_ONLY_SENTENCE).not.toMatch(/patreon|membership|supporter|supporting|payment|pledge|subscri/i);
+    expect(PAIR_ONLY_SENTENCE).not.toMatch(
+      /patreon|membership|supporter|supporting|payment|pledge|subscri/i,
+    );
 
     installWorld({ seed: "starter" });
     await expect(invoke("membership_elsewhere")).rejects.toThrow(/No fake handler registered/);
@@ -379,39 +380,6 @@ describe("two worlds at once", () => {
     expect(new Set(heard)).toEqual(new Set(["first"]));
     unmountFirst();
     unmountSecond();
-  });
-
-  /**
-   * **Issue #1191.** `scanner_assets_fetch` awaits between its stretches, so a test that presses
-   * Download and ends mid-fetch leaves it talking into the next test. Its events are its own
-   * world's: the next world's `useScannerAssets` hears none of them, and the finished world —
-   * whose subscriber was never taken down here — hears nothing after it went.
-   */
-  it("keeps a download's events in its own world after that world has gone", async () => {
-    const finished = installWorld({ seed: "empty", fault: "scannerMissing" });
-    const unmountFinished = finished.mount();
-    const heardByFinished: string[] = [];
-    await finished.run(() =>
-      listen<ScannerAssetsProgress>("scanner:assets", (e) => heardByFinished.push(e.payload.phase)),
-    );
-    const fetching = finished.run(() => invoke("scanner_assets_fetch"));
-    expect(heardByFinished).toEqual(["downloading"]);
-    unmountFinished();
-
-    const next = installWorld({ seed: "empty", fault: "scannerMissing" });
-    const unmountNext = next.mount();
-    const heardByNext: string[] = [];
-    await next.run(() =>
-      listen<ScannerAssetsProgress>("scanner:assets", (e) => heardByNext.push(e.payload.phase)),
-    );
-
-    await fetching;
-    expect(heardByNext).toEqual([]);
-    expect(heardByFinished).toEqual(["downloading"]);
-    // The fetch ended the fault in its own world and left the next one owing its files.
-    expect(finished.db.fault).toBeNull();
-    expect(next.db.fault).toBe("scannerMissing");
-    unmountNext();
   });
 
   it("leaves the app store alone for a world that is sharing a page", () => {
@@ -1013,7 +981,9 @@ describe("a story can read the world it was given", () => {
     // confirm. Decks 3 and 4 hold nothing, and `Recently removed` starts empty: nothing has been
     // cut.
     const copiesIn = (folderId: number) =>
-      db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
+      db.collectionEntries
+        .filter((e) => e.folderId === folderId)
+        .reduce((n, e) => n + e.quantity, 0);
     expect(groups.map((f) => copiesIn(f.id))).toEqual([3, 1, 0, 0]);
     expect(copiesIn(removed[0].id)).toBe(0);
   });

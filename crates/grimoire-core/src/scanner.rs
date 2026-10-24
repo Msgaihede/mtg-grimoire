@@ -3,14 +3,15 @@
 //!
 //! **What every scanner command does is here, once** (the light app's step 7.3, 2026-10-07): the
 //! session's five doors on [`ScannerState`] ([`ScannerState::status`], [`ScannerState::frame`],
-//! [`ScannerState::reset`], [`ScannerState::set_filters`], [`ScannerState::capture`]), the three
-//! writes ([`save_prefs`], [`save_tray`], [`commit_tray`]), and what a frame and a capture are
-//! read out of ([`frame_from`], [`capture_from`] — a body and a header lookup, so a host hands
-//! over whatever it calls a header). **Two callers, and each only fetches what is its own**: the
-//! command table (`commands.rs`), for a host with one page, which admits [`PAGE`] on the lease
-//! and reads the headers out of the call's arguments; and the desktop's `#[tauri::command]`
-//! wrappers (`src-tauri`'s `scanner` module, over a glob re-export of this one), which admit the
-//! calling webview's label and read the headers out of Tauri's raw request.
+//! [`ScannerState::reset`], [`ScannerState::set_filters`], [`ScannerState::capture`]), the four
+//! writes ([`save_prefs`], [`save_tray`], [`commit_tray`], [`archive_tray`]), and what a capture
+//! is read out of ([`capture_from`] — a body and a header lookup, so a host hands over whatever
+//! it calls a header). A frame is the body alone: the JPEG, and nothing beside it. **Two
+//! callers, and each only fetches what is its own**: the command table (`commands.rs`), for a
+//! host with one page, which admits [`PAGE`] on the lease and reads the capture's header out of
+//! the call's arguments; and the desktop's `#[tauri::command]` wrappers (`src-tauri`'s `scanner`
+//! module, over a glob re-export of this one), which admit the calling webview's label and read
+//! the header out of Tauri's raw request.
 //!
 //! **A field of [`crate::state::State`], `State.scanner`**, built empty from the data directory —
 //! since the extraction's seventh step (2026-10-03); it was the desktop's own managed state,
@@ -18,41 +19,25 @@
 //! for the session, and a host whose reader never opens the scanner never loads a byte of it. The
 //! prefs and the tray are `app_meta` rows and touch no session, so they answer before it has
 //! loaded; their writes take the lease, for its own reason below, and asking whose the lease is
-//! loads no asset.
+//! loads nothing.
 //!
-//! **Assets load per asset, first hit wins: a file in `data/scanner/`, then the copy the host's
-//! binary carries, then absent.** What the binary carries is the host's to say: the desktop's
-//! release build embeds all three under `cfg(scanner_assets)` (`build.rs` sets it when
-//! `apps/desktop/src-tauri/scanner-assets/` holds them) and says so once, through [`ScannerState::carry`],
-//! before any command can ask; a host that never says carries nothing. A file placed in
-//! `data/scanner/` overrides the embedded copy so a new bundle can be tried without a rebuild.
-//! Nothing here downloads — `scanner_assets` does, when a reader asks it to, into that same
-//! folder, and then lets the loaded session go. A missing bundle is a session that detects and
-//! rectifies and names nothing — the debug server's behaviour — and a missing model pair is a
-//! session with no reader.
-//! The status reports the exact path it looked at for each, and [`Asset::source`] says which of
-//! the three answered, so "no bundle" is never the whole message.
+//! **The session is the Neural scanner's files and the corpus's labels.** The files are built in
+//! or absent ([`Embedded::neural`], [`ScannerStatus::neural`]): they are in git, so the desktop
+//! and Android carry them on every build, and the host says so once, through
+//! [`ScannerState::carry`], before any command can ask; a host that never says carries nothing,
+//! and its frames answer `card_scanner::session::NEURAL_UNAVAILABLE_ERROR`. The labels — every
+//! printing's name, set, number, finishes — are read from `corpus.db` as the session loads; with
+//! none, a decision names a printing by its id alone and no filter can be built.
 //!
-//! **The Neural scanner's files are built in or absent, and nothing else** ([`Embedded::neural`],
-//! [`ScannerStatus::neural`]): they are in git, so the desktop and Android carry them on every
-//! build; no file in `data/scanner/` overrides them, and `scanner_assets` never owes or fetches
-//! them.
+//! **In a browser this module runs no session at all**: the page's scanner is a Worker of its own
+//! on a module of its own (`crates/grimoire-scan`, the light app's step 7.5), and the web host
+//! answers the session's commands on the page, in front of this table. So every door here to the
+//! session and to a file is shut on a page in one sentence ([`not_in_a_browser_yet`]) — a
+//! backstop no reader should meet — while the prefs, the tray and the lease, which are rows and a
+//! mutex, answer on a page as anywhere.
 //!
-//! **Every file goes through `platform::files`**, the models included — `TitleReader::load`
-//! reads its two files with `std::fs` inside the crate, so [`load`] reads them here and hands the
-//! bytes to `TitleReader::from_bytes`, with that function's sentences kept word for word. **In a
-//! browser this module runs no session at all**: the page's scanner is a Worker of its own on a
-//! module of its own (`crates/grimoire-scan`, the light app's step 7.5), and the web host answers
-//! the session's commands on the page, in front of this table. So every door here to the session
-//! and to a file is shut on a page in one sentence ([`not_in_a_browser_yet`]) — a backstop no
-//! reader should meet — while the prefs, the tray and the lease, which are rows and a mutex,
-//! answer on a page as anywhere.
-//!
-//! **The load can be let go** ([`ScannerState::forget`]): the first [`ScannerState::ensure`] keeps
-//! what it loaded for the life of the process, so an asset that arrives later — a download — is
-//! never seen until something drops the session and the next command loads afresh. The filters
-//! the dropped session held stay owed until a session takes them, and the status says so while
-//! one has not ([`ScannerStatus::unapplied_filters`]).
+//! **The first load is kept for the life of the process.** Nothing here reloads a session: what
+//! the binary carries is said once, and the labels are read once, on the first command that asks.
 //!
 //! **The seventh connection.** Labels are loaded on a read-only connection opened for the
 //! load and dropped after — never the state's read connection, the rule the mirror thread and
@@ -66,42 +51,35 @@
 //! *uses* the scanner admits the calling window's label and refuses any other window with
 //! [`OPEN_ELSEWHERE`] while the holder has a command still running, and for two seconds after its
 //! last one settled: the four session commands, the mounted view's heartbeat — which is what holds
-//! it while the camera is still starting or has failed — and the three writes of the prefs and the
+//! it while the camera is still starting or has failed — and the writes of the prefs and the
 //! tray. **An admission holds the scanner until its command settles** ([`LeaseGuard`]), not only
-//! at the moment it was let in. Those three writes are not the session, and they take the lease
+//! at the moment it was let in. Those writes are not the session, and they take the lease
 //! anyway: a tray write waiting up to five seconds for the write connection holds the scanner the
 //! whole time, and the page's next try comes 1.5 s after the last one settled — inside the two
 //! seconds — so a window with an unsaved tray keeps the scanner until the write lands, and no
 //! second window can open a tray read from a row that is about to change under it.
-//! [`ScannerState::elsewhere`] asks the same question without taking anything, and the three
-//! reads take nothing either. The lease keeps its time on `platform::clock::Tick`, so its tests
+//! [`ScannerState::elsewhere`] asks the same question without taking anything, and the reads
+//! take nothing either. The lease keeps its time on `platform::clock::Tick`, so its tests
 //! can say "two seconds later" without waiting two seconds.
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use card_scanner::filters::ScanFilters;
-use card_scanner::index::Bundle;
-use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::session::{FrameOptions, ScanMode, Session, Verdict};
+use card_scanner::session::{Session, Verdict};
 use rusqlite::Connection;
 
 use crate::platform::clock::Tick;
 use crate::platform::files;
 use crate::state::State;
 
-pub const BUNDLE_FILE: &str = "card-hashes.bin";
-pub const DETECTION_MODEL: &str = "models/text-detection.rten";
-pub const RECOGNITION_MODEL: &str = "models/text-recognition.rten";
-/// Candidates per frame — the debug server's `--top` default.
+/// Candidates per frame.
 const TOP: usize = 5;
 
 /// The `app_meta` key holding [`ScannerPrefs`], one JSON document written whole. Not synced: a
-/// scanner's mode and defaults are about the device in the reader's hand.
+/// scanner's defaults are about the device in the reader's hand.
 pub const K_SCANNER_PREFS: &str = "scanner_prefs";
 /// The `app_meta` key holding the review tray, one JSON array written whole. Not synced either:
 /// the tray is a session's worth of cards not yet in the collection, and it reaches another
@@ -116,8 +94,9 @@ pub const TRAY_ROW_NEEDS_A_COPY: &str = "A tray row needs at least one copy.";
 /// [`MAX_TRAY_ROWS`], in words.
 pub const TRAY_IS_FULL: &str =
     "The tray holds at most 5,000 rows — add these to the collection first.";
-/// [`ScannerPrefs::finish`]'s default: **let the scanner decide each card's finish**, from the
-/// collector line's separator (a ★ on a foil, a • on a non-foil) and the printing's own finishes.
+/// [`ScannerPrefs::finish`]'s default: **let the scanner decide each card's finish** from the
+/// printing's own finishes — the one it exists in, or `unknown` for the reader to settle where
+/// it exists in several.
 ///
 /// **Deliberately not one of `schema::FINISHES`, and it must never become one.** It is a policy the
 /// page applies as each card lands — `reader/trayFinish.ts` turns it into a finish, or into
@@ -127,19 +106,16 @@ pub const TRAY_IS_FULL: &str =
 /// a fixed finish, and a new default is no reason to take that back.
 pub const DETECT_FINISH: &str = "detect";
 
-/// Where an asset came from — [`load`]'s order, first hit wins.
+/// Where an asset came from.
 ///
-/// `File` also covers a file that is there and did **not** parse: the reader placed it, so its
-/// error is the answer, and quietly falling back to the embedded copy would hide exactly the file
-/// they are trying to test. `Absent` is "nothing to load anywhere".
+/// `File` is a file that was read from a folder, and `Absent` is "nothing to load anywhere".
 ///
-/// **`Store` is a host that has no folder**: the web host keeps what it downloaded in the
-/// browser's own storage, where no reader can put a file, and says so of all three assets —
-/// one it has and one it has not fetched yet alike, because `Absent` promises a path to place a
-/// file at and a page has none. [`load`] never answers it: this crate runs no session on a page
-/// ([`not_in_a_browser_yet`]), and the status a page reads is composed by the web host
-/// (`packages/ui/lib/core/web/scanner.ts`) in this struct's shape. It is declared here because the shape
-/// is declared here, and `packages/ui/lib/ipc.ts` mirrors it from this text.
+/// **`Store` is a host that has no folder**: the web host keeps what it fetched in the
+/// browser's own storage, where no reader can put a file, and says so whether it has fetched
+/// it yet or not. [`load`] never answers it, and never answers `File` either — the Neural
+/// scanner's files are built in or absent here. The status a page reads is composed by the web
+/// host (`packages/ui/lib/core/web/scanner.ts`) in this struct's shape; the variants are declared
+/// here because the shape is, and `packages/ui/lib/ipc.ts` mirrors it from this text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AssetSource {
@@ -151,56 +127,45 @@ pub enum AssetSource {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Asset {
-    /// The file this load looked at in `data/scanner/` — named even when the asset came out of
-    /// the binary or from nowhere, so the "put it here" sentence always has a path to name.
-    /// **Except the Neural asset's**, which has no file to look at: [`NEURAL_SOURCE`], where its
-    /// files are built in from, carried or not.
+    /// Where the asset is from — [`NEURAL_SOURCE`] for the Neural scanner's files, carried or
+    /// not, so the status always has a place to name.
     pub path: String,
-    /// There was something to load: the file exists, or (for `Embedded`) the binary carries it.
+    /// There was something to load: the binary carries it (or, on a page, the store holds it).
     pub present: bool,
     pub loaded: bool,
     pub error: Option<String>,
     pub source: AssetSource,
 }
 
-/// The assets compiled into the host's binary, if any — said to [`ScannerState::carry`].
+/// The files compiled into the host's binary, if any — said to [`ScannerState::carry`].
 ///
-/// **A struct passed to [`load`] rather than a `cfg!` inside it**, the `bool`-parameter rule
-/// `apps/desktop/src-tauri/CLAUDE.md` states for every `cfg`: both arms of the load order compile and are
-/// tested on every build, whether or not this one embedded anything. It is also what keeps the
-/// `cfg` out of this crate, whose fence refuses one outside `platform/`: the desktop's
-/// `scanner::compiled()` is where `cfg(scanner_assets)` is asked.
+/// **A struct passed to [`load`] rather than a `cfg!` inside it**: both arms of the load compile
+/// and are tested on every build, whatever this one carries, and the core's fence refuses a `cfg`
+/// outside `platform/`.
 ///
-/// **`Clone`, not `Copy`, since the Neural scanner's files joined it**: their
-/// [`card_scanner::neural::Files`] holds `Cow`s, so that a host handed owned buffers needs no
-/// copy. A clone of what a host carries is four borrowed slices — no byte is copied.
+/// **`Clone`, not `Copy`**: [`card_scanner::neural::Files`] holds `Cow`s, so that a host handed
+/// owned buffers needs no copy. A clone of what a host carries is borrowed slices — no byte is
+/// copied.
 #[derive(Debug, Clone, Default)]
 pub struct Embedded {
-    pub bundle: Option<&'static [u8]>,
-    /// Detection, then recognition. A pair because the models load as one or not at all.
-    pub models: Option<(&'static [u8], &'static [u8])>,
     /// The Neural scanner's four files — `card_neural::bundled()`, which the desktop and Android
     /// carry on every build because the files are in git (`crates/card-neural/models/`).
     /// **Built in or nothing**: no file in `data/scanner/` overrides them, since the four are one
     /// set (the gallery is the embedder's own and the thresholds were tuned on the pair) and a
-    /// new set is a rebuild; and no download is owed for them ([`crate::scanner_assets`]).
+    /// new set is a rebuild.
     pub neural: Option<card_scanner::neural::Files<'static>>,
     /// The Neural scanner's printing evidence — `card_neural::bundled_evidence()`: the set symbol
     /// and collector band networks and their galleries, in git beside [`Embedded::neural`] and
     /// built in or nothing for the same reasons. Loaded after those files, whose `neural.json`
-    /// says how to read and weigh them; **without it the Neural mode still decides**, a look
-    /// with its printings as the choices, so a refusal is logged and is not the asset's error.
+    /// says how to read and weigh them; **without it the scanner still decides**, a look with its
+    /// printings as the choices, so a refusal is logged and is not the asset's error.
     pub neural_evidence: Option<card_scanner::neural::EvidenceFiles<'static>>,
 }
 
 impl Embedded {
-    /// Nothing embedded — a host that carries no assets, and every test that is about files.
-    /// (A desktop build without `apps/desktop/src-tauri/scanner-assets/` still carries the
-    /// Neural scanner's files.)
+    /// Nothing embedded — a host that carries no files, and every test that is about none.
     pub fn none() -> Embedded {
         Embedded {
-            bundle: None,
-            models: None,
             neural: None,
             neural_evidence: None,
         }
@@ -209,36 +174,29 @@ impl Embedded {
 
 /// [`ScannerStatus::neural`]'s `path`: where the Neural scanner's files are built in from — the
 /// repository, not `data/scanner/`, because no file there is read for them. Named whether or not
-/// this build carries them, as every other asset names its path either way.
+/// this build carries them.
 pub const NEURAL_SOURCE: &str = "crates/card-neural/models";
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScannerStatus {
-    pub bundle: Asset,
-    pub detection_model: Asset,
-    pub recognition_model: Asset,
     /// **The Neural scanner's files, as one asset** — its detector, its embedder, the gallery of
     /// looks they are searched against and `neural.json` load together or not at all
     /// (`Session::load_neural`). `Embedded` and loaded on the desktop and Android, which build
-    /// them in; `Absent` on a host that carries none, where a Neural frame answers
+    /// them in; `Absent` on a host that carries none, where a frame answers
     /// `card_scanner::session::NEURAL_UNAVAILABLE_ERROR`; `Embedded` with the crate's sentence in
-    /// `error` when they were carried and did not load. Never `File`, and never owed to a
-    /// download. The web host composes its own (`Store`), as for the other three.
+    /// `error` when they were carried and did not load. Never `File`. The web host composes its
+    /// own (`Store`).
     pub neural: Asset,
-    /// Labels loaded from `corpus.db`; 0 when there is no bundle to label.
+    /// Labels loaded from `corpus.db`; 0 when there is none to read them from.
     pub labels: usize,
-    /// Where `scanner_capture` writes — the same names and sidecar as the debug server's.
+    /// Where `scanner_capture` writes.
     pub scans_dir: String,
     /// **The reader's filters are not in force**, and this is the sentence the loaded session
     /// refused them with — `None` on every session that searches under what the reader chose.
     ///
-    /// Set only after a reload ([`ScannerState::forget`]) whose new session could not take the
-    /// filters the dropped one held: a mask is built from labels, and a reload that found no
-    /// `corpus.db` to read them from — a card sync replacing it at that moment — has none. The
-    /// session then searches every printing while the page's popover still shows the filters,
-    /// which is the one state the page cannot learn from its own pushes. The filters are not
-    /// lost: they stay owed, and the next reload is offered them again. Not part of the load —
-    /// read from the state each time the status is asked, since a later push settles it.
+    /// **Always `None` from this crate**, which loads one session for the life of the process and
+    /// so never has filters to carry across a reload. The web host's scanner Worker can reload
+    /// its session, and its status says so here, in this struct's shape.
     pub unapplied_filters: Option<String>,
 }
 
@@ -327,24 +285,21 @@ pub const NOT_IN_A_BROWSER_YET: &str = "The scanner does not run in a browser ye
 /// as WebAssembly — in a module and a Worker **of its own** (`crates/grimoire-scan`). Not in
 /// this one: the web host's module is built with `panic = "abort"`, so a panic anywhere in a
 /// frame would be a trap that ends the instance holding the reader's databases; a read frame
-/// would block the one Worker every search queues through for a third of a second to more
-/// than one; and a session's hundred megabytes would be memory the engine's Worker can never
-/// give back. And the load here would find no asset: a page has no `data/scanner/` to read.
+/// would block the one Worker every search queues through; and a session's memory would be
+/// memory the engine's Worker can never give back.
 ///
 /// **A backstop, and what makes the linker drop the session.** The web host answers the
-/// session's commands and the two for its files on the page, in front of the table
-/// (`packages/ui/lib/core/web/scanner.ts`), so nothing a reader does arrives here. This stays because
-/// the table still names those commands for every host, and because on `wasm32` it is a
-/// constant refusal: everything behind it — the session, the readers, their OCR runtime — is
-/// unreachable, and fat LTO leaves it out of the engine's module — three megabytes of it.
-/// **That holds for an ordinary function and not for an `async fn`**, whose later states
-/// stay reachable whatever its first line returns: `scanner_assets::fetch` is the one such
-/// door, and is shut by `platform::host::with_files` instead.
+/// session's commands on the page, in front of the table (`packages/ui/lib/core/web/scanner.ts`),
+/// so nothing a reader does arrives here. This stays because the table still names those
+/// commands for every host, and because on `wasm32` it is a constant refusal: everything behind
+/// it — the session, the recogniser, the network runtime — is unreachable, and fat LTO leaves it
+/// out of the engine's module. **That holds for an ordinary function and not for an
+/// `async fn`**, whose later states stay reachable whatever its first line returns — so no door
+/// to the session may be one.
 ///
 /// **Where it is asked**, which is every way in: [`ScannerState::ensure`] — the one door to the
-/// session, so the status, a frame, a reset and a filter push all pass it —
-/// [`ScannerState::capture`], which writes files and touches no session, and the two asset
-/// commands.
+/// session, so the status, a frame, a reset and a filter push all pass it — and
+/// [`ScannerState::capture`], which writes files and touches no session.
 ///
 /// **What it deliberately leaves alone**: the prefs and the tray, read and written, and the
 /// tray's commit — rows in a database a page has too; and the lease's two commands, which are a
@@ -448,39 +403,15 @@ pub struct ScannerState {
     /// The window holding the scanner, if any — [`ScannerState::admit`] takes and renews it.
     ///
     /// **A mutex of its own rather than a field inside `loaded`, because the cheap commands must
-    /// never wait behind a frame.** `loaded` is held for the whole of a decode, and
+    /// never wait behind a frame.** `loaded` is held for the whole of a read, and
     /// `scanner_elsewhere` and `scanner_hold` are asked every second from every window on the
     /// Scanner view, the holder's own heartbeat among them: behind that lock a heartbeat would
-    /// queue for a decode, and a slow one could let the very lease it was renewing lapse. A
+    /// queue for a frame, and a slow one could let the very lease it was renewing lapse. A
     /// refusal not waiting behind the holder's frame is the same property from the other side.
     owner: Mutex<Option<Lease>>,
     /// What the host's binary carries — [`ScannerState::carry`]'s word, and [`Embedded::none`]
     /// until it is said.
     embedded: OnceLock<Embedded>,
-    /// The filters a session [`ScannerState::forget`] let go was searching under, owed to a
-    /// later one until one takes them — see [`Owed`]. **Only ever taken with `loaded` already in
-    /// hand**, by everything that touches it, so the two locks have one order and cannot cross.
-    owed: Mutex<Option<Owed>>,
-    /// Whether a fetch of this install's assets is running — `scanner_assets`' claim, taken and
-    /// let go there. Here because it is this state's: two states are two installs, and a
-    /// process-wide flag would have one test's download refuse another's.
-    pub(crate) fetching: AtomicBool,
-}
-
-/// Filters a dropped session held that no session has taken since.
-///
-/// **A debt, not a hand-over.** They were once taken out of here as the next session loaded and
-/// offered to it once; a session that could not build the mask at that moment — no labels,
-/// because `corpus.db` was mid-replacement — refused, and they were gone: every later frame
-/// searched every printing under a popover that still showed them. So the debt stands until a
-/// session accepts it, each reload is offered it again, and an accepted push from the page — the
-/// reader's own newer word — is what else settles it.
-#[derive(Debug, Clone)]
-struct Owed {
-    filters: ScanFilters,
-    /// What the session loaded since said to them, if one has been asked —
-    /// [`ScannerStatus::unapplied_filters`].
-    refusal: Option<String>,
 }
 
 impl ScannerState {
@@ -494,8 +425,6 @@ impl ScannerState {
             loaded: Mutex::new(None),
             owner: Mutex::new(None),
             embedded: OnceLock::new(),
-            owed: Mutex::new(None),
-            fetching: AtomicBool::new(false),
         }
     }
 
@@ -506,10 +435,9 @@ impl ScannerState {
         let _ = self.embedded.set(embedded);
     }
 
-    /// What the host said its binary carries, or nothing if it never said — what
-    /// `scanner_assets` reads to know which files no download could be owed for. A clone, which
+    /// What the host said its binary carries, or nothing if it never said. A clone, which
     /// copies references and no bytes ([`Embedded`]).
-    pub fn carried(&self) -> Embedded {
+    fn carried(&self) -> Embedded {
         self.embedded.get().cloned().unwrap_or_default()
     }
 
@@ -547,8 +475,7 @@ impl ScannerState {
     ///
     /// **The one door to the session, so the one place it is shut on a page**
     /// ([`not_in_a_browser_yet`]): nothing is loaded there — a page's session is its own
-    /// Worker's. A session loaded after a [`ScannerState::forget`] is offered the filters the
-    /// last one was searching under, and they stay owed if it cannot take them ([`Owed`]).
+    /// Worker's.
     pub fn ensure(&self) -> Result<MutexGuard<'_, Option<Loaded>>, String> {
         not_in_a_browser_yet()?;
         let mut guard = self
@@ -556,83 +483,14 @@ impl ScannerState {
             .lock()
             .map_err(|_| "the scanner state is poisoned".to_string())?;
         if guard.is_none() {
-            let mut loaded = load(
+            *guard = Some(load(
                 &self.dir(),
                 &self.data_dir.join(crate::db::CORPUS_DB),
                 TOP,
                 self.carried(),
-            );
-            let mut owed = self
-                .owed
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some(debt) = owed.as_mut() {
-                match loaded.session.set_filters(debt.filters.clone()) {
-                    Ok(()) => *owed = None,
-                    // A reload that could not build the mask — no labels to build it from. The
-                    // session searches unfiltered, as a first load does; the debt stands for the
-                    // next reload, and the sentence is the status's to carry until then.
-                    Err(sentence) => debt.refusal = Some(sentence),
-                }
-            }
-            drop(owed);
-            *guard = Some(loaded);
+            ));
         }
         Ok(guard)
-    }
-
-    /// **Let the loaded session go, so the next command that asks for one loads afresh** — the
-    /// door for assets that arrive after the first load: a download into `data/scanner/`, or a
-    /// file a reader placed by hand. Without it the first [`ScannerState::ensure`] keeps what it
-    /// found, an empty session included, for the life of the process.
-    ///
-    /// Nothing loads here; the cost of the reload is the next command's, as the first load's
-    /// was the first command's. With nothing loaded it does nothing.
-    ///
-    /// **Behind a frame in flight, never under it.** A frame holds `loaded` for the whole of its
-    /// decode, so this waits for it: the frame answers from the session it started on, and the
-    /// next one loads the new. An Exact resolve still running on its own thread keeps its own
-    /// handles to the old reference and its answer is dropped unread, which is what dropping a
-    /// session has always meant to one.
-    ///
-    /// **The lease is not touched, and none is asked for**: who holds the scanner is one
-    /// question and what is loaded is another, and the caller is whatever put the files there —
-    /// which need not be a window on the Scanner view at all.
-    ///
-    /// **What a reload keeps is the filters, and nothing else.** The session the page narrowed
-    /// is the one being dropped, and the page pushes its filters once per mount — so they are
-    /// owed to the next load ([`ScannerState::ensure`]) rather than silently lifted, and stay
-    /// owed past a load that cannot take them ([`Owed`]). A debt already standing is not
-    /// replaced by the nothing the session that failed to take it was searching under. The
-    /// evidence for the card in front of the lens goes, as on a reset, and **`decision_seq`
-    /// starts again from zero**: a page that is pumping across a reload should treat the next
-    /// verdict as a new stream's.
-    ///
-    /// **It cannot fail, and it is the way back from a poisoned lock.** A panic under `loaded`
-    /// — in a load, since a frame's own panics are caught inside the crate — leaves every later
-    /// [`ScannerState::ensure`] answering "the scanner state is poisoned" for the life of the
-    /// process. Dropping whatever is there and loading again is the only repair there is, so
-    /// this takes the lock poisoned or not and clears the mark; `ensure` itself is unchanged and
-    /// still refuses a poisoned lock nobody has cleared.
-    pub fn forget(&self) {
-        let mut guard = self
-            .loaded
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.loaded.clear_poison();
-        if let Some(old) = guard.take() {
-            let held = old.session.filters();
-            let mut owed = self
-                .owed
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if owed.is_none() && !held.is_empty() {
-                *owed = Some(Owed {
-                    filters: held.clone(),
-                    refusal: None,
-                });
-            }
-        }
     }
 
     /// Whether a session is loaded right now, asked without loading one — for a test of what a
@@ -655,34 +513,19 @@ impl ScannerState {
         }
     }
 
-    /// `scanner_status`: what loaded, and the path each asset was looked for at. Loads the
-    /// session if this is the first scanner command; takes no lease — it is a read.
+    /// `scanner_status`: what loaded. Loads the session if this is the first scanner command;
+    /// takes no lease — it is a read.
     pub fn status(&self) -> Result<ScannerStatus, String> {
-        self.session(|loaded| {
-            let mut status = loaded.status.clone();
-            status.unapplied_filters = self
-                .owed
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .as_ref()
-                .and_then(|debt| debt.refusal.clone());
-            status
-        })
+        self.session(|loaded| loaded.status.clone())
     }
 
-    /// `scanner_frame`'s work: one frame in, one verdict out, on the loaded session.
+    /// `scanner_frame`'s work: one frame in, one verdict out, on the loaded session. The frame
+    /// is the call's whole body, a JPEG.
     ///
-    /// The detail image is decoded only on a frame whose reads run, so carrying one the session
-    /// did not ask for costs the copy and nothing else. **The caller has admitted its window
-    /// first** ([`ScannerState::admit`]) and holds that guard across this call — the lease is
-    /// the caller's because the label is.
-    pub fn frame(
-        &self,
-        jpeg: &[u8],
-        detail: Option<&[u8]>,
-        opts: &FrameOptions,
-    ) -> Result<Verdict, String> {
-        self.session(|loaded| loaded.session.frame_with_detail(jpeg, detail, opts))
+    /// **The caller has admitted its window first** ([`ScannerState::admit`]) and holds that
+    /// guard across this call — the lease is the caller's because the label is.
+    pub fn frame(&self, jpeg: &[u8]) -> Result<Verdict, String> {
+        self.session(|loaded| loaded.session.frame(jpeg))
     }
 
     /// `scanner_reset`'s work: forget the card in front of the lens.
@@ -696,20 +539,8 @@ impl ScannerState {
     ///
     /// **The crate's sentence is the error, verbatim** — no labels to filter by, or filters
     /// that match no printing — and a refusal keeps the previous filters in force.
-    ///
-    /// **An accepted push settles whatever a reload still owed** ([`Owed`]): the session now
-    /// holds what the page just sent, which is the reader's newer word. A refused one settles
-    /// nothing — the page puts its popover back to the filters it last had accepted, and those
-    /// are the ones still owed.
     pub fn set_filters(&self, filters: ScanFilters) -> Result<(), String> {
-        self.session(|loaded| {
-            loaded.session.set_filters(filters)?;
-            *self
-                .owed
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-            Ok(())
-        })?
+        self.session(|loaded| loaded.session.set_filters(filters))?
     }
 
     /// `scanner_capture`'s work: the frame and its sidecar into `scans/` ([`write_capture`]).
@@ -721,120 +552,18 @@ impl ScannerState {
     }
 }
 
-/// The file at `path`, before anything has been read: `File` when it exists, `Absent` when it
-/// does not. [`load`] moves an absent one to `Embedded` when the binary carries it.
-fn asset(path: &Path) -> Asset {
-    let present = files::is_file(path);
-    Asset {
-        path: path.display().to_string(),
-        present,
-        loaded: false,
-        error: None,
-        source: if present {
-            AssetSource::File
-        } else {
-            AssetSource::Absent
-        },
-    }
-}
-
-/// Read the assets and build the session. Every failure is a sentence on its asset, never an
-/// error out of here: the page is useful without a bundle, and it says which file is missing.
+/// Read the labels and build the session. Every failure is a fact on the status or a line in the
+/// log, never an error out of here: the page is useful without labels, and without the Neural
+/// files it says so.
 ///
-/// **Per asset, first hit wins: the file in `dir`, then `embedded`, then absent.** The models
-/// stay a pair — they are `File` only when **both** files exist; one file alone falls through to
-/// the embedded pair (or to nothing), because a lone model reads nothing. The Neural scanner's
-/// files are the embedded copy or nothing ([`load_neural`]), and so is their printing evidence,
-/// loaded once they have ([`load_neural_evidence`]).
+/// **The labels are `corpus.db`'s**, read on a connection of their own ([`ScannerStatus::labels`]);
+/// a corpus that is not there, or will not read, is a session with no reference — decisions by id,
+/// and no filters. The Neural scanner's files are the embedded copy or nothing
+/// ([`load_neural`]), and so is their printing evidence, loaded once they have
+/// ([`load_neural_evidence`]). `dir` is `data/scanner/`, where captures go.
 pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded {
-    let bundle_path = dir.join(BUNDLE_FILE);
-    let mut bundle = asset(&bundle_path);
-    let bytes: Option<Result<Cow<'static, [u8]>, String>> = if bundle.present {
-        Some(
-            files::read(&bundle_path)
-                .map(Cow::Owned)
-                .map_err(|e| e.to_string()),
-        )
-    } else if let Some(b) = embedded.bundle {
-        bundle.present = true;
-        bundle.source = AssetSource::Embedded;
-        Some(Ok(Cow::Borrowed(b)))
-    } else {
-        None
-    };
-    let mut labels = 0;
-    let reference = match bytes {
-        None => None,
-        Some(read) => match read.and_then(|b| Bundle::from_bytes(&b).map_err(|e| e.to_string())) {
-            Ok(b) => {
-                bundle.loaded = true;
-                let mut reference = Reference::new(b);
-                // **A bundle that loaded and labels that did not is its own state, and the
-                // page draws a different sentence for it** — matching still works and answers
-                // ids, so `Asset::error` beside `loaded: true` is what says so. An absent
-                // `corpus.db` used to leave that field `None`, which made a nameless scanner
-                // indistinguishable from a working one; the sentence names the path for the
-                // reason every other sentence here does.
-                if files::is_file(corpus) {
-                    match rusqlite::Connection::open_with_flags(
-                        corpus,
-                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                            | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-                    )
-                    .and_then(|conn| reference.load_labels(&conn))
-                    {
-                        Ok(n) => labels = n,
-                        Err(e) => bundle.error = Some(format!("labels: {e}")),
-                    }
-                } else {
-                    bundle.error = Some(format!(
-                        "labels: corpus.db not found at {}",
-                        corpus.display()
-                    ));
-                }
-                Some(reference)
-            }
-            Err(e) => {
-                bundle.error = Some(e);
-                None
-            }
-        },
-    };
-
-    let det_path = dir.join(DETECTION_MODEL);
-    let rec_path = dir.join(RECOGNITION_MODEL);
-    let mut detection_model = asset(&det_path);
-    let mut recognition_model = asset(&rec_path);
-    let attempt = if detection_model.present && recognition_model.present {
-        Some(read_models(&det_path, &rec_path))
-    } else if let Some((det, rec)) = embedded.models {
-        // A lone file on disk does not survive this: the pair came out of the binary, so both
-        // assets say so, and a reader who placed one file sees `embedded` rather than a path
-        // that half-worked.
-        for model in [&mut detection_model, &mut recognition_model] {
-            model.present = true;
-            model.source = AssetSource::Embedded;
-        }
-        Some(TitleReader::from_bytes(det, rec))
-    } else {
-        None
-    };
-    let reader = match attempt {
-        None => None,
-        Some(Ok(r)) => {
-            detection_model.loaded = true;
-            recognition_model.loaded = true;
-            Some(r)
-        }
-        Some(Err(e)) => {
-            let s = e.to_string();
-            detection_model.error = Some(s.clone());
-            recognition_model.error = Some(s);
-            None
-        }
-    };
-
-    let mut session = Session::new(reference, reader, top);
+    let (reference, labels) = load_labels(corpus);
+    let mut session = Session::new(reference, top);
     let neural = load_neural(&mut session, embedded.neural);
     if neural.loaded {
         load_neural_evidence(&mut session, embedded.neural_evidence);
@@ -843,22 +572,43 @@ pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded
     Loaded {
         session,
         status: ScannerStatus {
-            bundle,
-            detection_model,
-            recognition_model,
             neural,
             labels,
             scans_dir: dir.join("scans").display().to_string(),
-            // What `ScannerState::status` fills in; a bare load owes nobody anything.
             unapplied_filters: None,
         },
     }
 }
 
+/// Every printing's label out of `corpus.db`, and how many there were — or no reference, with
+/// the reason in the log, when there is no corpus to read or it would not read.
+fn load_labels(corpus: &Path) -> (Option<Reference>, usize) {
+    if !files::is_file(corpus) {
+        eprintln!(
+            "scanner: no labels — corpus.db not found at {}",
+            corpus.display()
+        );
+        return (None, 0);
+    }
+    let mut reference = Reference::new();
+    let read = Connection::open_with_flags(
+        corpus,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .and_then(|conn| reference.load_labels(&conn));
+    match read {
+        Ok(n) => (Some(reference), n),
+        Err(e) => {
+            eprintln!("scanner: the labels did not load: {e}");
+            (None, 0)
+        }
+    }
+}
+
 /// The Neural scanner's files into `session`, and the asset that says how that went:
 /// `Embedded` when the binary carries them — loaded, or with the crate's sentence in `error` —
-/// and `Absent` when it carries none. **No file is looked for first**, unlike the three above:
-/// see [`Embedded::neural`] for why the four are built in or nothing.
+/// and `Absent` when it carries none. **No file is looked for**: see [`Embedded::neural`] for why
+/// the four are built in or nothing.
 fn load_neural(
     session: &mut Session,
     files: Option<card_scanner::neural::Files<'static>>,
@@ -896,28 +646,8 @@ fn load_neural_evidence(
     }
 }
 
-/// The model pair at `detection` and `recognition`, read through [`files`] — what
-/// `TitleReader::load` does with `std::fs` inside the crate, and with its sentences kept word
-/// for word, so an asset's error names its files exactly as it always has.
-fn read_models(detection: &Path, recognition: &Path) -> Result<TitleReader, String> {
-    let read = |what: &str, path: &Path| {
-        files::read(path).map_err(|e| format!("{what} model {}: {e}", path.display()))
-    };
-    let (d, r) = (
-        read("detection", detection)?,
-        read("recognition", recognition)?,
-    );
-    TitleReader::from_bytes(&d, &r).map_err(|e| {
-        format!(
-            "{e} ({} and {})",
-            detection.display(),
-            recognition.display()
-        )
-    })
-}
-
-/// How the reader last left the scanner: the mode, the filters, what a new tray row defaults to,
-/// and whether the developer panels are showing. One `app_meta` row, written whole.
+/// How the reader last left the scanner: the filters, what a new tray row defaults to, and
+/// whether the developer panels are showing. One `app_meta` row, written whole.
 ///
 /// **`finish` and `condition` are strings here and `Finish | "detect"`/`Condition` on the page**,
 /// and they are not validated on write: they are the defaults a tray row is *born* with, and the
@@ -927,12 +657,12 @@ fn read_models(detection: &Path, recognition: &Path) -> Result<TitleReader, Stri
 /// records none and the collection row takes the import's default.
 ///
 /// `#[serde(default)]` on the struct, so a row written by an older build with fewer fields — or a
-/// newer one's missing a field this build has — reads with the rest intact.
+/// newer one's missing a field this build has — reads with the rest intact; a key this build does
+/// not know (an older build's `mode`) is ignored.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ScannerPrefs {
-    pub mode: ScanMode,
-    /// Snake case inside, because [`ScanFilters`] is the crate's and the debug page reads it too.
+    /// Snake case inside, because [`ScanFilters`] is the crate's.
     pub filters: ScanFilters,
     pub finish: String,
     pub condition: String,
@@ -957,7 +687,6 @@ pub struct ScannerPrefs {
 impl Default for ScannerPrefs {
     fn default() -> ScannerPrefs {
         ScannerPrefs {
-            mode: ScanMode::default(),
             filters: ScanFilters::default(),
             // A policy and not a finish — see the constant.
             finish: DETECT_FINISH.to_owned(),
@@ -1141,8 +870,7 @@ pub fn tray_archive(
     })
 }
 
-/// `live-<epoch>.jpg` and its `.json`, the debug server's names and fields, so a frame captured
-/// here can be copied into `docs/scanner/scans/` unchanged.
+/// `live-<epoch>.jpg` and its `.json`, the frame and what the panel said of it.
 ///
 /// **A capture never replaces one already in `scans/`** (issue #1131). Two presses inside one
 /// wall-clock second used to share a name, and the second frame and sidecar silently replaced
@@ -1204,23 +932,16 @@ fn write_capture_at(
     Ok(Captured { saved: name })
 }
 
-/// The header a frame carries its `FrameOptions` in, as JSON.
-pub const OPTIONS_HEADER: &str = "x-scanner-options";
 /// The header a capture carries its [`Sidecar`] in, as JSON.
 pub const CAPTURE_HEADER: &str = "x-scanner-capture";
-/// The header that says a frame's body is **two** JPEGs back to back, and where the first ends:
-/// the decimal byte length of the frame, with the detail image as everything after it. Absent,
-/// the body is the frame alone. See [`frame_from`].
-pub const DETAIL_HEADER: &str = "x-scanner-detail";
 
 /// One header of a raw-body call, as far as the host that received it could read it.
 ///
-/// **Three states, because the two payloads treat the third differently** — an options header
-/// that is there and unreadable is a shrug, a sidecar or a detail length that is there and
-/// unreadable is a refusal ([`frame_from`], [`capture_from`]) — so "could not be read" may not
-/// be folded into "was not sent". Each host fills it from what it calls a header: the desktop
-/// from Tauri's `HeaderMap`, where a value outside visible ASCII is the unreadable one; the
-/// command table from the call's arguments ([`Header::of_json`]).
+/// **Three states, because a sidecar that is there and unreadable is a refusal and one that was
+/// not sent is not** ([`capture_from`]) — so "could not be read" may not be folded into "was not
+/// sent". Each host fills it from what it calls a header: the desktop from Tauri's `HeaderMap`,
+/// where a value outside visible ASCII is the unreadable one; the command table from the call's
+/// arguments ([`Header::of_json`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Header<'a> {
     Absent,
@@ -1231,10 +952,10 @@ pub enum Header<'a> {
 
 impl<'a> Header<'a> {
     /// A header as a call through the command table carries it: **the call's arguments are the
-    /// headers**, an object of strings, exactly as `packages/ui/lib/core/table.ts` and the web host's
-    /// `protocol.ts` send a `Uint8Array` call — `{"x-scanner-options": "<json>",
-    /// "x-scanner-detail": "<n>"}`. A key that is missing or `null` was not sent; a value that
-    /// is not a string is there and unreadable, as a header of raw bytes is on the desktop.
+    /// headers**, an object of strings, exactly as `packages/ui/lib/core/table.ts` and the web
+    /// host's `protocol.ts` send a `Uint8Array` call — `{"x-scanner-capture": "<json>"}`. A key
+    /// that is missing or `null` was not sent; a value that is not a string is there and
+    /// unreadable, as a header of raw bytes is on the desktop.
     pub fn of_json(value: Option<&'a serde_json::Value>) -> Header<'a> {
         match value {
             None | Some(serde_json::Value::Null) => Header::Absent,
@@ -1244,79 +965,16 @@ impl<'a> Header<'a> {
     }
 }
 
-/// What [`frame_from`] reads out of one call: the frame, the detail image if one came, and the
-/// options. Borrowed from the body — a host that hands the work to another thread copies them.
-pub type FrameParts<'b> = (&'b [u8], Option<&'b [u8]>, FrameOptions);
-
-/// The frame from a call's body, the detail image behind it if [`DETAIL_HEADER`] says there is
-/// one, and the options from [`OPTIONS_HEADER`]. `header` answers one header by name.
-///
-/// **Why one body carrying two JPEGs rather than a second command or a second header.** The
-/// detail image has to be the *same video frame* as the one the crate detects on — the quad it
-/// found in the small image is scaled onto the large one, so a large image one frame later is a
-/// card that has moved by however far the reader's hand did. One request is what makes the pair
-/// arrive together or not at all; a raw body is the only way bytes cross the desktop's boundary
-/// without a base64 step; and a header is the only place left to say where one ends.
-///
-/// **A detail header that is present and wrong is a refusal, where an unreadable options header
-/// is a shrug** — [`capture_from`]'s asymmetry, for a sharper reason. A defaulted slider costs
-/// one frame; a mis-split body hands the decoder the first half of a JPEG as the frame and a
-/// tail of it as the detail, and the verdict that comes back describes neither. So a length that
-/// is not a number, is zero, runs past the body, or leaves nothing behind it for the detail says
-/// so in words, and the page's loop shows the sentence and sends the next frame.
-pub fn frame_from<'b, 'h>(
-    body: &'b [u8],
-    header: &dyn Fn(&str) -> Header<'h>,
-) -> Result<FrameParts<'b>, String> {
-    let opts = match header(OPTIONS_HEADER) {
-        Header::Text(text) => serde_json::from_str(text).unwrap_or_default(),
-        Header::Absent | Header::Unreadable(_) => FrameOptions::default(),
-    };
-    let (jpeg, detail) = split_detail(body, header(DETAIL_HEADER))?;
-    Ok((jpeg, detail, opts))
-}
-
-/// The body split at [`DETAIL_HEADER`]'s length — `(frame, None)` when there is no header, and
-/// the whole body is the frame exactly as it was before the detail image existed.
-fn split_detail<'b>(
-    bytes: &'b [u8],
-    header: Header<'_>,
-) -> Result<(&'b [u8], Option<&'b [u8]>), String> {
-    let text = match header {
-        Header::Absent => return Ok((bytes, None)),
-        Header::Unreadable(e) => {
-            return Err(format!("the frame's detail length did not parse: {e}"))
-        }
-        Header::Text(text) => text,
-    };
-    let n: usize = text
-        .parse()
-        .map_err(|_| format!("the frame's detail length is not a number: {text:?}"))?;
-    if n == 0 {
-        return Err("the frame's detail length is zero, so there is no frame before it".into());
-    }
-    if n >= bytes.len() {
-        return Err(format!(
-            "the frame's detail length is {n} bytes but the body is {} — there is no detail image \
-             behind the frame",
-            bytes.len()
-        ));
-    }
-    let (jpeg, detail) = bytes.split_at(n);
-    Ok((jpeg, Some(detail)))
-}
-
 /// The capture from a call's body and its sidecar from [`CAPTURE_HEADER`].
 ///
-/// **A sidecar header that is there and unreadable is a refusal, where an unreadable options
-/// header in [`frame_from`] is a shrug — and the asymmetry is the point.** A defaulted slider
-/// costs one frame out of thirty and the next one corrects it; a defaulted sidecar writes a JPEG
-/// to disk with five empty fields and reports success, which is an *unlabelled* capture the
-/// reader believes they labelled — the one thing the dataset cannot recover from later. An
-/// **absent** header still means [`Sidecar::default`], because capturing without typing a name
-/// is a thing the reader chooses. On the desktop the unreadable case is `HeaderValue::to_str`
-/// refusing any byte outside visible ASCII, so the page escapes non-ASCII as `\uXXXX` before it
-/// puts this JSON on the wire — for every host, though only that one needs it.
+/// **A sidecar header that is there and unreadable is a refusal.** A defaulted sidecar would
+/// write a JPEG to disk with five empty fields and report success, which is an *unlabelled*
+/// capture the reader believes they labelled — the one thing the dataset cannot recover from
+/// later. An **absent** header still means [`Sidecar::default`], because capturing without
+/// typing a name is a thing the reader chooses. On the desktop the unreadable case is
+/// `HeaderValue::to_str` refusing any byte outside visible ASCII, so the page escapes non-ASCII
+/// as `\uXXXX` before it puts this JSON on the wire — for every host, though only that one
+/// needs it.
 pub fn capture_from<'b, 'h>(
     body: &'b [u8],
     header: &dyn Fn(&str) -> Header<'h>,
@@ -1393,20 +1051,7 @@ pub fn archive_tray(
 mod tests {
     use super::*;
     use crate::app_meta::set_app_meta;
-
-    /// A valid bundle with no entries, as bytes that live as long as the test binary — the shape
-    /// [`Embedded::bundle`] takes.
-    fn tiny_bundle() -> &'static [u8] {
-        Box::leak(
-            card_scanner::index::BundleBuilder::new(
-                card_scanner::hash::HashKind::DHashChroma32,
-                256,
-            )
-            .finish(0)
-            .to_bytes()
-            .into_boxed_slice(),
-        )
-    }
+    use std::borrow::Cow;
 
     /// The table [`K_SCANNER_PREFS`] and [`K_SCANNER_TRAY`] live in, as `schema.rs` builds it —
     /// `home.rs`' own test helper. Nothing here reads a second table.
@@ -1443,56 +1088,6 @@ mod tests {
         }
     }
 
-    /// The load order's first rung. The embedded bytes are deliberately **not** a bundle, so a
-    /// `loaded` asset proves the file's bytes were the ones parsed — `source` alone would only
-    /// prove which branch set the word.
-    #[test]
-    fn a_file_beats_the_embedded_copy_and_says_so() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let scanner = dir.path().join("scanner");
-        std::fs::create_dir_all(&scanner).expect("mkdir");
-        std::fs::write(scanner.join(BUNDLE_FILE), tiny_bundle()).expect("write");
-        let l = load(
-            &scanner,
-            &dir.path().join("corpus.db"),
-            5,
-            Embedded {
-                bundle: Some(&b"not a bundle"[..]),
-                models: None,
-                neural: None,
-                neural_evidence: None,
-            },
-        );
-        assert_eq!(l.status.bundle.source, AssetSource::File);
-        assert!(l.status.bundle.present && l.status.bundle.loaded);
-        assert!(l.status.bundle.path.ends_with(BUNDLE_FILE));
-    }
-
-    #[test]
-    fn with_no_file_the_embedded_bundle_loads() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let scanner = dir.path().join("scanner");
-        let l = load(
-            &scanner,
-            &dir.path().join("corpus.db"),
-            5,
-            Embedded {
-                bundle: Some(tiny_bundle()),
-                models: None,
-                neural: None,
-                neural_evidence: None,
-            },
-        );
-        let b = &l.status.bundle;
-        assert_eq!(b.source, AssetSource::Embedded);
-        assert!(b.present && b.loaded, "{b:?}");
-        // Still the path a file would override it from, so the developer panel can say where.
-        assert!(b.path.ends_with(BUNDLE_FILE), "{}", b.path);
-        assert!(l.session.has_reference());
-        // No models were embedded, so the pair is absent — per asset, not all or nothing.
-        assert_eq!(l.status.detection_model.source, AssetSource::Absent);
-    }
-
     #[test]
     fn nothing_anywhere_is_absent() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1502,24 +1097,18 @@ mod tests {
             5,
             Embedded::none(),
         );
-        for a in [
-            &l.status.bundle,
-            &l.status.detection_model,
-            &l.status.recognition_model,
-            &l.status.neural,
-        ] {
-            assert_eq!(a.source, AssetSource::Absent, "{a:?}");
-            assert!(!a.present && !a.loaded, "{a:?}");
-        }
+        let n = &l.status.neural;
+        assert_eq!(n.source, AssetSource::Absent, "{n:?}");
+        assert!(!n.present && !n.loaded, "{n:?}");
         // A host that carries no Neural files: no Neural scanner, and still the place they come
         // from, so the status has a path to name.
         assert!(!l.session.has_neural());
-        assert_eq!(l.status.neural.path, NEURAL_SOURCE);
-        assert_eq!(l.status.neural.error, None);
+        assert_eq!(n.path, NEURAL_SOURCE);
+        assert_eq!(n.error, None);
     }
 
     /// **The Neural scanner's files, as the desktop and Android carry them**, load into the
-    /// session and say so — and they need nothing else: no bundle, no OCR models, no folder.
+    /// session and say so — and they need nothing else: no labels, no folder.
     #[test]
     fn the_built_in_neural_files_load_and_say_so() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1537,10 +1126,9 @@ mod tests {
         assert!(n.present && n.loaded && n.error.is_none(), "{n:?}");
         assert_eq!(n.path, NEURAL_SOURCE);
         assert!(l.session.has_neural());
-        // The other three are their own: nothing embedded, nothing on disk.
-        assert_eq!(l.status.bundle.source, AssetSource::Absent);
-        assert_eq!(l.status.detection_model.source, AssetSource::Absent);
-        assert!(!l.session.has_reference() && !l.session.has_reader());
+        // No `corpus.db`, so no labels.
+        assert!(!l.session.has_reference());
+        assert_eq!(l.status.labels, 0);
         // Carried without its evidence: the files load, and decide as they did before it.
         assert!(!l.session.has_neural_evidence());
     }
@@ -1559,7 +1147,6 @@ mod tests {
                 Embedded {
                     neural,
                     neural_evidence,
-                    ..Embedded::none()
                 },
             )
         };
@@ -1613,23 +1200,27 @@ mod tests {
         assert!(!l.session.has_neural());
     }
 
-    /// **What the host carries reaches every load**, the first and one after a
-    /// [`ScannerState::forget`] alike: the Neural scanner is there again after a reload, with no
-    /// second word from the host.
+    /// **What the host carries reaches the load**, said once through `carry`, and a frame with
+    /// no Neural files carried says so in the crate's words rather than failing.
     #[test]
-    fn a_carried_neural_scanner_loads_and_loads_again_after_a_forget() {
+    fn a_carried_neural_scanner_is_the_one_the_session_loads() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let bare = ScannerState::new(dir.path().to_path_buf());
+        let verdict = bare.frame(&[0xFF, 0xD8, 0xFF]).expect("a verdict");
+        assert_eq!(
+            verdict.error.as_deref(),
+            Some(card_scanner::session::NEURAL_UNAVAILABLE_ERROR)
+        );
+
         let state = ScannerState::new(dir.path().to_path_buf());
         state.carry(Embedded {
             neural: Some(card_neural::bundled()),
             ..Embedded::none()
         });
-        assert!(state.carried().neural.is_some());
-        let first = state.status().expect("status");
-        assert!(first.neural.loaded, "{:?}", first.neural);
-        state.forget();
-        let again = state.status().expect("status");
-        assert!(again.neural.loaded, "{:?}", again.neural);
+        // A second word is ignored.
+        state.carry(Embedded::none());
+        let status = state.status().expect("status");
+        assert!(status.neural.loaded, "{:?}", status.neural);
         assert!(state
             .ensure()
             .expect("ensure")
@@ -1639,65 +1230,11 @@ mod tests {
             .has_neural());
     }
 
-    /// The models are a pair: `File` only when both files are there, and one file alone falls
-    /// through to the embedded pair. Garbage bytes throughout, because no model is in the repo —
-    /// what is under test is which place was read, and a failed parse still says that.
-    #[test]
-    fn the_models_load_as_a_pair_from_one_place() {
-        let garbage: (&'static [u8], &'static [u8]) = (&b"not a model"[..], &b"not a model"[..]);
-        let dir = tempfile::tempdir().expect("tempdir");
-        let scanner = dir.path().join("scanner");
-        std::fs::create_dir_all(scanner.join("models")).expect("mkdir");
-        let embedded = Embedded {
-            bundle: None,
-            models: Some(garbage),
-            neural: None,
-            neural_evidence: None,
-        };
-
-        // One file on disk: the embedded pair answers, for both.
-        std::fs::write(scanner.join(DETECTION_MODEL), b"on disk").expect("write");
-        let one = load(&scanner, &dir.path().join("corpus.db"), 5, embedded.clone());
-        for a in [&one.status.detection_model, &one.status.recognition_model] {
-            assert_eq!(a.source, AssetSource::Embedded, "{a:?}");
-            assert!(a.present && !a.loaded && a.error.is_some(), "{a:?}");
-        }
-
-        // One file on disk and nothing embedded: nothing loads, and the file that is there says so.
-        let bare = load(&scanner, &dir.path().join("corpus.db"), 5, Embedded::none());
-        assert_eq!(bare.status.detection_model.source, AssetSource::File);
-        assert_eq!(bare.status.recognition_model.source, AssetSource::Absent);
-        assert!(!bare.status.detection_model.loaded && !bare.session.has_reader());
-
-        // Both files on disk: the files answer, for both.
-        std::fs::write(scanner.join(RECOGNITION_MODEL), b"on disk").expect("write");
-        let both = load(&scanner, &dir.path().join("corpus.db"), 5, embedded);
-        for a in [&both.status.detection_model, &both.status.recognition_model] {
-            assert_eq!(a.source, AssetSource::File, "{a:?}");
-        }
-        // **And the refusal names both files, as `TitleReader::load`'s always has.** The pair is
-        // read here, through `platform::files`, since the move to the core — so the sentence is
-        // this module's to keep, and a reader who placed two files is told which two were wrong.
-        let said = both
-            .status
-            .detection_model
-            .error
-            .as_deref()
-            .expect("two files that are not models are refused");
-        let pair = format!(
-            " ({} and {})",
-            scanner.join(DETECTION_MODEL).display(),
-            scanner.join(RECOGNITION_MODEL).display()
-        );
-        assert!(said.ends_with(&pair), "{said}");
-    }
-
     #[test]
     fn prefs_round_trip_through_app_meta_and_default_when_unset() {
         let conn = meta();
         assert_eq!(stored_prefs(&conn), ScannerPrefs::default());
         let p = ScannerPrefs {
-            mode: ScanMode::Exact,
             developer: true,
             folder_id: Some(4),
             ..Default::default()
@@ -1709,7 +1246,7 @@ mod tests {
     #[test]
     fn a_prefs_row_that_does_not_parse_reads_as_the_default() {
         let conn = meta();
-        for junk in ["not json", "[]", r#"{"mode":"sideways"}"#] {
+        for junk in ["not json", "[]", r#"{"developer":"yes"}"#] {
             set_app_meta(&conn, K_SCANNER_PREFS, junk).unwrap();
             assert_eq!(stored_prefs(&conn), ScannerPrefs::default(), "{junk}");
         }
@@ -1720,7 +1257,6 @@ mod tests {
         let p = ScannerPrefs::default();
         assert_eq!(p.finish, "detect");
         assert_eq!(p.condition, "NONE");
-        assert_eq!(p.mode, ScanMode::Fast);
         assert_eq!(p.folder_id, None);
         assert!(!p.developer);
         assert_eq!(p.camera_id, None);
@@ -1729,8 +1265,9 @@ mod tests {
     }
 
     /// A row an older build wrote has no camera and no tray layout, and `#[serde(default)]` is
-    /// what reads it: the reader's mode and folder survive, and the two new fields take the
-    /// defaults rather than the whole row falling back to them.
+    /// what reads it: the reader's folder survives, and the two new fields take the defaults
+    /// rather than the whole row falling back to them. **Its `mode`, which the scanner no longer
+    /// has, is a key this build ignores** rather than a reason to drop the row.
     #[test]
     fn a_row_from_before_the_camera_and_the_layout_keeps_what_it_had() {
         let conn = meta();
@@ -1741,7 +1278,6 @@ mod tests {
         )
         .unwrap();
         let p = stored_prefs(&conn);
-        assert_eq!(p.mode, ScanMode::Exact);
         assert_eq!(p.folder_id, Some(4));
         assert!(p.developer);
         assert_eq!(p.camera_id, None);
@@ -1781,7 +1317,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(p["folderId"], 4);
-        assert_eq!(p["mode"], "fast");
+        assert!(p.get("mode").is_none(), "{p}");
         assert_eq!(p["cameraId"], "cam-1");
         assert_eq!(p["trayLayout"], "grid");
         assert_eq!(p["pointAndShoot"], false);
@@ -1805,8 +1341,7 @@ mod tests {
         }
         assert!(row["choices"][0].get("collectorNumber").is_some(), "{row}");
 
-        let absent = serde_json::to_value(asset(Path::new("nowhere/card-hashes.bin"))).unwrap();
-        assert_eq!(absent["source"], "absent");
+        assert_eq!(serde_json::to_value(AssetSource::Absent).unwrap(), "absent");
     }
 
     #[test]
@@ -2108,7 +1643,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_data_dir_names_three_absent_paths_and_still_answers() {
+    fn an_empty_data_dir_loads_no_labels_and_still_answers() {
         let dir = tempfile::tempdir().expect("tempdir");
         let loaded = load(
             &dir.path().join("scanner"),
@@ -2117,72 +1652,26 @@ mod tests {
             Embedded::none(),
         );
         let s = &loaded.status;
-        assert!(!s.bundle.present && !s.bundle.loaded);
-        assert!(s.bundle.path.ends_with(BUNDLE_FILE), "{}", s.bundle.path);
-        assert!(s.detection_model.path.ends_with("text-detection.rten"));
-        assert!(s.recognition_model.path.ends_with("text-recognition.rten"));
         assert_eq!(s.labels, 0);
         assert!(s.scans_dir.ends_with("scans"));
-        assert!(!loaded.session.has_reference());
-        assert!(!loaded.session.has_reader());
-    }
-
-    #[test]
-    fn a_bundle_that_is_not_a_bundle_is_present_and_not_loaded_with_a_sentence() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let scanner = dir.path().join("scanner");
-        std::fs::create_dir_all(&scanner).expect("mkdir");
-        std::fs::write(scanner.join(BUNDLE_FILE), b"nonsense").expect("write");
-        // A good embedded copy is on offer and is **not** taken: the reader placed this file, so
-        // its error is the answer, and falling back would hide the very file under test.
-        let embedded = Embedded {
-            bundle: Some(tiny_bundle()),
-            models: None,
-            neural: None,
-            neural_evidence: None,
-        };
-        let loaded = load(&scanner, &dir.path().join("corpus.db"), 5, embedded);
-        assert!(loaded.status.bundle.present);
-        assert!(!loaded.status.bundle.loaded);
-        assert!(loaded.status.bundle.error.is_some());
-        assert_eq!(loaded.status.bundle.source, AssetSource::File);
+        assert_eq!(s.unapplied_filters, None);
         assert!(!loaded.session.has_reference());
     }
 
-    /// A bundle that parsed with no `corpus.db` beside it: **loaded, and carrying a sentence
-    /// about its names**. The two facts have to be separable — the scanner matches perfectly
-    /// well here and answers ids — which is why this is `Asset::error` on a loaded asset
-    /// rather than `loaded: false`, and why the page draws a different sentence for it.
+    /// A `corpus.db` that is there and is not one is no labels, as an absent one is — and the
+    /// session is built either way: nameless is a state, not a failure.
     #[test]
-    fn a_bundle_with_no_corpus_beside_it_says_where_it_looked() {
+    fn a_corpus_that_will_not_read_is_no_labels() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let scanner = dir.path().join("scanner");
-        std::fs::create_dir_all(&scanner).expect("mkdir");
-        let empty = card_scanner::index::BundleBuilder::new(
-            card_scanner::hash::HashKind::DHashChroma32,
-            256,
-        )
-        .finish(0)
-        .to_bytes();
-        std::fs::write(scanner.join(BUNDLE_FILE), empty).expect("write");
-
         let corpus = dir.path().join("corpus.db");
-        let loaded = load(&scanner, &corpus, 5, Embedded::none());
-        assert!(loaded.status.bundle.present && loaded.status.bundle.loaded);
+        std::fs::write(&corpus, b"not a database").expect("write");
+        let loaded = load(&dir.path().join("scanner"), &corpus, 5, Embedded::none());
         assert_eq!(loaded.status.labels, 0);
-        let err = loaded
-            .status
-            .bundle
-            .error
-            .expect("a bundle with no corpus owes a sentence about its names");
-        assert!(err.contains("corpus.db not found"), "{err}");
-        assert!(err.contains(&corpus.display().to_string()), "{err}");
-        // The session is fully built either way: nameless is a state, not a failure.
-        assert!(loaded.session.has_reference());
+        assert!(!loaded.session.has_reference());
     }
 
     #[test]
-    fn a_capture_writes_the_two_files_the_debug_server_writes() {
+    fn a_capture_writes_the_frame_and_its_sidecar() {
         let dir = tempfile::tempdir().expect("tempdir");
         let scans = dir.path().join("scans");
         let sidecar = Sidecar {
@@ -2507,89 +1996,6 @@ mod tests {
         assert!(matches!(header("list"), Header::Unreadable(_)));
     }
 
-    /// The desktop's eight body tests (`src-tauri`'s `scanner::tests`), over the table's wire:
-    /// the same reader, handed a call's arguments where the desktop hands it request headers.
-    #[test]
-    fn a_body_with_no_header_is_the_frame_under_the_default_options() {
-        let args = serde_json::json!({});
-        let (jpeg, detail, opts) = frame_from(&[1, 2, 3], &carried(&args)).expect("payload");
-        assert_eq!(jpeg, [1, 2, 3]);
-        // No detail header is the body exactly as it was before the detail image existed.
-        assert_eq!(detail, None);
-        assert_eq!(opts, FrameOptions::default());
-        // And a call that carried no arguments at all reads the same.
-        let none = serde_json::Value::Null;
-        let (jpeg, detail, opts) = frame_from(&[1, 2, 3], &carried(&none)).expect("payload");
-        assert_eq!((jpeg, detail), (&[1u8, 2, 3][..], None));
-        assert_eq!(opts, FrameOptions::default());
-    }
-
-    #[test]
-    fn a_frame_reads_its_options_from_the_header_and_shrugs_at_one_it_cannot_read() {
-        let args = serde_json::json!({ OPTIONS_HEADER: r#"{"decide_at":12,"method":"otsu"}"# });
-        let (_, _, opts) = frame_from(&[9], &carried(&args)).expect("payload");
-        assert_eq!(opts.decide_at, 12.0);
-        assert_eq!(opts.method, card_scanner::session::Method::Otsu);
-        // Not JSON, and not a string: a defaulted slider, never a refused frame.
-        for unreadable in [
-            serde_json::json!({ OPTIONS_HEADER: "not json" }),
-            serde_json::json!({ OPTIONS_HEADER: { "decide_at": 12 } }),
-        ] {
-            let (jpeg, _, opts) = frame_from(&[9], &carried(&unreadable)).expect("payload");
-            assert_eq!(jpeg, [9]);
-            assert_eq!(opts, FrameOptions::default(), "{unreadable}");
-        }
-    }
-
-    /// The page's own shape: the frame, then the detail image, one body, with the frame's length
-    /// in the header. The options header still reads beside it.
-    #[test]
-    fn a_detail_header_splits_the_body_into_the_frame_and_the_detail() {
-        let args = serde_json::json!({
-            DETAIL_HEADER: "3",
-            OPTIONS_HEADER: r#"{"decide_at":12}"#,
-        });
-        let body = [1, 2, 3, 7, 8, 9, 10];
-        let (jpeg, detail, opts) = frame_from(&body, &carried(&args)).expect("payload");
-        assert_eq!(jpeg, [1, 2, 3]);
-        assert_eq!(detail, Some(&[7u8, 8, 9, 10][..]));
-        assert_eq!(opts.decide_at, 12.0);
-    }
-
-    /// Every wrong length is a sentence rather than a split somewhere else: a mis-split body is a
-    /// frame decoded from half a JPEG, and the verdict for it would describe neither image.
-    #[test]
-    fn a_detail_length_that_cannot_split_the_body_is_a_sentence() {
-        let body = [1, 2, 3, 4];
-        let refused = |value: serde_json::Value| {
-            let args = serde_json::json!({ DETAIL_HEADER: value });
-            let refusal = frame_from(&body, &carried(&args)).err();
-            refusal.expect("a length that cannot split is refused")
-        };
-        let err = refused("three".into());
-        assert!(err.contains("not a number"), "{err}");
-        let err = refused("-1".into());
-        assert!(err.contains("not a number"), "{err}");
-        let err = refused("0".into());
-        assert!(err.contains("zero"), "{err}");
-        // Past the end, and exactly at it — the second leaves an empty detail image.
-        let err = refused("9".into());
-        assert!(err.contains("no detail image"), "{err}");
-        let err = refused("4".into());
-        assert!(err.contains("no detail image"), "{err}");
-        // A number where the wire is a string is there and unreadable — a refusal, with the
-        // desktop's own opening words, and never the whole body taken as the frame.
-        let err = refused(3.into());
-        assert_eq!(
-            err,
-            "the frame's detail length did not parse: it is not a string"
-        );
-        // One byte short of the end is still a split, however small the detail.
-        let args = serde_json::json!({ DETAIL_HEADER: "3" });
-        let (jpeg, detail, _) = frame_from(&body, &carried(&args)).expect("payload");
-        assert_eq!((jpeg, detail), (&[1u8, 2, 3][..], Some(&[4u8][..])));
-    }
-
     #[test]
     fn a_capture_reads_its_sidecar_from_the_header() {
         let args = serde_json::json!({ CAPTURE_HEADER: r#"{"expected":"Plains","votes":"8.0"}"# });
@@ -2635,93 +2041,21 @@ mod tests {
         }
     }
 
-    /// The bytes of a bundle holding one printing, and a `corpus.db` beside `scanner/` that
-    /// names it — the least a session needs to accept a filter, which is built from labels.
-    fn a_labelled_bundle(data_dir: &Path) {
+    /// A `corpus.db` in `data_dir` that names one printing — the least a session needs to
+    /// accept a filter, which is built from labels.
+    fn a_labelled_corpus(data_dir: &Path) {
         let id = "f29ba16f-c8fb-42fe-aabf-87089cb214a7";
-        let mut builder = card_scanner::index::BundleBuilder::new(
-            card_scanner::hash::HashKind::DHashChroma32,
-            256,
-        );
-        builder.push(
-            card_scanner::index::Section::Card,
-            card_scanner::index::parse_uuid(id).expect("a uuid"),
-            &card_scanner::hash::Descriptor {
-                words: [1, 2, 3, 4],
-                bits: 256,
-            },
-        );
-        let scanner = data_dir.join("scanner");
-        std::fs::create_dir_all(&scanner).expect("mkdir");
-        std::fs::write(scanner.join(BUNDLE_FILE), builder.finish(0).to_bytes()).expect("write");
         let corpus = Connection::open(data_dir.join(crate::db::CORPUS_DB)).expect("corpus.db");
         corpus
             .execute_batch(&format!(
-                "CREATE TABLE cards (id TEXT PRIMARY KEY, illustration_id TEXT, name TEXT,
-                    set_code TEXT, collector_number TEXT, lang TEXT, released_at TEXT,
-                    oracle_id TEXT, finishes TEXT, promo INTEGER NOT NULL DEFAULT 0,
+                "CREATE TABLE cards (id TEXT PRIMARY KEY, name TEXT, set_code TEXT,
+                    collector_number TEXT, lang TEXT, released_at TEXT, oracle_id TEXT,
+                    finishes TEXT, promo INTEGER NOT NULL DEFAULT 0,
                     layout TEXT NOT NULL DEFAULT 'normal', type_line TEXT);
-                 INSERT INTO cards VALUES ('{id}', NULL, 'Lightning Bolt', '2x2', '117', 'en',
+                 INSERT INTO cards VALUES ('{id}', 'Lightning Bolt', '2x2', '117', 'en',
                     '2022-07-08', NULL, '[\"nonfoil\"]', 0, 'normal', 'Instant');"
             ))
             .expect("a card");
-    }
-
-    /// **The first load is kept until it is let go.** A scanner asked with nothing on disk
-    /// loads an empty session, and assets that arrive afterwards — a download — change nothing
-    /// it answers: that is the memo this door exists to open. After `forget`, the next command
-    /// loads what is there now.
-    #[test]
-    fn a_forgotten_session_loads_again_and_finds_what_has_arrived() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = ScannerState::new(dir.path().to_path_buf());
-        // Nothing loaded, nothing to let go.
-        state.forget();
-        assert!(!state.is_loaded());
-
-        let before = state.status().expect("status");
-        assert!(!before.bundle.present && !before.bundle.loaded);
-        assert!(state.is_loaded());
-
-        a_labelled_bundle(dir.path());
-        let still = state.status().expect("status");
-        assert!(
-            !still.bundle.present,
-            "the session loaded once: a file placed since is not seen"
-        );
-
-        state.forget();
-        assert!(!state.is_loaded(), "forgetting loads nothing itself");
-        let after = state.status().expect("status");
-        assert!(after.bundle.present && after.bundle.loaded, "{after:?}");
-        assert_eq!(after.bundle.source, AssetSource::File);
-        assert_eq!(after.labels, 1);
-        assert!(state
-            .ensure()
-            .expect("ensure")
-            .as_ref()
-            .expect("loaded")
-            .session
-            .has_reference());
-    }
-
-    /// **A reload keeps the filters the reader chose.** The page pushes them once per mount, to
-    /// the session that is about to be dropped; lifted silently, every later frame would search
-    /// every printing under a popover that says otherwise.
-    #[test]
-    fn a_forgotten_sessions_filters_are_handed_to_the_next_one() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        a_labelled_bundle(dir.path());
-        let state = ScannerState::new(dir.path().to_path_buf());
-        let filters = the_2x2_filter();
-        state
-            .set_filters(filters.clone())
-            .expect("a set that is there");
-        assert_eq!(in_force(&state), filters);
-
-        state.forget();
-        assert_eq!(in_force(&state), filters, "the reload lifted the filters");
-        assert_eq!(state.status().expect("status").unapplied_filters, None);
     }
 
     /// The filters a session is searching under right now, loading one if none is.
@@ -2736,157 +2070,51 @@ mod tests {
             .clone()
     }
 
-    /// The one printing's set, as a filter.
-    fn the_2x2_filter() -> ScanFilters {
-        ScanFilters {
+    /// **The labels are `corpus.db`'s**, and a filter is built from them: with the one printing
+    /// named, its set narrows the scan, and a set nothing is printed in is the crate's refusal.
+    #[test]
+    fn the_labels_come_from_the_corpus_and_a_filter_is_built_from_them() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        a_labelled_corpus(dir.path());
+        let state = ScannerState::new(dir.path().to_path_buf());
+        assert_eq!(state.status().expect("status").labels, 1);
+        assert!(state
+            .ensure()
+            .expect("ensure")
+            .as_ref()
+            .expect("loaded")
+            .session
+            .has_reference());
+
+        let filters = ScanFilters {
             sets: vec!["2x2".to_owned()],
             ..Default::default()
-        }
-    }
-
-    /// **A reload that cannot take the filters still owes them.** A mask is built from labels,
-    /// and a reload that lands while `corpus.db` is being replaced has none: the session loads,
-    /// searches unfiltered, and the filters used to be dropped there for good — every later
-    /// frame matched against every printing under a popover still showing them. Now the status
-    /// says so in the crate's sentence, and the next reload that can take them does.
-    #[test]
-    fn filters_a_reload_could_not_take_stay_owed_until_one_can() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        a_labelled_bundle(dir.path());
-        let state = ScannerState::new(dir.path().to_path_buf());
-        let filters = the_2x2_filter();
+        };
         state
             .set_filters(filters.clone())
             .expect("a set that is there");
-        assert_eq!(state.status().expect("status").unapplied_filters, None);
-
-        // The reload that loses its labels: it still loads, unfiltered, and says why.
-        let corpus = dir.path().join(crate::db::CORPUS_DB);
-        std::fs::remove_file(&corpus).expect("remove");
-        state.forget();
-        assert_eq!(in_force(&state), ScanFilters::default());
-        let status = state.status().expect("status");
-        assert!(status.bundle.loaded, "{status:?}");
-        let said = status
-            .unapplied_filters
-            .expect("filters that are not in force are said so");
-        assert!(said.starts_with("Filters need card names"), "{said}");
-
-        // A second reload in the same state owes the same filters, not the nothing the session
-        // in between was searching under.
-        state.forget();
-        assert_eq!(in_force(&state), ScanFilters::default());
-        assert!(state.status().expect("status").unapplied_filters.is_some());
-
-        // The labels are back: the reload takes what was owed, and the status is quiet again.
-        a_labelled_bundle(dir.path());
-        state.forget();
-        assert_eq!(
-            in_force(&state),
-            filters,
-            "the filters were dropped at the reload that could not take them"
-        );
-        assert_eq!(state.status().expect("status").unapplied_filters, None);
-    }
-
-    /// **What settles the debt besides a reload is the reader's own newer word.** An accepted
-    /// push is what the session now holds, so nothing older is owed; a refused one changes
-    /// nothing, and the filters the page puts its popover back to are still the ones owed.
-    #[test]
-    fn an_accepted_push_settles_owed_filters_and_a_refused_one_does_not() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        a_labelled_bundle(dir.path());
-        let state = ScannerState::new(dir.path().to_path_buf());
-        state
-            .set_filters(the_2x2_filter())
-            .expect("a set that is there");
-        std::fs::remove_file(dir.path().join(crate::db::CORPUS_DB)).expect("remove");
-        state.forget();
-        assert!(state.status().expect("status").unapplied_filters.is_some());
-
-        // Refused — this session has no labels for any filter — so the debt stands.
-        let other = ScanFilters {
+        assert_eq!(in_force(&state), filters);
+        let none = ScanFilters {
             sets: vec!["lea".to_owned()],
             ..Default::default()
         };
-        assert!(state.set_filters(other).is_err());
-        assert!(state.status().expect("status").unapplied_filters.is_some());
-
-        // Accepted: the reader cleared the filters. Nothing is owed, and a later reload with
-        // its labels back does not bring the old ones in again.
-        state
-            .set_filters(ScanFilters::default())
-            .expect("no filter is always a filter");
-        assert_eq!(state.status().expect("status").unapplied_filters, None);
-        a_labelled_bundle(dir.path());
-        state.forget();
-        assert_eq!(in_force(&state), ScanFilters::default());
-    }
-
-    /// **`forget` is the way back from a poisoned lock.** Every door to the session refuses a
-    /// poisoned `loaded` — and would for the life of the process, since nothing else clears it.
-    #[test]
-    fn forgetting_recovers_a_poisoned_session_lock() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = ScannerState::new(dir.path().to_path_buf());
-        assert!(state.status().is_ok());
-        let poisoner = std::thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    let _loaded = state.loaded.lock();
-                    panic!("poisoning the scanner's session on purpose");
-                })
-                .join()
-        });
-        assert!(poisoner.is_err() && state.loaded.is_poisoned());
         assert_eq!(
-            state.status().err().as_deref(),
-            Some("the scanner state is poisoned"),
-            "`ensure` still refuses a poisoned lock nobody has cleared"
+            state.set_filters(none).unwrap_err(),
+            "No printing matches these filters."
+        );
+        assert_eq!(
+            in_force(&state),
+            filters,
+            "a refusal keeps what is in force"
         );
 
-        state.forget();
-        assert!(!state.loaded.is_poisoned());
-        assert!(!state.is_loaded());
-        assert!(state.status().is_ok(), "the next command loads afresh");
+        // Without the corpus, no filter but none can be built.
+        let bare = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(bare.path().to_path_buf());
+        let said = state.set_filters(filters).unwrap_err();
+        assert!(said.starts_with("Filters need card names"), "{said}");
+        assert_eq!(state.set_filters(ScanFilters::default()), Ok(()));
     }
-
-    /// **Behind a frame in flight, and with the lease left alone.** `forget` waits for the
-    /// session a command is holding rather than dropping it under the command, and whoever held
-    /// the scanner before it still does.
-    #[test]
-    fn forgetting_waits_for_a_command_in_hand_and_leaves_the_lease() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let state = ScannerState::new(dir.path().to_path_buf());
-        let _lease = state.admit("main").expect("a free scanner admits");
-        let (forgotten_tx, forgotten_rx) = std::sync::mpsc::channel();
-        std::thread::scope(|scope| {
-            // A command holding the session, as a frame does for the whole of its decode.
-            let in_hand = state.ensure().expect("ensure");
-            scope.spawn(|| {
-                state.forget();
-                forgotten_tx.send(()).expect("the test is listening");
-            });
-            assert!(
-                forgotten_rx
-                    .recv_timeout(Duration::from_millis(200))
-                    .is_err(),
-                "the session was dropped under a command that held it"
-            );
-            assert!(in_hand.is_some());
-            drop(in_hand);
-            forgotten_rx
-                .recv_timeout(Duration::from_secs(10))
-                .expect("forget runs once the command lets go");
-        });
-        assert!(!state.is_loaded());
-        assert!(
-            state.elsewhere("window-2"),
-            "the lease went with the session"
-        );
-        assert_eq!(in_flight(&state), 1);
-    }
-
     /// **On a page every door to the session and to a file is one sentence**, and nothing is
     /// loaded or written on the way to it; the lease, which is a mutex, answers as anywhere.
     #[test]
@@ -2898,12 +2126,7 @@ mod tests {
             let refused = Some(NOT_IN_A_BROWSER_YET.to_owned());
             assert_eq!(not_in_a_browser_yet().err(), refused);
             assert_eq!(state.status().err(), refused);
-            assert_eq!(
-                state
-                    .frame(&[1, 2, 3], None, &FrameOptions::default())
-                    .err(),
-                refused
-            );
+            assert_eq!(state.frame(&[1, 2, 3]).err(), refused);
             assert_eq!(state.reset().err(), refused);
             assert_eq!(state.set_filters(ScanFilters::default()).err(), refused);
             assert_eq!(
@@ -2913,8 +2136,7 @@ mod tests {
                 refused
             );
             assert!(state.ensure().is_err());
-            // Letting go of nothing, and holding the scanner, are no session and no file.
-            state.forget();
+            // Holding the scanner is no session and no file.
             let _held = state.admit(PAGE).expect("the page is admitted");
             assert!(!state.elsewhere(PAGE));
         }
@@ -2973,7 +2195,6 @@ mod tests {
         let (state, _dir) = a_state_with_a_card("scanner-write-prefs");
         let index = crate::index::lifecycle::current(&state).expect("a warm index");
         let prefs = ScannerPrefs {
-            mode: ScanMode::Exact,
             developer: true,
             ..Default::default()
         };

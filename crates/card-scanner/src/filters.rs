@@ -6,14 +6,12 @@
 //! the mask it builds from these ([`crate::reference::Reference::mask_without_tokens`]).
 //!
 //! **Language is deliberately absent**, not merely unimplemented — see the design's decision 7
-//! (`docs/superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md` §3). The bundle
-//! holds one printing per card, English wherever English exists, so a language filter would
-//! bite only on printings that exist in no other language.
+//! (`docs/superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md` §3): a printing's
+//! language is not something its picture says.
 //!
-//! A filter becomes an [`crate::index::Mask`] through [`crate::reference::Reference::mask_for`],
-//! and **that mask constrains every tier** — the hash search, the name lookup and the collector
-//! lookup alike. A filter that only hid some answers from one tier would let another tier hand
-//! them straight back.
+//! A filter becomes an [`crate::ids::Mask`] through [`crate::reference::Reference::mask_for`],
+//! and **that mask constrains the search itself** — the gallery's looks are admitted by it, and
+//! a decision's printings are chosen among what it permits — never only the answers shown.
 
 use crate::reference::Label;
 
@@ -29,7 +27,7 @@ pub struct ScanFilters {
     pub released_to: Option<String>,
     /// Leave out every printing the corpus marks a promo (Scryfall's `promo`) — prerelease
     /// stamps, promo packs, buy-a-box and the rest. A promo shares its artwork with the
-    /// printing it promotes often enough that the descriptor reads one for the other, and a
+    /// printing it promotes often enough that the recogniser reads one for the other, and a
     /// reader sorting a box of boosters never wants the promo answered.
     pub exclude_promos: bool,
 }

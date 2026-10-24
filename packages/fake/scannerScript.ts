@@ -8,38 +8,28 @@
  * is the script that replaced it — a believable session a frame at a time, so the page, its
  * stories and `scripts/phone-scanner-smoke.ts` have cards landing in the tray.
  *
- * **One card is thirteen frames**: nothing in frame, the tracker weighing it, the frame that
+ * **One card is thirteen frames**: nothing in frame, the agreement weighing it, the frame that
  * decides (the one that moves `decision_seq`), and the card lying there decided until it is lifted.
  * The decided card rides every held frame with the *same* number, as the session's does — which is
  * what makes "one add per card" a property the page has to honour rather than one the fake hands
  * it. After the last card the camera looks at an empty desk; `scanner_reset` lays the pile down
  * again, and the number it has reached survives that, as the crate's does.
  *
- * **The pile is the tray's four shapes, in the Storybook corpus's own printings** (so every row
- * draws its art): a card, the same card again (a bump to ×2), one whose finish the collector line
- * did not settle (`Unknown`, for the reader), a printing sold one way, and Lightning Bolt — which
- * Fast names outright and Exact cannot tell from two reprints, so the row waits on a pick.
+ * **The pile is the tray's shapes, in the Storybook corpus's own printings** (so every row draws
+ * its art): Urza's Saga twice — printed nonfoil and foil, so under *Detect* each lands `Unknown`
+ * for the reader to pick, and under a set finish the second is a bump to ×2 — then two printings
+ * sold one way (Ancient Tomb, Black Lotus), which *Detect* files nonfoil, and Lightning Bolt — whose
+ * picture stands for all three of its printings, so the scanner answers it `ambiguous` with the
+ * three as its choices and the row waits on a pick.
  *
- * **Neural is answered as Neural** (2026-10-20), never as Fast under another name: the same pile at
- * the same pace — the fake's timing is one script for every mode — but each frame in Neural's shape
- * (no lock, `method: "neural"`, one view of the whole card, no resolve) and its decisions as the
- * session makes them. Lightning Bolt's picture stands for all three of its printings, so Neural
- * answers it `ambiguous` with the three as its choices and the row waits on a pick, as in Exact;
- * and Neural reads no collector line, so no decision carries a separator — under *Detect* a
- * printing made in two finishes lands `Unknown`, which is what the engine's Neural does too.
- *
- * **What it does not do**: it never asks for a detail frame (`wants_detail` stays `false`), it
- * reads no title and no collector line, it ignores the filters, and the quad it reports is the
- * fixture's whatever the camera shows. Those are the engine's to prove.
+ * **What it does not do**: it ignores the filters, and the quad it reports is the fixture's
+ * whatever the camera shows. Those are the engine's to prove.
  */
-import { MARKS, VERDICTS } from "@grimoire/ui/features/scanner/fixtures";
+import { VERDICTS } from "@grimoire/ui/features/scanner/fixtures";
 import type {
-  ScanMode,
   ScannerChoice,
   ScannerDecision,
-  ScannerFinishMark,
   ScannerLabel,
-  ScannerResolution,
   ScannerStanding,
   ScannerVerdict,
 } from "@grimoire/ui/lib/ipc";
@@ -54,7 +44,7 @@ export const FAKE_FRAME_MS = 110;
 
 /** Frames with nothing in frame before a card is laid down. */
 const LOOKING = 3;
-/** Frames the tracker spends weighing it. */
+/** Frames the agreement spends weighing it. */
 const WEIGHING = 4;
 /** Frames the decided card lies there before it is lifted — more than `DECISION_GAP_FRAMES`. */
 const HELD = 5;
@@ -69,24 +59,19 @@ const BOLT_STA = "b14fae63-2e82-49c1-8e62-d84a65f27479";
 const BOLT_SLD = "4f43c378-9e6a-4ece-9c24-5dc08c977746";
 
 interface PileCard {
-  /** The printing Fast names, and Exact's and Neural's first choice. */
+  /** The printing the scanner names first. */
   id: string;
-  /**
-   * The reprints Exact's resolve cannot split from it — none for a card it pins — and the other
-   * printings Neural's matched picture stands for.
-   */
+  /** The other printings its matched picture stands for — none for a picture of one printing. */
   rivals: readonly string[];
-  /** The collector line's separator as it measured, or `null` for a card with no such line. */
-  mark: ScannerFinishMark | null;
 }
 
 /** The cards on the desk, in the order they are laid down. */
 export const FAKE_PILE: readonly PileCard[] = [
-  { id: SAGA, rivals: [], mark: MARKS.dot },
-  { id: SAGA, rivals: [], mark: MARKS.dot },
-  { id: TOMB, rivals: [], mark: MARKS.unmeasured },
-  { id: LOTUS, rivals: [], mark: null },
-  { id: BOLT_2X2, rivals: [BOLT_STA, BOLT_SLD], mark: MARKS.unmeasured },
+  { id: SAGA, rivals: [] },
+  { id: SAGA, rivals: [] },
+  { id: TOMB, rivals: [] },
+  { id: LOTUS, rivals: [] },
+  { id: BOLT_2X2, rivals: [BOLT_STA, BOLT_SLD] },
 ];
 
 /** Where a session has got to. One per fake database, so two stories never share a pile. */
@@ -108,7 +93,8 @@ export function resetScanScript(script: ScanScript): void {
 
 function corpusCard(id: string) {
   const card = CARDS.find((c) => c.id === id);
-  if (card === undefined) throw new Error(`the fake scanner's pile names a printing the corpus lost: ${id}`);
+  if (card === undefined)
+    throw new Error(`the fake scanner's pile names a printing the corpus lost: ${id}`);
   return card;
 }
 
@@ -141,169 +127,106 @@ function standingOf(id: string, evidence: number, seen: number): ScannerStanding
   return { id, evidence, share: 1, seen, label: labelOf(id), best_distance: 0.11 };
 }
 
-/** A verdict as the frame asked for it: the mode echoed, and no previews unless they were asked for. */
-function framed(verdict: ScannerVerdict, mode: ScanMode, previews: boolean, seq: number): ScannerVerdict {
-  const shaped = mode === "neural" ? asNeural(verdict) : verdict;
-  return {
-    ...shaped,
-    mode,
-    decision_seq: seq,
-    rectified: previews ? shaped.rectified : null,
-    hash: previews ? shaped.hash : null,
-  };
+/** A verdict with the session's number on it. */
+function numbered(verdict: ScannerVerdict, seq: number): ScannerVerdict {
+  return { ...verdict, decision_seq: seq };
 }
 
-/**
- * A frame in Neural's shape — `card-scanner`'s Neural arm: no lock (it tracks no quad across
- * frames), its own method on a frame with a card in it, no detector score, no hash or preview of
- * its own, and its search reported as one view of the whole card. The tracker is left as the pile
- * paces it: what differs between the modes here is the shape of an answer, not its timing.
- */
-function asNeural(verdict: ScannerVerdict): ScannerVerdict {
-  return {
-    ...verdict,
-    lock: null,
-    from_lock: false,
-    method: verdict.quad === null ? null : "neural",
-    search: "full",
-    score: null,
-    hash: null,
-    rectified: null,
-    match: verdict.match && { ...verdict.match, section: "card", view: 0, views: 1, hashes: 1 },
-  };
-}
-
-/** A card in frame, locked, the tracker `n` frames into weighing it. */
+/** A card in frame, the agreement `n` frames into weighing it. */
 function weighing(card: PileCard, n: number): ScannerVerdict {
   const base = VERDICTS.voting;
+  const confidence = n / (WEIGHING + 1);
   return {
     ...base,
     match: base.match && {
       ...base.match,
-      candidates: [{ id: card.id, distance: 30, normalized: 0.11, label: labelOf(card.id), printings: 1 }],
+      candidates: [
+        { id: card.id, distance: 30, normalized: 0.11, label: labelOf(card.id), printings: 1 },
+      ],
       margin: null,
     },
     tracked: base.tracked && {
       ...base.tracked,
-      confidence: n / (WEIGHING + 1),
-      lead: null,
+      confidence,
       streak: n,
       frames: n,
       misses: 0,
-      // Short of the bar's eight on the last weighing frame, so the bar is never full before
-      // the frame that decides.
-      standings: [standingOf(card.id, n * 1.75, n)],
+      // Short of the bar on the last weighing frame, so the bar is never full before the frame
+      // that decides.
+      standings: [standingOf(card.id, confidence * base.tracked.decide_at, n)],
     },
   };
 }
 
-/** The resolve Exact reports on the frame that decides: one printing, or the ones it cannot split. */
-function resolutionOf(card: PileCard): ScannerResolution {
-  const choices = [card.id, ...card.rivals].map((id, i) => choiceOf(id, 0.121 + i * 0.011));
-  const like = card.rivals.length > 0 ? VERDICTS.exactAmbiguous : VERDICTS.exactResolved;
-  return {
-    outcome: card.rivals.length > 0 ? "ambiguous" : "resolved",
-    choices,
-    // The fixture's own tier table: the developer's view of a resolve, which no reader's surface
-    // draws, so the figures in it are not this card's and are not claimed to be.
-    tiers: like.resolution?.tiers ?? [],
-    elapsed_ms: like.resolution?.elapsed_ms ?? 0,
-  };
-}
-
 /**
- * The printings Neural's matched picture stands for, the one it names first — each at the
- * picture's own distance, since it is one picture that matched them all.
+ * The printings the matched picture stands for, the one it names first — each at the picture's
+ * own distance, since it is one picture that matched them all.
  */
 function lookOf(card: PileCard): ScannerChoice[] {
   return [card.id, ...card.rivals].map((id) => choiceOf(id, 0.071));
 }
 
 /**
- * What each mode decides on a card. Fast names the printing and offers no choice. Exact's choices
- * are its resolve's, even when it pinned one. **Neural** offers choices only when its picture
- * stands for more than one printing — `ambiguous`, with them as the choices — and is `resolved`
- * with none otherwise; it reads no collector line, so it never carries a separator.
+ * What the scanner decides on a card: choices only when its picture stands for more than one
+ * printing — `ambiguous`, with them as the choices — and `resolved` with none otherwise.
  */
-function decisionOf(card: PileCard, mode: ScanMode): ScannerDecision {
-  const ambiguous = mode !== "fast" && card.rivals.length > 0;
-  const choices =
-    mode === "exact"
-      ? resolutionOf(card).choices
-      : mode === "neural" && ambiguous
-        ? lookOf(card)
-        : [];
+function decisionOf(card: PileCard): ScannerDecision {
+  const ambiguous = card.rivals.length > 0;
   return {
     printing: card.id,
     oracle_id: corpusCard(card.id).oracleId,
     label: labelOf(card.id),
     outcome: ambiguous ? "ambiguous" : "resolved",
-    choices,
+    choices: ambiguous ? lookOf(card) : [],
     replaces_previous: false,
     finishes: finishesOf(card.id),
-    finish_mark: mode === "neural" ? null : card.mark,
   };
 }
 
-/** The card decided: on the deciding frame (with Exact's resolve) and on every held one after. */
-function decided(card: PileCard, mode: ScanMode, deciding: boolean): ScannerVerdict {
+/** The card decided: on the deciding frame and on every held one after. */
+function decided(card: PileCard): ScannerVerdict {
   const base = VERDICTS.decided;
   return {
     ...base,
-    decision: decisionOf(card, mode),
-    // A resolve is reported on the one frame it ran on.
-    resolution: mode === "exact" && deciding ? resolutionOf(card) : null,
+    decision: decisionOf(card),
     match: base.match && {
       ...base.match,
-      candidates: [{ id: card.id, distance: 30, normalized: 0.11, label: labelOf(card.id), printings: 1 }],
+      candidates: [
+        { id: card.id, distance: 30, normalized: 0.11, label: labelOf(card.id), printings: 1 },
+      ],
     },
-    tracked: base.tracked && { ...base.tracked, standings: [standingOf(card.id, 8, 8)] },
+    tracked: base.tracked && {
+      ...base.tracked,
+      standings: [standingOf(card.id, base.tracked.decide_at, base.tracked.decide_at)],
+    },
   };
 }
+
+/** What every frame says with no models loaded — `NEURAL_UNAVAILABLE_ERROR`, verbatim. */
+export const MODELS_NOT_LOADED = "the Neural scanner's models are not loaded";
 
 /**
  * One frame of the session — the verdict, and the script moved on by it.
  *
- * `missing` is the `scannerMissing` fault: with no bundle a card is still found in the frame and
- * can never be named, so nothing is ever decided and `decision_seq` never moves.
+ * `missing` is the `scannerMissing` fault: with no models loaded every frame fails, in the
+ * crate's sentence, so nothing is ever decided and `decision_seq` never moves.
  */
-export function scanStep(
-  script: ScanScript,
-  mode: ScanMode,
-  previews: boolean,
-  missing: boolean,
-): ScannerVerdict {
+export function scanStep(script: ScanScript, missing: boolean): ScannerVerdict {
+  if (missing) {
+    return numbered(
+      { ...VERDICTS.panicked, error: MODELS_NOT_LOADED, matcher: false, read_ms: 0 },
+      script.seq,
+    );
+  }
   const at = script.frame;
   script.frame += 1;
   const card = FAKE_PILE[Math.floor(at / FRAMES_PER_CARD)];
   const phase = at % FRAMES_PER_CARD;
 
-  if (card === undefined || phase < LOOKING) {
-    return framed(VERDICTS.noCard, mode, previews, script.seq);
-  }
-  if (missing) {
-    return framed({ ...VERDICTS.noMatch, matcher: false, tracked: null }, mode, previews, script.seq);
-  }
+  if (card === undefined || phase < LOOKING) return numbered(VERDICTS.noCard, script.seq);
   if (phase < LOOKING + WEIGHING) {
-    return framed(weighing(card, phase - LOOKING + 1), mode, previews, script.seq);
+    return numbered(weighing(card, phase - LOOKING + 1), script.seq);
   }
-  const deciding = phase === LOOKING + WEIGHING;
-  if (deciding) script.seq += 1;
-  return framed(decided(card, mode, deciding), mode, previews, script.seq);
-}
-
-/**
- * The options a frame was sent under, read out of its header — `x-scanner-options`, the JSON
- * `ipc.scannerFrame` writes. `null` where there is none to read: a caller that reached the handler
- * without the IPC layer, which gets the stored mode and no previews.
- */
-export function sentOptions(
-  options: { headers?: Record<string, string> } | undefined,
-): { mode: ScanMode; previews: boolean } | null {
-  const raw = options?.headers?.["x-scanner-options"];
-  if (raw === undefined) return null;
-  const parsed = JSON.parse(raw) as { mode?: unknown; previews?: unknown };
-  // A word the fake does not know is Fast, the crate's default — never a mode it would echo.
-  const mode: ScanMode = parsed.mode === "exact" || parsed.mode === "neural" ? parsed.mode : "fast";
-  return { mode, previews: parsed.previews === true };
+  if (phase === LOOKING + WEIGHING) script.seq += 1;
+  return numbered(decided(card), script.seq);
 }

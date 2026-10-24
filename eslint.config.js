@@ -77,9 +77,6 @@ export default tseslint.config(
       // person wrote. The smoke removes what it made; a `wrangler dev` stopped any other way
       // does not.
       "**/.wrangler/",
-      // The card scanner's frame bench (`pnpm scanner:bench`): wasm-bindgen's glue for the
-      // two modules it builds, machine-written like `dist-wasm/`'s.
-      "crates/card-scanner/bench/web/pkg/",
     ],
   },
   js.configs.recommended,
@@ -89,68 +86,7 @@ export default tseslint.config(
   // that stopped updating. `recommended-latest` also brings the React Compiler rules,
   // which are kept on as free static analysis.
   reactHooks.configs.flat["recommended-latest"],
-  // Developer tooling that runs in Node rather than in the webview. Listed by hand rather
-  // than pulled from the `globals` package: half a dozen names is not worth a dependency,
-  // and the list being short is itself a fence — anything in `scripts/` that needs more of
-  // Node than this should be asked why. **The card scanner's own scripts are the same kind
-  // of file one directory down** (`crates/card-scanner/scripts/`: the page check, the model
-  // fetch, the camera-less drive), and `eslint .` reaches them — found 2026-09-08 as 27
-  // `no-undef` errors the first time `pnpm verify` ran with the crate in the tree.
-  {
-    files: ["crates/*/scripts/**/*.mjs"],
-    languageOptions: {
-      globals: {
-        process: "readonly",
-        console: "readonly",
-        fetch: "readonly",
-        WebSocket: "readonly",
-        Buffer: "readonly",
-        // Asked and answered: a real drag is a *paced* gesture. Chromium starts one from a
-        // press and a few moves spread over time, and dispatched back to back they arrive as
-        // a click. `cdp.ts drag` sleeps between moves for that reason and no other.
-        setTimeout: "readonly",
-        // `drive-frames.mjs` times each round trip; Node 22 has it as a global.
-        performance: "readonly",
-        // Asked and answered: `web-deploy-probe.ts` gives each `fetch` a deadline, and
-        // `AbortSignal.timeout` is the only way to hand `fetch` one.
-        AbortSignal: "readonly",
-        // Asked and answered: a post-deploy probe is a `Request` (`deploy-probe.ts`), so that
-        // the same object is what `fetch` sends to the host at a release and what a test hands
-        // to the Worker's own `fetch` in a pull request. Its tests read one back (`URL`) and
-        // answer it (`Response`).
-        Request: "readonly",
-        Response: "readonly",
-        URL: "readonly",
-        // Asked and answered: `play-upload.ts` posts the token request as a form, which is
-        // what Google's token endpoint takes.
-        URLSearchParams: "readonly",
-      },
-    },
-  },
-  // The frame bench's page, its Worker and their shared summariser: three plain scripts a
-  // browser loads as they are, with no bundler and no `tsc` over them — so `no-undef` is live
-  // and the browser's names are listed, by hand, as Node's are above. `summary.js` is imported
-  // by `scripts/scanner-bench.ts` too and uses none of them.
-  {
-    files: ["crates/card-scanner/bench/web/*.js"],
-    languageOptions: {
-      globals: {
-        console: "readonly",
-        document: "readonly",
-        fetch: "readonly",
-        location: "readonly",
-        navigator: "readonly",
-        performance: "readonly",
-        self: "readonly",
-        window: "readonly",
-        URL: "readonly",
-        URLSearchParams: "readonly",
-        WebAssembly: "readonly",
-        Worker: "readonly",
-      },
-    },
-  },
-  // No Node-globals block accompanies this: `.storybook` and the root's `scripts/` are
+  // No Node-globals block is here: `.storybook` and the root's `scripts/` are
   // TypeScript, and typescript-eslint's `eslint-recommended` turns
   // `no-undef` off for TS files — the compiler already answers that question better.
   // Verified with `eslint --print-config .storybook/main.ts`: `no-undef` is `[0]`, so such a

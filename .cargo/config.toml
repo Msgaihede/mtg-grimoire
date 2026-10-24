@@ -17,7 +17,7 @@
 # `crates/card-scanner`** — cargo finds config files from the working directory, not from
 # `--manifest-path`. That package keeps its own tree: `crates/card-scanner/.cargo/config.toml`
 # answers a run started inside it, and every scripted run from the root (`pnpm verify`,
-# `ci.yml`, `scanner-bundle.yml`) passes `--target-dir crates/card-scanner/target`.
+# `ci.yml`) passes `--target-dir crates/card-scanner/target`.
 #
 # **The agent worktrees read one more file, and it is that same walk put to use** (2026-10-11):
 # `.claude/worktrees/.cargo/config.toml`, the folder above them, which no other checkout is

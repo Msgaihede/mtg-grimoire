@@ -131,7 +131,10 @@ eight random bytes:
 ```
 
 (Three frames shown, at the scanner's size as runs were kept before 2026-10-22; a real `run` has
-five to twenty, and one sent since is some 1920×1080.)
+five to twenty, and one sent since is some 1920×1080. The example is a scan from before
+2026-10-24, when the Fast and Exact modes were removed: an app since then always sends
+`"mode": "neural"`, `"bundle": null`, and each frame `"lock": null, "detail": false`. The shape and
+`"v": 1` are unchanged, so labels of either age are read alike.)
 
 **A scan with no card in it** has `"card": null, "finish": null` — both, never one: the reader
 said the last frame holds no card, and the scanner was looking for one anyway. It is a false
@@ -143,7 +146,7 @@ camera at the press, or `null` for none; the engine reads its set, number, langu
 own card data, so a label cannot pair one printing's id with another's name. `scanner` is what
 the scanner had said at the press, and every figure is `null` when it had none. **`reported` is
 the printing it had decided on, and `null` while it had decided nothing** — never the card it
-was merely leaning towards, which the tracker knows by another id. So `reported === card.id` is
+was merely leaning towards, which the scanner's standings know by another id. So `reported === card.id` is
 a scan it got right, any other id is one it got wrong, and `null` is one it had not answered;
 `confidence` and `distance` are how far it had got. `filters` is what the reader had narrowed
 the scanner to (set codes and a release-date range), which decides what it *could* have
@@ -157,10 +160,10 @@ answered: a run replayed without them is another scan.
 | `bytes` | the frame's length in the object; the next frame starts where this one ends |
 | `width`, `height` | read by the engine from the JPEG's own header |
 | `ok` | whether the scanner found a card in it at all |
-| `lock` | the quad lock's phase on it (`idle`, `acquiring`, `locked`), or `null` |
-| `confidence`, `distance` | the tracker's confidence after it and the best match's distance in bits, each `null` with none |
+| `lock` | the quad lock's phase on it (`idle`, `acquiring`, `locked`), or `null` — always `null` since 2026-10-24 |
+| `confidence`, `distance` | the scanner's confidence after it and the best match's distance, each `null` with none |
 | `decided` | the printing the scanner had decided on by this frame, or `null` — the frame where this first appears is the one it made up its mind on |
-| `detail` | a larger picture went to the scanner with this frame. **It is not in the run** — a replay of a `detail` frame gives the scanner less than it had |
+| `detail` | a larger picture went to the scanner with this frame. **It is not in the run** — a replay of a `detail` frame gives the scanner less than it had. Always `false` since 2026-10-24 |
 
 **Nothing stored says who sent it**: no device, no group, no account, no address. The token
 that opened the door names the first three, and none of it is kept — not in either object
@@ -289,10 +292,10 @@ for (const [n, frame] of run.entries()) {
 ```
 
 Brought down to 960 pixels on their long edge (`card_scanner::replay::as_sent`, which the
-replay does) and fed to the scanner in that order, `ms` apart, with `scanner.mode` and
-`scanner.filters` set as the label says, the frames are the scan as the scanner saw it — short
-of whatever came before the run's first frame, and of the larger picture a `detail` frame had
-beside it.
+replay does) and fed to the scanner in that order, `ms` apart, with `scanner.filters` set as the label says,
+the frames are the scan as the scanner saw it — short of whatever came before the run's first
+frame, and of the larger picture a `detail` frame had beside it. A scan whose `scanner.mode` is
+`fast` or `exact` is replayed through the Neural scanner all the same.
 
 For the whole inbox, R2's S3 API with an API token scoped to this one bucket (`rclone copy`, or
 `aws s3 sync` against the account's R2 endpoint) brings `runs/` and `labels/` down as two

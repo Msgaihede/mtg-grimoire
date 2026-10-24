@@ -2,45 +2,14 @@
  * What the reader's half of the Scanner says: the Match strip above the camera — where the
  * scanner has got to with the card in front of it — and what the filters are narrowing it to.
  *
- * `verdictText.ts` is the developer panels' vocabulary — votes, leads, distances — and **none of
- * those words may reach here**. The reader's view never shows a vote, a lead or a distance; it
+ * `verdictText.ts` is the developer panels' vocabulary — votes, distances — and **none of those
+ * words may reach here**. The reader's view never shows a vote or a distance; it
  * says what to do next, in the order a person holding a card would need to hear it. A bar and a
  * card's name are not that vocabulary: the bar is `barFill`'s number and nothing of how it was
  * reached, which is the one thing this file takes from that one.
  */
-import type {
-  ScanFilters,
-  ScanMode,
-  ScannerChoice,
-  ScannerLabel,
-  ScannerResolution,
-  ScannerVerdict,
-} from "@/lib/ipc";
+import type { ScanFilters, ScannerChoice, ScannerLabel, ScannerVerdict } from "@/lib/ipc";
 import { barFill } from "../verdictText";
-
-/**
- * The three modes, in the order a reader meets them: the quick one first, then the one that reads,
- * then **Neural, the new one, last** — offered beside the other two so readers can try it before it
- * replaces them (the owner's plan, 2026-10-20), and its hint says so.
- *
- * The hints say what each mode *does for the reader* and never how — no hashes, no tiers, no
- * bursts, no networks. Those words belong to the developer panels, and a reader choosing between
- * the scans needs only to know which one pins the printing. Here rather than in `ScanBar`, so the
- * phone page's switch and its options sheet say the same words and the same sentences.
- */
-export const SCAN_MODES: readonly { id: ScanMode; label: string; hint: string }[] = [
-  { id: "fast", label: "Fast", hint: "Recognizes cards by their picture. Fastest for mixed piles." },
-  {
-    id: "exact",
-    label: "Exact",
-    hint: "Also reads the name and collector number to identify the exact printing.",
-  },
-  {
-    id: "neural",
-    label: "Neural",
-    hint: "New: names the card and its printing from the picture alone. Worth a try — it may replace Fast and Exact.",
-  },
-];
 
 /**
  * What the picture says while recognition is stopped — both Scanner surfaces', so the press it
@@ -107,8 +76,8 @@ export function filtering(filters: ScanFilters): boolean {
  *
  * `bumpedTo` is the row's new quantity when the add folded into the newest row, and `null` for a
  * row of its own: a second copy reads as a count, a new card as its printing. `replaced` is a
- * second opinion that rewrote the newest row's printing rather than adding a copy — a switch to
- * Exact on the card Fast named — and reads as an update, never as another add.
+ * second opinion that rewrote the newest row's printing rather than adding a copy — a change of
+ * filters with one card on the mat — and reads as an update, never as another add.
  */
 export type LastAdded = {
   name: string;
@@ -139,20 +108,7 @@ export interface StripState {
   fill: number;
   /** The bar in the accent rather than dim: the scanner has settled on a card. */
   committed: boolean;
-  /** Where the bar's hairline sits: the right-hand end, or a fraction of the way along. */
-  threshold: "end" | number;
 }
-
-/**
- * **`0.7` is `TrackerOptions::commit_confidence` (`crates/card-scanner/src/track.rs`, `0.70`)
- * written a second time, with nothing keeping the two in step.** The crate does not send the
- * threshold on the verdict — `TrackedView` carries `decide_at` for the vote rule and no equivalent
- * for this one — so the only alternatives were a field on the wire or a literal with its coupling
- * named. If that constant moves, move this: a hairline in the wrong place is a bar that commits
- * visibly early or late, and nothing in either suite can see it. The vote rule needs no literal —
- * its bar *is* `decide_at`, so the line is the right-hand end.
- */
-const COMMIT_CONFIDENCE = 0.7;
 
 /**
  * A printing as the tray spells it: the set upper-cased, then the number. `null` for a card with
@@ -169,10 +125,10 @@ function labelPrinting(label: ScannerLabel | null): string | null {
 }
 
 /**
- * The one card an ambiguous resolve's printings all belong to, or `null` when they are not one
- * card. A resolve can tie two names — a fuzzy read, a title several oracle cards share — and the
- * strip naming the first of them would tell the reader the card was settled when only its tray row
- * knows it was not.
+ * The one card an ambiguous decision's printings all belong to, or `null` when they are not one
+ * card. A picture can stand for printings of two names — a reprint under a new title, art two
+ * cards share — and the strip naming the first of them would tell the reader the card was settled
+ * when only its tray row knows it was not.
  */
 function sharedName(choices: readonly ScannerChoice[]): string | null {
   const names = new Set(choices.flatMap((c) => (c.label === null ? [] : [c.label.name])));
@@ -183,82 +139,45 @@ function sharedName(choices: readonly ScannerChoice[]): string | null {
  * The strip above the camera.
  *
  * **The order is the whole rule, and every rung above a later one is a reason that one cannot be
- * true.** No hashes means nothing can be named, so it outranks everything, a card in frame
- * included. No card in frame outranks every sentence *about* a card. A resolve that found nothing
- * or found several outranks "added", because a reader told a card was added while the tray is
- * waiting on them would stop looking at it. And the two "hold steady" rungs are what is left.
+ * true.** No recogniser means nothing can be named, so it outranks everything, a card in frame
+ * included. No card in frame outranks every sentence *about* a card. A decision that offers
+ * several printings outranks "added", because a reader told a card was added while the tray is
+ * waiting on them would stop looking at it. And "hold steady" is what is left.
  *
- * `lastResolution` is the page's latch of the last non-null `verdict.resolution`, **cleared when a
- * frame has no quad** — a resolve is reported on one frame only, and the sentence has to outlive
- * that frame for as long as the same card is still in front of the camera, and not a moment
- * longer. The two outcome rungs therefore sit *below* the no-card rung by construction.
+ * **The printings to pick from ride the decision.** A picture that stands for several printings
+ * comes back as an `ambiguous` decision with them as its choices, on every frame that decision
+ * stands, so the strip reads it straight off the verdict. The rung asks `tracked.committed` as
+ * well, so it never reaches a card the agreement has not settled on. **The added rung asks for
+ * this frame's decision too, for the same reason one step further on**: `lastAdded` is never
+ * cleared, so on a frame that has not decided it is still the *previous* card, and the strip would
+ * call that one matched over the card in the camera. A committed frame is a decided one — the
+ * session commits only while a decision stands — so a commit is a match.
  *
- * The ambiguous rung asks `tracked.committed` as well, so it never reaches a card the tracker has
- * not settled on: a stale latch from the last card is exactly what the new card's first frames
- * would otherwise read. **The added rung asks for this frame's decision too, and for the same
- * reason one step further on**: `lastAdded` is never cleared, so on a committed frame that has not
- * decided yet — Fast's one frame waiting on the read that confirms it, or Exact's tracker settling
- * before its resolve has answered — it is still the *previous* card, and the strip would call that
- * one matched over the card in the camera.
- *
- * **Exact is settled by its resolve, not by the tracker**, so an Exact commit with no decision
- * still reads as reading; Fast's decision *is* the commit, and its one unconfirmed frame reads as
- * matched on the tracker's leader. **Neural is Fast's case**: it reads no text, so it never says
- * *Reading*, and a committed Neural frame is a decided one (the session commits only while a
- * decision stands).
- *
- * **Neural's printings to pick from ride the decision, not a resolve.** It runs none, so
- * `lastResolution` stays `null` in Neural; a picture that stands for several printings comes back
- * as an `ambiguous` decision with them as its choices, on every frame that decision stands — which
- * is the latch's lifetime already, so the strip reads it straight off the verdict and puts it on
- * the ambiguous rung, above "added", for that rung's reason.
- *
- * **A filed card is named from the tray's row, never from the hash's leader** — in Exact the
- * resolve can pin another printing than the one the tracker leads with, and the strip has to name
- * what was filed. The leader names the card only until then.
+ * **A filed card is named from the tray's row, never from the agreement's leader** — the row is
+ * what was filed, and the reader may have picked another printing for it. The leader names the
+ * card only until then.
  */
-export function matchStrip(
-  verdict: ScannerVerdict | null,
-  mode: ScanMode,
-  lastAdded: LastAdded,
-  hasBundle: boolean,
-  lastResolution: ScannerResolution | null,
-): StripState {
+export function matchStrip(verdict: ScannerVerdict | null, lastAdded: LastAdded): StripState {
   const tracked = verdict?.tracked ?? null;
-  const threshold: StripState["threshold"] =
-    tracked?.rule === "confidence" ? COMMIT_CONFIDENCE : "end";
-  const empty = { name: null, printing: null, fill: 0, committed: false, threshold };
-  if (!hasBundle) {
+  const empty = { name: null, printing: null, fill: 0, committed: false };
+  if (verdict !== null && !verdict.matcher) {
     return {
       ...empty,
       word: "Can't identify",
       tone: "error",
-      sentence: "Card hashes aren't loaded, so cards can be detected but not identified.",
+      sentence: "The card recognizer isn't loaded, so cards can't be identified.",
     };
   }
   if (verdict === null || verdict.quad === null) {
     return { ...empty, word: "Looking", tone: "idle", sentence: "Point the camera at a card" };
   }
-  if (lastResolution?.outcome === "not_found") {
-    return {
-      ...empty,
-      word: "No match",
-      tone: "error",
-      sentence: "Try better lighting or clear the filters.",
-    };
-  }
 
   const committed = tracked?.committed === true;
   const decided = committed && verdict.decision !== null;
   const lead = tracked?.standings[0]?.label ?? null;
-  const full = { fill: 1, committed: true, threshold };
+  const full = { fill: 1, committed: true };
 
-  const pick =
-    lastResolution?.outcome === "ambiguous"
-      ? lastResolution.choices
-      : mode === "neural" && verdict.decision?.outcome === "ambiguous"
-        ? verdict.decision.choices
-        : null;
+  const pick = verdict.decision?.outcome === "ambiguous" ? verdict.decision.choices : null;
   if (pick !== null && committed) {
     const count = pick.length;
     return {
@@ -273,7 +192,7 @@ export function matchStrip(
   }
   if (lastAdded !== null && decided) {
     // "Updated" rather than "Added" for a replaced row: the tray did not grow, and a reader told a
-    // card was added after switching to Exact would go looking for the duplicate.
+    // card was added after changing a filter would go looking for the duplicate.
     const sentence = lastAdded.bumpedTo
       ? `Added again — ×${lastAdded.bumpedTo}`
       : lastAdded.replaced
@@ -288,10 +207,8 @@ export function matchStrip(
       sentence,
     };
   }
-  // Every mode but Exact is settled by its tracker, so a commit is a match there.
-  if (decided || (committed && mode !== "exact")) {
-    // The decision's name before the leader's: a Fast title read that names a card overrides the
-    // hash, so the two can differ, and the decision is what the tray is about to file.
+  if (committed) {
+    // The decision's name before the leader's: the decision is what the tray is about to file.
     const label = verdict.decision?.label ?? lead;
     return {
       ...full,
@@ -303,18 +220,15 @@ export function matchStrip(
     };
   }
 
-  const leaning = {
-    tone: "progress" as const,
+  return {
+    word: "Matching",
+    tone: "progress",
     name: lead?.name ?? null,
     printing: labelPrinting(lead),
+    sentence: "Hold steady",
     fill: barFill(tracked),
     committed: false,
-    threshold,
   };
-  if (mode === "exact" && verdict.lock?.phase === "locked") {
-    return { ...leaning, word: "Reading", sentence: "Hold steady — reading…" };
-  }
-  return { ...leaning, word: "Matching", sentence: "Hold steady" };
 }
 
 /** A set list as a trigger can say it: up to two codes by name, a count past that. */

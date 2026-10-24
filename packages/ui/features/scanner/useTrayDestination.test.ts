@@ -6,8 +6,8 @@ import { NO_FINISHED_ROWS, rowFromDecision } from "./reader/tray";
 import type { TrayState } from "./useTray";
 import { heldNotice, useTrayDestination, type TrayDestination } from "./useTrayDestination";
 
-const resolved = VERDICTS.exactResolved.decision!;
-const ambiguous = VERDICTS.exactAmbiguous.decision!;
+const resolved = VERDICTS.resolved.decision!;
+const ambiguous = VERDICTS.ambiguous.decision!;
 
 /** A resolved row under names this file controls. Built per call: a row is told apart by identity. */
 function row(key: string, over: Partial<ScannerTrayRow> = {}): ScannerTrayRow {

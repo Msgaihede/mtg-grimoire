@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { STATUS, VERDICTS } from "../fixtures";
-import type { ScanFilters, ScanMode, ScannerStatus, ScannerVerdict } from "../types";
+import { VERDICTS } from "../fixtures";
+import type { ScanFilters, ScannerVerdict } from "../types";
 import { RUN_MAX_AGE_MS, RUN_MIN_FRAMES, runClock, runFrameOf, type RunFrame } from "./run";
 import { SCAN_TOO_SHORT } from "./submitText";
 import { useScanSubmit } from "./useScanSubmit";
@@ -9,8 +9,6 @@ import { useScanSubmit } from "./useScanSubmit";
 interface Page {
   recent: () => readonly RunFrame[];
   verdict: ScannerVerdict | null;
-  mode: ScanMode;
-  status: ScannerStatus | null;
   filters: ScanFilters;
   ready: boolean;
 }
@@ -24,7 +22,7 @@ const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: nu
  */
 function ring(count: number, at = 1000, verdict: ScannerVerdict = VERDICTS.decided): RunFrame[] {
   return Array.from({ length: count }, (_, n) =>
-    runFrameOf(new Uint8Array([n + 1]), at - (count - 1 - n) * 100, verdict, false),
+    runFrameOf(new Uint8Array([n + 1]), at - (count - 1 - n) * 100, verdict),
   );
 }
 
@@ -32,8 +30,6 @@ function page(over: Partial<Page> = {}): Page {
   return {
     recent: vi.fn(() => ring(6)),
     verdict: VERDICTS.decided,
-    mode: "fast",
-    status: STATUS.present,
     filters: NO_FILTERS,
     ready: true,
     ...over,
@@ -83,10 +79,8 @@ describe("useScanSubmit", () => {
     expect(result.current.error).toBeNull();
     expect(result.current.run?.said).toEqual({
       reported: "storm-of-saruman-ltr-72",
-      mode: "fast",
       confidence: 1,
-      distance: 30,
-      bundle: 117630,
+      distance: 11,
       filters: NO_FILTERS,
     });
     expect(result.current.run?.leadName).toBe("Storm of Saruman");
@@ -117,22 +111,19 @@ describe("useScanSubmit", () => {
    * decided beside a last frame that says it had not — so nothing sent is the verdict's.
    */
   it("says what the run's last frame said, where the verdict the page is holding says otherwise", () => {
-    // The ring: still weighing, in Fast. The page: decided, and switched to Exact.
+    // The ring: still weighing. The page: decided.
     const recent = () => ring(6, 1000, VERDICTS.voting);
-    const { result } = renderHook(() =>
-      useScanSubmit(page({ recent, verdict: VERDICTS.decided, mode: "exact" })),
-    );
+    const { result } = renderHook(() => useScanSubmit(page({ recent, verdict: VERDICTS.decided })));
     act(() => result.current.open(opener()));
 
     const run = result.current.run;
     expect(run?.said).toMatchObject({
       reported: null,
-      mode: "fast",
       confidence: 0.625,
-      distance: 74,
+      distance: 23,
     });
     const newest = run?.frames[5];
-    expect(newest).toMatchObject({ decided: null, confidence: 0.625, distance: 74 });
+    expect(newest).toMatchObject({ decided: null, confidence: 0.625, distance: 23 });
     // The verdict is what the reader was looking at, and it is only the word the search opens on.
     expect(run?.leadName).toBe("Storm of Saruman");
   });
@@ -245,11 +236,11 @@ describe("useScanSubmit", () => {
     const pictures = frozen?.frames.map((one) => one.jpeg);
 
     frames = ring(20, 5000);
-    rerender(page({ recent, verdict: VERDICTS.voting, mode: "exact", status: STATUS.missing }));
+    rerender(page({ recent, verdict: VERDICTS.voting }));
     rerender(page({ recent, verdict: null, filters: { ...NO_FILTERS, sets: ["ltr"] } }));
     expect(result.current.run).toBe(frozen);
     expect(result.current.run?.frames.map((one) => one.jpeg)).toEqual(pictures);
-    expect(result.current.run?.said.mode).toBe("fast");
+    expect(result.current.run?.said.reported).toBe("storm-of-saruman-ltr-72");
     expect(result.current.run?.said.filters).toEqual(NO_FILTERS);
   });
 

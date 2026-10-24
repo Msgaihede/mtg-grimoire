@@ -70,8 +70,8 @@ Because WASM runs in a single-threaded Web Worker:
 ## The Second Module: The Scanner (`crates/grimoire-scan`)
 
 Since the light app's step 7.5 the web host is **two WASM modules in two Workers**. The engine's
-is everything above. The scanner's is `card-scanner` alone — the session, both modes, the two OCR
-readers — built from `crates/grimoire-scan` into `dist-wasm/scanner/` (`grimoire_scan.js`,
+is everything above. The scanner's is `card-scanner` alone — the session and `card-neural`'s recogniser
+under it — built from `crates/grimoire-scan` into `dist-wasm/scanner/` (`grimoire_scan.js`,
 `grimoire_scan_bg.wasm`), and loaded by a dedicated Worker of its own that the page ends when
 the reader leaves the Scanner.
 
@@ -82,11 +82,15 @@ Measured at step 7.2 ([light-app.md](light-app.md) §11.2), and any one of the f
 1. **A panic ends the instance.** The modules are built with `panic = "abort"`, where the
    crate's own guard guards nothing ([card-scanner.md](card-scanner.md) §11). In the engine's
    module that is the database and the app's failure screen; in its own, a Worker thrown away.
-2. **A frame a reader runs on blocks its Worker for 0.3–1.2 s.** In the engine's Worker every
-   command, the live socket and a download would wait behind it.
+2. **A frame blocks its Worker for as long as it is read** — then 0.3–1.2 s for a frame the OCR
+   readers ran on; a Neural frame is about 44 ms ([card-scanner.md](card-scanner.md) §11, *Measured*). In the
+   engine's Worker every command, the live socket and a download would wait behind it.
 3. **A WASM memory is never given back.** The session's is tens of megabytes with the labels
-   and more with the readers; a Worker of its own is let go with the page that needed it.
-4. **It is a megabyte of module that only a reader who scans has to fetch** — which is a rule and not a hope: the build leaves it out of the service worker's precache (`sw/shell.ts`'s `precacheList`, held by `sw/scanner.test.ts`), and the page makes no Worker until a reader has downloaded the scanner's files.
+   and the recogniser; a Worker of its own is let go with the page that needed it.
+4. **It is a module that only a reader who scans has to fetch** — which is a rule and not a hope: the build leaves it out of the service worker's precache (`sw/shell.ts`'s `precacheList`, held by `sw/scanner.test.ts`), and the page makes no Worker until the Scanner asks for one.
+
+The measurements were taken on the scanner with its Fast and Exact modes and OCR readers, which
+were removed on 2026-10-24; the reasons hold for the Neural scanner that is left.
 
 ### Its exports
 
@@ -96,38 +100,37 @@ Eight synchronous functions; every string is `{"ok": …}` or `{"err": "<sentenc
 | Export | Arguments | Return Shape | Notes |
 | :--- | :--- | :--- | :--- |
 | `start()` | None | None | `performance.now()` as the crate's clock, and a panic hook that writes the panic's sentence to the console. Run by the glue at instantiation; saying it again changes nothing. |
-| `load(bundle?, labels?, detection?, recognition?)` | Four optional `Uint8Array`s | `{"ok": <facts>}` | Builds the session, replacing any there was. Facts, never a sentence about a file: `{"bundle":{"loaded","entries","error"},"labels","models":{"loaded","error"},"unapplied_filters"}`. |
-| `load_neural(detector, embedder, gallery, meta)` | `card-neural`'s four files, as the page fetched them from `/scanner-neural/<set>/` | `undefined`, or a sentence | Gives the Neural mode its files, into the session `load` built (a later `load` lets them go with it). Owned buffers pass without a second copy; about 37 MiB once loaded (measured before the evidence, which comes on top). The page sends them on a Worker's first Neural frame and never for Fast or Exact. |
-| `load_neural_evidence(symbol_net, band_net, symbols, bands)` | `card-neural`'s printing-evidence files (`symbol.onnx`, `band.onnx`, `symbols.bin`, `bands.bin`), from the same `/scanner-neural/<set>/` | `undefined`, or a sentence | Gives the Neural mode the set symbol and collector band networks, so it chooses a card's printing from two crops. Refused before `load_neural` has answered, when its `neural.json` has no `evidence` section, or for files that are not them; a refusal leaves the recogniser deciding as it did. The page sends them in the background once `load_neural` answered, holding up no frame. |
-| `frame(jpeg, detail?, options)` | A JPEG, the same frame at camera resolution or nothing, `FrameOptions` as JSON | `{"ok": <Verdict>}` | The verdict is serialised straight from the crate's type — the bytes the desktop's `scanner_frame` hands its page. `""` is the default options, and so are options left out and options that do not parse — the table's rule for an unreadable header (`scanner::frame_from`). |
+| `load(labels?)` | The labels the engine encoded, or nothing | `{"ok": <facts>}` | Builds the session, replacing any there was. Facts, never a sentence about a file: how many labels attached, their error, and the filters it could not take (`unapplied_filters`). |
+| `load_neural(detector, embedder, gallery, meta)` | `card-neural`'s four files, as the page fetched them from `/scanner-neural/<set>/` | `undefined`, or a sentence | Gives the recogniser its files, into the session `load` built (a later `load` lets them go with it). Owned buffers pass without a second copy; about 37 MiB once loaded (measured before the evidence, which comes on top). Until it has answered every frame is `NEURAL_UNAVAILABLE_ERROR`. |
+| `load_neural_evidence(symbol_net, band_net, symbols, bands)` | `card-neural`'s printing-evidence files (`symbol.onnx`, `band.onnx`, `symbols.bin`, `bands.bin`), from the same `/scanner-neural/<set>/` | `undefined`, or a sentence | Gives the recogniser the set symbol and collector band networks, so it chooses a card's printing from two crops. Refused before `load_neural` has answered, when its `neural.json` has no `evidence` section, or for files that are not them; a refusal leaves the recogniser deciding as it did. The page sends them in the background once `load_neural` answered, holding up no frame. |
+| `frame(jpeg)` | A JPEG | `{"ok": <Verdict>}` | The verdict is serialised straight from the crate's type — the bytes the desktop's `scanner_frame` hands its page. A frame takes no options. |
 | `reset()` | None | `{"ok":null}` | Forget the card in front of the lens. |
 | `set_filters(filters)` | `ScanFilters` as JSON | `{"ok":null}` or `{"err": …}` | The `err` is the crate's own sentence, and a refusal keeps the filters in force. |
 | `memory_bytes()` | None | number | The module's linear memory, a high-water mark. |
 
-- **A load's facts.** Each input is optional and each failure sits on its own asset. The models
-  are a pair: one without the other loads neither. Labels of no bytes are no labels — what
-  `scanner_labels` answers while the corpus is empty — and labels that will not decode are
-  `labels: …` in the bundle's `error` beside `loaded: true`, with none of them attached.
+- **A load's facts.** Labels of no bytes are no labels — what `scanner_labels` answers while the
+  corpus is empty — and labels that will not decode are an error in the facts, with none of them
+  attached; the session still recognises cards, and answers ids.
 - **Filters survive a reload as a debt**, as `grimoire_core::scanner` keeps them: what the
   replaced session was searching under is offered to the new one, and to each one after it
   until one accepts or an accepted `set_filters` replaces it. A session that cannot take them
   (no labels to build a mask from) says so in `unapplied_filters`. Filters set before the first
   `load` are owed to it.
-- **Nothing may throw**, as for the engine: bytes that are not a bundle, labels cut short, a
-  model that is not one, a JPEG that is not one. **A trap is only ever a real panic**, and it
+- **Nothing may throw**, as for the engine: labels cut short, a model file that is not one, a
+  JPEG that is not one. **A trap is only ever a real panic**, and it
   ends the instance — after one, every string export answers `{"err": …}` rather than trap
   again, and the Worker's script should end the Worker on the first.
 
 ### The labels cross as bytes
 
-The scanner's module has no database: it is `card-scanner` with `ocr` and **without `corpus`**,
+The scanner's module has no database: it is `card-scanner` with no feature and **without `corpus`**,
 which is SQLite. The engine holds the corpus, so the page asks the engine's Worker for
 `scanner_labels()` and hands the buffer to the scanner's Worker, which passes it to `load`.
 
 - **The encoding is `card_scanner::labels`** ([card-scanner.md](card-scanner.md) §2 has the
-  layout): the twelve columns `Reference::load_labels` reads, each distinct word and id written
-  once in a table and each row naming them by place. The dev corpus's 118 475 labels are
-  5 998 193 B.
+  layout, version 4): the eleven columns `Reference::load_labels` reads, each distinct word and id
+  written once in a table and each row naming them by place. The dev corpus's 118 475 labels were
+  5 998 193 B in version 3, which also carried the illustration ids.
 - **`host::scanner_labels` reads through the state's one connection, a page at a time**
   (`LABEL_PAGE`, 200 rows), lets go of the connection between pages and takes a turn of the
   event loop on the engine's work budget — a `call` sent meanwhile is answered between two
@@ -147,11 +150,11 @@ Step 7.5's second half (2026-10-07) is TypeScript, under `packages/ui/lib/core/w
 | `scanWorker.ts`, `scanSession.ts` | The scanner's Worker and everything it decides: the module loaded once, each message answered by its id, an export that throws answered as a trap and nothing asked of the module after it |
 | `scanProtocol.ts` | The second wire: `load` / `frame` / `reset` / `filters` / `memory` one way, `ok` / `err` / `unloaded` / `trapped` the other, and what each message hands over rather than copies |
 | `scanner.ts` | The page's client and router: which commands are answered here, when a Worker is made and ended, the status composed from `load`'s facts |
-| `scanStore.ts` | The three files: the manifest, what is owed, the checked download, Cache Storage |
+| `scanNeural.ts`, `assets.ts` | The recogniser's eight files: their addresses under `/scanner-neural/<set>/`, each fetched once and held to its length |
 | `protocol.ts`, `engine.ts`, `worker.ts` | The engine's side of the hand-over: a `labels` message, answered with `scanner_labels()`'s bytes, transferred |
 
-[card-scanner.md](card-scanner.md) §9 has the command table and the Worker's life, §10 the
-files, and [light-app.md](light-app.md) §11.5 what was measured in a browser.
+[card-scanner.md](card-scanner.md) §9 has the command table and the Worker's life, §10 where
+the files come from, and [light-app.md](light-app.md) §11.5 what was measured in a browser.
 
 ### How the two are built
 
@@ -159,8 +162,8 @@ files, and [light-app.md](light-app.md) §11.5 what was measured in a browser.
 `--only scanner` builds one.
 
 - **The scanner's module is built with `-C target-feature=+simd128`; the engine's is not.**
-  `rten` compiles its WebAssembly kernels only under that feature — a title read is 0.3 s with
-  it and 0.9–1.6 s without. A browser without fixed-width SIMD cannot compile such a module,
+  `rten` compiles its WebAssembly kernels only under that feature (measured on the OCR models it
+  ran until 2026-10-24: a title read was 0.3 s with it and 0.9–1.6 s without). A browser without fixed-width SIMD cannot compile such a module,
   so the flag is the scanner's alone and the rest of the app does not depend on it. The script
   reads each module's `target_features` section back and refuses a scanner module that does not
   name `simd128`, and an engine module that does.
@@ -171,5 +174,4 @@ files, and [light-app.md](light-app.md) §11.5 what was measured in a browser.
   features for the packages a build names: beside the engine, `card-scanner` would be compiled
   with the `corpus` feature the engine asks it for.
 - **The engine's module still drops the scanner.** It links `card-scanner` for the labels'
-  encoder alone; no export reaches a session, so fat LTO drops the detector, the hashes and the
-  OCR runtime as before.
+  encoder alone; no export reaches a session, so fat LTO drops the session and the recogniser.

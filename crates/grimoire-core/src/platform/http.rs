@@ -51,19 +51,6 @@ pub struct Config<'a> {
     pub connect_timeout: Option<Duration>,
     /// Bounds the gap between two reads, not the length of a download.
     pub read_timeout: Option<Duration>,
-    /// **Refuse anything that is not HTTPS — the request itself, and every hop of a redirect.**
-    /// For a client that follows a host's redirect to wherever that host names
-    /// (`scanner_assets`, after GitHub's): the default policy follows up to ten hops to any
-    /// address, and with this set a hop to `http://` ends the request as an error instead of
-    /// being followed, so no byte of a file is ever read over a link that is not encrypted.
-    /// `false` for every client whose address is one constant it is tested against over a
-    /// local server.
-    ///
-    /// Natively it is `reqwest`'s `https_only`. **In a browser nothing is set**, because a page
-    /// has nothing to set: one served over HTTPS may not `fetch` an `http://` address at all —
-    /// the engine's own mixed-content rule blocks the request, and a redirect to one — and the
-    /// web app is served over nothing else.
-    pub https_only: bool,
 }
 
 /// A client: one connection pool, one `User-Agent`. Cloning it shares both.
@@ -186,13 +173,6 @@ impl Response {
             return None;
         }
         self.0.headers().get(name).and_then(|v| v.to_str().ok())
-    }
-
-    /// Where the answer came from: the request's own address, or the last one a redirect led
-    /// to. For a caller that follows a host's redirect and still has something to say about
-    /// where it ended — `scanner_assets` refuses an answer that left HTTPS.
-    pub fn url(&self) -> &str {
-        self.0.url().as_str()
     }
 
     /// What the response *claims* its body's length is. A chunked response claims nothing.
@@ -333,10 +313,7 @@ mod imp {
         if let Some(d) = config.read_timeout {
             builder = builder.read_timeout(d);
         }
-        builder
-            .https_only(config.https_only)
-            .build()
-            .expect("client")
+        builder.build().expect("client")
     }
 
     pub fn is_connect(e: &reqwest::Error) -> bool {
@@ -367,10 +344,6 @@ mod imp {
     /// **And no `User-Agent`**: a page may not choose one. Chromium drops a script-set one
     /// without a word; an engine that honours it has to pre-flight the request for it, and
     /// the bulk file hosts answer a pre-flight 403. The browser's own goes out instead.
-    ///
-    /// **Nor `https_only`**, which this backend has no switch for and no need of: the
-    /// engine's mixed-content rule already refuses an `http://` request, and a redirect to
-    /// one, from a page served over HTTPS ([`Config::https_only`]).
     pub fn build(_config: &Config<'_>) -> reqwest::Client {
         reqwest::Client::builder().build().expect("client")
     }
@@ -402,7 +375,6 @@ mod tests {
             user_agent: "test",
             connect_timeout: Some(Duration::from_secs(30)),
             read_timeout: Some(Duration::from_secs(60)),
-            https_only: false,
         })
     }
 
@@ -492,46 +464,6 @@ mod tests {
         );
     }
 
-    /// **An HTTPS-only client asks nothing over plain HTTP, and follows no redirect to it.**
-    /// The request to a plain-HTTP address is refused before it leaves — the server is never
-    /// asked — and the same client without the switch is answered. The redirect's half is the
-    /// same switch in `reqwest`'s redirect policy; it cannot be shown without a TLS server to
-    /// be redirected *from*, so what is held here is the half that can.
-    #[tokio::test]
-    async fn an_https_only_client_refuses_a_plain_http_address_before_asking() {
-        let server = MockServer::start();
-        let asked = server.mock(|when, then| {
-            when.method(GET).path("/file");
-            then.status(200).body("body");
-        });
-        let secure = Client::new(&Config {
-            user_agent: "test",
-            connect_timeout: Some(Duration::from_secs(30)),
-            read_timeout: Some(Duration::from_secs(60)),
-            https_only: true,
-        });
-        let refused = secure
-            .get(&server.url("/file"))
-            .send()
-            .await
-            .expect_err("a plain-HTTP address");
-        assert!(!refused.is_timeout() && !refused.is_connect());
-        asked.assert_calls(0);
-
-        assert_eq!(
-            client()
-                .get(&server.url("/file"))
-                .send()
-                .await
-                .unwrap()
-                .status(),
-            200
-        );
-        asked.assert_calls(1);
-    }
-
-    /// A body that keeps arriving is never ended by the bound, however long the whole of it
-    /// takes: the bound is on a gap, not on a length.
     #[tokio::test]
     async fn a_body_that_keeps_arriving_is_read_to_its_end() {
         let server = MockServer::start();

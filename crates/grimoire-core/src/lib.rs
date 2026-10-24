@@ -161,9 +161,6 @@ pub mod scan_history;
 /// **The scanner's session glue**: the `card-scanner` session behind a lazy load, the one-window
 /// lease, the reader's scanner prefs and review tray. `State.scanner` holds it.
 pub mod scanner;
-/// **The scanner's three files, fetched when a reader asks**: what this install owes of them,
-/// and the download — checked, renamed into place, and the loaded session let go.
-pub mod scanner_assets;
 /// **One camera picture and the card a reader says it shows, sent to the scan inbox** — the one
 /// thing here that sends a picture off the device, and only at a reader's press.
 pub mod scanner_submit;

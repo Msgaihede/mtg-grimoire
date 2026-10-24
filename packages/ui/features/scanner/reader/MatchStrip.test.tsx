@@ -1,7 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { ScannerTracked, ScannerVerdict } from "@/lib/ipc";
 import { VERDICTS } from "../fixtures";
 import { MatchStrip, type MatchStripProps } from "./MatchStrip";
 import type { LastAdded } from "./readerText";
@@ -9,10 +8,7 @@ import type { LastAdded } from "./readerText";
 function props(over: Partial<MatchStripProps> = {}): MatchStripProps {
   return {
     verdict: VERDICTS.voting,
-    mode: "fast",
     lastAdded: null,
-    hasBundle: true,
-    lastResolution: null,
     onReset: vi.fn(),
     ...over,
   };
@@ -80,7 +76,9 @@ describe("MatchStrip", () => {
     render(<MatchStrip {...props({ onSend })} />);
     const send = screen.getByRole("button", { name: "Send scan…" });
     expect(send.parentElement).toBe(bar().parentElement);
-    expect(send.previousElementSibling).toBe(screen.getByRole("button", { name: "Reset evidence" }));
+    expect(send.previousElementSibling).toBe(
+      screen.getByRole("button", { name: "Reset evidence" }),
+    );
     expect(region()).not.toContainElement(send);
     expect(send).toHaveAttribute("aria-haspopup", "dialog");
 
@@ -123,16 +121,10 @@ describe("MatchStrip", () => {
     expect(announced(region())).toBe("Matching Hold steady");
     expect(screen.getByText("Plains")).toHaveAttribute("aria-hidden", "true");
     expect(screen.getByText("2XM 373")).toHaveAttribute("aria-hidden", "true");
-    // Five of the eight the vote rule wants, dim, with the line at the bar's end.
+    // Five eighths of the way, dim, with the line at the bar's end.
     expect(bar()).toHaveAttribute("aria-valuenow", "63");
     expect(bar().firstElementChild).toHaveClass("bg-dim");
-    expect(hairline()).toHaveStyle({ right: "0" });
-  });
-
-  it("says Exact is reading a locked card it has not settled", () => {
-    render(<MatchStrip {...props({ mode: "exact" })} />);
-    expect(region()).toHaveTextContent(/^Reading Plains 2XM 373 Hold steady — reading…$/);
-    expect(announced(region())).toBe("Reading Hold steady — reading…");
+    expect(hairline()).toHaveClass("right-0");
   });
 
   it("announces the card once it is matched, with the bar full and gold", () => {
@@ -151,10 +143,8 @@ describe("MatchStrip", () => {
     render(
       <MatchStrip
         {...props({
-          verdict: VERDICTS.exactAmbiguous,
-          mode: "exact",
+          verdict: VERDICTS.ambiguous,
           lastAdded: { ...saruman, name: "Lightning Bolt", setCode: "2x2", collectorNumber: "117" },
-          lastResolution: VERDICTS.exactAmbiguous.resolution,
         })}
       />,
     );
@@ -164,22 +154,11 @@ describe("MatchStrip", () => {
     expect(bar()).toHaveAttribute("aria-valuenow", "100");
   });
 
-  /** Neural reads no text, so a card it is still weighing is matching, never reading. */
-  it("says Neural is matching a locked card it has not settled, never reading it", () => {
-    render(
-      <MatchStrip
-        {...props({ verdict: { ...VERDICTS.voting, mode: "neural" }, mode: "neural" })}
-      />,
-    );
-    expect(region()).toHaveTextContent(/^Matching Plains 2XM 373 Hold steady$/);
-  });
-
-  it("announces a card Neural has matched, as it does Fast's", () => {
+  it("announces a card on a real printing once it is matched", () => {
     render(
       <MatchStrip
         {...props({
-          verdict: VERDICTS.neuralDecided,
-          mode: "neural",
+          verdict: VERDICTS.resolved,
           lastAdded: { ...saruman, name: "Black Lotus", setCode: "lea", collectorNumber: "232" },
         })}
       />,
@@ -190,55 +169,15 @@ describe("MatchStrip", () => {
     expect(bar()).toHaveAttribute("aria-valuenow", "100");
   });
 
-  /** Neural runs no resolve: the printings to pick between ride its decision. */
-  it("counts the printings a Neural picture stands for, with no resolve behind it", () => {
+  it("says nothing can be identified while no recogniser is loaded", () => {
     render(
       <MatchStrip
-        {...props({
-          verdict: VERDICTS.neuralAmbiguous,
-          mode: "neural",
-          lastAdded: { ...saruman, name: "Lightning Bolt", setCode: "2x2", collectorNumber: "117" },
-        })}
+        {...props({ verdict: { ...VERDICTS.decided, matcher: false }, lastAdded: saruman })}
       />,
     );
-    expect(region()).toHaveTextContent(/^3 printings Lightning Bolt Pick a printing in the tray$/);
-  });
-
-  it("says a resolve found nothing, with the sentence where the name would be", () => {
-    render(
-      <MatchStrip
-        {...props({
-          verdict: VERDICTS.exactNotFound,
-          mode: "exact",
-          lastResolution: VERDICTS.exactNotFound.resolution,
-        })}
-      />,
-    );
-    expect(region()).toHaveTextContent(/^No match Try better lighting or clear the filters\.$/);
-    expect(bar()).toHaveAttribute("aria-valuenow", "0");
-  });
-
-  it("says nothing can be identified while no hashes are loaded", () => {
-    render(<MatchStrip {...props({ verdict: VERDICTS.decided, lastAdded: saruman, hasBundle: false })} />);
     expect(region()).toHaveTextContent(
-      /^Can't identify Card hashes aren't loaded, so cards can be detected but not identified\.$/,
+      /^Can't identify The card recognizer isn't loaded, so cards can't be identified\.$/,
     );
     expect(bar()).toHaveAttribute("aria-valuenow", "0");
-  });
-
-  /**
-   * The confidence rule commits at a proportion rather than at the bar's end, so its line sits at
-   * 70% — `TrackerOptions::commit_confidence`, which the crate does not send.
-   */
-  it("puts the line at 70% under the confidence rule", () => {
-    const gathering: ScannerTracked = {
-      ...(VERDICTS.confidence.tracked as ScannerTracked),
-      committed: false,
-      confidence: 0.55,
-    };
-    const verdict: ScannerVerdict = { ...VERDICTS.confidence, decision: null, tracked: gathering };
-    render(<MatchStrip {...props({ verdict })} />);
-    expect(bar()).toHaveAttribute("aria-valuenow", "55");
-    expect(hairline()).toHaveStyle({ left: "70%" });
   });
 });

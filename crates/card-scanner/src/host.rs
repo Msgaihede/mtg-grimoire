@@ -1,48 +1,24 @@
-//! The one place this crate knows what kind of machine it is on: whether there is a second
-//! thread to give, a clock to read, and a panic that can be caught.
+//! The one place this crate knows what kind of machine it is on: whether there is a clock to
+//! read, and a panic that can be caught.
 //!
-//! **The pipeline was written for a desktop and assumed all three.** Five stages fan out under
-//! `std::thread::scope`, an Exact resolve runs on a thread of its own, fourteen timings start
-//! at `Instant::now()`, and two `catch_unwind`s turn an assertion deep in an image crate into a
-//! sentence. A browser's Worker has none of it: it is one thread, `Instant::now()` **panics**
-//! on `wasm32-unknown-unknown` — at run time, in a build that compiled without a warning — and
-//! the web module is built with `panic = "abort"`, where a panic is a trap and nothing unwinds.
-//! So the rest of the crate asks here, and this file answers for the host it finds itself on:
+//! **A browser's Worker has neither.** `Instant::now()` **panics** on `wasm32-unknown-unknown` —
+//! at run time, in a build that compiled without a warning — and the web module is built with
+//! `panic = "abort"`, where a panic is a trap and nothing unwinds. So the rest of the crate asks
+//! here, and this file answers for the host it finds itself on:
 //!
-//! | | A host with threads (the desktop, Android) | A host with one (a Worker) |
+//! | | A native host (the desktop, Android) | A Worker |
 //! | --- | --- | --- |
-//! | [`fan_out`], [`par_map`], [`join`], [`join3`] | scoped threads, as each site always had | the same closures **on the caller**, one after another, in the order written down on each |
-//! | [`background`] | a named thread | **run where it stands**, before the call returns |
 //! | [`Stopwatch`] | an installed clock, else `Instant` | an installed clock, else **zero** |
 //! | [`guard`] | `catch_unwind` | nothing: see below |
 //!
-//! **Nothing here changes an answer.** The stages a site runs side by side never needed each
-//! other's results — that is why they could be threads — so running them in turn gives the same
-//! candidates, the same hashes and the same reads, later. The two
-//! `tests::…_session_answers_the_same_on_one_thread_as_on_many` hold that: one stream of frames
-//! through two sessions, verdict for verdict, in each mode.
-//!
-//! **The inline order is fixed, and it is one rule: the caller's share first, then every other
-//! share in the order it was handed over.** [`fan_out`] gives the caller no share, so it is its
-//! items in order; [`par_map`] gives it the first item; [`join`] and [`join3`] give it their
-//! first closure. A panic in one share stops the ones after it — with threads they would have
-//! run to their ends first — and reaches the caller either way.
-//!
-//! **A test, or a host, can ask for the one-thread arm on a machine that has many**:
-//! [`inline`] answers a guard, and while it lives every helper called *on that thread* runs
-//! where it stands. It is per thread and needs to be nothing more: work that is never handed
-//! to another thread never leaves the one the guard is on, so the nested sites — a resolve's
-//! whole-card search fanning out its hashes, a frame's methods fanning out their masks — find
-//! it too. Per thread, and never global, because a test binary runs its tests on many threads
-//! and one that made the process a Worker would take the threads from every other.
+//! **The scanner runs on the thread that hands it a frame**, on every host: nothing in this crate
+//! spawns, and a Worker is one thread.
 //!
 //! **⚠️ [`guard`] guards nothing where a panic aborts.** With `panic = "abort"` there is no
 //! unwinding for `catch_unwind` to stop, so the closure's panic is the end of the instance: in a
 //! browser a `RuntimeError: unreachable` thrown out of whichever export was running, with the
 //! module's memory left as it was at that instruction. **Containing that is the host's**, and
-//! the only containment there is: throw the instance away and make another. What this crate does
-//! about it is keep a caller from being able to provoke one — `detect::canny_pair` is that —
-//! and neither guard has been reached by an input since.
+//! the only containment there is: throw the instance away and make another.
 //!
 //! **Only this file names a thread, a clock, an unwind or a target.** `tests::the_fence` reads
 //! every other source file's shipped code, at any depth under `src/`, and refuses one that
@@ -52,140 +28,11 @@
 
 use std::sync::OnceLock;
 
-/// Whether this target has another thread to give and a clock of its own to read.
+/// Whether this target has a clock of its own to read.
 ///
 /// `target_family = "wasm"` and not the one triple the web module is built for: a WASI build
-/// has a clock, but no more threads than a Worker, and a zero in a timing is the cheap way to
-/// be wrong.
+/// has a clock, but a zero in a timing is the cheap way to be wrong.
 const NATIVE: bool = cfg!(not(target_family = "wasm"));
-
-// ---- Threads ---------------------------------------------------------------------------------
-
-thread_local! {
-    /// How many [`Inline`] guards are alive on this thread.
-    static INLINED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-/// Whether work handed to a helper here leaves the calling thread.
-///
-/// Never in a Worker. Natively always, except on a thread holding an [`inline`] guard.
-pub fn threads() -> bool {
-    NATIVE && INLINED.with(|depth| depth.get() == 0)
-}
-
-/// Run every helper here where it stands, **on the calling thread**, until the guard is dropped
-/// — what a Worker does, on a machine that could do otherwise.
-///
-/// Guards nest: the thread has its threads back when the last one goes.
-pub fn inline() -> Inline {
-    INLINED.with(|depth| depth.set(depth.get() + 1));
-    Inline(std::marker::PhantomData)
-}
-
-/// [`inline`]'s guard. Not `Send`: it speaks for the thread it was made on, and dropped on
-/// another it would give that one's threads back instead.
-pub struct Inline(std::marker::PhantomData<*const ()>);
-
-impl Drop for Inline {
-    fn drop(&mut self) {
-        INLINED.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
-/// A worker's answer, with its panic carried on to the caller rather than swallowed: the
-/// session's [`guard`] then reports the failure it is, exactly as when the work ran inline.
-fn joined<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
-    handle.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-}
-
-/// `items.iter().map(f)`, **every item on a thread of its own** when there is more than one,
-/// answered in `items`' order. The caller only waits.
-///
-/// Inline: the items in order. What a frame's detector methods and a method's masks run under.
-pub fn fan_out<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    if items.len() < 2 || !threads() {
-        return items.iter().map(f).collect();
-    }
-    let f = &f;
-    std::thread::scope(|s| {
-        let spawned: Vec<_> = items.iter().map(|item| s.spawn(move || f(item))).collect();
-        spawned.into_iter().map(joined).collect()
-    })
-}
-
-/// `items.iter().map(f)`, **the first item on the caller and each of the rest on a thread of
-/// its own**, answered in `items`' order.
-///
-/// Inline: the items in order. What the matcher hashes and searches a frame's picks under.
-pub fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let Some((first, rest)) = items.split_first() else {
-        return Vec::new();
-    };
-    if rest.is_empty() || !threads() {
-        return items.iter().map(f).collect();
-    }
-    let f = &f;
-    std::thread::scope(|s| {
-        let spawned: Vec<_> = rest.iter().map(|item| s.spawn(move || f(item))).collect();
-        let mut out = Vec::with_capacity(items.len());
-        out.push(f(first));
-        out.extend(spawned.into_iter().map(joined));
-        out
-    })
-}
-
-/// `here` on the caller and `there` on a thread of its own, at once.
-///
-/// Inline: `here`, then `there`. What a Fast frame's two reads run under.
-pub fn join<A, B: Send>(here: impl FnOnce() -> A, there: impl FnOnce() -> B + Send) -> (A, B) {
-    if !threads() {
-        let a = here();
-        return (a, there());
-    }
-    std::thread::scope(|s| {
-        let there = s.spawn(there);
-        let a = here();
-        (a, joined(there))
-    })
-}
-
-/// [`join`] with a third: `here` on the caller, `there` and `also` each on a thread of its own.
-///
-/// Inline: `here`, `there`, `also`. What an Exact resolve's search and two reads run under.
-pub fn join3<A, B: Send, C: Send>(
-    here: impl FnOnce() -> A,
-    there: impl FnOnce() -> B + Send,
-    also: impl FnOnce() -> C + Send,
-) -> (A, B, C) {
-    if !threads() {
-        let a = here();
-        let b = there();
-        return (a, b, also());
-    }
-    std::thread::scope(|s| {
-        let there = s.spawn(there);
-        let also = s.spawn(also);
-        let a = here();
-        (a, joined(there), joined(also))
-    })
-}
-
-/// Run `job` off the caller, on a thread called `name` — or **where it stands, to its end,
-/// before this returns**, on a host with no thread to give.
-///
-/// That second arm is why a caller must not wait on the job from the thread that started it:
-/// a Worker that sat on a spawn which cannot happen would sit for ever. `Session::start_resolve`
-/// hands its answer across a channel and polls it, which reads the same either way — full at
-/// the first poll here, full some frames later there.
-///
-/// A thread the operating system refuses drops `job` unrun, and everything it owned with it;
-/// the session's channel closing is how that is noticed.
-pub fn background(name: &str, job: impl FnOnce() + Send + 'static) {
-    if !threads() {
-        return job();
-    }
-    let _ = std::thread::Builder::new().name(name.into()).spawn(job);
-}
 
 // ---- The panic guard --------------------------------------------------------------------------
 
@@ -194,8 +41,8 @@ pub type Caught<T> = Result<T, Box<dyn std::any::Any + Send + 'static>>;
 
 /// Run `body`, and answer a panic inside it as a value instead of unwinding through the caller.
 ///
-/// `AssertUnwindSafe`, because both callers throw away what the body was working on: a frame's
-/// verdict, a resolve's burst.
+/// `AssertUnwindSafe`, because the caller throws away what the body was working on: a frame's
+/// verdict.
 ///
 /// **On a host where a panic aborts this is `Ok(body())` and nothing else** — see the module
 /// doc. It is still called there, so the code that reads its answer is the same on every host.
@@ -212,10 +59,9 @@ static CLOCK: OnceLock<fn() -> f64> = OnceLock::new();
 /// Hand the crate a clock: `now_ms` answers milliseconds, monotonic, from whatever origin the
 /// host likes — `performance.now()` is one. Once per process; a second word is ignored.
 ///
-/// **Telemetry, with one exception.** Every reading ends in an `_ms` field of a verdict, and
-/// nothing in Fast or Exact paces, bounds or orders anything by one — which is why a host that
-/// installs none still scans, with its timings at zero. **The exception is the Neural mode's
-/// agreement** (`src/neural_mode.rs`), whose votes age by a [`Stopwatch`] started when its
+/// **Telemetry, with one exception.** Every reading ends in an `_ms` field of a verdict — which
+/// is why a host that installs none still scans, with its timings at zero. **The exception is
+/// the agreement** (`src/neural_mode.rs`), whose votes age by a [`Stopwatch`] started when its
 /// models load: two accepted frames further apart than its gap do not agree. On a host with no
 /// clock every frame is at zero, so no vote ages and no gap is too long — a frame with no card
 /// still resets the count, which is most of what the ages are for. The replay installs the
@@ -270,128 +116,14 @@ impl Stopwatch {
     }
 }
 
-#[cfg(test)]
+#[cfg(test)]#[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
-    use std::thread::ThreadId;
-
-    fn here() -> ThreadId {
-        std::thread::current().id()
-    }
-
-    /// Every helper, with its work recording the thread it ran on.
-    fn threads_used(run: impl FnOnce(&(dyn Fn() + Sync))) -> HashSet<ThreadId> {
-        let seen = Mutex::new(HashSet::new());
-        run(&|| {
-            seen.lock().unwrap().insert(here());
-        });
-        seen.into_inner().unwrap()
-    }
 
     #[test]
-    fn the_helpers_keep_order_with_threads_and_without() {
-        let check = || {
-            assert_eq!(fan_out(&[1, 2, 3, 4, 5, 6], |x| x * 10), vec![10, 20, 30, 40, 50, 60]);
-            assert_eq!(fan_out(&[7], |x| x + 1), vec![8]);
-            assert!(fan_out(&[] as &[u8], |x| *x).is_empty());
-            assert_eq!(par_map(&[1, 2, 3, 4, 5, 6], |x| x * 10), vec![10, 20, 30, 40, 50, 60]);
-            assert_eq!(par_map(&[7], |x| x + 1), vec![8]);
-            assert!(par_map(&[] as &[u8], |x| *x).is_empty());
-            assert_eq!(join(|| "here", || 2), ("here", 2));
-            assert_eq!(join3(|| "here", || 2, || 3.0), ("here", 2, 3.0));
-        };
-        assert!(threads(), "a test thread has threads until it says otherwise");
-        check();
-        let _one = inline();
-        assert!(!threads());
-        check();
-    }
-
-    /// The thread structure each site had before it moved here: `fan_out` leaves the caller
-    /// idle, the other three give it the first share — and under [`inline`] nothing leaves it.
-    #[test]
-    fn each_helper_uses_the_threads_it_says_and_none_under_the_guard() {
-        let me = here();
-        let all = threads_used(|mark| drop(fan_out(&[0, 1, 2], |_| mark())));
-        assert_eq!(all.len(), 3, "one thread an item");
-        assert!(!all.contains(&me), "`fan_out` ran an item on the caller");
-
-        let mapped = threads_used(|mark| drop(par_map(&[0, 1, 2], |_| mark())));
-        assert_eq!(mapped.len(), 3);
-        assert!(mapped.contains(&me), "`par_map`'s first item left the caller");
-
-        let pair = threads_used(|mark| (join(mark, mark), ()).1);
-        assert!(pair.len() == 2 && pair.contains(&me));
-        let three = threads_used(|mark| (join3(mark, mark, mark), ()).1);
-        assert!(three.len() == 3 && three.contains(&me));
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        background("a-test-job", move || {
-            let named = std::thread::current().name().map(String::from);
-            let _ = tx.send((here(), named));
-        });
-        let (ran_on, named) = rx.recv().expect("the job never ran");
-        assert_ne!(ran_on, me);
-        assert_eq!(named.as_deref(), Some("a-test-job"));
-
-        let _one = inline();
-        let only = HashSet::from([me]);
-        assert_eq!(threads_used(|mark| drop(fan_out(&[0, 1, 2], |_| mark()))), only);
-        assert_eq!(threads_used(|mark| drop(par_map(&[0, 1, 2], |_| mark()))), only);
-        assert_eq!(threads_used(|mark| (join(mark, mark), ()).1), only);
-        assert_eq!(threads_used(|mark| (join3(mark, mark, mark), ()).1), only);
-        let (tx, rx) = std::sync::mpsc::channel();
-        background("a-test-job", move || {
-            let _ = tx.send(here());
-        });
-        // `try_recv`, not `recv`: the job has run to its end before `background` returned.
-        assert_eq!(rx.try_recv(), Ok(me));
-    }
-
-    /// The order a Worker runs each site's work in — the caller's share, then the rest as
-    /// handed over.
-    #[test]
-    fn the_inline_order_is_the_callers_share_then_the_rest_as_written() {
-        let _one = inline();
-        let order = Mutex::new(Vec::new());
-        let step = |n: u8| order.lock().unwrap().push(n);
-        fan_out(&[1, 2, 3], |&n| step(n));
-        par_map(&[4, 5, 6], |&n| step(n));
-        join(|| step(7), || step(8));
-        join3(|| step(9), || step(10), || step(11));
-        assert_eq!(*order.lock().unwrap(), (1..=11).collect::<Vec<u8>>());
-    }
-
-    #[test]
-    fn the_guard_nests_and_is_one_threads_business() {
-        let outer = inline();
-        let inner = inline();
-        drop(inner);
-        assert!(!threads(), "the inner guard took the outer one's word with it");
-        // Another thread never heard of this one's guard.
-        assert!(std::thread::spawn(threads).join().unwrap());
-        drop(outer);
-        assert!(threads());
-    }
-
-    /// A worker's panic reaches the caller from every helper, on either arm — which is what
-    /// lets one [`guard`] at the top of a frame answer for every thread under it.
-    #[test]
-    fn a_panic_in_any_share_is_reraised_on_the_caller() {
-        let boom = |x: &i32| if *x == 3 { panic!("a spawned item panicked") } else { *x };
-        let all = || {
-            assert!(guard(|| fan_out(&[1, 2, 3], boom)).is_err(), "fan_out swallowed it");
-            assert!(guard(|| par_map(&[1, 2, 3], boom)).is_err(), "par_map swallowed it");
-            assert!(guard(|| join(|| 1, || boom(&3))).is_err(), "join swallowed it");
-            assert!(guard(|| join3(|| 1, || 2, || boom(&3))).is_err(), "join3 swallowed it");
-            assert!(guard(|| join3(|| boom(&3), || 2, || 3)).is_err());
-        };
-        all();
-        let _one = inline();
-        all();
+    fn the_guard_answers_a_panic_as_a_value() {
+        assert!(guard(|| panic!("a frame panicked")).is_err());
         assert_eq!(guard(|| 5).ok(), Some(5));
     }
 
@@ -455,179 +187,6 @@ mod tests {
         let waited = watch.ms();
         assert!(waited >= 10.0, "a 20 ms sleep measured as {waited}");
         assert!(ASKED.load(Ordering::Relaxed) >= before + 2, "start and ms each ask the host");
-    }
-
-    // ---- One thread or many -------------------------------------------------------------------
-
-    use crate::session::{FrameOptions, ResolveOn, ScanMode, Session, Verdict};
-    use image::RgbImage;
-
-    /// The banded card, face on, `w` wide: a dark border round light title, art, type and text
-    /// bands — the horizontal structure card-likeness scores.
-    fn banded(w: u32, h: u32) -> RgbImage {
-        let border = 11 * w / 250;
-        RgbImage::from_fn(w, h, |x, y| {
-            if x < border || y < border || x >= w - border || y >= h - border {
-                return image::Rgb([16, 16, 18]);
-            }
-            let v = match y as f32 / h as f32 {
-                t if t < 0.10 => 238,
-                t if t < 0.55 => 150,
-                t if t < 0.62 => 238,
-                t if t < 0.92 => 205,
-                _ => 140,
-            };
-            image::Rgb([v, v, v])
-        })
-    }
-
-    /// A 960×540 JPEG of that card on a flat grey table, `dx` pixels right of centre — the
-    /// session tests' own fixture, drawn again here so this file needs nothing private of
-    /// theirs. A pixel or two of movement a frame keeps the lock's smoothed quad apart from
-    /// the raw one.
-    fn card_frame_jpeg(dx: u32) -> Vec<u8> {
-        let card = banded(250, 349);
-        let (x0, y0) = (355 + dx, 95u32);
-        let mut frame = RgbImage::from_pixel(960, 540, image::Rgb([96, 100, 104]));
-        image::imageops::replace(&mut frame, &card, i64::from(x0), i64::from(y0));
-        let mut out = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
-            .encode_image(&frame)
-            .expect("encode");
-        out
-    }
-
-    fn id(n: u8) -> [u8; crate::index::ID_LEN] {
-        let mut raw = [0u8; crate::index::ID_LEN];
-        raw[0] = n;
-        raw
-    }
-
-    /// A reference that knows the banded card among two it does not: its negative, and a
-    /// gradient. In colour, so a frame's match weighs chroma as the app's does.
-    fn knows_the_banded_card() -> crate::reference::Reference {
-        use crate::hash::{hash_rgb, HashKind};
-        use crate::index::{BundleBuilder, Section};
-        let kind = HashKind::DHashChroma32;
-        let face = banded(crate::RECTIFIED_W, crate::RECTIFIED_H);
-        let negative = RgbImage::from_fn(face.width(), face.height(), |x, y| {
-            let p = face.get_pixel(x, y).0;
-            image::Rgb([255 - p[0], 255 - p[1], 255 - p[2]])
-        });
-        let gradient =
-            RgbImage::from_fn(60, 84, |x, y| image::Rgb([((x * 3 + y) % 256) as u8; 3]));
-        let mut b = BundleBuilder::new(kind, 256);
-        for (n, image) in [(1u8, &face), (2, &negative), (3, &gradient)] {
-            b.push(Section::Card, id(n), &hash_rgb(image, kind, 256));
-        }
-        let mut r = crate::reference::Reference::new(b.finish(0));
-        for (n, oracle) in [(1u8, 10u8), (2, 20), (3, 30)] {
-            let label = crate::reference::Label {
-                name: format!("Card {oracle}"),
-                set: "hob".into(),
-                number: n.to_string(),
-                lang: "en".into(),
-                released: "2025-01-01".into(),
-            };
-            r.add_label(id(n), Some(id(oracle)), None, label);
-        }
-        r
-    }
-
-    /// A verdict as JSON without what a clock put in it: every `…_ms` key, at any depth.
-    fn without_timings(v: &Verdict) -> serde_json::Value {
-        fn strip(value: &mut serde_json::Value) {
-            match value {
-                serde_json::Value::Object(map) => {
-                    map.retain(|key, _| !key.ends_with("_ms"));
-                    map.values_mut().for_each(strip);
-                }
-                serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
-                _ => {}
-            }
-        }
-        let mut json = serde_json::to_value(v).expect("serialise");
-        strip(&mut json);
-        json
-    }
-
-    /// **A host with one thread answers what a host with many does** — the whole of what this
-    /// module promises. The same frames go through a session whose sites fan out and through
-    /// one under [`inline`], where each runs where it stands, and every verdict has to be the
-    /// same but for its timings: the quad, the lock, the candidates and their distances, the
-    /// tally, the resolution's tiers, the decision and its frame.
-    ///
-    /// **Four of the six sites, and the two reads of none.** These sessions have no readers —
-    /// no model is in the tree — so what runs both ways here is a frame's detectors and a
-    /// detector's masks ([`fan_out`], twice over), a frame's hashes and searches
-    /// ([`par_map`]), a resolve's whole-card search ([`join3`], whose two reads are
-    /// `NoReaders` and answer at once) and the resolve itself ([`background`], on its inline
-    /// arm). **`session::fast_reads`' [`join`] never runs**, and neither does a real read
-    /// beside a search. What holds those is the helpers' own tests above — the threads each
-    /// uses, the order each keeps, the panic each carries — and, with the published models,
-    /// the frame bench (`pnpm scanner:bench --native`), which fails when the hosts
-    /// disagree about a decision or a read and which CI, having no models, does not run.
-    ///
-    /// **The threaded session resolves inline and the inline one in the "background".** A real
-    /// background resolve lands on whichever frame follows it, which is the clock's business
-    /// (`session::tests::a_background_resolve_decides_on_a_later_frame_and_only_once`), so the
-    /// first is told to resolve inside its frame — and the second is left at the app's
-    /// default, which is how this also holds that a host with no thread to give resolves
-    /// inside the frame rather than waiting on a thread it will never get.
-    ///
-    /// A bar of four votes, so Fast decides inside `frames`: three to lock, then the votes. A
-    /// debug build spends about a second on each frame, which is why each mode is a test of
-    /// its own — the harness runs the two side by side.
-    fn one_thread_answers_as_many_do(mode: ScanMode, frames: u32) -> Vec<Verdict> {
-        assert!(threads(), "the premise: this thread has threads to compare against");
-        let frames: Vec<Vec<u8>> = (0..frames).map(|i| card_frame_jpeg(i % 3)).collect();
-        let opts = FrameOptions { mode, previews: true, decide_at: 4.0, ..Default::default() };
-        assert_eq!(opts.method.as_str(), "both", "two methods, so the sweep fans out");
-
-        let mut threaded = Session::new(Some(knows_the_banded_card()), None, 5);
-        threaded.set_resolve_on(ResolveOn::Inline);
-        let many: Vec<Verdict> = frames.iter().map(|f| threaded.frame(f, &opts)).collect();
-
-        let one: Vec<Verdict> = {
-            let _one_thread = inline();
-            // Left at `ResolveOn::Background`, the default: what the app runs.
-            let mut s = Session::new(Some(knows_the_banded_card()), None, 5);
-            let seen = frames.iter().map(|f| s.frame(f, &opts)).collect();
-            assert!(!s.resolving(), "a resolve was left waiting on a thread");
-            seen
-        };
-
-        for (i, (a, b)) in many.iter().zip(&one).enumerate() {
-            assert_eq!(
-                without_timings(a),
-                without_timings(b),
-                "frame {i} in {mode:?} differs between many threads and one"
-            );
-        }
-        // The premise: the stream reached the matcher, more than one pick at a time, and a
-        // decision — or the two runs agreed about nothing much.
-        let last = many.last().expect("frames");
-        assert!(last.ok, "{:?}", last.error);
-        assert!(
-            many.iter().any(|v| v.r#match.as_ref().is_some_and(|m| m.hashes > 1)),
-            "no frame hashed more than one view, so `par_map` never fanned out"
-        );
-        assert_eq!(last.decision_seq, 1, "the card was never decided in {mode:?}");
-        let named = last.decision.as_ref().map(|d| d.printing.clone());
-        assert_eq!(named, Some(crate::index::format_uuid(&id(1))));
-        many
-    }
-
-    #[test]
-    fn a_fast_session_answers_the_same_on_one_thread_as_on_many() {
-        one_thread_answers_as_many_do(ScanMode::Fast, 9);
-    }
-
-    #[test]
-    fn an_exact_session_answers_the_same_on_one_thread_as_on_many() {
-        let seen = one_thread_answers_as_many_do(ScanMode::Exact, 7);
-        let resolved = seen.iter().filter(|v| v.resolution.is_some()).count();
-        assert_eq!(resolved, 1, "Exact resolved {resolved} times");
     }
 
     // ---- The fence ----------------------------------------------------------------------------
@@ -709,8 +268,8 @@ mod tests {
     }
 
     /// A file's shipped code: its lines up to the first column-0 `#[cfg(test)]` **that gates a
-    /// module**, without the lines that are comments. `detect.rs` gates a `thread_local!` and
-    /// two helpers far above its tests; cutting at the first gate would leave everything below
+    /// module**, without the lines that are comments. A file may gate a `thread_local!` or a
+    /// helper far above its tests; cutting at the first gate would leave everything below
     /// them unread, so a single gated item is read as shipped — refusing too much is the cheap
     /// direction.
     ///
@@ -802,7 +361,7 @@ mod tests {
         }
         // A sweep that read nothing passes everything.
         let read = files.len();
-        assert!(read >= 16, "the fence read {read} files — `src/` has moved, or the walk broke");
+        assert!(read >= 7, "the fence read {read} files — `src/` has moved, or the walk broke");
         assert!(
             found.is_empty(),
             "only `host.rs` may know the machine it is on — ask it instead:\n{}",
@@ -836,7 +395,7 @@ mod tests {
         for line in [
             "thread_local! {",
             "let instants = slice.windows(2);",
-            "#[cfg(feature = \"ocr\")]",
+            "#[cfg(feature = \"corpus\")]",
             "#[cfg_attr(not(feature = \"corpus\"), allow(dead_code))]",
             "let watch = crate::host::Stopwatch::start();",
             "pub struct InstantReplay;",
@@ -852,7 +411,7 @@ mod tests {
         let split = [
             (1, "#[cfg(any("),
             (2, "    target_os = \"windows\","),
-            (3, "    feature = \"ocr\","),
+            (3, "    feature = \"corpus\","),
             (4, "))]"),
             (5, "fn gated() {}"),
         ];
@@ -860,7 +419,7 @@ mod tests {
             (0..split.len()).filter(|&at| broken(&split, at).is_some()).collect();
         assert_eq!(hits, [0], "a gate over four lines");
         let features =
-            [(1, "#[cfg(any("), (2, "    feature = \"ocr\","), (3, "))]"), (4, "#[cfg(unix)]")];
+            [(1, "#[cfg(any("), (2, "    feature = \"corpus\","), (3, "))]"), (4, "#[cfg(unix)]")];
         assert_eq!(broken(&features, 0), None, "a split gate ran on into the next one");
 
         // A gated item above the tests is read as shipped; the cut is the module's gate.

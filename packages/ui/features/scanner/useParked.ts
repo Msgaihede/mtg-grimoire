@@ -44,7 +44,7 @@ export function usePageHidden(): boolean {
  * The Scanner's answer to being out of sight: **pause at once, let go after a grace.**
  *
  * The pump stops the moment `away` goes true — a frame sent from a view nobody is looking at is a
- * detector pass and an OCR read for nothing — and the camera and the lease follow
+ * recogniser's pass for nothing — and the camera and the lease follow
  * {@link PARK_GRACE_MS} later, so a quick return finds the stream still open. A return inside the
  * grace cancels it; one after it reopens the camera and renews the lease, and if another window
  * took the scanner meanwhile, the heartbeat's refusal is what sends this one to the gate's

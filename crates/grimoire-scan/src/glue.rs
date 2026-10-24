@@ -8,9 +8,8 @@
 //! memory has grown.
 //!
 //! **Every export is synchronous, and none may throw.** A frame is one call that returns its
-//! verdict; there is nothing to await, because the crate runs a frame where it stands on a
-//! host with one thread (`card_scanner::host`) — an Exact resolve included, inside the frame
-//! that started it.
+//! verdict; there is nothing to await, because the crate runs a frame where it stands
+//! (`card_scanner::host`).
 //!
 //! **After a panic the instance is finished, and says so rather than trapping twice.** The
 //! module is built with `panic = "abort"`: a panic inside a frame is a trap out of that call,
@@ -73,39 +72,29 @@ pub fn start() {
     card_scanner::host::set_clock(now_ms);
 }
 
-/// `load(bundle?, labels?, detection?, recognition?): string` — build the session, replacing
+/// `load(labels?): string` — build the session from the labels the engine encoded, replacing
 /// any there was. Answers `{"ok": <facts>}` ([`scanner::Loaded`]):
 ///
 /// ```text
-/// {"ok":{"bundle":{"loaded":true,"entries":118313,"error":null},"labels":118475,
-///        "models":{"loaded":true,"error":null},"unapplied_filters":null}}
+/// {"ok":{"labels":118475,"unapplied_filters":null}}
 /// ```
 ///
-/// Each argument is taken, not borrowed: the glue has already copied it into this module's
-/// memory, and `Scanner::load` lets each go as soon as it has been read.
+/// Taken, not borrowed: the glue has already copied it into this module's memory, and
+/// `Scanner::load` lets it go as soon as it has been read.
 #[wasm_bindgen]
-pub fn load(
-    bundle: Option<Vec<u8>>,
-    labels: Option<Vec<u8>>,
-    detection: Option<Vec<u8>>,
-    recognition: Option<Vec<u8>>,
-) -> String {
-    with(|scanner| scanner.load_json(bundle, labels, detection, recognition))
+pub fn load(labels: Option<Vec<u8>>) -> String {
+    with(|scanner| scanner.load_json(labels))
 }
 
-/// `frame(jpeg, detail?, options): string` — one frame through the session. `options` is a
-/// `FrameOptions` as JSON (`""` for the defaults). Answers `{"ok": <Verdict>}`, or
-/// and reads options that are not one as the defaults. See [`Scanner::frame`].
+/// `frame(jpeg): string` — one frame through the session. Answers `{"ok": <Verdict>}`. See
+/// [`Scanner::frame`].
 #[wasm_bindgen]
-pub fn frame(jpeg: &[u8], detail: Option<Vec<u8>>, options: Option<String>) -> String {
-    // `Option`, so a caller that leaves the options out gets the defaults: as a `&str` an
-    // omitted argument was a `TypeError` in the glue, before a line of this ran.
-    let options = options.as_deref().unwrap_or_default();
-    with(|scanner| scanner.frame(jpeg, detail.as_deref(), options))
+pub fn frame(jpeg: &[u8]) -> String {
+    with(|scanner| scanner.frame(jpeg))
 }
 
 /// `load_neural(detector, embedder, gallery, meta): string | undefined` — give the session the
-/// Neural mode's four files, as the page fetched them from the app's origin. Answers nothing, or
+/// Neural scanner's four files, as the page fetched them from the app's origin. Answers nothing, or
 /// the crate's sentence when they would not load ([`Scanner::load_neural`]) — **never a throw**,
 /// and not the envelope: there is no value to carry, only a refusal. After a panic it answers
 /// [`scanner::PANICKED`], as every string export does.
@@ -128,7 +117,7 @@ pub fn load_neural(
 }
 
 /// `load_neural_evidence(symbol_net, band_net, symbols, bands): string | undefined` — give the
-/// session the Neural mode's printing evidence, which the page fetches once `load_neural` has
+/// session the Neural scanner's printing evidence, which the page fetches once `load_neural` has
 /// answered. Answers nothing, or the crate's sentence ([`Scanner::load_neural_evidence`]) —
 /// `load_neural`'s shape, for its reason, and [`scanner::PANICKED`] after a panic.
 #[wasm_bindgen]

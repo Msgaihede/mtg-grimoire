@@ -477,8 +477,9 @@ window left one target listed, the same pid, `window_count` answering **1** — 
 last window exited the process, and afterwards **`user.db-wal` was 0 bytes** and `corpus.db-wal` 0:
 the exit push and the checkpoint ran exactly once, at the real exit.
 
-**Scanner ownership.** This data copy has no `card-hashes.bin` and no OCR models, so the view says
-so — it still mounts, and it still holds the lease.
+**Scanner ownership.** This data copy had no `card-hashes.bin` and no OCR models (the files the
+Fast and Exact modes read, removed on 2026-10-24), so the view said so — it still mounted, and it
+still held the lease.
 
 | Step | What was measured |
 | --- | --- |

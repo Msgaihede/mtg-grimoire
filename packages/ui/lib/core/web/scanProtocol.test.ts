@@ -1,57 +1,29 @@
 import { describe, expect, it } from "vitest";
 import scannerRs from "../../../../../crates/grimoire-core/src/scanner.rs?raw";
 import {
-  DETAIL_HEADER,
   frameMessage,
-  isNeuralFrame,
   isUnsupported,
   loadFactsOf,
   loadMessage,
   neuralEvidenceMessage,
   neuralMessage,
-  OPTIONS_HEADER,
   scanAnswerOf,
-  type ScanOutgoing,
 } from "./scanProtocol";
 
-const sent = (outgoing: ScanOutgoing | string): ScanOutgoing => {
-  if (typeof outgoing === "string") throw new Error(`refused: ${outgoing}`);
-  return outgoing;
-};
-
 describe("a load, as the message the scanner's Worker is sent", () => {
-  it("hands over every file's buffer and copies none", () => {
-    const bundle = new Uint8Array([1, 2, 3]);
+  it("hands over the labels' buffer and copies it not", () => {
     const labels = new Uint8Array([4, 5]);
-    const detection = new Uint8Array([6]);
-    const recognition = new Uint8Array([7, 8]);
-    const { message, transfer } = loadMessage(3, '{"sets":["LTR"]}', {
-      bundle,
-      labels,
-      detection,
-      recognition,
-    });
-    expect(message).toEqual({
-      kind: "load",
-      id: 3,
-      filters: '{"sets":["LTR"]}',
-      bundle,
-      labels,
-      detection,
-      recognition,
-    });
-    expect(transfer).toEqual([bundle.buffer, labels.buffer, detection.buffer, recognition.buffer]);
+    const { message, transfer } = loadMessage(3, '{"sets":["LTR"]}', labels);
+    expect(message).toEqual({ kind: "load", id: 3, filters: '{"sets":["LTR"]}', labels });
+    expect(transfer).toEqual([labels.buffer]);
   });
 
-  it("hands over nothing for a file that is not there, or that is no bytes", () => {
-    const { message, transfer } = loadMessage(1, null, {
-      bundle: null,
-      labels: new Uint8Array(0),
-      detection: null,
-      recognition: null,
-    });
-    expect(message).toMatchObject({ kind: "load", filters: null, bundle: null });
-    expect(transfer).toEqual([]);
+  it("hands over nothing for labels that are not there, or that are no bytes", () => {
+    for (const labels of [null, new Uint8Array(0)]) {
+      const { message, transfer } = loadMessage(1, null, labels);
+      expect(message).toMatchObject({ kind: "load", filters: null });
+      expect(transfer).toEqual([]);
+    }
   });
 });
 
@@ -74,102 +46,55 @@ describe("the Neural evidence files, as the message the scanner's Worker is sent
     const symbols = new Uint8Array([4, 5, 6]);
     const bands = new Uint8Array([7]);
     const { message, transfer } = neuralEvidenceMessage(10, { symbolNet, bandNet, symbols, bands });
-    expect(message).toEqual({ kind: "neural-evidence", id: 10, symbolNet, bandNet, symbols, bands });
+    expect(message).toEqual({
+      kind: "neural-evidence",
+      id: 10,
+      symbolNet,
+      bandNet,
+      symbols,
+      bands,
+    });
     expect(transfer).toEqual([symbolNet.buffer, bandNet.buffer, symbols.buffer, bands.buffer]);
   });
 });
 
-describe("which frame is a Neural one", () => {
-  it("is one whose options say the mode as serde writes `ScanMode::Neural`", () => {
-    expect(isNeuralFrame('{"mode":"neural"}')).toBe(true);
-    expect(isNeuralFrame('{"previews":false,"mode":"neural","decide_at":2}')).toBe(true);
-  });
-
-  it("is no other: another mode, no mode, and options the module reads as the defaults", () => {
-    for (const options of ['{"mode":"fast"}', '{"mode":"exact"}', '{"mode":"Neural"}', "{}", "", "{not json", "null", '"neural"', '["neural"]']) {
-      expect(isNeuralFrame(options), options).toBe(false);
-    }
-  });
-});
-
 describe("a frame, as the message the scanner's Worker is sent", () => {
-  it("names the two headers as the engine names them", () => {
-    expect(scannerRs).toContain(`pub const OPTIONS_HEADER: &str = "${OPTIONS_HEADER}";`);
-    expect(scannerRs).toContain(`pub const DETAIL_HEADER: &str = "${DETAIL_HEADER}";`);
+  /**
+   * **A frame is its JPEG and nothing beside it** — the engine reads no header for one any more,
+   * so none is named there either (2026-10-24: the options and the detail frame went with the old
+   * scanner).
+   */
+  it("reads no header, as the engine reads none", () => {
+    expect(scannerRs).not.toContain('"x-scanner-options"');
+    expect(scannerRs).not.toContain('"x-scanner-detail"');
   });
 
-  it("is the whole body when there is no detail, transferred", () => {
+  it("is the whole body, transferred", () => {
     const body = new Uint8Array([0xff, 0xd8, 1, 2]);
-    const { message, transfer } = sent(
-      frameMessage(7, body, { [OPTIONS_HEADER]: '{"mode":"exact"}' }),
-    );
-    expect(message).toEqual({
-      kind: "frame",
-      id: 7,
-      jpeg: body,
-      detail: null,
-      options: '{"mode":"exact"}',
-    });
+    const { message, transfer } = frameMessage(7, body);
+    expect(message).toEqual({ kind: "frame", id: 7, jpeg: body });
     expect(transfer).toEqual([body.buffer]);
-  });
-
-  it("splits the body at the detail header without copying a byte", () => {
-    const body = new Uint8Array([1, 2, 3, 9, 9]);
-    const { message, transfer } = sent(frameMessage(1, body, { [DETAIL_HEADER]: "3" }));
-    if (message.kind !== "frame") throw new Error("not a frame");
-    expect([...message.jpeg]).toEqual([1, 2, 3]);
-    expect([...(message.detail ?? [])]).toEqual([9, 9]);
-    // Two views of the one buffer, and the buffer handed over once.
-    expect(message.jpeg.buffer).toBe(body.buffer);
-    expect(message.detail?.buffer).toBe(body.buffer);
-    expect(transfer).toEqual([body.buffer]);
-    // No options header is the defaults, which the module reads empty text as.
-    expect(message.options).toBe("");
   });
 
   it("copies a body that is only part of its buffer, and leaves the rest of that memory alone", () => {
     const memory = new Uint8Array([0, 1, 2, 3, 4, 5]);
     const body = memory.subarray(1, 5);
-    const { message, transfer } = sent(frameMessage(1, body, { [DETAIL_HEADER]: "2" }));
+    const { message, transfer } = frameMessage(1, body);
     if (message.kind !== "frame") throw new Error("not a frame");
-    expect([...message.jpeg]).toEqual([1, 2]);
-    expect([...(message.detail ?? [])]).toEqual([3, 4]);
+    expect([...message.jpeg]).toEqual([1, 2, 3, 4]);
     expect(transfer).toHaveLength(1);
     expect(transfer[0]).not.toBe(memory.buffer);
-  });
-
-  it("refuses a detail length the body cannot be split at, in the engine's own sentences", () => {
-    const body = new Uint8Array(4);
-    const refusals = [
-      frameMessage(1, body, { [DETAIL_HEADER]: "abc" }),
-      frameMessage(1, body, { [DETAIL_HEADER]: "0" }),
-      frameMessage(1, body, { [DETAIL_HEADER]: "4" }),
-      frameMessage(1, body, { [DETAIL_HEADER]: "-1" }),
-    ];
-    expect(refusals).toEqual([
-      `the frame's detail length is not a number: "abc"`,
-      "the frame's detail length is zero, so there is no frame before it",
-      "the frame's detail length is 4 bytes but the body is 4 — there is no detail image behind the frame",
-      `the frame's detail length is not a number: "-1"`,
-    ]);
-    // As Rust's `usize` parse reads a number: a `+` in front is one, a space or a sign is not.
-    const plus = sent(frameMessage(1, new Uint8Array([1, 2, 3]), { [DETAIL_HEADER]: "+2" }));
-    expect(plus.message).toMatchObject({ kind: "frame", jpeg: new Uint8Array([1, 2]) });
-    for (const not of [" 2", "2 ", "2.0", "0x2", ""]) {
-      expect(frameMessage(1, new Uint8Array(4), { [DETAIL_HEADER]: not }), not).toMatch(/is not a number/);
-    }
-    // Held to the Rust they repeat (`scanner::split_detail`).
-    expect(scannerRs).toContain("the frame's detail length is not a number: {text:?}");
-    expect(scannerRs).toContain("the frame's detail length is zero, so there is no frame before it");
-    expect(scannerRs.replace(/\\\s+/g, "")).toContain(
-      "the frame's detail length is {n} bytes but the body is {} — there is no detail image behind the frame",
-    );
+    expect([...memory]).toEqual([0, 1, 2, 3, 4, 5]);
   });
 });
 
 describe("the module's strings", () => {
   it("reads an ok and an err as the message for that id", () => {
-    expect(scanAnswerOf(4, '{"ok":{"ok":true}}')).toEqual({ kind: "ok", id: 4, result: { ok: true } });
+    expect(scanAnswerOf(4, '{"ok":{"ok":true}}')).toEqual({
+      kind: "ok",
+      id: 4,
+      result: { ok: true },
+    });
     expect(scanAnswerOf(4, '{"ok":null}')).toEqual({ kind: "ok", id: 4, result: null });
     expect(scanAnswerOf(5, '{"err":"no labels to filter by"}')).toEqual({
       kind: "err",
@@ -187,17 +112,12 @@ describe("the module's strings", () => {
   });
 
   it("reads a load's facts, and nothing that is not them", () => {
-    const facts = {
-      bundle: { loaded: true, entries: 118313, error: null },
-      labels: 118475,
-      models: { loaded: false, error: "one model without the other: the readers need both" },
-      unapplied_filters: null,
-    };
+    const facts = { labels: 118475, unapplied_filters: null };
     expect(loadFactsOf(facts)).toEqual(facts);
     expect(loadFactsOf({ ...facts, unapplied_filters: "no labels" })?.unapplied_filters).toBe(
       "no labels",
     );
-    for (const not of [null, 7, {}, { bundle: {}, labels: 1, models: {} }, { ...facts, labels: "1" }]) {
+    for (const not of [null, 7, {}, { unapplied_filters: null }, { ...facts, labels: "1" }]) {
       expect(loadFactsOf(not)).toBeNull();
     }
   });

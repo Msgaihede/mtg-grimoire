@@ -48,7 +48,7 @@ describe("every workflow", () => {
       expect.arrayContaining([
         "/.github/workflows/ci.yml",
         "/.github/workflows/release.yml",
-        "/.github/workflows/scanner-bundle.yml",
+        "/.github/workflows/neural-deliver.yml",
       ]),
     );
   });

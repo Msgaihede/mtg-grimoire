@@ -1,10 +1,10 @@
 # .github — CI and releases
 
-Six workflows: `ci.yml`, `release.yml`, `scanner-bundle.yml` and `android-emulator.yml` manage CI
+Five workflows: `ci.yml`, `release.yml` and `android-emulator.yml` manage CI
 and distribution, and `neural-train.yml` and `neural-deliver.yml` retrain the Neural scanner's
 models. Every rule below is enforced by tests or measured in production.
-Full historical records and measurements: [`docs/reference/ci-and-releases.md`](../docs/reference/ci-and-releases.md);
-scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/card-scanner.md) §10.
+Full historical records and measurements: [`docs/reference/ci-and-releases.md`](../docs/reference/ci-and-releases.md).
+The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 2026-10-24 with the Fast and Exact scanner modes.
 
 ## `ci.yml` — Pull Request & Main Branch Gates
 
@@ -49,18 +49,16 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - **`storybook`**: Runs `pnpm build-storybook`. Gates `.storybook/DesignSystem.mdx` and `preview.css`.
   - **`rust`**: Windows and Linux matrix. Writes a stub `apps/desktop/dist/index.html` (and `apps/light/dist-mobile/index.html`) so `tauri-build` compiles on fresh checkouts.
     Runs `cargo fmt --check` (Linux only, with `-p` for each workspace member; never `--all`), `clippy --workspace --all-targets -D warnings`,
-    and `cargo test --workspace`. Also runs `crates/card-scanner` test suites (`--features cli`, `--features builder --bins`, and its frame bench's, `crates/card-scanner/bench`).
+    and `cargo test --workspace`. Also runs `crates/card-scanner`'s test suite twice, at `--features cli` and with no feature (the crate as the browser's module links it) — tests only, the crate is not fmt- or clippy-clean.
     Compiles shipping binaries without dev-dependencies (`cargo check -p mtg-grimoire -p grimoire-light`) and verifies no host enables the core's `testing` feature.
     `Swatinem/rust-cache` is configured with `workspaces: ". -> target"`: `.cargo/config.toml` pins `target-dir = "target"`, so the workspace builds into `target/` at the repository root.
   - **`core`**: Target compile gate on `ubuntu-24.04` (requires clang ≥ 18 for `sqlite-wasm-rs`) for `wasm32-unknown-unknown` and `aarch64-linux-android`.
     Sets `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` and the NDK `bin` path explicitly because cargo does not read `NDK_HOME`.
-    Each leg also `cargo check`s `crates/card-scanner/bench` — the scanner with its readers — for its target; nothing in this job runs.
   - **`android`**: Builds the light app on `ubuntu-24.04` via `pnpm exec tauri android build --apk --aab --target aarch64` with JDK 21 (debug-signed, no secret), holds it to its version (`scripts/android-release/check-version.sh`),
     then proves the release's signing by running `scripts/android-release/proof.sh` over the bundle: throwaway keys, one signing, five refusals.
   - **`web`**: Builds the WebAssembly host:
     - Reads the exact `wasm-bindgen` CLI version from `Cargo.lock` and compiles via `cargo install wasm-bindgen-cli --version "$bindgen" --locked`.
     - Builds both modules (`pnpm web:wasm`: the engine, held under a size ceiling by the script, and the card scanner with `simd128`) and web assets (`pnpm web:build`).
-    - Fetches the scanner's three files from this repository's public release (`pnpm scanner:assets --web`) before the page is built, and builds with `GRIMOIRE_SCANNER_ASSETS=required` — as `release.yml`'s `web` job does.
     - Executes headless Chrome smoke tests (`pnpm web:smoke`) against fixture cards, enforcing offline operation and CORS safety.
     - Scans one real card through the scanner's own module (`pnpm web:scanner-smoke`: a file for a camera, the desktop face and then the phone face); the card's picture is the one request the script makes of Scryfall, kept by `actions/cache` between runs.
     - Runs the live-sync walk (`pnpm web:sync-smoke`: two Chrome profiles, `infrastructure/relay/` under `wrangler dev --local`), with wrangler installed from `infrastructure/wrangler/package-lock.json` (`npm ci --ignore-scripts --prefix infrastructure/wrangler`; npm's, because that folder is not in the pnpm workspace) — never `npx wrangler@…`, and no secret in the job. `infrastructure/relay/**` routes to `frontend`, `rust` and `web`.
@@ -76,7 +74,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - All third-party GitHub actions must use full 40-character commit SHAs with trailing version tags (`@<sha> # vX.Y.Z`).
   - Dependabot updates action SHAs weekly via grouped pull requests over `/` and `/.github/actions/*`.
   - `persist-credentials: false` is required on all checkouts to prevent leaking tokens.
-  - Workflows must declare a top-level `permissions:` that grants no write (`{}` in `release.yml`, `scanner-bundle.yml` and both `neural-*.yml`, `contents: read` in `ci.yml` and `android-emulator.yml`) and grant anything more per job.
+  - Workflows must declare a top-level `permissions:` that grants no write (`{}` in `release.yml` and both `neural-*.yml`, `contents: read` in `ci.yml` and `android-emulator.yml`) and grant anything more per job.
   - **A job granted any write builds nothing** (no toolchain, cache, install, cargo, pnpm or tauri-action); what a build made reaches it as an artifact.
   - **Fence**: `scripts/actions-pinned.test.ts` enforces action SHA pinning, permissions, and the write-builds-nothing rule.
 - **Scripts a workflow runs must exist**: `scripts/workflow-scripts.test.ts` fails if a workflow, composite action, Tauri hook or package script calls a `pnpm <name>` that `package.json` lacks. It reads only `pnpm <name>`, `pnpm run <name>` and the `-w` forms, refuses a `--` on a pnpm line, and refuses any npm, npx, pnpx or corepack line but the deploy tool's `npm ci --ignore-scripts`.
@@ -94,7 +92,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - `relay-deploy`, then `share-deploy`, run `wrangler d1 migrations apply mtg-grimoire-relay --remote` and `wrangler deploy` from their Worker's folder (`infrastructure/relay`, `infrastructure/share-worker`), then a probe of the live address (`scripts/relay-deploy-probe.ts`, `scripts/share-deploy-probe.ts`). `share-deploy` uploads the viewer `share` built. Migrations are numbered files in each Worker's `migrations/`; `schema.sql` is the frozen baseline (`scripts/d1-migrations.test.ts`).
   - `scan-deploy` (the scan inbox, `infrastructure/scan-worker`) needs `release-please` and `share-deploy`: the same token, no database so no migration, `wrangler deploy` from its folder, then `scripts/scan-deploy-probe.ts` — seven requests of `https://scans.mtg-grimoire.app` (a Custom Domain, so the token's *Zone → Workers Routes → Edit* is asked here too), none of which reaches the bucket or holds a token; two are the tell for a `RELAY_HMAC_KEY` nobody has set, which fails the job and leaves the release a draft. It goes ahead of `web-deploy` because the page's policy names its host and its Send waits on its CORS answer. Its bucket (`mtg-grimoire-scans`) is the owner's to have created, and its one secret (`RELAY_HMAC_KEY`, the relay's value) the owner's to have set after a first deploy by hand — `infrastructure/scan-worker/README.md`, *Deploying*.
   - `web-deploy` installs `wrangler` from `infrastructure/wrangler/package-lock.json` (`npm ci --ignore-scripts` in that folder, no secret in that step), runs `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker` (a path, so nothing is resolved; the Worker's `wrangler.jsonc` `alias` stands in for the workspace link to `@grimoire/ui`),
-    then `scripts/web-deploy-probe.ts` against the origin (the document, its policy, and the card scanner's manifest). It needs `attach`, `android-sign`, `web`, `relay-deploy`, `share-deploy` and `scan-deploy` — the last of four deploys, each live at once — and refuses a tag older than the newest published release.
+    then `scripts/web-deploy-probe.ts` against the origin (the document and its policy). It needs `attach`, `android-sign`, `web`, `relay-deploy`, `share-deploy` and `scan-deploy` — the last of four deploys, each live at once — and refuses a tag older than the newest published release.
   - `play-upload` (`android (upload to Play)` on the run page) needs `release-please`, `android-sign` and `web-deploy`: the last thing before `publish`, behind all four deploys, because Play takes a `versionCode` once. No account, or no bundle signed → nothing uploaded, said in the summary, green.
   - `publish` needs `attach`, `android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy` and `play-upload`; any failure leaves the release a draft. `relay-deploy` needs `attach` too, so a missing signing key stops a release before anything deploys. A failure in `play-upload` leaves all four Workers deployed.
 - **Secrets and write tokens live in jobs that build nothing, and secrets in the `release` environment**: `attach`, `android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy` and `play-upload` run no pnpm (no `pnpm/action-setup`, no install), no cargo and no Gradle (the deploy tool is `infrastructure/wrangler`, npm's), restore no cache (each deploy job's and `play-upload`'s Node step says `package-manager-cache: false`; the fence refuses the word `cache` anywhere else in them), and are the only jobs with `environment: release`
@@ -124,20 +122,13 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Host tests (`the_core_wears_the_apps_version`, `the_host_wears_the_cores_version`) and `scripts/release-rule.test.ts` (all five crates, both `tauri.conf.json`s) verify version alignment.
   - With `bump-minor-pre-major` enabled, breaking changes on `0.x` bump the minor version; releasing 1.0.0 requires a `Release-As: 1.0.0` commit footer.
 - **Assets & artifacts**:
-  - Each build leg downloads the scanner hash bundle via `pnpm scanner:assets` (published by `scanner-bundle.yml`).
   - Artifacts built: NSIS installer (`-setup.exe`), MSI (`.msi`), portable archive (`.zip`), `.deb`, `.AppImage`. The Android bundle is a workflow artifact, never a release asset.
   - GitHub rewrites spaces to dots on release asset upload; match assets using the dotted filename convention.
   - Draft releases are created first, with tags applied only upon successful publish (`force-tag-creation: true`).
   - Release pull requests open with `action_required` and must be manually approved before CI jobs run.
 
-## `scanner-bundle.yml` & `android-emulator.yml`
+## `android-emulator.yml`
 
-- **`scanner-bundle.yml`**:
-  - Weekly and manual dispatch workflow building the scanner hash bundle from Scryfall's bulk cards (`default_cards`).
-  - Publishes OCR models and hashes to prerelease `scanner-bundle-v<FORMAT_VERSION>`: `build` (`contents: read`, no token) hands them as the artifact `scanner-bundle` to `publish` (`contents: write`, no checkout, no build), on `main` only.
-  - Fenced by strict fetch failure thresholds (< 0.5% transient errors) and size checks (≥ 99% of previous bundle size).
-  - Evaluates models with `continue-on-error: true` so performance summaries are posted without blocking publishing.
-  - **Refuses to go on unless both OCR models' SHA-256 are the ones the app pins** (`DETECTION_SHA256`, `RECOGNITION_SHA256` in `crates/grimoire-core/src/scanner_assets.rs`, read out of that source by the step): an installed app that fetches its scanner files refuses any other model, so one must never be published. Changing a model means changing those two constants and the two lengths in the same commit.
 - **`android-emulator.yml`**:
   - Non-gating performance diagnostic workflow. Builds and boots the Android APK on an x86_64 emulator under KVM.
   - Times cold launch, measures first-run corpus sync, checks for process crashes (`destroyed mutex`, `Fatal signal`), and captures screenshots.
@@ -157,6 +148,6 @@ Retrains `crates/card-neural`'s two networks on a Modal GPU and delivers them as
 
 For exhaustive live measurements, proof runs, and the historical evolution of every CI gate and release artifact:
 - [`docs/reference/ci-and-releases.md`](../docs/reference/ci-and-releases.md) — Comprehensive record of pipeline measurements, routing test design, and release validations.
-- [`docs/reference/card-scanner.md`](../docs/reference/card-scanner.md) §10 — The scanner bundle workflow, asset publishing, and regression evaluation harness.
+- [`docs/reference/card-scanner.md`](../docs/reference/card-scanner.md) §7 and §10 — The scanner crate's checks and the replay of readers' scans.
 - [`docs/reference/light-app.md`](../docs/reference/light-app.md) §8–§9 — Android build specifics, emulator first-run findings, and WebAssembly web host smoke test runs.
 - [`infrastructure/app-worker/README.md`](../infrastructure/app-worker/README.md) — Web application hosting Worker runbook, CSP headers verification, and deployment records.

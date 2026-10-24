@@ -162,8 +162,7 @@ a request it matches is a 429 once the free plan's day is spent.
   `https://` literal in the code the three crates **ship** (above each file's test modules, by
   the cut `crates/grimoire-core/CLAUDE.md` states; comments out), each of which must be in
   `connect-src` or on a short list of hosts a browser's engine never asks, with a reason apiece —
-  Mana Pool, Patreon's authorize page, the repository's address in the `User-Agent`, the
-  scanner's debug page. A sixth feed in a file the test has never heard of is red. **Not Mana
+  Mana Pool, Patreon's authorize page, the repository's address in the `User-Agent`. A sixth feed in a file the test has never heard of is red. **Not Mana
   Pool** (it sends no `Access-Control-Allow-Origin`, so a page cannot read it whatever a policy
   says).
 - **The scan inbox is in `connect-src` since 2026-10-11, and answers this origin by name as the
@@ -646,27 +645,21 @@ from yet is a header on no request. So:
    installer's folder), and a **`wasm-bindgen` CLI of exactly the version `Cargo.lock` resolves**
    — `cargo install wasm-bindgen-cli --version <that> --locked`. The script checks all three and
    says which is wrong.
-3. **`pnpm scanner:assets --web`, then `pnpm web:build`** — the card scanner's three
-   files into `dist-wasm/scanner-assets/` with their manifest (18 MB from this repository's
-   public release), then the page, into `apps/light/dist-web/`, with the engine under `wasm/<build id>/`,
-   the scanner's module under `wasm/<its own build id>/scanner/`, the three files and
-   `manifest.json` under `scanner-assets/`, and `_headers` at its root. Without the first
-   command the build still builds and says the scanner's files are not in it; with
-   `GRIMOIRE_SCANNER_ASSETS=required` — as CI and the release set it — it fails instead. ⚠️ **`wrangler deploy` uploads whatever is in `apps/light/dist-web/`**: the
+3. **`pnpm web:build`** — the page, into `apps/light/dist-web/`, with the engine under
+   `wasm/<build id>/`, the scanner's module under `wasm/<its own build id>/scanner/`, the
+   Neural scanner's eight files (from `crates/card-neural/models/`, in git) under
+   `scanner-neural/<set>/`, and `_headers` at its root. (Until 2026-10-24 a `pnpm scanner:assets
+   --web` came first, for the hash bundle and OCR models the removed Fast and Exact modes read.) ⚠️ **`wrangler deploy` uploads whatever is in `apps/light/dist-web/`**: the
    last build on this machine, not this commit. Build from the commit being deployed, with a clean
    tree, and check `apps/light/dist-web/_headers` is there — a `apps/light/dist-web/` built before step 5.5 has none,
    and deploys as an app with no policy and no caching rules.
 4. **`pnpm web:smoke`** and **`pnpm web:scanner-smoke`** (a file for a camera, one real
-   card, from the offer's Download to the collection and then offline), then
+   card, to the collection and then offline), then
    **`pnpm web:preview`** and a look in a real browser. Against a deployed or `wrangler dev`
-   host, the scanner's addresses to probe are: `/scanner-assets/manifest.json` and the three
-   files (`200`, `Cache-Control: no-cache`, the manifest `application/json`),
-   `/wasm/<id>/scanner/grimoire_scan_bg.wasm` (`application/wasm`, a year and immutable) and
-   `/assets/scanWorker-<hash>.js` (`no-cache`, carrying the policy — a Worker runs under its
-   own script's). After a deploy, `scripts/web-deploy-probe.ts` asks the first of these itself: the
-   manifest the address serves must be the bundle's, byte for byte, and for the bundle format
-   this tree's scanner reads — a web app deployed without its scanner's files is red there. The
-   preview applies the policy by this repository's own reading of `_headers`. **And
+   host, the scanner's addresses to probe are: `/scanner-neural/<set>/` and its eight files (a
+   year and immutable), `/wasm/<id>/scanner/grimoire_scan_bg.wasm` (`application/wasm`, a year
+   and immutable) and `/assets/scanWorker-<hash>.js` (`no-cache`, carrying the policy — a Worker
+   runs under its own script's). The preview applies the policy by this repository's own reading of `_headers`. **And
    `pnpm web:sync-smoke`** when the engine's sync, the relay or `connect-src` changed: two
    headless Chrome profiles — the desktop face and the phone face — claim, pair and sync
    through `infrastructure/relay/`'s own code under workerd, by the relay's real name and under this policy,

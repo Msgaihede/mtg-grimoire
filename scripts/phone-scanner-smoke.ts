@@ -15,8 +15,9 @@
 //   1. the page opens the camera once its prefs have loaded, and shapes the picture's box by the
 //      stream — inside the screen, with the status line and the tray's heading still on it;
 //   2. the page opens stopped (issue #1317) — no frame goes out until *Start scanning* is pressed;
-//      then frames go out in the stored mode and **never ask for previews**, and each card the
-//      script decides lands in the tray once — the second copy of a card counts onto its row;
+//      then frames go out as the JPEG alone, **with no options and no detail picture**, and each
+//      card the script decides lands in the tray once — the second copy of a card counts onto
+//      its row;
 //   3. *Stop scanning* stops the frames and keeps the picture;
 //   4. a quantity steps, a folder is chosen from the sheet and stored;
 //   5. nothing scrolls sideways, every control is at least 44px under the coarse pointer, and the
@@ -24,15 +25,12 @@
 //   6. *Add* is one `scanner_tray_commit` for the chosen folder, the tray empties and the receipt
 //      says what was filed;
 //   7. leaving the page stops the camera's track, and so does hiding it past the grace;
-//   8. with the scanner's data absent the page offers it in the slot kept for it — one sentence
-//      with its size and a Download button — and adds nothing; a press draws the bar, and when
-//      the data has landed the offer clears with no reload and the running camera names cards;
-//   9. in Exact the card the script cannot pin waits in the tray as a question, and a press on a
-//      candidate answers it;
-//  10. on its side at 800×360 the camera's column and the tray's stand side by side, with nothing
+//   8. the card the script cannot pin to one printing waits in the tray as a question, and a
+//      press on a candidate answers it;
+//   9. on its side at 800×360 the camera's column and the tray's stand side by side, with nothing
 //      off the screen, no control under 44px and Add under a thumb;
-//  11. with the camera refused the page lands on its sentence;
-//  12. *Send scan…* is a supporter's, and sends a run of frames and never one picture: on a
+//  10. with the camera refused the page lands on its sentence;
+//  11. *Send scan…* is a supporter's, and sends a run of frames and never one picture: on a
 //      device with no membership behind it the press is not drawn over a running scanner and
 //      nothing on the page names one; on a supporter's (`?fault=patreonGroupEntitled`), stopped,
 //      the press is not drawn;
@@ -47,8 +45,7 @@
 //      the press.
 //
 // **What it cannot prove is everything the fake stands in for**: recognition (the script names its
-// own cards whatever the lens shows), a phone's real frame rate, the detail frame (the script never
-// asks for one), and the camera *grant* — Chromium's flags answer the prompt, where on Android it
+// own cards whatever the lens shows), a phone's real frame rate, and the camera *grant* — Chromium's flags answer the prompt, where on Android it
 // is the system's and in an installed web app the browser's. Those are a real phone's to show.
 //
 // No dependencies, like `pairing-scan-smoke.ts`, whose browser launcher this is: Node has a
@@ -304,7 +301,7 @@ const WATCH = `(async () => {
   window.seen = { frames: [], commits: [], prefs: [] };
   core.registerCommands({
     scanner_frame: (bytes, options) => {
-      window.seen.frames.push(JSON.parse(options.headers['x-scanner-options']));
+      window.seen.frames.push(Object.keys(options?.headers ?? {}));
       return own.scanner_frame(bytes, options);
     },
     scanner_tray_commit: (args) => { window.seen.commits.push(args); return own.scanner_tray_commit(args); },
@@ -392,6 +389,26 @@ async function phone(send: Send, width: number, height: number) {
   if (unstarted.frames !== 0) fail(`${at}: ${unstarted.frames} frames went out before Start`);
   if (!/Scanning stopped/.test(unstarted.note))
     fail(`${at}: a scanner not yet started says "${unstarted.note}"`);
+  // Nonfoil by hand, as the page's own suite does: Urza's Saga is printed nonfoil and foil, so
+  // Detect would land each copy as an Unknown row of its own — and the second copy is counted.
+  await page.evaluate(`smoke.press(smoke.button('Scanner options'), 'Options')`);
+  await page.until(
+    `smoke.sheet() !== null && smoke.controls(smoke.sheet()).some((b) => /^Finish/.test(b.textContent))`,
+    "the options sheet",
+  );
+  await page.evaluate(
+    `smoke.press(smoke.controls(smoke.sheet()).find((b) => /^Finish/.test(b.textContent)), 'Finish')`,
+  );
+  await page.until(
+    `smoke.controls(smoke.sheet()).some((b) => /^Nonfoil/.test(b.textContent))`,
+    "the finish page",
+  );
+  await page.evaluate(
+    `smoke.press(smoke.controls(smoke.sheet()).find((b) => /^Nonfoil/.test(b.textContent)), 'Nonfoil')`,
+  );
+  await page.until(`window.seen.prefs.at(-1)?.finish === 'nonfoil'`, "the finish to be stored");
+  await page.evaluate(`smoke.press(smoke.button('Close scanner options'), 'close')`);
+  await page.until(`smoke.sheet() === null`, "the sheet to close");
   await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
   await page.until(`smoke.rows().length >= 1`, "the first card to land");
   const first = await page.evaluate<{ status: string; row: string }>(
@@ -419,7 +436,7 @@ async function phone(send: Send, width: number, height: number) {
   const stopped = await page.evaluate<number>(`window.seen.frames.length`);
   await sleep(900);
   const later = await page.evaluate<{
-    frames: { previews: boolean; mode: string }[];
+    frames: string[][];
     live: string;
     rows: number;
     note: string;
@@ -429,11 +446,12 @@ async function phone(send: Send, width: number, height: number) {
     fail(`${at}: ${later.frames.length - stopped} frames went out after Stop`);
   if (later.live !== "live") fail(`${at}: Stop closed the camera (${later.live})`);
   if (!/Scanning stopped/.test(later.note)) fail(`${at}: a stopped scanner says "${later.note}"`);
-  if (later.frames.some((f) => f.previews !== false || f.mode !== "fast")) {
-    fail(`${at}: a frame went out with previews, or not in Fast`);
-  }
+  // A frame is the JPEG and nothing else: the options and the detail picture left with the Fast
+  // and Exact scanner. The developer capture's sidecar is the one header a frame may carry.
+  const headed = later.frames.flat().filter((name) => name.toLowerCase() !== "x-scanner-capture");
+  if (headed.length > 0) fail(`${at}: a frame went out with ${[...new Set(headed)].join(", ")}`);
   say(
-    `${at}: ${later.frames.length} frames, every one Fast and without previews; 3 cards → 2 rows; Stop holds the picture`,
+    `${at}: ${later.frames.length} frames, every one the JPEG alone; 3 cards → 2 rows; Stop holds the picture`,
   );
 
   // ------------------------------------------------ 4. a quantity, a folder ---------------
@@ -533,7 +551,7 @@ async function phone(send: Send, width: number, height: number) {
   // ------------------------------------------------ the options sheet ---------------------
   await page.evaluate(`smoke.press(smoke.button('Scanner options'), 'Options')`);
   await page.until(
-    `smoke.sheet() !== null && /Scan mode/.test(smoke.sheet().textContent)`,
+    `smoke.sheet() !== null && smoke.controls(smoke.sheet()).some((b) => /^Filters/.test(b.textContent))`,
     "the options sheet",
   );
   await sleep(350);
@@ -584,68 +602,13 @@ async function phone(send: Send, width: number, height: number) {
     `${at}: hidden — the camera closes after the grace and reopens on return; leaving the page stops its track`,
   );
 
-  // ------------------------------------------------ 8. no scanner data -------------------
-  await page.go("/scanner?fault=scannerMissing");
-  const SLOT = `document.querySelector('[data-scanner-data-slot]')`;
-  const slot = await page.until<string>(`${SLOT}?.textContent`, "the slot's offer");
-  if (!/The scanner needs its card data — about 19 MB\./.test(slot))
-    fail(`${at}: with no data the slot says "${slot}"`);
-  // The offer, and never the instruction it replaced: a file at a path nobody here can reach.
-  if (/No reference bundle|No OCR models|Restart the app/.test(slot))
-    fail(`${at}: the slot still tells a phone to place a file — "${slot}"`);
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
-  await page.until(
-    `/Can't identify/.test(smoke.status())`,
-    "the status line to say it cannot identify",
-  );
-  await sleep(2500);
-  const missing = await page.evaluate<Measurement & { rows: number; download: boolean }>(
-    `({ ...smoke.measure(), rows: smoke.rows().length, download: !!smoke.button('Download') })`,
-  );
-  if (missing.rows !== 0) fail(`${at}: ${missing.rows} cards landed with no bundle`);
-  if (!missing.download) fail(`${at}: the offer has no Download to press`);
-  // `hold` is where the button is measured: with every other control, 44px under the pointer.
-  hold(`${at}, no scanner data`, missing);
-  await page.shot("assets-missing");
-  // The press: the bar stands where the button was, and when the data has landed the offer is
-  // gone — no restart, no reload — the line stops saying it cannot identify, and the camera that
-  // was running all along starts naming cards.
-  // The fake's download is half a second, so the bar is watched for from inside the page rather
-  // than caught between two looks at it from here.
-  await page.evaluate(`(() => {
-    window.sawBar = false;
-    new MutationObserver(() => {
-      if (${SLOT}?.querySelector('[role="progressbar"]') && !smoke.button('Download')) window.sawBar = true;
-    }).observe(document.body, { childList: true, subtree: true });
-    smoke.press(smoke.button('Download'), 'Download');
-  })()`);
-  await page.until(`window.sawBar === true`, "the bar where the button was");
-  await page.until(`${SLOT} === null`, "the offer to clear once the data has landed");
-  await page.until(
-    `!/Can't identify/.test(smoke.status())`,
-    "the status line to stop saying it cannot identify",
-  );
-  await page.until(
-    `smoke.rows().length >= 1`,
-    "a card to land once the scanner has its data",
-    30_000,
-  );
-  say(
-    `${at}: no scanner data — the offer with its size, a press, the bar, and a scanner that names cards with no reload`,
-  );
-
-  // ------------------------------------------------ 9. Exact ------------------------------
+  // ------------------------------------------------ 8. a card with a question ------------
   await page.go("/scanner");
   await page.until(`${TRACK}?.readyState === 'live'`, "the camera again");
   await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
-  await page.evaluate(`smoke.press(smoke.button('Exact'), 'Exact')`);
-  await page.until(
-    `smoke.button('Exact').getAttribute('aria-pressed') === 'true'`,
-    "Exact to take",
-  );
   await page.until(
     `smoke.rows().some((row) => /Pick a printing/.test(row.textContent))`,
-    "the card Exact cannot pin",
+    "the card the scanner cannot pin to one printing",
     30_000,
   );
   await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
@@ -688,10 +651,10 @@ async function phone(send: Send, width: number, height: number) {
     "the printing handed back",
   );
   say(
-    `${at}: Exact — ${asking.rows} rows, the fifth card waits with three candidates; a press settles it, and the printings sheet hands another back`,
+    `${at}: ${asking.rows} rows, the fifth card waits with three candidates; a press settles it, and the printings sheet hands another back`,
   );
 
-  // ------------------------------------------------ 12. Send scan -------------------------
+  // ------------------------------------------------ 11. Send scan -------------------------
   // A scan is a run of the frames the scanner was given, never one picture. So: stopped, there
   // is no press at all; started, a press before the scanner has answered enough frames opens
   // nothing and says why; and once it has, the dialog holds exactly those frames — every one of
@@ -730,13 +693,6 @@ async function phone(send: Send, width: number, height: number) {
   // The rest is a supporter's device: the same page, in the world where the relay knows it.
   await page.go("/scanner?fault=patreonGroupEntitled");
   await page.until(`${TRACK}?.readyState === 'live'`, "a supporter's camera");
-  // Exact, as the page above was left: the mode a label names has to be the one in force, and
-  // a page still on its default would prove nothing about that.
-  await page.evaluate(`smoke.press(smoke.button('Exact'), 'Exact')`);
-  await page.until(
-    `smoke.button('Exact').getAttribute('aria-pressed') === 'true'`,
-    "Exact to take on a supporter's page",
-  );
   await page.until(
     `smoke.button('Start scanning') !== undefined`,
     "a supporter's scanner to open stopped",
@@ -1003,7 +959,6 @@ async function phone(send: Send, width: number, height: number) {
       cardId: string;
       finish: string;
       reported: string | null;
-      mode: string;
       filters?: Record<string, unknown>;
     };
     /** The run as it was sent, each picture cut to its first four characters. */
@@ -1071,8 +1026,6 @@ async function phone(send: Send, width: number, height: number) {
     scan.frames.some(
       (frame) =>
         typeof frame.ok !== "boolean" ||
-        typeof frame.detail !== "boolean" ||
-        !("lock" in frame) ||
         !("confidence" in frame) ||
         !("distance" in frame) ||
         !("decided" in frame),
@@ -1084,10 +1037,7 @@ async function phone(send: Send, width: number, height: number) {
   }
   if (scan.said.finish !== "foil" || !/^[0-9a-f-]{36}$/.test(scan.said.cardId))
     fail(`${at}: sent ${JSON.stringify(scan.said)}`);
-  if (
-    scan.said.mode !== "exact" ||
-    !(scan.said.reported === null || /^[0-9a-f-]{36}$/.test(scan.said.reported))
-  )
+  if (!(scan.said.reported === null || /^[0-9a-f-]{36}$/.test(scan.said.reported)))
     fail(`${at}: the scanner's side went out as ${JSON.stringify(scan.said)}`);
   const filters = scan.said.filters;
   if (
@@ -1176,10 +1126,10 @@ async function run() {
   const first = await launch(CAMERA);
   for (const [width, height] of PHONES) await phone(first, width, height);
 
-  // ------------------------------------------------ 10. a phone on its side --------------
+  // ------------------------------------------------ 9. a phone on its side ---------------
   await sideways(first, ...SIDEWAYS);
 
-  // ------------------------------------------------ 11. the camera refused ---------------
+  // ------------------------------------------------ 10. the camera refused ---------------
   const second = await launch(["--deny-permission-prompts"]);
   const refused = await openPage(second, 360, 800, "/scanner");
   const sentence = await refused.until<string>(

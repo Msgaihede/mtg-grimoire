@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Camera, Check, Crosshair, Gauge, ListFilter, ScanLine, Sparkles } from "lucide-react";
+import { Camera, Check, Crosshair, Gauge, ListFilter, Sparkles } from "lucide-react";
 import {
   CAMERA_CHOICE_NOTE,
   CONTINUOUS_HINT,
@@ -7,7 +7,6 @@ import {
   NO_FILTERS,
   POINT_AND_SHOOT,
   POINT_AND_SHOOT_HOLD_HINT,
-  SCAN_MODES,
   SKIP_PROMOS,
   SKIP_PROMOS_NOTE,
 } from "@grimoire/ui/features/scanner/reader/readerText";
@@ -17,13 +16,13 @@ import { SetCombobox } from "@grimoire/ui/features/search/SetCombobox";
 import { CONDITION_LABEL, CONDITIONS, type Condition } from "@grimoire/ui/lib/conditions";
 import { FINISHES } from "@grimoire/ui/lib/finish";
 import { FOCUS } from "@grimoire/ui/lib/focus";
-import type { ScanFilters, ScanMode, ScannerFinishPref } from "@grimoire/ui/lib/ipc";
+import type { ScanFilters, ScannerFinishPref } from "@grimoire/ui/lib/ipc";
 import { PRESS, PRESS_STILL } from "@grimoire/ui/lib/motion";
 import { sortOptions } from "@grimoire/ui/lib/options";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ActionSheet, SheetBack, SheetChoice, SheetRow } from "../deck/sheet";
 
-type Page = "main" | "mode" | "trigger" | "filters" | "finish" | "condition" | "camera";
+type Page = "main" | "trigger" | "filters" | "finish" | "condition" | "camera";
 
 /** The two ways to run the scanner, as the Scanning page lists them — the bar's press for each. */
 const TRIGGERS = [
@@ -38,7 +37,7 @@ const FINISH_PREFS: readonly ScannerFinishPref[] = [DETECT, ...FINISHES];
 /** What each default finish does, said under its name — the desktop popover's two captions. */
 const finishNote = (pref: ScannerFinishPref): string =>
   pref === DETECT
-    ? "The scanner reads each card's finish. A card it can't tell waits in the tray for you to pick."
+    ? "A card printed in one finish takes it. One printed in several waits in the tray for you to pick."
     : "Each new card starts in this finish.";
 
 /** A date field a thumb can hit and a phone does not zoom on: 44px tall, 16px type. */
@@ -57,8 +56,6 @@ const DATE_FIELD = cn(
  * anchored. Every choice is written as it is pressed, as on the desktop — the camera is running
  * behind the sheet, and the next card should be read under what the sheet says.
  *
- * - **Scan mode** — the bar's switch again, with each mode's sentence under its name. On the
- *   desktop that sentence is a tooltip; here it has to be on the page to be read at all.
  * - **Scanning** — *Start and stop*, or *Point & shoot*: the bar's press becomes *Scan*, read
  *   while held (`usePointAndShoot`). The desktop's switch on its bar, as a page of two choices.
  * - **Filters** — the set picker, the promo switch and the release window, sent as they are changed. A refusal from
@@ -69,16 +66,13 @@ const DATE_FIELD = cn(
  * - **Camera** — drawn only where there is a choice to make: a device with one camera, or none,
  *   has no row. The tick follows the camera that is open, not the one last pressed.
  *
- * **No Developer switch.** The developer panels are the desktop's; the phone never asks the engine
- * for their previews, whatever the stored switch says — the pref is shared with the desktop face of
- * the same install, so it is left alone rather than written.
+ * **No Developer switch.** The developer panels are the desktop's — the pref is shared with the
+ * desktop face of the same install, so it is left alone rather than written.
  */
 export function OptionsSheet({
   open,
   onClose,
   onDismiss,
-  mode,
-  onMode,
   pointAndShoot,
   onPointAndShoot,
   filters,
@@ -98,8 +92,6 @@ export function OptionsSheet({
   onClose: () => void;
   /** Escape and the ✕: closed, and the caret handed back to the press that opened it. */
   onDismiss: () => void;
-  mode: ScanMode;
-  onMode: (mode: ScanMode) => void;
   /** The stored point-and-shoot pref. */
   pointAndShoot: boolean;
   onPointAndShoot: (on: boolean) => void;
@@ -129,7 +121,6 @@ export function OptionsSheet({
     setPage("main");
     onDismiss();
   };
-  const modeLabel = SCAN_MODES.find((m) => m.id === mode)?.label ?? "";
   const cameraName = cameras.find((c) => c.deviceId === cameraId)?.label ?? "Default";
 
   return (
@@ -142,13 +133,6 @@ export function OptionsSheet({
     >
       {page === "main" && (
         <ul>
-          <SheetRow
-            label="Scan mode"
-            value={modeLabel}
-            Icon={ScanLine}
-            opens
-            onPress={() => setPage("mode")}
-          />
           <SheetRow
             label="Scanning"
             value={pointAndShoot ? POINT_AND_SHOOT : "Start and stop"}
@@ -188,26 +172,6 @@ export function OptionsSheet({
             />
           )}
         </ul>
-      )}
-
-      {page === "mode" && (
-        <>
-          <SheetBack label="Scan mode" onBack={back} />
-          <ul aria-label="Scan modes">
-            {SCAN_MODES.map(({ id, label, hint }) => (
-              <SheetChoice
-                key={id}
-                label={label}
-                note={hint}
-                current={id === mode}
-                onPick={() => {
-                  onMode(id);
-                  back();
-                }}
-              />
-            ))}
-          </ul>
-        </>
       )}
 
       {page === "trigger" && (
