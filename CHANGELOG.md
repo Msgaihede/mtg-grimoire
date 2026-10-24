@@ -30,6 +30,22 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.61.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.60.0...v0.61.0) (2026-10-24)
+
+
+### Features
+
+* add a volume slider to the playtest board's sound controls ([ae73eb1](https://github.com/Msgaihede/mtg-grimoire/commit/ae73eb18317630f2bcc52544604187672f963f09))
+* add a volume slider to the playtest board's sound controls ([355bc81](https://github.com/Msgaihede/mtg-grimoire/commit/355bc818054f13a47c564c55ead1720a356f7ccd)), closes [#1390](https://github.com/Msgaihede/mtg-grimoire/issues/1390)
+* **scanner:** measure the finish mark on full-resolution frames, and an aimed-only ranking ([#1394](https://github.com/Msgaihede/mtg-grimoire/issues/1394)) ([0046d7a](https://github.com/Msgaihede/mtg-grimoire/commit/0046d7a17534228c57523b9f44bb268eeff8ef91))
+* **scanner:** redesign the scanner page on desktop and phone ([#1401](https://github.com/Msgaihede/mtg-grimoire/issues/1401)) ([c15b253](https://github.com/Msgaihede/mtg-grimoire/commit/c15b253915ce710a93b154668b45c87e30fb0abd))
+
+
+### Bug Fixes
+
+* **playtesting:** draw the page bar on the setup page, with no extra top padding ([eead89a](https://github.com/Msgaihede/mtg-grimoire/commit/eead89a46ab28de475e5d8b5cf30a23cde38ec5a))
+* **playtesting:** draw the page bar on the setup page, with no extra top padding ([093f8e5](https://github.com/Msgaihede/mtg-grimoire/commit/093f8e526f5f0adbc3172793fa880831630b430b))
+
 ## [0.60.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.59.0...v0.60.0) (2026-10-24)
 
 
