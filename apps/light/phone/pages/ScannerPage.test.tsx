@@ -1313,13 +1313,15 @@ describe("the phone's Scanner page", () => {
     // The peek is undrawn on its side; the bar heads the right column.
     expect(document.querySelector("[data-tray-peek-slot]")).toHaveClass("landscape:hidden");
     expect(trayBar()).toHaveClass("landscape:col-start-2", "landscape:row-start-1");
-    // Two columns, the list's 22rem giving way to 14.5rem before the scanner's goes under the
-    // 22rem its controls need whole.
+    // Two columns, the list's 22rem giving way to 18.5rem before the scanner's goes under the
+    // 20.5rem its controls need whole on one line.
     const page = trayBar().parentElement as HTMLElement;
     expect(page).toHaveClass(
       "landscape:grid",
-      "landscape:grid-cols-[minmax(0,1fr)_clamp(14.5rem,100%_-_22rem,22rem)]",
+      "landscape:grid-cols-[minmax(0,1fr)_clamp(18.5rem,100%_-_20.5rem,22rem)]",
     );
+    // *Add card…* is the tray actions' first row on its side: the header's one line has no room.
+    expect(within(column).queryByRole("button", { name: "Add card…" })).toBeNull();
 
     await start();
     await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);

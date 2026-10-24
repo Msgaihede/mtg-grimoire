@@ -32,12 +32,10 @@ function mount(
     header,
     walk,
     inDialog = false,
-    onAddCard,
     onActions,
   }: {
     flashKey?: string | null;
-    /** `Tray`'s own: *Add card…* and the header's `⋯`, drawn only when handed. */
-    onAddCard?: (opener: HTMLElement) => void;
+    /** `Tray`'s own: the header's `⋯`, drawn only when handed. */
     onActions?: (opener: HTMLElement) => void;
     /** `Tray`'s own prop: `false` is the tray sheet's headless list. */
     header?: boolean;
@@ -73,7 +71,6 @@ function mount(
         header={header}
         rows={rows}
         flashKey={flashKey}
-        onAddCard={onAddCard}
         onActions={onActions}
         onRows={(change) => {
           held.latest = change(held.latest);
@@ -138,25 +135,29 @@ describe("the phone's review tray", () => {
     ).toBeInTheDocument();
   });
 
-  it("draws Add card… and the ⋯ only where the host hands them in, each handing its press over", async () => {
-    const onAddCard = vi.fn();
+  /**
+   * **One 44px line**, as the design draws it in a 22rem column: the title, the walk and the `⋯`,
+   * and no *Add card…* — a fourth press would wrap the line, taking the room from the list (the
+   * page puts it in the tray's actions instead).
+   */
+  it("draws the ⋯ only where the host hands it in, on one line with no Add card…", async () => {
     const onActions = vi.fn();
-    mount([SAGA], { onAddCard, onActions });
+    mount([NEEDS_A_FINISH_ROW, SAGA], { onActions });
     const actions = screen.getByRole("button", { name: "Tray actions" });
     expect(actions).toHaveAttribute("aria-haspopup", "dialog");
     await userEvent.click(actions);
     expect(onActions).toHaveBeenCalledWith(actions);
-    const add = screen.getByRole("button", { name: "Add card…" });
-    await userEvent.click(add);
-    expect(onAddCard).toHaveBeenCalledWith(add);
-    // Sticks over the rows scrolling under it, at the table header's rung.
-    expect(screen.getByRole("heading").closest("header")).toHaveClass("sticky", "top-0", "z-20");
+    expect(screen.queryByRole("button", { name: "Add card…" })).toBeNull();
+    const header = screen.getByRole("heading").closest("header") as HTMLElement;
+    // Sticks over the rows scrolling under it, at the table header's rung — and never wraps.
+    expect(header).toHaveClass("sticky", "top-0", "z-20", "h-11");
+    expect(header).not.toHaveClass("flex-wrap");
+    expect(within(header).getByRole("button", { name: /^1 needs you/ })).toBeInTheDocument();
   });
 
-  it("draws neither Add card… nor the ⋯ for a host that handed in neither", () => {
+  it("draws no ⋯ for a host that handed in none", () => {
     mount([SAGA]);
     expect(screen.queryByRole("button", { name: "Tray actions" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Add card…" })).toBeNull();
   });
 
   it("steps a quantity on the tray as it is, not as it was drawn", async () => {

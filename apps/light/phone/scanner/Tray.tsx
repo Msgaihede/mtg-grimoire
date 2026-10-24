@@ -23,7 +23,6 @@ import {
   trayFinishChoices,
   UNKNOWN_FINISH,
 } from "@grimoire/ui/features/scanner/reader/trayFinish";
-import { ADD_CARD_LABEL } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { useHeadLanded } from "@grimoire/ui/features/scanner/reader/useHeadLanded";
 import { useTrayPrices } from "@grimoire/ui/features/scanner/reader/useTrayPrices";
 import { plural } from "@grimoire/ui/lib/counts";
@@ -62,9 +61,9 @@ function choiceLabel(choice: ScannerTrayChoice): string {
 }
 
 /**
- * A 44px press in a tray header — *Add card…* and the `⋯` — the tray's own and the tray sheet's
- * (`TraySheet`), which draws a header of its own over a headless tray. Each adds its width and its
- * type.
+ * A 44px press in a tray header — the `⋯` in the tray's own, *Add card…* and the `⋯` in the tray
+ * sheet's (`TraySheet`), which draws a header of its own over a headless tray. Each adds its width
+ * and its type.
  */
 export const HEADER_PRESS = cn(
   "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border",
@@ -172,11 +171,13 @@ function revealTrayTop(section: HTMLElement) {
  * its side, or the tray sheet's list (`TraySheet`). A card that lands brings its heading back when
  * the reader has scrolled past it ({@link revealTrayTop}).
  *
- * **Its own header** (the scanner redesign, 2026-10-24) is the desktop tray's in the phone's sizes:
- * the title and the copy count, a gold **_N need you_** while any card waits on a printing or a
- * finish — the press that walks to the next one — then *Add card…* and, where the host hands one
- * in, the `⋯` that opens the tray's actions. It **sticks to the top of the scroller** the tray is
- * in, so a reader forty rows down still has the walk and the `⋯`.
+ * **Its own header** (the scanner redesign, 2026-10-24) is **one 44px line**, as the design draws
+ * it in a 22rem column: the title and the copy count, a gold **_N need you_** while any card waits
+ * on a printing or a finish — the press that walks to the next one — and, where the host hands one
+ * in, the `⋯` that opens the tray's actions. *Add card…* is not on it: a fourth press does not fit
+ * the line beside the walk, so the page puts it in those actions (`TrayActionsSheet`'s first row).
+ * It **sticks to the top of the scroller** the tray is in, so a reader forty rows down still has
+ * the walk and the `⋯`.
  *
  * **The tray sheet draws its own header** — the title and count, the worth, *Add card…* and the
  * `⋯`, with the walk under the tray's bar — so it mounts this with `header={false}` and walks the
@@ -189,7 +190,6 @@ export function Tray({
   flashKey,
   title = "Scanned cards",
   marketplace,
-  onAddCard,
   onActions,
   header = true,
   ref,
@@ -205,9 +205,6 @@ export function Tray({
   /** Whose prices the rows are quoted at — a destination's, where it has one. Absent is the
    *  reader's own marketplace. */
   marketplace?: MarketplaceId;
-  /** *Add card…* was pressed (issue #978): the page opens the search and pauses the scanner under
-   *  it. Handed the press, for the caret to come back to. Absent draws no button. */
-  onAddCard?: (opener: HTMLElement) => void;
   /** The header's `⋯` was pressed: the page opens the tray's actions (`TrayActionsSheet`). Handed
    *  the press, for the caret to come back to. Absent draws no `⋯`. */
   onActions?: (opener: HTMLElement) => void;
@@ -322,7 +319,10 @@ export function Tray({
         // through, at the table header's rung.
         <header
           className={cn(
-            "sticky top-0 flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1 bg-bg py-1.5",
+            // `-mr-3`: the `⋯` runs into the column's right padding, as the design draws it — its
+            // glyph is centred in 44px, so it still stands clear of the edge, and the title keeps
+            // the 12px a two-figure count and a two-figure walk take on a 22rem column.
+            "sticky top-0 -mr-3 flex h-11 items-center gap-2 bg-bg",
             LAYER.header,
           )}
         >
@@ -330,7 +330,7 @@ export function Tray({
               apart, which the name algorithm fuses into `Scanned cards3`. */}
           <h2
             aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
-            className="flex min-w-0 items-baseline gap-2 font-heading text-lg leading-none"
+            className="flex min-w-0 items-baseline gap-1.5 font-heading text-base leading-none landscape:max-[760px]:text-sm"
           >
             <span id={titleId} className="truncate">
               {title}
@@ -340,50 +340,43 @@ export function Tray({
             </span>
           </h2>
           {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing is
-              one a reader keeps trying. Gold, because it walks the questions gold already marks;
-              named both halves — how many, and what the press does. */}
+              one a reader keeps trying. Gold words with no box, because it walks the questions
+              gold already marks and a box would not fit the line; named both halves — how many,
+              and what the press does. */}
           {waiting > 0 && (
             <button
               type="button"
               aria-label={`${needYouLabel(waiting)}: ${NEXT_DECISION_LABEL}`}
               onClick={nextDecision}
               className={cn(
-                "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
-                "text-xs font-medium text-accent",
+                "ml-auto inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md px-2",
+                "text-[13px] font-medium whitespace-nowrap text-accent",
                 PRESS,
                 FOCUS,
               )}
             >
-              <ArrowDown aria-hidden className="size-3.5" />
+              {/* Dropped on a phone on its side under 760px, where the column is under 22rem:
+                  the words say it, and the title keeps the room. */}
+              <ArrowDown aria-hidden className="size-3.5 landscape:max-[760px]:hidden" />
               {needYouLabel(waiting)}
             </button>
           )}
-          {/* Wrapped onto a line of their own when the walk takes the room: a 22rem column holds
-              the title, the walk and the `⋯`, and not *Add card…* as well. */}
-          <div className="ml-auto flex items-center gap-2">
-            {onAddCard && (
-              <button
-                type="button"
-                aria-haspopup="dialog"
-                onClick={(e) => onAddCard(e.currentTarget)}
-                className={cn(HEADER_PRESS, "px-3 text-xs text-text")}
-              >
-                <Plus aria-hidden className="size-3.5" />
-                {ADD_CARD_LABEL}
-              </button>
-            )}
-            {onActions && (
-              <button
-                type="button"
-                aria-label="Tray actions"
-                aria-haspopup="dialog"
-                onClick={(e) => onActions(e.currentTarget)}
-                className={cn(HEADER_PRESS, "w-11 text-dim")}
-              >
-                <Ellipsis aria-hidden className="size-5" />
-              </button>
-            )}
-          </div>
+          {onActions && (
+            <button
+              type="button"
+              aria-label="Tray actions"
+              aria-haspopup="dialog"
+              onClick={(e) => onActions(e.currentTarget)}
+              className={cn(
+                "inline-flex size-11 shrink-0 items-center justify-center rounded-md text-dim",
+                waiting === 0 && "ml-auto",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              <Ellipsis aria-hidden className="size-5" />
+            </button>
+          )}
         </header>
       )}
 
@@ -611,7 +604,9 @@ function TrayRow({
           )}
         </div>
       ) : (
-        <div key="settled" className="relative flex items-center gap-2">
+        // `gap-1.5`: a 22rem column on a phone on its side holds the printing, the finish and
+        // the stepper on one line with a printing's set and number whole.
+        <div key="settled" className="relative flex items-center gap-1.5">
           {row.oracleId !== null ? (
             <button
               type="button"

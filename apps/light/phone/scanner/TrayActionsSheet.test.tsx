@@ -174,6 +174,23 @@ describe("the tray's actions", () => {
     await gone();
   });
 
+  it("offers Add card… first only where the page hands it in, closing itself first", async () => {
+    const onAddCard = vi.fn();
+    mount({ onAddCard });
+    const { sheet } = await openSheet();
+    const rows = within(sheet).getAllByRole("button").filter((b) => b.closest("li"));
+    expect(rows[0]).toHaveAccessibleName(/^Add card…/);
+    await userEvent.click(rows[0]);
+    expect(onAddCard).toHaveBeenCalledTimes(1);
+    await gone();
+  });
+
+  it("draws no Add card… where the page hands it none — upright, the tray sheet has its own", async () => {
+    mount();
+    const { sheet } = await openSheet();
+    expect(within(sheet).queryByRole("button", { name: /Add card/ })).toBeNull();
+  });
+
   it("draws neither Archive nor the history where the page hands it neither", async () => {
     mount({ onArchive: undefined, onHistory: undefined });
     const { sheet } = await openSheet();

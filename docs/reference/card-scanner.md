@@ -1363,12 +1363,14 @@ The arrangement, because each of the desktop's is built for a pointer and a wide
 | A host with no session draws its sentence where the picture would be | The same, in `CameraBox`; the status line is not drawn and the Filters row is refused with the sentence | No camera is asked for and no frame sent; the tray still reads, edits and files |
 
 **On its side** (the `landscape:` variant, at any width) the camera's column and the tray's stand side by
-side, and only the tray's column scrolls (the list under its own header). The tray is 22rem and gives
-way first, down to 14.5rem, so the camera's column keeps the 22rem *Continuous | Point & shoot* needs
-whole beside the two 44px glyphs (*Point & shoot* is 87px in its pressed weight, Geist at 14px,
-measured 2026-10-24): whole from a 667 × 375 phone beside the 80px rail up; beside the rail on a
-narrower page the two glyphs wrap under the pair. The list's column is mounted only on its side —
-upright the list is the tray sheet's. This replaced a 720px-wide rule
+side, and only the tray's column scrolls (the list under its own header, one 44px line: the count,
+*N need you* and the `⋯`, whose sheet holds *Add card…* on its side). **No row on the page wraps**,
+a second line being taken from the picture. The tray is 22rem and gives way first, down to 18.5rem
+(a card's printing, finish and stepper at their narrowest), so the camera's column keeps the 20.5rem
+*Continuous | Point & shoot* needs whole beside the two 44px glyphs, its words a step smaller on its
+side (*Point & shoot* 81px at 13px): both whole from a 740 × 360 phone beside the 80px rail up;
+narrower, the words are cut short on their one line (measured 2026-10-24 at 568–932px wide). The
+list's column is mounted only on its side — upright the list is the tray sheet's. This replaced a 720px-wide rule
 (2026-10-24): the phone's shape decides, not its width. It asks the viewport, not a container, because
 the page's sheets are mounted inside it. Measured at 600px, the rail's breakpoint, the old rule's tray
 was a 288px column beside a camera 200×113.

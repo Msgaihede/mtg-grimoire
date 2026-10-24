@@ -148,9 +148,10 @@ function useLandscape(): boolean {
  *
  * **On its side** (the `landscape:` variant, at any phone width) the same elements are laid out
  * by a grid: the controls, the picture and Start/Stop on the left; on the right, 22rem wide —
- * giving way to 14.5rem before the left column goes under the 22rem its controls need whole — the
- * tray's bar, its header (the count, the gold *N need you* that walks the questions, *Add card…*
- * and the `⋯`) and the whole list, scrolling by itself. No peek — the list it opens is there —
+ * giving way to 18.5rem before the left column goes under the 20.5rem its controls need whole —
+ * the tray's bar, its header on one line (the count, the gold *N need you* that walks the
+ * questions, and the `⋯`, whose sheet holds *Add card…* here) and the whole list, scrolling by
+ * itself. **No row on the page wraps** at any shape: a second line is taken from the picture. No peek — the list it opens is there —
  * and the Added popup on one line. **Asked of the viewport, not a container**: the page's sheets
  * are mounted inside it, and a container is the containing block for a `fixed` scrim. The
  * list's column is mounted only on its side (upright the list is the tray sheet's); a turn of
@@ -501,10 +502,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col overflow-hidden",
-          // The tray's column is 22rem, and gives way first: down to 14.5rem, so that the
-          // scanner's keeps the 22rem its controls need whole (`ScanControls`) on a page down to
-          // 36.5rem — a 667px phone beside the 80px rail is 587px.
-          "landscape:grid landscape:grid-cols-[minmax(0,1fr)_clamp(14.5rem,100%_-_22rem,22rem)]",
+          // **Nothing on this page wraps**: a second line is taken from the picture. The tray's
+          // column is 22rem and gives way first, so that the scanner's keeps the 20.5rem its
+          // controls need whole on one line (`ScanControls`) — both are whole from a 42.5rem page,
+          // a 740px phone beside the 80px rail. The tray stops at 18.5rem, a card's row of
+          // presses (printing, finish, stepper) at its narrowest; on a page narrower than 39rem
+          // the scanner's column gives way instead, its words cut short on their one line.
+          "landscape:grid landscape:grid-cols-[minmax(0,1fr)_clamp(18.5rem,100%_-_20.5rem,22rem)]",
           "landscape:grid-rows-[auto_auto_minmax(0,1fr)]",
         )}
       >
@@ -519,7 +523,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           <ReceiptBar receipt={receipt} muted={traySheetOpen} />
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-3 landscape:col-start-1 landscape:row-span-3 landscape:row-start-1">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-3 landscape:col-start-1 landscape:row-span-3 landscape:row-start-1 landscape:px-3">
           <ScanControls
             pointAndShoot={pointAndShoot}
             onPointAndShoot={(on) => {
@@ -649,7 +653,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           <div
             data-tray-column=""
             className={cn(
-              "relative hidden min-h-0 overflow-y-auto overscroll-contain px-4 pb-3",
+              "relative hidden min-h-0 overflow-y-auto overscroll-contain px-3 pb-3",
               "landscape:col-start-2 landscape:row-start-3 landscape:block landscape:border-l landscape:border-border",
             )}
           >
@@ -659,7 +663,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               flashKey={flashKey}
               title={destination?.title}
               marketplace={destination?.marketplace}
-              onAddCard={openAddCard}
               onActions={openActions}
             />
           </div>
@@ -702,6 +705,16 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         committing={destination === undefined ? committing : handOff.committing}
         archiving={destination === undefined && archiving}
         destination={destination}
+        // On its side the tray's one-line header has no room for *Add card…*, so it is the first
+        // row here; upright the tray sheet's header draws its own, and this sheet opens over that.
+        onAddCard={
+          landscape
+            ? () => {
+                pickOpener.current = actionsOpener.current;
+                setPicking(true);
+              }
+            : undefined
+        }
         onCreateDeck={() => {
           deckOpener.current = actionsOpener.current;
           scannedDeck.reset();

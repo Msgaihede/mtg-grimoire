@@ -11,13 +11,6 @@ const ICON_PRESS = cn(
   FOCUS,
 );
 
-/**
- * What the pair asks for on a phone on its side before the glyphs beside it wrap: 212px, so each
- * half is 105px — 89px for its words inside `px-2` and the hairline, which *Point & shoot* in its
- * pressed weight (87px) fits.
- */
-const PAIR_FLOOR = "landscape:flex-[1_1_13.25rem]";
-
 /** The two ways to run the scanner, in the segmented group's order — the stored pref for each. */
 const WAYS = [
   { pointAndShoot: false, label: CONTINUOUS },
@@ -40,15 +33,11 @@ const WAYS = [
  * (`ScannerPage`), and under point and shoot there is none — the picture itself is held
  * (`HoldSurface`).
  *
- * **Both words are whole on a phone on its side.** There the row is the left column's, which the
- * page keeps 22rem wide down to a 36.5rem page (`ScannerPage`'s grid) — 320px inside its padding,
- * so the pair gets 216px and each half 91px for its words, where *Point & shoot* in its pressed
- * weight is 87px (Geist, 14px, measured): whole from a 667 × 375 phone beside the rail up. On a
- * page narrower still, beside the rail (640 × 360), the pair asks for {@link PAIR_FLOOR} and the
- * two glyphs wrap under it rather than cut a word short — 52px of picture, measured 172 → 120.
- * **Never below 600px wide**, where the tab bar is a bar and the page's height is already short:
- * a wrap there left 28px of picture (568 × 320), so the row keeps one line. Upright the row never
- * wraps either: the picture's height is what an upright phone has least of.
+ * **The row never wraps** — a second line is taken from the picture, whose height is what a phone
+ * has least of, upright or on its side. On its side the row is the left column's, which the page
+ * keeps 20.5rem wide (`ScannerPage`'s grid) — 304px inside its `px-3` — so there the words step
+ * down to 13px in `px-2`: the pair gets 200px, each half 98px, and *Point & shoot* in its pressed
+ * weight is 81px. Upright the row has a phone's whole width.
  */
 export function ScanControls({
   pointAndShoot,
@@ -66,23 +55,14 @@ export function ScanControls({
   onOptions: (opener: HTMLElement) => void;
 }) {
   return (
-    // Stretched, so the two glyphs stand as tall as the pill and its hairline. On its side beside
-    // the rail the row may wrap, the glyphs going under the pair at its right-hand end.
-    <div
-      className={cn(
-        "flex shrink-0 items-stretch gap-2",
-        "landscape:min-[600px]:flex-wrap landscape:min-[600px]:justify-end",
-      )}
-    >
+    // Stretched, so the two glyphs stand as tall as the pill and its hairline.
+    <div className="flex shrink-0 items-stretch gap-2">
       {/* One bordered pill, split in two edge to edge: each half is the 44px floor itself, and
           the desktop dock's group in name and colour (`ScanDock`'s *How scanning runs*). */}
       <div
         role="group"
         aria-label="How scanning runs"
-        className={cn(
-          "flex min-w-0 flex-1 overflow-hidden rounded-md border border-border",
-          PAIR_FLOOR,
-        )}
+        className="flex min-w-0 flex-1 overflow-hidden rounded-md border border-border"
       >
         {WAYS.map((way) => {
           const on = way.pointAndShoot === pointAndShoot;
@@ -95,7 +75,7 @@ export function ScanControls({
                 if (!on) onPointAndShoot(way.pointAndShoot);
               }}
               className={cn(
-                "h-11 min-w-0 flex-1 truncate px-2 text-sm",
+                "h-11 min-w-0 flex-1 truncate px-2 text-sm landscape:text-[13px]",
                 on ? "bg-accent font-medium text-accent-fg" : "text-dim",
                 PRESS,
                 // Inside the pill, which clips: an outline standing off the edge would not show.

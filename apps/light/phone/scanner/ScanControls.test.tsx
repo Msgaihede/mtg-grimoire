@@ -46,18 +46,17 @@ describe("the controls over the picture", () => {
   });
 
   /**
-   * **Both words whole on a phone on its side** (measured: *Point & shoot* is 87px in its pressed
-   * weight). The pair asks for 13.25rem there — 89px of words a half — and beside the rail the
-   * two glyphs wrap under it rather than cut a word; never upright, and never below 600px wide,
-   * where the height is what the page has least of.
+   * **The row never wraps**: a second line is taken from the picture. On its side the words step
+   * down to 13px, so the pair fits the scanner's 20.5rem column (*Point & shoot* is 81px there).
    */
-  it("keeps the pair's words whole on its side, the glyphs wrapping under it beside the rail", () => {
+  it("keeps one line at every shape, the words a step smaller on its side", () => {
     controls();
     const group = screen.getByRole("group", { name: "How scanning runs" });
-    expect(group).toHaveClass("flex-1", "landscape:flex-[1_1_13.25rem]");
     const row = group.parentElement as HTMLElement;
-    expect(row).toHaveClass("landscape:min-[600px]:flex-wrap", "landscape:min-[600px]:justify-end");
-    expect(row).not.toHaveClass("flex-wrap", "landscape:flex-wrap");
+    expect(row.className).not.toMatch(/flex-wrap/);
+    for (const name of ["Continuous", "Point & shoot"]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("text-sm", "landscape:text-[13px]");
+    }
   });
 
   /** Start and Stop are the page's gold press under the picture, and point and shoot is a hold. */

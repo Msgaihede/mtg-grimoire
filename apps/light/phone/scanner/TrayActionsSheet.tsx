@@ -1,5 +1,6 @@
-import { Archive, History, Layers, Trash2 } from "lucide-react";
+import { Archive, History, Layers, Plus, Trash2 } from "lucide-react";
 import { SCAN_HISTORY_TITLE } from "@grimoire/ui/features/scanner/history/historyWords";
+import { ADD_CARD_LABEL } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { deckRefusal, EMPTY_REASON } from "@grimoire/ui/features/scanner/reader/tray";
 import type { TrayDestinationFace } from "@grimoire/ui/features/scanner/useTrayDestination";
 import type { ScannerTrayRow } from "@grimoire/ui/lib/ipc";
@@ -14,6 +15,9 @@ import { ARCHIVING } from "./TrayBar";
  * sheet's header, and the tray's column on a phone on its side); **the page owns the press and
  * opens this**, so the press can be wherever the tray's header is.
  *
+ * - **Add card…** (issue #978), first, only where the page hands it in: on a phone on its side,
+ *   whose tray header is one line with no room for it beside the walk and the `⋯` (`Tray`). The
+ *   tray sheet's header draws its own, so the page hands nothing in upright. A request.
  * - **Archive** (issue #989) puts away the rows Add would take, into the scan history and not
  *   the collection — the desktop tray's Archive, refused on *Clear all…*'s terms (an empty tray,
  *   or either press in flight). A row waiting on a printing is said by the press, in the plan's
@@ -38,6 +42,7 @@ export function TrayActionsSheet({
   committing,
   archiving = false,
   destination,
+  onAddCard,
   onCreateDeck,
   onClearAll,
   onArchive,
@@ -55,6 +60,9 @@ export function TrayActionsSheet({
   archiving?: boolean;
   /** Where the tray files when that is not the collection. Only *Clear all…* is drawn. */
   destination?: TrayDestinationFace;
+  /** *Add card…* — a request; the page opens the search. Absent draws no row. Drawn with a
+   *  {@link destination} too: a card typed in is filed wherever the tray files. Never refused. */
+  onAddCard?: () => void;
   /** *Create deck…* — a request; the page owns the dialog. Not drawn with a {@link destination}. */
   onCreateDeck: () => void;
   /** *Clear all…* — a request, never the clear itself: the page asks first. */
@@ -82,6 +90,17 @@ export function TrayActionsSheet({
       onDismiss={onDismiss}
     >
       <ul>
+        {onAddCard && (
+          <SheetRow
+            label={ADD_CARD_LABEL}
+            Icon={Plus}
+            opens
+            onPress={() => {
+              onClose();
+              onAddCard();
+            }}
+          />
+        )}
         {archiveShown && (
           <SheetRow
             label="Archive"
