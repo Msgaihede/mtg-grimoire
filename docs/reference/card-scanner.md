@@ -5248,6 +5248,41 @@ this before creation, and a successful creation opens the deck editor.
   camera, the row's flash. **No toast**: the tray is staging, not the collection, and its Add is
   the write that toasts.
 
+## Scan sounds
+
+**A card that lands in the tray plays a short sound, and a valuable one plays a bigger one**
+(2026-10-24). Six files in `features/scanner/sounds/`, renamed from the owner's set so their names
+say what decides them rather than a dollar figure the reader can move: `scan-ok.wav`,
+`scan-needs-input.wav`, `price-tier-1.wav`, `price-tier-2.wav`, `price-tier-3.wav` and
+`jackpot.wav` (44.1 kHz mono PCM, 0.26–3.3 s, 670 KB together; Vite emits each under `assets/`, so
+the web build precaches them with the shell).
+
+- **Which sound is `scanSounds.ts`'s** (pure): a landing that asks the reader something — a pick,
+  or an `unknown` finish (`landingNeedsInput`) — plays `needs-input` whatever it costs; anything
+  else plays the highest tier its price reaches (`soundForPrice`, each floor *at least*), and
+  `ok` below the first or unpriced. **A row the reader settles** — a printing picked, a finish
+  named, a printing found through *More printings…* — plays its tier then (`settledRows`: same key,
+  same `addedAt`, asked before and not now; a second opinion is a landing, so it is not counted
+  twice). Two rows settled by one write play the dearer one's.
+- **The price is the tray's own read** (`trayPricesQuery`, at the tray's marketplace — a trade's
+  over one), so the figure over the camera and the figure the jingle is judged by are one.
+- **`useScanSounds`** plays them, called by both faces' pages beside `useTrayLanding`: keyed on
+  `landed` (a new object per landing) and on the tray's rows, never on the first render. Only the
+  newest event plays — a price read answering after a later card landed is dropped.
+- **The player is Web Audio** (`player.ts`), not a media element: Android's WebView refuses an
+  `<audio>`'s `play()` without a fresh gesture, and a card lands seconds after the last press. One
+  `AudioContext`, each file fetched and decoded once (preloaded as the page mounts), resumed on any
+  press if the platform suspended it; one sound at a time, a new one stopping the last. A host
+  without Web Audio, or a file that will not decode, is a silent scan, never an error.
+- **The setting is `scansounds.rs`**: one `app_meta` row (`scan_sounds`) — on or off, and the four
+  floors, default 1, 10, 100 and 1000 **in the reader's marketplace currency**, never converted.
+  The write refuses a ladder that does not climb (`TIERS_MUST_CLIMB`; the page's `ladderRefusal`
+  says the same words) and the read treats one as the defaults. **It takes no scanner lease** —
+  unlike `set_scanner_prefs` it is written from Settings, which holds no scanner. The page's entry
+  is `["scanSounds"]` (`useScanSoundSettings`), followed across windows (`FOLLOW_LIVE_APP_META`).
+- **Settings → Scanner → Scan sounds** (`ScanSoundsPanel`, both editions): the switch, a row per
+  sound with a Play to preview it, and a *From* box per tier, stored when left or on Enter.
+
 ## Sending a scan to the inbox
 
 **A reader can send a scan — the last couple of seconds of frames the scanner was given, with

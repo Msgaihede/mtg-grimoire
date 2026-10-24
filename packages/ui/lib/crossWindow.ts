@@ -44,6 +44,9 @@ export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
   ["decks", "lastFormat"],
   ["mirror"],
   ["scanner", "trayCount"],
+  // The scanner's sounds (`features/scanner/sounds/useScanSoundSettings.ts`' `SCAN_SOUNDS_KEY`,
+  // spelled here for `trayCount`'s reason): set in Settings, heard in a Scanner another window has.
+  ["scanSounds"],
 ];
 
 /**

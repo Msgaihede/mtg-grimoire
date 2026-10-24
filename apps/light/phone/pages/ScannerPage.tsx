@@ -16,6 +16,7 @@ import { putBack } from "@grimoire/ui/features/scanner/history/putBack";
 import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
 import { withoutCommitted } from "@grimoire/ui/features/scanner/reader/trayCommit";
 import { useLandedPrice } from "@grimoire/ui/features/scanner/reader/useLandedPrice";
+import { useScanSounds } from "@grimoire/ui/features/scanner/sounds/useScanSounds";
 import {
   DEFAULT_DETAIL_WAIT_MS,
   DEFAULT_SCANNER_OPTIONS,
@@ -196,6 +197,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const armed = pointAndShoot || scanning;
   // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
   const landedPrice = useLandedPrice(armed ? landed : null, destination?.marketplace);
+  // A sound for each card that lands and each row the reader settles — the desktop page's.
+  useScanSounds({ landed, rows: tray.rows, at: destination?.marketplace });
 
   const loop = useScanLoop({
     videoRef,

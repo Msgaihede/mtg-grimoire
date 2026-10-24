@@ -19,10 +19,10 @@ use crate::{
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
     export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
     mirror, nav, new_printings, panelwidth, paths, playtest, price_history, recent_cards, reset,
-    scan_history, scanner, schema, scryfall, search, searchopen, searchwidth, set_completion,
-    share, shelffolds, stackhide, startup, startview, sticky_notes, sync, sync_engine, sync_pair,
-    tags, trade, upcoming_sets, update, value_history, window, wishlist, wishlist_folders,
-    wishlist_optimize, zoom,
+    scan_history, scanner, scansounds, schema, scryfall, search, searchopen, searchwidth,
+    set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes, sync,
+    sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history, window, wishlist,
+    wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -704,6 +704,8 @@ pub fn run() {
             upcoming_sets::upcoming_sets,
             startview::start_view,
             startview::set_start_view,
+            scansounds::scan_sounds,
+            scansounds::set_scan_sounds,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
             combos::combos_status,

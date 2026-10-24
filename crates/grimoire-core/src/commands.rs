@@ -1041,6 +1041,10 @@ commands! {
         store(conn, deck_id, category_id, hidden)
     };
 
+    // scansounds
+    read scan_sounds in scansounds() = |conn| Ok(stored(conn));
+    write set_scan_sounds in scansounds(sounds: ScanSounds) = |conn| store(conn, &sounds);
+
     // startview
     read start_view in startview() = |conn| Ok(stored(conn));
     write set_start_view in startview(view: String) = |conn| store(conn, &view);
@@ -2401,6 +2405,7 @@ mod tests {
             // Structs with a required field, which `{}` would stop at the door.
             "search_marks" => json!({ "req": { "ids": ["c-bolt"] } }),
             "set_home_layout" => json!({ "layout": seeded.layout }),
+            "set_scan_sounds" => json!({ "sounds": {} }),
             // The scoped statement, which `{}` would never reach: all three lists at once.
             "price_movers" => json!({
                 "window": "7d",

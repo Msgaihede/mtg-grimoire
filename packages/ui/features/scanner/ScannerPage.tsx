@@ -24,6 +24,7 @@ import { TrayPanel } from "./reader/TrayPanel";
 import { useLandedPrice } from "./reader/useLandedPrice";
 import { ScannerAssets } from "./ScannerAssets";
 import { ScannerPanels } from "./ScannerPanels";
+import { useScanSounds } from "./sounds/useScanSounds";
 import {
   DEFAULT_DETAIL_WAIT_MS,
   DEFAULT_SCANNER_OPTIONS,
@@ -228,6 +229,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
   const landedPrice = useLandedPrice(armed ? landed : null, destination?.marketplace);
+  // **A sound for each card that lands, and for each row the reader settles** — `needs-input`
+  // while a card asks something, otherwise the jingle its price reaches on the reader's ladder
+  // (Settings → Scanner). Not gated on `armed`: a card that ends its own shot still landed.
+  useScanSounds({ landed, rows: tray.rows, at: destination?.marketplace });
 
   // **A refused frame is the lease saying another window has the scanner** — asking the gate again
   // flips it to the sentence, which unmounts this view and stops the camera.

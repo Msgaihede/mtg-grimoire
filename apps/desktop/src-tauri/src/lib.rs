@@ -221,6 +221,9 @@ pub mod share;
 pub mod shelffolds;
 pub use grimoire_core::slug;
 pub use grimoire_core::sorting;
+/// **The scanner's sounds** — `grimoire-core`'s module and its two `#[tauri::command]`
+/// wrappers: one `app_meta` row, on or off and the four prices a louder sound starts at.
+pub mod scansounds;
 /// **How wide the reader dragged a deck's card search column** (issue #932) — [`stackhide`]'s
 /// shape with a width per deck. No filesystem, no clock and no network.
 pub mod searchwidth;

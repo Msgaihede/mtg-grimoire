@@ -28,6 +28,7 @@ describe("Settings on the phone", () => {
       "Sync",
       "Tags",
       "Appearance",
+      "Scanner",
       "Storage and data",
       "Errors",
     ]);

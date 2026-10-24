@@ -97,6 +97,7 @@ const RAIL: GroupId[] = [
   "sync",
   "tags",
   "appearance",
+  "scanner",
   "storage",
   "errors",
 ];
@@ -108,6 +109,7 @@ const UNDER: Record<GroupId, PanelId[]> = {
   sync: ["sync", "review"],
   tags: ["hidden-tags"],
   appearance: ["start-view", "theory-marks", "labels"],
+  scanner: ["scan-sounds"],
   storage: ["data-folder", "backup", "cache", "danger"],
   errors: ["errors"],
 };
@@ -135,9 +137,9 @@ describe("the settings rail", () => {
     expect([...ids].sort()).toEqual(declared.sort());
   });
 
-  it("has seven entries, in declaration order", () => {
+  it("has eight entries, in declaration order", () => {
     expect(GROUP_ORDER).toEqual(RAIL);
-    expect(GROUP_ORDER).toHaveLength(7);
+    expect(GROUP_ORDER).toHaveLength(8);
     // `GROUP_ORDER` is derived from `GROUPS`, so this is what would catch the two coming apart —
     // an entry with a label and no place in the rail, or the reverse.
     expect(Object.keys(GROUPS)).toEqual(RAIL);
@@ -167,6 +169,7 @@ describe("PANEL_ORDER", () => {
       "start-view",
       "theory-marks",
       "labels",
+      "scan-sounds",
       "data-folder",
       "backup",
       "cache",
