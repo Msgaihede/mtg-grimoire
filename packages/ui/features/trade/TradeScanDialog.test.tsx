@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import type { ScannerAssetsOwed, ScannerTrayRow, Trade, TradeSide } from "@/lib/ipc";
+import type { ScannerTrayRow, Trade, TradeSide } from "@/lib/ipc";
 
 /**
  * The commands a Scanner view asks as it mounts, each answered — `ScannerPage.test.tsx`'s table,
@@ -13,19 +13,13 @@ import type { ScannerAssetsOwed, ScannerTrayRow, Trade, TradeSide } from "@/lib/
  */
 vi.mock("@/lib/ipc", async (orig) => {
   const real = await orig<typeof import("@/lib/ipc")>();
-  const { DEFAULT_SCANNER_PREFS: prefs, STATUS: status } = await import(
-    "@/features/scanner/fixtures"
-  );
+  const { DEFAULT_SCANNER_PREFS: prefs, STATUS: status } =
+    await import("@/features/scanner/fixtures");
   return {
     ...real,
     ipc: {
       ...real.ipc,
       scannerStatus: vi.fn(async () => status.missing),
-      scannerAssets: vi.fn(
-        (): Promise<ScannerAssetsOwed> =>
-          Promise.reject(new Error("There is no command named scanner_assets on this host.")),
-      ),
-      onScannerAssets: vi.fn(() => () => {}),
       scannerElsewhere: vi.fn(async () => false),
       scannerHold: vi.fn(async () => {}),
       // Parked: a frame that never answers, so a camera that opens sends one and waits.
@@ -62,11 +56,7 @@ vi.mock("@/features/scanner/useWindowParked", () => ({
   useWindowParked: () => ({ paused: false, released: false }),
 }));
 
-import {
-  DEFAULT_SCANNER_PREFS,
-  NEEDS_A_FINISH_ROW,
-  TRAY_ROWS,
-} from "@/features/scanner/fixtures";
+import { DEFAULT_SCANNER_PREFS, NEEDS_A_FINISH_ROW, TRAY_ROWS } from "@/features/scanner/fixtures";
 import { ipc } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
 import { TradeScanDialog } from "./TradeScanDialog";
@@ -292,10 +282,9 @@ describe("TradeScanDialog", () => {
       screen.getByRole("button", { name: "Add 0 to their side · 1 needs a finish" }),
     ).toHaveAttribute("aria-disabled", "true");
     // Exactly the rows that went are the rows that left, and that is what is stored.
-    await waitFor(
-      () => expect(ipc.setScannerTray).toHaveBeenLastCalledWith([NEEDS_A_FINISH_ROW]),
-      { timeout: 3000 },
-    );
+    await waitFor(() => expect(ipc.setScannerTray).toHaveBeenLastCalledWith([NEEDS_A_FINISH_ROW]), {
+      timeout: 3000,
+    });
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "Scan cards" })).toBeInTheDocument();
   });
@@ -377,7 +366,7 @@ describe("TradeScanDialog", () => {
     expect(within(panel).queryByRole("switch", { name: "Developer" })).toBeNull();
     expect(within(panel).queryByRole("region", { name: "Match" })).toBeNull();
     // The scanner's own controls are all still there.
-    expect(within(panel).getByRole("group", { name: "Scan mode" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Filters: Any set" })).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: "Start scanning" })).toBeInTheDocument();
     // And the stored switch was not written by merely opening here.
     expect(ipc.setScannerPrefs).not.toHaveBeenCalled();

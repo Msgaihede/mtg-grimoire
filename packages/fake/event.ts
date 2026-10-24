@@ -19,10 +19,6 @@
  * that started it),
  * `sync:applied` (`RelayOutcome`, subscribed by `useDeviceSyncInvalidation`),
  * `sync:live` (`SyncLiveEvent`, subscribed by `useDeviceSyncLive`),
- * `scanner:assets` (`ScannerAssetsProgress`, subscribed by `useScannerAssets` while the scanner's
- * files are owed or on their way — **a twelfth, and one that grep cannot count**: the core emits
- * it through the state's event sink, `scanner_assets::PROGRESS_EVENT`, and no `app.emit` names
- * it; here `scannerAssetHandlers`' fetch is what says it, through {@link worldEmitter}),
  * `startup:changed` (`StartupStatus`, reached through `ipc.onStartupChanged` by `DesktopBoot`,
  * which gates the whole app on it) and
  * `db:changed` (`DbChanged`, subscribed once by `useCrossWindowRefresh`). **That last one is
@@ -84,12 +80,12 @@ export function emitFake<T>(event: string, payload: T): void {
  *
  * A handler is the one emitter that knows its world: `core.ts`' `invoke` points the fake at the
  * caller's world before it calls one, so the active scope at the top of a handler *is* that
- * world. Read later it is not — `scanner_assets_fetch` awaits between its stretches, and by the
- * time it says `done` the pointer may name another story on the page, or the next test's. So the
- * scope is captured once, before the first `await`, as `invoke` captures its own, and its events
- * go to that world's listeners and no other's: a press on one story of a docs page is not a bar
- * moving on its neighbours, and a fetch a finished test left running is not heard by the next
- * test's `useScannerAssets` (issue #1191).
+ * world. Read later it is not — a handler that awaits between its events (the old scanner's
+ * file download did, until 2026-10-24) may find the pointer naming another story on the page, or
+ * the next test's, by the time it says `done`. So the scope is captured once, before the first
+ * `await`, as `invoke` captures its own, and its events go to that world's listeners and no
+ * other's: a press on one story of a docs page is not a bar moving on its neighbours, and work a
+ * finished test left running is not heard by the next test (issue #1191).
  *
  * **And to nobody once that world has gone with another standing** — `scope.ts`' `standing`,
  * the same rule `invoke` re-points by. A world's subscribers leave with its components as a

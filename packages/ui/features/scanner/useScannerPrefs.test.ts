@@ -85,7 +85,7 @@ describe("useScannerPrefs", () => {
   });
 
   it("starts on the defaults, loads the stored prefs and pushes their filters to the session", async () => {
-    const stored: ScannerPrefs = { ...DEFAULT_SCANNER_PREFS, mode: "exact", filters: HOB, folderId: 3 };
+    const stored: ScannerPrefs = { ...DEFAULT_SCANNER_PREFS, filters: HOB, folderId: 3 };
     scannerPrefs.mockResolvedValue(stored);
     const { result } = mount();
     expect(result.current.prefs).toEqual(DEFAULT_SCANNER_PREFS);
@@ -116,27 +116,21 @@ describe("useScannerPrefs", () => {
     const { result } = mount();
     await waitFor(() => expect(result.current.loaded).toBe(true));
 
-    act(() => result.current.update({ mode: "exact" }));
-    await waitFor(() => expect(result.current.prefs.mode).toBe("exact"));
-    expect(setScannerPrefs).toHaveBeenCalledWith({ ...DEFAULT_SCANNER_PREFS, mode: "exact" });
+    act(() => result.current.update({ pointAndShoot: true }));
+    await waitFor(() => expect(result.current.prefs.pointAndShoot).toBe(true));
+    expect(setScannerPrefs).toHaveBeenCalledWith({ ...DEFAULT_SCANNER_PREFS, pointAndShoot: true });
   });
 
-  /** The third mode is a stored word like the other two — read back as it was written. */
-  it("keeps Neural as the stored mode, both ways", async () => {
-    scannerPrefs.mockResolvedValue({ ...DEFAULT_SCANNER_PREFS, mode: "neural" });
+  /**
+   * **A row written while the scanner had modes reads as it is**: the far side passes over the
+   * `mode` key it no longer knows, and what the page writes back is the row without it.
+   */
+  it("writes back no mode, whatever an older row held", async () => {
     const { result } = mount();
     await waitFor(() => expect(result.current.loaded).toBe(true));
-    expect(result.current.prefs.mode).toBe("neural");
-
-    act(() => result.current.update({ mode: "fast" }));
-    await waitFor(() => expect(result.current.prefs.mode).toBe("fast"));
-    act(() => result.current.update({ mode: "neural" }));
-    await waitFor(() =>
-      expect(setScannerPrefs).toHaveBeenLastCalledWith({
-        ...DEFAULT_SCANNER_PREFS,
-        mode: "neural",
-      }),
-    );
+    act(() => result.current.update({ developer: true }));
+    await waitFor(() => expect(setScannerPrefs).toHaveBeenCalled());
+    expect(vi.mocked(setScannerPrefs).mock.lastCall?.[0]).not.toHaveProperty("mode");
   });
 
   it("sends changed filters to the session and persists them once the session accepts", async () => {
@@ -184,7 +178,10 @@ describe("useScannerPrefs", () => {
     // The switch is pressed while the session is still deciding about the filter.
     act(() => result.current.update({ developer: true }));
     await waitFor(() =>
-      expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...DEFAULT_SCANNER_PREFS, developer: true }),
+      expect(setScannerPrefs).toHaveBeenLastCalledWith({
+        ...DEFAULT_SCANNER_PREFS,
+        developer: true,
+      }),
     );
     await act(async () => refuse(REFUSED));
     expect(result.current.prefs).toEqual({ ...DEFAULT_SCANNER_PREFS, developer: true });
@@ -345,7 +342,7 @@ describe("useScannerPrefs", () => {
   /**
    * **A retry never writes what is not there.** With the view gone and its cache entry dropped,
    * `current()` answers the defaults it draws before a load — and written, those would replace the
-   * reader's stored mode, filters and folder with the crate's.
+   * reader's stored filters and folder with the crate's.
    */
   it("skips a retry that finds its cache entry gone, rather than storing the defaults", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -428,7 +425,6 @@ describe("useScannerPrefs under another window's refresh", () => {
     expect(setScannerPrefs).toHaveBeenCalledTimes(2);
     expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
   });
-
 });
 
 /**
@@ -455,12 +451,17 @@ describe("useScannerPrefs retrying until the write lands", () => {
 
     for (let tries = 2; tries <= 8; tries += 1) {
       await advance(PREFS_RETRY_MS - 1);
-      expect(setScannerPrefs, "a try went out before its interval").toHaveBeenCalledTimes(tries - 1);
+      expect(setScannerPrefs, "a try went out before its interval").toHaveBeenCalledTimes(
+        tries - 1,
+      );
       await advance(1);
       expect(setScannerPrefs, `try ${tries} did not go out`).toHaveBeenCalledTimes(tries);
       expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
       refreshForTables(qc, ["app_meta"]);
-      expect(qc.getQueryData(PREFS), "the prefs were dropped while their write was still refused").toEqual({
+      expect(
+        qc.getQueryData(PREFS),
+        "the prefs were dropped while their write was still refused",
+      ).toEqual({
         ...STORED,
         developer: true,
       });
@@ -521,13 +522,17 @@ describe("useScannerPrefs retrying until the write lands", () => {
     await advance(PREFS_RETRY_MS);
     expect(setScannerPrefs).toHaveBeenCalledTimes(2);
 
-    act(() => result.current.update({ mode: "exact" }));
+    act(() => result.current.update({ pointAndShoot: true }));
     await advance(0);
     expect(setScannerPrefs).toHaveBeenCalledTimes(3);
     for (let tries = 4; tries <= 8; tries += 1) {
       await advance(PREFS_RETRY_MS);
       expect(setScannerPrefs, "two loops were running").toHaveBeenCalledTimes(tries);
-      expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true, mode: "exact" });
+      expect(setScannerPrefs).toHaveBeenLastCalledWith({
+        ...STORED,
+        developer: true,
+        pointAndShoot: true,
+      });
     }
   });
 });
@@ -611,30 +616,33 @@ describe("useScannerPrefs while another window holds the scanner", () => {
     SCANNER_NOT_IN_A_BROWSER_YET,
     // A host's own words for it (`@/lib/core/hostScanner`): the page draws whichever it was told.
     ...HOST_SCANNER_UNAVAILABLE,
-  ])("never loads, and sends nothing again, on a host with no scanner session: %s", async (said) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    scannerPrefs.mockResolvedValue(STORED);
-    scannerSetFilters.mockRejectedValue(said);
-    const { result } = mount();
-    await advance(0);
-    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
-    expect(result.current.loaded).toBe(false);
-    expect(result.current.unavailable).toBe(said);
-    expect(result.current.filterError).toBeNull();
-    // The stored filters are still what is drawn — nothing was put back to none.
-    expect(result.current.prefs.filters).toEqual(HOB);
+  ])(
+    "never loads, and sends nothing again, on a host with no scanner session: %s",
+    async (said) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      scannerPrefs.mockResolvedValue(STORED);
+      scannerSetFilters.mockRejectedValue(said);
+      const { result } = mount();
+      await advance(0);
+      expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+      expect(result.current.loaded).toBe(false);
+      expect(result.current.unavailable).toBe(said);
+      expect(result.current.filterError).toBeNull();
+      // The stored filters are still what is drawn — nothing was put back to none.
+      expect(result.current.prefs.filters).toEqual(HOB);
 
-    await advance(SCANNER_ELSEWHERE_POLL_MS * 5);
-    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
-    expect(result.current.loaded).toBe(false);
-    expect(setScannerPrefs).not.toHaveBeenCalled();
+      await advance(SCANNER_ELSEWHERE_POLL_MS * 5);
+      expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+      expect(result.current.loaded).toBe(false);
+      expect(setScannerPrefs).not.toHaveBeenCalled();
 
-    // A pref that is the reader's alone still writes, and carries the stored filters with it.
-    act(() => result.current.update({ developer: true }));
-    await advance(0);
-    expect(setScannerPrefs).toHaveBeenCalledTimes(1);
-    expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
-  });
+      // A pref that is the reader's alone still writes, and carries the stored filters with it.
+      act(() => result.current.update({ developer: true }));
+      await advance(0);
+      expect(setScannerPrefs).toHaveBeenCalledTimes(1);
+      expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
+    },
+  );
 
   /**
    * **A prefs read that fails must not be a way round that.** `loaded` was `isError || …`, and a
@@ -678,107 +686,6 @@ describe("useScannerPrefs while another window holds the scanner", () => {
     const { result } = mount();
     await waitFor(() => expect(result.current.loaded).toBe(true));
     expect(result.current.unavailable).toBeNull();
-  });
-
-  /**
-   * **`resync`: the engine's session is a new one, and it is given the reader's filters.** The
-   * case it exists for — a phone with no card hashes. The stored filters were refused at mount,
-   * because a session with no bundle has no names to filter by, and the popover was put back to
-   * none; the row was never rewritten. When the files land the engine loads a session that can
-   * take them, and what it is pushed is the **row's** filters, read again — not the none the
-   * cache was left holding.
-   */
-  it("pushes the stored filters again on resync, read from the row rather than the cache", async () => {
-    scannerPrefs.mockResolvedValue(STORED);
-    scannerSetFilters.mockRejectedValueOnce(
-      "Filters need card names, and the scanner has none loaded — it needs corpus.db beside the bundle.",
-    );
-    const { result } = mount();
-    await waitFor(() => expect(result.current.loaded).toBe(true));
-    expect(result.current.prefs.filters).toEqual(DEFAULT_SCANNER_PREFS.filters);
-    expect(result.current.filterError).toMatch(/^Filters need card names/);
-    expect(scannerPrefs).toHaveBeenCalledTimes(1);
-    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
-
-    act(() => result.current.resync());
-    await waitFor(() => expect(scannerSetFilters).toHaveBeenCalledTimes(2));
-    expect(scannerPrefs).toHaveBeenCalledTimes(2);
-    expect(scannerSetFilters).toHaveBeenLastCalledWith(HOB);
-    await waitFor(() => expect(result.current.filterError).toBeNull());
-    expect(result.current.prefs.filters).toEqual(HOB);
-    // The camera and the pump ran on through it: `loaded` never went back.
-    expect(result.current.loaded).toBe(true);
-    // Reading the row back is not a change to it.
-    expect(setScannerPrefs).not.toHaveBeenCalled();
-  });
-
-  /**
-   * A change still on its way to the row is the reader's newer word than the row: with a write
-   * refused and waiting, resync pushes what the cache holds and does not read the row over it.
-   */
-  it("pushes the cache's filters on resync while a change has not reached the row", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    setScannerPrefs.mockRejectedValue(BUSY);
-    const { result } = mount();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    act(() => result.current.update({ filters: HOB }));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(setScannerPrefs).toHaveBeenCalledTimes(1);
-    const read = scannerPrefs.mock.calls.length;
-    const pushed = scannerSetFilters.mock.calls.length;
-
-    act(() => result.current.resync());
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(scannerPrefs).toHaveBeenCalledTimes(read);
-    expect(scannerSetFilters).toHaveBeenCalledTimes(pushed + 1);
-    expect(scannerSetFilters).toHaveBeenLastCalledWith(HOB);
-    expect(result.current.prefs.filters).toEqual(HOB);
-  });
-
-  /**
-   * **A change made while resync is reading the row is not written over by the row.** The read
-   * used to go through the query, which put the row into the cache as it answered: a switch
-   * flipped in that moment went back on screen, while its own write was still going out. The
-   * row now reaches the cache only if nothing changed since the read set out — and what is
-   * pushed is then the reader's newer filters.
-   */
-  it("does not put the row over a change made while resync was reading it", async () => {
-    scannerPrefs.mockResolvedValue(STORED);
-    const { result } = mount();
-    await waitFor(() => expect(result.current.loaded).toBe(true));
-
-    let answer!: (prefs: ScannerPrefs) => void;
-    scannerPrefs.mockReturnValueOnce(new Promise<ScannerPrefs>((resolve) => (answer = resolve)));
-    act(() => result.current.resync());
-    // While the row is on its way: the reader turns Developer on, and narrows to another set.
-    act(() => result.current.update({ developer: true }));
-    act(() => result.current.update({ filters: ZZZ }));
-    await waitFor(() => expect(scannerSetFilters).toHaveBeenLastCalledWith(ZZZ));
-    const pushed = scannerSetFilters.mock.calls.length;
-
-    await act(async () => answer(STORED));
-    await waitFor(() => expect(scannerSetFilters).toHaveBeenCalledTimes(pushed + 1));
-    expect(scannerSetFilters).toHaveBeenLastCalledWith(ZZZ);
-    expect(result.current.prefs.developer).toBe(true);
-    expect(result.current.prefs.filters).toEqual(ZZZ);
-  });
-
-  /** A resync from a view that has gone sends nothing — an accepted push is the lease, taken. */
-  it("does not resync once the view has gone", async () => {
-    const { result, unmount } = mount();
-    await waitFor(() => expect(result.current.loaded).toBe(true));
-    const resync = result.current.resync;
-    unmount();
-    act(() => resync());
-    await act(async () => {});
-    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
-    expect(scannerPrefs).toHaveBeenCalledTimes(1);
   });
 
   /** A view that has gone must not push again — an accepted push is the lease, taken. */

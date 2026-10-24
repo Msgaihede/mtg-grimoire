@@ -667,12 +667,12 @@ function DefaultCategoryRow({
  * a plan, or a deck whose cardboard the reader does not own, and the two booleans behind
  * that are one choice wearing two columns.
  *
- * **`role="group"` with `aria-pressed` per button, never a radiogroup.** That is
- * `features/scanner/panels/ControlsPanel.tsx`'s grammar and its argument verbatim: these are
- * toggles that happen to be exclusive, and a radio's roving tab stop would put the reader
- * inside a three-way keyboard mode to change one word. Its `Segment` is the **precedent and
- * not the component** — that file is a private dev panel, sized and coloured for a debug
- * rail, and importing a control out of it would tie this panel to a surface no reader sees.
+ * **`role="group"` with `aria-pressed` per button, never a radiogroup.** That was the scanner's
+ * developer `ControlsPanel`'s grammar and its argument verbatim (the panel went with the old
+ * scanner's modes on 2026-10-24): these are toggles that happen to be exclusive, and a radio's
+ * roving tab stop would put the reader inside a three-way keyboard mode to change one word. Its
+ * `Segment` was the **precedent and not the component** — a private dev panel, sized and
+ * coloured for a debug rail, which no control here was ever imported from.
  *
  * **It is drawn as the editor's own `Theory | Actual` switch is** (`DeckEditor.tsx`'s variant
  * group): the same joined box, the same `bg-accent`/`text-accent-fg` pressed half against

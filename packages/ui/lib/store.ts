@@ -155,11 +155,10 @@ export interface PaneCopy {
  * A closed union rather than {@link CardSelection}'s open string, and for the opposite reason:
  * the set of panels is a fact about one screen that nothing outside this feature adds to, so
  * an exhaustive record is exactly what is wanted — a new panel is a compile error at the
- * initial state below until somebody says what it starts as. `tiers` was that compile error
- * once, when the Exact mode's resolve got a panel of its own.
+ * initial state below until somebody says what it starts as. One panel is left since the old
+ * scanner and its panels went (2026-10-24).
  */
-export type ScannerPanelId =
-  "controls" | "pipeline" | "budget" | "rectified" | "readouts" | "tiers";
+export type ScannerPanelId = "budget";
 
 /** How the search results are laid out. */
 export type SearchView = "table" | "grid";
@@ -1494,17 +1493,10 @@ export const useAppStore = create<AppState>((set) => ({
   // store at all rather than in either of the two components that use it.
   keyMapOpen: false,
   setKeyMapOpen: (keyMapOpen) => set({ keyMapOpen }),
-  // All folded away on launch. The Scanner's job is the picture and the card it came to, and
-  // every one of these panels is a developer's answer to "why did it come to that" — so the
-  // column opens as one heading per question and costs a reader who is only scanning nothing.
-  scannerFolds: {
-    controls: false,
-    pipeline: false,
-    budget: false,
-    rectified: false,
-    readouts: false,
-    tiers: false,
-  },
+  // Folded away on launch. The Scanner's job is the picture and the card it came to, and the
+  // panel is a developer's answer to "why did it come to that" — so the column opens as a
+  // heading and costs a reader who is only scanning nothing.
+  scannerFolds: { budget: false },
   setScannerFold: (id, open) => set((s) => ({ scannerFolds: { ...s.scannerFolds, [id]: open } })),
   // The folders on launch: the cabinet is how the reader filed their decks, and the flat wall is
   // a press away rather than a place the app opens on.

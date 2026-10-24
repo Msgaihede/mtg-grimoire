@@ -99,8 +99,9 @@ export function useTradeDestination({
  * *Scan onto*: which side the list is headed for — **You give** or **They give**.
  *
  * Two toggles that are exclusive, in the scanner's own segment grammar (`role="group"`,
- * `aria-pressed` per button — `ScanBar`'s `ModeSwitch` says why not a radiogroup). A press on the
- * side already chosen says nothing: there is no "neither".
+ * `aria-pressed` per button — never a radiogroup: these are toggles that happen to be exclusive,
+ * and a radio's roving tab stop would put the reader inside a keyboard mode to change one word).
+ * A press on the side already chosen says nothing: there is no "neither".
  */
 export function ScanOnto({
   side,

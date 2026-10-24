@@ -16,20 +16,14 @@
 use std::borrow::Cow;
 
 use card_scanner::filters::ScanFilters;
-use card_scanner::index::Bundle;
 use card_scanner::neural::evidence::EvidenceFiles;
 use card_scanner::neural::Files;
-use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::session::{FrameOptions, Session};
+use card_scanner::session::Session;
 use serde::Serialize;
 
 /// How many candidates a verdict carries. The app's (`grimoire_core::scanner`).
 pub const TOP: usize = 5;
-
-/// What a load says when it was handed one model and not the other. The readers are a pair:
-/// one alone reads nothing.
-pub const ONE_MODEL: &str = "one model without the other: the readers need both";
 
 /// What every export answers once a panic has ended the instance — see `glue`.
 pub const PANICKED: &str =
@@ -61,43 +55,25 @@ pub fn err(sentence: impl Into<String>) -> String {
     text(&Answer::<()>::Err(sentence.into()))
 }
 
-/// What a [`Scanner::load`] found — facts, and the crate's own words where something would
-/// not load. Never a sentence about where the bytes came from: that is the page's.
+/// What a [`Scanner::load`] found — facts, never a sentence about where the bytes came from:
+/// that is the page's.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Loaded {
-    pub bundle: BundleFacts,
-    /// Labels attached. Zero is a session that answers ids with no names.
+    /// Labels attached. Zero is a session that names a printing by its id alone — no labels
+    /// were handed over, or what was handed over would not decode.
     pub labels: u32,
-    pub models: ModelFacts,
     /// Filters an earlier session held that this one would not take, in the crate's words —
     /// see [`Scanner::load`]. `null` when nothing is owed.
     pub unapplied_filters: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct BundleFacts {
-    pub loaded: bool,
-    /// Entries in the bundle's card section — one per face a printing is filed under.
-    pub entries: u32,
-    /// Why the bundle did not load; or, beside `loaded: true`, why its labels did not
-    /// (`labels: …`) — a state of its own, in which a frame still answers, with ids.
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct ModelFacts {
-    /// Whether both readers loaded. They are a pair.
-    pub loaded: bool,
-    pub error: Option<String>,
-}
-
 /// Filters no session has taken yet.
 ///
-/// **A debt, not a hand-over** — `grimoire_core::scanner`'s rule, mirrored: what a replaced
-/// session was searching under is owed to the next, stays owed past a load that cannot take it
-/// (no labels to build a mask from), and is settled only by a session accepting it or by the
-/// page's own newer word being accepted. Offered once and dropped, a reload without labels
-/// would search every printing under a popover that still showed the filters.
+/// **A debt, not a hand-over**: what a replaced session was searching under is owed to the
+/// next, stays owed past a load that cannot take it (no labels to build a mask from), and is
+/// settled only by a session accepting it or by the page's own newer word being accepted.
+/// Offered once and dropped, a reload without labels would search every printing under a
+/// popover that still showed the filters.
 #[derive(Debug, Clone)]
 struct Owed {
     filters: ScanFilters,
@@ -108,8 +84,8 @@ struct Owed {
 /// One session, and what a reload owes it.
 pub struct Scanner {
     session: Session,
-    /// Whether [`Scanner::load`] has run. Until it has, the session is one with no reference:
-    /// it answers a frame, with no card named, and is never asked about filters.
+    /// Whether [`Scanner::load`] has run. Until it has, the session is one with no labels, and
+    /// is never asked about filters.
     loaded: bool,
     owed: Option<Owed>,
 }
@@ -121,11 +97,11 @@ impl Default for Scanner {
 }
 
 impl Scanner {
-    /// A scanner with nothing loaded: a frame is answered as a session with no reference
+    /// A scanner with nothing loaded: a frame is answered as a session with no recogniser
     /// answers one.
     pub fn new() -> Scanner {
         Scanner {
-            session: Session::new(None, None, TOP),
+            session: Session::new(None, TOP),
             loaded: false,
             owed: None,
         }
@@ -136,21 +112,17 @@ impl Scanner {
         self.session.filters()
     }
 
-    /// Build the session from bytes, replacing the one there was, and say what loaded.
+    /// Build the session from the labels the engine encoded (`card_scanner::labels`), replacing
+    /// the one there was, and say how many were attached.
     ///
-    /// Each input is optional and each failure is a fact on its own asset, never an error out
-    /// of here: a session with no models still names cards, and one with no labels still
-    /// answers ids. **The models are a pair** — one without the other loads neither
-    /// ([`ONE_MODEL`]). **Labels of no bytes are no labels**, which is what the engine hands
-    /// over while its corpus is empty; labels that will not decode are `labels: …` on the
-    /// bundle's `error`, beside `loaded: true`, and none of them is attached.
+    /// **Labels of no bytes are no labels**, which is what the engine hands over while its corpus
+    /// is empty, and labels that will not decode are none either: the session names a printing
+    /// by its id, and builds no filter.
     ///
-    /// **The session there was goes first, and each input as soon as it has been read.** A
-    /// WASM memory never shrinks, so what is alive at once is the figure the page pays. That
-    /// peak is not the session alone: the glue has copied all four inputs into this memory
-    /// before the first line here runs — some twenty-four megabytes with a full corpus's
-    /// labels — and they stand beside the session as it is built, each until it has been
-    /// read. What is spared is the *old* session under them, which is why it goes first.
+    /// **The session there was goes first, and the labels as soon as they have been read.** A
+    /// WASM memory never shrinks, so what is alive at once is the figure the page pays: the glue
+    /// has copied the labels into this memory before the first line here runs, and what is
+    /// spared is the *old* session beside them.
     ///
     /// **What a reload keeps is the filters** ([`Owed`]): the ones the replaced session held,
     /// or the ones the page set before any session was loaded, are offered to the new one. If
@@ -158,18 +130,11 @@ impl Scanner {
     /// evidence for the card in front of the lens goes, and `decision_seq` starts again from
     /// zero.
     ///
-    /// **The Neural mode's files go with the session they were loaded into**
-    /// ([`Scanner::load_neural`]): they are the replaced session's, and carrying them across
-    /// would need them twice in a memory that never shrinks. The page never asks for this —
-    /// it loads each Worker once, and loads the Neural files after that load — so a Worker that
-    /// was asked to load again would be asked for the Neural files again too.
-    pub fn load(
-        &mut self,
-        bundle: Option<Vec<u8>>,
-        labels: Option<Vec<u8>>,
-        detection: Option<Vec<u8>>,
-        recognition: Option<Vec<u8>>,
-    ) -> Loaded {
+    /// **The Neural files go with the session they were loaded into**
+    /// ([`Scanner::load_neural`]): carrying them across would need them twice in a memory that
+    /// never shrinks. The page loads each Worker once, and the Neural files after that load — so
+    /// a Worker that was asked to load again would be asked for the Neural files again too.
+    pub fn load(&mut self, labels: Option<Vec<u8>>) -> Loaded {
         let held = self.session.filters().clone();
         if self.loaded && self.owed.is_none() && !held.is_empty() {
             self.owed = Some(Owed {
@@ -177,52 +142,17 @@ impl Scanner {
                 refusal: None,
             });
         }
-        self.session = Session::new(None, None, TOP);
+        self.session = Session::new(None, TOP);
 
         let mut facts = Loaded::default();
-        let reference = bundle.and_then(|bytes| match Bundle::from_bytes(&bytes) {
-            Ok(bundle) => {
-                drop(bytes);
-                facts.bundle.loaded = true;
-                facts.bundle.entries = u32::try_from(bundle.cards.len()).unwrap_or(u32::MAX);
-                Some(Reference::new(bundle))
-            }
-            Err(e) => {
-                facts.bundle.error = Some(e.to_string());
-                None
-            }
-        });
-        let reference = reference.map(|mut reference| {
-            if let Some(bytes) = labels.filter(|bytes| !bytes.is_empty()) {
-                match card_scanner::labels::attach(&mut reference, &bytes) {
-                    Ok(attached) => facts.labels = u32::try_from(attached).unwrap_or(u32::MAX),
-                    Err(e) => facts.bundle.error = Some(format!("labels: {e}")),
-                }
-            }
-            reference
+        let reference = labels.filter(|bytes| !bytes.is_empty()).and_then(|bytes| {
+            let mut reference = Reference::new();
+            let attached = card_scanner::labels::attach(&mut reference, &bytes).ok()?;
+            facts.labels = u32::try_from(attached).unwrap_or(u32::MAX);
+            Some(reference)
         });
 
-        let reader = match (detection, recognition) {
-            (None, None) => None,
-            (Some(detection), Some(recognition)) => {
-                match TitleReader::from_bytes(&detection, &recognition) {
-                    Ok(reader) => {
-                        facts.models.loaded = true;
-                        Some(reader)
-                    }
-                    Err(e) => {
-                        facts.models.error = Some(e);
-                        None
-                    }
-                }
-            }
-            _ => {
-                facts.models.error = Some(ONE_MODEL.to_owned());
-                None
-            }
-        };
-
-        self.session = Session::new(reference, reader, TOP);
+        self.session = Session::new(reference, TOP);
         self.loaded = true;
         if let Some(debt) = self.owed.as_mut() {
             match self.session.set_filters(debt.filters.clone()) {
@@ -237,25 +167,19 @@ impl Scanner {
     }
 
     /// [`Scanner::load`], as the JSON an export answers: `{"ok": <Loaded>}`.
-    pub fn load_json(
-        &mut self,
-        bundle: Option<Vec<u8>>,
-        labels: Option<Vec<u8>>,
-        detection: Option<Vec<u8>>,
-        recognition: Option<Vec<u8>>,
-    ) -> String {
-        ok(self.load(bundle, labels, detection, recognition))
+    pub fn load_json(&mut self, labels: Option<Vec<u8>>) -> String {
+        ok(self.load(labels))
     }
 
     /// Give the session the Neural mode's four files — `card-neural`'s detector, embedder,
     /// gallery and `neural.json`, as the page fetched them — and answer `None`, or the crate's
-    /// sentence when they would not load. A refusal leaves the mode as it was: a Neural frame
-    /// then says its models are not loaded (`card_scanner::session::NEURAL_UNAVAILABLE_ERROR`).
+    /// sentence when they would not load. A refusal leaves the session as it was: a frame then
+    /// says its models are not loaded (`card_scanner::session::NEURAL_UNAVAILABLE_ERROR`).
     ///
     /// **Each buffer is handed over, never copied again.** The glue has already copied all
     /// four into this module's memory — some twenty-seven megabytes — and they pass to the
     /// recogniser as owned `Cow`s: the gallery is searched where it lies, and the networks are
-    /// `rten`'s from those buffers. What a Neural session costs is therefore about what was
+    /// `rten`'s from those buffers. What a session costs is therefore about what was
     /// handed in, and is given back only by ending the Worker.
     ///
     /// Into the session there is, which [`Scanner::load`] replaces — see there.
@@ -275,7 +199,7 @@ impl Scanner {
         self.session.load_neural(files).err()
     }
 
-    /// Give the Neural mode its printing evidence — `card-neural`'s set symbol and collector
+    /// Give the recogniser its printing evidence — `card-neural`'s set symbol and collector
     /// band networks and their two galleries, as the page fetched them **after**
     /// [`Scanner::load_neural`] took the recogniser — and answer `None`, or the crate's sentence
     /// when they would not load: before the recogniser, without an `evidence` section in its
@@ -301,30 +225,19 @@ impl Scanner {
         self.session.load_neural_evidence(files).err()
     }
 
-    /// Whether a Neural frame can be read: the session there is has its files.
+    /// Whether a frame can be read: the session there is has its Neural files.
     pub fn has_neural(&self) -> bool {
         self.session.has_neural()
     }
 
     /// One frame through the session: `{"ok": <Verdict>}`, the verdict serialised as the
-    /// desktop's `scanner_frame` serialises it.
-    ///
-    /// `options` is a `FrameOptions` as JSON — what a page's `x-scanner-options` header
-    /// carries. Empty text is the defaults, as an absent header is — **and so is text that is
-    /// not a `FrameOptions`**, which is `grimoire_core::scanner::frame_from`'s rule for an
-    /// unreadable header: the same page sends the same header to every host, and a slider that
-    /// defaulted costs a frame where a refusal would cost every frame until a reload. (This
-    /// answered an `err` until the page's half was written, 2026-10-07.)
-    ///
-    /// `detail` is the same frame at the camera's resolution, for the readers
-    /// (`Session::frame_with_detail`); none, or no bytes, is none.
+    /// desktop's `scanner_frame` serialises it. `jpeg` is the frame, whole.
     ///
     /// A JPEG that will not decode is not an `err`: it is a verdict, `ok: false` with the
-    /// decoder's sentence, exactly as on the desktop.
-    pub fn frame(&mut self, jpeg: &[u8], detail: Option<&[u8]>, options: &str) -> String {
-        let options: FrameOptions = serde_json::from_str(options).unwrap_or_default();
-        let detail = detail.filter(|bytes| !bytes.is_empty());
-        ok(self.session.frame_with_detail(jpeg, detail, &options))
+    /// decoder's sentence, exactly as on the desktop — and so is a frame before the Neural files
+    /// have loaded, with the crate's sentence for that.
+    pub fn frame(&mut self, jpeg: &[u8]) -> String {
+        ok(self.session.frame(jpeg))
     }
 
     /// Forget the card in front of the lens, keeping the session: `{"ok":null}`.
@@ -367,11 +280,10 @@ impl Scanner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use card_scanner::hash::{hash_rgb, HashKind};
-    use card_scanner::index::{format_uuid, BundleBuilder, Section, ID_LEN};
+    use card_scanner::ids::ID_LEN;
     use card_scanner::labels::{Encoder, Row};
     use card_scanner::reference::Label;
-    use card_scanner::session::ScanMode;
+    use card_scanner::session::NEURAL_UNAVAILABLE_ERROR;
     use image::RgbImage;
     use serde_json::{json, Value};
 
@@ -392,10 +304,9 @@ mod tests {
         value["err"].as_str().expect("a sentence").to_owned()
     }
 
-    // ---- The fixture: `card_scanner::host`'s own, drawn again ----------------------------------
+    // ---- The fixture --------------------------------------------------------------------------
 
-    /// The banded card, face on, `w` wide: a dark border round light title, art, type and text
-    /// bands — the horizontal structure card-likeness scores.
+    /// A card face, `w` wide: a dark border round light title, art, type and text bands.
     fn banded(w: u32, h: u32) -> RgbImage {
         let border = 11 * w / 250;
         RgbImage::from_fn(w, h, |x, y| {
@@ -431,31 +342,13 @@ mod tests {
         raw
     }
 
-    /// A bundle that knows the banded card among two it does not — its negative and a
-    /// gradient — in colour, as the app's is.
-    fn bundle() -> Vec<u8> {
-        let kind = HashKind::DHashChroma32;
-        let face = banded(card_scanner::RECTIFIED_W, card_scanner::RECTIFIED_H);
-        let negative = RgbImage::from_fn(face.width(), face.height(), |x, y| {
-            let p = face.get_pixel(x, y).0;
-            image::Rgb([255 - p[0], 255 - p[1], 255 - p[2]])
-        });
-        let gradient = RgbImage::from_fn(60, 84, |x, y| image::Rgb([((x * 3 + y) % 256) as u8; 3]));
-        let mut b = BundleBuilder::new(kind, 256);
-        for (n, image) in [(1u8, &face), (2, &negative), (3, &gradient)] {
-            b.push(Section::Card, id(n), &hash_rgb(image, kind, 256));
-        }
-        b.finish(0).to_bytes()
-    }
-
-    /// The three printings' labels: the banded card in `hob`, the other two in `ltr`.
+    /// Three printings' labels: one in `hob`, two in `ltr`.
     fn rows() -> Vec<Row> {
         [(1u8, 10u8, "hob"), (2, 20, "ltr"), (3, 30, "ltr")]
             .into_iter()
             .map(|(n, oracle, set)| Row {
                 id: id(n),
                 oracle: Some(id(oracle)),
-                illustration: None,
                 label: Label {
                     name: format!("Card {oracle}"),
                     set: set.into(),
@@ -480,8 +373,8 @@ mod tests {
 
     fn loaded() -> Scanner {
         let mut scanner = Scanner::new();
-        let facts = scanner.load(Some(bundle()), Some(labels()), None, None);
-        assert_eq!((facts.bundle.loaded, facts.labels), (true, 3), "{facts:?}");
+        let facts = scanner.load(Some(labels()));
+        assert_eq!(facts.labels, 3, "{facts:?}");
         scanner
     }
 
@@ -525,224 +418,107 @@ mod tests {
     // ---- A load's facts -----------------------------------------------------------------------
 
     #[test]
-    fn a_load_of_nothing_says_nothing_loaded_and_names_no_fault() {
+    fn a_load_of_nothing_says_nothing_loaded() {
         let mut scanner = Scanner::new();
         assert_eq!(
-            scanner.load_json(None, None, None, None),
-            r#"{"ok":{"bundle":{"loaded":false,"entries":0,"error":null},"labels":0,"models":{"loaded":false,"error":null},"unapplied_filters":null}}"#
+            scanner.load_json(None),
+            r#"{"ok":{"labels":0,"unapplied_filters":null}}"#
         );
-        // Labels with no bundle to attach them to are not a fault either: there is no session
-        // to name anything in.
-        let facts = scanner.load(None, Some(labels()), None, None);
-        assert_eq!(facts, Loaded::default());
+        // Labels of no bytes — what the engine hands over while its corpus is empty — are the
+        // same thing.
+        assert_eq!(scanner.load(Some(Vec::new())), Loaded::default());
     }
 
     #[test]
-    fn a_bundle_and_its_labels_load_and_say_how_many() {
+    fn labels_load_and_say_how_many() {
         let mut scanner = Scanner::new();
-        let facts = answered(&scanner.load_json(Some(bundle()), Some(labels()), None, None));
-        assert_eq!(
-            facts,
-            json!({
-                "bundle": { "loaded": true, "entries": 3, "error": null },
-                "labels": 3,
-                "models": { "loaded": false, "error": null },
-                "unapplied_filters": null,
-            })
-        );
-        // No labels, and labels of no bytes — what the engine hands over while its corpus is
-        // empty — are the same thing, and neither is a fault.
-        for none in [None, Some(Vec::new())] {
-            let facts = scanner.load(Some(bundle()), none, None, None);
-            assert_eq!(
-                (facts.bundle.loaded, facts.labels, facts.bundle.error),
-                (true, 0, None)
-            );
-        }
+        let facts = answered(&scanner.load_json(Some(labels())));
+        assert_eq!(facts, json!({ "labels": 3, "unapplied_filters": null }));
     }
 
+    /// Every way of cutting a labels file short, and bytes that are none: no labels, never a
+    /// panic, and the scanner still answers afterwards.
     #[test]
-    fn a_bundle_that_is_not_one_is_a_fact_in_the_crates_words() {
-        let mut scanner = Scanner::new();
-        let facts = scanner.load(
-            Some(b"<!doctype html>".to_vec()),
-            Some(labels()),
-            None,
-            None,
-        );
-        assert_eq!(
-            facts.bundle,
-            BundleFacts {
-                loaded: false,
-                entries: 0,
-                error: Some("not a card-scanner bundle (bad magic)".into()),
-            }
-        );
-        assert_eq!(facts.labels, 0);
-
-        // Every way of cutting a real one short, and a bundle of no bytes: refused, none
-        // panics, and the scanner still answers a frame afterwards.
-        let whole = bundle();
-        for len in 0..whole.len() {
-            let facts = scanner.load(Some(whole[..len].to_vec()), None, None, None);
-            assert!(!facts.bundle.loaded, "the first {len} bytes loaded");
-            assert!(facts.bundle.error.is_some(), "{len} bytes named no fault");
-        }
-        // A header that claims more entries than any file holds.
-        let mut greedy = whole.clone();
-        greedy[22..30].copy_from_slice(&[0xff; 8]);
-        let facts = scanner.load(Some(greedy), None, None, None);
-        assert!(!facts.bundle.loaded && facts.bundle.error.is_some());
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, "{}"));
-        assert_eq!(verdict["matcher"], false);
-    }
-
-    #[test]
-    fn labels_that_will_not_decode_are_a_fault_beside_a_loaded_bundle_and_none_is_attached() {
+    fn labels_that_will_not_decode_are_no_labels() {
         let mut scanner = Scanner::new();
         let whole = labels();
         for len in 1..whole.len() {
-            let facts = scanner.load(Some(bundle()), Some(whole[..len].to_vec()), None, None);
-            assert!(facts.bundle.loaded, "the bundle is its own asset");
+            let facts = scanner.load(Some(whole[..len].to_vec()));
             assert_eq!(facts.labels, 0, "{len} bytes of labels attached some");
-            let error = facts.bundle.error.expect("a fault");
-            assert!(error.starts_with("labels: "), "{error}");
         }
-        let facts = scanner.load(Some(bundle()), Some(b"[[\"0000419b".to_vec()), None, None);
-        assert_eq!(
-            facts.bundle.error.as_deref(),
-            Some("labels: not a card-scanner labels file (bad magic)")
+        assert_eq!(scanner.load(Some(b"<!doctype html>".to_vec())).labels, 0);
+        let sentence = refused(&scanner.set_filters(LTR));
+        assert!(
+            sentence.starts_with("Filters need card names"),
+            "{sentence}"
         );
-        // A frame still answers, and names the card by its id alone.
-        let mut named = Value::Null;
-        for i in 0..9 {
-            let options = r#"{"decide_at":4}"#;
-            named = answered(&scanner.frame(&card_frame_jpeg(i % 3), None, options));
-        }
-        assert_eq!(named["decision"]["printing"], format_uuid(&id(1)));
-        assert_eq!(named["decision"]["label"], Value::Null);
-    }
-
-    #[test]
-    fn the_models_are_a_pair_and_a_model_that_is_not_one_is_a_fact() {
-        let mut scanner = Scanner::new();
-        for (detection, recognition) in [(Some(vec![1, 2, 3]), None), (None, Some(vec![1, 2, 3]))] {
-            let facts = scanner.load(Some(bundle()), None, detection, recognition);
-            assert_eq!(
-                facts.models,
-                ModelFacts {
-                    loaded: false,
-                    error: Some(ONE_MODEL.into()),
-                }
-            );
-            assert!(
-                facts.bundle.loaded,
-                "the bundle does not wait for the readers"
-            );
-        }
-        // Bytes that are no model: no bytes, a web page, and noise.
-        let noise: Vec<u8> = (0..4096u32)
-            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
-            .collect();
-        for not_a_model in [Vec::new(), b"<!doctype html><html>".to_vec(), noise] {
-            let facts = scanner.load(None, None, Some(not_a_model.clone()), Some(not_a_model));
-            assert!(!facts.models.loaded);
-            let error = facts.models.error.expect("a fault");
-            assert!(error.starts_with("detection model: "), "{error}");
-        }
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
+        assert_eq!(verdict["ok"], false);
     }
 
     // ---- A frame ------------------------------------------------------------------------------
 
     #[test]
-    fn before_any_load_a_frame_is_answered_as_a_session_with_no_reference_answers_it() {
-        let _one_thread = card_scanner::host::inline();
+    fn before_the_neural_files_a_frame_is_the_sessions_own_refusal() {
         let frame = card_frame_jpeg(0);
-        let mut bare = Session::new(None, None, TOP);
-        let expected = bare.frame_with_detail(&frame, None, &FrameOptions::default());
+        let mut bare = Session::new(None, TOP);
+        let expected = bare.frame(&frame);
 
         let mut scanner = Scanner::new();
-        // No options at all are the defaults, as an absent header is.
-        for options in ["{}", "", "  "] {
-            let verdict = answered(&scanner.frame(&frame, None, options));
-            assert_eq!(verdict["ok"], true);
-            assert_eq!(verdict["matcher"], false, "no bundle is loaded");
-            assert_eq!(verdict["decision_seq"], 0);
-            assert_eq!(
-                without_timings(verdict),
-                without_timings(as_a_page_reads(&expected))
-            );
-            scanner.reset();
-            bare.reset();
-        }
+        let verdict = answered(&scanner.frame(&frame));
+        assert_eq!(verdict["ok"], false);
+        assert_eq!(verdict["matcher"], false);
+        assert_eq!(verdict["error"], NEURAL_UNAVAILABLE_ERROR);
+        assert_eq!(verdict["decision_seq"], 0);
+        assert_eq!(
+            without_timings(verdict),
+            without_timings(as_a_page_reads(&expected))
+        );
         assert_eq!(scanner.reset(), r#"{"ok":null}"#);
     }
 
     /// **The same frames through this module's `frame` and through the crate's own session
-    /// are the same verdicts**, but for their timings — a session built from the same bundle
-    /// with its labels attached a row at a time, as `load_labels` attaches them.
-    ///
-    /// Both under `host::inline()`, which is the browser: one thread, and a resolve inside
-    /// the frame it started on.
-    fn the_module_answers_what_the_session_does(mode: ScanMode, frames: u32) -> Value {
-        let _one_thread = card_scanner::host::inline();
-        let options = FrameOptions {
-            mode,
-            previews: true,
-            decide_at: 4.0,
-            ..Default::default()
-        };
-        let options_json = serde_json::to_string(&options).expect("options");
-
-        let mut reference = Reference::new(Bundle::from_bytes(&bundle()).expect("bundle"));
+    /// are the same verdicts**, but for their timings — a session with the same labels attached
+    /// a row at a time, and the same Neural files.
+    #[test]
+    fn a_frame_is_the_sessions_own_verdict() {
+        let mut reference = Reference::new();
         for row in rows() {
             row.attach(&mut reference);
         }
-        let mut direct = Session::new(Some(reference), None, TOP);
+        let mut direct = Session::new(Some(reference), TOP);
+        let [d, e, g, m] = neural_files();
+        direct
+            .load_neural(Files {
+                detector: Cow::Owned(d),
+                embedder: Cow::Owned(e),
+                gallery: Cow::Owned(g),
+                meta: Cow::Owned(m),
+            })
+            .expect("the files in git");
         let mut scanner = loaded();
+        assert_eq!(load_neural(&mut scanner, neural_files()), None);
 
-        let mut last = Value::Null;
-        for i in 0..frames {
-            let frame = card_frame_jpeg(i % 3);
-            let expected = direct.frame_with_detail(&frame, None, &options);
-            let text = scanner.frame(&frame, None, &options_json);
+        for i in 0..3 {
+            let frame = card_frame_jpeg(i);
+            let expected = direct.frame(&frame);
+            let text = scanner.frame(&frame);
             // The envelope around the crate's own serialisation, and nothing re-ordered.
-            assert!(
-                text.starts_with(r#"{"ok":{"ok":true,"frame":{"w":960,"h":540},"#),
-                "{text}"
-            );
-            last = answered(&text);
+            assert!(text.starts_with(r#"{"ok":{"ok":"#), "{text}");
             assert_eq!(
-                without_timings(last.clone()),
+                without_timings(answered(&text)),
                 without_timings(as_a_page_reads(&expected)),
-                "frame {i} in {mode:?}"
+                "frame {i}"
             );
         }
-        // The premise: the stream reached a decision, and the labels named it.
-        assert_eq!(last["decision_seq"], 1, "never decided in {mode:?}");
-        assert_eq!(last["decision"]["printing"], format_uuid(&id(1)));
-        assert_eq!(last["decision"]["label"]["name"], "Card 10");
-        assert_eq!(last["decision"]["finishes"], json!(["nonfoil", "foil"]));
-        last
     }
 
     #[test]
-    fn a_fast_frame_is_the_sessions_own_verdict() {
-        let last = the_module_answers_what_the_session_does(ScanMode::Fast, 9);
-        assert_eq!(last["mode"], "fast");
-    }
-
-    #[test]
-    fn an_exact_frame_is_the_sessions_own_verdict() {
-        let last = the_module_answers_what_the_session_does(ScanMode::Exact, 7);
-        assert_eq!(last["mode"], "exact");
-    }
-
-    #[test]
-    fn a_frame_that_is_not_a_picture_is_a_verdict_and_options_that_are_not_json_the_defaults() {
+    fn a_frame_that_is_not_a_picture_is_a_verdict() {
         let mut scanner = loaded();
+        assert_eq!(load_neural(&mut scanner, neural_files()), None);
         for not_a_picture in [&b""[..], b"not a jpeg", &[0xff, 0xd8, 0xff, 0xe0, 0, 16]] {
-            let verdict = answered(&scanner.frame(not_a_picture, None, "{}"));
+            let verdict = answered(&scanner.frame(not_a_picture));
             assert_eq!(verdict["ok"], false);
             // **The decoder's own refusal, and not a panic the session caught.** Natively
             // `Session::guarded` turns a panic into this same shape — `ok: false` and a
@@ -751,25 +527,6 @@ mod tests {
             let error = verdict["error"].as_str().expect("a sentence");
             assert!(error.starts_with("decode:"), "{error}");
         }
-        // A detail image that is not one costs the read it was for, never the frame; and a
-        // detail of no bytes is no detail.
-        let frame = card_frame_jpeg(0);
-        for detail in [&b"not a jpeg"[..], b""] {
-            let verdict = answered(&scanner.frame(&frame, Some(detail), "{}"));
-            assert_eq!(verdict["ok"], true, "{verdict}");
-        }
-
-        // Options nobody can read are the defaults, as the engine's table reads an unreadable
-        // header (`grimoire_core::scanner::frame_from`) — never a refusal of the frame.
-        let defaults = serde_json::to_value(FrameOptions::default().mode).expect("a mode");
-        for options in ["{not json", r#"{"mode":"thorough"}"#, "null", "7"] {
-            let verdict = answered(&scanner.frame(&frame, None, options));
-            assert_eq!(verdict["ok"], true, "{options}: {verdict}");
-            assert_eq!(verdict["mode"], defaults, "{options}: {verdict}");
-        }
-        // A key this build has never heard of is not a fault: the options are `serde(default)`.
-        let verdict = answered(&scanner.frame(&frame, None, r#"{"some_later_slider":3}"#));
-        assert_eq!(verdict["ok"], true);
     }
 
     // ---- Filters, and what a reload owes ------------------------------------------------------
@@ -805,7 +562,7 @@ mod tests {
 
         // With no labels there is nothing to build a mask from, and the crate says so.
         let mut nameless = Scanner::new();
-        nameless.load(Some(bundle()), None, None, None);
+        nameless.load(None);
         let sentence = refused(&nameless.set_filters(LTR));
         assert!(
             sentence.starts_with("Filters need card names"),
@@ -819,25 +576,6 @@ mod tests {
     }
 
     #[test]
-    fn filters_narrow_what_a_frame_can_name() {
-        let _one_thread = card_scanner::host::inline();
-        let mut scanner = loaded();
-        scanner.set_filters(LTR);
-        // The banded card is the `hob` printing, which the filters exclude: it is not among
-        // the candidates, and the frame's best answer is one of the two that are left.
-        // The lock takes three frames to trust the card; the match is on the frame after.
-        let mut verdict = Value::Null;
-        for i in 0..5 {
-            verdict = answered(&scanner.frame(&card_frame_jpeg(i % 3), None, "{}"));
-        }
-        let candidates = verdict["match"]["candidates"]
-            .as_array()
-            .expect("candidates");
-        assert_eq!(candidates.len(), 2, "{candidates:?}");
-        assert!(candidates.iter().all(|c| c["label"]["set"] == "ltr"));
-    }
-
-    #[test]
     fn filters_set_before_the_first_load_are_owed_to_it() {
         let mut scanner = Scanner::new();
         assert_eq!(scanner.set_filters(LTR), r#"{"ok":null}"#);
@@ -845,7 +583,7 @@ mod tests {
             scanner.filters().is_empty(),
             "there is no session to hold them yet"
         );
-        let facts = scanner.load(Some(bundle()), Some(labels()), None, None);
+        let facts = scanner.load(Some(labels()));
         assert_eq!(facts.unapplied_filters, None);
         assert!(
             scanner.filters().same_as(&ltr()),
@@ -857,7 +595,7 @@ mod tests {
         let mut scanner = Scanner::new();
         scanner.set_filters(r#"{"sets":["hob"]}"#);
         scanner.set_filters("{}");
-        scanner.load(Some(bundle()), Some(labels()), None, None);
+        scanner.load(Some(labels()));
         assert!(scanner.filters().is_empty());
     }
 
@@ -866,14 +604,14 @@ mod tests {
         let mut scanner = loaded();
         scanner.set_filters(LTR);
 
-        // Reloaded whole — the models arriving, say: the new session searches under them.
-        let facts = scanner.load(Some(bundle()), Some(labels()), None, None);
+        // Reloaded whole: the new session searches under them.
+        let facts = scanner.load(Some(labels()));
         assert_eq!(facts.unapplied_filters, None);
         assert!(scanner.filters().same_as(&ltr()));
 
         // Reloaded with no labels: there is no mask to build. The session searches every
         // printing, the load says so in the crate's words, and the debt stands.
-        let facts = scanner.load(Some(bundle()), None, None, None);
+        let facts = scanner.load(None);
         let sentence = facts.unapplied_filters.expect("a refusal");
         assert!(
             sentence.starts_with("Filters need card names"),
@@ -881,11 +619,11 @@ mod tests {
         );
         assert!(scanner.filters().is_empty());
         // And through a second one, which is offered them again and still cannot.
-        let facts = scanner.load(Some(bundle()), None, None, None);
+        let facts = scanner.load(None);
         assert!(facts.unapplied_filters.is_some());
 
         // The labels arrive: the filters the reader chose three sessions ago are in force.
-        let facts = scanner.load(Some(bundle()), Some(labels()), None, None);
+        let facts = scanner.load(Some(labels()));
         assert_eq!(facts.unapplied_filters, None);
         assert!(scanner.filters().same_as(&ltr()));
     }
@@ -896,7 +634,7 @@ mod tests {
         let owing = || {
             let mut scanner = loaded();
             scanner.set_filters(LTR);
-            let facts = scanner.load(Some(bundle()), None, None, None);
+            let facts = scanner.load(None);
             assert!(facts.unapplied_filters.is_some());
             scanner
         };
@@ -904,13 +642,13 @@ mod tests {
         // Refused — there are still no labels — so the older filters are still the ones owed.
         let mut scanner = owing();
         refused(&scanner.set_filters(hob));
-        scanner.load(Some(bundle()), Some(labels()), None, None);
+        scanner.load(Some(labels()));
         assert!(scanner.filters().same_as(&ltr()));
 
         // Accepted: clearing the filters needs no labels, and it is the reader's newer word.
         let mut scanner = owing();
         assert_eq!(scanner.set_filters("{}"), r#"{"ok":null}"#);
-        let facts = scanner.load(Some(bundle()), Some(labels()), None, None);
+        let facts = scanner.load(Some(labels()));
         assert_eq!(facts.unapplied_filters, None);
         assert!(scanner.filters().is_empty(), "a settled debt came back");
     }
@@ -932,47 +670,29 @@ mod tests {
         scanner.load_neural(d, e, g, m)
     }
 
-    const NEURAL: &str = r#"{"mode":"neural"}"#;
-
     #[test]
     fn the_neural_files_in_git_load_into_the_session_a_neural_frame_reads() {
-        let _one_thread = card_scanner::host::inline();
         let mut scanner = loaded();
         assert!(!scanner.has_neural());
-        // Unloaded, a Neural frame is a verdict that says so — never an `err`, never a trap.
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, NEURAL));
-        assert_eq!(verdict["mode"], "neural");
+        // Unloaded, a frame is a verdict that says so — never an `err`, never a trap.
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
         assert_eq!(verdict["ok"], false);
-        assert_eq!(
-            verdict["error"],
-            card_scanner::session::NEURAL_UNAVAILABLE_ERROR
-        );
+        assert_eq!(verdict["error"], NEURAL_UNAVAILABLE_ERROR);
 
         assert_eq!(load_neural(&mut scanner, neural_files()), None);
         assert!(scanner.has_neural());
-        // The bundle's session is the one that took them: its names and filters stand.
+        // The labelled session is the one that took them: its names and filters stand.
         assert_eq!(scanner.set_filters(LTR), r#"{"ok":null}"#);
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, NEURAL));
-        assert_eq!(verdict["mode"], "neural");
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
         // Read by the networks this time: the drawn card is no card they know — a frame with no
-        // card in it, as the mode says one — and not a mode without its files.
-        assert_ne!(
-            verdict["error"],
-            card_scanner::session::NEURAL_UNAVAILABLE_ERROR,
-            "{verdict}"
-        );
+        // card in it — and not a session without its files.
+        assert_ne!(verdict["error"], NEURAL_UNAVAILABLE_ERROR, "{verdict}");
+        assert_eq!(verdict["matcher"], true, "{verdict}");
         assert!(verdict["tracked"].is_object(), "{verdict}");
-        // And the other two modes still read as they did beside it.
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, "{}"));
-        assert_eq!(
-            (&verdict["ok"], &verdict["mode"]),
-            (&json!(true), &json!("fast"))
-        );
     }
 
     #[test]
-    fn neural_files_that_are_not_them_are_the_crates_sentence_and_the_mode_stays_unloaded() {
-        let _one_thread = card_scanner::host::inline();
+    fn neural_files_that_are_not_them_are_the_crates_sentence_and_the_session_stays_unloaded() {
         let noise = |n: usize| -> Vec<u8> {
             (0..n as u32)
                 .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
@@ -1035,10 +755,9 @@ mod tests {
             let sentence = refusal.unwrap_or_else(|| panic!("{what} loaded"));
             assert!(!sentence.is_empty(), "{what}");
             assert!(!scanner.has_neural(), "{what}");
-            let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, NEURAL));
+            let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
             assert_eq!(
-                verdict["error"],
-                card_scanner::session::NEURAL_UNAVAILABLE_ERROR,
+                verdict["error"], NEURAL_UNAVAILABLE_ERROR,
                 "{what}: {sentence}"
             );
         }
@@ -1060,7 +779,6 @@ mod tests {
 
     #[test]
     fn evidence_that_would_not_load_is_the_crates_sentence_and_the_recogniser_reads_on() {
-        let _one_thread = card_scanner::host::inline();
         let mut scanner = loaded();
         // Before the recogniser: refused, and nothing loaded by it.
         let refusal = load_neural_evidence(&mut scanner, not_evidence());
@@ -1072,15 +790,10 @@ mod tests {
         // `evidence` section to read them by — and never a panic.
         let refusal = load_neural_evidence(&mut scanner, not_evidence());
         assert!(!refusal.expect("refused after the recogniser").is_empty());
-        // The recogniser stands: a Neural frame is read by its networks, as it was before.
+        // The recogniser stands: a frame is read by its networks, as it was before.
         assert!(scanner.has_neural());
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None, NEURAL));
-        assert_eq!(verdict["mode"], "neural");
-        assert_ne!(
-            verdict["error"],
-            card_scanner::session::NEURAL_UNAVAILABLE_ERROR,
-            "{verdict}"
-        );
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
+        assert_ne!(verdict["error"], NEURAL_UNAVAILABLE_ERROR, "{verdict}");
         assert!(verdict["tracked"].is_object(), "{verdict}");
     }
 
@@ -1090,7 +803,7 @@ mod tests {
         assert_eq!(load_neural(&mut scanner, neural_files()), None);
         // The page never does this — one load a Worker — and if it did, it would owe the files
         // again: they are not kept anywhere but the session.
-        scanner.load(Some(bundle()), Some(labels()), None, None);
+        scanner.load(Some(labels()));
         assert!(!scanner.has_neural());
         assert_eq!(load_neural(&mut scanner, neural_files()), None);
         assert!(scanner.has_neural());

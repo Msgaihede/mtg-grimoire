@@ -1,25 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { VERDICTS, STATUS } from "./fixtures";
-import type { ScannerStatus, ScannerVerdict } from "./types";
+import type { ScannerVerdict } from "./types";
 import {
   barFill,
-  bundleSentence,
   cameraSentence,
   headline,
-  leadLine,
-  modelsSentence,
+  neuralSentence,
   shareLine,
   standingValue,
 } from "./verdictText";
-
-/**
- * The clause every asset sentence ends with, **written out here rather than imported**.
- *
- * A test that reads the module's own constant cannot tell a changed sentence from a correct
- * one — it would agree with whatever the module says, including the empty string. This is the
- * wording, spelled twice on purpose, and the two agree by hand.
- */
-const RESTART = "Restart the app after adding or replacing a file.";
 
 describe("the headline", () => {
   it("is the decided card's name, and otherwise says what the frame is", () => {
@@ -29,40 +18,31 @@ describe("the headline", () => {
     expect(headline(null)).toBe("looking…");
   });
 
-  it("names the decision, not the hash's leader, when a title read overrode it", () => {
+  it("names the decision, not the agreement's leader, when the two differ", () => {
     const decision = VERDICTS.decided.decision;
     if (decision === null || decision.label === null) throw new Error("the premise: a decision");
-    const overridden: ScannerVerdict = {
+    const another: ScannerVerdict = {
       ...VERDICTS.decided,
       decision: { ...decision, label: { ...decision.label, name: "Strider, Ranger of the North" } },
     };
-    expect(headline(overridden)).toBe("Strider, Ranger of the North");
+    expect(headline(another)).toBe("Strider, Ranger of the North");
   });
 });
 
-describe("the vote rule's numbers", () => {
-  it("fills the bar with votes over the bar, capped at one", () => {
-    expect(barFill(VERDICTS.voting.tracked)).toBeCloseTo(5 / 8);
+describe("the agreement's numbers", () => {
+  it("fills the bar with the confidence, capped at one", () => {
+    expect(barFill(VERDICTS.voting.tracked)).toBeCloseTo(0.625);
     expect(barFill(VERDICTS.decided.tracked)).toBe(1);
-    expect(barFill(VERDICTS.confidence.tracked)).toBeCloseTo(0.8);
+    expect(barFill({ ...VERDICTS.decided.tracked!, confidence: 1.2 })).toBe(1);
     expect(barFill(null)).toBe(0);
   });
 
-  it("fills the bar and says so when Fast decided on clear frames short of the bar", () => {
-    const tracked = { ...VERDICTS.decided.tracked!, early: true };
-    tracked.standings = [{ ...tracked.standings[0], evidence: 2 }];
-    expect(barFill(tracked)).toBe(1);
-    expect(shareLine(tracked)).toBe("2.0/8 · clear · 8f");
-  });
-
-  it("writes the tally, the frames and the lead the way the debug page does", () => {
-    expect(shareLine(VERDICTS.voting.tracked)).toBe("5.0/8 · 12f");
-    expect(shareLine(VERDICTS.confidence.tracked)).toBe("80% over 12f");
-    expect(leadLine(VERDICTS.voting.tracked)).toBe("×4.0");
-    expect(leadLine(VERDICTS.decided.tracked)).toBe("unopposed");
-    expect(leadLine(VERDICTS.confidence.tracked)).toBe("—");
-    expect(standingValue(VERDICTS.voting.tracked!.standings[0], "votes")).toBe("5.0");
-    expect(standingValue(VERDICTS.confidence.tracked!.standings[0], "confidence")).toBe("90%");
+  it("writes the leader's votes over the bar and the frames read", () => {
+    expect(shareLine(VERDICTS.voting.tracked)).toBe("1.3/2 · 3f");
+    expect(shareLine(VERDICTS.decided.tracked)).toBe("2.0/2 · 2f");
+    expect(shareLine(VERDICTS.noMatch.tracked)).toBe("0.0/2 · 3f");
+    expect(shareLine(null)).toBe("—");
+    expect(standingValue(VERDICTS.voting.tracked!.standings[0])).toBe("1.3");
   });
 });
 
@@ -71,135 +51,26 @@ describe("the sentences", () => {
     expect(cameraSentence(new DOMException("x", "NotAllowedError")).message).toBe(
       "MTG Grimoire needs camera access to scan a card.",
     );
-    expect(cameraSentence(new DOMException("x", "NotFoundError")).message).toBe("No camera on this device.");
+    expect(cameraSentence(new DOMException("x", "NotFoundError")).message).toBe(
+      "No camera on this device.",
+    );
     expect(cameraSentence(new Error("boom")).message).toBe("Camera error: Error.");
   });
 
-  it("names the missing file and where it looked", () => {
-    expect(bundleSentence(STATUS.present)).toBeNull();
-    expect(bundleSentence(STATUS.missing)).toBe(
-      `No reference bundle. Put \`card-hashes.bin\` at ${STATUS.missing.bundle.path}. ${RESTART}`,
-    );
-    expect(modelsSentence(STATUS.noModels)).toBe(
-      `No OCR models. Put \`text-detection.rten\` and \`text-recognition.rten\` at ${STATUS.noModels.detection_model.path}. ${RESTART}`,
-    );
-    expect(modelsSentence(STATUS.present)).toBeNull();
-  });
-
   /**
-   * The state `loaded` alone cannot see. A file that is *there* and did not parse used to draw
-   * the sentence above — an instruction to put a file where that file already is — and
-   * `Asset.error`, the only thing that says what went wrong, was rendered nowhere at all.
+   * **One sentence, for files that were there and did not load** — and none for files that are
+   * not there, which are never a reader's to place: built into the binary, or fetched by a page.
    */
-  it("prints a present-but-unreadable file's own reason instead of an instruction", () => {
-    const bundle = bundleSentence(STATUS.corrupt);
-    expect(bundle).toBe(
-      `\`card-hashes.bin\` at ${STATUS.corrupt.bundle.path} did not load: ${STATUS.corrupt.bundle.error}. ${RESTART}`,
+  it("says the recogniser did not load in the load's words, and nothing else", () => {
+    expect(neuralSentence(STATUS.corrupt)).toBe(
+      "The card recognizer did not load: gallery: bad magic.",
     );
-    expect(bundle).not.toContain("Put `card-hashes.bin`");
-
-    const models = modelsSentence(STATUS.corrupt);
-    expect(models).toBe(
-      `\`text-detection.rten\` at ${STATUS.corrupt.detection_model.path} did not load: ${STATUS.corrupt.detection_model.error}. ${RESTART}`,
-    );
-    expect(models).not.toContain("No OCR models");
+    for (const status of [STATUS.present, STATUS.missing, STATUS.unlabelled, STATUS.store, null]) {
+      expect(neuralSentence(status)).toBeNull();
+    }
   });
 
-  /**
-   * **A file the host has offered to fetch draws no instruction to place it** — the offer stands
-   * where the sentence would, and a path nobody can reach on a phone is not said. Absent or
-   * there-and-unreadable alike: both are a bundle a download replaces. What is not about a file
-   * to fetch is said either way, and so is everything once the file has loaded.
-   */
-  it("says nothing about a file the host has offered to fetch", () => {
-    expect(bundleSentence(STATUS.missing, true)).toBeNull();
-    expect(bundleSentence(STATUS.corrupt, true)).toBeNull();
-    expect(modelsSentence(STATUS.noModels, true)).toBeNull();
-    expect(modelsSentence(STATUS.corrupt, true)).toBeNull();
-    // Card names are `corpus.db`'s, not a file an offer covers.
-    expect(bundleSentence(STATUS.unlabelled, true)).toBe(bundleSentence(STATUS.unlabelled));
-    expect(bundleSentence(STATUS.unlabelled, true)).not.toBeNull();
-    expect(bundleSentence(STATUS.present, true)).toBeNull();
-    expect(modelsSentence(STATUS.present, true)).toBeNull();
-    // And unsaid, the offer changes nothing: the Developer panels still name the path.
-    expect(bundleSentence(STATUS.missing, false)).toBe(bundleSentence(STATUS.missing));
-    expect(bundleSentence(STATUS.missing)).toContain(STATUS.missing.bundle.path);
-  });
-
-  /** The pair fails as one, so the sentence names whichever asset is carrying the reason. */
-  it("names the recognition model when it is the one that failed", () => {
-    const recognitionOnly: ScannerStatus = {
-      ...STATUS.corrupt,
-      detection_model: { ...STATUS.corrupt.detection_model, loaded: true, error: null },
-    };
-    expect(modelsSentence(recognitionOnly)).toBe(
-      `\`text-recognition.rten\` at ${recognitionOnly.recognition_model.path} did not load: ${recognitionOnly.recognition_model.error}. ${RESTART}`,
-    );
-  });
-
-  /**
-   * A bundle that loaded and labels that did not. **Not a broken scanner** — every match still
-   * lands and every match reads as an id — so the sentence says that rather than reporting a
-   * missing file, and `MatchPanel` draws it under the verdict rather than in place of one.
-   */
-  it("says the names failed where the bundle itself did not", () => {
-    expect(bundleSentence(STATUS.unlabelled)).toBe(
-      `Bundle loaded, but card names didn't: ${STATUS.unlabelled.bundle.error}. Matches will show IDs. ${RESTART}`,
-    );
-  });
-
-  /**
-   * Every asset sentence carries it, and it is the only part that makes the rest actionable:
-   * assets load once, on the first command, so a file placed while the app is running changes
-   * nothing until a restart.
-   */
-  it("ends every asset sentence with the restart clause", () => {
-    const sentences = [
-      bundleSentence(STATUS.missing),
-      bundleSentence(STATUS.corrupt),
-      bundleSentence(STATUS.unlabelled),
-      modelsSentence(STATUS.noModels),
-      modelsSentence(STATUS.corrupt),
-    ];
-    expect(sentences.every((s) => s !== null)).toBe(true);
-    for (const sentence of sentences) expect(sentence).toContain(RESTART);
-  });
-
-  /**
-   * **A release build is this state, and it draws nothing.** The bundle and both models come out
-   * of the binary with no file overriding them, so there is nothing to place and nothing broken —
-   * every sentence above is an instruction about `data/scanner/`, and none of them applies.
-   */
-  it("says nothing about assets compiled into the binary", () => {
-    expect(bundleSentence(STATUS.embedded)).toBeNull();
-    expect(modelsSentence(STATUS.embedded)).toBeNull();
-  });
-
-  /**
-   * The labels are `corpus.db`'s, not the binary's, so an embedded bundle can lose them exactly as
-   * a placed one can — and that sentence is about the names, which embedding does not supply.
-   */
-  it("still says the names failed on an embedded bundle", () => {
-    const embeddedUnlabelled: ScannerStatus = {
-      ...STATUS.embedded,
-      bundle: { ...STATUS.embedded.bundle, error: STATUS.unlabelled.bundle.error },
-      labels: 0,
-    };
-    expect(bundleSentence(embeddedUnlabelled)).toBe(
-      `Bundle loaded, but card names didn't: ${STATUS.unlabelled.bundle.error}. Matches will show IDs. ${RESTART}`,
-    );
-  });
-
-  /** An absent bundle keeps its placement sentence whatever else the binary carries. */
-  it("keeps the placement sentence for an absent bundle beside embedded models", () => {
-    const absentBundle: ScannerStatus = { ...STATUS.embedded, bundle: STATUS.missing.bundle };
-    expect(bundleSentence(absentBundle)).toBe(
-      `No reference bundle. Put \`card-hashes.bin\` at ${STATUS.missing.bundle.path}. ${RESTART}`,
-    );
-  });
-
-  it("says nothing at all when there is no status yet", () => {
-    expect(bundleSentence(null)).toBeNull();
-    expect(modelsSentence(null)).toBeNull();
+  it("never tells a reader to place a file or to restart", () => {
+    expect(neuralSentence(STATUS.corrupt)).not.toMatch(/Put |restart|data[\\/]scanner/i);
   });
 });

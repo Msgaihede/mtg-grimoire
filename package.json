@@ -44,8 +44,6 @@
     "test:coverage:rust": "node scripts/coverage-rust.ts",
     "golden": "node scripts/golden.ts",
     "changelog": "node scripts/changelog/cli.ts",
-    "scanner:assets": "node scripts/scanner-assets.ts",
-    "scanner:bench": "node scripts/scanner-bench.ts",
     "scanner:corpus": "node scripts/scanner-corpus.ts",
     "scanner:replay": "node scripts/scanner-replay.ts",
     "storybook": "storybook dev -p 6006",

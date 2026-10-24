@@ -20,19 +20,14 @@
 export default function init(input?: { module_or_path: string }): Promise<unknown>;
 
 /**
- * Build the session from bytes, replacing the one there was. Each is optional. Answers
- * `scanProtocol.ts`'s `LoadFacts` under `ok`; never an `err` for a file that would not load —
- * that is a fact on its own asset.
+ * Build the session, replacing the one there was, with the labels the engine encoded — or none.
+ * Answers `scanProtocol.ts`'s `LoadFacts` under `ok`; never an `err` for labels that would not
+ * decode — the session then answers ids, and says it attached none.
  */
-export function load(
-  bundle?: Uint8Array | null,
-  labels?: Uint8Array | null,
-  detection?: Uint8Array | null,
-  recognition?: Uint8Array | null,
-): string;
+export function load(labels?: Uint8Array | null): string;
 
 /**
- * Give the session the Neural mode's four files — `card-neural`'s detector, embedder, gallery and
+ * Give the session the recogniser's four files — `card-neural`'s detector, embedder, gallery and
  * `neural.json`. **Not the envelope**: `undefined`, or the crate's sentence for files that would
  * not load. Into the session `load` built; a later `load` lets them go with it.
  */
@@ -44,7 +39,7 @@ export function load_neural(
 ): string | undefined;
 
 /**
- * Give the session the Neural mode's printing evidence — `card-neural`'s set symbol and collector
+ * Give the session the recogniser's printing evidence — `card-neural`'s set symbol and collector
  * band networks and their galleries — after `load_neural` has taken the recogniser. **Not the
  * envelope**: `undefined`, or the crate's sentence — before the recogniser, without an
  * `evidence` section in its `neural.json`, or for files that would not load. A refusal leaves
@@ -57,15 +52,8 @@ export function load_neural_evidence(
   bands: Uint8Array,
 ): string | undefined;
 
-/**
- * One frame. `options` is a `FrameOptions` as JSON; left out, empty, or text that is not one,
- * it is the defaults. Answers the verdict exactly as the desktop's `scanner_frame` serialises it.
- */
-export function frame(
-  jpeg: Uint8Array,
-  detail?: Uint8Array | null,
-  options?: string | null,
-): string;
+/** One frame, a JPEG. Answers the verdict exactly as the desktop's `scanner_frame` serialises it. */
+export function frame(jpeg: Uint8Array): string;
 
 /** Forget the card in front of the lens, keeping the session. */
 export function reset(): string;

@@ -36,11 +36,10 @@ construction).
 - [Scryfall and the price feeds](#scryfall-and-the-price-feeds)
 - [Scryfall's Tagger datasets](#scryfalls-tagger-datasets)
 - [Commander Spellbook's combo feed](#commander-spellbooks-combo-feed)
-- [The scanner's files, from this repository's GitHub release](#the-scanners-files-from-this-repositorys-github-release)
+- [The scanner's files, from nowhere but the app](#the-scanners-files-from-nowhere-but-the-app)
 - [Sync and the hosted relay](#sync-and-the-hosted-relay)
 - [Entitlements, removal and leaving](#entitlements-removal-and-leaving)
 - [The share Worker (read-only shared collection)](#the-share-worker-read-only-shared-collection)
-- [The scanner's files, from this repository's GitHub release](#the-scanners-files-from-this-repositorys-github-release)
 - [The app Worker (the light app's web host)](#the-app-worker-the-light-apps-web-host)
 - [The scan Worker (the scanner's inbox)](#the-scan-worker-the-scanners-inbox)
 
@@ -92,35 +91,21 @@ prose columns (**corpus schema 2**, the corpus ladder's first rung ever) and why
 no combo" and "we have never downloaded the list" have to be two different sentences.
 [commander-brackets.md](../reference/commander-brackets.md) has every measurement.
 
-## The scanner's files, from this repository's GitHub release
+## The scanner's files, from nowhere but the app
 
-**GitHub is an outbound host of the engine's since 2026-10-07, and the only one a launch never
-asks.** The scanner needs a bundle of card hashes and two OCR models — 18.1 MB together. A
-desktop release build carries them in its binary and asks nobody. An install that does not — a
-phone, a developer's build — is **offered** them: `scanner_assets` says which are owed and what
-they cost, and only a reader's press on that offer calls `scanner_assets_fetch`, which downloads
-them from `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
-— the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
-`scripts/scanner-assets.ts` already reads at build time. **Optional in the price feeds' sense**:
-nothing is fetched until the reader asks, and without them the scanner detects a card and names
-nothing rather than failing. GitHub answers with a redirect to its asset host
-(`release-assets.githubusercontent.com` when asked on 2026-10-07), which the client follows; an
-answer that did not arrive over HTTPS is refused, each file is checked before it is kept, and
-the request carries the app's `User-Agent` and nothing else — no token, the repository is public.
-**A browser cannot ask it**: a release download sends no `Access-Control-Allow-Origin`, so the
-engine refuses both commands on a page before any request, and the web host's source for these
-files is its own origin's to provide (the light app's step 7.5).
-[card-scanner.md](../reference/card-scanner.md) §10 has the rules and what was measured.
+**The scanner asks no outside host.** Its files are the Neural recogniser's eight, in git
+(`crates/card-neural/models/`): the desktop and Android binaries compile them in, and the web build
+serves them from the app's own origin (`/scanner-neural/<set>/`, fetched by the page when its
+scanner Worker first needs them) — no host in the hosting policy's `connect-src` beyond the
+origin. Until 2026-10-24 the engine also downloaded a hash bundle and two OCR models from this
+repository's `scanner-bundle-v*` GitHub release; that download went with the Fast and Exact modes,
+and nothing reads or publishes that release any more.
+[card-scanner.md](../reference/card-scanner.md) §10 has where each host gets the files.
 
-**The web app asks GitHub nothing.** A release download sends no CORS header, so a browser
-cannot read it: the web build copies the same three files into its own static files
-(`pnpm scanner:assets --web`, run by `ci.yml`'s and `release.yml`'s `web` jobs) and a
-reader's press fetches them from the app's own origin, `/scanner-assets/` — no new host in the
-hosting policy's `connect-src`. `pnpm web:scanner-smoke` makes one request of its own, from
-Node and never from the browser: the picture of the one card its camera shows, from
-`cards.scryfall.io`, under the app's `User-Agent`, tried three times and kept — by
-`actions/cache` in CI, in the temp folder on a desk — so most runs ask nothing (card image
-bytes are not committed).
+**`pnpm web:scanner-smoke` makes one request of its own**, from Node and never from the browser:
+the picture of the one card its camera shows, from `cards.scryfall.io`, under the app's
+`User-Agent`, tried three times and kept — by `actions/cache` in CI, in the temp folder on a desk
+— so most runs ask nothing (card image bytes are not committed).
 
 ## Sync and the hosted relay
 
@@ -237,39 +222,6 @@ at the tag, after the relay's: it applies any pending migration of its own
 (`infrastructure/share-worker/migrations/`, bookkept in `d1_migrations_share`, in the relay's database),
 then deploys the Worker with the viewer `share` built — with `CLOUDFLARE_INFRA_API_TOKEN`, which is set (first used by the 0.44.0 release). **Were it removed, the job would end green having deployed nothing, and this Worker would be deployed by hand, when asked.** A deploy between releases is still by hand and asked for.
 
-## The scanner's files, from this repository's GitHub release
-
-**The scanner's three files are the sixth, the only download a launch never starts, and the
-first thing the _engine_ asks GitHub for** (2026-10-07; the desktop's own updater has asked
-`api.github.com` since it shipped). The scanner needs a bundle of card hashes and two OCR models
-— 18.1 MB together. A desktop release build carries them in its binary and asks nobody. An
-install that does not — a phone, a developer's build — is **offered** them: `scanner_assets` says
-which are owed and what they cost, and only a reader's press on that offer calls
-`scanner_assets_fetch`, which downloads them from
-`https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
-— the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
-`scripts/scanner-assets.ts` already reads at build time. **Optional in the price feeds' sense**:
-nothing is fetched until the reader asks, and without them the scanner detects a card and names
-nothing rather than failing.
-
-**What is trusted, and why.** The request carries the app's `User-Agent` and nothing else — no
-token, the repository is public. GitHub answers with a redirect to its asset host
-(`release-assets.githubusercontent.com` when asked on 2026-10-07), which the client follows —
-and the client is **HTTPS-only**, on the request and on every hop of a redirect, so nothing is
-read over a link that is not encrypted. **The two models are pinned by SHA-256** in the engine
-(`scanner_assets::{DETECTION,RECOGNITION}_SHA256`): a model that is not byte for byte the
-published one is refused before any loader sees it, whoever sent it, and the publishing
-workflow checks the same two digests so it cannot upload one the installed apps would refuse.
-**The bundle cannot be pinned** — it is rebuilt every week — so it is held to its ceiling, its
-format and not being empty; what vouches for its contents is the HTTPS chain to GitHub and the
-repository's own release. A wrong bundle that parses would name the wrong cards; it runs no
-code. No file takes its name until it has passed its check, and a failed fetch is a sentence and
-a row in `error_log`.
-
-**A browser cannot ask it**: a release download sends no `Access-Control-Allow-Origin`, so the
-engine refuses both commands on a page before any request, and the web host's source for these
-files is its own origin's to provide (the light app's step 7.5).
-[card-scanner.md](../reference/card-scanner.md) §10 has the rules and what was measured.
 ## The app Worker (the light app's web host)
 
 **A _third_ Worker is the light app's web host, and it has been deployed since 2026-10-04.** `infrastructure/app-worker/` serves

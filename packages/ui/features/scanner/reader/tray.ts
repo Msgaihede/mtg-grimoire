@@ -36,8 +36,8 @@ export interface RowDefaults {
 /**
  * What a row is called when the session could name no printing.
  *
- * A decision with no `label` is a bundle whose labels did not load — `corpus.db` absent, or a read
- * that failed — so the match still landed and the row still commits; it simply has no words.
+ * A decision with no `label` is a session whose labels did not load — `corpus.db` absent, or a
+ * read that failed — so the match still landed and the row still commits; it simply has no words.
  */
 const UNKNOWN_NAME = "Unknown card";
 
@@ -117,12 +117,12 @@ export function rowFromDecision(
  * the newest row instead of adding one** — but only when that row is the same oracle card, or
  * the same printing when neither has an oracle id. Tokens and art cards can have no oracle id;
  * that must not turn a second opinion about the same printing into another copy (#742).
- * "Fast said Forest, switch to Exact to pin the printing" is one card on the mat, and
- * adding would file it twice. The row keeps its key, quantity and finish — the reader's own
- * answers, and the flash's identity — and takes everything that says *which printing* from the
- * decision, its choices included. **An `unknown` finish is no answer to keep**, so a row still
- * waiting on one takes the second opinion's — Exact's closer read of the same card may be the one
- * that measured the separator. The session's flag alone is not enough: a row the reader removed
+ * A filter changed with one card on the mat — "not that set, the other one" — is one card
+ * re-read, and adding would file it twice. The row keeps its key, quantity and finish — the
+ * reader's own answers, and the flash's identity — and takes everything that says *which
+ * printing* from the decision, its choices included. **An `unknown` finish is no answer to
+ * keep**, so a row still waiting on one takes the second opinion's — the printing it now names
+ * may be one printed in a single finish. The session's flag alone is not enough: a row the reader removed
  * or scanned past is not the card the session remembers, and replacing it would overwrite a
  * different card. So a newest row of another card is an ordinary add.
  */

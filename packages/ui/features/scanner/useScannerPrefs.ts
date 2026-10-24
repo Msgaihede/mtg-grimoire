@@ -4,11 +4,7 @@ import { registerUnsavedCheck } from "@/lib/crossWindow";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { ScanFilters, ScannerPrefs } from "./types";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
-import {
-  refusalPasses,
-  scannerUnavailable,
-  SCANNER_OPEN_ELSEWHERE,
-} from "./verdictText";
+import { refusalPasses, scannerUnavailable, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /** The one cache entry the prefs live in — the query's key and every write's. */
 const PREFS_KEY = ["scanner", "prefs"] as const;
@@ -70,9 +66,8 @@ const NO_FILTERS: ScanFilters = {
  * agree by a test rather than by hand.
  */
 export const SCANNER_PREFS_BEFORE_LOAD: ScannerPrefs = {
-  mode: "fast",
   filters: NO_FILTERS,
-  // `scanner::DETECT_FINISH`: a policy, not a finish — the scanner reads each card's.
+  // `scanner::DETECT_FINISH`: a policy, not a finish — each card's printing decides it.
   finish: "detect",
   condition: "NONE",
   folderId: null,
@@ -126,14 +121,6 @@ export interface ScannerPrefsState {
    * sends no frame — and nothing is sent again, because no wait changes it.
    */
   unavailable: string | null;
-  /**
-   * **The engine's session is a new one: give it the reader's filters again.** The mount's push
-   * went to a session the engine has since let go (`ScannerState::forget`, for scanner files
-   * that arrived by download), so this sends the stored filters to the one that replaced it —
-   * what the mount effect does, asked for by name. Nothing else is touched: `loaded` stays as it
-   * is, so the camera and the pump run on through it.
-   */
-  resync: () => void;
 }
 
 function current(qc: QueryClient): ScannerPrefs {
@@ -141,7 +128,7 @@ function current(qc: QueryClient): ScannerPrefs {
 }
 
 /**
- * The scanner's `app_meta` row — its mode, filters, the tray's defaults and the Developer switch —
+ * The scanner's `app_meta` row — its filters, the tray's defaults and the Developer switch —
  * and the one place the filters meet the session.
  *
  * **The cache entry is the state.** Every change is a `setQueryData` on `["scanner", "prefs"]`
@@ -377,48 +364,6 @@ export function useScannerPrefs(): ScannerPrefsState {
     }
   }, [data, failed, push]);
 
-  /**
-   * The filters to a session that has just replaced the one the mount pushed to.
-   *
-   * **The stored row's, read again — not the cache's.** A session with no card hashes has no
-   * names to filter by, so the mount's push of a reader's stored filters was refused there and
-   * the cache was put back to none, which is what that session was searching under. The row was
-   * never rewritten for it, so the row still holds what the reader chose, and the session that
-   * can finally take it is this one. Unless a change is still on its way to the row: then the
-   * cache is the newer word, and it is what is pushed.
-   *
-   * Never after the view has gone — an accepted push is the scanner's lease, taken.
-   */
-  const resync = useCallback(() => {
-    if (!mountedRef.current) return;
-    if (hasUnsavedPrefs(qc)) {
-      push(current(qc).filters, false);
-      return;
-    }
-    // **Read beside the cache, not through it.** A read through the query would write the row
-    // over the entry as it answered — and over a change the reader made while it was on its
-    // way, whose own write is still going out. So the row is read on its own, and it reaches
-    // the entry only if the entry is still the one this read set out from, with nothing
-    // unsaved; otherwise the reader has said something newer, and that is what is pushed.
-    const before = qc.getQueryData<ScannerPrefs>(PREFS_KEY);
-    ipc.scannerPrefs().then(
-      (stored) => {
-        if (!mountedRef.current) return;
-        const untouched = qc.getQueryData<ScannerPrefs>(PREFS_KEY) === before;
-        if (!untouched || hasUnsavedPrefs(qc)) {
-          push(current(qc).filters, false);
-          return;
-        }
-        qc.setQueryData<ScannerPrefs>(PREFS_KEY, stored);
-        push(stored.filters, false);
-      },
-      // The row would not read: the cache is all there is to push.
-      () => {
-        if (mountedRef.current) push(current(qc).filters, false);
-      },
-    );
-  }, [qc, push]);
-
   const update = useCallback(
     (patch: Partial<ScannerPrefs>) => {
       qc.setQueryData<ScannerPrefs>(PREFS_KEY, { ...current(qc), ...patch });
@@ -439,6 +384,5 @@ export function useScannerPrefs(): ScannerPrefsState {
     inForce,
     filterError,
     unavailable,
-    resync,
   };
 }

@@ -175,65 +175,26 @@ export const FinishSheet: Story = {
 };
 
 /**
- * Everything that is not on the bar, behind its one press: the mode again with each mode's
- * sentence, the filters, the tray's two defaults.
+ * Everything that is not on the bar, behind its one press: how scanning runs, the filters, the
+ * tray's two defaults.
  *
  * No Camera row — this device has one camera or none, so there is no choice to draw — and no
  * Developer switch: the developer panels are the desktop's.
  */
 export const Options: Story = {
-  render: () => <Refused prefs={{ mode: "exact", finish: "foil", condition: "NM" }} />,
+  render: () => <Refused prefs={{ finish: "foil", condition: "NM" }} />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await waitFor(() =>
-      expect(canvas.getByRole("button", { name: "Exact" })).toHaveAttribute("aria-pressed", "true"),
-    );
-    await userEvent.click(canvas.getByRole("button", { name: "Scanner options" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Scanner options" }));
     const sheet = await canvas.findByRole("dialog", { name: "Scanner options" });
     const rows = within(sheet)
       .getAllByRole("button")
       .map((row) => row.textContent);
-    await expect(rows).toContain("Scan modeExact");
+    await expect(rows.some((row) => row?.startsWith("Scan mode"))).toBe(false);
     await expect(rows).toContain("FiltersAny set");
     await expect(rows).toContain("FinishFoil");
     await expect(rows).toContain("ConditionNear mint");
     await expect(within(sheet).queryByRole("switch")).toBeNull();
-  },
-};
-
-/**
- * The page in **Neural**, the third mode and the newest: lit on the bar, and named on the sheet's
- * first page; its own page says each mode's sentence, Neural's the one that says it is new and
- * worth a try.
- *
- * The bar is three segments now, and at a phone's width they do not fit beside *Stop scanning*:
- * the switch and the Options press go to a line of their own together. Narrow the canvas to 360px
- * with the workbench's viewport tool to see it fold; at 412px it is one line.
- */
-export const NeuralMode: Story = {
-  render: () => <Refused prefs={{ mode: "neural" }} />,
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await waitFor(() =>
-      expect(canvas.getByRole("button", { name: "Neural" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      ),
-    );
-    const group = canvas.getByRole("group", { name: "Scan mode" });
-    await expect(
-      within(group)
-        .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual(["Fast", "Exact", "Neural"]);
-    await userEvent.click(canvas.getByRole("button", { name: "Scanner options" }));
-    const sheet = await canvas.findByRole("dialog", { name: "Scanner options" });
-    await userEvent.click(within(sheet).getByRole("button", { name: /^Scan mode/ }));
-    const modes = within(within(sheet).getByRole("list", { name: "Scan modes" })).getAllByRole(
-      "button",
-    );
-    await expect(modes[2]).toHaveAttribute("aria-current", "true");
-    await expect(modes[2]).toHaveTextContent(/^Neural\s*New:/);
   },
 };
 
@@ -306,33 +267,24 @@ export const ScanHistory: Story = {
 };
 
 /**
- * The scanner's data absent — the state a light install starts in, since it does not carry the
- * bundle and the reading models inside its binary.
- *
- * The slot kept for it under the camera draws the offer to fetch it — one sentence with the
- * measured size, what each file is, and a Download button — in place of the status's own
- * sentences, which named a path to put files at. Nothing is fetched until the press. The status
- * line says cards can be found and not named, and the Filters row in Options is refused, with its
- * reason. (`Scanner/Assets` presses it: the bar, the failure, and the offer clearing.)
+ * A build with nothing to scan with — no recogniser and no card names. The slot under the camera
+ * draws nothing — the recogniser is never a reader's to place — and the Filters row in Options is
+ * refused, with its reason.
  */
-export const AssetsMissing: Story = {
+export const RecognizerMissing: Story = {
   parameters: { fake: { fault: "scannerMissing" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const offer = await canvas.findByRole("region", { name: "Scanner files" });
-    await expect(
-      within(offer).getByText("The scanner needs its card data — about 19 MB."),
-    ).toBeInTheDocument();
-    await expect(within(offer).getByRole("button", { name: "Download" })).toBeInTheDocument();
-    await expect(canvas.queryByText(/No reference bundle\. Put/)).not.toBeInTheDocument();
+    await userEvent.click(await canvas.findByRole("button", { name: "Scanner options" }));
+    const sheet = await canvas.findByRole("dialog", { name: "Scanner options" });
     await waitFor(() =>
-      expect(canvas.getByRole("status", { name: "Scanner status" })).toHaveTextContent(
-        "Card hashes aren't loaded",
+      expect(within(sheet).getByRole("button", { name: /^Filters/ })).toHaveTextContent(
+        "Filters need the card database",
       ),
     );
+    await expect(canvasElement.querySelector("[data-scanner-data-slot]")).toBeNull();
   },
 };
-
 /**
  * Another window holds the scanner: two sentences, no camera, no tray.
  *

@@ -21,11 +21,9 @@ const FRAMES: ScannerSubmissionFrame[] = ["AQ==", "Ag==", "Aw==", "BA==", "BQ=="
     jpeg,
     ms: -10 - (all.length - 1 - index) * 110,
     ok: true,
-    lock: "locked",
     confidence: 1,
     distance: 30,
     decided: null,
-    detail: false,
   }),
 );
 const LAST = FRAMES.length;
@@ -36,7 +34,8 @@ const picture = () => screen.getByRole("img");
 const slider = () => screen.getByRole("slider", { name: "Picture" });
 const play = () => screen.getByRole("button", { name: "Play" });
 /** Which picture is showing, by its place in the run. */
-const showing = () => FRAMES.findIndex((one) => picture().getAttribute("src")?.endsWith(one.jpeg)) + 1;
+const showing = () =>
+  FRAMES.findIndex((one) => picture().getAttribute("src")?.endsWith(one.jpeg)) + 1;
 
 /** One step of a pass on the fake clock, with React's queue drained after it. */
 function step(times = 1) {

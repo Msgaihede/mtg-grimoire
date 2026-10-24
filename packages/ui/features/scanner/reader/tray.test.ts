@@ -24,18 +24,18 @@ import {
 import { VERDICTS } from "../fixtures";
 
 /**
- * The Exact fixture's resolved card, **as a printing sold in both finishes** — Alpha's Lotus was
+ * The fixture's resolved card, **as a printing sold in both finishes** — Alpha's Lotus was
  * printed in one, which would settle every row's finish before a test about the reducer could set
  * it. The corpus's say over a finish has tests of its own (issue #982).
  */
 const resolved: ScannerDecision = {
-  ...VERDICTS.exactResolved.decision!,
+  ...VERDICTS.resolved.decision!,
   finishes: ["nonfoil", "foil"],
 };
-const ambiguous = VERDICTS.exactAmbiguous.decision!;
+const ambiguous = VERDICTS.ambiguous.decision!;
 
-/** What Fast said about the Bolt in frame: its second printing, resolved, no choices. */
-const fastBolt: ScannerDecision = {
+/** The Bolt in frame named outright: its second printing, resolved, no choices. */
+const namedBolt: ScannerDecision = {
   ...ambiguous,
   printing: ambiguous.choices[1].id,
   label: ambiguous.choices[1].label,
@@ -43,16 +43,15 @@ const fastBolt: ScannerDecision = {
   choices: [],
   replaces_previous: false,
   finishes: ["nonfoil", "foil"],
-  finish_mark: null,
 };
 
 describe("tray", () => {
   describe("a decision that replaces the previous one", () => {
     it("replaces the newest row's printing and choices, keeping its key, quantity and finish", () => {
-      const fast = addDecision([], fastBolt, { finish: "nonfoil" }, 1, "a").rows;
-      const reader = setQuantity(setFinish(fast, "a", "foil"), "a", 3);
-      const exact = { ...ambiguous, replaces_previous: true };
-      const { rows, bumped, replaced } = addDecision(reader, exact, { finish: "nonfoil" }, 5, "b");
+      const first = addDecision([], namedBolt, { finish: "nonfoil" }, 1, "a").rows;
+      const reader = setQuantity(setFinish(first, "a", "foil"), "a", 3);
+      const second = { ...ambiguous, replaces_previous: true };
+      const { rows, bumped, replaced } = addDecision(reader, second, { finish: "nonfoil" }, 5, "b");
       expect(replaced).toBe(true);
       expect(bumped).toBe(false);
       expect(rows).toHaveLength(1);
@@ -71,7 +70,7 @@ describe("tray", () => {
     it("closes a waiting row's question when the second opinion pins one printing", () => {
       const waiting = addDecision([], ambiguous, { finish: "nonfoil" }, 1, "a").rows;
       const pinned: ScannerDecision = {
-        ...fastBolt,
+        ...namedBolt,
         printing: ambiguous.choices[2].id,
         label: ambiguous.choices[2].label,
         replaces_previous: true,
@@ -87,7 +86,7 @@ describe("tray", () => {
       const lotus = addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows;
       const { rows, bumped, replaced } = addDecision(
         lotus,
-        { ...fastBolt, replaces_previous: true },
+        { ...namedBolt, replaces_previous: true },
         { finish: "nonfoil" },
         2,
         "b",
@@ -99,7 +98,7 @@ describe("tray", () => {
     });
 
     it("never replaces a different printing with no oracle id", () => {
-      const nameless: ScannerDecision = { ...fastBolt, oracle_id: null };
+      const nameless: ScannerDecision = { ...namedBolt, oracle_id: null };
       const first = addDecision([], nameless, { finish: "nonfoil" }, 1, "a").rows;
       const other: ScannerDecision = {
         ...nameless,
@@ -112,7 +111,7 @@ describe("tray", () => {
     });
 
     it("replaces a second opinion of the same printing without an oracle id", () => {
-      const art: ScannerDecision = { ...fastBolt, oracle_id: null };
+      const art: ScannerDecision = { ...namedBolt, oracle_id: null };
       const first = setQuantity(
         setFinish(addDecision([], art, { finish: "nonfoil" }, 1, "a").rows, "a", "foil"),
         "a",
@@ -132,7 +131,7 @@ describe("tray", () => {
     });
 
     it("counts a re-presented copy without an oracle id when it is not a second opinion", () => {
-      const token: ScannerDecision = { ...fastBolt, oracle_id: null };
+      const token: ScannerDecision = { ...namedBolt, oracle_id: null };
       const first = addDecision([], token, { finish: "nonfoil" }, 1, "a").rows;
       const { rows, replaced, bumped } = addDecision(first, token, { finish: "nonfoil" }, 2, "b");
       expect(replaced).toBe(false);
@@ -141,7 +140,7 @@ describe("tray", () => {
     });
 
     it("adds a second printing of the same card when the session did not say it replaces", () => {
-      const first = addDecision([], fastBolt, { finish: "nonfoil" }, 1, "a").rows;
+      const first = addDecision([], namedBolt, { finish: "nonfoil" }, 1, "a").rows;
       const { rows, replaced } = addDecision(first, ambiguous, { finish: "nonfoil" }, 2, "b");
       expect(replaced).toBe(false);
       expect(rows).toHaveLength(2);
@@ -305,17 +304,17 @@ describe("tray", () => {
     });
 
     it("fits the reader's finish to a second opinion's printing", () => {
-      const fast = setFinish(
-        addDecision([], fastBolt, { finish: "nonfoil" }, 1, "a").rows,
+      const first = setFinish(
+        addDecision([], namedBolt, { finish: "nonfoil" }, 1, "a").rows,
         "a",
         "nonfoil",
       );
       const foilPromo: ScannerDecision = {
-        ...fastBolt,
+        ...namedBolt,
         finishes: ["foil"],
         replaces_previous: true,
       };
-      expect(addDecision(fast, foilPromo, { finish: "nonfoil" }, 2, "b").rows[0]).toMatchObject({
+      expect(addDecision(first, foilPromo, { finish: "nonfoil" }, 2, "b").rows[0]).toMatchObject({
         key: "a",
         finish: "foil",
       });
@@ -389,14 +388,14 @@ describe("tray", () => {
 
   /** A second opinion fills an Unknown finish, and never overwrites one the row already had. */
   it("takes a second opinion's finish only when the row's was unknown", () => {
-    const fast = addDecision([], fastBolt, { finish: "unknown" }, 1, "a").rows;
-    const exact = { ...ambiguous, replaces_previous: true };
-    expect(addDecision(fast, exact, { finish: "foil" }, 2, "b").rows[0]).toMatchObject({
+    const first = addDecision([], namedBolt, { finish: "unknown" }, 1, "a").rows;
+    const second = { ...ambiguous, replaces_previous: true };
+    expect(addDecision(first, second, { finish: "foil" }, 2, "b").rows[0]).toMatchObject({
       key: "a",
       finish: "foil",
     });
-    const set = setFinish(fast, "a", "nonfoil");
-    expect(addDecision(set, exact, { finish: "foil" }, 2, "b").rows[0].finish).toBe("nonfoil");
+    const set = setFinish(first, "a", "nonfoil");
+    expect(addDecision(set, second, { finish: "foil" }, 2, "b").rows[0].finish).toBe("nonfoil");
   });
 
   it("sets a row back to unknown, to hold it out of the next Add", () => {
@@ -411,7 +410,7 @@ describe("tray", () => {
   it("splits a commit into the known-finish rows and the ones that need a finish", () => {
     let rows = addDecision([], resolved, { finish: "foil" }, 1, "a").rows;
     rows = addDecision(rows, resolved, { finish: "foil" }, 2, "a2").rows; // a bump: ×2
-    rows = addDecision(rows, fastBolt, { finish: "unknown" }, 3, "b").rows;
+    rows = addDecision(rows, namedBolt, { finish: "unknown" }, 3, "b").rows;
     rows = setQuantity(rows, "b", 3);
 
     expect(readyRows(rows).map((r) => r.key)).toEqual(["a"]);
@@ -544,10 +543,10 @@ describe("tray", () => {
     const first = addDecision([], resolved, { finish: "nonfoil" }, 1, "first").rows;
 
     it("lands a new row, a second copy, a second opinion and a card added by hand", () => {
-      const scanned = addDecision(first, fastBolt, { finish: "nonfoil" }, 2, "bolt").rows;
+      const scanned = addDecision(first, namedBolt, { finish: "nonfoil" }, 2, "bolt").rows;
       expect(headLanded(first, scanned)).toBe(true);
       // The same printing again bumps the head — the same key, a fresh stamp.
-      const bumped = addDecision(scanned, fastBolt, { finish: "nonfoil" }, 3, "spare").rows;
+      const bumped = addDecision(scanned, namedBolt, { finish: "nonfoil" }, 3, "spare").rows;
       expect(bumped[0].key).toBe("bolt");
       expect(headLanded(scanned, bumped)).toBe(true);
       const reread = addDecision(
@@ -576,7 +575,7 @@ describe("tray", () => {
     });
 
     it("lands nothing for an edit, a removal of the head, an empty tray or the same rows", () => {
-      const rows = addDecision(first, fastBolt, { finish: "nonfoil" }, 2, "bolt").rows;
+      const rows = addDecision(first, namedBolt, { finish: "nonfoil" }, 2, "bolt").rows;
       expect(headLanded(rows, setQuantity(rows, "bolt", 3))).toBe(false);
       expect(headLanded(rows, setFinish(rows, "bolt", "foil"))).toBe(false);
       // The row the head uncovers was already there, with its own stamp.

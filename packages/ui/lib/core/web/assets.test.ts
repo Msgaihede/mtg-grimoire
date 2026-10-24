@@ -20,7 +20,6 @@ import {
   neuralPath,
   neuralTable,
   NOT_A_PLACE,
-  SCANNER_ASSETS_PREFIX,
   wasmContentType,
   wasmFileOf,
   wasmPath,
@@ -213,8 +212,6 @@ describe("where the Neural scanner's four files are served from", () => {
       expect(isScannerFile(neuralPath("ab12", name).slice(1)), name).toBe(true);
     expect(NOT_A_PLACE).toContain(NEURAL_PREFIX);
     expect(isNavigation("GET", "text/html", "/scanner-neural/ab12/gallery")).toBe(false);
-    // Its own tree, not the three files' — those are revalidated, these are kept a year.
-    expect(NEURAL_PREFIX.startsWith(SCANNER_ASSETS_PREFIX)).toBe(false);
   });
 
   it("serves the constants as JSON and the rest as bytes", () => {

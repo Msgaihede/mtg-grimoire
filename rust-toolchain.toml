@@ -1,5 +1,5 @@
 # The Rust toolchain every build of this repo uses — `cargo` run anywhere under the root, every
-# CI job, every release leg and the scanner-bundle workflow alike.
+# CI job, every release leg and the Neural models' delivery alike.
 #
 # **Pinned, never `stable` or `nightly`.** CI runs `clippy -D warnings`, and a new release ships
 # new lints: with a floating channel one Rust release could turn every open PR red with no change

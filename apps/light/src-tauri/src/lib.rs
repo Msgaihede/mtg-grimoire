@@ -6,17 +6,15 @@
 //! - **one command, [`core_call`]**, which answers every call the page makes by forwarding it to
 //!   [`grimoire_core::dispatch`] — so a command the core's table does not have is refused here
 //!   in the table's own words, and `packages/ui/lib/core` picks this transport by asking nothing of the
-//!   page (see [`HOST_MARK`]). **The scanner's commands are twelve of them** (phase 7, step
-//!   7.3): a camera frame is `core_call { name: "scanner_frame", args: <its headers>, body:
-//!   <the JPEG, base64> }`, decoded here and judged by the core's session on the blocking pool.
+//!   page (see [`HOST_MARK`]). **The scanner's commands are among them** (phase 7, step 7.3):
+//!   a camera frame is `core_call { name: "scanner_frame", args: {}, body: <the JPEG, base64> }`,
+//!   decoded here and judged by the core's session on the blocking pool.
 //!   This host needs nothing of its own for it — the page's camera is the WebView's, granted
 //!   through the manifest's `CAMERA` permission by wry's own `onPermissionRequest`, as the
 //!   pairing scanner's already is; the video is a `srcObject` and the frame a canvas `toBlob`
 //!   read as bytes, so the CSP is asked for neither `media-src` nor `blob:`. **It embeds the
-//!   Neural scanner's files and nothing else** ([`carried`]): the session loads the other three
-//!   from `<data>/scanner/` (`card-hashes.bin`, `models/text-detection.rten`,
-//!   `models/text-recognition.rten`) once the core has downloaded them on a reader's press, and
-//!   until those are there a Fast or Exact frame is detected and names nothing;
+//!   Neural scanner's files** ([`carried`]), and the session names cards from the corpus's
+//!   labels;
 //! - **the startup gate** the page waits on before it mounts ([`startup`]), answered inside
 //!   `core_call` because the core has no window to start;
 //! - **the `mtgimg` protocol**, answered by the core's [`grimoire_core::images::answer`] — the
@@ -367,16 +365,13 @@ pub(crate) fn spawn_downloads(state: &Arc<State>) {
 }
 
 /// What this host's binary carries of the scanner's files, for the core's
-/// `ScannerState::carry`: **the Neural scanner's four and their printing evidence's four, and
-/// nothing else.** They are in git (`crates/card-neural/models/`) and compiled in by
-/// `card_neural::bundled()` and `bundled_evidence()`, as the desktop's are. The other three —
-/// the bundle and the two OCR models — are not carried, so they stay owed and are downloaded on
-/// a reader's press (`scanner_assets`), as before.
+/// `ScannerState::carry`: **the Neural scanner's four and their printing evidence's four.** They
+/// are in git (`crates/card-neural/models/`) and compiled in by `card_neural::bundled()` and
+/// `bundled_evidence()`, as the desktop's are.
 fn carried() -> grimoire_core::scanner::Embedded {
     grimoire_core::scanner::Embedded {
         neural: Some(card_neural::bundled()),
         neural_evidence: Some(card_neural::bundled_evidence()),
-        ..grimoire_core::scanner::Embedded::none()
     }
 }
 
@@ -494,61 +489,15 @@ mod tests {
         AAAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAA\
         ABQAACfAAAAAAAAAAAAAAAAAAAAAB//Z";
 
-    /// **What this install owes of the scanner's files, as the page asks it** — through the one
-    /// command this host registers, forwarded to the core's table, which is the whole of what a
-    /// phone needs for the offer: nothing here is the host's own. An Android build embeds none
-    /// of the three — only the Neural scanner's files ([`carried`]), which are never owed — so a
-    /// fresh install owes all three, at the core's sizes, with the Neural scanner loaded beside
-    /// them. The fetch itself is the core's to test (`scanner_assets::tests`): a call from here
-    /// would ask GitHub.
-    #[test]
-    fn a_fresh_install_owes_the_scanners_three_files() {
-        let (state, _dir) =
-            grimoire_core::state::fixtures::on_files("light-scanner-assets", "http://127.0.0.1:9");
-        state.scanner.carry(carried());
-        let status = tauri::async_runtime::block_on(forward(&state, "scanner_status", None, None))
-            .expect("the status");
-        assert_eq!(status["neural"]["source"], "embedded", "{status}");
-        assert_eq!(status["neural"]["loaded"], true, "{status}");
-        assert_eq!(status["bundle"]["source"], "absent", "{status}");
-        let owed = tauri::async_runtime::block_on(forward(&state, "scanner_assets", None, None))
-            .expect("what is owed");
-        let keys: Vec<_> = owed["owed"]
-            .as_array()
-            .expect("rows")
-            .iter()
-            .map(|row| row["key"].as_str().expect("a key"))
-            .collect();
-        assert_eq!(keys, ["bundle", "detectionModel", "recognitionModel"]);
-        assert_eq!(owed["fetching"], false);
-        assert_eq!(
-            owed["bytes"],
-            grimoire_core::scanner_assets::BUNDLE_BYTES
-                + grimoire_core::scanner_assets::DETECTION_BYTES
-                + grimoire_core::scanner_assets::RECOGNITION_BYTES
-        );
-        // And the fetch is a command this host answers — refused here only for carrying a body.
-        assert_eq!(
-            tauri::async_runtime::block_on(forward(
-                &state,
-                "scanner_assets_fetch",
-                None,
-                Some("AAEC".to_owned())
-            )),
-            Err("scanner_assets_fetch takes no raw body.".to_owned())
-        );
-    }
-
     /// **A camera frame, as it crosses this host**: the call `packages/ui/lib/core/table.ts` makes of a
-    /// `Uint8Array` — the headers as `args`, the bytes as base64 in `body` — forwarded to the
-    /// core's table and judged by its session. On an install with nothing in `<data>/scanner/`,
-    /// which is every Android install until the assets are downloaded: the status says where it
-    /// looked, and the frame is decoded and answered by a session with no reference.
+    /// `Uint8Array` — no headers, the bytes as base64 in `body` — forwarded to the core's table
+    /// and judged by its session, which carries the Neural scanner's files as this binary does.
     #[test]
     fn a_frame_crosses_as_base64_and_is_judged_by_the_cores_session() {
         use serde_json::json;
-        let (state, dir) =
+        let (state, _dir) =
             grimoire_core::state::fixtures::on_files("light-scanner-frame", "http://127.0.0.1:9");
+        state.scanner.carry(carried());
         let ask = |name: &'static str, args: Option<Value>, body: Option<&str>| {
             tauri::async_runtime::block_on(forward(&state, name, args, body.map(str::to_owned)))
         };
@@ -558,22 +507,12 @@ mod tests {
         assert_eq!(ask("scanner_elsewhere", None, None), Ok(json!(false)));
 
         let status = ask("scanner_status", None, None).expect("the status");
-        let looked = std::path::PathBuf::from(status["bundle"]["path"].as_str().expect("a path"));
-        assert_eq!(looked, dir.join("scanner").join("card-hashes.bin"));
-        assert_eq!(status["bundle"]["source"], "absent");
+        assert_eq!(status["neural"]["source"], "embedded", "{status}");
+        assert_eq!(status["neural"]["loaded"], true, "{status}");
 
-        let verdict = ask(
-            "scanner_frame",
-            Some(json!({ "x-scanner-options": r#"{"mode":"exact"}"# })),
-            Some(FRAME),
-        )
-        .expect("a verdict");
+        let verdict = ask("scanner_frame", Some(json!({})), Some(FRAME)).expect("a verdict");
         assert_eq!(verdict["frame"], json!({ "w": 160, "h": 120 }), "{verdict}");
-        assert_eq!(verdict["matcher"], false, "{verdict}");
-        assert_eq!(
-            verdict["mode"], "exact",
-            "the headers rode as the arguments"
-        );
+        assert_eq!(verdict["matcher"], true, "{verdict}");
 
         // A body that is not base64 is this host's refusal, and one that is missing the table's.
         let garbled = ask("scanner_frame", Some(json!({})), Some("not base64!")).unwrap_err();

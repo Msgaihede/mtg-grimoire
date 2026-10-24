@@ -1,49 +1,46 @@
 import { describe, expect, it } from "vitest";
-import type { ScannerChoice, ScannerResolution, ScannerTracked, ScannerVerdict } from "@/lib/ipc";
+import type { ScannerChoice, ScannerTracked, ScannerVerdict } from "@/lib/ipc";
 import { VERDICTS } from "../fixtures";
 import { filtering, filterSummary, matchStrip, NO_FILTERS, type LastAdded } from "./readerText";
 
-/**
- * A resolve's outcome on its own, with nothing else in it — every rung but the ambiguous one reads
- * the outcome and nothing more, so a fixture carrying tiers would be scenery the assertion ignores.
- * The ambiguous rung also counts the choices and asks whether they name one card, so it is handed
- * them.
- */
-const resolution = (
-  outcome: ScannerResolution["outcome"],
-  choices: ScannerChoice[] = [],
-): ScannerResolution => ({ outcome, choices, tiers: [], elapsed_ms: 41 });
-
-/** Three printings of Lightning Bolt the margin could not split — the shared ambiguous resolve. */
-const boltChoices = VERDICTS.exactAmbiguous.resolution?.choices ?? [];
+/** Three printings of Lightning Bolt one picture stands for — the shared ambiguous decision. */
+const boltChoices = VERDICTS.ambiguous.decision?.choices ?? [];
 
 /**
- * The two tracker states every rung below the no-card one turns on, taken off the shared
- * fixtures: `decided` is a card the tracker has settled on, `voting` one it is still weighing,
- * and both are locked with a quad in frame. Spread over the Exact fixture so the frame is the mode
- * this pass added rather than the vote rule's alone.
+ * The two agreement states every rung below the no-card one turns on, taken off the shared
+ * fixtures: `decided` is a card the agreement has settled on, `voting` one it is still weighing.
  *
- * **`settled` names two cards on purpose**: its tracker leads with Storm of Saruman (LTR 72) and
- * its decision is the Exact resolve's Black Lotus (LEA 232), which is the shape of an Exact frame
- * whose resolve pinned another printing than the hash's leader — so a rung that names the wrong
- * source names the wrong card here.
+ * **`settled` names two cards on purpose**: its agreement leads with Storm of Saruman (LTR 72)
+ * and its decision is Black Lotus (LEA 232) — so a rung that names the wrong source names the
+ * wrong card here.
  */
-const settled: ScannerVerdict = { ...VERDICTS.exactResolved, quad: VERDICTS.decided.quad, lock: VERDICTS.decided.lock, tracked: VERDICTS.decided.tracked };
-const weighing: ScannerVerdict = { ...VERDICTS.exactResolved, quad: VERDICTS.voting.quad, lock: VERDICTS.voting.lock, tracked: VERDICTS.voting.tracked };
+const settled: ScannerVerdict = { ...VERDICTS.resolved, tracked: VERDICTS.decided.tracked };
+const weighing: ScannerVerdict = { ...VERDICTS.voting, decision: null };
 
-const forest: LastAdded = { name: "Forest", setCode: "hob", collectorNumber: "193", bumpedTo: null, replaced: false };
+/** A settled frame whose decision offers `choices` to pick from. */
+const offering = (choices: ScannerChoice[]): ScannerVerdict => ({
+  ...VERDICTS.ambiguous,
+  decision: { ...VERDICTS.ambiguous.decision!, choices },
+});
+
+const forest: LastAdded = {
+  name: "Forest",
+  setCode: "hob",
+  collectorNumber: "193",
+  bumpedTo: null,
+  replaced: false,
+};
 
 describe("matchStrip", () => {
-  it("says the scanner cannot name anything while no hashes are loaded, whatever is in frame", () => {
-    expect(matchStrip(settled, "exact", forest, false, resolution("resolved"))).toEqual({
+  it("says the scanner cannot name anything while no recogniser is loaded, whatever is in frame", () => {
+    expect(matchStrip({ ...settled, matcher: false }, forest)).toEqual({
       word: "Can't identify",
       tone: "error",
       name: null,
       printing: null,
-      sentence: "Card hashes aren't loaded, so cards can be detected but not identified.",
+      sentence: "The card recognizer isn't loaded, so cards can't be identified.",
       fill: 0,
       committed: false,
-      threshold: "end",
     });
   });
 
@@ -57,217 +54,83 @@ describe("matchStrip", () => {
       fill: 0,
       committed: false,
     };
-    expect(matchStrip(null, "fast", null, true, null)).toMatchObject(looking);
-    expect(matchStrip(VERDICTS.noCard, "exact", forest, true, resolution("not_found"))).toMatchObject(
-      looking,
-    );
+    expect(matchStrip(null, null)).toMatchObject(looking);
+    expect(matchStrip(VERDICTS.noCard, forest)).toMatchObject(looking);
   });
 
-  it("says a resolve found nothing, even before the tracker settles", () => {
-    expect(matchStrip(weighing, "exact", null, true, resolution("not_found"))).toMatchObject({
-      word: "No match",
-      tone: "error",
-      name: null,
-      sentence: "Try better lighting or clear the filters.",
-      fill: 0,
-      committed: false,
-    });
-  });
-
-  it("names the card and counts its printings when a settled card resolved to several", () => {
-    expect(matchStrip(settled, "exact", forest, true, resolution("ambiguous", boltChoices))).toEqual({
+  it("names the card and counts its printings when a settled card stands for several", () => {
+    expect(matchStrip(VERDICTS.ambiguous, forest)).toEqual({
       word: "3 printings",
       tone: "attention",
       name: "Lightning Bolt",
-      // A card, not a printing — which printing is what the tray is asking.
+      // A card, not a printing: which printing is the question the tray is asking.
       printing: null,
       sentence: "Pick a printing in the tray",
       fill: 1,
       committed: true,
-      threshold: "end",
     });
   });
 
-  it("asks for a pick without a count when the resolve carries no choices to count", () => {
-    expect(matchStrip(settled, "exact", forest, true, resolution("ambiguous"))).toMatchObject({
+  it("asks for a pick without a count when there is one printing to pick", () => {
+    expect(matchStrip(offering(boltChoices.slice(0, 1)), null)).toMatchObject({
       word: "Pick a printing",
-      name: null,
-      sentence: "Pick a printing in the tray",
+      tone: "attention",
     });
   });
 
-  /** A tie between two names is not a card settled — the strip must not name the first of them. */
   it("names no card when the printings to pick from are not one card", () => {
-    const tie: ScannerChoice[] = [
-      boltChoices[0],
-      { id: "chain", oracle_id: null, label: { name: "Chain Lightning", set: "lgn", number: "94", lang: "en", released: "1998-02-23" }, distance: 0.15, finishes: ["nonfoil"] },
-    ];
-    expect(matchStrip(settled, "exact", forest, true, resolution("ambiguous", tie))).toMatchObject({
+    const other = {
+      ...boltChoices[1],
+      label: { ...boltChoices[1].label!, name: "Chain Lightning" },
+    };
+    expect(matchStrip(offering([boltChoices[0], other]), null)).toMatchObject({
       word: "2 printings",
       name: null,
-      sentence: "Pick a printing in the tray",
     });
   });
 
-  it("does not ask for a pick on a card the tracker has not settled on", () => {
-    expect(matchStrip(weighing, "exact", null, true, resolution("ambiguous", boltChoices))).toMatchObject({
-      word: "Reading",
-      tone: "progress",
-      sentence: "Hold steady — reading…",
-    });
+  it("does not ask for a pick on a card the agreement has not settled on", () => {
+    const unsettled: ScannerVerdict = { ...VERDICTS.ambiguous, tracked: VERDICTS.voting.tracked };
+    expect(matchStrip(unsettled, null)).toMatchObject({ word: "Matching", tone: "progress" });
   });
 
   it("names the printing a settled card was added as", () => {
-    expect(matchStrip(VERDICTS.decided, "fast", forest, true, null)).toEqual({
+    expect(
+      matchStrip(VERDICTS.decided, {
+        ...forest,
+        name: "Storm of Saruman",
+        setCode: "ltr",
+        collectorNumber: "72",
+      }),
+    ).toEqual({
       word: "Matched",
       tone: "done",
-      name: "Forest",
-      printing: "HOB 193",
+      name: "Storm of Saruman",
+      printing: "LTR 72",
       sentence: "Added · swap in the next card",
       fill: 1,
       committed: true,
-      threshold: "end",
     });
   });
 
-  /**
-   * The hash's leader here is Storm of Saruman and the resolve's decision Black Lotus; the tray
-   * filed Forest LTR 270. Only the tray's row is what was filed, so only it may be named.
-   */
-  it("names what the tray filed in Exact, not the hash's leader or the resolve's first choice", () => {
-    const pinned: LastAdded = { ...forest, setCode: "ltr", collectorNumber: "270", replaced: true };
-    expect(matchStrip(settled, "exact", pinned, true, resolution("resolved"))).toMatchObject({
-      word: "Matched",
-      name: "Forest",
-      printing: "LTR 270",
-      sentence: "Printing updated",
-    });
+  it("names what the tray filed, not the agreement's leader or the decision's label", () => {
+    expect(matchStrip(settled, forest)).toMatchObject({ name: "Forest", printing: "HOB 193" });
   });
 
-  it("says a second copy as a count", () => {
-    expect(matchStrip(settled, "fast", { ...forest, bumpedTo: 2 }, true, null)).toMatchObject({
-      word: "Matched",
-      name: "Forest",
-      sentence: "Added again — ×2",
-    });
+  it("says a second copy as a count, and a second opinion as an update", () => {
+    expect(matchStrip(settled, { ...forest, bumpedTo: 3 }).sentence).toBe("Added again — ×3");
+    expect(matchStrip(settled, { ...forest, replaced: true }).sentence).toBe("Printing updated");
   });
 
   it("names no printing for a card with no label", () => {
-    const unknown: LastAdded = { name: "Unknown card", setCode: "", collectorNumber: "", bumpedTo: null, replaced: false };
-    expect(matchStrip(settled, "fast", unknown, true, null)).toMatchObject({
-      name: "Unknown card",
+    expect(matchStrip(settled, { ...forest, setCode: "", collectorNumber: "" })).toMatchObject({
+      name: "Forest",
       printing: null,
-      sentence: "Added · swap in the next card",
     });
   });
 
-  it("says matched on the decided card before the tray has taken one", () => {
-    expect(matchStrip(VERDICTS.decided, "fast", null, true, null)).toMatchObject({
-      word: "Matched",
-      tone: "done",
-      name: "Storm of Saruman",
-      printing: "LTR 72",
-      sentence: "Hold steady",
-      fill: 1,
-      committed: true,
-    });
-  });
-
-  /**
-   * Fast holds a commit one frame for the read that confirms it, and that frame carries no
-   * decision. `lastAdded` is still the card before — naming it as matched would put the previous
-   * card's name over the new one in the camera.
-   */
-  it("does not name the last card filed on a Fast frame that has not decided yet", () => {
-    const confirming: ScannerVerdict = { ...VERDICTS.decided, decision: null };
-    expect(matchStrip(confirming, "fast", forest, true, null)).toMatchObject({
-      word: "Matched",
-      name: "Storm of Saruman",
-      printing: "LTR 72",
-      sentence: "Hold steady",
-    });
-  });
-
-  /** Exact is settled by its resolve; a tracker that got there first is still being read. */
-  it("keeps reading an Exact card the tracker settled before its resolve answered", () => {
-    const early: ScannerVerdict = { ...settled, decision: null, resolution: null };
-    expect(matchStrip(early, "exact", forest, true, null)).toEqual({
-      word: "Reading",
-      tone: "progress",
-      name: "Storm of Saruman",
-      printing: "LTR 72",
-      sentence: "Hold steady — reading…",
-      fill: 1,
-      committed: false,
-      threshold: "end",
-    });
-  });
-
-  it("says the card is being read while Exact holds a lock it has not settled", () => {
-    expect(matchStrip(weighing, "exact", null, true, null)).toEqual({
-      word: "Reading",
-      tone: "progress",
-      name: "Plains",
-      printing: "2XM 373",
-      sentence: "Hold steady — reading…",
-      fill: 0.625,
-      committed: false,
-      threshold: "end",
-    });
-  });
-
-  it("says hold steady otherwise, with the tracker's leader and its bar", () => {
-    expect(matchStrip(weighing, "fast", null, true, null)).toEqual({
-      word: "Matching",
-      tone: "progress",
-      name: "Plains",
-      printing: "2XM 373",
-      sentence: "Hold steady",
-      fill: 0.625,
-      committed: false,
-      threshold: "end",
-    });
-    const acquiring: ScannerVerdict = { ...weighing, lock: { phase: "acquiring", agree: 1, misses: 0 } };
-    expect(matchStrip(acquiring, "exact", null, true, null)).toMatchObject({ word: "Matching", sentence: "Hold steady" });
-  });
-
-  it("names nothing while there is no tracker to lead", () => {
-    const untracked: ScannerVerdict = { ...weighing, tracked: null };
-    expect(matchStrip(untracked, "fast", null, true, null)).toMatchObject({
-      word: "Matching",
-      name: null,
-      printing: null,
-      fill: 0,
-    });
-  });
-
-  it("puts the hairline at 70% under the confidence rule, and at the end under votes", () => {
-    const gathering: ScannerTracked = { ...(VERDICTS.confidence.tracked as ScannerTracked), committed: false, confidence: 0.55 };
-    const strip = matchStrip({ ...VERDICTS.confidence, decision: null, tracked: gathering }, "fast", null, true, null);
-    expect(strip).toMatchObject({ word: "Matching", fill: 0.55, threshold: 0.7 });
-    expect(matchStrip(weighing, "fast", null, true, null).threshold).toBe("end");
-  });
-
-  it("fills the bar under the confidence rule once the card is matched", () => {
-    // Committed at 80%: the bar is the question "decided yet?", and the answer is yes.
-    expect(matchStrip(VERDICTS.confidence, "fast", null, true, null)).toMatchObject({
-      word: "Matched",
-      name: "Plains",
-      fill: 1,
-      committed: true,
-      threshold: 0.7,
-    });
-  });
-});
-
-/**
- * Neural is Fast's case on every rung Fast's committed words apply to — it is settled by its
- * tracker, not by a resolve — and it reads no text, so it never says *Reading*. What it adds is
- * a choice of printings carried on the decision itself, since it runs no resolve to latch.
- */
-describe("matchStrip in Neural", () => {
-  it("says matched on a committed Neural frame, naming the decision", () => {
-    expect(matchStrip(VERDICTS.neuralDecided, "neural", null, true, null)).toEqual({
+  it("says matched on the decided card before the tray has taken one, naming the decision", () => {
+    expect(matchStrip(settled, null)).toEqual({
       word: "Matched",
       tone: "done",
       name: "Black Lotus",
@@ -275,76 +138,45 @@ describe("matchStrip in Neural", () => {
       sentence: "Hold steady",
       fill: 1,
       committed: true,
-      threshold: "end",
     });
   });
 
-  it("names the printing the tray filed once it has taken the card", () => {
-    expect(matchStrip(VERDICTS.neuralDecided, "neural", forest, true, null)).toMatchObject({
-      word: "Matched",
-      name: "Forest",
-      printing: "HOB 193",
-      sentence: "Added · swap in the next card",
-    });
+  it("does not name the last card filed on a frame that has not decided", () => {
+    expect(matchStrip(weighing, forest)).toMatchObject({ word: "Matching", name: "Plains" });
   });
 
-  it("says matched on the tracker's leader on a commit with no decision yet, as Fast does", () => {
-    const committing: ScannerVerdict = { ...VERDICTS.decided, mode: "neural", decision: null };
-    expect(matchStrip(committing, "neural", forest, true, null)).toMatchObject({
+  it("says matched on the agreement's leader on a commit with no decision on it", () => {
+    const committed: ScannerVerdict = { ...VERDICTS.decided, decision: null };
+    expect(matchStrip(committed, forest)).toMatchObject({
       word: "Matched",
       name: "Storm of Saruman",
+      printing: "LTR 72",
       sentence: "Hold steady",
     });
   });
 
-  it("never says it is reading, even over a locked card it is still weighing", () => {
-    const locked: ScannerVerdict = {
-      ...weighing,
-      mode: "neural",
-      decision: null,
-      resolution: null,
-    };
-    expect(locked.lock?.phase).toBe("locked");
-    expect(matchStrip(locked, "neural", null, true, null)).toMatchObject({
+  it("says hold steady otherwise, with the agreement's leader and its bar", () => {
+    expect(matchStrip(weighing, null)).toEqual({
       word: "Matching",
       tone: "progress",
       name: "Plains",
+      printing: "2XM 373",
       sentence: "Hold steady",
       fill: 0.625,
+      committed: false,
     });
   });
 
-  it("asks for a pick when the picture stands for several printings, over the card added", () => {
-    expect(VERDICTS.neuralAmbiguous.resolution).toBeNull();
-    expect(matchStrip(VERDICTS.neuralAmbiguous, "neural", forest, true, null)).toEqual({
-      word: "3 printings",
-      tone: "attention",
-      name: "Lightning Bolt",
-      printing: null,
-      sentence: "Pick a printing in the tray",
-      fill: 1,
-      committed: true,
-      threshold: "end",
-    });
-  });
-
-  it("does not ask for a pick before the tracker has settled", () => {
-    const weighingBolt: ScannerVerdict = {
-      ...VERDICTS.neuralAmbiguous,
-      tracked: { ...(VERDICTS.voting.tracked as ScannerTracked), committed: false },
-    };
-    expect(matchStrip(weighingBolt, "neural", forest, true, null)).toMatchObject({
+  it("names nothing while there is no agreement to lead", () => {
+    const blank: ScannerVerdict = { ...VERDICTS.voting, tracked: null };
+    expect(matchStrip(blank, null)).toMatchObject({
       word: "Matching",
-      tone: "progress",
+      name: null,
+      printing: null,
+      fill: 0,
     });
-  });
-
-  /** The decision's choices are Neural's question only — Exact asks through its resolve. */
-  it("reads choices off the decision in Neural alone", () => {
-    expect(matchStrip(VERDICTS.neuralAmbiguous, "exact", forest, true, null)).toMatchObject({
-      word: "Matched",
-      sentence: "Added · swap in the next card",
-    });
+    const empty: ScannerTracked = { ...VERDICTS.voting.tracked!, standings: [] };
+    expect(matchStrip({ ...VERDICTS.voting, tracked: empty }, null)).toMatchObject({ name: null });
   });
 });
 
@@ -354,12 +186,18 @@ describe("filterSummary", () => {
   });
 
   it("names up to two sets by code, upper-cased", () => {
-    expect(filterSummary({ sets: ["hob", "ltr"], released_from: null, released_to: null })).toBe("HOB, LTR");
+    expect(filterSummary({ sets: ["hob", "ltr"], released_from: null, released_to: null })).toBe(
+      "HOB, LTR",
+    );
   });
 
   it("counts past two sets", () => {
     expect(
-      filterSummary({ sets: ["hob", "ltr", "mh3"], released_from: "2020-01-01", released_to: "2024-12-31" }),
+      filterSummary({
+        sets: ["hob", "ltr", "mh3"],
+        released_from: "2020-01-01",
+        released_to: "2024-12-31",
+      }),
     ).toBe("3 sets · 2020-01-01 – 2024-12-31");
   });
 

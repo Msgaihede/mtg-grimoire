@@ -351,47 +351,33 @@ jobs:
 
       # **The `card-scanner` crate's own suite, which ran in no CI job until 2026-09-08.** It is
       # a separate cargo package, excluded from the workspace on purpose, so the `cargo test`
-      # above does not touch a line of it — and `session::tests` is where the `live.html` key
-      # census, the panic guard and the reader cadence live. `pnpm verify` was the only fence.
-      # `--features cli` is what `verify` runs, so the debug server's tests are in it.
+      # above does not touch a line of it — and `session::tests` is where the verdict's keys,
+      # the panic guard and the Neural session's decisions live. `pnpm verify` was the only fence.
+      # `--features cli` is what `verify` runs, so the replay's tests are in it.
       #
-      # **Test-only, on purpose.** The crate is not `cargo fmt`-clean and carries four
-      # pre-existing clippy warnings — both measured and listed in
-      # `docs/reference/card-scanner.md` §8 — so `fmt --check` and `clippy -D warnings` would go
-      # red on day one for something this step is not about. Tidying it is its own commit.
+      # **Test-only, on purpose.** The crate is not `cargo fmt`-clean and carries clippy
+      # warnings (`docs/reference/card-scanner.md` §8), so `fmt --check` and `clippy -D warnings`
+      # would go red for something this step is not about. Tidying it is its own commit.
       #
       # Linux only, like `cargo fmt` above: the crate's one platform gate (`host.rs`, since
       # 2026-10-07) tells a browser from everything else, so Windows and Linux compile the same
-      # paths and a second leg would compile `ocrs`/`rten` again to prove the same thing.
+      # paths and a second leg would compile `rten` again to prove the same thing.
       #
-      # **Two commands, because `cli` does not compile the `builder` binaries** (2026-09-15).
-      # `build-hashes` and `eval` sit behind `builder` (`ureq` + `rayon`), so until the second line
-      # a change that broke either — or a test inside them — went red only in
-      # `scanner-bundle.yml`'s weekly run, which is the job that publishes what every release
-      # embeds. `--bins` because the library's own tests already ran in the first command.
-      #
-      # **And a third, because one library module is `builder`-only** (2026-09-30, #703):
-      # `synth` is `#[cfg(feature = "builder")]`, so neither line above compiled its tests —
-      # including the one that proves the evaluation's frames are something the detector can
-      # see. `--lib synth` runs that module alone rather than the whole library a second time.
+      # **Two commands, because a feature decides what compiles**: with `cli` the replay and
+      # the corpus's readers (`corpus`, behind it) are built and tested, and plain is the crate as
+      # the browser's host links it — no SQLite, the labels handed over as bytes — so a change
+      # that compiles only with `corpus` on goes red here, not in the `web` job.
       #
       # **`--target-dir` on every line, since the workspace** (2026-10-02). Cargo reads its config
       # from the working directory, never from `--manifest-path`, so run from the repository
       # root these would follow `.cargo/config.toml` into `target` — the workspace's tree,
       # and the one the cache above saves. The flag keeps this package building where it always
       # has; `crates/card-scanner/.cargo/config.toml` says the same to a run started inside it.
-      #
-      # **And a fourth, for the frame bench** (2026-10-07, the light app's step 7.1):
-      # `crates/card-scanner/bench` is a package of its own beside the crate — the session loaded
-      # from bytes, which is what a browser's Worker and an Android shell are each handed — so
-      # none of the three lines above compiles it. Its two other targets are the `core` job's.
       - name: cargo test (card-scanner)
         if: matrix.os == 'ubuntu-22.04'
         run: |
           cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
-          cargo test --locked --features builder --bins --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
-          cargo test --locked --features builder --lib synth --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
-          cargo test --locked --manifest-path crates/card-scanner/bench/Cargo.toml --target-dir crates/card-scanner/target
+          cargo test --locked --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
 
   # **`grimoire-core` on the two targets a desktop build never touches** (2026-10-02). The engine
   # is moving out of `src-tauri` into a crate three hosts link — this desktop, an Android shell
@@ -498,20 +484,6 @@ jobs:
 
       - name: cargo clippy (${{ matrix.target }})
         run: cargo clippy --lib -p grimoire-core --locked --target ${{ matrix.target }} -- -D warnings
-
-      # **The card scanner with its readers, for this target** (2026-10-07, the light app's step
-      # 7.1). The build above links `card-scanner` too, but nothing in the core's table calls its
-      # session on these targets yet, and what no export reaches a compiler may not look at
-      # hard. `crates/card-scanner/bench` calls all of it: the session, both modes and the
-      # readers behind three exports for a Worker, and behind a `main` that an Android shell
-      # runs. So this is the crate's `host` seam compiling where it matters — and the bench
-      # staying buildable for the phone it has not been run on.
-      #
-      # **`check`, like everything in this job: nothing here runs.** Whether a frame gets through
-      # the module in a browser is `pnpm scanner:bench`, a desk's to run. Into the scanner's
-      # own `target/`, as its tests build: the bench is outside the workspace, as the crate is.
-      - name: cargo check, the scanner's frame bench (${{ matrix.target }})
-        run: cargo check --lib --bins --locked --target ${{ matrix.target }} --manifest-path crates/card-scanner/bench/Cargo.toml --target-dir crates/card-scanner/target
 
   # **The light app's Android host, built into an APK** (phase 4, 2026-10-03). The `core` job
   # proves the engine *compiles* for `aarch64-linux-android`; this one links the host
@@ -767,7 +739,7 @@ jobs:
       # both, and why: `simd128` is this module's alone, and a tree of its own is what keeps a
       # build with the flag and a build without from throwing each other's artifacts away.
       # `-p` and nothing beside it, so the features are this crate's graph's — `card-scanner`
-      # with `ocr` and no `corpus`, and so no SQLite.
+      # with no `corpus`, and so no SQLite.
       - name: Clippy, the scanner's module for wasm32
         env:
           RUSTFLAGS: -C target-feature=+simd128
@@ -780,26 +752,12 @@ jobs:
       - name: Build the modules
         run: pnpm web:wasm
 
-      # **The card scanner's three files, into `dist-wasm/scanner-assets/`** (step 7.5): the
-      # bundle of card hashes and the two OCR models, from this repository's own public release
-      # `scanner-bundle-v<FORMAT_VERSION>` — no secret, 18 MB — with the manifest the page reads
-      # them by. A browser cannot ask that release itself (a release download sends no CORS
-      # header), so the web build serves them from the app's origin. After the modules, because
-      # the folder is theirs; before the page, because the build copies what is there. The
-      # script exits non-zero on any failure, and the build below is told the files are
-      # **required**: a web app built without its scanner would pass every check but the one
-      # that scans.
-      - name: Fetch the scanner's files
-        run: pnpm scanner:assets --web
-
       # `tsc` over the page's program and the Worker's own, then the light entry in `web` mode
       # into `apps/light/dist-web/`, with the engine from `dist-wasm/` emitted under `apps/light/dist-web/wasm/` in a
       # directory named for its build — which is why the module is built first: the config fails
       # a build whose engine is not there.
       - name: Build the page
         id: build
-        env:
-          GRIMOIRE_SCANNER_ASSETS: required
         run: pnpm web:build
 
       # Every `.wasm` the bundle holds, raw and as a server would send it, and the bundle

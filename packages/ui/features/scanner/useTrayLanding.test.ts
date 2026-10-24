@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MARKS, TRAY_ROWS, VERDICTS } from "./fixtures";
+import { TRAY_ROWS, VERDICTS } from "./fixtures";
 import type { ScannerDecision, ScannerFinishPref, ScannerTrayRow } from "./types";
 import { FLASH_MS, useTrayLanding } from "./useTrayLanding";
 
@@ -13,9 +13,9 @@ function trayOf(rows: ScannerTrayRow[] = []) {
   return { latest: () => now, setRows, write: (next: ScannerTrayRow[]) => (now = next) };
 }
 
-/** A Fast decision — the fixture's — and the same card decided in Exact with rivals. */
+/** A decision on one printing — the fixture's — and one on a picture of three printings. */
 const RESOLVED = VERDICTS.decided.decision as ScannerDecision;
-const AMBIGUOUS = VERDICTS.exactAmbiguous.decision as ScannerDecision;
+const AMBIGUOUS = VERDICTS.ambiguous.decision as ScannerDecision;
 
 function mount(tray: ReturnType<typeof trayOf>, pref: ScannerFinishPref = "detect") {
   return renderHook(({ finish }) => useTrayLanding(tray, finish), {
@@ -45,8 +45,8 @@ describe("useTrayLanding", () => {
       cardId: RESOLVED.printing,
       name: "Storm of Saruman",
       quantity: 1,
-      // Detect, a printing sold two ways, and a dot on the collector line.
-      finish: "nonfoil",
+      // Detect, and a printing sold two ways: the reader's to settle.
+      finish: "unknown",
     });
     expect(result.current.lastAdded).toEqual({
       name: "Storm of Saruman",
@@ -71,7 +71,9 @@ describe("useTrayLanding", () => {
 
   it("counts a second copy onto the newest row, and says how many", () => {
     const tray = trayOf();
-    const { result } = mount(tray);
+    // A fixed finish: a row of unknown finish is never bumped (`tray.ts`), and this printing is
+    // sold two ways, so Detect would leave each copy for the reader.
+    const { result } = mount(tray, "nonfoil");
     act(() => result.current.onDecision(RESOLVED));
     act(() => result.current.onDecision(RESOLVED));
     expect(tray.latest()).toHaveLength(1);
@@ -97,11 +99,11 @@ describe("useTrayLanding", () => {
     expect(tray.latest().map((row) => row.finish)).toEqual(["etched", "foil"]);
   });
 
-  it("leaves a finish it cannot read for the reader", () => {
+  it("takes a printing's only finish under Detect", () => {
     const tray = trayOf();
     const { result } = mount(tray);
-    act(() => result.current.onDecision({ ...RESOLVED, finish_mark: MARKS.unmeasured }));
-    expect(tray.latest()[0].finish).toBe("unknown");
+    act(() => result.current.onDecision({ ...RESOLVED, finishes: ["foil"] }));
+    expect(tray.latest()[0].finish).toBe("foil");
   });
 
   it("lands an ambiguous decision as a row waiting on a pick", () => {
@@ -118,7 +120,11 @@ describe("useTrayLanding", () => {
     act(() => result.current.onDecision(RESOLVED));
     const key = tray.latest()[0].key;
     act(() =>
-      result.current.onDecision({ ...RESOLVED, printing: "the-other-printing", replaces_previous: true }),
+      result.current.onDecision({
+        ...RESOLVED,
+        printing: "the-other-printing",
+        replaces_previous: true,
+      }),
     );
     expect(tray.latest()).toHaveLength(1);
     expect(tray.latest()[0]).toMatchObject({ key, cardId: "the-other-printing", quantity: 1 });

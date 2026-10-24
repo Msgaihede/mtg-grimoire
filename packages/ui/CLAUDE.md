@@ -25,7 +25,7 @@ For global repo workflow, style, and testing conventions, refer to:
 
 - **Hand-written wire mirror**: `packages/ui/lib/ipc.ts` mirrors Rust structs — a barrel over `lib/ipc/<domain>.ts`, whose commands objects it spreads into one `ipc`. Import it only as `@/lib/ipc`, never a domain file (ESLint; it is the seam every suite mocks). Checked by `ipc.test.ts`, which parses Rust source files to ensure struct and parameter parity. Its walk covers **every** `export interface`: a new one needs a Rust struct of its name, a `renamed` entry, or an `unmirrored` entry with a reason — otherwise the suite fails naming it. Every closed string or tagged union is walked the same way: a serde `pub enum` of its name, a `unionHomes` entry naming where Rust spells its words, or a `looseUnions` entry with a reason (issue #1185).
 - **IPC dispatch (`Core.call`)**: Abstraction layer below `@/lib/core` routing calls to desktop Tauri invoke, Android `core_call`, or WebAssembly Worker dispatch.
-- **ASCII JSON headers**: Serializing JSON for IPC headers (e.g. scanner frames) must use `asciiJson` (escapes non-ASCII) to satisfy header byte constraints.
+- **ASCII JSON headers**: Serializing JSON for IPC headers (e.g. the scanner capture's `x-scanner-capture` sidecar) must use `asciiJson` (escapes non-ASCII) to satisfy header byte constraints.
 - **One rejection shape**: every `ipc.*` wrapper rejects with the backend's sentence as a plain `string` on every host (`invoke` runs the rejection through `ipcError`). Never branch on `instanceof Error` for an IPC failure; render it with `ipcError(e)`.
 
 ---

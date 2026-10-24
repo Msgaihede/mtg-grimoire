@@ -5,9 +5,7 @@ import {
   NEURAL_FILES,
   NEURAL_PREFIX,
   neuralPath,
-  SCANNER_ASSETS_PREFIX,
   SCANNER_GLUE_FILE,
-  SCANNER_MANIFEST,
   SCANNER_WASM_FILE,
   wasmContentType,
   wasmPath,
@@ -17,7 +15,8 @@ import { headersFor, parseHeaders } from "./headers";
 /**
  * **What the host sends the card scanner's files** (the light app's step 7.5) — `hosting.test.ts`'s
  * arrangement, for the addresses that step added: a second Worker's script, a second module, and
- * three files under stable names. Asked of `headersFor`, never matched against the file's text.
+ * the Neural scanner's files under a content address. Asked of `headersFor`, never matched against
+ * the file's text.
  */
 
 const rules = parseHeaders(headersText);
@@ -35,9 +34,6 @@ const STEM = (() => {
 })();
 const WORKER_CHUNK = `/assets/${STEM}-Gu6zwksK.js`;
 const MODULE = [wasmPath("75b93dc9b194607d", SCANNER_GLUE_FILE), wasmPath("75b93dc9b194607d", SCANNER_WASM_FILE)];
-const FILES = ["card-hashes.bin", "text-detection.rten", "text-recognition.rten", SCANNER_MANIFEST].map(
-  (name) => SCANNER_ASSETS_PREFIX + name,
-);
 
 describe("the scanner's Worker", () => {
   it("is revalidated, by a rule of its own: its policy is the host's and can change under it", () => {
@@ -71,23 +67,6 @@ describe("the scanner's module", () => {
   });
 });
 
-describe("the scanner's three files", () => {
-  it.each(FILES)("is revalidated every time, its name being stable and its bytes not: %s", (path) => {
-    // Exactly: a value joined onto the default's would read `no-cache, no-cache`.
-    expect(cache(path)).toBe("no-cache");
-  });
-
-  it("has a rule of its own, so that loosening the default cannot take it along", () => {
-    const own = rules.find((rule) => rule.path === `${SCANNER_ASSETS_PREFIX}*`);
-    expect(own?.unset).toEqual(["cache-control"]);
-    expect(own?.set).toEqual([["cache-control", "no-cache"]]);
-  });
-
-  it("is fetched from this origin, which the policy's `connect-src` already allows", () => {
-    expect(policy(FILES[0])).toBe(policy("/"));
-  });
-});
-
 describe("the Neural scanner's four files", () => {
   const NEURAL = NEURAL_FILES.map((name) => neuralPath("3c0ffee5d00dfeed", name));
 
@@ -100,8 +79,6 @@ describe("the Neural scanner's four files", () => {
     const own = rules.find((rule) => rule.path === `${NEURAL_PREFIX}*`);
     expect(own?.unset).toEqual(["cache-control"]);
     expect(own?.set).toEqual([["cache-control", YEAR]]);
-    // The three files' stable names are still revalidated beside it.
-    expect(cache(FILES[0])).toBe("no-cache");
   });
 
   it("is fetched from this origin under the one policy", () => {

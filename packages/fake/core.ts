@@ -64,9 +64,8 @@ export async function invoke<T>(
   cmd: string,
   args?: Record<string, unknown> | Uint8Array,
   // The real `invoke`'s third argument. **Handed to the handler second, and only when a caller
-  // passed one** — every command but the scanner's two byte-bodied ones is called without, and
-  // its handler is still called with exactly its arguments. `scanner_frame` reads the frame's
-  // mode out of its `x-scanner-options` header, which is the only place the mode rides.
+  // passed one** — every command but the scanner's capture, whose sidecar rides in a header, is
+  // called without, and its handler is still called with exactly its arguments.
   options?: { headers?: Record<string, string> },
 ): Promise<T> {
   const scope = activeScope();

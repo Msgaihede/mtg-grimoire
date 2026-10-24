@@ -37,8 +37,7 @@
  * makes is to a different URL, after a 404; {@link download} has why.) Exits non-zero, listing every
  * file that failed, and **sets `process.exitCode` rather than calling `process.exit()`** —
  * exiting while `fetch` still holds a socket aborts Node 24 on Windows with a libuv assertion,
- * which buries the sentence that says what went wrong (`scripts/scanner-assets.ts` found it
- * first).
+ * which buries the sentence that says what went wrong.
  */
 import {
   cpSync,

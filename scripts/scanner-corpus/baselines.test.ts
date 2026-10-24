@@ -3,9 +3,8 @@ import { keepingRuns, parsePending, rowsOf, settlePending, withoutRuns } from ".
 
 const text = (over: object = {}) =>
   JSON.stringify({
-    v: 1,
+    v: 2,
     commit: "abc",
-    bundle_printings: 7,
     extra: { kept: [1, 2] },
     runs: [
       { id: "a", x: 1 },
@@ -27,7 +26,7 @@ describe("keepingRuns", () => {
       { id: "c", x: 3 },
     ]);
     expect(got.skipped).toEqual([{ id: "s", why: "no" }]);
-    expect(got).toMatchObject({ v: 1, commit: "abc", bundle_printings: 7, extra: { kept: [1, 2] } });
+    expect(got).toMatchObject({ v: 2, commit: "abc", extra: { kept: [1, 2] } });
   });
 
   it("is null when every id in the file is held", () => {

@@ -7,13 +7,13 @@ import {
   type NeuralEvidenceFile,
   type NeuralFile,
 } from "./assets";
-import { spaced, unstalledBy, type Answered, type StoreEnv } from "./scanStore";
+import type { CachesLike } from "./sw/pictures";
 
 /**
  * **The Neural scanner's four files, as the page fetches them** — `card-neural`'s detector,
  * embedder, gallery and `neural.json`, which the scanner's Worker is handed once per Worker, the
- * first time a Neural frame is due (`scanner.ts`). Never for a Fast or an Exact frame, and never
- * before a reader has chosen Neural.
+ * first time a frame is due (`scanner.ts`). Never before a reader has opened the Scanner and
+ * started scanning.
  *
  * **Fetched from the app's own origin and kept by what keeps a content-addressed file**: the
  * address names the set (`assets.ts`' `NEURAL_PREFIX`), so the HTTP cache keeps each a year and
@@ -25,13 +25,76 @@ import { spaced, unstalledBy, type Answered, type StoreEnv } from "./scanStore";
  * **One at a time, each held to its length** — what the build measured (`VITE_NEURAL_BYTES`). A
  * host that hands its document to a path it does not know answers with a page, and a cut-off
  * body is short: either is refused in a sentence, and no Worker is handed part of a network.
- * Each answer and each chunk is bounded (`scanStore.ts`' `STALL_MS`), so a fetch that never
- * ends is a failure and not a frame that hangs.
+ * Each answer and each chunk is bounded ({@link STALL_MS}), so a fetch that never ends is a
+ * failure and not a frame that hangs.
  *
  * **The printing evidence is four more, fetched the same way and later**
  * ({@link fetchNeuralEvidence}): once the recogniser has taken its four, in the background, with
  * no frame waiting on them.
  */
+
+/**
+ * How long a fetch may hear nothing — on the answer and on each chunk — before it is given up.
+ * The feeds' own bound (`scryfall::STALL`): a fetch that never ended would hold up every frame
+ * waiting on the files for good.
+ */
+export const STALL_MS = 30_000;
+
+/** As much of a streamed body as a fetch reads. */
+interface BodyReader {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+  cancel(): Promise<void>;
+}
+
+/** As much of a `Response` as this reads — which lets the suite hand it a body of its own. */
+export interface Answered {
+  ok: boolean;
+  status: number;
+  headers: { get(name: string): string | null };
+  body: { getReader(): BodyReader } | null;
+  json(): Promise<unknown>;
+}
+
+/** What the fetches ask of the browser. Handed in, so the suite gives it fakes. */
+export interface NeuralEnv {
+  /** `caches`. Absent in a browser, or a context, with none. */
+  caches?: CachesLike;
+  /**
+   * `fetch`, to the app's own origin — `default`, because the files are content-addressed and
+   * kept by the HTTP cache and the service worker.
+   */
+  fetch(path: string, init: { cache: "default" }): Promise<Answered>;
+  /** Run `run` after `ms`. */
+  after(ms: number, run: () => void): void;
+  /** Unix milliseconds. */
+  now(): number;
+}
+
+/** `1 234 567`, as the core's sentences write a byte count. */
+export const spaced = (n: number): string => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+
+/**
+ * `promise`, or a rejection once {@link STALL_MS} has passed with it still pending — on `env`'s
+ * clock. The bound on an answer and on each chunk of a fetch.
+ */
+export function unstalledBy<T>(env: Pick<NeuralEnv, "after">, promise: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let over = false;
+    env.after(STALL_MS, () => {
+      if (!over) reject(new Error("stalled"));
+    });
+    promise.then(
+      (value) => {
+        over = true;
+        resolve(value);
+      },
+      (error: unknown) => {
+        over = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
+}
 
 /** What the page knows of the eight before it asks: their set, and each one's length. */
 export interface NeuralSource {
@@ -75,7 +138,7 @@ const failed = (why: string): string =>
 
 /** One file, read to its end and held to its length. Rejects with one sentence. */
 async function one(
-  env: Pick<StoreEnv, "fetch" | "after">,
+  env: Pick<NeuralEnv, "fetch" | "after">,
   source: NeuralSource,
   name: NeuralFile | NeuralEvidenceFile,
 ): Promise<Uint8Array<ArrayBuffer>> {
@@ -148,7 +211,7 @@ async function one(
  * the ones already read are let go with the promise.
  */
 export async function fetchNeural(
-  env: Pick<StoreEnv, "fetch" | "after">,
+  env: Pick<NeuralEnv, "fetch" | "after">,
   source: NeuralSource,
 ): Promise<NeuralFiles> {
   const read: Uint8Array[] = [];
@@ -172,7 +235,7 @@ export function shipsEvidence(source: NeuralSource): boolean {
  * and a refusal here is logged and nothing else: Neural reads on without the evidence.
  */
 export async function fetchNeuralEvidence(
-  env: Pick<StoreEnv, "fetch" | "after">,
+  env: Pick<NeuralEnv, "fetch" | "after">,
   source: NeuralSource,
 ): Promise<NeuralEvidenceFiles> {
   const read: Uint8Array[] = [];
@@ -188,7 +251,7 @@ export async function fetchNeuralEvidence(
  * **never creates the cache by asking**; a Cache Storage that throws holds nothing.
  */
 export async function neuralKept(
-  env: Pick<StoreEnv, "caches">,
+  env: Pick<NeuralEnv, "caches">,
   source: NeuralSource,
 ): Promise<boolean> {
   if (!env.caches) return false;

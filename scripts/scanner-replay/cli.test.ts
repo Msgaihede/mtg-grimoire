@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baselineName, baselineNote, commitLabel, newestBundle, parseArgs } from "./cli.ts";
+import { baselineName, baselineNote, commitLabel, parseArgs } from "./cli.ts";
 
 describe("parseArgs", () => {
   it("reads nothing as the defaults", () => {
@@ -7,8 +7,6 @@ describe("parseArgs", () => {
       baseline: null,
       saveBaseline: null,
       only: [],
-      bundle: null,
-      models: null,
       corpus: null,
       jobs: null,
       neuralEvidence: null,
@@ -20,15 +18,13 @@ describe("parseArgs", () => {
   it("reads every flag, and --only more than once", () => {
     const args = parseArgs([
       "--baseline", "first", "--save-baseline", "v2", "--only", "bolt", "--only", "abc",
-      "--bundle", "b.bin", "--models", "m", "--corpus", "c.db", "--jobs", "4",
+      "--corpus", "c.db", "--jobs", "4",
       "--neural-evidence", "ev", "--neural-evidence-meta", "n.json", "--no-build",
     ]);
     expect(args).toEqual({
       baseline: "first",
       saveBaseline: "v2",
       only: ["bolt", "abc"],
-      bundle: "b.bin",
-      models: "m",
       corpus: "c.db",
       jobs: "4",
       neuralEvidence: "ev",
@@ -39,6 +35,9 @@ describe("parseArgs", () => {
 
   it("refuses a flag that is not one of ours, with a sentence", () => {
     expect(() => parseArgs(["--bulk", "x"])).toThrow('unknown argument "--bulk"');
+    // The hash bundle and the OCR models left with the Fast and Exact scanner.
+    expect(() => parseArgs(["--bundle", "b.bin"])).toThrow('unknown argument "--bundle"');
+    expect(() => parseArgs(["--models", "m"])).toThrow('unknown argument "--models"');
   });
 
   it("refuses a flag with no value, even when another flag follows", () => {
@@ -68,23 +67,6 @@ describe("baselineName", () => {
     for (const bad of [".hidden", "..", "a/b", "a\\b", "a b", "", "é"]) {
       expect(() => baselineName("--save-baseline", bad)).toThrow("is not a baseline name");
     }
-  });
-});
-
-describe("newestBundle", () => {
-  it("picks the highest version by number, not by text", () => {
-    expect(newestBundle(["card-hashes-v2.bin", "card-hashes-v10.bin", "card-hashes-v9.bin"])).toBe("card-hashes-v10.bin");
-  });
-
-  it("ignores everything else in the folder", () => {
-    expect(newestBundle(["models", "card-hashes.bin", "card-hashes-v3.bin.tmp", "card-hashes-v3.bin"])).toBe(
-      "card-hashes-v3.bin",
-    );
-  });
-
-  it("is null for a folder with no bundle", () => {
-    expect(newestBundle([])).toBeNull();
-    expect(newestBundle(["models"])).toBeNull();
   });
 });
 

@@ -12,8 +12,8 @@ import {
   trayRowPrice,
 } from "./trayPrice";
 
-const resolved = VERDICTS.exactResolved.decision!;
-const ambiguous = VERDICTS.exactAmbiguous.decision!;
+const resolved = VERDICTS.resolved.decision!;
+const ambiguous = VERDICTS.ambiguous.decision!;
 
 const base = rowFromDecision(resolved, { finish: "nonfoil" }, 1, "base");
 const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 2, "waiting");
@@ -55,7 +55,12 @@ describe("trayRowPrice", () => {
 
 describe("trayPriceIds", () => {
   it("asks for each resolved printing once, sorted, and nothing for a waiting row", () => {
-    const rows = [row({ cardId: "b" }), waiting, row({ cardId: "a" }), row({ cardId: "b", key: "again" })];
+    const rows = [
+      row({ cardId: "b" }),
+      waiting,
+      row({ cardId: "a" }),
+      row({ cardId: "b", key: "again" }),
+    ];
     expect(waiting.choices.length).toBeGreaterThan(0);
     expect(trayPriceIds(rows)).toEqual(["a", "b"]);
   });

@@ -47,12 +47,11 @@ export interface TrayLanding {
  * One card, into the tray — once per `decision_seq`, which the loop is what guarantees.
  *
  * The reducer decides whether it is a new row, a second copy of the newest, or a second opinion
- * that rewrites the newest row's printing (`replaces_previous` — a switch to Exact on the card
- * Fast named); this files the answer, marks the row for the flash, and remembers what to say
+ * that rewrites the newest row's printing (`replaces_previous` — a filter changed with the card
+ * still on the mat); this files the answer, marks the row for the flash, and remembers what to say
  * about it. The finish is the Defaults' at the moment the card landed, which is why a change there
  * moves only the next card — and under **Detect**, the default, it is `trayFinish`'s reading of
- * this decision's own facts: the printing's finishes and the separator the collector line showed,
- * or `unknown` for the reader to settle.
+ * this decision's own facts: the printing's finishes, or `unknown` for the reader to settle.
  *
  * **It builds on `tray.latest()`, never on the rows a render drew**: a decision from the pump can
  * land after more cards were scanned than the render that built its closure knew about. `latest()`

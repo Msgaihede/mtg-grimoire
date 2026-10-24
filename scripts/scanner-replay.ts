@@ -6,27 +6,32 @@
 //   pnpm scanner:replay --save-baseline first    keep this run's results as that baseline
 //   pnpm scanner:replay --only "lightning bolt"  runs whose card name or id contains the text
 //
-// Also `--bundle <file>`, `--models <dir>`, `--corpus <corpus.db>` and `--jobs <n>`, each
-// found in the main checkout when left out, and `--no-build`, which trusts the binary as it is.
-// `--neural-evidence <dir>` hands the Neural pass the set symbol and collector band files, and
-// each decision then records its candidates and scores (`evidence`); `--neural-evidence-meta
-// <neural.json>` reads the thresholds from that file instead of the models' own.
+// Also `--corpus <corpus.db>`, found in the main checkout when left out, `--jobs <n>`, and
+// `--no-build`, which trusts the binary as it is. The recogniser's files are the ones in git
+// (`crates/card-neural/models/`). `--neural-evidence <dir>` hands the passes the set symbol and
+// collector band files, and each decision then records its candidates and scores (`evidence`);
+// `--neural-evidence-meta <neural.json>` reads the thresholds from that file instead of the
+// models' own.
+//
+// **Two passes a scan**: As scanned (the label's filters) and Neural (none). A scan sent while
+// the scanner still had its Fast and Exact modes is replayed all the same: its frames are what
+// the camera saw.
 //
 // **Run `pnpm scanner:corpus pull` first**: this reads the local mirror and asks no network.
-// It writes `out/results.json`, `out/summary.md` and `out/report.html` beside the corpus,
-// with the pictures the scanner cut under `out/slices/`. None of it is for git: the report
-// draws readers' photographs. Only the summary's table belongs in the reference document.
+// It writes `out/results.json`, `out/summary.md` and `out/report.html` beside the corpus.
+// None of it is for git: the report draws readers' photographs. Only the summary's table
+// belongs in the reference document.
 //
 // The binary supplies facts (`crates/card-scanner/src/bin/replay.rs`); every count here is
 // `scripts/scanner-replay/summary.ts`'s, which the summary and the page both read. The
-// arguments and the choice of bundle are `scripts/scanner-replay/cli.ts`'s.
+// arguments are `scripts/scanner-replay/cli.ts`'s.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { corpusDir } from "./scanner-corpus/mirror.ts";
-import { baselineNote, commitLabel, newestBundle, parseArgs } from "./scanner-replay/cli.ts";
+import { baselineNote, commitLabel, parseArgs } from "./scanner-replay/cli.ts";
 import { reportHtml } from "./scanner-replay/report.ts";
 import { parseResults } from "./scanner-replay/results.ts";
 import { summaryMarkdown } from "./scanner-replay/summary.ts";
@@ -78,15 +83,6 @@ function find(what: string, flag: string, given: string | null, candidates: stri
   return fail(`no ${what} found — pass ${flag}`);
 }
 
-/** The newest bundle in each checkout's `.scanner-bundle/`. */
-const bundles = [ROOT, main].flatMap((base) => {
-  const folder = join(base, ".scanner-bundle");
-  const name = existsSync(folder) ? newestBundle(readdirSync(folder)) : null;
-  return name ? [join(".scanner-bundle", name)] : [];
-});
-
-const bundle = find("scanner bundle", "--bundle", args.bundle, bundles);
-const models = find("OCR models", "--models", args.models, [".scanner-bundle/models"]);
 const corpus = find("corpus.db", "--corpus", args.corpus, [
   "target/debug/data/corpus.db",
   "src-tauri/target/debug/data/corpus.db",
@@ -96,20 +92,18 @@ const out = join(dir, "out");
 if (!args.noBuild) {
   const cargo = [
     "build", "--locked", "--manifest-path", join(SCANNER, "Cargo.toml"), "--target-dir", TARGET_DIR,
-    "--release", "--features", "builder", "--bin", "replay",
+    "--release", "--features", "cli", "--bin", "replay",
   ];
   const built = spawnSync("cargo", cargo, { cwd: ROOT, stdio: "inherit" });
   if (built.status !== 0) fail("the replay binary did not build");
 }
 
-// Last run's slices would outlive a scan that no longer cuts them.
-rmSync(join(out, "slices"), { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 const dirty = git("status", "--porcelain", "--", "crates/card-scanner") !== "";
 const ran = spawnSync(
   join(TARGET_DIR, "release", `replay${EXE}`),
   [
-    "--corpus-dir", dir, "--bundle", bundle, "--corpus", corpus, "--models", models, "--out", out,
+    "--corpus-dir", dir, "--corpus", corpus, "--out", out,
     "--commit", commitLabel(git("rev-parse", "--short", "HEAD"), dirty, args.noBuild),
     ...args.only.flatMap((text) => ["--only", text]),
     ...(args.jobs ? ["--jobs", args.jobs] : []),
@@ -124,7 +118,7 @@ const now = parseResults(readFileSync(join(out, "results.json"), "utf8"));
 
 const summary = summaryMarkdown(now, base);
 writeFileSync(join(out, "summary.md"), summary);
-writeFileSync(join(out, "report.html"), reportHtml(now, base, { frames: "../frames", slices: "." }));
+writeFileSync(join(out, "report.html"), reportHtml(now, base, { frames: "../frames" }));
 const saved = args.saveBaseline ? join(baselines, `${args.saveBaseline}.json`) : null;
 const replaced = saved !== null && existsSync(saved);
 if (saved) {

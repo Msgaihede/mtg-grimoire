@@ -2,14 +2,15 @@
 // The web app's card scanner, in a real browser: **a camera shows a card, and the built app
 // scans it** — the light app's step 7.5.
 //
-//     pnpm web:wasm && pnpm scanner:assets --web && pnpm web:build
+//     pnpm web:wasm && pnpm web:build
 //     pnpm web:scanner-smoke
 //
 // `pnpm web:smoke` proves the engine. This is the run that proves the *second* module: the
-// scanner's own WASM, built with `simd128`, in a Worker of its own, fed the three files a reader
-// downloads and the labels the engine hands across. Vitest drives the page's half over a fake
-// Worker and cargo tests the module's logic natively; neither instantiates the module in a
-// browser, moves a megabyte between two real Workers, or hears a real policy refuse something.
+// scanner's own WASM, built with `simd128`, in a Worker of its own, handed the Neural scanner's
+// files from the app's origin (`/scanner-neural/<set>/`) and the labels the engine hands across.
+// Vitest drives the page's half over a fake Worker and cargo tests the module's logic natively;
+// neither instantiates the module in a browser, moves megabytes between two real Workers, or
+// hears a real policy refuse something.
 //
 // It serves `apps/light/dist-web/` as the production host will (`web-smoke/harness.ts`: every response
 // under the headers `_headers` gives its address, a miss as the hosting Worker's own 404), on
@@ -17,35 +18,28 @@
 // one real card on a table (`--use-file-for-fake-video-capture`). In this order:
 //
 //   1. the app opens and ingests a card file that has the card in it
-//   2. the Scanner draws its offer — the three files, about 19 MB — and **nothing of the
-//      scanner has left the host**: not its module, not one of its three files, and none of
-//      them is in the service worker's shell. A frame sent meanwhile is refused in a sentence
-//   3. Download fetches exactly the three files, once each, with progress the page hears
-//      (`scanner:assets`: downloading, checking, done), and keeps them in Cache Storage under
-//      their digests
-//   4. the session builds — files out of the store, labels out of the engine's Worker — and
-//      says so: bundle, labels and both readers loaded, from the store
-//   5. **the card is recognised and lands in the tray**, by name
-//   6. Add files it, and the Collection page draws it
-//   7. sixty frames more are timed, one of them a read frame with its detail image, and the
-//      module's memory is read
-//   8. a fault staged in the scanner's Worker ends it; the frame in flight is refused in the
+//   2. the Scanner opens stopped, and **none of the Neural scanner's files has left the host**,
+//      and none of the scanner's is in the service worker's shell
+//   3. Start scanning: the Neural files are fetched, once each, **the card is recognised and
+//      lands in the tray**, by name
+//   4. the session says so — the Neural files and the labels loaded — and the service worker
+//      keeps the module and the files in the scanner's Cache Storage
+//   5. Add files it, and the Collection page draws it
+//   6. sixty frames more are timed, and the module's memory is read
+//   7. a fault staged in the scanner's Worker ends it; the frame in flight is refused in the
 //      host's sentence, and the next frame is answered by a new Worker with a new session
-//   9. leaving the Scanner ends the Worker: its DevTools target goes, and the host says there
+//   8. leaving the Scanner ends the Worker: its DevTools target goes, and the host says there
 //      is no session; asking again builds one, and that build is timed
-//  10. **offline** — the server refusing every connection, every other host gone, the HTTP
-//      cache emptied — a reload opens the Scanner and the card lands in the tray again. **The
-//      one thing the page asks the host for is the scanner's manifest** (`scanner_assets` asks
-//      it on every visit, past every cache, to learn whether a newer bundle is owed); it is
-//      refused, nothing is owed that the store does not hold, and no offer is drawn. The
+//   9. **offline** — the server refusing every connection, every other host gone, the HTTP
+//      cache emptied — a reload opens the Scanner and the card lands in the tray again. The
 //      browser asks for `sw.js`, as every load does. Nothing else is asked — not the module,
 //      not a file, not a chunk of the app's own shell
-//  11. the host's Content-Security-Policy refused nothing, in the page, in either dedicated
+//  10. the host's Content-Security-Policy refused nothing, in the page, in either dedicated
 //      Worker or in the service worker; no request went to a host with no fixture
 //
-//  12. **the phone face**, in a browser and a profile of its own at 360 × 800 under the same
-//      camera: a first run again, the offer drawn in the phone page's slot under its camera
-//      with nothing scrolling sideways, Download, the card in the tray, Add, and an empty tray
+//  11. **the phone face**, in a browser and a profile of its own at 360 × 800 under the same
+//      camera: a first run again, Start scanning, the card in the tray with nothing scrolling
+//      sideways, Add, and an empty tray
 //
 // **The card's picture is not in this repository** — card image bytes never are — so it is the
 // one thing this run brings from outside: `SCAN_CARD_PICTURE=<file>` when that is set, else the
@@ -55,12 +49,12 @@
 // in the system's temp folder. A picture that cannot be had after that fails the run: a skip
 // would be a run that passed having scanned nothing. A second
 // headless browser decodes it and lays it on a table — a browser is the JPEG decoder this
-// script does not have — and the frame is written as Y4M **with its chroma**: the scanner's
-// hash reads colour, and a grey card matches nothing.
+// script does not have — and the frame is written as Y4M **with its chroma**: the recogniser
+// reads colour, and a grey card is not the card.
 //
 // **The staged fault is a message, not a panic.** No export of the module panics on request —
 // a callable trap would ship to every reader — and its clock swallows a throwing
-// `performance.now`. So step 8 has the Worker *say* it trapped (`scanProtocol.ts`'s `trapped`),
+// `performance.now`. So step 7 has the Worker *say* it trapped (`scanProtocol.ts`'s `trapped`),
 // from inside the Worker, over DevTools: what is real from there on is everything the page
 // does about it. A real panic in this module, in a browser, has still not been seen.
 //
@@ -91,9 +85,7 @@ import {
 
 import type { Site } from "./web-smoke/harness.ts";
 type ScanStatus = {
-  bundle: { loaded: boolean; error: string | null; source: string };
-  detection_model: { loaded: boolean };
-  recognition_model: { loaded: boolean };
+  neural: { loaded: boolean; error: string | null; source: string };
   labels: number;
 };
 type ScanResults = {
@@ -105,17 +97,16 @@ type ScanResults = {
   scanner_frame: { ok: boolean };
   "host:scanner_memory": number | null;
 };
-type CallOptions = { headers: Record<string, string> };
 const DEADLINE_MS = 300_000;
 /** A phone: under the app's 1024px floor, and the narrowest the phone face is measured at. */
 const PHONE = [360, 800];
 /** The desktop face: at or past the app's 1024px floor. */
 const VIEW = [1440, 900];
-/** The camera's frame: 720p, the least the readers are given a detail image at. */
+/** The camera's frame: 720p, as a laptop's camera gives one. */
 const FRAME = [1280, 720];
 /** The card's height in that frame — most of it, as a reader holds one. */
 const CARD_HEIGHT = 640;
-/** A play mat, not a black table: this card's border is black, and an edge needs two sides. */
+/** A play mat, not a black table: this card's border is black. */
 const TABLE = "#6b5a3e";
 
 /** The card the camera shows — Counterspell, Modern Horizons 2 #267 — as Scryfall describes it. */
@@ -125,13 +116,21 @@ const CARD: { id: string; name: string; image_uris: Record<string, string> } = J
 
 const SCANNER_CACHE = "grimoire-scanner-v1";
 const SHELL_PREFIX = "grimoire-shell-";
-const ASSETS = ["card-hashes.bin", "text-detection.rten", "text-recognition.rten"];
-/** The page's sentences this run reads (`packages/ui/lib/core/web/scanner.ts`). */
-const NOT_DOWNLOADED = "The scanner's card data has not been downloaded yet.";
+/** Where the build serves the Neural scanner's files: `/scanner-neural/<set>/<name>` (`assets.ts`). */
+const NEURAL_PREFIX = "/scanner-neural/";
+/** The recogniser's four, which the first frame waits on (`assets.ts`' `NEURAL_FILES`). */
+const NEURAL_FILES = ["detector.onnx", "embedder.onnx", "gallery.bin", "neural.json"];
+/** The page's sentence for a Worker that trapped (`packages/ui/lib/core/web/scanner.ts`). */
 const STOPPED = "The card scanner stopped unexpectedly. It starts again with the next frame.";
 
 const mb = (bytes: number | null) => `${((bytes ?? 0) / 1e6).toFixed(2)} MB`;
 const ms = (n: number) => `${Math.round(n)} ms`;
+/** Whether a path the server was asked for is the scanner's: its module, or a Neural file. */
+const isScanners = (path: string) =>
+  /^\/wasm\/[^/]+\/scanner\//.test(path) || path.startsWith(NEURAL_PREFIX);
+/** Whether it is one of the recogniser's four, of whatever set. */
+const isRecognisers = (path: string) =>
+  path.startsWith(NEURAL_PREFIX) && NEURAL_FILES.some((name) => path.endsWith(`/${name}`));
 
 // ---------------------------------------------------------------------------------------------
 // The camera
@@ -315,7 +314,6 @@ function scannerChunk() {
   return `/assets/${name}`;
 }
 
-const OFFER = `document.querySelector('section[aria-label="Scanner files"]')`;
 const ADD = `[...document.querySelectorAll("button")].find((b) => /^Add \\d+ to collection/.test(b.innerText.trim()))`;
 /** A row of the desktop shell's sidebar, by its word. */
 const sidebar = (word: string) =>
@@ -345,7 +343,7 @@ const grab = (width: number) => `(async () => {
 
 /**
  * **The phone face**, on a profile of its own — so a first run, with nothing of the scanner in
- * the store and an empty tray: a tray row the desktop leg left would make "the card is in the
+ * Cache Storage and an empty tray: a tray row the desktop leg left would make "the card is in the
  * tray" true before a frame was sent.
  */
 async function phoneFace(
@@ -403,47 +401,28 @@ async function phoneFace(
   const before = site.asked.length;
 
   await page.press("the Scanner tab", `${TABS}.querySelector('a[href="/scanner"]')`);
-  await page.until(
-    "the phone's Scanner drew its offer",
-    `!!${OFFER} && !!${buttonSaying("Download", 'section[aria-label="Scanner files"]')}`,
-  );
-  const offer = await page.evaluate<string>(`${OFFER}.innerText`);
-  if (!/about 19 MB/.test(offer)) fail(`the phone's offer does not say what it costs:\n${offer}`);
+  await page.until("the phone's Scanner opened", `!!${buttonSaying("Start scanning")}`);
   const sideways = () =>
     page.evaluate<number>(
       `document.documentElement.scrollWidth - document.documentElement.clientWidth`,
     );
-  const box = await page.evaluate<[number, number, number]>(
-    `(() => { const r = ${OFFER}.getBoundingClientRect(); return [r.left, r.right, innerWidth]; })()`,
-  );
-  if (box[0] < 0 || box[1] > box[2] || (await sideways()) > 0) {
-    fail(
-      `at ${PHONE[0]}px the offer runs off the screen: ${JSON.stringify(box)}, ${await sideways()}px sideways`,
-    );
-  }
+  if ((await sideways()) > 0)
+    fail(`at ${PHONE[0]}px the Scanner scrolls ${await sideways()}px sideways`);
   if (await page.evaluate(`!!${ADD} && !/^Add 0 /.test(${ADD}.innerText.trim())`)) {
     fail("the phone's tray held a card before a frame was sent");
   }
-  const early = site.asked
-    .slice(before)
-    .filter(
-      (path) =>
-        /^\/wasm\/[^/]+\/scanner\//.test(path) ||
-        (path.startsWith("/scanner-assets/") && !path.endsWith("manifest.json")),
-    );
+  const early = site.asked.slice(before).filter((path) => path.startsWith(NEURAL_PREFIX));
   if (early.length > 0)
     fail(
-      `on the phone face the scanner's files were asked for before the press: ${early.join(", ")}`,
+      `on the phone face the Neural files were asked for before Start scanning: ${early.join(", ")}`,
     );
 
   // The page opens stopped (issue #1317): nothing is read until Start scanning is pressed.
   await page.press("Start scanning", buttonSaying("Start scanning"));
-  await page.press("Download", buttonSaying("Download", 'section[aria-label="Scanner files"]'));
-  await page.until("on the phone face, the files landed and the offer went", `!${OFFER}`, 120_000);
   await page.until(
     "on the phone face, the card was recognised and landed in the tray",
     `!!${ADD} && /^Add 1 to collection$/.test(${ADD}.innerText.trim())`,
-    60_000,
+    120_000,
   );
   if ((await sideways()) > 0)
     fail(`with a card in the tray the phone's Scanner scrolls ${await sideways()}px sideways`);
@@ -457,7 +436,7 @@ async function phoneFace(
   const thrown = page.thrown();
   if (thrown.length > 0) fail(`the phone's page threw:\n${thrown.join("\n")}`);
   console.log(
-    `ok  on the phone face at ${PHONE[0]}px: the offer in the page's slot, Download, ${CARD.name} in the tray and filed, ` +
+    `ok  on the phone face at ${PHONE[0]}px: Start scanning, ${CARD.name} in the tray and filed, ` +
       "nothing scrolling sideways and the policy refusing nothing",
   );
   await close();
@@ -502,13 +481,12 @@ async function main() {
   const call = async <M extends keyof ScanResults>(
     command: M,
     args?: Record<string, unknown> | string,
-    options?: CallOptions,
   ) => {
     const answer = await page.evaluate<{ value: ScanResults[M]; refused?: string }>(
       `import(${JSON.stringify(chunk)})
         .then(async (module) => module.scanningCore.call(${JSON.stringify(command)}, ${
           typeof args === "string" ? `await ${args}` : JSON.stringify(args)
-        }, ${JSON.stringify(options)}))
+        }))
         .then((value) => ({ value }), (refused) => ({ refused: String(refused) }))`,
     );
     return answer;
@@ -516,17 +494,11 @@ async function main() {
   const engine = async <M extends keyof ScanResults>(
     command: M,
     args?: Record<string, unknown> | string,
-    options?: CallOptions,
   ): Promise<ScanResults[M]> => {
-    const answer = await call(command, args, options);
+    const answer = await call(command, args);
     if (answer.refused !== undefined) fail(`${command} was refused: ${answer.refused}`);
     return answer.value;
   };
-  /** Paths the server has been asked for that are the scanner's: its module, or its files. */
-  const scannerAsks = () =>
-    site.asked.filter(
-      (path) => /^\/wasm\/[^/]+\/scanner\//.test(path) || path.startsWith("/scanner-assets/"),
-    );
 
   // ---- 1. the app, with the card in its corpus ----------------------------------------------
   await page.until(
@@ -550,126 +522,72 @@ async function main() {
     "ok  the app opened on the desktop face and ingested 7 cards, the camera's among them",
   );
 
-  // The finish is the reader's to fix for this run: at this size the collector line's mark is
-  // a few pixels, and a row with an unknown finish is one Add leaves in the tray.
+  // The finish is the reader's to fix for this run: a printing made in more than one finish
+  // lands with its finish unknown, and a row with an unknown finish is one Add leaves in the tray.
   const prefs = await engine("scanner_prefs");
   await engine("set_scanner_prefs", { prefs: { ...prefs, finish: "nonfoil" } });
-  await page.evaluate(
-    `import(${JSON.stringify(chunk)}).then((module) => {
-      globalThis.__assets = [];
-      module.scanningCore.listen("scanner:assets", (event) => globalThis.__assets.push(event));
-    })`,
-  );
 
-  // ---- 2. the offer, and nothing fetched ------------------------------------------------------
+  // ---- 2. the Scanner, stopped, and nothing of Neural's fetched ----------------------------------
   await page.press("the sidebar's Scanner", sidebar("Scanner"));
-  await page.until(
-    "the Scanner drew its offer",
-    `!!${OFFER} && !!${buttonSaying("Download", 'section[aria-label="Scanner files"]')}`,
-  );
-  const offer = await page.evaluate<string>(`${OFFER}.innerText`);
-  if (
-    !/about 19 MB/.test(offer) ||
-    !/Card hashes/.test(offer) ||
-    !/Text recognition model/.test(offer)
-  ) {
-    fail(`the offer does not say what it costs:\n${offer}`);
-  }
-  // The view opens stopped (issue #1317): a frame goes out only once Start scanning is pressed.
-  await page.press("Start scanning", buttonSaying("Start scanning"));
-  await page.until(
-    "a frame was refused for want of the files",
-    `document.body.innerText.includes(${JSON.stringify(NOT_DOWNLOADED)})`,
-    30_000,
-  );
-  const early = scannerAsks().filter((path) => path !== "/scanner-assets/manifest.json");
+  await page.until("the Scanner opened", `!!${buttonSaying("Start scanning")}`);
+  const early = site.asked.filter((path) => path.startsWith(NEURAL_PREFIX));
   if (early.length > 0)
-    fail(`the scanner's files were asked for before the press: ${early.join(", ")}`);
+    fail(`the Neural files were asked for before Start scanning: ${early.join(", ")}`);
   const before = await page.evaluate<Record<string, string[]>>(CACHES);
   const inShell = Object.entries(before)
     .filter(([name]) => name.startsWith(SHELL_PREFIX))
     .flatMap(([, paths]) => paths)
-    .filter((path) => /\/scanner\/|^\/scanner-assets\//.test(path));
+    .filter(isScanners);
   if (inShell.length > 0)
     fail(`the service worker precached the scanner's files: ${inShell.join(", ")}`);
-  if (before[SCANNER_CACHE]?.length)
-    fail(`the scanner's cache holds something already: ${before[SCANNER_CACHE]}`);
-  if (policy.workerScripts().some(([, url]) => url.includes("scanWorker"))) {
-    fail("a scanner Worker was started before there was anything to load");
-  }
   console.log(
-    `ok  the Scanner offers its files (${offer.split("\n")[0]}) and has fetched none: no module, no Worker, nothing in the shell`,
+    "ok  the Scanner opened stopped, and has fetched none of the Neural files; nothing of the scanner is in the shell",
   );
 
-  // ---- 3. the download ------------------------------------------------------------------------
+  // ---- 3. the card --------------------------------------------------------------------------------
+  // The view opens stopped (issue #1317): a frame goes out only once Start scanning is pressed.
   const pressed = performance.now();
-  await page.press("Download", buttonSaying("Download", 'section[aria-label="Scanner files"]'));
-  await page.until("the files landed and the offer went", `!${OFFER}`, 120_000);
-  const heard =
-    await page.evaluate<{ phase: string; done: number; total: number }[]>("globalThis.__assets");
-  const phases = new Set(heard.map((event) => event.phase));
-  const total = ASSETS.reduce(
-    (sum, name) => sum + statSync(join(DIST, "scanner-assets", name)).size,
-    0,
+  await page.press("Start scanning", buttonSaying("Start scanning"));
+  await page.until(
+    "the card was recognised and landed in the tray",
+    `!!${ADD} && /^Add 1 to collection$/.test(${ADD}.innerText.trim()) && document.body.innerText.includes(${JSON.stringify(CARD.name)})`,
+    120_000,
   );
-  if (
-    !["downloading", "checking", "done"].every((phase) => phases.has(phase)) ||
-    phases.has("error")
-  ) {
-    fail(
-      `the fetch's progress was ${JSON.stringify([...phases])}: ${JSON.stringify(heard.at(-1))}`,
-    );
-  }
-  if (heard.at(-1)?.done !== total || heard.at(-1)?.total !== total) {
-    fail(
-      `the fetch ended on ${JSON.stringify(heard.at(-1))}, and the three files are ${total} bytes`,
-    );
-  }
-  for (const name of ASSETS) {
-    const asks = site.asked.filter((path) => path === `/scanner-assets/${name}`).length;
+  const recognisers = site.asked.filter(isRecognisers);
+  for (const name of NEURAL_FILES) {
+    const asks = recognisers.filter((path) => path.endsWith(`/${name}`)).length;
     if (asks !== 1) fail(`${name} was asked for ${asks} times`);
   }
   console.log(
-    `ok  Download fetched the three files once each — ${mb(total)}, ${heard.length} progress events, ` +
-      `${ms(performance.now() - pressed)} from the press to the offer going`,
+    `ok  ${CARD.name} was recognised and is in the tray (${ms(performance.now() - pressed)} after the press); ` +
+      "the recogniser's four files were fetched once each",
   );
 
   // ---- 4. the session -------------------------------------------------------------------------
   const status = await engine("scanner_status");
-  const loaded =
-    status.bundle.loaded &&
-    status.bundle.error === null &&
-    status.detection_model.loaded &&
-    status.recognition_model.loaded &&
-    status.labels > 0 &&
-    status.bundle.source === "store";
-  if (!loaded) fail(`the session did not load everything:\n${JSON.stringify(status, null, 2)}`);
+  if (!status.neural.loaded || status.neural.error !== null || status.labels <= 0)
+    fail(`the session did not load everything:\n${JSON.stringify(status, null, 2)}`);
   const kept = (await page.evaluate<Record<string, string[]>>(CACHES))[SCANNER_CACHE] ?? [];
+  // The module and the recogniser's four. The evidence's four follow in the background, and may
+  // still be on their way.
   const wanted = [
-    ...ASSETS.map((name) => `/scanner-assets/${name}`),
-    ...new Set(site.asked.filter((path) => /^\/wasm\/[^/]+\/scanner\//.test(path))),
+    ...new Set(
+      site.asked.filter(
+        (path) => isScanners(path) && (!path.startsWith(NEURAL_PREFIX) || isRecognisers(path)),
+      ),
+    ),
   ];
   const lost = wanted.filter((path) => !kept.includes(path));
-  if (wanted.length !== 5 || lost.length > 0) {
+  if (wanted.filter(isRecognisers).length !== NEURAL_FILES.length || lost.length > 0) {
     fail(
       `the scanner's cache holds ${JSON.stringify(kept)}; it should hold ${JSON.stringify(wanted)}`,
     );
   }
   console.log(
-    `ok  the session built: bundle, ${status.labels} labels and both readers, from the store; the module and the files are kept`,
+    `ok  the session built: the Neural files and ${status.labels} labels; the module and the ${wanted.length} files it asked for are kept`,
   );
 
-  // ---- 5. the card ------------------------------------------------------------------------------
-  await page.until(
-    "the card was recognised and landed in the tray",
-    `!!${ADD} && /^Add 1 to collection$/.test(${ADD}.innerText.trim()) && document.body.innerText.includes(${JSON.stringify(CARD.name)})`,
-    60_000,
-  );
-  console.log(
-    `ok  ${CARD.name} was recognised and is in the tray (${ms(performance.now() - pressed)} after the press)`,
-  );
-
-  // ---- 6. the commit ----------------------------------------------------------------------------
+  // ---- 5. the commit ----------------------------------------------------------------------------
   await page.press("Add", ADD);
   await page.until(
     "the tray was filed",
@@ -677,55 +595,37 @@ async function main() {
     30_000,
   );
 
-  // ---- 7. sixty frames, timed ---------------------------------------------------------------------
+  // ---- 6. sixty frames, timed ---------------------------------------------------------------------
   await page.press("Stop scanning", buttonSaying("Stop scanning"));
   await pause(1500);
   await engine("scanner_reset");
-  const options = { headers: { "x-scanner-options": JSON.stringify({ mode: "fast" }) } };
   const timed = await page.evaluate<{
-    plain: number[];
-    reads: number[];
+    frames: number[];
     named: string | null;
     memory: number | null;
   }>(`(async () => {
     const { scanningCore } = await import(${JSON.stringify(chunk)});
-    const small = () => ${grab(640)};
-    const large = () => ${grab(FRAME[0])};
-    const plain = [];
-    const reads = [];
+    const frames = [];
     let named = null;
-    let asks = false;
     for (let i = 0; i < 60; i += 1) {
-      const jpeg = await small();
-      let body = jpeg;
-      const headers = { ...${JSON.stringify(options.headers)} };
-      if (asks) {
-        const detail = await large();
-        body = new Uint8Array(jpeg.length + detail.length);
-        body.set(jpeg, 0);
-        body.set(detail, jpeg.length);
-        headers["x-scanner-detail"] = String(jpeg.length);
-      }
-      const read = asks;
+      const jpeg = await ${grab(640)};
       const t0 = performance.now();
-      const verdict = await scanningCore.call("scanner_frame", body, { headers });
-      (read ? reads : plain).push(performance.now() - t0);
-      asks = verdict.wants_detail === true;
+      const verdict = await scanningCore.call("scanner_frame", jpeg);
+      frames.push(performance.now() - t0);
       named = verdict.decision?.label?.name ?? named;
     }
     const memory = await scanningCore.call("host:scanner_memory");
-    return { plain, reads, named, memory };
+    return { frames, named, memory };
   })()`);
   const median = (list: number[]) => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
-  if (timed.plain.length === 0 || timed.memory === null)
+  if (timed.frames.length === 0 || timed.memory === null)
     fail(`no frame was timed: ${JSON.stringify(timed)}`);
   console.log(
-    `ok  60 frames: ${timed.plain.length} plain at a median ${ms(median(timed.plain))} (max ${ms(Math.max(...timed.plain))}), ` +
-      `${timed.reads.length} read frame(s)${timed.reads.length ? ` at a median ${ms(median(timed.reads))} (max ${ms(Math.max(...timed.reads))})` : ""}; ` +
+    `ok  60 frames at a median ${ms(median(timed.frames))} (max ${ms(Math.max(...timed.frames))}); ` +
       `the module's memory stands at ${mb(timed.memory)}; decided: ${timed.named ?? "nothing"}`,
   );
 
-  // ---- 8. a staged fault ------------------------------------------------------------------------
+  // ---- 7. a staged fault ------------------------------------------------------------------------
   const scanners = () => policy.workerScripts().filter(([, url]) => url.includes("scanWorker"));
   const gone = (sessionId: string | undefined) =>
     browser.heard.some(
@@ -738,7 +638,7 @@ async function main() {
   const refused = page.evaluate(`(async () => {
     const { scanningCore } = await import(${JSON.stringify(chunk)});
     const jpeg = await ${grab(640)};
-    return scanningCore.call("scanner_frame", jpeg, ${JSON.stringify(options)}).then(() => null, String);
+    return scanningCore.call("scanner_frame", jpeg).then(() => null, String);
   })()`);
   // Under the frame, or just behind it: either way the Worker has said it trapped.
   await browser.send(
@@ -754,7 +654,7 @@ async function main() {
   for (const stop = performance.now() + 15_000; !gone(first[0]); await pause(100)) {
     if (performance.now() > stop) fail("the Worker that trapped was not ended");
   }
-  const after = await call("scanner_frame", grab(640), options);
+  const after = await call("scanner_frame", grab(640));
   if (after.refused !== undefined || after.value.ok !== true) {
     fail(`the frame after the fault was not answered: ${JSON.stringify(after).slice(0, 400)}`);
   }
@@ -768,7 +668,7 @@ async function main() {
       "and the next frame was answered by a new one",
   );
 
-  // ---- 9. leaving the Scanner -------------------------------------------------------------------
+  // ---- 8. leaving the Scanner -------------------------------------------------------------------
   await page.press("the sidebar's Collection", sidebar("Collection"));
   // The wall draws a picture and its printing, not the name: the tile is named for the card.
   await page.until(
@@ -790,15 +690,15 @@ async function main() {
   const t0 = performance.now();
   const rebuilt = await engine("scanner_status");
   const build = performance.now() - t0;
-  if (!rebuilt.bundle.loaded || rebuilt.labels !== status.labels)
+  if (rebuilt.labels !== status.labels)
     fail(`the session built again differently: ${JSON.stringify(rebuilt)}`);
   const fresh = await engine("host:scanner_memory");
   console.log(
     `ok  leaving the Scanner ended its Worker after ${ms(idle)}; a new session built in ${ms(build)} ` +
-      `(the store, the labels, the module from the service worker's cache) at ${mb(fresh)}`,
+      `(the labels, the module from the service worker's cache) at ${mb(fresh)}`,
   );
 
-  // ---- 10. offline --------------------------------------------------------------------------------
+  // ---- 9. offline --------------------------------------------------------------------------------
   const asked = site.asked.length;
   const fixtureAsks = hosts.asked.length;
   site.refusing = true;
@@ -818,32 +718,23 @@ async function main() {
     `!!${ADD} && /^Add 1 /.test(${ADD}.innerText.trim()) && document.body.innerText.includes(${JSON.stringify(CARD.name)})`,
     60_000,
   );
-  if (await page.evaluate(`!!${OFFER}`))
-    fail("offline, the Scanner offers a download it cannot make");
-  // What was asked of a host that was not there: the scanner's manifest by the page, the
-  // worker's own script by the browser — a load asks whether there is a newer one — and
-  // nothing else.
+  // What was asked of a host that was not there: the worker's own script by the browser — a
+  // load asks whether there is a newer one — and nothing else.
   const offlineAsks = [...new Set(site.asked.slice(asked))];
-  const beyond = offlineAsks.filter(
-    (path) => path !== "/scanner-assets/manifest.json" && path !== "/sw.js",
-  );
+  const beyond = offlineAsks.filter((path) => path !== "/sw.js");
   if (beyond.length > 0) fail(`offline, the server was asked for ${beyond.join(", ")}`);
-  if (!offlineAsks.includes("/scanner-assets/manifest.json")) {
-    fail("offline, the page never asked whether its scanner's files are current");
-  }
   const offlineStatus = await engine("scanner_status");
-  if (!offlineStatus.bundle.loaded || !offlineStatus.detection_model.loaded) {
+  if (!offlineStatus.neural.loaded)
     fail(`offline, the session is ${JSON.stringify(offlineStatus)}`);
-  }
   console.log(
     `ok  offline — the host refusing every connection, the HTTP cache emptied — a reload opened the Scanner ` +
-      `and ${CARD.name} landed in the tray again; the host was asked for ${offlineAsks.join(" and ")} ` +
+      `and ${CARD.name} landed in the tray again; the host was asked for ${offlineAsks.join(" and ") || "nothing"} ` +
       `and nothing else (${hosts.asked.length - fixtureAsks} asks of other hosts, each failed)`,
   );
   site.refusing = false;
   hosts.offline(false);
 
-  // ---- 11. the policy, and what crossed the wire ---------------------------------------------------
+  // ---- 10. the policy, and what crossed the wire ---------------------------------------------------
   hosts.check();
   const thrown = page.thrown();
   if (thrown.length > 0) fail(`the page threw:\n${thrown.join("\n")}`);
@@ -866,9 +757,14 @@ async function main() {
     .map((id) => join(DIST, "wasm", id, "scanner"))
     .find((dir) => existsSync(dir));
   if (!scannerDir) fail("the scanner WASM directory is missing");
+  const neuralDir = join(DIST, NEURAL_PREFIX.slice(1));
+  const neuralSets = existsSync(neuralDir) ? readdirSync(neuralDir) : [];
+  if (neuralSets.length !== 1)
+    fail(`apps/light/dist-web/scanner-neural/ holds ${neuralSets.length} sets, not one`);
+  const setDir = join(neuralDir, neuralSets[0]);
   const files = [
     ...readdirSync(scannerDir).map((name) => join(scannerDir, name)),
-    ...ASSETS.map((name) => join(DIST, "scanner-assets", name)),
+    ...NEURAL_FILES.map((name) => join(setDir, name)),
   ];
   console.log(
     "    what a first scan fetches, as this server sent it (identity) and through brotli at level 5:",

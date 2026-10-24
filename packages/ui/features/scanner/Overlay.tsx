@@ -1,24 +1,22 @@
 import { useEffect, useLayoutEffect, useRef, type JSX, type RefObject } from "react";
 import type { ScannerCorner, ScannerVerdict } from "./types";
 
-/** The smoothed quad, once it has held still. */
+/** The card the frame votes for. */
 const QUAD = "#5ed69a";
-/** This frame's own detection, behind it. Faint red so the gap between the two reads as jitter. */
-const RAW = "#e88";
-/** The corner the rectifier treats as top-left, so a 180° flip is visible live. */
+/** The corner the scanner treats as top-left, so a 180° flip is visible live. */
 const CORNER = "#e05ad0";
 
 /**
  * The box over the video — the one part of the scanner that has to keep up with the camera.
  *
- * **The detector answers around nine times a second and the camera runs at thirty to sixty, so
+ * **The scanner answers around nine times a second and the camera runs at thirty to sixty, so
  * the overlay redraws on `requestAnimationFrame` and reads the verdict from a ref.** Drawing on
- * a React render instead would tie the box to the detector's rate and make every answer a
+ * a React render instead would tie the box to the scanner's rate and make every answer a
  * commit; reading through a ref means the parent's re-render costs one assignment and the
  * canvas keeps painting at the display's rate either way. Nothing here ever calls `setState`.
  *
  * **The quad is in the coordinates of the frame that was *sent*, not the video's**, which is
- * smaller by the send slider's scale — hence `sx`/`sy` off `verdict.frame`. Scaling here rather
+ * smaller by the pump's downscale — hence `sx`/`sy` off `verdict.frame`. Scaling here rather
  * than in the crate keeps the wire payload independent of how big the preview happens to be.
  *
  * No unit test: jsdom's canvas has no 2D context, so every line below is a no-op there and a
@@ -73,21 +71,10 @@ export function Overlay({
 
       // The widths are a fraction of the canvas rather than literal pixels, because the canvas
       // is sized to the *video* and stretched down to the element: a 3px stroke on a 1920-wide
-      // canvas in a 640px box draws at one CSS pixel, and the 1px raw box at a third of one.
-      // `crates/card-scanner/src/bin/live.html`'s `draw()` verbatim, the `Math.max` floors
-      // included — they are what keeps the box visible on a low-resolution camera.
+      // canvas in a 640px box draws at one CSS pixel. The old debug page's `draw()` verbatim,
+      // the `Math.max` floor included — it is what keeps the box visible on a low-resolution
+      // camera.
       const stroke = Math.max(2, canvas.width / 300);
-      const hair = Math.max(1, canvas.width / 700);
-
-      if (v.quad_raw !== null) {
-        ctx.save();
-        ctx.setLineDash([4, 6]);
-        ctx.lineWidth = hair;
-        ctx.strokeStyle = RAW;
-        trace(ctx, v.quad_raw, sx, sy);
-        ctx.stroke();
-        ctx.restore();
-      }
 
       if (v.quad !== null) {
         ctx.lineWidth = stroke;
@@ -96,8 +83,6 @@ export function Overlay({
         ctx.stroke();
         const first = v.quad[0];
         if (first !== undefined) {
-          // The reference draws the dot after restoring the raw box's `save()`, so the radius is
-          // off the *smoothed* width and not the hairline.
           ctx.fillStyle = CORNER;
           ctx.beginPath();
           ctx.arc(first[0] * sx, first[1] * sy, stroke * 2.2, 0, Math.PI * 2);

@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { Condition } from "@/lib/conditions";
-import type { ScanFilters, ScanMode, ScannerFinishPref } from "@/lib/ipc";
+import type { ScanFilters, ScannerFinishPref } from "@/lib/ipc";
 import type { CameraDevice } from "../useCamera";
 import { ScanBar, type ScanBarProps } from "./ScanBar";
 
@@ -20,7 +20,7 @@ const CAMERAS: readonly CameraDevice[] = [
  * The row with its values held, so a press in the workbench moves what it would move in the app.
  *
  * `ScanBar` is controlled end to end — the page owns the prefs — so a story drawn straight from
- * `args` would be a row whose Exact never lights and whose Clear clears nothing. The args seed the
+ * `args` would be a row whose Start never turns to Stop and whose Clear clears nothing. The args seed the
  * state and still receive every call, so the Actions panel reads exactly what the page would be
  * handed. A camera press is held as though the new stream opened at once — in the app the tick
  * waits for it.
@@ -29,7 +29,6 @@ function Held(args: ScanBarProps) {
   const [scanning, setScanning] = useState(args.scanning);
   const [pointAndShoot, setPointAndShoot] = useState(args.pointAndShoot);
   const [shooting, setShooting] = useState(args.shooting);
-  const [mode, setMode] = useState<ScanMode>(args.mode);
   const [filters, setFilters] = useState<ScanFilters>(args.filters);
   const [finish, setFinish] = useState<ScannerFinishPref>(args.finish);
   const [condition, setCondition] = useState<Condition>(args.condition);
@@ -53,11 +52,6 @@ function Held(args: ScanBarProps) {
       onShoot={(on) => {
         setShooting(on);
         args.onShoot(on);
-      }}
-      mode={mode}
-      onMode={(m) => {
-        setMode(m);
-        args.onMode(m);
       }}
       filters={filters}
       onFilters={(f) => {
@@ -100,8 +94,6 @@ const meta = {
     onPointAndShoot: fn(),
     shooting: false,
     onShoot: fn(),
-    mode: "fast",
-    onMode: fn(),
     filters: { sets: [], released_from: null, released_to: null },
     onFilters: fn(),
     filterError: null,
@@ -132,7 +124,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * What a reader opens the view on: Fast, no narrowing, the finish detected per card, no condition,
+ * What a reader opens the view on: no narrowing, the finish detected per card, no condition,
  * panels off.
  */
 export const Default: Story = {
@@ -196,9 +188,13 @@ export const PointAndShoot: Story = {
 export const DefaultsDetect: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }));
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }),
+    );
     await expect(
-      await canvas.findByText("The scanner reads each card's finish. A card it can't tell waits in the tray for you to pick."),
+      await canvas.findByText(
+        "A card printed in one finish takes it. One printed in several waits in the tray for you to pick.",
+      ),
     ).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "Finish" }));
     const options = canvas.getAllByRole("option").map((o) => o.textContent);
@@ -207,50 +203,22 @@ export const DefaultsDetect: Story = {
 };
 
 /**
- * Exact, narrowed to two sets and a release window — the Filters trigger turns gold, which is the
- * one thing a reader has to be able to see without opening it: a filter left on from the last pile
- * is how the next pile fails to match.
+ * Narrowed to two sets and a release window — the Filters trigger turns gold, which is the one
+ * thing a reader has to be able to see without opening it: a filter left on from the last pile is
+ * how the next pile fails to match.
  */
-export const ExactWithFilters: Story = {
+export const WithFilters: Story = {
   args: {
-    mode: "exact",
     filters: { sets: ["hob", "ltr"], released_from: "2023-06-23", released_to: "2024-12-31" },
     finish: "foil",
     condition: "NM",
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByRole("button", { name: "Exact" })).toHaveAttribute("aria-pressed", "true");
+    await expect(canvas.queryByRole("group", { name: "Scan mode" })).toBeNull();
     await expect(
       canvas.getByRole("button", { name: "Filters: HOB, LTR · 2023-06-23 – 2024-12-31" }),
     ).toBeInTheDocument();
-  },
-};
-
-/**
- * Neural, the third mode and the newest: lit in the switch, its hint ("New: …") the tooltip a
- * reader meets before trying it. A press on Fast hands the switch back.
- */
-export const Neural: Story = {
-  args: { mode: "neural" },
-  play: async ({ canvasElement, args }) => {
-    const canvas = within(canvasElement);
-    const group = canvas.getByRole("group", { name: "Scan mode" });
-    await expect(
-      within(group)
-        .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual(["Fast", "Exact", "Neural"]);
-    await expect(canvas.getByRole("button", { name: "Neural" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await userEvent.click(canvas.getByRole("button", { name: "Fast" }));
-    await expect(args.onMode).toHaveBeenCalledWith("fast");
-    await expect(canvas.getByRole("button", { name: "Neural" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
   },
 };
 
@@ -299,11 +267,11 @@ export const CameraOpen: Story = {
     await expect(within(group).getByRole("radio", { checked: true })).toHaveAccessibleName(
       "Logitech BRIO",
     );
-    await expect(within(group).getAllByRole("radio").map((r) => r.getAttribute("aria-label"))).toEqual([
-      "Integrated Camera",
-      "Logitech BRIO",
-      "OBS Virtual Camera",
-    ]);
+    await expect(
+      within(group)
+        .getAllByRole("radio")
+        .map((r) => r.getAttribute("aria-label")),
+    ).toEqual(["Integrated Camera", "Logitech BRIO", "OBS Virtual Camera"]);
   },
 };
 

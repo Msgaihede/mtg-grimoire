@@ -49,12 +49,13 @@
 //! app's step 7.3 (2026-10-07), `scanner_frame` and `scanner_capture` as the table's two `bytes`
 //! entries.
 //!
-//! **A `bytes` call's arguments are its headers.** A desktop frame is a raw request body with
-//! its JSON in request headers; a host of the table has no headers to send, so the page puts the
-//! same object where the arguments go — `{"x-scanner-options": "<json>", "x-scanner-detail":
-//! "<n>"}` beside the body (`packages/ui/lib/core/table.ts`, and the web host's `protocol.ts`). The arm
-//! hands that object to the body as a [`Carried`], whole and unparsed, beside whatever named
-//! arguments the entry declares — the scanner's two declare none. **The body crosses as the
+//! **A `bytes` call's arguments are its headers.** A desktop capture is a raw request body with
+//! its sidecar's JSON in a request header; a host of the table has no headers to send, so the
+//! page puts the same object where the arguments go — `{"x-scanner-capture": "<json>"}` beside
+//! the body (`packages/ui/lib/core/table.ts`, and the web host's `protocol.ts`); a frame carries
+//! none, and its arguments are `{}`. The arm hands that object to the body as a [`Carried`],
+//! whole and unparsed, beside whatever named arguments the entry declares — the scanner's two
+//! declare none. **The body crosses as the
 //! host can carry it**: base64 in `core_call`'s `body` on Android, where Tauri takes no raw
 //! body; a transferred buffer in a browser. Both arrive here as `Some(Vec<u8>)`.
 //!
@@ -166,10 +167,9 @@ pub(crate) fn needs_body(name: &str, body: Option<Vec<u8>>) -> Result<Vec<u8>, S
 /// — the headers a raw request would have had (the module doc says why they ride there).
 ///
 /// Handed to a `bytes` body unparsed, because a header is read by the module that owns the
-/// payload and by its rules: an options header that does not parse is a shrug and a sidecar that
-/// does not parse is a refusal (`scanner::frame_from`, `scanner::capture_from`), and a typed
-/// argument struct could only ever do one of those. Arguments that were no object — `null`, or
-/// none at all — carried nothing.
+/// payload and by its rules — a sidecar that does not parse is a refusal and an absent one is
+/// not (`scanner::capture_from`) — which a typed argument struct could not say. Arguments that
+/// were no object — `null`, or none at all — carried nothing.
 #[derive(Debug, Clone, Default)]
 pub struct Carried(serde_json::Map<String, Value>);
 
@@ -930,15 +930,13 @@ commands! {
     // capture are refused on a page in one sentence, inside the functions
     // (`scanner::not_in_a_browser_yet`).
     blocking scanner_status in scanner() = |state| state.scanner.status();
-    // The table's two `bytes` entries: the body is the JPEG — or the frame and the detail image
-    // back to back — and the call's arguments are the desktop's three headers by name
-    // (`Carried`, `scanner::Header::of_json`). Admitted before the body is split or decoded, so
-    // a refused frame costs neither; `loaded` is taken and let go inside `ScannerState::frame`,
-    // on the blocking pool, with no `.await` under it.
-    bytes scanner_frame in scanner() = |state, raw, carried| {
+    // The table's two `bytes` entries: the body is the JPEG, and a capture's arguments are the
+    // desktop's header by name (`Carried`, `scanner::Header::of_json`); a frame's carry nothing.
+    // Admitted before the body is decoded, so a refused frame costs no decode; `loaded` is taken
+    // and let go inside `ScannerState::frame`, on the blocking pool, with no `.await` under it.
+    bytes scanner_frame in scanner() = |state, raw, _carried| {
         let _lease = state.scanner.admit(PAGE)?;
-        let (jpeg, detail, opts) = frame_from(&raw, &|name| Header::of_json(carried.get(name)))?;
-        state.scanner.frame(jpeg, detail, &opts)
+        state.scanner.frame(&raw)
     };
     blocking scanner_reset in scanner() = |state| {
         let _lease = state.scanner.admit(PAGE)?;
@@ -986,24 +984,13 @@ commands! {
     };
     write scan_history_delete in scan_history(id: i64) = |conn| delete_batch(conn, id);
 
-    // scanner_assets — what this install lacks of the scanner's three files, and the download a
-    // reader's press starts (the light app's step 7.4). **Neither takes the lease**: what is
-    // loaded and who holds the scanner are two questions (`ScannerState::forget`), and a fetch
-    // outlives the view that started it. The read is `blocking` because it asks the status,
-    // which loads the session on its first ask; the fetch is a `task`, awaited where it stands
-    // — it reaches a network, and says how far it has got through `State::events`
-    // (`scanner_assets::PROGRESS_EVENT`). Both are refused on a page in the scanner's own
-    // sentence (`scanner::not_in_a_browser_yet`), before any request.
-    blocking scanner_assets in scanner_assets() = |state| owed(&state);
-    task scanner_assets_fetch in scanner_assets() = |state| async move { fetch(&state).await };
-
     // scanner_submit — the last couple of seconds of camera frames and the card a reader says
     // they show, sent to the scan inbox to improve the scanner (issue #776): the one command
     // that sends a picture off the device, and only a reader's press on Send calls it. A `task`,
     // awaited where it stands, because it reaches a network — which is also why **its pictures
     // are base64 in its one argument and it is not a third `bytes` entry**: a `bytes` body runs
-    // on the blocking pool, where nothing can be awaited. **No lease**, for the files' reason:
-    // who holds the scanner and what a reader chooses to send are two questions. It answers on a
+    // on the blocking pool, where nothing can be awaited. **No lease**: who holds the scanner
+    // and what a reader chooses to send are two questions. It answers on a
     // page as on any host.
     task scanner_submit in scanner_submit(submission: Submission) = |state| async move {
         submit(&state, submission).await
@@ -2447,9 +2434,6 @@ mod tests {
             "scanner_tray_archive" => json!({ "items": [], "remaining": [] }),
             // `bytes`: no headers, and `chosen_body` is what the call carries.
             "scanner_frame" | "scanner_capture" => json!({}),
-            // The scanner's files: the read and the fetch (a `task`) both stop at the same
-            // sentence on a page, before the session is loaded or any host is asked.
-            "scanner_assets" | "scanner_assets_fetch" => Value::Null,
             // A real run of pictures of a card these tables have. This table's device has no
             // membership behind it, so the body stops where a non-supporter's does: at the one
             // read on the one connection that asks. A supporter's whole trip on one connection
@@ -2459,7 +2443,6 @@ mod tests {
                 "submission": {
                     "cardId": "c-bolt",
                     "finish": "nonfoil",
-                    "mode": "fast",
                     "filters": {},
                     "run": scan_run(),
                 },
@@ -2820,12 +2803,8 @@ mod tests {
         }
     }
 
-    /// The two that fetch the scanner's files (step 7.4) — a list of their own, because they
-    /// are not the session's: neither takes the lease, and neither is one of the thirteen above.
-    const SCANNER_ASSETS: [&str; 2] = ["scanner_assets", "scanner_assets_fetch"];
-
-    /// The one that sends a scan to the inbox (issue #776) — not the session's either: it takes
-    /// no lease, and it is the only one of the sixteen that asks a server of ours.
+    /// The one that sends a scan to the inbox (issue #776) — not the session's: it takes no
+    /// lease, and it is the only one of the fourteen that asks a server of ours.
     const SCANNER_SUBMIT: [&str; 1] = ["scanner_submit"];
 
     /// `TINY_JPEG` as the page sends a picture to `scanner_submit`: standard base64.
@@ -2844,11 +2823,9 @@ mod tests {
                     "jpeg": base64_of(TINY_JPEG),
                     "ms": -110.5 * (frames - 1 - at) as f64,
                     "ok": at + 1 == frames,
-                    "lock": if at + 1 == frames { json!("locked") } else { Value::Null },
                     "confidence": null,
                     "distance": 12,
                     "decided": null,
-                    "detail": false,
                 })
             })
             .collect()
@@ -2856,13 +2833,13 @@ mod tests {
 
     #[test]
     fn all_thirteen_scanner_commands_are_in_the_table() {
-        for name in SCANNER.iter().chain(&SCANNER_ASSETS).chain(&SCANNER_SUBMIT) {
+        for name in SCANNER.iter().chain(&SCANNER_SUBMIT) {
             assert!(TABLE.iter().any(|e| e.name == *name), "{name}");
         }
         let in_table = TABLE.iter().filter(|e| e.name.contains("scanner")).count();
         assert_eq!(
             in_table,
-            SCANNER.len() + SCANNER_ASSETS.len() + SCANNER_SUBMIT.len(),
+            SCANNER.len() + SCANNER_SUBMIT.len(),
             "a scanner command these lists lack"
         );
     }
@@ -2914,7 +2891,7 @@ mod tests {
         let _page = crate::platform::host::emulate_page();
         let mut runtime = one_thread_runtime();
         let args = json!({ "submission": {
-            "cardId": "c-bolt", "finish": "foil", "mode": "fast", "filters": {},
+            "cardId": "c-bolt", "finish": "foil", "filters": {},
             "run": scan_run(),
         }});
         match drive(&mut runtime, dispatch(&state, "scanner_submit", args, None)) {
@@ -2972,10 +2949,8 @@ mod tests {
                 "cardId": "c-bolt",
                 "finish": "foil",
                 "reported": null,
-                "mode": "exact",
                 "confidence": 0.5,
                 "distance": 12,
-                "bundle": 98000,
                 "filters": { "sets": ["LEA"], "released_from": null, "released_to": "1993-12-31" },
                 "run": scan_run(),
             },
@@ -3004,7 +2979,7 @@ mod tests {
         // **And one picture is not a scan**: the same call with a run of one is refused in the
         // reader's sentence, and the inbox is asked nothing more.
         let mut single = json!({ "submission": {
-            "cardId": "c-bolt", "finish": "foil", "mode": "exact", "filters": {},
+            "cardId": "c-bolt", "finish": "foil", "filters": {},
         }});
         single["submission"]["run"] = json!([scan_run()[0]]);
         let refused = dispatch(&state, "scanner_submit", single, None).await;
@@ -3012,48 +2987,18 @@ mod tests {
         took.assert_calls(1);
     }
 
-    /// **The scanner's files, through the table**: on an install with nothing, the read names
-    /// the three files and what they cost, in the keys the page reads; and neither command
-    /// takes a body or an argument. The fetch itself is `scanner_assets::tests`' — a table call
-    /// reaches the shipped source, and no test asks GitHub for anything.
+    /// **The session's commands, through `dispatch`** — a real `State` over files carrying the
+    /// Neural scanner's files as the desktop and Android do, with no `corpus.db` to name a card
+    /// by: the status says what loaded, and a real frame is decoded and read rather than
+    /// refused or failed.
     #[tokio::test]
-    async fn what_the_scanner_owes_is_read_through_the_table() {
-        let (state, _dir) =
-            crate::state::fixtures::on_files("commands-scanner-assets", "http://127.0.0.1:1");
-        let owed = dispatch(&state, "scanner_assets", Value::Null, None)
-            .await
-            .expect("what is owed");
-        let keys: Vec<_> = owed["owed"]
-            .as_array()
-            .expect("rows")
-            .iter()
-            .map(|row| row["key"].as_str().expect("a key"))
-            .collect();
-        assert_eq!(keys, ["bundle", "detectionModel", "recognitionModel"]);
-        assert_eq!(owed["bytes"], 18_101_604);
-        assert_eq!(owed["fetching"], false);
-        let row = &owed["owed"][1];
-        assert_eq!(row["bytes"], crate::scanner_assets::DETECTION_BYTES);
-        assert!(row["label"].as_str().is_some_and(|label| !label.is_empty()));
-
-        for name in SCANNER_ASSETS {
-            assert_eq!(
-                dispatch(&state, name, Value::Null, Some(vec![1, 2, 3])).await,
-                Err(format!("{name} takes no raw body."))
-            );
-            let entry = TABLE.iter().find(|e| e.name == name).expect("in the table");
-            assert!(entry.args.is_empty(), "{name} takes nothing");
-        }
-    }
-
-    /// **The session's commands, through `dispatch`, on a state with no assets** — a real
-    /// `State` over files, nothing in `<data>/scanner/`, which is an Android install before any
-    /// download: the status names three absent paths, and a real frame is decoded and judged
-    /// by a session with no reference rather than refused or failed.
-    #[tokio::test]
-    async fn the_scanners_session_answers_through_the_table_with_no_assets() {
+    async fn the_scanners_session_answers_through_the_table() {
         let (state, dir) =
             crate::state::fixtures::on_files("commands-scanner", "http://127.0.0.1:1");
+        state.scanner.carry(crate::scanner::Embedded {
+            neural: Some(card_neural::bundled()),
+            ..crate::scanner::Embedded::none()
+        });
         let call = |name: &'static str, args: Value, body: Option<Vec<u8>>| {
             let state = state.clone();
             async move { dispatch(&state, name, args, body).await }
@@ -3062,16 +3007,13 @@ mod tests {
         let status = call("scanner_status", Value::Null, None)
             .await
             .expect("the status");
-        for asset in ["bundle", "detection_model", "recognition_model"] {
-            assert_eq!(status[asset]["source"], "absent", "{status}");
-            assert_eq!(status[asset]["present"], false, "{status}");
-        }
-        let looked = status["bundle"]["path"].as_str().expect("a path");
-        assert!(
-            looked.ends_with("card-hashes.bin") && looked.contains("scanner"),
-            "{looked}"
-        );
+        assert_eq!(status["neural"]["source"], "embedded", "{status}");
+        assert_eq!(status["neural"]["loaded"], true, "{status}");
         assert_eq!(status["labels"], 0);
+        assert_eq!(status["unapplied_filters"], Value::Null);
+        for gone in ["bundle", "detection_model", "recognition_model"] {
+            assert!(status.get(gone).is_none(), "{gone}: {status}");
+        }
 
         // No filter is always a filter; a real one needs names this session does not have, and
         // the crate's sentence is the refusal, verbatim.
@@ -3091,78 +3033,31 @@ mod tests {
             "{narrowed}"
         );
 
-        // A frame: the body is the JPEG, and the options ride in the arguments under the
-        // desktop's header name, as JSON text — exactly what `table.ts` sends.
-        let verdict = call(
+        // A frame: the body is the JPEG, and the arguments carry nothing — exactly what
+        // `table.ts` sends. A verdict that names the frame's size is a body that crossed whole.
+        let verdict = call("scanner_frame", json!({}), Some(TINY_JPEG.to_vec()))
+            .await
+            .expect("a verdict");
+        assert_eq!(verdict["frame"], json!({ "w": 160, "h": 120 }), "{verdict}");
+        assert_eq!(verdict["matcher"], true, "{verdict}");
+        assert_eq!(verdict["decision"], Value::Null);
+        // A key a page of an older build still sends is nobody's business.
+        let older = call(
             "scanner_frame",
             json!({ "x-scanner-options": r#"{"mode":"exact"}"# }),
             Some(TINY_JPEG.to_vec()),
         )
         .await
         .expect("a verdict");
-        assert_eq!(verdict["frame"], json!({ "w": 160, "h": 120 }), "{verdict}");
-        assert_eq!(
-            verdict["matcher"], false,
-            "no bundle is a state the verdict names, not a failure: {verdict}"
-        );
-        assert_eq!(verdict["mode"], "exact", "the options header was read");
-        assert_eq!(verdict["decision"], Value::Null);
-        // With no options the frame is judged in the default mode — an absent header is a
-        // shrug, and so is one that is not JSON.
-        for args in [json!({}), json!({ "x-scanner-options": "not json" })] {
-            let plain = call("scanner_frame", args, Some(TINY_JPEG.to_vec()))
-                .await
-                .expect("a verdict");
-            assert_eq!(plain["mode"], "fast", "{plain}");
-        }
-
-        // The detail image: two JPEGs in one body, the first one's length in a header. **What
-        // this can show is where the frame ends, and nothing about the detail**: a session with
-        // no reader never decodes one, so no verdict here depends on the second JPEG — the two
-        // halves are held byte for byte by `scanner::tests`, over `frame_from`. And "the frame
-        // decodes" alone would show nothing either: a JPEG decoder stops at the end-of-image
-        // marker, so the whole pair taken as the frame is the same 160×120 picture.
-        let mut pair = TINY_JPEG.to_vec();
-        pair.extend_from_slice(TINY_JPEG);
-        let split = TINY_JPEG.len().to_string();
-        let paired = call(
-            "scanner_frame",
-            json!({ "x-scanner-detail": split }),
-            Some(pair.clone()),
-        )
-        .await
-        .expect("a verdict for the pair");
-        assert_eq!(paired["frame"], json!({ "w": 160, "h": 120 }), "{paired}");
-        // So the cut is put where it hurts: twenty bytes in, the frame is the head of a JPEG
-        // and nothing more, and the session says it could not decode it. An entry that ignored
-        // the header would have decoded the whole picture, as above.
-        let cut_short = call(
-            "scanner_frame",
-            json!({ "x-scanner-detail": "20" }),
-            Some(pair.clone()),
-        )
-        .await
-        .expect("a verdict for a frame that is not one");
+        assert_eq!(older["frame"], json!({ "w": 160, "h": 120 }), "{older}");
+        // A body cut short is the decoder's refusal, as a verdict.
+        let cut_short = call("scanner_frame", json!({}), Some(TINY_JPEG[..20].to_vec()))
+            .await
+            .expect("a verdict for a frame that is not one");
         assert_eq!(cut_short["ok"], false, "{cut_short}");
         assert_eq!(cut_short["frame"], json!({ "w": 0, "h": 0 }), "{cut_short}");
         let said = cut_short["error"].as_str().expect("why");
         assert!(said.starts_with("decode: "), "{said}");
-        // And a length that cannot split the body is the reader's sentence, through the table.
-        for (length, said) in [
-            (json!("0"), "zero"),
-            (json!(pair.len().to_string()), "no detail image"),
-            (json!("three"), "not a number"),
-            (json!(252), "did not parse: it is not a string"),
-        ] {
-            let refused = call(
-                "scanner_frame",
-                json!({ "x-scanner-detail": length }),
-                Some(pair.clone()),
-            )
-            .await
-            .unwrap_err();
-            assert!(refused.contains(said), "{refused}");
-        }
 
         assert_eq!(
             call("scanner_reset", Value::Null, None).await,
@@ -3303,9 +3198,9 @@ mod tests {
         };
 
         let mut prefs = call("scanner_prefs", Value::Null).await.expect("prefs");
-        assert_eq!(prefs["mode"], "fast");
+        assert_eq!(prefs["developer"], false);
         assert!(!armed(&state), "a read arms nothing");
-        prefs["mode"] = json!("exact");
+        prefs["developer"] = json!(true);
         prefs["folderId"] = json!(4);
         assert_eq!(
             call("set_scanner_prefs", json!({ "prefs": prefs.clone() })).await,
@@ -3465,7 +3360,7 @@ mod tests {
     }
 
     /// **A refused frame costs no decode and no load**: the lease is asked before the body is
-    /// split or the session touched. Its own state, so the status read above cannot have been
+    /// read or the session touched. Its own state, so the status read above cannot have been
     /// what loaded it.
     #[tokio::test]
     async fn a_frame_refused_by_the_lease_never_reaches_the_session() {
@@ -3473,9 +3368,9 @@ mod tests {
             crate::state::fixtures::on_files("commands-scanner-refused", "http://127.0.0.1:1");
         let _window = state.scanner.admit("window-2").expect("admitted");
         for name in ["scanner_frame", "scanner_capture"] {
-            // A detail length that cannot split the body: were the payload read first, this
+            // A sidecar that cannot be read: were the payload read first, the capture's answer
             // would be the reader's sentence rather than the lease's.
-            let args = json!({ "x-scanner-detail": "0", "x-scanner-capture": "{not json" });
+            let args = json!({ "x-scanner-capture": "{not json" });
             assert_eq!(
                 dispatch(&state, name, args, Some(TINY_JPEG.to_vec())).await,
                 Err(crate::scanner::OPEN_ELSEWHERE.to_owned()),

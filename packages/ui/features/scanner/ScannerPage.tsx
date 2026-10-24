@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 import { PageRule, PageTitle } from "@/components/PageBar";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
@@ -9,7 +9,6 @@ import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { ScanHistoryDialog } from "./history/ScanHistoryDialog";
 import { Overlay } from "./Overlay";
-import { TiersPanel } from "./panels/TiersPanel";
 import { AddCardDialog } from "./reader/AddCardDialog";
 import { AddedToast } from "./reader/AddedToast";
 import { MatchStrip } from "./reader/MatchStrip";
@@ -19,18 +18,11 @@ import { setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
 import { withoutCommitted } from "./reader/trayCommit";
 import { TrayPanel } from "./reader/TrayPanel";
 import { useLandedPrice } from "./reader/useLandedPrice";
-import { ScannerAssets } from "./ScannerAssets";
 import { ScannerPanels } from "./ScannerPanels";
-import {
-  DEFAULT_DETAIL_WAIT_MS,
-  DEFAULT_SCANNER_OPTIONS,
-  DEFAULT_SEND_PX,
-  frameOptions as frameOptionsOf,
-} from "./scannerOptions";
 import { SubmitScanDialog } from "./submit/SubmitScanDialog";
 import { useMaySendScans } from "./submit/useMaySendScans";
 import { useScanSubmit } from "./submit/useScanSubmit";
-import type { ScannerOptions, ScannerTrayRow } from "./types";
+import type { ScannerTrayRow } from "./types";
 import { useCamera, useCameraDevices } from "./useCamera";
 import { usePointAndShoot } from "./usePointAndShoot";
 import { useScanLoop } from "./useScanLoop";
@@ -100,9 +92,8 @@ function ElsewhereSentence() {
 
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { prefs, update, inForce, filterError, loaded, unavailable, resync } = useScannerPrefs();
-  // The developer panels are the Scanner view's own; a destination's host draws none of them, and
-  // asks the engine for none of the previews they alone show.
+  const { prefs, update, inForce, filterError, loaded, unavailable } = useScannerPrefs();
+  // The developer panels are the Scanner view's own; a destination's host draws none of them.
   const developer = destination === undefined && prefs.developer;
   // **Stopped until the reader presses Start scanning** (issue #1317): opening the view turns the
   // camera on, not recognition. Session-only: a Start or Stop survives minimize/restore, and a new
@@ -127,20 +118,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const scannedDeck = useScannedDeck(deckRows ?? []);
   const newDeckFormat = useNewDeckFormat();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
-  // The developer sliders. `mode` rides the same header but is the reader's, so it is taken from
-  // the prefs on the way out rather than from here.
-  const [options, setOptions] = useState<ScannerOptions>(DEFAULT_SCANNER_OPTIONS);
-  const [sendPx, setSendPx] = useState(DEFAULT_SEND_PX);
-  const [detailWaitMs, setDetailWaitMs] = useState(DEFAULT_DETAIL_WAIT_MS);
-  // `previews` is the Developer switch's too: the rectified preview and its hash cost a JPEG
-  // encode a frame, and nothing but the developer panels draws them.
-  const frameOptions = useMemo(
-    () => frameOptionsOf(options, prefs.mode, developer),
-    [options, prefs.mode, developer],
-  );
-  // Asked once a session, and again when a download of the scanner's files lands —
-  // `useScannerStatus` says why nothing else asks, and `ScannerAssets`, below, is that download.
-  const { status: statusData, hasBundle, filtersDisabled } = useScannerStatus();
+  // Asked once a session — `useScannerStatus` says why nothing else asks.
+  const { status: statusData, filtersDisabled, assetNotes } = useScannerStatus();
 
   // **The heartbeat: this view holds the scanner from its first render, whatever its camera is
   // doing** — `useScannerHold`, stopped while the window is released (minimized past the grace).
@@ -200,8 +179,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   const loop = useScanLoop({
     videoRef,
-    // **Held until the prefs and the tray are in.** The first frame must go out in the stored
-    // mode and under the stored filters, and a decision must land on the stored tray rather than
+    // **Held until the prefs and the tray are in.** The first frame must go out under the stored
+    // filters, and a decision must land on the stored tray rather than
     // on an empty one the load then overwrites. And paused the moment the window is minimized,
     // for as long as *Send scan…*'s dialog is open (`sending`, below), and while a card is being
     // added by hand (`picking`).
@@ -213,9 +192,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       !parked.paused &&
       !sending &&
       !picking,
-    options: frameOptions,
-    sendPx,
-    detailWaitMs,
     keepFullFrames: maySend,
     onDecision: (decision) => {
       onDecision(decision);
@@ -315,8 +291,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
-    mode: prefs.mode,
-    status: statusData,
     filters: inForce,
     ready: sendable,
   });
@@ -449,7 +423,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     });
   };
 
-  // The detector's own refusal is a developer's sentence — contours examined, a quad rejected —
+  // The scanner's own refusal of a frame is a developer's sentence — no card found in it —
   // and the reader has the status line for what it means to them. The loop's failures, a refused
   // reset and a *Send scan…* pressed too soon are not the detector's, and every reader gets
   // those. **A press that opened nothing is never silent**: it takes this line over from the
@@ -490,8 +464,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           }}
           shooting={shot.shooting}
           onShoot={(on) => (on ? shot.start(loop.clearReads, "card") : shot.stop())}
-          mode={prefs.mode}
-          onMode={(mode) => update({ mode })}
           filters={prefs.filters}
           onFilters={(filters) => update({ filters })}
           filterError={filterError}
@@ -537,10 +509,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 bar fill, and a line under a tall camera is a line below where they are looking. */}
             <MatchStrip
               verdict={reading ? loop.verdict : null}
-              mode={prefs.mode}
               lastAdded={lastAdded}
-              hasBundle={hasBundle}
-              lastResolution={loop.lastResolution}
               onReset={onReset}
               // Offered only where `sendable` says: a run to send, the Scanner view itself, and
               // a supporter's device. Without a live camera, or stopped, the box under the strip
@@ -548,17 +517,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               onSend={sendable ? submit.open : undefined}
             />
             {/* The column is the height, and the video box takes what the strip above it and the
-                asset notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
+                notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
                 `Overlay`'s canvas with it): at two thirds of a wide view the box is nearer square
                 than 16:9, and a letterboxed feed there is a strip with black above and below. */}
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
               <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
               <Overlay videoRef={videoRef} verdict={reading ? loop.verdict : null} />
-              <AddedToast
-                card={armed ? landed : null}
-                onDone={clearLanded}
-                price={landedPrice}
-              />
+              <AddedToast card={armed ? landed : null} onDone={clearLanded} price={landedPrice} />
               {!reading && (
                 <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
                   {pointAndShoot ? SHOT_READY_CLICK : SCANNING_STOPPED}
@@ -573,7 +538,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 </p>
               )}
               {/* **A host with no scanner session** (`scannerUnavailable`) — a browser that
-                  cannot run the scanner's module, a build made without its files. The host's own
+                  cannot run the scanner's module. The host's own
                   sentence where the picture would be: `loaded` never goes true there, so no
                   camera was asked for and nothing else will ever fill this box. The tray beside
                   it still reads, edits and files. */}
@@ -597,17 +562,18 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 {reading ? detectorSentence : ""}
               </p>
             </div>
-            {/* The scanner's files: the offer to download them where the host says it owes
-                them, and otherwise whatever the status still has to say. When a download lands
-                the engine's session is a new one — it is given the filters again, and what the
-                last one said is dropped, so the next verdict starts a stream of its own. */}
-            <ScannerAssets
-              status={statusData}
-              onLoaded={() => {
-                resync();
-                loop.clearReads();
-              }}
-            />
+            {/* Whatever the status still has to say — the recogniser's files, there and not
+                loaded. */}
+            {assetNotes.length > 0 && (
+              <div className="space-y-1 text-xs text-dim">
+                {assetNotes.map((note) => (
+                  // An error may carry a path, which is one unbreakable word.
+                  <p key={note} className="break-words">
+                    {note}
+                  </p>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* **The tray's side, and below 88rem it is one fixed column.** With the developer panels
@@ -674,19 +640,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 <ScannerPanels
                   status={statusData}
                   verdict={loop.verdict}
-                  lastOcr={loop.lastOcr}
-                  lastCollector={loop.lastCollector}
                   roundTripMs={loop.roundTripMs}
                   rate={loop.rate}
-                  options={options}
-                  sendPx={sendPx}
-                  detailWaitMs={detailWaitMs}
-                  onOptions={setOptions}
-                  onSendPx={setSendPx}
-                  onDetailWaitMs={setDetailWaitMs}
                   onCapture={onCapture}
                 />
-                <TiersPanel resolution={loop.lastResolution} />
               </div>
             )}
           </div>

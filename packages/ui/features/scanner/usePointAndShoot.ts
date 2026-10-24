@@ -22,7 +22,7 @@ export interface PointAndShoot {
 /**
  * **Point and shoot** — recognition for the length of a press, rather than from Start until Stop.
  *
- * The Neural mode decides on one clear frame, so a camera carried from one card to the next reads
+ * The scanner decides on a couple of clear frames, so a camera carried from one card to the next reads
  * whatever passes under it — the table, a card in the pile, the one just filed — and files it. A
  * shot is the reader saying when: **a click on the desktop face** (*Scan card*) runs the pump
  * until one card lands, and **a hold on the phone's** (*Scan*) runs it until the finger lifts.

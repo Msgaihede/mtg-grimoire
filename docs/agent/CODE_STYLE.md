@@ -59,7 +59,7 @@ mtg-grimoire repository.
     IPC handlers.
   - `crates/grimoire-web`: Web WASM target host.
   - `apps/light/src-tauri`: Android light app host.
-  - `crates/card-scanner`: OCR and optical card detection.
+  - `crates/card-scanner`: The card scanner's session over `crates/card-neural`'s recogniser — not a workspace member.
 - **Module files**: Standard Rust `snake_case.rs` and `module/mod.rs` conventions.
 - **Tests**: Colocated `#[cfg(test)] mod tests { ... }` modules inside the source files.
 

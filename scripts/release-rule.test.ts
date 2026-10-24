@@ -37,7 +37,6 @@ import deployToolLock from "../infrastructure/wrangler/package-lock.json?raw";
 import appWorkerPackage from "../infrastructure/app-worker/package.json?raw";
 import workspaceYaml from "../pnpm-workspace.yaml?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
-import scannerBundleYml from "../.github/workflows/scanner-bundle.yml?raw";
 import updateRs from "../apps/desktop/src-tauri/src/update.rs?raw";
 import ciYml from "../.github/workflows/ci.yml?raw";
 import syncSmoke from "./web-sync-smoke.ts?raw";
@@ -1363,10 +1362,6 @@ describe("release.yml", () => {
       "sudo apt-get update && sudo apt-get install -y clang",
       'cargo install wasm-bindgen-cli --version "$bindgen" --locked',
       "run: pnpm web:wasm",
-      // The card scanner's three files, and a build that fails without them (step 7.5): a web
-      // app released without its scanner opens, passes its smoke, and cannot scan.
-      "run: pnpm scanner:assets --web",
-      "GRIMOIRE_SCANNER_ASSETS: required",
       "run: pnpm web:build",
       "run: pnpm web:smoke",
       "key: web-wasm32",
@@ -1374,13 +1369,10 @@ describe("release.yml", () => {
       expect(jobs.web, command).toContain(command);
       expect(ciYml, command).toContain(command);
     }
-    // In that order, in both: the modules' build empties the folder the files land in, and
-    // the page's build ships what is there when it runs.
+    // In that order, in both: the page's build copies the modules the build before it wrote.
     for (const text of [jobs.web, ciYml]) {
       const at = (needle: string) => text.indexOf(needle);
-      expect(at("run: pnpm scanner:assets --web")).toBeGreaterThan(at("run: pnpm web:wasm"));
-      expect(at("run: pnpm web:build")).toBeGreaterThan(at("run: pnpm scanner:assets --web"));
-      expect(at("run: pnpm web:build")).toBeGreaterThan(at("GRIMOIRE_SCANNER_ASSETS: required"));
+      expect(at("run: pnpm web:build")).toBeGreaterThan(at("run: pnpm web:wasm"));
     }
     // And a pull request scans a card with what it built.
     expect(ciYml).toContain("run: pnpm web:scanner-smoke");
@@ -2064,33 +2056,5 @@ describe("the guards' own guards", () => {
   it("computes Tauri's versionCode", () => {
     expect(versionCode("0.40.0")).toBe(40_000);
     expect(versionCode("1.2.3")).toBe(1_002_003);
-  });
-});
-
-describe("scanner-bundle.yml", () => {
-  const jobs = jobsOf(scannerBundleYml);
-
-  // The release builds embed what this workflow publishes, so the job that writes the release
-  // is one that runs nothing it built: the cargo build scripts, `build-hashes`, `eval` and the
-  // model fetch all run in `build`, with a read token and no token in any step.
-  it("builds with a read token, and publishes from a job that builds nothing", () => {
-    expect(Object.keys(jobs)).toEqual(["build", "publish"]);
-    expect(jobs.build).toMatch(/^ {4}permissions:\n {6}contents: read$/m);
-    expect(jobs.build).not.toMatch(/: write\b|GH_TOKEN|GITHUB_TOKEN|github\.token|gh release/);
-    expect(secretRefs(jobs.build)).toEqual([]);
-    expect(jobs.build).toContain("name: scanner-bundle");
-
-    const publish = jobs.publish;
-    expect(needsOf(publish)).toEqual(["build"]);
-    expect(publish).toMatch(/^ {4}if: github\.ref == 'refs\/heads\/main'$/m);
-    expect(publish).toMatch(/^ {4}permissions:\n {6}contents: write$/m);
-    expect([...publish.matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1])).toEqual([
-      "actions/download-artifact",
-    ]);
-    expect(publish).not.toMatch(/cargo|pnpm|npm|node |rust|cache|checkout/);
-    expect(secretRefs(publish)).toEqual([]);
-    const holding = stepsOf(publish).filter((step) => /GH_TOKEN/.test(step));
-    expect(holding).toHaveLength(1);
-    expect(holding[0]).toContain("name: Publish if changed");
   });
 });

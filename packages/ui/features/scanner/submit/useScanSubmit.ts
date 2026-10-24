@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import type { ScanFilters, ScanMode, ScannerStatus, ScannerVerdict } from "../types";
+import type { ScanFilters, ScannerVerdict } from "../types";
 import type { ScanLoop } from "../useScanLoop";
 import { RUN_MIN_FRAMES, runAtPress, runClock, scanRun, type ScanRun } from "./run";
 import { SCAN_TOO_SHORT } from "./submitText";
@@ -45,8 +45,8 @@ export interface ScanSubmit {
  *
  * **What the scanner had said is the run's last frame's, not the page's.** The press reads the
  * ring as it stands and everything else as the last render had it, and the ring can be a frame
- * ahead — so `scanRun` takes the reported printing, the two figures and the mode off the last
- * frame of the run itself. The `verdict` here is only what the reader was looking at: the name
+ * ahead — so `scanRun` takes the reported printing and the two figures off the last frame of the
+ * run itself. The `verdict` here is only what the reader was looking at: the name
  * the search opens on.
  *
  * **Recognition pauses for it** (issue #977): the pages hold their pump while `run` is not
@@ -63,8 +63,6 @@ export interface ScanSubmit {
 export function useScanSubmit({
   recent,
   verdict,
-  mode,
-  status,
   filters,
   ready,
 }: {
@@ -75,10 +73,6 @@ export function useScanSubmit({
    * name the search opens on and for nothing that is sent.**
    */
   verdict: ScannerVerdict | null;
-  /** The reader's mode. What is sent is the mode the run's last frame was judged in. */
-  mode: ScanMode;
-  /** `useScannerStatus`' answer, or `null` before it has one. */
-  status: ScannerStatus | null;
   /**
    * The sets and dates the scanner is narrowed to: **the ones its session last accepted**
    * (`useScannerPrefs`' `inForce`), never the ones the popover is drawing. A change the session
@@ -123,7 +117,7 @@ export function useScanSubmit({
     opened.current = true;
     opener.current = from;
     setError(null);
-    setRun(scanRun(frames, pressedAt, verdict, mode, status, filters));
+    setRun(scanRun(frames, pressedAt, verdict, filters));
   };
 
   // The two ways out are stable, which `open` cannot be: the dialog's body is memoised on them,

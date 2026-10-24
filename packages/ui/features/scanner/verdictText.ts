@@ -1,16 +1,5 @@
 import { HOST_SCANNER_UNAVAILABLE } from "@/lib/core/hostScanner";
-import type {
-  ScannerAsset,
-  ScannerRule,
-  ScannerStanding,
-  ScannerStatus,
-  ScannerTracked,
-  ScannerVerdict,
-} from "./types";
-
-export const CARD_ASPECT = 63 / 88;
-/** The distance gate, as a fraction of the descriptor's bits — `TrackerOptions::max_normalized`. */
-export const SURE_DISTANCE = 0.3;
+import type { ScannerStanding, ScannerStatus, ScannerTracked, ScannerVerdict } from "./types";
 
 /**
  * What a second window's Scanner view says while another window holds the scanner. The same string
@@ -39,9 +28,9 @@ export const SCANNER_NOT_IN_A_BROWSER_YET = "The scanner does not run in a brows
 
 /**
  * **Whether a refusal is the host saying it has no scanner to offer at all** — in its own
- * words, which this only knows the list of: the engine's sentence above, and the two a web host
- * says for a browser that cannot run the scanner's module and for a build made without its
- * files (`@/lib/core/hostScanner`, which that host imports its sentences from).
+ * words, which this only knows the list of: the engine's sentence above, and the one a web host
+ * says for a browser that cannot run the scanner's module (`@/lib/core/hostScanner`, which that
+ * host imports its sentences from).
  *
  * **The page matches on them for one reason: to stay quiet.** A refused filter push is otherwise
  * an answer — the view counts its filters as settled, opens the camera and sends frames, each
@@ -71,58 +60,36 @@ export function refusalPasses(sentence: string): boolean {
   return sentence === DB_BUSY || sentence === SCANNER_OPEN_ELSEWHERE;
 }
 
-function aspectOk(v: ScannerVerdict): boolean {
-  return v.ok && v.score !== null && Math.abs(v.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
-}
-
 /**
  * The word over the video: the decided card, else what the frame is.
  *
- * **The decision's name before the tracker's leader.** A Fast title read that names a card
- * overrides the hash, so the leader can be one card while the decision — what the tray adds — is
- * another; the headline names the one being added. The leader stands in only on a committed
- * frame with no decision yet, which in Fast is the one frame waiting on its confirming read.
+ * **The decision's name before the agreement's leader** — the decision is what the tray adds.
+ * The leader stands in only on a committed frame with no decision on it.
  */
 export function headline(v: ScannerVerdict | null): string {
   if (v === null) return "looking…";
   const lead = v.tracked?.standings[0];
   const name = v.decision?.label?.name ?? lead?.label?.name;
   if (v.tracked?.committed && name) return name;
-  if (!v.ok) return "no card";
-  return aspectOk(v) ? "card located" : "suspect shape";
+  return v.ok ? "card located" : "no card";
 }
 
-/**
- * 0..1. Votes over the bar under the vote rule; the two-way confidence otherwise. A card Fast
- * decided on clear frames before the bar is full, because the bar is the question "decided yet?"
- * and the tally short of it is the answer arriving early rather than a card still being voted on.
- */
+/** 0..1: the votes held over what deciding takes, 1 once decided — `TrackedView::confidence`. */
 export function barFill(t: ScannerTracked | null): number {
   if (t === null) return 0;
-  const lead = t.standings[0];
-  if (t.rule === "votes") {
-    if (lead === undefined) return 0;
-    return t.early ? 1 : Math.min(1, lead.evidence / t.decide_at);
-  }
   return Math.min(1, t.confidence);
 }
 
+/** The leader's votes over the bar, and the frames read: `1.0/2 · 3f`. */
 export function shareLine(t: ScannerTracked | null): string {
   if (t === null) return "—";
-  if (t.rule === "votes") {
-    const tally = t.standings[0]?.evidence ?? 0;
-    return `${tally.toFixed(1)}/${t.decide_at}${t.early ? " · clear" : ""} · ${t.frames}f`;
-  }
-  return `${(t.confidence * 100).toFixed(0)}% over ${t.frames}f`;
+  const tally = t.standings[0]?.evidence ?? 0;
+  return `${tally.toFixed(1)}/${t.decide_at} · ${t.frames}f`;
 }
 
-export function leadLine(t: ScannerTracked | null): string {
-  if (t === null || t.rule !== "votes" || t.standings.length === 0) return "—";
-  return t.lead === null ? "unopposed" : `×${t.lead.toFixed(1)}`;
-}
-
-export function standingValue(s: ScannerStanding, rule: ScannerRule): string {
-  return rule === "votes" ? s.evidence.toFixed(1) : `${(s.share * 100).toFixed(0)}%`;
+/** One standing's votes, on the bar's scale. */
+export function standingValue(s: ScannerStanding): string {
+  return s.evidence.toFixed(1);
 }
 
 /** The QR scanner's three sentences, with "scan a card" in place of "scan a code". */
@@ -139,113 +106,18 @@ export function cameraSentence(err: unknown): { name: string; message: string } 
 }
 
 /**
- * The three file names, mirroring `crates/grimoire-core/src/scanner.rs`'s `BUNDLE_FILE`,
- * `DETECTION_MODEL` and `RECOGNITION_MODEL` — the sentences below name what a reader has to
- * put on disk, and they were three loose literals across two functions before this.
- */
-const BUNDLE_FILE = "card-hashes.bin";
-const DETECTION_FILE = "text-detection.rten";
-const RECOGNITION_FILE = "text-recognition.rten";
-
-/**
- * The clause every asset sentence ends with.
+ * What a reader is told of the recogniser's files — **one sentence, and only for files that
+ * were there and did not load**, with the load's own reason.
  *
- * **It is the only instruction that makes the rest of the sentence work.** `scanner_status`
- * loads the bundle and the models on its first call and answers out of what it loaded for the
- * rest of the session, so a file dropped into place while the app is running changes nothing a
- * reader can see — they follow the instruction, the sentence does not move, and the reasonable
- * conclusion is that the path was wrong. `ScannerPage` says the same thing about why there is
- * no `Reload assets` button; this is the half a reader actually reads.
+ * Nothing is said of files that are not there. They are never a reader's to place: built into
+ * the desktop's and Android's binaries, fetched from the app's origin by a web page the first
+ * time a frame is due — and until a web page has fetched them, `present` is `false` with no
+ * fault in it. A build that has none fails every frame in the crate's own sentence, which the
+ * page already draws where the picture is; a second sentence here would say it twice.
  */
-const RESTART = "Restart the app after adding or replacing a file.";
-
-/** A file that is *there* and did not parse. The path names it; the error says why. */
-function didNotLoad(file: string, path: string, error: string): string {
-  return `\`${file}\` at ${path} did not load: ${error}. ${RESTART}`;
-}
-
-/**
- * The one sentence a `store` asset can earn: **it is there and did not load.** A host that
- * keeps the files in a store of its own has no folder to name and nothing a restart reads, so
- * neither is said; and one it does not hold says nothing here at all — the offer to download it
- * stands where a sentence would, and where the host cannot make that offer either, the frame's
- * own refusal says why.
- */
-function storeSentence(what: string, asset: ScannerAsset, offered: boolean): string | null {
-  if (asset.loaded || offered || !asset.present) return null;
-  return `${what} did not load: ${asset.error ?? "no reason given"}.`;
-}
-
-/**
- * What the Match panel says instead of, or under, a card's name.
- *
- * **Three states, not two, and `loaded` alone cannot tell them apart** — which is what the
- * first draft of this got wrong. A bundle that is *absent* wants an instruction to place a
- * file. A bundle that is **present and did not parse** wants its error: telling a reader to
- * put a file where that file already is reads as the app not having looked. And a bundle that
- * loaded may still carry an `error` from the *label* load — no `corpus.db`, or a read that
- * failed — which is not a broken scanner at all: matching works and answers ids.
- *
- * **A bundle compiled into the binary draws nothing**, which is every release build: there is no
- * file to place and nothing broken, and each sentence below is an instruction about
- * `data/scanner/`. The one sentence an embedded bundle can still earn is the labels' — the names
- * come out of `corpus.db` and never out of the binary, so embedding cannot lose them and cannot
- * supply them either.
- *
- * **`offered` is the host saying it can fetch the bundle** (`scanner_assets` listed it as owed),
- * and then a bundle that did not load draws nothing here: the offer to download it stands where
- * this sentence would, and "put a file at this path and restart" is the wrong instruction for a
- * reader with a button — and an impossible one on a phone, whose path nobody can reach. The
- * labels' sentence is not about a file to fetch and stands either way. The Developer panels pass
- * nothing, so a developer placing a file by hand still reads its path and its error there.
- */
-export function bundleSentence(status: ScannerStatus | null, offered = false): string | null {
+export function neuralSentence(status: ScannerStatus | null): string | null {
   if (status === null) return null;
-  const bundle = status.bundle;
-  if (bundle.source === "store") {
-    if (!bundle.loaded) return storeSentence("The scanner's card data", bundle, offered);
-    return bundle.error === null
-      ? null
-      : `Card names didn't load: ${bundle.error}. Matches will show IDs.`;
-  }
-  if (bundle.source === "embedded" && bundle.loaded && bundle.error === null) return null;
-  if (offered && !bundle.loaded) return null;
-  if (!bundle.present) {
-    return `No reference bundle. Put \`${BUNDLE_FILE}\` at ${bundle.path}. ${RESTART}`;
-  }
-  if (!bundle.loaded) {
-    return didNotLoad(BUNDLE_FILE, bundle.path, bundle.error ?? "no reason given");
-  }
-  if (bundle.error !== null) {
-    return `Bundle loaded, but card names didn't: ${bundle.error}. Matches will show IDs. ${RESTART}`;
-  }
-  return null;
-}
-
-/**
- * The same three states for the reader's two `.rten` files.
- *
- * **They load as a pair and fail as one**: `TitleReader::load` writes the identical sentence
- * onto both assets, so this names whichever one is carrying it rather than printing it twice.
- * Either file missing is the placement sentence, because a lone model reads nothing.
- *
- * `offered` is {@link bundleSentence}'s, for the models: the host listed one of them as owed, so
- * the offer stands in for every sentence here.
- */
-export function modelsSentence(status: ScannerStatus | null, offered = false): string | null {
-  if (status === null) return null;
-  const det = status.detection_model;
-  const rec = status.recognition_model;
-  if (det.loaded && rec.loaded) return null;
-  if (offered) return null;
-  if (det.source === "store") {
-    return storeSentence("The scanner's text readers", det.present ? det : rec, false);
-  }
-  if (!det.present || !rec.present) {
-    return `No OCR models. Put \`${DETECTION_FILE}\` and \`${RECOGNITION_FILE}\` at ${det.path}. ${RESTART}`;
-  }
-  if (det.error === null && rec.error !== null) {
-    return didNotLoad(RECOGNITION_FILE, rec.path, rec.error);
-  }
-  return didNotLoad(DETECTION_FILE, det.path, det.error ?? "no reason given");
+  const neural = status.neural;
+  if (neural.loaded || neural.error === null) return null;
+  return `The card recognizer did not load: ${neural.error}.`;
 }

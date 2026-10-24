@@ -1,24 +1,16 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import type { ScannerTracked, ScannerVerdict } from "@/lib/ipc";
 import { VERDICTS } from "../fixtures";
 import { MatchStrip } from "./MatchStrip";
 import type { LastAdded } from "./readerText";
 
-/** The tray's newest row after the Fast fixture's decision landed on it. */
+/** The tray's newest row after the decided fixture's decision landed on it. */
 const saruman: LastAdded = {
   name: "Storm of Saruman",
   setCode: "ltr",
   collectorNumber: "72",
   bumpedTo: null,
   replaced: false,
-};
-
-/** The confidence rule's tracker still gathering, a little short of its 70% line. */
-const gathering: ScannerVerdict = {
-  ...VERDICTS.confidence,
-  decision: null,
-  tracked: { ...(VERDICTS.confidence.tracked as ScannerTracked), committed: false, confidence: 0.55 },
 };
 
 /** The strip's region, by the name the view's status line has always had. */
@@ -32,10 +24,7 @@ const meta = {
   tags: ["autodocs"],
   args: {
     verdict: VERDICTS.voting,
-    mode: "fast",
     lastAdded: null,
-    hasBundle: true,
-    lastResolution: null,
     onReset: fn(),
     // A live camera, which is every state but `NoPictureToSend`'s: the page hands the strip this
     // press only while there is a picture to send.
@@ -64,12 +53,13 @@ export const Looking: Story = {
 };
 
 /**
- * Fast, with the evidence building: the leader drawn dim beside a dim bar, and the line at the
- * bar's end. The name is drawn and not announced — it can change on the next frame.
+ * The evidence building: the leader drawn dim beside a dim bar, and the line at the bar's end. The name is drawn and not announced — it can change on the next frame.
  */
 export const Matching: Story = {
   play: async ({ args, canvasElement }) => {
     await expect(status(canvasElement)).toHaveTextContent("Matching Plains 2XM 373 Hold steady");
+    const bar = within(canvasElement).getByRole("progressbar", { name: "Match progress" });
+    await expect(bar).toHaveAttribute("aria-valuenow", "63");
     await expect(within(canvasElement).getByText("Plains")).toHaveAttribute("aria-hidden", "true");
     // Reset evidence sits at the bar's end, outside the live region, for every reader.
     const reset = within(canvasElement).getByRole("button", { name: "Reset evidence" });
@@ -100,23 +90,6 @@ export const NoPictureToSend: Story = {
   },
 };
 
-/** Exact, the card locked and its name and number being read. */
-export const Reading: Story = {
-  args: { mode: "exact" },
-  play: async ({ canvasElement }) => {
-    await expect(status(canvasElement)).toHaveTextContent("Reading Plains 2XM 373 Hold steady — reading…");
-  },
-};
-
-/** The confidence rule commits at a proportion, so its line sits at 70% rather than at the end. */
-export const ConfidenceRule: Story = {
-  args: { verdict: gathering },
-  play: async ({ canvasElement }) => {
-    const bar = within(canvasElement).getByRole("progressbar", { name: "Match progress" });
-    await expect(bar).toHaveAttribute("aria-valuenow", "55");
-  },
-};
-
 /** Decided and filed: the pill and the bar gold, and the card named as the tray filed it. */
 export const Matched: Story = {
   args: { verdict: VERDICTS.decided, lastAdded: saruman },
@@ -135,62 +108,35 @@ export const AddedAgain: Story = {
   },
 };
 
-/** Exact re-read the newest card and pinned another printing of it — an update, not an add. */
+/**
+ * A filter changed with the card still on the mat, and the scanner pinned another printing of
+ * it — a second opinion on the newest row: an update, not an add.
+ */
 export const PrintingUpdated: Story = {
   args: {
-    verdict: VERDICTS.exactResolved,
-    mode: "exact",
-    lastAdded: { name: "Black Lotus", setCode: "lea", collectorNumber: "232", bumpedTo: null, replaced: true },
-    lastResolution: VERDICTS.exactResolved.resolution,
-  },
-  play: async ({ canvasElement }) => {
-    await expect(status(canvasElement)).toHaveTextContent("Matched Black Lotus LEA 232 Printing updated");
-  },
-};
-
-/** Decided on a card, not a printing: the tray row is waiting on the reader. */
-export const PickAPrinting: Story = {
-  args: {
-    verdict: VERDICTS.exactAmbiguous,
-    mode: "exact",
-    lastAdded: { name: "Lightning Bolt", setCode: "2x2", collectorNumber: "117", bumpedTo: null, replaced: false },
-    lastResolution: VERDICTS.exactAmbiguous.resolution,
-  },
-  play: async ({ canvasElement }) => {
-    await expect(status(canvasElement)).toHaveTextContent(
-      "3 printings Lightning Bolt Pick a printing in the tray",
-    );
-  },
-};
-
-/** Neural decided and filed: Fast's words — it reads no text, so it is never *Reading*. */
-export const NeuralMatched: Story = {
-  args: {
-    verdict: VERDICTS.neuralDecided,
-    mode: "neural",
+    verdict: VERDICTS.resolved,
     lastAdded: {
       name: "Black Lotus",
       setCode: "lea",
       collectorNumber: "232",
       bumpedTo: null,
-      replaced: false,
+      replaced: true,
     },
   },
   play: async ({ canvasElement }) => {
     await expect(status(canvasElement)).toHaveTextContent(
-      "Matched Black Lotus LEA 232 Added · swap in the next card",
+      "Matched Black Lotus LEA 232 Printing updated",
     );
   },
 };
 
 /**
- * Neural's picture stands for three printings: the same question as Exact's, asked off the
- * decision itself — Neural runs no resolve, so there is none to latch.
+ * The picture stands for three printings: decided on a card, not a printing, and the tray row is
+ * waiting on the reader. Asked off the decision itself, on every frame it stands.
  */
-export const NeuralPickAPrinting: Story = {
+export const PickAPrinting: Story = {
   args: {
-    verdict: VERDICTS.neuralAmbiguous,
-    mode: "neural",
+    verdict: VERDICTS.ambiguous,
     lastAdded: {
       name: "Lightning Bolt",
       setCode: "2x2",
@@ -206,27 +152,15 @@ export const NeuralPickAPrinting: Story = {
   },
 };
 
-/** An Exact resolve found nothing inside the gate. */
-export const NoMatch: Story = {
-  args: {
-    verdict: VERDICTS.exactNotFound,
-    mode: "exact",
-    lastResolution: VERDICTS.exactNotFound.resolution,
-  },
-  play: async ({ canvasElement }) => {
-    await expect(status(canvasElement)).toHaveTextContent(
-      "No match Try better lighting or clear the filters.",
-    );
-  },
-};
-
 /**
- * No reference bundle: cards are detected and nothing can be named. The longest sentence the
- * strip says, and the one state it is allowed to wrap in — it holds rather than flickers.
+ * No recogniser loaded: nothing can be named. The longest sentence the strip says, and the one
+ * state it is allowed to wrap in — it holds rather than flickers.
  */
 export const CantIdentify: Story = {
-  args: { verdict: VERDICTS.decided, hasBundle: false },
+  args: { verdict: { ...VERDICTS.noCard, matcher: false } },
   play: async ({ canvasElement }) => {
-    await expect(status(canvasElement)).toHaveTextContent("Can't identify Card hashes aren't loaded");
+    await expect(status(canvasElement)).toHaveTextContent(
+      "Can't identify The card recognizer isn't loaded",
+    );
   },
 };

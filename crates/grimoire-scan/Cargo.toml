@@ -15,26 +15,25 @@ publish = false
 # WASM and loaded by a dedicated Worker **of its own** — not the engine's Worker and not the
 # engine's module. `docs/reference/light-app.md` §11.2 has the four figures that decided it: a
 # panic ends the instance, so it must not be the instance that holds the database; a frame a
-# reader runs on blocks its Worker for 0.3–1.2 s; a WASM memory is never given back, so the
-# page ends the Worker when the reader leaves the Scanner; and it is a megabyte of module only
-# a reader who scans has to fetch.
+# reader runs on blocks its Worker; a WASM memory is never given back, so the page ends the
+# Worker when the reader leaves the Scanner; and it is a module only a reader who scans has to
+# fetch.
 #
-# **The crate alone.** `card-scanner` with `ocr` and **never `corpus`**: `corpus` is SQLite,
+# **The crate alone.** `card-scanner` with **no feature, and never `corpus`**: `corpus` is SQLite,
 # and the labels this module needs arrive as bytes the engine encoded
 # (`card_scanner::labels`, `grimoire_web`'s `scanner_labels`). No `grimoire-core`, no `tokio`,
 # no `reqwest` — nothing here fetches, stores or waits. `cargo tree -p grimoire-scan` is the
 # check, and what `scripts/build-wasm.ts` builds is `-p grimoire-scan` alone, so the features
 # the engine turns on for the same crate elsewhere in the workspace do not reach it.
 #
-# **A workspace member, where the frame bench beside the crate is not.** A member shares the
-# root lockfile — so its `wasm-bindgen` is the engine's by construction, the one CLI version
-# `scripts/build-wasm.ts` checks fits both modules — and the root's `wasm` profile, and
-# `cargo test --workspace`, `clippy --workspace` and `cargo fmt -p grimoire-scan` reach it on a
-# desktop. The bench stays outside for its `--release` native runner and its feature switch.
+# **A workspace member.** A member shares the root lockfile — so its `wasm-bindgen` is the
+# engine's by construction, the one CLI version `scripts/build-wasm.ts` checks fits both modules
+# — and the root's `wasm` profile, and `cargo test --workspace`, `clippy --workspace` and
+# `cargo fmt -p grimoire-scan` reach it on a desktop.
 #
-# **Built with `-C target-feature=+simd128`, in a build tree of its own** — the flag is the
-# difference between a title read at 0.3 s and at 0.9–1.6 s (`rten`'s WASM kernels are compiled
-# only under it), and a tree of its own is how the flag never reaches the engine's artifacts.
+# **Built with `-C target-feature=+simd128`, in a build tree of its own** — `rten`'s WASM kernels
+# are compiled only under the flag, and a tree of its own is how the flag never reaches the
+# engine's artifacts.
 # `scripts/build-wasm.ts` has both.
 #
 # **It builds natively as nearly nothing, on purpose**, as the web host does: only the
@@ -47,11 +46,10 @@ name = "grimoire_scan"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# `ocr` — the two readers — and `neural` — the Neural mode's two networks and gallery, whose four
-# files the page fetches from the app's origin on the first Neural frame and hands over with
-# `load_neural`; none is compiled in (`card-neural`'s `bundled` is the native hosts'). Nothing
-# else. See above for why never `corpus`.
-card-scanner = { path = "../card-scanner", features = ["ocr", "neural"] }
+# The session and its recogniser, `card-neural`'s networks and gallery — whose files the page
+# fetches from the app's origin and hands over with `load_neural`; none is compiled in
+# (`card-neural`'s `bundled` is the native hosts'). See above for why never `corpus`.
+card-scanner = { path = "../card-scanner" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

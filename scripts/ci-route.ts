@@ -130,7 +130,6 @@ export const ARMS = [
   {
     match: [
       ".github/workflows/release.yml",
-      ".github/workflows/scanner-bundle.yml",
       ".github/workflows/android-emulator.yml",
       ".github/workflows/neural-train.yml",
       ".github/workflows/neural-deliver.yml",
@@ -361,13 +360,10 @@ export const ARMS = [
   // purpose**: it measures a large pull on that harness and no job runs it, so `scripts/*`
   // lints it and that is all a change to it needs.
   // **`scripts/web-scanner-smoke.ts`** (step 7.5) is the fourth: a camera that is a file, and
-  // the built app scanning the card on it. **And `scripts/scanner-assets.ts` with it**, since
-  // that step: `web` runs it with `--web` to fetch the three files the build then ships, so a
-  // change to it is a change to what the web app's scanner is given.
+  // the built app scanning the card on it.
   {
     match: [
       "scripts/build-wasm.ts",
-      "scripts/scanner-assets.ts",
       "scripts/web-smoke.ts",
       "scripts/web-scanner-smoke.ts",
       "scripts/web-sync-smoke.ts",

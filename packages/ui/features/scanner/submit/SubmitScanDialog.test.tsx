@@ -24,7 +24,7 @@ vi.mock("@/lib/ipc", async (orig) => {
 
 import { ipc } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
-import { STATUS, VERDICTS } from "../fixtures";
+import { VERDICTS } from "../fixtures";
 import type { ScanFilters, ScannerSubmissionFrame } from "../types";
 import { runClock, runFrameOf, type RunFrame, type ScanRun } from "./run";
 import { SubmitScanDialog } from "./SubmitScanDialog";
@@ -129,11 +129,9 @@ const FRAMES: ScannerSubmissionFrame[] = ["AQ==", "Ag==", "Aw==", "BA==", "BQ=="
     jpeg,
     ms: -8 - (all.length - 1 - index) * 110,
     ok: index > 0,
-    lock: index > 1 ? "locked" : "acquiring",
     confidence: index === 0 ? null : 0.82,
     distance: index === 0 ? null : 36,
     decided: index >= 4 ? "bolt-2x2" : null,
-    detail: index === 3,
   }),
 );
 const LAST_PICTURE = `data:image/jpeg;base64,${FRAMES[FRAMES.length - 1].jpeg}`;
@@ -143,10 +141,8 @@ const RUN: ScanRun = {
   frames: FRAMES,
   said: {
     reported: "bolt-2x2",
-    mode: "exact",
     confidence: 0.82,
     distance: 36,
-    bundle: 117630,
     filters: { sets: ["2x2"], released_from: null, released_to: null },
   },
   leadName: "Lightning Bolt",
@@ -471,10 +467,8 @@ describe("SubmitScanDialog", () => {
       cardId: "bolt-sta",
       finish: "foil",
       reported: "bolt-2x2",
-      mode: "exact",
       confidence: 0.82,
       distance: 36,
-      bundle: 117630,
       filters: { sets: ["2x2"], released_from: null, released_to: null },
       run: FRAMES,
     });
@@ -491,11 +485,9 @@ describe("SubmitScanDialog", () => {
       jpeg: "BA==",
       ms: -228,
       ok: true,
-      lock: "locked",
       confidence: 0.82,
       distance: 36,
       decided: null,
-      detail: true,
     });
   });
 
@@ -527,10 +519,8 @@ describe("SubmitScanDialog", () => {
       cardId: null,
       finish: null,
       reported: "bolt-2x2",
-      mode: "exact",
       confidence: 0.82,
       distance: 36,
-      bundle: 117630,
       filters: { sets: ["2x2"], released_from: null, released_to: null },
       run: FRAMES,
     });
@@ -559,10 +549,8 @@ describe("SubmitScanDialog", () => {
       frames: FRAMES,
       said: {
         reported: null,
-        mode: "fast",
         confidence: null,
         distance: null,
-        bundle: null,
         filters: NO_FILTERS,
       },
       leadName: "Lightning Bolt",
@@ -574,10 +562,8 @@ describe("SubmitScanDialog", () => {
       cardId: "bolt-lea",
       finish: "nonfoil",
       reported: null,
-      mode: "fast",
       confidence: null,
       distance: null,
-      bundle: null,
       filters: NO_FILTERS,
       run: FRAMES,
     });
@@ -877,16 +863,14 @@ describe("the dialog, opened by the press", () => {
   const ring = (): RunFrame[] => {
     const newest = runClock.now();
     return [1, 2, 3, 4, 5, 6].map((n) =>
-      runFrameOf(new Uint8Array([n]), newest - (6 - n) * 110, VERDICTS.exactAmbiguous, false),
+      runFrameOf(new Uint8Array([n]), newest - (6 - n) * 110, VERDICTS.ambiguous),
     );
   };
 
   function Page() {
     const submit = useScanSubmit({
       recent: ring,
-      verdict: VERDICTS.exactAmbiguous,
-      mode: "exact",
-      status: STATUS.present,
+      verdict: VERDICTS.ambiguous,
       filters: NO_FILTERS,
       ready: true,
     });
@@ -943,7 +927,7 @@ describe("the dialog, opened by the press", () => {
     expect(ms.every((one) => one <= 0)).toBe(true);
     expect(ms[5] - ms[0]).toBe(550);
     expect(sent.filters).toEqual(NO_FILTERS);
-    expect(sent.reported).toBe(VERDICTS.exactAmbiguous.decision?.printing);
+    expect(sent.reported).toBe(VERDICTS.ambiguous.decision?.printing);
   });
 
   it("hands the caret back to the press on Escape", async () => {

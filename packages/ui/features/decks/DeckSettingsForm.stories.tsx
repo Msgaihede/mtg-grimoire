@@ -433,8 +433,8 @@ export const FoldersUnread: Story = {
  * ([#401](https://github.com/Msgaihede/mtg-grimoire/issues/401)) and the question stopped being a
  * yes-or-no one.
  *
- * `role="group"` with `aria-pressed` per button rather than a radiogroup — the scanner's
- * `ControlsPanel` grammar: these are toggles that happen to be exclusive, and a radio's roving
+ * `role="group"` with `aria-pressed` per button rather than a radiogroup — the grammar the
+ * scanner's old developer `ControlsPanel` set: these are toggles that happen to be exclusive, and a radio's roving
  * tab stop would put the reader inside a three-way keyboard mode to change one word. The caption
  * under the group is the **selected** kind's line and swaps with the press; three sentences at
  * once would be a paragraph about a choice rather than the meaning of the one that was made.

@@ -173,13 +173,6 @@ jobs:
       # beforeBuildCommand (`pnpm -w run build`), so do not run that here as well.
       - run: pnpm install --frozen-lockfile
 
-      # The scanner's hash bundle and OCR models are embedded into the binary (build.rs sets
-      # cfg(scanner_assets)). A release without them cannot scan, so this fails the leg. The
-      # script fetches the public release's files with no token.
-      - name: Scanner assets
-        shell: bash
-        run: pnpm scanner:assets
-
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
 
@@ -699,17 +692,7 @@ jobs:
       - name: Build the module
         run: pnpm web:wasm
 
-      # The card scanner's three files, from this repository's own public release — what the
-      # desktop's build fetches to embed, fetched here for the web app to serve from its origin
-      # (`scripts/scanner-assets.ts --web`; `ci.yml`'s `web` job has the long form). The
-      # build is told they are required: a release whose web app cannot scan fails here, not in
-      # a reader's browser.
-      - name: Fetch the scanner's files
-        run: pnpm scanner:assets --web
-
       - name: Build the page
-        env:
-          GRIMOIRE_SCANNER_ASSETS: required
         run: pnpm web:build
 
       # What a deploy cannot do without: the document, the policy and caching rules

@@ -1165,8 +1165,9 @@ function grownCards(count: number) {
 }
 
 export { serve, browse, openPage, fixtures, fixtureCards, pictureAddress, coreChunk };
-// The browser alone, for a run that serves a page of its own and intercepts nothing — the card
-// scanner's frame bench (`scripts/scanner-bench.ts`).
+// The browser alone, for a run that serves no page and intercepts nothing — the card scanner
+// smoke's camera, which a browser composes (`scripts/web-scanner-smoke.ts`), and the runs that
+// drive a page over DevTools themselves.
 export { launch, connect };
 export { grownCards, grownCardId };
 export { ALERT, buttonSaying };

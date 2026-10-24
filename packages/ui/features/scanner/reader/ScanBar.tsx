@@ -9,8 +9,8 @@ import { SetCombobox } from "@/features/search/SetCombobox";
 import { CONDITION_LABEL, CONDITION_NOT_SET, CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import type { ScanFilters, ScanMode, ScannerFinishPref } from "@/lib/ipc";
-import { PRESS, PRESS_STILL } from "@/lib/motion";
+import type { ScanFilters, ScannerFinishPref } from "@/lib/ipc";
+import { PRESS_STILL } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
@@ -22,7 +22,6 @@ import {
   NO_FILTERS,
   POINT_AND_SHOOT,
   POINT_AND_SHOOT_CLICK_HINT,
-  SCAN_MODES,
   SKIP_PROMOS,
   SKIP_PROMOS_NOTE,
 } from "./readerText";
@@ -41,8 +40,6 @@ export interface ScanBarProps {
   shooting: boolean;
   /** `true` is a click on *Scan card*, `false` the same press while a shot is running. */
   onShoot: (on: boolean) => void;
-  mode: ScanMode;
-  onMode: (m: ScanMode) => void;
   filters: ScanFilters;
   onFilters: (f: ScanFilters) => void;
   /** The last `set_filters` refusal, drawn inside the popover. */
@@ -86,10 +83,6 @@ export interface ScanBarProps {
   lead?: ReactNode;
 }
 
-// The three modes' words and the unrestricted filter are `readerText.ts`'s — shared with the light
-// app's phone page, which draws its own switch and its own Clear from them.
-const MODES = SCAN_MODES;
-
 /**
  * **Deliberately not through `sortOptions` — the order is the information.** `Detect` first,
  * because it is the default and the one choice that is not a finish; then a printing's finishes,
@@ -111,7 +104,7 @@ const CONDITION_OPTIONS: readonly DropdownOption[] = CONDITIONS.map((c) => ({
 }));
 
 /**
- * The reader's controls over the camera, in one row that wraps: the mode, the filters, the tray's
+ * The reader's controls over the camera, in one row that wraps: the filters, the tray's
  * defaults, which camera is reading, and the switch that brings the developer panels back.
  *
  * **Everything here is controlled.** The page owns the prefs and pushes the filters to the session,
@@ -129,8 +122,6 @@ export function ScanBar({
   onPointAndShoot,
   shooting,
   onShoot,
-  mode,
-  onMode,
   filters,
   onFilters,
   filterError,
@@ -181,7 +172,6 @@ export function ScanBar({
         </button>
       )}
       <PointAndShootSwitch on={pointAndShoot} onChange={onPointAndShoot} />
-      <ModeSwitch mode={mode} onMode={onMode} />
 
       <BarPopover
         caption="Filters"
@@ -321,53 +311,6 @@ function PointAndShootSwitch({ on, onChange }: { on: boolean; onChange: (on: boo
 }
 
 /**
- * **Fast | Exact | Neural**, in the scanner's segment grammar: `role="group"` with `aria-pressed`
- * per button, never a radiogroup. Neural is the third and newest (2026-10-20); its tooltip says it
- * is new and worth trying, which is all a reader needs to know to press it.
- *
- * `ControlsPanel`'s `Segment` is the grammar and its argument verbatim — these are toggles that
- * happen to be exclusive, and a radio's roving tab stop would put the reader inside a three-way
- * keyboard mode to change one word. That component is module-private and drawn *inside* a panel,
- * so its box does not transfer: this one stands on the page ground beside 36px triggers, so it is
- * the deck editor's `Theory | Actual` box instead — 36px, a hairline, and the chosen word filled
- * in accent, because which mode the camera is in is the one fact on this row a reader must read
- * without looking twice.
- *
- * The group is padded rather than clipped, so each button keeps the app's outset focus outline:
- * a clipped group would cut that outline off, and an inset one would vanish into the accent fill.
- */
-function ModeSwitch({ mode, onMode }: { mode: ScanMode; onMode: (m: ScanMode) => void }) {
-  const tip = useTooltip();
-  return (
-    <div
-      role="group"
-      aria-label="Scan mode"
-      className="flex shrink-0 gap-0.5 rounded-md border border-border p-0.5"
-    >
-      {MODES.map(({ id, label, hint }) => (
-        <button
-          key={id}
-          type="button"
-          aria-pressed={mode === id}
-          onClick={() => onMode(id)}
-          {...tip(hint)}
-          className={cn(
-            // 30px inside a 2px pad and a hairline is the row's 36 exactly, so the switch shares
-            // a line with the triggers beside it.
-            "h-7.5 rounded-[4px] px-3 text-sm",
-            PRESS,
-            mode === id ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
-            FOCUS,
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/**
  * A worded trigger on the row and the panel it opens under itself — `AnchoredPopup`, with the
  * row's box and a caption beside the value.
  *
@@ -455,9 +398,8 @@ const DATE_FIELD = cn(
  * already be read against what the popover says; a draft here would be a popover and a scanner
  * disagreeing for as long as it was open.
  *
- * **No language, deliberately and in this pass's own words** (spec §3, decision 7): the bundle
- * holds one printing per card, English wherever English exists, so a language filter would bite
- * on almost nothing and read as though it bit on everything.
+ * **No language, deliberately and in this pass's own words** (spec §3, decision 7): a language
+ * filter would bite on almost nothing and read as though it bit on everything.
  */
 function FiltersBody({
   filters,
@@ -605,12 +547,16 @@ function DefaultsBody({
         />
         <p className="text-[0.7rem] leading-snug text-dim">
           {finish === DETECT
-            ? "The scanner reads each card's finish. A card it can't tell waits in the tray for you to pick."
+            ? "A card printed in one finish takes it. One printed in several waits in the tray for you to pick."
             : "Each new card starts in this finish."}
         </p>
       </div>
       <div className="flex flex-col gap-1">
-        <label id={`${id}-condition-label`} htmlFor={`${id}-condition`} className="text-xs text-dim">
+        <label
+          id={`${id}-condition-label`}
+          htmlFor={`${id}-condition`}
+          className="text-xs text-dim"
+        >
           Condition
         </label>
         <Dropdown
@@ -632,9 +578,8 @@ function DefaultsBody({
 /**
  * Which camera reads the cards: one radio per camera, the open one ticked and marked `Live`.
  *
- * **A radiogroup, where the mode beside it is a row of toggles**, because this is a list of
- * unknown length and exactly one value — the shape `ModeSwitch`'s comment says a three-way switch
- * is not. One Tab stop and the arrows choose, through `radioKeys` like every group in the app.
+ * **A radiogroup**, because this is a list of unknown length and exactly one value. One Tab stop
+ * and the arrows choose, through `radioKeys` like every group in the app.
  *
  * **A press chooses and closes; an arrow only chooses.** Both are the same choice — `onCamera` with
  * the camera's id — and differ only in whether the panel stays: a press is "that one", while an
@@ -723,9 +668,7 @@ function CameraBody({
         })}
       </div>
       <div aria-hidden="true" className="my-1 h-px bg-border" />
-      <p className="px-2 pb-1.5 pt-1 text-xs leading-snug text-dim">
-        {CAMERA_CHOICE_NOTE}
-      </p>
+      <p className="px-2 pb-1.5 pt-1 text-xs leading-snug text-dim">{CAMERA_CHOICE_NOTE}</p>
     </div>
   );
 }
@@ -749,7 +692,9 @@ function DeveloperSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean
         FILTER_CONTROL,
         "ml-auto inline-flex items-center gap-1.5 px-2.5",
         FOCUS,
-        on ? "border-accent text-accent" : "border-border text-dim hover:border-accent hover:text-accent",
+        on
+          ? "border-accent text-accent"
+          : "border-border text-dim hover:border-accent hover:text-accent",
       )}
     >
       {/* `Bug` and not `Wrench`: the wrench is Deck settings' glyph, and one picture for two

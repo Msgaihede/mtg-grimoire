@@ -1,11 +1,10 @@
 /**
- * What finish a scanned card lands in — the one conclusion drawn from the scanner's two facts
- * about it.
+ * What finish a scanned card lands in — the one conclusion drawn from the scanner's fact about
+ * it.
  *
- * **Rust measures, TypeScript decides.** The session hands over the decided printing's finishes
- * from the corpus and the collector line's separator as it measured it (a ★ on a foil, a • on a
- * non-foil); which of those wins, and when neither is enough, is this module's and nobody
- * else's. `tray.ts` never sees the Defaults popover's `detect`: the page asks {@link trayFinish}
+ * **Rust supplies the fact, TypeScript decides.** The session hands over the decided printing's
+ * finishes from the corpus; what a row takes from them, and when they are not enough, is this
+ * module's and nobody else's. `tray.ts` never sees the Defaults popover's `detect`: the page asks {@link trayFinish}
  * as each card lands and hands the reducer a finish, or `unknown`.
  */
 import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
@@ -78,29 +77,19 @@ function asFinish(word: string): Finish | null {
  *
  * **A fixed preference is the answer wherever the printing exists in it** — Nonfoil, Foil or Etched
  * in the Defaults popover is a reader saying "this pile is all one finish", and nothing the camera
- * reads overrules them. **The corpus does**: a preference the decided printing was never made in —
+ * sees overrules them. **The corpus does**: a preference the decided printing was never made in —
  * Nonfoil on a foil-only promo — is no answer for that card, so it is decided as `detect` would
  * decide it (issue #982).
  *
- * **Under `detect`, three rungs, first answer wins:**
+ * **Under `detect`, a printing that exists in exactly one finish is that finish**, and one that
+ * exists in several is `unknown`, for the reader to settle. The picture cannot tell a foil from a
+ * non-foil, so nothing else is a guess worth filing. (Until 2026-10-24 a collector line's
+ * separator — a ★ on a foil, a • on a non-foil — was read as a second rung; it went with the old
+ * scanner's text readers.)
  *
- * 1. **A printing that exists in exactly one finish is that finish** — no read needed, and no
- *    misread can argue with it. A foil-only promo is foil whatever the separator looked like.
- * 2. **The separator, when it read `foil` or `nonfoil`, and only if the printing exists in that
- *    finish.** A star on a printing the corpus says was never foil is a misread, not a discovery,
- *    and the honest answer to a contradiction is to ask. An **empty** finish list is the corpus
- *    saying nothing, not a printing that exists in no finish, so it constrains nothing and the
- *    mark stands on its own.
- * 3. **Otherwise `unknown`** — no mark read, a mark between a dot and a star, or a contradiction.
- *
- * **Etched is never inferred from the mark**: the mark knows star from dot and nothing else, so a
- * star says foil and never which foil. Etched arrives by rung 1 — an etched-only printing — or by
- * the reader's hand.
- *
- * **An ambiguous decision skips rung 1 and the check in rung 2.** Its `finishes` belong to the
- * printing it wears provisionally, which the reader has not yet agreed to, and a pick among its
- * choices would leave the row stamped with a finish drawn from a printing it is no longer. The
- * separator is a fact about the cardboard, not about the printing, so it still stands — alone.
+ * **An ambiguous decision is `unknown` under `detect`.** Its `finishes` belong to the printing it
+ * wears provisionally, which the reader has not yet agreed to, and a pick among its choices would
+ * leave the row stamped with a finish drawn from a printing it is no longer.
  */
 export function trayFinish(pref: ScannerFinishPref, decision: ScannerDecision): ScannerTrayFinish {
   const provisional = decision.outcome === "ambiguous" && decision.choices.length > 0;
@@ -110,11 +99,6 @@ export function trayFinish(pref: ScannerFinishPref, decision: ScannerDecision): 
 
   if (finishes.length === 1) {
     return asFinish(finishes[0]) ?? UNKNOWN_FINISH;
-  }
-
-  const reading = decision.finish_mark?.reading ?? "unknown";
-  if (reading === "foil" || reading === "nonfoil") {
-    return finishes.length === 0 || finishes.includes(reading) ? reading : UNKNOWN_FINISH;
   }
   return UNKNOWN_FINISH;
 }

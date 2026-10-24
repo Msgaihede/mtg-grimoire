@@ -1,8 +1,9 @@
 # card-neural — the Neural scanner's recogniser
 
-Two small CNNs and a gallery of looks, on `rten`: what the Scanner's **Neural** mode runs
-(`card-scanner`'s `neural` feature calls it; `docs/superpowers/plans/2026-10-20-neural-scan-mode.md`
-is the contract). The mode and its replay are
+Two small CNNs and a gallery of looks, on `rten`: what the Scanner runs — the only recogniser
+since the Fast and Exact modes were removed (2026-10-24). `card-scanner`'s session calls it, as a
+plain dependency (`docs/superpowers/plans/2026-10-20-neural-scan-mode.md` is the contract). The
+recogniser and its replay are
 [`docs/reference/card-scanner.md`](../../docs/reference/card-scanner.md) §10 _Neural_. **The
 training that remakes the model files is here**, in `train/` (§5): the monthly pipeline on a
 Modal GPU (`docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`). **The development

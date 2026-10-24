@@ -78,7 +78,7 @@ The Worker executes on a single thread with no parallel background threads:
 - **Version alignment**: Workspace version matches the app release; managed by `release-please`.
 - **Toolchain pin**: `wasm-bindgen-cli` version must strictly match `Cargo.lock`.
 - **SQLite features**: `rusqlite` uses `hooks` and must not disable default features (`default-features = false` breaks WASM SQLite).
-- **`card-scanner` is here for `labels` alone** (`corpus` feature): nothing in this crate may reach a session, or fat LTO stops dropping the scanner and its OCR runtime from this module. A new class or a megabyte in `dist-wasm/grimoire_web_bg.wasm` is the symptom.
+- **`card-scanner` is here for `labels` alone** (`corpus` feature): nothing in this crate may reach a session, or fat LTO stops dropping the session and its recogniser from this module. A new class or a megabyte in `dist-wasm/grimoire_web_bg.wasm` is the symptom.
 - **No `simd128` here.** That target feature is the scanner module's alone; `scripts/build-wasm.ts` refuses an engine module that names it.
 - **Dev dependencies**: `httpmock` and `flate2` are used for testing downloads against local mock endpoints without hitting live Scryfall or Commander Spellbook feeds.
 

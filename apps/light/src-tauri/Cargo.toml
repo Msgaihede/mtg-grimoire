@@ -53,11 +53,10 @@ tauri-plugin-opener = "2"
 # **Never with its `testing` feature** — `platform::fence` reads this file for it, and CI's
 # `rust` job asks `cargo tree` for this package by name too.
 grimoire-core = { path = "../../../crates/grimoire-core" }
-# The Neural scanner's four files, compiled in (`bundled`, ~27 MB of the `.so`): [`carried`] in
-# `lib.rs` hands `card_neural::bundled()` to the core's scanner, as the desktop's
-# `scanner::compiled` does. They are in git, so they are built in rather than downloaded; the
-# other three scanner files still arrive on a reader's press (`scanner_assets`). The recogniser
-# itself comes through the core's `card-scanner`, whose `neural` feature it turns on.
+# The Neural scanner's four files and their printing evidence, compiled in (`bundled`, ~27 MB
+# of the `.so`): [`carried`] in `lib.rs` hands `card_neural::bundled()` and `bundled_evidence()`
+# to the core's scanner, as the desktop's `scanner::compiled` does. They are in git, so they are
+# built in rather than downloaded. The recogniser itself comes through the core's `card-scanner`.
 card-neural = { path = "../../../crates/card-neural", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

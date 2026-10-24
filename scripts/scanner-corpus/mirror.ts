@@ -68,7 +68,11 @@ export function checkPair(label: Uint8Array, run: Uint8Array): string | null {
   }
 }
 
-/** The four places a scan lives here. */
+/**
+ * The four places a scan lives here. `out/slices/<id>` holds the pictures a replay cut before
+ * 2026-10-24, when the Fast and Exact scanner left; no replay writes it now, but a mirror may
+ * still hold one, and a removal must not leave a reader's picture behind.
+ */
 const localPaths = (dir: string, id: string) => [
   join(dir, "frames", id),
   join(dir, "out", "slices", id),

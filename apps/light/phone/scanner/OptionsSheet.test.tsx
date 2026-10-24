@@ -27,8 +27,6 @@ function mount(over: Partial<Parameters<typeof OptionsSheet>[0]> = {}) {
     open: true,
     onClose: vi.fn(),
     onDismiss: vi.fn(),
-    mode: "fast" as const,
-    onMode: vi.fn(),
     pointAndShoot: false,
     onPointAndShoot: vi.fn(),
     filters: NO_FILTERS,
@@ -61,7 +59,6 @@ describe("the scanner's options sheet", () => {
 
   it("says what each option is set to", async () => {
     mount({
-      mode: "exact",
       filters: { sets: ["hob", "ltr"], released_from: "2023-06-23", released_to: null },
       finish: "foil",
       condition: "NM",
@@ -69,7 +66,7 @@ describe("the scanner's options sheet", () => {
     const rows = within(await sheet())
       .getAllByRole("button")
       .map((b) => b.textContent);
-    expect(rows).toContain("Scan modeExact");
+    expect(rows.some((row) => row?.startsWith("Scan mode"))).toBe(false);
     expect(rows).toContain("FiltersHOB, LTR · from 2023-06-23");
     expect(rows).toContain("FinishFoil");
     expect(rows).toContain("ConditionNear mint");
@@ -81,23 +78,6 @@ describe("the scanner's options sheet", () => {
     expect(within(dialog).queryByRole("button", { name: /^Camera/ })).toBeNull();
     expect(within(dialog).queryByText(/Developer/)).toBeNull();
     expect(within(dialog).queryByRole("switch")).toBeNull();
-  });
-
-  it("says each mode's sentence under its name, and writes the one pressed", async () => {
-    const props = mount();
-    await open(/^Scan mode/);
-    const dialog = await sheet();
-    const modes = within(within(dialog).getByRole("list", { name: "Scan modes" })).getAllByRole("button");
-    expect(modes.map((m) => m.textContent)).toEqual([
-      "FastRecognizes cards by their picture. Fastest for mixed piles.",
-      "ExactAlso reads the name and collector number to identify the exact printing.",
-      "NeuralNew: names the card and its printing from the picture alone. Worth a try — it may replace Fast and Exact.",
-    ]);
-    expect(modes[0]).toHaveAttribute("aria-current", "true");
-    await userEvent.click(modes[1]);
-    expect(props.onMode).toHaveBeenCalledWith("exact");
-    // Back on the first page.
-    expect(within(dialog).getByRole("button", { name: /^Filters/ })).toBeInTheDocument();
   });
 
   it("switches to point and shoot from its page, saying what each way does", async () => {
@@ -123,26 +103,12 @@ describe("the scanner's options sheet", () => {
     expect(within(dialog).getByRole("button", { name: /^Filters/ })).toBeInTheDocument();
   });
 
-  it("writes Neural from its page, and names it on the first page once chosen", async () => {
-    const props = mount({ mode: "neural" });
-    const rows = within(await sheet())
-      .getAllByRole("button")
-      .map((b) => b.textContent);
-    expect(rows).toContain("Scan modeNeural");
-    await open(/^Scan mode/);
-    const dialog = await sheet();
-    const modes = within(within(dialog).getByRole("list", { name: "Scan modes" })).getAllByRole(
-      "button",
-    );
-    expect(modes[2]).toHaveAttribute("aria-current", "true");
-    await userEvent.click(modes[0]);
-    expect(props.onMode).toHaveBeenCalledWith("fast");
-  });
-
   it("refuses the filters, with the reason in the row's name, where the scanner has no card names", async () => {
     mount({ filtersDisabled: FILTERS_NEED_NAMES });
     // A greyed row's name includes its reason; the two are separate lines of one press.
-    const row = within(await sheet()).getByRole("button", { name: /^Filters\s*Filters need the card database/ });
+    const row = within(await sheet()).getByRole("button", {
+      name: /^Filters\s*Filters need the card database/,
+    });
     expect(row).toHaveTextContent(FILTERS_NEED_NAMES);
     expect(row).toHaveAttribute("aria-disabled", "true");
     await userEvent.click(row);
@@ -150,7 +116,9 @@ describe("the scanner's options sheet", () => {
   });
 
   it("sends a date as it is settled, and an emptied one as no bound", async () => {
-    const props = mount({ filters: { sets: ["hob"], released_from: null, released_to: "2024-12-31" } });
+    const props = mount({
+      filters: { sets: ["hob"], released_from: null, released_to: "2024-12-31" },
+    });
     await open(/^Filters/);
     const from = screen.getByLabelText("Released from");
     fireEvent.change(from, { target: { value: "2023-06-23" } });
@@ -200,9 +168,11 @@ describe("the scanner's options sheet", () => {
   it("offers Detect and the three finishes, each saying when it takes effect", async () => {
     const props = mount({ finish: "detect" });
     await open(/^Finish/);
-    const choices = within(screen.getByRole("list", { name: "Default finishes" })).getAllByRole("button");
+    const choices = within(screen.getByRole("list", { name: "Default finishes" })).getAllByRole(
+      "button",
+    );
     expect(choices.map((c) => c.textContent?.replace(/\..*$/, ""))).toEqual([
-      "DetectThe scanner reads each card's finish",
+      "DetectA card printed in one finish takes it",
       "NonfoilEach new card starts in this finish",
       "FoilEach new card starts in this finish",
       "EtchedEach new card starts in this finish",
@@ -224,7 +194,9 @@ describe("the scanner's options sheet", () => {
       "Heavily played",
       "Damaged",
     ]);
-    expect(screen.getByText("Every card in the tray is added in this condition.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Every card in the tray is added in this condition."),
+    ).toBeInTheDocument();
     await userEvent.click(grades[2]);
     expect(props.onCondition).toHaveBeenCalledWith("LP");
   });
@@ -245,7 +217,9 @@ describe("the scanner's options sheet", () => {
 
   it("reads Default for a live camera the list has not caught up with", async () => {
     mount({ cameras: CAMERAS, cameraId: null });
-    expect(within(await sheet()).getByRole("button", { name: /^Camera/ })).toHaveTextContent("Default");
+    expect(within(await sheet()).getByRole("button", { name: /^Camera/ })).toHaveTextContent(
+      "Default",
+    );
   });
 
   it("tells Escape and the ✕ from a press on the scrim, so the page can hand the caret back", async () => {

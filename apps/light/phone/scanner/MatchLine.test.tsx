@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { VERDICTS } from "@grimoire/ui/features/scanner/fixtures";
 import { matchStrip, type LastAdded } from "@grimoire/ui/features/scanner/reader/readerText";
-import type { ScanMode, ScannerResolution, ScannerVerdict } from "@grimoire/ui/lib/ipc";
+import type { ScannerVerdict } from "@grimoire/ui/lib/ipc";
 import { CameraBox } from "./CameraBox";
 import { MatchLine } from "./MatchLine";
 import { ScanControls } from "./ScanControls";
@@ -19,35 +19,21 @@ const SARUMAN: LastAdded = {
 function line(
   verdict: ScannerVerdict | null,
   {
-    mode = "fast",
     lastAdded = null,
-    hasBundle = true,
-    lastResolution = null,
     onReset = vi.fn(),
     onSend,
   }: {
-    mode?: ScanMode;
     lastAdded?: LastAdded;
-    hasBundle?: boolean;
-    lastResolution?: ScannerResolution | null;
     onReset?: () => void;
     onSend?: (opener: HTMLElement) => void;
   } = {},
 ) {
   const { unmount } = render(
-    <MatchLine
-      verdict={verdict}
-      mode={mode}
-      lastAdded={lastAdded}
-      hasBundle={hasBundle}
-      lastResolution={lastResolution}
-      onReset={onReset}
-      onSend={onSend}
-    />,
+    <MatchLine verdict={verdict} lastAdded={lastAdded} onReset={onReset} onSend={onSend} />,
   );
   return {
     status: screen.getByRole("status", { name: "Scanner status" }),
-    expected: matchStrip(verdict, mode, lastAdded, hasBundle, lastResolution),
+    expected: matchStrip(verdict, lastAdded),
     onReset,
     unmount,
   };
@@ -59,16 +45,15 @@ describe("the phone's status line", () => {
       [null, {}],
       [VERDICTS.noCard, {}],
       [VERDICTS.voting, {}],
-      [VERDICTS.voting, { mode: "exact" }],
+      [VERDICTS.noMatch, {}],
+      [VERDICTS.panicked, {}],
       [VERDICTS.decided, { lastAdded: SARUMAN }],
       [VERDICTS.decided, { lastAdded: { ...SARUMAN, bumpedTo: 2 } }],
       [VERDICTS.decided, { lastAdded: { ...SARUMAN, replaced: true } }],
-      [VERDICTS.exactAmbiguous, { mode: "exact", lastResolution: VERDICTS.exactAmbiguous.resolution }],
-      [VERDICTS.exactNotFound, { mode: "exact", lastResolution: VERDICTS.exactNotFound.resolution }],
-      [{ ...VERDICTS.voting, mode: "neural" }, { mode: "neural" }],
-      [VERDICTS.neuralDecided, { mode: "neural" }],
-      [VERDICTS.neuralAmbiguous, { mode: "neural", lastAdded: SARUMAN }],
-      [VERDICTS.voting, { hasBundle: false }],
+      [VERDICTS.resolved, {}],
+      [VERDICTS.ambiguous, {}],
+      [VERDICTS.ambiguous, { lastAdded: SARUMAN }],
+      [{ ...VERDICTS.voting, matcher: false }, {}],
     ];
     for (const [verdict, over] of states) {
       const { status, expected, unmount } = line(verdict, over);
@@ -134,7 +119,9 @@ describe("the phone's status line", () => {
     const reset = screen.getByRole("button", { name: "Reset evidence" });
     expect(status.contains(send)).toBe(false);
     expect(send.previousElementSibling).toBe(reset);
-    expect(send.parentElement).toBe(screen.getByRole("progressbar", { name: "Match progress" }).parentElement);
+    expect(send.parentElement).toBe(
+      screen.getByRole("progressbar", { name: "Match progress" }).parentElement,
+    );
     // A glyph and no words, a finger's size both ways, and the bar keeps the row's spare width.
     expect(send.textContent).toBe("");
     expect(send.classList.contains("size-11")).toBe(true);
@@ -164,8 +151,6 @@ describe("the bar over the camera", () => {
       shooting: false,
       onHold: vi.fn(),
       onTap: vi.fn(),
-      mode: "fast" as const,
-      onMode: vi.fn(),
       onOptions: vi.fn(),
       ...over,
     };
@@ -218,66 +203,16 @@ describe("the bar over the camera", () => {
     expect(starting.onScanning).toHaveBeenCalledWith(true);
   });
 
-  it("switches mode as a row of toggles, and writes nothing for the mode already on", async () => {
-    const props = bar({ mode: "fast" });
-    const group = screen.getByRole("group", { name: "Scan mode" });
-    expect(group).toBeInTheDocument();
-    const fast = screen.getByRole("button", { name: "Fast" });
-    const exact = screen.getByRole("button", { name: "Exact" });
-    expect(fast).toHaveAttribute("aria-pressed", "true");
-    expect(exact).toHaveAttribute("aria-pressed", "false");
-    await userEvent.click(fast);
-    expect(props.onMode).not.toHaveBeenCalled();
-    await userEvent.click(exact);
-    expect(props.onMode).toHaveBeenCalledWith("exact");
-  });
-
-  it("draws the three modes, Neural last, and hands Neural up when it is pressed", async () => {
-    const props = bar({ mode: "exact" });
-    const group = screen.getByRole("group", { name: "Scan mode" });
-    expect(
-      within(group)
-        .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual(["Fast", "Exact", "Neural"]);
-    await userEvent.click(within(group).getByRole("button", { name: "Neural" }));
-    expect(props.onMode).toHaveBeenCalledWith("neural");
-  });
-
-  /** The outer corners rounded and every inner edge shared, whatever the count of modes. */
-  it("rounds the switch's two outer corners and shares every edge between", () => {
-    bar({ mode: "neural" });
-    const [fast, exact, neural] = within(
-      screen.getByRole("group", { name: "Scan mode" }),
-    ).getAllByRole("button");
-    expect(fast).toHaveClass("rounded-l-md");
-    expect(fast).not.toHaveClass("-ml-px");
-    expect(exact).toHaveClass("-ml-px");
-    expect(exact).not.toHaveClass("rounded-l-md");
-    expect(exact).not.toHaveClass("rounded-r-md");
-    expect(neural).toHaveClass("-ml-px", "rounded-r-md");
-    expect(neural).toHaveAttribute("aria-pressed", "true");
-    // Each box keeps its label inside it, and none is under the 44px floor's height.
-    for (const box of [fast, exact, neural]) expect(box).toHaveClass("h-11", "min-w-fit");
-  });
-
-  /**
-   * Three modes do not fit beside Stop at 360px (368px wanted, 328px there): the switch and the
-   * Options press wrap onto a line of their own **together**, so the press is never alone on a
-   * second line and nothing is read in another order than it is drawn.
-   */
-  it("keeps the switch and the Options press in one unit that wraps whole", () => {
+  /** One scanner, so no mode to pick: the bar is the scanning press and the Options press. */
+  it("draws no scan mode, and the Options press at the row's end beside Stop", () => {
     bar();
+    expect(screen.queryByRole("group", { name: "Scan mode" })).toBeNull();
+    for (const name of ["Fast", "Exact", "Neural"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
     const options = screen.getByRole("button", { name: "Scanner options" });
-    const group = screen.getByRole("group", { name: "Scan mode" });
-    const unit = group.parentElement;
-    expect(unit).toHaveAttribute("data-scan-modes-row");
-    expect(options.parentElement).toBe(unit);
-    expect(group.nextElementSibling).toBe(options);
-    // The bar wraps, and the unit grows from a basis wide enough for the switch and the press.
-    expect(unit?.parentElement).toHaveClass("flex-wrap");
-    expect(unit).toHaveClass("grow", "basis-[13.75rem]");
-    expect(unit?.previousElementSibling).toBe(
+    expect(options).toHaveClass("ml-auto");
+    expect(options.previousElementSibling).toBe(
       screen.getByRole("button", { name: "Stop scanning" }),
     );
   });
@@ -381,7 +316,9 @@ describe("the camera's box", () => {
         unavailable="The scanner does not run in a browser yet."
       />,
     );
-    expect(screen.getByRole("alert")).toHaveTextContent("The scanner does not run in a browser yet.");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The scanner does not run in a browser yet.",
+    );
   });
 });
 

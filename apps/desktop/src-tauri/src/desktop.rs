@@ -786,11 +786,6 @@ pub fn run() {
             scanner::set_scanner_tray,
             scanner::scanner_tray_commit,
             scanner::scanner_tray_archive,
-            // The scanner's three files where the binary does not carry them: what this install
-            // owes, and the download a reader's press starts. A release build embeds all three,
-            // owes nothing and so is never offered it. See the core's `scanner_assets`.
-            scanner::scanner_assets,
-            scanner::scanner_assets_fetch,
             // One camera picture and the card a reader says it shows, sent to the scan inbox to
             // improve the scanner — only ever from a reader's press on Send. See the core's
             // `scanner_submit`.

@@ -34,8 +34,7 @@ incremental = false
 # worktree does, and no two checkouts meet in it.
 #
 # ⚠️ **`--target-dir` no longer moves a whole build**, only what it finishes. A script that
-# wants a build tree of its own for one run — `scripts/build-wasm.ts`, `scripts/scanner-bench.ts`
-# — hands that run `CARGO_BUILD_BUILD_DIR` as well. `cargo metadata` answers both folders, as
+# wants a build tree of its own for one run — `scripts/build-wasm.ts` — hands that run `CARGO_BUILD_BUILD_DIR` as well. `cargo metadata` answers both folders, as
 # `target_directory` and `build_directory`.
 build-dir = "{workspace-root}/target/cache"
 

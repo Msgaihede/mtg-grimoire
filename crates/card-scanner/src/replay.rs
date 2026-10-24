@@ -22,8 +22,8 @@ const JPEG_MAGIC: [u8; 3] = [0xFF, 0xD8, 0xFF];
 pub const NO_CARD: &str =
     "the reader said there is no card in the last frame; the replay does not score those yet";
 
-/// The long edge the app's pump sends its scanner a frame at — `DEFAULT_SEND_PX` in
-/// `packages/ui/features/scanner/scannerOptions.ts`.
+/// The long edge the app's pump sends its scanner a frame at — `SEND_PX` in
+/// `packages/ui/features/scanner/useScanLoop.ts`.
 pub const SENT_LONG_EDGE: u32 = 960;
 /// The JPEG quality the pump sends at — `PUMP_QUALITY` in `useScanLoop.ts`.
 pub const SENT_QUALITY: u8 = 72;

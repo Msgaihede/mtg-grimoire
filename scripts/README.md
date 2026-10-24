@@ -5,7 +5,7 @@ Run scripts directly with Node.js 22.18 or newer, for example:
 ```sh
 node scripts/cdp.ts pages
 pnpm web:smoke
-pnpm scanner:bench --sizes
+pnpm scanner:corpus status
 ```
 
 Node strips TypeScript types at runtime. Scripts use ESM, explicit `.ts` extensions for local

@@ -340,7 +340,8 @@ pub const LABEL_ATTEMPTS: u32 = 12;
 const _: () = assert!(LABEL_ATTEMPTS > 8);
 
 /// **The labels the browser's scanner needs, as bytes** — every printing's name, set, number,
-/// language, release date, oracle, artwork and finishes, read from `cards` and encoded as
+/// language, release date, oracle, finishes and whether it is a promo or a token, read from
+/// `cards` and encoded as
 /// `card_scanner::labels` lays them out. The scanner's session runs in a Worker of its own on
 /// a module with no database (`crates/grimoire-scan`); this host holds the corpus, so the
 /// page asks here and hands what it gets across.
@@ -366,8 +367,7 @@ const _: () = assert!(LABEL_ATTEMPTS > 8);
 /// can stand on the very page the old one did. The cookie moves for any schema change — the
 /// staged table being made, a tag feed's swap — and a read that starts over for one of those
 /// has lost a second or two and nothing else. In rowid order, which is the order
-/// `Reference::load_labels` walks: the first printing of a card and the first label under an
-/// artwork follow it.
+/// `Reference::load_labels` walks.
 ///
 /// **An `Err` is not an empty corpus, and the page is told which it got.** A read that failed,
 /// or a corpus that changed under every one of [`LABEL_ATTEMPTS`], is a sentence: `glue` writes
@@ -1039,17 +1039,17 @@ mod tests {
         format!("0000000{n}-0bba-4488-8f7a-6194544ce91e")
     }
 
-    /// One row of `table` — `cards`, or the table a sync stages into — with the nine columns a
-    /// label is read from and the three others the table will not take a row without.
+    /// One row of `table` — `cards`, or the table a sync stages into — with the columns a label is
+    /// read from and the others the table will not take a row without.
     fn add_card(state: &State, table: &str, n: u32, name: &str, set: &str, finishes: &str) {
         state
             .lock_db()
             .execute(
                 &format!(
                     "INSERT INTO {table} (id, oracle_id, name, lang, released_at, set_code,
-                                          collector_number, layout, finishes, illustration_id, raw)
+                                          collector_number, layout, finishes, raw)
                      VALUES (?1, 'b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6', ?2, 'en', '2024-08-02',
-                             ?3, ?4, 'normal', ?5, NULL, '{{}}')"
+                             ?3, ?4, 'normal', ?5, '{{}}')"
                 ),
                 (printing(n), name, set, n.to_string(), finishes),
             )
@@ -1107,7 +1107,7 @@ mod tests {
             .rows()
             .collect();
         assert_eq!(
-            card_scanner::index::format_uuid(&rows[0].id),
+            card_scanner::ids::format_uuid(&rows[0].id),
             printing(1),
             "an id crosses as its sixteen bytes"
         );
@@ -1117,7 +1117,7 @@ mod tests {
             ("blb", "1")
         );
         assert_eq!(rows[0].label.released, "2024-08-02");
-        assert!(rows[0].oracle.is_some() && rows[0].illustration.is_none());
+        assert!(rows[0].oracle.is_some());
         assert!(rows[1].finishes.is_empty());
 
         // A page of one row is five stretches — the skipped row is one of them — and the same

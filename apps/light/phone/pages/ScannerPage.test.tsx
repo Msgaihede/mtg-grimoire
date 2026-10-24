@@ -40,13 +40,11 @@ import { FRAMES_PER_CARD, newScanScript, scanStep } from "@grimoire/fake/scanner
 import {
   DEFAULT_SCANNER_PREFS,
   NEEDS_A_FINISH_ROW,
+  STATUS,
   TRAY_ROWS,
   VERDICTS,
 } from "@grimoire/ui/features/scanner/fixtures";
-import {
-  SCANNING_STOPPED,
-  SHOT_READY_HOLD,
-} from "@grimoire/ui/features/scanner/reader/readerText";
+import { SCANNING_STOPPED, SHOT_READY_HOLD } from "@grimoire/ui/features/scanner/reader/readerText";
 import { runClock } from "@grimoire/ui/features/scanner/submit/run";
 import {
   DB_BUSY,
@@ -56,7 +54,6 @@ import {
 import type {
   CollectionImportItem,
   ScanFilters,
-  ScannerOptions,
   ScannerPrefs,
   ScannerSubmission,
   ScannerTrayRow,
@@ -175,13 +172,7 @@ function noCamera(name: string) {
 
 /* ------------------------------------------------------------------ the host's half ------- */
 
-type Frame = (
-  jpeg: unknown,
-  options?: { headers?: Record<string, string> },
-) => Promise<ScannerVerdict>;
-
-const sentWith = (options: { headers?: Record<string, string> } | undefined): ScannerOptions =>
-  JSON.parse(options?.headers?.["x-scanner-options"] ?? "{}") as ScannerOptions;
+type Frame = (jpeg: unknown, options?: unknown) => Promise<ScannerVerdict>;
 
 /**
  * **Every test that opens a camera answers its own frames**, and never leaves the fake's script to
@@ -218,11 +209,11 @@ const SHOWN = [0, 7, 8, 9];
  */
 function pile(cards: number, after: "parked" | "looking" = "parked") {
   const script = newScanScript();
-  const sent: ScannerOptions[] = [];
+  // What rode beside each frame's bytes — nothing, since a frame is its JPEG alone.
+  const sent: unknown[] = [];
   let asked = 0;
   const frame: Frame = (_jpeg, options) => {
-    const under = sentWith(options);
-    sent.push(under);
+    sent.push(options);
     const at = asked++;
     const card = Math.floor(at / SHOWN.length);
     if (card >= cards && after === "parked") return new Promise(() => {});
@@ -233,7 +224,7 @@ function pile(cards: number, after: "parked" | "looking" = "parked") {
           card >= cards
             ? cards * FRAMES_PER_CARD
             : card * FRAMES_PER_CARD + SHOWN[at % SHOWN.length];
-        answer(scanStep(script, under.mode, under.previews, false));
+        answer(scanStep(script, false));
       }, 3),
     );
   };
@@ -468,7 +459,12 @@ describe("the phone's Scanner page", () => {
     camera();
     restoreVideo = shimVideo();
     const cards = pile(3);
-    const { seen } = mount({ over: () => ({ scanner_frame: cards.frame }) });
+    // Nonfoil by hand: Urza's Saga is printed nonfoil and foil, so Detect would land each copy as
+    // Unknown — and an Unknown row takes no second copy.
+    const { seen } = mount({
+      prefs: { finish: "nonfoil" },
+      over: () => ({ scanner_frame: cards.frame }),
+    });
     await start();
 
     // Three cards laid down; the second is a second copy of the first, counted onto its row.
@@ -495,9 +491,9 @@ describe("the phone's Scanner page", () => {
         ]),
       SETTLE,
     );
-    // Every frame in the stored mode, and none asking for previews.
+    // Every frame its bytes alone: no options, no header.
     expect(cards.sent.length).toBeGreaterThanOrEqual(SHOWN.length * 3);
-    expect(cards.sent.every((sent) => sent.mode === "fast" && sent.previews === false)).toBe(true);
+    expect(cards.sent.every((sent) => sent === undefined)).toBe(true);
   });
 
   it("shapes the camera's box by the stream it opened", async () => {
@@ -512,7 +508,7 @@ describe("the phone's Scanner page", () => {
     );
   });
 
-  it("never asks for previews whatever the stored Developer switch says, and leaves the switch alone", async () => {
+  it("leaves the stored Developer switch alone, carrying it on through a write of another field", async () => {
     camera();
     restoreVideo = shimVideo();
     const cards = pile(1);
@@ -522,15 +518,17 @@ describe("the phone's Scanner page", () => {
     });
     await start();
     await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);
-    expect(cards.sent.every((sent) => sent.previews === false)).toBe(true);
 
     // A write of another field carries the switch on as it was stored: it is the desktop face's.
-    await userEvent.click(screen.getByRole("button", { name: "Exact" }));
+    await userEvent.click(screen.getByRole("button", { name: "Scanner options" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanner options" });
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Scanning/ }));
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Point & shoot/ }));
     await waitFor(
-      () => expect(last(seen.prefs)).toMatchObject({ mode: "exact", developer: true }),
+      () => expect(last(seen.prefs)).toMatchObject({ pointAndShoot: true, developer: true }),
       SETTLE,
     );
-    expect(screen.queryByRole("switch")).toBeNull();
+    expect(within(sheet).queryByRole("switch")).toBeNull();
   });
 
   it("stops recognition and keeps the camera, and starts again on the same stream", async () => {
@@ -602,47 +600,13 @@ describe("the phone's Scanner page", () => {
     expect(await screen.findByRole("button", { name: "Scan" })).toBeInTheDocument();
   });
 
-  it("stores a change of mode and sends the next frame in it", async () => {
-    camera();
-    restoreVideo = shimVideo();
-    const cards = pile(0, "looking");
-    const { seen } = mount({ over: () => ({ scanner_frame: cards.frame }) });
-    await start();
-    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(0), SETTLE);
-    expect(screen.getByRole("button", { name: "Fast" })).toHaveAttribute("aria-pressed", "true");
-
-    await userEvent.click(screen.getByRole("button", { name: "Exact" }));
-    expect(screen.getByRole("button", { name: "Exact" })).toHaveAttribute("aria-pressed", "true");
-    await waitFor(() => expect(last(seen.prefs)?.mode).toBe("exact"), SETTLE);
-    await waitFor(() => expect(last(cards.sent)?.mode).toBe("exact"), SETTLE);
-  });
-
-  it("stores Neural from the bar and sends the next frame in it", async () => {
-    camera();
-    restoreVideo = shimVideo();
-    const cards = pile(0, "looking");
-    const { seen } = mount({ over: () => ({ scanner_frame: cards.frame }) });
-    await start();
-    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(0), SETTLE);
-
-    await userEvent.click(screen.getByRole("button", { name: "Neural" }));
-    expect(screen.getByRole("button", { name: "Neural" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Fast" })).toHaveAttribute("aria-pressed", "false");
-    await waitFor(() => expect(last(seen.prefs)?.mode).toBe("neural"), SETTLE);
-    await waitFor(() => expect(last(cards.sent)?.mode).toBe("neural"), SETTLE);
-  });
-
-  /** Neural runs no resolve: the printings its picture stands for ride the decision. */
-  it("lands a card Neural's picture cannot pin as a question, as Exact's", async () => {
+  /** The printings a picture stands for ride the decision, and a card it cannot pin is a question. */
+  it("lands a card the picture cannot pin to one printing as a question", async () => {
     camera();
     restoreVideo = shimVideo();
     mount({
-      prefs: { mode: "neural" },
       over: () => ({
-        scanner_frame: frames(
-          { ...VERDICTS.voting, mode: "neural" },
-          { ...VERDICTS.neuralAmbiguous, decision_seq: 1 },
-        ),
+        scanner_frame: frames(VERDICTS.voting, { ...VERDICTS.ambiguous, decision_seq: 1 }),
       }),
     });
     await start();
@@ -658,14 +622,13 @@ describe("the phone's Scanner page", () => {
     );
   });
 
-  it("lands a card Exact cannot pin as a question, and a press on a candidate answers it", async () => {
+  it("lands an ambiguous card as a question, and a press on a candidate answers it", async () => {
     camera();
     restoreVideo = shimVideo();
     const { seen } = mount({
-      prefs: { mode: "exact" },
       // The first number is a baseline; the second, on a frame carrying a decision, is the card.
       over: () => ({
-        scanner_frame: frames(VERDICTS.voting, { ...VERDICTS.exactAmbiguous, decision_seq: 1 }),
+        scanner_frame: frames(VERDICTS.voting, { ...VERDICTS.ambiguous, decision_seq: 1 }),
       }),
     });
     await start();
@@ -1062,7 +1025,7 @@ describe("sending a scan from the Scanner page", () => {
    * The dialog, opened from the press once the scanner has answered a run's worth of frames,
    * with the search asked for Lightning Bolt's printings.
    */
-  async function opened(cards: { sent: ScannerOptions[] }) {
+  async function opened(cards: { sent: unknown[] }) {
     // Well past the fewest frames that are a scan, whatever was on the wire at the press.
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(10), SETTLE);
     const opener = await screen.findByRole("button", { name: "Send scan…" }, SETTLE);
@@ -1118,7 +1081,7 @@ describe("sending a scan from the Scanner page", () => {
   }
 
   /** `count` more frames answered — each a render of the page, so anything owed is drawn. */
-  async function framesGoBy(cards: { sent: ScannerOptions[] }, count: number) {
+  async function framesGoBy(cards: { sent: unknown[] }, count: number) {
     const sent = cards.sent.length;
     await waitFor(() => expect(cards.sent.length).toBeGreaterThan(sent + count), SETTLE);
   }
@@ -1194,22 +1157,11 @@ describe("sending a scan from the Scanner page", () => {
     expect(submission).toMatchObject({
       cardId: printing("sta", "105").id,
       finish: "etched",
-      mode: "fast",
       filters: DEFAULT_SCANNER_PREFS.filters,
     });
     // Every key the engine's struct has, each present even where it is `null`.
     expect(Object.keys(submission).sort()).toEqual(
-      [
-        "bundle",
-        "cardId",
-        "confidence",
-        "distance",
-        "filters",
-        "finish",
-        "mode",
-        "reported",
-        "run",
-      ].sort(),
+      ["cardId", "confidence", "distance", "filters", "finish", "reported", "run"].sort(),
     );
 
     // **The run is frames the pump really sent**: as many as the dialog counted, each kept at
@@ -1227,7 +1179,7 @@ describe("sending a scan from the Scanner page", () => {
     expect(ms.every((one) => Number.isInteger(one) && one <= 0)).toBe(true);
     for (const frame of submission.run) {
       expect(Object.keys(frame).sort()).toEqual(
-        ["confidence", "decided", "detail", "distance", "jpeg", "lock", "ms", "ok"].sort(),
+        ["confidence", "decided", "distance", "jpeg", "ms", "ok"].sort(),
       );
     }
 
@@ -1674,7 +1626,7 @@ describe("what the Scanner page says when it cannot scan", () => {
     expect(await screen.findByRole("alert", {}, SETTLE)).toHaveTextContent(
       "MTG Grimoire needs camera access to scan a card.",
     );
-    expect(screen.getByRole("group", { name: "Scan mode" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Scanner options" })).toBeInTheDocument();
     expect(
       await screen.findByRole("button", { name: "Add 5 to collection" }, SETTLE),
     ).toBeInTheDocument();
@@ -1688,21 +1640,25 @@ describe("what the Scanner page says when it cannot scan", () => {
     );
   });
 
-  it("offers the missing data in its slot, says it cannot identify, and refuses the filters in words", async () => {
-    noCamera("NotAllowedError");
-    const { view } = mount({ fake: { seed: "starter", fault: "scannerMissing" } });
-    const slot = () => view.container.querySelector("[data-scanner-data-slot]");
-    await waitFor(
-      () => expect(slot()).toHaveTextContent("The scanner needs its card data — about 19 MB."),
-      SETTLE,
-    );
-    // The offer, and not an instruction to put a file where nobody holding this page can reach.
-    expect(
-      within(slot() as HTMLElement).getByRole("button", { name: "Download" }),
-    ).toBeInTheDocument();
-    expect(slot()).not.toHaveTextContent("No reference bundle.");
-    expect(slot()).not.toHaveTextContent("Restart the app");
+  /**
+   * **A build with nothing to scan with** — no recogniser and no card names. There is nothing to
+   * download and no file to put anywhere, so the slot under the camera says nothing; the line says
+   * the card cannot be identified, and the filters are refused in words.
+   */
+  it("says it cannot identify with no recogniser, offers nothing to fetch, and refuses the filters in words", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    // The fault's own frame — every one fails in the crate's sentence — answered here, at this
+    // file's pace (`pile`'s reason).
+    const { view } = mount({
+      fake: { seed: "starter", fault: "scannerMissing" },
+      over: () => ({ scanner_frame: frames(scanStep(newScanScript(), true)) }),
+    });
+    await start();
     await waitFor(() => expect(statusLine()).toHaveTextContent("Can't identify"), SETTLE);
+    expect(view.container.querySelector("[data-scanner-data-slot]")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Scanner files" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Download" })).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Scanner options" }));
     const sheet = await screen.findByRole("dialog", { name: "Scanner options" });
@@ -1712,68 +1668,17 @@ describe("what the Scanner page says when it cannot scan", () => {
     ).toHaveAttribute("aria-disabled", "true");
   });
 
-  /**
-   * **The download, from the press to a scanner that has its data.** The host owes the three
-   * files; the reader presses once; the bar stands where the button was; and when the files have
-   * landed the offer is gone with no restart — the status is read again and says the bundle
-   * loaded, the line stops saying it cannot identify, the filters can be opened, and the new
-   * session is given the reader's stored filters, which the one with no card names had refused.
-   */
-  it("fetches the scanner's data on a press, and afterwards has it: the offer gone, the status read again, the filters pushed", async () => {
+  /** A recogniser that is there and did not load says so under the camera, in the load's words. */
+  it("says the recogniser's own refusal in the slot under the camera", async () => {
     noCamera("NotAllowedError");
-    const hob = { sets: ["hob"], released_from: null, released_to: null };
-    const asked = { status: 0, fetches: 0, filters: [] as unknown[] };
-    const { view } = mount({
-      fake: { seed: "starter", fault: "scannerMissing" },
-      prefs: { filters: hob },
-      over: (own) => ({
-        scanner_status: () => {
-          asked.status += 1;
-          return (own.scanner_status as () => unknown)();
-        },
-        scanner_assets_fetch: () => {
-          asked.fetches += 1;
-          return (own.scanner_assets_fetch as () => unknown)();
-        },
-        scanner_set_filters: (args: { filters: unknown }) => {
-          asked.filters.push(args.filters);
-          return (own.scanner_set_filters as (a: unknown) => unknown)(args);
-        },
-      }),
-    });
+    const { view } = mount({ over: () => ({ scanner_status: () => STATUS.corrupt }) });
     const slot = () => view.container.querySelector("[data-scanner-data-slot]");
-    await waitFor(() => expect(slot()).toHaveTextContent("about 19 MB"), SETTLE);
-    await waitFor(() => expect(statusLine()).toHaveTextContent("Can't identify"), SETTLE);
-    // Nothing is fetched until the press; and the stored filters were pushed once, to a session
-    // with no card names to filter by.
-    expect(asked.fetches).toBe(0);
-    expect(asked.status).toBe(1);
-    expect(asked.filters).toEqual([hob]);
-
-    const download = within(slot() as HTMLElement).getByRole("button", { name: "Download" });
-    // A finger's size under a coarse pointer.
-    expect(download.classList.contains("coarse:min-h-[var(--target-min)]")).toBe(true);
-    await userEvent.click(download);
-    expect(
-      await within(slot() as HTMLElement).findByRole("progressbar", {
-        name: "Downloading the scanner's files",
-      }),
-    ).toBeInTheDocument();
-    expect(within(slot() as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
-
-    // Landed: no element left in the slot, and the page reads a scanner that has its data.
-    await waitFor(() => expect(slot()).toBeNull(), SETTLE);
-    expect(asked.fetches).toBe(1);
-    expect(asked.status).toBe(2);
-    await waitFor(() => expect(statusLine()).not.toHaveTextContent("Can't identify"), SETTLE);
-    await waitFor(() => expect(asked.filters).toEqual([hob, hob]), SETTLE);
-
-    await userEvent.click(screen.getByRole("button", { name: "Scanner options" }));
-    const sheet = await screen.findByRole("dialog", { name: "Scanner options" });
-    expect(within(sheet).getByRole("button", { name: /^Filters/ })).not.toHaveAttribute(
-      "aria-disabled",
-      "true",
+    await waitFor(
+      () =>
+        expect(slot()).toHaveTextContent("The card recognizer did not load: gallery: bad magic."),
+      SETTLE,
     );
+    expect(within(slot() as HTMLElement).queryByRole("button")).toBeNull();
   });
 
   /**

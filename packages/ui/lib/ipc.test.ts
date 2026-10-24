@@ -110,34 +110,23 @@ import wishlistRsCore from "../../../crates/grimoire-core/src/wishlist.rs?raw";
 import wishlistRsDesktop from "../../../apps/desktop/src-tauri/src/wishlist/mod.rs?raw";
 import wishlistOptimizeRsCore from "../../../crates/grimoire-core/src/wishlist_optimize.rs?raw";
 import wishlistOptimizeRsDesktop from "../../../apps/desktop/src-tauri/src/wishlist_optimize/mod.rs?raw";
-// The scanner's sources. All but one are in the `card-scanner` crate rather than under
-// `apps/desktop/src-tauri/src` — the detector is a library with a CLI of its own, and the shapes the page
-// reads are declared there — and the app's own `scanner` is two files since the extraction's
-// seventh step: the session glue, the stored prefs and tray in the core, the commands in
-// `src-tauri`, joined below as `scannerRs`.
+// The scanner's sources. The verdict's shapes are in the `card-scanner` crate rather than under
+// `apps/desktop/src-tauri/src` — the session is a library with a CLI of its own, and the shapes the
+// page reads are declared there (`session.rs`, and `reference.rs` for a match's) — and the app's
+// own `scanner` is two files since the extraction's seventh step: the session glue, the stored
+// prefs and tray in the core, the commands in `src-tauri`, joined below as `scannerRs`.
 import scanHistoryRsCore from "../../../crates/grimoire-core/src/scan_history.rs?raw";
 import scanHistoryRsDesktop from "../../../apps/desktop/src-tauri/src/scan_history/mod.rs?raw";
 import scannerRsCore from "../../../crates/grimoire-core/src/scanner.rs?raw";
 import scannerRsDesktop from "../../../apps/desktop/src-tauri/src/scanner/mod.rs?raw";
-// The scanner's files, fetched on first use (the light app's step 7.4): the engine's module, and
-// `downloads.rs` for the row it answers in — `Due`, the shape every offer of a download is made of.
-import scannerAssetsRs from "../../../crates/grimoire-core/src/scanner_assets.rs?raw";
-import downloadsRs from "../../../crates/grimoire-core/src/downloads.rs?raw";
 // Sending a scan to the inbox (issue #776): the engine's module, whose `Submission` the page
 // fills in and whose `Submitted` it reads the reference out of.
 import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs?raw";
 import sessionRs from "../../../crates/card-scanner/src/session.rs?raw";
-import resolveRs from "../../../crates/card-scanner/src/resolve.rs?raw";
 import filtersRs from "../../../crates/card-scanner/src/filters.rs?raw";
 import referenceRs from "../../../crates/card-scanner/src/reference.rs?raw";
-import lockRs from "../../../crates/card-scanner/src/lock.rs?raw";
-import detectRs from "../../../crates/card-scanner/src/detect.rs?raw";
-import cardnessRs from "../../../crates/card-scanner/src/cardness.rs?raw";
-import trimRs from "../../../crates/card-scanner/src/trim.rs?raw";
-import ocrRs from "../../../crates/card-scanner/src/ocr.rs?raw";
 import ipcBarrel from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
-import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
 import { RUN_MAX_BYTES, RUN_MAX_FRAMES, RUN_MIN_FRAMES } from "@/features/scanner/submit/run";
 import {
@@ -163,7 +152,7 @@ import {
   type FolderRule,
   type OracleTagProgressEvent,
   type RelayOutcome,
-  type ScannerAssetsProgress,
+  type ScannerSubmission,
   type StartupStatus,
   type SyncLiveEvent,
   type SyncProgressEvent,
@@ -4360,44 +4349,20 @@ describe("ipc argument names match the Rust command signatures", () => {
   /**
    * **The call shape, and this is the only pin it has.**
    *
-   * A camera frame has no fields to name, so it is Tauri's raw byte body with the detector
-   * options riding in a header. Nothing type-checks it: the header *name* is a string on both
-   * sides, and a misspelling is a scanner that reports "no card" for every frame.
+   * A camera frame has no fields to name, so it is Tauri's raw byte body — the JPEG and nothing
+   * else, since there is one scanner (2026-10-24): no options header and no detail frame behind
+   * it. A header sent here would be read by nothing, and a body with more than the frame in it
+   * is a JPEG the decoder refuses.
    */
-  it("scanner_frame sends the frame as bytes with its options in a header", async () => {
+  it("scanner_frame sends the frame as its bytes alone, with no header", async () => {
     const jpeg = new Uint8Array([1, 2, 3]);
-    await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS);
-    expect(invoke).toHaveBeenCalledWith("scanner_frame", jpeg, {
-      headers: { "x-scanner-options": JSON.stringify(DEFAULT_SCANNER_OPTIONS) },
-    });
-  });
-
-  /**
-   * **The detail image is the frame's tail, and the header is the only thing that says where the
-   * frame ends.** `scanner::split_detail` cuts the body at `x-scanner-detail`'s number, so a
-   * length counted off the wrong array — the detail's, or the concatenation's — hands the decoder
-   * half a JPEG. Nothing type-checks it, for the options header's reason above.
-   */
-  it("scanner_frame puts a detail image behind the frame, with the frame's length in a header", async () => {
-    const jpeg = new Uint8Array([1, 2, 3]);
-    const detail = new Uint8Array([7, 8, 9, 10]);
-    await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS, detail);
-    expect(invoke).toHaveBeenCalledWith("scanner_frame", new Uint8Array([1, 2, 3, 7, 8, 9, 10]), {
-      headers: {
-        "x-scanner-options": JSON.stringify(DEFAULT_SCANNER_OPTIONS),
-        "x-scanner-detail": "3",
-      },
-    });
-  });
-
-  it("scanner_frame with a null or empty detail is the plain call, with no detail header", async () => {
-    const jpeg = new Uint8Array([1, 2, 3]);
-    const plain = { headers: { "x-scanner-options": JSON.stringify(DEFAULT_SCANNER_OPTIONS) } };
-    await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS, null);
-    expect(invoke).toHaveBeenLastCalledWith("scanner_frame", jpeg, plain);
-    // The far end refuses an empty detail in words, so the page must never send one.
-    await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS, new Uint8Array());
-    expect(invoke).toHaveBeenLastCalledWith("scanner_frame", jpeg, plain);
+    await ipc.scannerFrame(jpeg);
+    expect(invoke).toHaveBeenCalledWith("scanner_frame", jpeg);
+    expect(invoke.mock.lastCall).toHaveLength(2);
+    expect(ipc.scannerFrame).toHaveLength(1);
+    expect(scannerRsDesktop).toMatch(
+      /pub async fn scanner_frame\(\s*state: tauri::State<'_, Arc<AppState>>,\s*request: tauri::ipc::Request<'_>,/,
+    );
   });
 
   /**
@@ -4415,22 +4380,18 @@ describe("ipc argument names match the Rust command signatures", () => {
       cardId: "c-bolt",
       finish: "foil" as const,
       reported: null,
-      mode: "exact" as const,
       confidence: 0.5,
       distance: 12,
-      bundle: 98_000,
       filters: { sets: ["2x2"], released_from: null, released_to: null },
       run: [-440, -330, -220, -110, 0].map((ms) => ({
         jpeg: "QUJD",
         ms,
         ok: ms === 0,
-        lock: ms === 0 ? ("locked" as const) : null,
         confidence: null,
         distance: null,
         decided: null,
-        detail: false,
       })),
-    };
+    } satisfies ScannerSubmission;
     await ipc.scannerSubmit(submission);
     expect(invoke).toHaveBeenCalledWith("scanner_submit", { submission });
     expect(ipc.scannerSubmit).toHaveLength(1);
@@ -4638,72 +4599,6 @@ describe("ipc argument names match the Rust command signatures", () => {
       /blocking scanner_tray_archive in scanner\(items: Vec<crate::collection::CollectionImportItem>, remaining: Vec<ScannerTrayRow>\)/,
     );
     expect(desktopRs).toContain("scanner::scanner_tray_archive,");
-  });
-
-  /**
-   * **The scanner's files** (the light app's step 7.4, 2026-10-07): what this install owes of
-   * them, the fetch a reader's press starts, and the event the fetch reports itself through.
-   *
-   * Neither command takes an argument — `home_layout`'s trap again, an argument object sent to a
-   * command that declares only the managed state. And both failures here are silent ones, which
-   * is why the names are read out of the crate: the offer is drawn only when `scanner_assets`
-   * **answers**, so a name nothing registers is a rejection the page reads as "this host has
-   * nothing to offer" — a phone whose scanner names nothing and says nothing about why. A
-   * misspelt event is a bar that never moves over a download that is working.
-   */
-  it("asks what the scanner owes, starts the fetch and hears it, by the engine's own names", async () => {
-    expect(scannerAssetsRs.length, "scanner_assets.rs was not read").toBeGreaterThan(1_000);
-
-    const owed = {
-      owed: [{ key: "bundle", label: "Card hashes", bytes: 5_874_752 }],
-      bytes: 5_874_752,
-      fetching: false,
-    };
-    invoke.mockResolvedValue(owed);
-    expect(await ipc.scannerAssets()).toEqual(owed);
-    expect(invoke).toHaveBeenCalledWith("scanner_assets");
-    expect(await ipc.scannerAssetsFetch()).toEqual(owed);
-    expect(invoke).toHaveBeenCalledWith("scanner_assets_fetch");
-    // The desktop's two wrappers, each taking the managed state and nothing a page sends.
-    expect(scannerRsDesktop).toMatch(
-      /pub async fn scanner_assets\(\s*state: tauri::State<'_, Arc<AppState>>,\s*\)/,
-    );
-    expect(scannerRsDesktop).toMatch(
-      /pub async fn scanner_assets_fetch\(\s*state: tauri::State<'_, Arc<AppState>>,\s*\)/,
-    );
-
-    let emit: ((evt: { payload: ScannerAssetsProgress }) => void) | undefined;
-    listen.mockImplementation(
-      (_name: string, handler: (evt: { payload: ScannerAssetsProgress }) => void) => {
-        emit = handler;
-        return Promise.resolve(vi.fn());
-      },
-    );
-    const heard: ScannerAssetsProgress[] = [];
-    await ipc.onScannerAssets((e) => heard.push(e));
-    const progress: ScannerAssetsProgress = {
-      phase: "downloading",
-      file: "bundle",
-      done: 262_144,
-      total: 18_101_604,
-      message: null,
-    };
-    emit?.({ payload: progress });
-    expect(listen).toHaveBeenCalledWith("scanner:assets", expect.any(Function));
-    expect(heard).toEqual([progress]);
-    expect(scannerAssetsRs).toContain('pub const PROGRESS_EVENT: &str = "scanner:assets";');
-    // The four phases and the three keys the page reads, each as the engine spells it.
-    for (const phase of ["downloading", "checking", "done", "error"]) {
-      expect(scannerAssetsRs, phase).toContain(
-        `pub const PHASE_${phase.toUpperCase()}: &str = "${phase}";`,
-      );
-    }
-    // And no phase is said that is not one of the four constants.
-    expect(scannerAssetsRs).not.toMatch(/say\(\s*"/);
-    expect(scannerAssetsRs).not.toMatch(/phase: "/);
-    for (const key of ["bundle", "detectionModel", "recognitionModel"]) {
-      expect(scannerAssetsRs, key).toContain(`=> "${key}",`);
-    }
   });
 });
 
@@ -4962,21 +4857,21 @@ describe("multi-window's cross-boundary names", () => {
   });
 
   /**
-   * **The three header names, on both sides of both wires.** The desktop reads them off Tauri's
-   * request and a light host off the call's arguments (`packages/ui/lib/core/table.ts` sends the headers
-   * object as `args`), and both hand `scanner::frame_from` / `capture_from` a lookup by these
-   * names — defined once, in the core. The page spells each by hand in `ipc.ts`, so a renamed
-   * constant is a frame whose options are silently the defaults on every host.
+   * **The one header name, on both sides of both wires.** The desktop reads it off Tauri's
+   * request and a light host off the call's arguments (`packages/ui/lib/core/table.ts` sends the
+   * headers object as `args`), and both hand `scanner::capture_from` a lookup by this name —
+   * defined once, in the core. The page spells it by hand in `ipc.ts`, so a renamed constant is a
+   * capture whose sidecar is silently empty on every host. A frame carries no header at all
+   * since there is one scanner (2026-10-24), and the two it used to carry are gone from the core.
    */
-  it("names the scanner's three headers as the engine names them", async () => {
-    expect(scannerRsCore).toContain('pub const OPTIONS_HEADER: &str = "x-scanner-options";');
-    expect(scannerRsCore).toContain('pub const DETAIL_HEADER: &str = "x-scanner-detail";');
+  it("names the scanner's one header as the engine names it, and a frame sends none", async () => {
     expect(scannerRsCore).toContain('pub const CAPTURE_HEADER: &str = "x-scanner-capture";');
+    expect(scannerRsCore).not.toMatch(/pub const (OPTIONS|DETAIL)_HEADER/);
     // And not a second time in the desktop's file, where they lived until the table took them.
     expect(scannerRsDesktop).not.toMatch(/pub const (OPTIONS|DETAIL|CAPTURE)_HEADER/);
 
     invoke.mockResolvedValue({});
-    await ipc.scannerFrame(new Uint8Array([1]), DEFAULT_SCANNER_OPTIONS, new Uint8Array([2]));
+    await ipc.scannerFrame(new Uint8Array([1]));
     await ipc.scannerCapture(new Uint8Array([1]), {
       expected: "",
       reported: "",
@@ -4985,9 +4880,9 @@ describe("multi-window's cross-boundary names", () => {
       distance: "",
     });
     const sent = invoke.mock.calls.flatMap(([, , options]) =>
-      Object.keys((options as { headers: Record<string, string> }).headers),
+      Object.keys((options as { headers?: Record<string, string> } | undefined)?.headers ?? {}),
     );
-    expect(sent.sort()).toEqual(["x-scanner-capture", "x-scanner-detail", "x-scanner-options"]);
+    expect(sent).toEqual(["x-scanner-capture"]);
   });
 
   /**
@@ -5851,11 +5746,11 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
 
   /** Field names of a `pub struct` in a Rust source file, in declaration order. */
   const rustFields = (src: string, name: string): string[] =>
-    // **Two things the plain `pub name:` line cannot express, both of them the scanner's.**
+    // **Two things the plain `pub name:` line cannot express.**
     //
     // A `#[serde(skip)]` field is not in the JSON at all, so it must not be in the mirror
-    // either — `LockState::quad` is the live one, and the row for `ScannerLock` would fail for
-    // a field the page can never receive. The attribute is on a line *before* the field, so
+    // either — `Device::public_key` is the live one, and the row for `PairedDevice` would fail
+    // for a field the page can never receive. The attribute is on a line *before* the field, so
     // the walk needs the neighbouring lines and not just its own. `skip_serializing_if` is
     // deliberately not matched: that field *is* in the JSON whenever it has a value, and
     // `Verdict::error` is the one that has to stay.
@@ -6528,23 +6423,11 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerPrefs", scannerRs, "ScannerPrefs"],
     ["ScannerTrayRow", scannerRs, "ScannerTrayRow"],
     ["ScannerTrayChoice", scannerRs, "ScannerTrayChoice"],
-    // **The scanner's files, fetched on first use** (the light app's step 7.4) — what is owed,
-    // the row it is owed in, and the fetch's progress. camelCase like the three above and for
-    // their reason: the app's own answers, not the detector's JSON.
-    //
-    // Each drift is a quiet one. A renamed `owed` is `undefined`, and the page — which draws its
-    // offer only for a non-empty list — reads that as nothing owed: a phone with no card hashes
-    // and no way offered to get them. A renamed `fetching` is falsy, so a reader who comes back
-    // to the view mid-download is offered a second one, which the engine refuses. And a renamed
-    // `done` or `total` is a bar with no fraction for the whole of an 18 MB download.
-    ["ScannerAssetDue", downloadsRs, "Due"],
-    ["ScannerAssetsOwed", scannerAssetsRs, "Owed"],
-    ["ScannerAssetsProgress", scannerAssetsRs, "Progress"],
     // **A scan sent to the inbox** (issue #776): what the reader chose and what the scanner had
     // said, the run of frames it is made of, and the reference that comes back. camelCase, the
     // app's own — but for `filters`, which is the scanner crate's struct and on `snakeMirrors`.
     //
-    // `Submission`'s four figures are `Option`s, so a renamed one is not a refusal: it is
+    // `Submission`'s three figures are `Option`s, so a renamed one is not a refusal: it is
     // `None`, and every label in the inbox says the scanner read nothing — the half of a
     // submission that says what it got wrong, gone, with every test of the dialog still green.
     // A frame's three are the same, twenty times over. A renamed `cardId`, `finish`, `run` or
@@ -6693,41 +6576,23 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerStatus", scannerRs, "ScannerStatus"],
     ["ScannerSidecar", scannerRs, "Sidecar"],
     ["ScannerCaptured", scannerRs, "Captured"],
-    ["ScannerOptions", sessionRs, "FrameOptions"],
     ["ScannerVerdict", sessionRs, "Verdict"],
     ["ScannerFrameSize", sessionRs, "FrameSize"],
-    ["ScannerStages", sessionRs, "Stages"],
     ["ScannerStanding", sessionRs, "StandingView"],
     ["ScannerTracked", sessionRs, "TrackedView"],
-    ["ScannerCollectorTry", sessionRs, "CollectorTry"],
-    ["ScannerCollector", sessionRs, "CollectorView"],
-    ["ScannerOcr", sessionRs, "OcrView"],
-    // **The finish mark** (2026-10-01), nested twice — in `DecisionView::finish_mark`, which is
-    // what files a row's finish under Detect, and in `CollectorView::mark` for the Readouts panel.
-    // `StandingView`'s reason once more: a renamed `reading` leaves both parents agreeing field for
-    // field while every mark arrives with no reading, and a tray under Detect files every
-    // two-finish printing as Unknown with nothing on screen to say why.
-    ["ScannerFinishMark", ocrRs, "FinishMark"],
-    // **Modes, filters and the decision** (2026-09-15). `ScannerDecision` is what the page builds a
-    // tray row from, and `ScannerResolution` nests `ScannerChoice` and `ScannerTier` for
-    // `StandingView`'s reason above: a renamed `oracle_id` inside a choice leaves the resolution
-    // agreeing field for field while every candidate a reader picks from arrives unkeyed, and a
-    // tray that groups a card's printings by it groups nothing. `ScanFilters` is the one of these
-    // the app **sends**, and it is `#[serde(default)]` — a renamed `released_from` is not a
-    // refusal, it is no lower bound, and the scanner answers from sets the reader excluded.
+    // **Filters and the decision** (2026-09-15). `ScannerDecision` is what the page builds a tray
+    // row from, and it nests `ScannerChoice` for `StandingView`'s reason above: a renamed
+    // `oracle_id` inside a choice leaves the decision agreeing field for field while every
+    // candidate a reader picks from arrives unkeyed, and a tray that groups a card's printings by
+    // it groups nothing. `ScanFilters` is the one of these the app **sends**, and it is
+    // `#[serde(default)]` — a renamed `released_from` is not a refusal, it is no lower bound, and
+    // the scanner answers from sets the reader excluded.
     ["ScannerDecision", sessionRs, "DecisionView"],
-    ["ScannerChoice", resolveRs, "ChoiceView"],
-    ["ScannerTier", resolveRs, "TierView"],
-    ["ScannerResolution", resolveRs, "ResolutionView"],
+    ["ScannerChoice", sessionRs, "ChoiceView"],
     ["ScanFilters", filtersRs, "ScanFilters"],
     ["ScannerLabel", referenceRs, "Label"],
     ["ScannerCandidate", referenceRs, "Candidate"],
     ["ScannerMatch", referenceRs, "MatchReport"],
-    ["ScannerLock", lockRs, "LockState"],
-    ["ScannerScore", detectRs, "QuadScore"],
-    ["ScannerTimings", detectRs, "DetectTimings"],
-    ["ScannerCardness", cardnessRs, "Cardness"],
-    ["ScannerTrim", trimRs, "Margin"],
   ];
 
   it.each(snakeMirrors)(
@@ -6871,10 +6736,10 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   /**
    * TypeScript name → the Rust struct that is its wire shape, where the two names differ.
    *
-   * `in` is a path fragment for a Rust name the workspace declares more than once — `Progress`
-   * is both the card sync's and the scanner download's (`scanner_assets.rs`, which is
-   * `ScannerAssetsProgress` on `plainMirrors`), and only one of them is `sync:progress`. A short
-   * name gets one even while it is unique: a second struct of that name, added anywhere, would
+   * `in` is a path fragment for a Rust name the workspace declares more than once — `Asset` is
+   * both a release's download and the scanner's model file, and only one of them is
+   * `UpdateAsset`. A short name gets one even while it is unique — `Progress`, the card sync's,
+   * is the one of its name today: a second struct of that name, added anywhere, would
    * otherwise turn a green row into a "declared twice" failure in somebody else's change.
    */
   const renamed: Record<string, { rust: string; in?: string }> = {
@@ -6899,7 +6764,6 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     PairingOffer: { rust: "Offer", in: "sync_pair/pairing.rs" },
     PairingHandshake: { rust: "Handshake", in: "sync_pair/pairing.rs" },
     PairingSealedKey: { rust: "SealedKey", in: "sync_pair/pairing.rs" },
-    ScannerBandOrigin: { rust: "BandOrigin", in: "card-scanner/src/ocr.rs" },
   };
 
   /**
@@ -7166,16 +7030,8 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       PlaytestDifficulty: { enum: "Difficulty", in: "grimoire-play/src/playtest/view.rs" },
       ScanBatchStatus: { consts: ["STATUSES"], in: "grimoire-core/src/scan_history.rs" },
       // The scanner's, which this side prefixes for the reason `renamed` gives for pairing's.
-      ScannerMethod: { enum: "Method", in: "card-scanner/src/session.rs" },
-      ScannerRule: { enum: "CommitRule", in: "card-scanner/src/track.rs" },
       ScannerAssetSource: { enum: "AssetSource", in: "grimoire-core/src/scanner.rs" },
-      ScannerAssetsPhase: {
-        consts: ["PHASE_DOWNLOADING", "PHASE_CHECKING", "PHASE_DONE", "PHASE_ERROR"],
-        in: "grimoire-core/src/scanner_assets.rs",
-      },
-      ScannerLockPhase: { enum: "Phase", in: "card-scanner/src/lock.rs" },
-      ScannerMarkReading: { enum: "MarkReading", in: "card-scanner/src/ocr.rs" },
-      ScannerOutcome: { enum: "Outcome", in: "card-scanner/src/resolve.rs" },
+      ScannerOutcome: { enum: "Outcome", in: "card-scanner/src/session.rs" },
       SyncPhase: { consts: ["PHASES"], in: "grimoire-core/src/sync.rs" },
       ReviewTable: { consts: ["REVIEWABLE"], in: "sync_engine/commands.rs" },
       // The table's three, which this side names for the game rather than the view.

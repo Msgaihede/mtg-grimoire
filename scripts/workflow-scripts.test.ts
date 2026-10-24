@@ -82,7 +82,7 @@ describe("every script that is run", () => {
   });
 
   // npm strips a `--` before a script's arguments; pnpm hands it to the script. Vitest then reads
-  // `--shard=1/3` as a file to look for, and `scanner-assets.ts` never sees `--web`.
+  // `--shard=1/3` as a file to look for, and a script never sees the flag it was handed.
   // Anywhere on the line: `pnpm test:run --coverage -- --shard=1/3` hands the `--` on just the same.
   it.each(CALLERS)("%s puts no `--` between a script and its arguments", (_path, src) => {
     expect(src).not.toMatch(/\bpnpm [^\n]* -- /);

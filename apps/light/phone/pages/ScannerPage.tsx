@@ -1,22 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBulkUndoAction } from "@grimoire/ui/components/UndoNotice";
 import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
 import { AddCardDialog } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { AddedToast } from "@grimoire/ui/features/scanner/reader/AddedToast";
-import {
-  SCANNING_STOPPED,
-  SHOT_READY_HOLD,
-} from "@grimoire/ui/features/scanner/reader/readerText";
+import { SCANNING_STOPPED, SHOT_READY_HOLD } from "@grimoire/ui/features/scanner/reader/readerText";
 import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
 import { withoutCommitted } from "@grimoire/ui/features/scanner/reader/trayCommit";
 import { useLandedPrice } from "@grimoire/ui/features/scanner/reader/useLandedPrice";
-import {
-  DEFAULT_DETAIL_WAIT_MS,
-  DEFAULT_SCANNER_OPTIONS,
-  DEFAULT_SEND_PX,
-  frameOptions,
-} from "@grimoire/ui/features/scanner/scannerOptions";
 import { SubmitScanDialog } from "@grimoire/ui/features/scanner/submit/SubmitScanDialog";
 import { useMaySendScans } from "@grimoire/ui/features/scanner/submit/useMaySendScans";
 import { useScanSubmit } from "@grimoire/ui/features/scanner/submit/useScanSubmit";
@@ -115,8 +106,8 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
  * **The rules the desktop page holds, held here**:
  *
  * - **The camera stays shut until the prefs have loaded** (the stored camera is one of them), and
- *   the loop stays off until the prefs *and* the tray have — the first frame goes out in the stored
- *   mode under the stored filters, and a decision lands on the stored tray.
+ *   the loop stays off until the prefs *and* the tray have — the first frame goes out under the
+ *   stored filters, and a decision lands on the stored tray.
  * - **Every tray writer builds on `tray.latest()`**, never on the rows a render drew: the pump
  *   writes between two renders.
  * - **A commit and a clear subtract a snapshot**, because the camera keeps running behind the
@@ -130,8 +121,8 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
  *
  * A page that *mounts* hidden opens no camera at all.
  *
- * **Nothing here asks the engine for previews**: the developer panels that draw them are the
- * desktop's. The stored Developer switch is the desktop face's and is neither read nor written.
+ * **No developer panels**: they are the desktop's. The stored Developer switch is the desktop
+ * face's and is neither read nor written.
  *
  * **On a host with no scanner session** — a web page, until the light app's web step
  * (`useScannerPrefs`' `unavailable`) — the prefs never count as loaded, so both gates below stay
@@ -143,7 +134,7 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
  */
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { prefs, update, inForce, filterError, loaded, unavailable, resync } = useScannerPrefs();
+  const { prefs, update, inForce, filterError, loaded, unavailable } = useScannerPrefs();
   // The desktop's: stopped until Start scanning is pressed (issue #1317), and session-only — a
   // Start or Stop survives the page being hidden and shown.
   const [scanning, setScanning] = useState(false);
@@ -154,7 +145,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // Keyed on the camera that opened: a browser names no camera until one has been granted.
   const cameras = useCameraDevices(camera.kind === "live" ? camera.deviceId : null);
   const tray = useTray();
-  const { status, hasBundle, filtersDisabled } = useScannerStatus();
+  const { status, filtersDisabled } = useScannerStatus();
 
   useScannerHold(parked.released);
 
@@ -162,16 +153,11 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     tray,
     prefs.finish,
   );
-  // The crate's defaults, in the reader's mode, and never with previews.
   // *Add card…* (issue #978) — the desktop page's: the scanner pauses while the search is open,
   // and closing it resumes whatever was running before.
   const [picking, setPicking] = useState(false);
   const pickOpener = useRef<HTMLElement | null>(null);
 
-  const options = useMemo(
-    () => frameOptions(DEFAULT_SCANNER_OPTIONS, prefs.mode, false),
-    [prefs.mode],
-  );
   // *Send scan…*'s dialog is open, so recognition pauses (issue #977) — the desktop page's
   // `sending`, synced below `useScanSubmit` for its reason.
   const [sending, setSending] = useState(false);
@@ -202,9 +188,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       !parked.paused &&
       !sending &&
       !picking,
-    options,
-    sendPx: DEFAULT_SEND_PX,
-    detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
     keepFullFrames: maySend,
     onDecision: (decision) => {
       onDecision(decision);
@@ -326,8 +309,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
-    mode: prefs.mode,
-    status,
     filters: inForce,
     ready: sendable,
   });
@@ -379,8 +360,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               shooting={shot.shooting}
               onHold={(held) => (held ? shot.start(loop.clearReads, "release") : shot.stop())}
               onTap={() => (shot.shooting ? shot.stop() : shot.start(loop.clearReads, "card"))}
-              mode={prefs.mode}
-              onMode={(mode) => update({ mode })}
               onOptions={(opener) => {
                 optionsOpener.current = opener;
                 setOptionsOpen(true);
@@ -393,29 +372,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               note={cameraNote}
               unavailable={unavailable}
             >
-              <AddedToast
-                card={armed ? landed : null}
-                onDone={clearLanded}
-                price={landedPrice}
-              />
+              <AddedToast card={armed ? landed : null} onDone={clearLanded} price={landedPrice} />
             </CameraBox>
-            {/* The scanner's files, where this install owes them. When a download lands the
-                engine's session is a new one: it is given the reader's filters again, and what
-                the last one said is dropped, so the next verdict starts a stream of its own. */}
-            <ScannerDataSlot
-              status={status}
-              onLoaded={() => {
-                resync();
-                loop.clearReads();
-              }}
-            />
+            {/* What the status still has to say of the scanner's own files. */}
+            <ScannerDataSlot status={status} />
             {unavailable === null && (
               <MatchLine
                 verdict={reading ? loop.verdict : null}
-                mode={prefs.mode}
                 lastAdded={lastAdded}
-                hasBundle={hasBundle}
-                lastResolution={loop.lastResolution}
                 onReset={onReset}
                 // Offered only where `sendable` says, as on the desktop: a run to send, the
                 // Scanner tab itself, and a supporter's device. With no camera live, or stopped,
@@ -497,8 +461,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           setOptionsOpen(false);
           optionsOpener.current?.focus();
         }}
-        mode={prefs.mode}
-        onMode={(mode) => update({ mode })}
         pointAndShoot={pointAndShoot}
         onPointAndShoot={(on) => {
           // Either way the page lands stopped, as on the desktop: a hold ends with the pref, and

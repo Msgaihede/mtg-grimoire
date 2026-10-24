@@ -6,7 +6,6 @@ import type {
   CardSummary,
   CollectionFolder,
   ScanBatchSummary,
-  ScannerAssetsOwed,
   ScannerPrefs,
   ScannerSubmitted,
   ScannerVerdict,
@@ -15,14 +14,7 @@ import type {
 } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
-import {
-  DEFAULT_SCANNER_PREFS,
-  MARKS,
-  NEEDS_A_FINISH_ROW,
-  STATUS,
-  TRAY_ROWS,
-  VERDICTS,
-} from "./fixtures";
+import { DEFAULT_SCANNER_PREFS, NEEDS_A_FINISH_ROW, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
 
 vi.mock("@/lib/ipc", async (orig) => {
   const real = await orig<typeof import("@/lib/ipc")>();
@@ -32,18 +24,6 @@ vi.mock("@/lib/ipc", async (orig) => {
     ipc: {
       ...real.ipc,
       scannerStatus: vi.fn(async () => STATUS.missing),
-      // The scanner's files. **Refused by default**, which is a host with nothing to offer — so
-      // every test but the one that says otherwise draws the status's own sentences, as the page
-      // did before there was an offer, and none reaches the real core for an answer.
-      scannerAssets: vi.fn((): Promise<ScannerAssetsOwed> =>
-        Promise.reject(new Error("There is no command named scanner_assets on this host.")),
-      ),
-      scannerAssetsFetch: vi.fn(async (): Promise<ScannerAssetsOwed> => ({
-        owed: [],
-        bytes: 0,
-        fetching: false,
-      })),
-      onScannerAssets: vi.fn(() => () => {}),
       // The lease, free: every test but the ones that say otherwise is a window with the scanner to
       // itself, which is also the only state the page had before there was more than one window.
       scannerElsewhere: vi.fn(async () => false),
@@ -325,8 +305,6 @@ const DECK_GROUP: CollectionFolder = {
 
 const COMMANDS = [
   ipc.scannerStatus,
-  ipc.scannerAssets,
-  ipc.scannerAssetsFetch,
   ipc.scannerElsewhere,
   ipc.scannerHold,
   ipc.scannerFrame,
@@ -560,26 +538,28 @@ describe("ScannerPage", () => {
     }
   });
 
-  it("shows the refused camera's sentence in place of the video, and the missing bundle under it", async () => {
+  it("shows the refused camera's sentence in place of the video, and the recognizer's refusal under it", async () => {
     refused();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.corrupt);
     mount();
     expect(
       await screen.findByText("MTG Grimoire needs camera access to scan a card."),
     ).toBeInTheDocument();
-    expect(await screen.findByText(/No reference bundle\. Put/)).toBeInTheDocument();
+    expect(
+      await screen.findByText("The card recognizer did not load: gallery: bad magic."),
+    ).toBeInTheDocument();
     // The reader's view: the tray beside the camera, and no developer panel until asked for.
     expect(tray()).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
   });
 
-  it("says nothing about assets a release build carries inside itself", async () => {
+  it("says nothing about a recognizer the build carries inside itself and loaded", async () => {
     refused();
-    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.embedded);
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     mount();
     await screen.findByText("MTG Grimoire needs camera access to scan a card.");
     await waitFor(() => expect(ipc.scannerStatus).toHaveBeenCalled());
-    expect(screen.queryByText(/No reference bundle/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/No OCR models/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/card recognizer did not load/)).not.toBeInTheDocument();
   });
 
   it("has an sr-only heading, because the ribbon carries the visible title", async () => {
@@ -622,29 +602,6 @@ describe("ScannerPage", () => {
     }
   });
 
-  /**
-   * The rectified preview is a JPEG encode a frame and only a developer panel draws it, so the
-   * frame asks for it exactly while the Developer switch is on (issue #701).
-   */
-  it.each([
-    [false, "off"],
-    [true, "on"],
-  ])("asks the crate for previews = %s while the Developer switch is %s", async (developer) => {
-    const restore = shimVideo();
-    opens();
-    storedPrefs({ developer });
-    frames(VERDICTS.noCard);
-    try {
-      mount();
-      await start();
-      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
-      const [, options] = vi.mocked(ipc.scannerFrame).mock.calls[0] ?? [];
-      expect(options?.previews).toBe(developer);
-    } finally {
-      restore();
-    }
-  });
-
   it("puts the tray beside the camera, the video box taking what the row leaves", async () => {
     refused();
     const { container } = mount();
@@ -664,7 +621,6 @@ describe("ScannerPage", () => {
 
     await user.click(toggle);
     expect(await screen.findByRole("region", { name: "Match" })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Tiers" })).toBeInTheDocument();
     await waitFor(() =>
       expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({
         ...DEFAULT_SCANNER_PREFS,
@@ -707,7 +663,7 @@ describe("ScannerPage", () => {
     const restore = shimVideo();
     opens();
     storedPrefs({ developer: true });
-    // A bundle that loaded, so the Match panel's figures describe a named card.
+    // A recognizer that loaded, so the Match panel's figures describe a named card.
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     frames(VERDICTS.decided);
     try {
@@ -729,8 +685,8 @@ describe("ScannerPage", () => {
         expected: "Storm of Saruman",
         reported: "Storm of Saruman",
         confidence: "1.000",
-        votes: "8.00",
-        distance: "30",
+        votes: "2.00",
+        distance: "11",
       });
       expect(await screen.findByText("saved live-7.jpg")).toBeInTheDocument();
     } finally {
@@ -747,6 +703,9 @@ describe("ScannerPage", () => {
   it("adds a tray row when decision_seq moves, and not again for the same seq", async () => {
     const restore = shimVideo();
     opens();
+    // Nonfoil set by hand: the decided printing has two finishes, which Detect would leave to the
+    // reader (the Unknown test below), and this test is about the number, not the finish.
+    storedPrefs({ finish: "nonfoil" });
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     frames(VERDICTS.voting, VERDICTS.decided, VERDICTS.decided, VERDICTS.decided);
     try {
@@ -785,7 +744,8 @@ describe("ScannerPage", () => {
   it("reads one card per Scan card under point and shoot, then pauses by itself", async () => {
     const restore = shimVideo();
     opens();
-    storedPrefs({ pointAndShoot: true });
+    // Nonfoil by hand, so the second copy can bump the first: an Unknown row never does.
+    storedPrefs({ pointAndShoot: true, finish: "nonfoil" });
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     // Every frame decided, paced (`paced`'s reason): each shot's first frame lands its card.
     vi.mocked(ipc.scannerFrame).mockImplementation(
@@ -861,6 +821,7 @@ describe("ScannerPage", () => {
   it("lays the card that just landed over the camera", async () => {
     const restore = shimVideo();
     opens();
+    storedPrefs({ finish: "nonfoil" });
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     frames(VERDICTS.voting, VERDICTS.decided);
     try {
@@ -938,19 +899,17 @@ describe("ScannerPage", () => {
   });
 
   /**
-   * **Detect is the default, and a card it cannot read lands as Unknown rather than as a guess.**
-   * Storm of Saruman exists in two finishes, so with no separator measured there is nothing to
-   * choose between them by — and the row says so instead of filing the first finish on the list.
+   * **Detect is the default, and a card printed in more than one finish lands as Unknown rather
+   * than as a guess.** Storm of Saruman exists in two finishes and the scanner reads no finish off
+   * the card, so there is nothing to choose between them by — and the row says so instead of
+   * filing the first finish on the list.
    */
-  it("stamps a new row Unknown under Detect when the separator did not read", async () => {
+  it("stamps a new row Unknown under Detect when the printing has two finishes", async () => {
     const restore = shimVideo();
     opens();
     expect(DEFAULT_SCANNER_PREFS.finish).toBe("detect");
-    const unread: ScannerVerdict = {
-      ...VERDICTS.decided,
-      decision: { ...VERDICTS.decided.decision!, finish_mark: MARKS.unmeasured },
-    };
-    frames(VERDICTS.voting, unread);
+    expect(VERDICTS.decided.decision?.finishes).toEqual(["nonfoil", "foil"]);
+    frames(VERDICTS.voting, VERDICTS.decided);
     try {
       mount();
       await start();
@@ -1117,9 +1076,8 @@ describe("ScannerPage", () => {
         outcome: "resolved",
         choices: [],
         replaces_previous: false,
-        // A dot on a two-finish printing: Detect files it nonfoil, the saga row's own finish.
-        finishes: ["nonfoil", "foil"],
-        finish_mark: MARKS.dot,
+        // One finish: Detect files it nonfoil, the saga row's own finish.
+        finishes: ["nonfoil"],
       },
     };
     let land!: (v: ScannerVerdict) => void;
@@ -1410,56 +1368,25 @@ describe("ScannerPage", () => {
     expect(history).toHaveFocus();
   });
 
-  it("sends mode: exact on the next frame once Exact is pressed", async () => {
+  /**
+   * **A frame is its JPEG and nothing else.** There is one scanner, so there is no mode to send
+   * with it and none to pick in the bar.
+   */
+  it("sends each frame as its JPEG alone, and offers no scan mode to pick", async () => {
     const restore = shimVideo();
     opens();
-    let answer!: (v: ScannerVerdict) => void;
-    vi.mocked(ipc.scannerFrame)
-      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
-      .mockImplementation(() => new Promise(() => {}));
-    const user = userEvent.setup();
+    vi.mocked(ipc.scannerFrame).mockImplementation(() => new Promise(() => {}));
     try {
       mount();
       await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(1));
-      expect(vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1].mode).toBe("fast");
-
-      const exact = screen.getByRole("button", { name: "Exact" });
-      await user.click(exact);
-      await waitFor(() => expect(exact).toHaveAttribute("aria-pressed", "true"));
-      answer(VERDICTS.voting);
-      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
-      expect(vi.mocked(ipc.scannerFrame).mock.calls[1]?.[1].mode).toBe("exact");
-    } finally {
-      restore();
-    }
-  });
-
-  it("sends mode: neural on the next frame once Neural is pressed, and stores the choice", async () => {
-    const restore = shimVideo();
-    opens();
-    let answer!: (v: ScannerVerdict) => void;
-    vi.mocked(ipc.scannerFrame)
-      .mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)))
-      .mockImplementation(() => new Promise(() => {}));
-    const user = userEvent.setup();
-    try {
-      mount();
-      await start();
-      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(1));
-      expect(vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1].mode).toBe("fast");
-
-      const neural = screen.getByRole("button", { name: "Neural" });
-      await user.click(neural);
-      await waitFor(() => expect(neural).toHaveAttribute("aria-pressed", "true"));
-      await waitFor(() =>
-        expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith(
-          expect.objectContaining({ mode: "neural" }),
-        ),
-      );
-      answer(VERDICTS.voting);
-      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
-      expect(vi.mocked(ipc.scannerFrame).mock.calls[1]?.[1].mode).toBe("neural");
+      const call = vi.mocked(ipc.scannerFrame).mock.calls[0] ?? [];
+      expect(call).toHaveLength(1);
+      expect(call[0]).toBeInstanceOf(Uint8Array);
+      expect(screen.queryByRole("group", { name: "Scan mode" })).toBeNull();
+      for (const name of ["Fast", "Exact", "Neural"]) {
+        expect(screen.queryByRole("button", { name })).toBeNull();
+      }
     } finally {
       restore();
     }
@@ -1474,7 +1401,7 @@ describe("ScannerPage", () => {
  * that recognition pauses while it is open (issue #977).
  */
 describe("ScannerPage sending a scan", () => {
-  /** The printing the Fast fixture decides on, as the search answers it. */
+  /** The printing the decided fixture names, as the search answers it. */
   const SARUMAN: CardSummary = {
     id: "storm-of-saruman-ltr-72",
     name: "Storm of Saruman",
@@ -1566,9 +1493,7 @@ describe("ScannerPage sending a scan", () => {
     const restore = shimVideo();
     const plainFrames = numberedCanvas();
     opens();
-    // A bundle that loaded and models that did not: the models' sentence under the camera is the
-    // tell that the status is in, which the submission's `bundle` is read from.
-    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.noModels);
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     // Seven frames: three the scanner was still weighing, then four it had decided on.
     const weighing: ScannerVerdict = { ...VERDICTS.voting, decision_seq: 0 };
     answers(weighing, weighing, weighing, ...Array<ScannerVerdict>(4).fill(VERDICTS.decided));
@@ -1582,7 +1507,6 @@ describe("ScannerPage sending a scan", () => {
     try {
       const { container } = mount();
       await start();
-      await screen.findByText(/No OCR models\. Put/);
       // All seven answered: the eighth is on the wire, and stays there.
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(8));
       await waitFor(() => expect(statusLine()).toHaveTextContent("Storm of Saruman"));
@@ -1629,16 +1553,16 @@ describe("ScannerPage sending a scan", () => {
       expect(sent).toMatchObject({
         cardId: "storm-of-saruman-ltr-72",
         finish: "foil",
-        // What the scanner had said, read at the press: the Fast fixture's decision, its
-        // tracker's confidence, its best candidate's bits, the bundle's card count, and the
-        // filters it was under.
+        // What the scanner had said, read at the press: the fixture's decision, its tracker's
+        // confidence, its best candidate's distance, and the filters it was under.
         reported: "storm-of-saruman-ltr-72",
-        mode: "fast",
         confidence: 1,
-        distance: 30,
-        bundle: STATUS.noModels.labels,
+        distance: 11,
         filters: DEFAULT_SCANNER_PREFS.filters,
       });
+      expect(Object.keys(sent).sort()).toEqual(
+        ["cardId", "confidence", "distance", "filters", "finish", "reported", "run"].sort(),
+      );
 
       // **The run is the frames the pump really sent**, in the order it sent them — each kept at
       // full resolution, out of the same draw of the video as the frame the scanner was given:
@@ -1662,9 +1586,7 @@ describe("ScannerPage sending a scan", () => {
         settled,
       ]);
       expect(sent.run.map((frame) => frame.confidence)).toEqual([0.625, 0.625, 0.625, 1, 1, 1, 1]);
-      expect(sent.run.every((frame) => frame.ok && frame.lock === "locked" && !frame.detail)).toBe(
-        true,
-      );
+      expect(sent.run.every((frame) => frame.ok)).toBe(true);
       // Counted back from the press: oldest first, and none after it.
       const ms = sent.run.map((frame) => frame.ms);
       expect([...ms].sort((a, b) => a - b)).toEqual(ms);
@@ -1693,7 +1615,7 @@ describe("ScannerPage sending a scan", () => {
     const restore = shimVideo();
     const plainFrames = numberedCanvas();
     opens();
-    // A bundle that loaded, so the strip names the card the scanner is leaning towards.
+    // A recognizer that loaded, so the strip names the card the scanner is leaning towards.
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     paced();
     const user = userEvent.setup();
@@ -2284,8 +2206,8 @@ describe("ScannerPage on a host with no scanner session", () => {
       expect(ipc.scannerFrame).not.toHaveBeenCalled();
       // One push, refused, and never sent again.
       expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(1);
-      // No asset notes: there is no folder on this host to put a file in.
-      expect(screen.queryByText(/card-hashes\.bin/)).not.toBeInTheDocument();
+      // No asset notes: a host with no session has no recogniser to say anything about.
+      expect(screen.queryByText(/card recognizer did not load/)).not.toBeInTheDocument();
     } finally {
       restore();
     }
@@ -2404,48 +2326,6 @@ describe("ScannerPage with another window holding the scanner", () => {
     visit();
     expect(await screen.findByText(SCANNER_OPEN_ELSEWHERE)).toBeInTheDocument();
     expect(getUserMedia).not.toHaveBeenCalled();
-  });
-
-  /**
-   * **The scanner's files, in the page** (the light app's step 7.4). Where the host says it owes
-   * them, the reader's view draws the offer in place of the path-and-restart sentence; and when
-   * the download lands the engine's session is a new one, so the page does its two halves of
-   * that — the status is read again, and the stored filters are pushed again, to the session
-   * that can now take them. `ScannerAssets`' and the two hooks' own suites hold the rest.
-   */
-  it("offers the scanner's files where the host owes them, and gives the new session its filters when they land", async () => {
-    const user = userEvent.setup();
-    refused();
-    const filters = { sets: ["hob"], released_from: null, released_to: null };
-    storedPrefs({ filters });
-    vi.mocked(ipc.scannerAssets).mockResolvedValue({
-      owed: [{ key: "bundle", label: "Card hashes", bytes: 5_874_752 }],
-      bytes: 5_874_752,
-      fetching: false,
-    });
-    mount();
-    const offer = await screen.findByRole("region", { name: "Scanner files" });
-    expect(
-      within(offer).getByText("The scanner needs its card data — about 6 MB."),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/No reference bundle\. Put/)).not.toBeInTheDocument();
-    // The models were not offered, so their own sentence still stands under the offer.
-    expect(screen.getByText(/No OCR models\. Put/)).toBeInTheDocument();
-    await waitFor(() => expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(1));
-    expect(ipc.scannerStatus).toHaveBeenCalledTimes(1);
-    expect(ipc.scannerAssetsFetch).not.toHaveBeenCalled();
-
-    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
-    await user.click(within(offer).getByRole("button", { name: "Download" }));
-    await waitFor(() => expect(ipc.scannerAssetsFetch).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(ipc.scannerStatus).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(2));
-    expect(ipc.scannerSetFilters).toHaveBeenLastCalledWith(filters);
-    await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "Scanner files" })).not.toBeInTheDocument(),
-    );
-    expect(screen.queryByText(/No reference bundle/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/No OCR models/)).not.toBeInTheDocument();
   });
 });
 
@@ -2603,26 +2483,9 @@ describe("ScannerPage with a destination", () => {
     expect(screen.queryByRole("button", { name: "History" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Match" })).toBeNull();
-    expect(screen.queryByRole("region", { name: "Tiers" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Frame budget" })).toBeNull();
     // The rest of the bar is the scanner's own.
-    expect(screen.getByRole("group", { name: "Scan mode" })).toBeInTheDocument();
-  });
-
-  it("asks the engine for no previews, whatever the stored Developer switch says", async () => {
-    const restore = shimVideo();
-    opens();
-    storedPrefs({ developer: true });
-    paced();
-    const { destination } = destinationOf();
-    try {
-      mountOver(destination);
-      await start();
-      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
-      const sent = vi.mocked(ipc.scannerFrame).mock.calls[0]?.[1];
-      expect(sent?.previews).toBe(false);
-    } finally {
-      restore();
-    }
+    expect(screen.getByRole("button", { name: "Filters: Any set" })).toBeInTheDocument();
   });
 
   it("says what the tray already held, and words the clear for the destination", async () => {

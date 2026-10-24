@@ -77,10 +77,10 @@ impl std::ops::Add<std::time::Duration> for Tick {
 /// [`Tick`] for a caller that can be handed a function and nothing else.
 ///
 /// The card scanner's crate is that caller: it cannot depend on this one (this one depends on
-/// it), it times every stage of a frame, and `Instant::now()` — what it read until the light
-/// app's phase 7 — panics in a browser. `ScannerState::new` hands it this through
-/// `card_scanner::host::set_clock`, so its timings are a [`Tick`]'s on every host:
-/// `Instant` natively, as they always were, and `performance.now()` in a Worker.
+/// it), it times a frame's decode and read and ages the votes its agreement counts, and
+/// `Instant::now()` — what it read until the light app's phase 7 — panics in a browser.
+/// `ScannerState::new` hands it this through `card_scanner::host::set_clock`, so its clock is
+/// a [`Tick`]'s on every host: `Instant` natively, and `performance.now()` in a Worker.
 ///
 /// A span between two readings is all it is good for. The origin is this process's own, so a
 /// reading says nothing about the date and nothing to another process.

@@ -3,8 +3,6 @@ import {
   isScannerFile,
   isScannerModule,
   neuralPath,
-  NOT_A_PLACE,
-  SCANNER_ASSETS_PREFIX,
   SCANNER_CACHE,
   SCANNER_GLUE_FILE,
   SCANNER_WASM_FILE,
@@ -19,13 +17,18 @@ import { precacheList, routeFor, SHELL_PREFIX, shellCacheName, type Routable } f
 
 /**
  * **The card scanner's files, as the build and the service worker treat them** (step 7.5):
- * fetched on first use, in no precache, and — for the module — kept from then on in a cache
- * that is no build's.
+ * fetched on first use, in no precache, and kept from then on in a cache that is no build's.
  */
 
 const ORIGIN = "https://mtg-grimoire.app";
 const GLUE = wasmPath("5c4a", SCANNER_GLUE_FILE);
 const WASM = wasmPath("5c4a", SCANNER_WASM_FILE);
+/**
+ * One of the files a page before 2026-10-24 kept in the scanner's cache itself — the old
+ * scanner's card hashes. A browser that has one keeps it until the cache goes: nothing here
+ * sweeps what it did not put there.
+ */
+const OLD_PAGE_FILE = "/scanner-assets/card-hashes.bin";
 
 describe("where the scanner's module and files are", () => {
   it("serves the module from a folder of `/wasm/<its own build>/`", () => {
@@ -46,20 +49,13 @@ describe("where the scanner's module and files are", () => {
     for (const file of [
       "wasm/5c4a/scanner/grimoire_scan.js",
       "wasm/5c4a/scanner/grimoire_scan_bg.wasm",
-      "scanner-assets/card-hashes.bin",
-      "scanner-assets/manifest.json",
+      "scanner-neural/ab12/gallery.bin",
     ]) {
       expect(isScannerFile(file), file).toBe(true);
     }
     for (const file of ["wasm/9f/grimoire_web.js", "assets/scanWorker-B1x9.js", "index.html"]) {
       expect(isScannerFile(file), file).toBe(false);
     }
-  });
-
-  it("is not the Scanner page's own place, and is nowhere a page", () => {
-    expect(SCANNER_ASSETS_PREFIX).toBe("/scanner-assets/");
-    expect("/scanner".startsWith(SCANNER_ASSETS_PREFIX)).toBe(false);
-    expect(NOT_A_PLACE).toContain(SCANNER_ASSETS_PREFIX);
   });
 
   it("keeps what it fetched in a cache that is neither a shell nor the pictures", () => {
@@ -69,7 +65,7 @@ describe("where the scanner's module and files are", () => {
 });
 
 describe("what a build precaches, with a scanner in it", () => {
-  it("leaves out the scanner's module and its three files, and keeps its Worker's script", () => {
+  it("leaves out the scanner's module and the Neural files, and keeps its Worker's script", () => {
     const list = precacheList([
       "index.html",
       "assets/index-a.js",
@@ -78,10 +74,6 @@ describe("what a build precaches, with a scanner in it", () => {
       "wasm/9f/grimoire_web_bg.wasm",
       "wasm/5c4a/scanner/grimoire_scan.js",
       "wasm/5c4a/scanner/grimoire_scan_bg.wasm",
-      "scanner-assets/card-hashes.bin",
-      "scanner-assets/text-detection.rten",
-      "scanner-assets/text-recognition.rten",
-      "scanner-assets/manifest.json",
       "scanner-neural/ab12/detector.onnx",
       "scanner-neural/ab12/embedder.onnx",
       "scanner-neural/ab12/gallery.bin",
@@ -98,15 +90,16 @@ describe("what a build precaches, with a scanner in it", () => {
 });
 
 describe("which request is the scanner's", () => {
-  const ask = (path: string, mode = "cors"): Routable => ({ url: ORIGIN + path, method: "GET", mode });
+  const ask = (path: string, mode = "cors"): Routable => ({
+    url: ORIGIN + path,
+    method: "GET",
+    mode,
+  });
   const none = new Set<string>();
 
-  it("keeps the module, and leaves the three files and the manifest to the network", () => {
+  it("keeps the module", () => {
     expect(routeFor(ask(GLUE), ORIGIN, none)).toEqual({ kind: "kept", key: GLUE });
     expect(routeFor(ask(WASM), ORIGIN, none)).toEqual({ kind: "kept", key: WASM });
-    for (const name of ["card-hashes.bin", "manifest.json"]) {
-      expect(routeFor(ask(SCANNER_ASSETS_PREFIX + name), ORIGIN, none)).toEqual({ kind: "passthrough" });
-    }
     // The engine's files are still a shell's.
     expect(routeFor(ask("/wasm/9f/grimoire_web.js"), ORIGIN, none)).toEqual({
       kind: "shell",
@@ -118,7 +111,10 @@ describe("which request is the scanner's", () => {
     const gallery = neuralPath("ab12", "gallery.bin");
     expect(routeFor(ask(gallery), ORIGIN, none)).toEqual({ kind: "kept", key: gallery });
     // Opened as a page it is the file, never the app — and never a place the app draws.
-    expect(routeFor(ask(gallery, "navigate"), ORIGIN, none)).toEqual({ kind: "kept", key: gallery });
+    expect(routeFor(ask(gallery, "navigate"), ORIGIN, none)).toEqual({
+      kind: "kept",
+      key: gallery,
+    });
   });
 });
 
@@ -143,8 +139,10 @@ function harness(files: Record<string, () => Response>) {
   const worker = createWorker(env);
   const later: Promise<unknown>[] = [];
   const get = async (path: string): Promise<Response> => {
-    const answer = worker.respond({ url: ORIGIN + path, method: "GET", mode: "cors" }, "page", (work) =>
-      later.push(work),
+    const answer = worker.respond(
+      { url: ORIGIN + path, method: "GET", mode: "cors" },
+      "page",
+      (work) => later.push(work),
     );
     if (answer === null) throw new Error(`${path} is not the worker's`);
     const response = await answer;
@@ -155,7 +153,9 @@ function harness(files: Record<string, () => Response>) {
 }
 
 const wasm = (bytes: string) => () =>
-  new Response(bytes, { headers: { "Content-Type": "application/wasm", "Content-Encoding": "br" } });
+  new Response(bytes, {
+    headers: { "Content-Type": "application/wasm", "Content-Encoding": "br" },
+  });
 
 describe("answering the scanner's module", () => {
   it("fetches it the first time, keeps it, and answers it with no network from then on", async () => {
@@ -180,14 +180,15 @@ describe("answering the scanner's module", () => {
     const { caches, get } = harness({ [WASM]: wasm("new"), [older]: wasm("old") });
     await get(older);
     const cache = await caches.open(SCANNER_CACHE);
-    // The page's own files live in the same cache, and are nobody's to sweep.
-    await cache.put(`${SCANNER_ASSETS_PREFIX}card-hashes.bin`, new Response("hashes"));
+    // What an older page kept in the same cache is nobody's to sweep.
+    await cache.put(OLD_PAGE_FILE, new Response("hashes"));
     await get(WASM);
-    expect([...cache.entries.keys()].sort()).toEqual([`${SCANNER_ASSETS_PREFIX}card-hashes.bin`, WASM].sort());
+    expect([...cache.entries.keys()].sort()).toEqual([OLD_PAGE_FILE, WASM].sort());
   });
 
   it("keeps neither a miss nor a page handed over where the module should be", async () => {
-    const html = () => new Response("<!doctype html>", { headers: { "Content-Type": "text/html" } });
+    const html = () =>
+      new Response("<!doctype html>", { headers: { "Content-Type": "text/html" } });
     const { caches, get } = harness({ [WASM]: html });
     expect((await get(GLUE)).status).toBe(404);
     expect(await (await get(WASM)).text()).toBe("<!doctype html>");
@@ -195,7 +196,8 @@ describe("answering the scanner's module", () => {
   });
 
   it("keeps a 200 and no other answer in the 2xx", async () => {
-    const partial = () => new Response("part", { status: 206, headers: { "Content-Type": "application/wasm" } });
+    const partial = () =>
+      new Response("part", { status: 206, headers: { "Content-Type": "application/wasm" } });
     const { caches, get } = harness({ [WASM]: partial });
     expect((await get(WASM)).status).toBe(206);
     expect((await caches.open(SCANNER_CACHE)).entries.size).toBe(0);
@@ -235,19 +237,22 @@ describe("answering the Neural scanner's files", () => {
     await get(olderMeta);
     await get(WASM);
     const cache = await caches.open(SCANNER_CACHE);
-    await cache.put(`${SCANNER_ASSETS_PREFIX}card-hashes.bin`, new Response("hashes"));
+    await cache.put(OLD_PAGE_FILE, new Response("hashes"));
     await get(GALLERY);
-    expect([...cache.entries.keys()].sort()).toEqual([`${SCANNER_ASSETS_PREFIX}card-hashes.bin`, GALLERY, WASM].sort());
+    expect([...cache.entries.keys()].sort()).toEqual([OLD_PAGE_FILE, GALLERY, WASM].sort());
     // And the module kept again lets no Neural file go.
     const newer = wasmPath("n3w", SCANNER_WASM_FILE);
     const second = harness({ [newer]: wasm("newer"), [GALLERY]: bytes("new") });
     await second.get(GALLERY);
     await second.get(newer);
-    expect([...(await second.caches.open(SCANNER_CACHE)).entries.keys()].sort()).toEqual([GALLERY, newer].sort());
+    expect([...(await second.caches.open(SCANNER_CACHE)).entries.keys()].sort()).toEqual(
+      [GALLERY, newer].sort(),
+    );
   });
 
   it("keeps neither a miss nor a page handed over where a file should be", async () => {
-    const html = () => new Response("<!doctype html>", { headers: { "Content-Type": "text/html" } });
+    const html = () =>
+      new Response("<!doctype html>", { headers: { "Content-Type": "text/html" } });
     const { caches, get } = harness({ [GALLERY]: html });
     expect((await get(neuralPath("ab12", "detector.onnx"))).status).toBe(404);
     expect(await (await get(GALLERY)).text()).toBe("<!doctype html>");

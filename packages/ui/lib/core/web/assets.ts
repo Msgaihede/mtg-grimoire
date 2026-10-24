@@ -61,30 +61,16 @@ export function isScannerModule(path: string): boolean {
 }
 
 /**
- * **Where the scanner's three files are served from: `/scanner-assets/`**, under the names the
- * release publishes them by, with {@link SCANNER_MANIFEST} beside them saying what each one is.
- *
- * **Stable names, unlike the two trees a build hashes**: the bundle of card hashes is rebuilt
- * with every set and shipped again at each release under the name it always had, so these
- * addresses are revalidated and never kept by the HTTP cache (`infrastructure/app-worker/_headers`) — and the
- * page keeps what it fetched in Cache Storage itself, by what the manifest said of it
- * (`scanStore.ts`). Not `/scanner/`: that is the Scanner page's own place.
- */
-export const SCANNER_ASSETS_PREFIX = "/scanner-assets/";
-/** The build's word on the three files: their names, lengths, digests and the bundle's format. */
-export const SCANNER_MANIFEST = "manifest.json";
-
-/**
- * **The scanner's cache: what it fetched, kept for good.** One cache, two writers, and neither
- * is a build's: the page puts the three files here once it has checked them (`scanStore.ts`),
- * and the service worker keeps the scanner's module here the first time a Worker loads it
- * (`sw/serve.ts`) — so a reader who has scanned once can scan offline.
+ * **The scanner's cache: what it fetched, kept for good.** The service worker keeps the scanner's
+ * module and the Neural scanner's files here the first time a Worker loads them (`sw/serve.ts`) —
+ * so a reader who has scanned once can scan offline.
  *
  * **Not a shell and not the pictures.** A shell cache is deleted when its build is replaced,
  * and this must outlive a deploy; and Settings' *Clear cache* empties the picture cache alone,
  * as the desktop's sweeps its picture folder and leaves `data/scanner/` where it is. The `v1`
  * is for a day the *stored shape* changes — the headers an entry is kept under — and nothing
- * else moves it: a new bundle is a new digest under the same name.
+ * else moves it: a new set of files is a new address. (Until 2026-10-24 the page kept the old
+ * scanner's three files here as well; a browser that has them keeps them until the cache goes.)
  */
 export const SCANNER_CACHE = "grimoire-scanner-v1";
 
@@ -92,19 +78,15 @@ export const SCANNER_CACHE = "grimoire-scanner-v1";
  * **Where the Neural scanner's eight files are served: `/scanner-neural/<set>/`** —
  * `card-neural`'s detector, embedder, gallery and `neural.json`, and the four of its printing
  * evidence, which are in git (`crates/card-neural/models/`), copied in by the web build and
- * fetched by the page the first time a Neural frame is due (`scanner.ts`) — never before, and
- * never for a Fast or Exact frame.
+ * fetched by the page the first time a frame is due (`scanner.ts`) — never before.
  *
  * **Content-addressed, as the two modules are**: `<set>` is {@link buildIdOf} the eight files, so
  * a new set — the gallery is rebuilt when cards come out — is a new address, and nothing kept
  * under an old one is ever stale. So the HTTP cache keeps them a year
  * (`infrastructure/app-worker/_headers`), and the service worker keeps them in
  * {@link SCANNER_CACHE} the first time they are fetched, letting the last set go (`sw/shell.ts`'s
- * `kept`, the module's route) — a reader who has scanned in Neural once does so offline. In no
- * precache ({@link isScannerFile}): 48.7 megabytes most readers never ask for.
- *
- * A tree of its own, not `/scanner-assets/`: those are stable names that are revalidated and
- * kept by the page, and these are neither.
+ * `kept`, the module's route) — a reader who has scanned once does so offline. In no precache
+ * ({@link isScannerFile}): 48.7 megabytes most readers never ask for.
  */
 export const NEURAL_PREFIX = "/scanner-neural/";
 
@@ -283,17 +265,13 @@ export function neuralBytesOf(
 
 /**
  * Whether one of a build's files — its path from the output folder — is **the scanner's, and so
- * fetched on first use and never precached**: its module, its three files and the Neural
- * scanner's eight. None is asked for until a reader opens the Scanner — the three not before
- * Download, the eight not before a Neural frame — and a service worker that put them in its shell
- * would spend 50 MB of every first visit on a view most readers never open.
+ * fetched on first use and never precached**: its module and the Neural scanner's eight. None is
+ * asked for until a reader opens the Scanner — the eight not before its first frame — and a
+ * service worker that put them in its shell would spend 50 MB of every first visit on a view most
+ * readers never open.
  */
 export function isScannerFile(file: string): boolean {
-  return (
-    isScannerModule(`/${file}`) ||
-    `/${file}`.startsWith(SCANNER_ASSETS_PREFIX) ||
-    `/${file}`.startsWith(NEURAL_PREFIX)
-  );
+  return isScannerModule(`/${file}`) || `/${file}`.startsWith(NEURAL_PREFIX);
 }
 
 /**
@@ -351,9 +329,9 @@ export function wasmContentType(file: string): string {
 /**
  * **Where nothing is a page**, whatever the caller accepts: the two trees a build writes its
  * files into, the tree the service worker answers card pictures under (`packages/ui/lib/images.ts`'s
- * `WEB_IMAGE_PREFIX`; `assets.test.ts` holds this spelling to that constant), the folders the
- * scanner's three files and the Neural scanner's eight are fetched from, and `/_headers`, which a
- * host parses and does not serve.
+ * `WEB_IMAGE_PREFIX`; `assets.test.ts` holds this spelling to that constant), the folder the
+ * Neural scanner's eight are fetched from, and `/_headers`, which a host parses and does not
+ * serve.
  *
  * A path under any of them names a file or nothing. Answered with the document, a chunk a
  * deploy renamed would be a 200 of HTML where a script was asked for, and a picture a page asks
@@ -367,7 +345,6 @@ export const NOT_A_PLACE: readonly string[] = [
   "/assets/",
   "/wasm/",
   "/mtgimg/",
-  SCANNER_ASSETS_PREFIX,
   NEURAL_PREFIX,
   "/_headers",
 ];

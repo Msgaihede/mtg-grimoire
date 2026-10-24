@@ -90,18 +90,15 @@ same-file = "1.0.6"
 # Write a full backup beside its destination and replace it only after ZIP completion.
 tempfile = "3"
 # The card scanner. A plain path dependency on a standalone package — it is deliberately excluded
-# from the workspace this package is a member of (the root `Cargo.toml` says why), so its three
-# tools keep building into `crates/card-scanner/target/`. `corpus` is the join back to
-# `corpus.db` for labels and unifies with the `rusqlite = "0.40"` above; `ocr` is the two
-# readers. The session glue is the core's since the extraction's seventh step, which declares it
-# the same way; this line stays because the commands still name the crate's types (a frame's
-# options, its verdict, the filters).
-card-scanner = { path = "../../../crates/card-scanner", features = ["corpus", "ocr"] }
-# The Neural scanner's four files, compiled in (`bundled`, ~27 MB): `scanner::compiled` hands
-# `card_neural::bundled()` to the core on every build, because they are in git — unlike the three
-# `scanner-assets/` files, which only a release build carries. A direct dependency for that one
-# function; the recogniser itself reaches this host through `card-scanner`'s `neural` feature,
-# which the core turns on.
+# from the workspace this package is a member of (the root `Cargo.toml` says why). `corpus` is the
+# join back to `corpus.db` for labels and unifies with the `rusqlite = "0.40"` above. The session
+# glue is the core's since the extraction's seventh step, which declares it the same way; this
+# line stays because the commands still name the crate's types (a frame's verdict, the filters).
+card-scanner = { path = "../../../crates/card-scanner", features = ["corpus"] }
+# The Neural scanner's four files and their printing evidence, compiled in (`bundled`, ~27 MB):
+# `scanner::compiled` hands `card_neural::bundled()` and `bundled_evidence()` to the core on
+# every build, because they are in git. A direct dependency for those two functions; the
+# recogniser itself reaches this host through `card-scanner`.
 card-neural = { path = "../../../crates/card-neural", features = ["bundled"] }
 # The engine with no window: what this host, the Android shell and the WASM build all link.
 # A workspace member, unlike the scanner. Modules arrive there a step at a time and `lib.rs`

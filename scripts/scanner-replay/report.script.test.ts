@@ -6,18 +6,18 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CARD_ID, results, run } from "./fixture.ts";
 import { copiedText, pickedText, reportHtml } from "./report.ts";
 
-const named = (id: string, name: string, scores: ["wrong" | "printing", "wrong" | "printing", "wrong" | "printing"]) =>
+const named = (id: string, name: string, scores: ["wrong" | "printing", "wrong" | "printing"]) =>
   run({ id, scores, card: { id: CARD_ID, set: "2x2", number: "1", lang: "en", name } });
 
 const html = reportHtml(
   results([
-    named("scan-a", "Lightning Bolt", ["printing", "printing", "printing"]),
-    named("scan-b", "Shock", ["wrong", "wrong", "wrong"]),
-    named("scan-c", "Counterspell", ["wrong", "wrong", "wrong"]),
-    named("scan-d", "Giant Growth", ["printing", "printing", "printing"]),
+    named("scan-a", "Lightning Bolt", ["printing", "printing"]),
+    named("scan-b", "Shock", ["wrong", "wrong"]),
+    named("scan-c", "Counterspell", ["wrong", "wrong"]),
+    named("scan-d", "Giant Growth", ["printing", "printing"]),
   ]),
   null,
-  { frames: "../frames", slices: "." },
+  { frames: "../frames" },
 );
 const script = html.match(/<script>([\s\S]*)<\/script>/)![1];
 

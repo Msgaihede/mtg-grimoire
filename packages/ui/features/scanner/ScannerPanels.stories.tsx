@@ -2,11 +2,8 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
 import { useAppStore, type ScannerPanelId } from "@/lib/store";
-import { READS, STATUS, VERDICTS } from "./fixtures";
-import { NO_RESOLVE, TiersPanel } from "./panels/TiersPanel";
-import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
+import { STATUS, VERDICTS } from "./fixtures";
 import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
-import type { ScannerResolution } from "./types";
 
 /**
  * The column, with the named panels open and the rest folded.
@@ -21,33 +18,10 @@ import type { ScannerResolution } from "./types";
  * own version of this reason.
  */
 function Column({ open, ...props }: ScannerPanelsProps & { open: readonly ScannerPanelId[] }) {
-  useFolds(open);
-  return <ScannerPanels {...props} />;
-}
-
-/** The folds, written during render — see {@link Column} for why it has to be then. */
-function useFolds(open: readonly ScannerPanelId[]) {
   useState(() => {
-    useAppStore.setState({
-      scannerFolds: {
-        controls: open.includes("controls"),
-        pipeline: open.includes("pipeline"),
-        budget: open.includes("budget"),
-        rectified: open.includes("rectified"),
-        readouts: open.includes("readouts"),
-        tiers: open.includes("tiers"),
-      },
-    });
+    useAppStore.setState({ scannerFolds: { budget: open.includes("budget") } });
   });
-}
-
-/**
- * The Tiers panel on its own, open — the page draws it under this column rather than inside it,
- * because it reads the loop's latched resolve and nothing `ScannerPanels` takes.
- */
-function TiersOpen({ resolution }: { resolution: ScannerResolution | null }) {
-  useFolds(["tiers"]);
-  return <TiersPanel resolution={resolution} />;
+  return <ScannerPanels {...props} />;
 }
 
 /** A story's `render`, naming the panels it wants open. No arguments is every panel folded. */
@@ -63,11 +37,6 @@ const meta = {
   args: {
     status: STATUS.present,
     verdict: VERDICTS.voting,
-    // Both `null`, which is the honest default: every shared verdict fixture has `ocr: null`,
-    // and these two are the loop's *latch* rather than a field of the frame. `ReadoutsWithReads`
-    // below is the story that fills them.
-    lastOcr: null,
-    lastCollector: null,
     // A real `performance.now()` delta rather than a round number — the figure this row prints
     // came off the clock and the panel is what rounds it. A `180` here cannot tell a `.toFixed(1)`
     // from a bare interpolation, which is how `288.39999999999998 ms` reached the shipped window.
@@ -76,17 +45,11 @@ const meta = {
     // nothing here. This one round-trips long.
     roundTripMs: 288.4000000000001,
     rate: 5.6,
-    options: DEFAULT_SCANNER_OPTIONS,
-    sendPx: DEFAULT_SEND_PX,
-    detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
-    onOptions: fn(),
-    onSendPx: fn(),
-    onDetailWaitMs: fn(),
     onCapture: fn(async () => "live-1.jpg"),
   },
   decorators: [
     // The column's own width in the shipped window — the panels sit beside the video, and this
-    // is the box every figure row, slider row and standings row has to survive.
+    // is the box every figure row and standings row has to survive.
     (Story) => (
       <div className="w-80 p-2">
         <Story />
@@ -105,58 +68,37 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Evidence accumulating under the vote rule, with a second candidate still arguing.
+ * Evidence accumulating, with a second candidate still in the standings.
  *
- * Five votes of the eight it wants and a lead of ×4 over Honored Hierarch. This is what most
- * frames look like: the answer is probably right and the scanner has not said so yet. The card's
- * name and the bar are the Match strip's above the camera (`Scanner/Reader/Match strip`); this
- * panel is the numbers under them.
+ * The leader's votes at five eighths of the bar. This is what most frames look like: the answer
+ * is probably right and the scanner has not said so yet. The card's name and the bar are the
+ * Match strip's above the camera (`Scanner/Reader/Match strip`); this panel is the numbers under
+ * them.
  */
 export const Voting: Story = {
   play: async ({ canvasElement }) => {
     const match = within(canvasElement).getByRole("region", { name: "Match" });
-    await expect(within(match).getByText("5.0/8 · 12f")).toBeInTheDocument();
-    await expect(within(match).getByText("×4.0")).toBeInTheDocument();
+    await expect(within(match).getByText("1.3/2 · 3f")).toBeInTheDocument();
+    await expect(within(match).getAllByRole("listitem")).toHaveLength(2);
   },
 };
 
-/**
- * Nothing left arguing with it.
- *
- * `lead` reads `unopposed` rather than a multiple: the runner-up did not merely lose, it never
- * scored. A committed verdict freezes the tracker, which is why the frame count stops at eight.
- */
+/** Decided: the bar full, one standing, and the distance the picture matched at. */
 export const Decided: Story = {
   args: { verdict: VERDICTS.decided },
   play: async ({ canvasElement }) => {
     const match = within(canvasElement).getByRole("region", { name: "Match" });
-    await expect(within(match).getByText("8.0/8 · 8f")).toBeInTheDocument();
-    await expect(within(match).getByText("unopposed")).toBeInTheDocument();
+    await expect(within(match).getByText("2.0/2 · 2f")).toBeInTheDocument();
+    await expect(within(match).getByText("0.043 (11/256)")).toBeInTheDocument();
   },
 };
 
 /**
- * The other commit rule.
+ * A card in the frame the recogniser could not place.
  *
- * Under `confidence` the evidence is a decayed two-way share rather than a tally, so it commits at
- * a *proportion* — the strip's hairline moves to 70% — and the standings read as shares rather
- * than as votes. The same evidence, with a different question asked of it.
- */
-export const ConfidenceRule: Story = {
-  args: { verdict: VERDICTS.confidence },
-  play: async ({ canvasElement }) => {
-    const match = within(canvasElement).getByRole("region", { name: "Match" });
-    await expect(within(match).getByText("80% over 12f")).toBeInTheDocument();
-    await expect(within(match).getAllByRole("listitem")[0]).toHaveTextContent("90%");
-  },
-};
-
-/**
- * A card the detector is happy with that the reference bundle cannot name.
- *
- * `match: null` with `ok: true` — the quad is good and the rectification is good, and no
- * descriptor in 117,630 came close enough. Every match-derived row is an em dash and the
- * standings are empty, which is a different picture from a frame with no card in it.
+ * `match: null` with `ok: true` — the detector found a card and no picture in the gallery came
+ * close enough. Every match-derived row is an em dash and the standings are empty, which is a
+ * different picture from a frame with no card in it.
  */
 export const NoMatch: Story = {
   args: { verdict: VERDICTS.noMatch },
@@ -166,26 +108,17 @@ export const NoMatch: Story = {
   },
 };
 
-/**
- * No quadrilateral in the frame looked like a card.
- *
- * The commonest failure by far — a hand over a corner, a card off the edge, the table's own
- * rectangle winning. Nothing downstream of the detector ran, so there is no rectification, no
- * hash and no timings; the Rectified panel is open here to show that it says so rather than
- * drawing an empty box or a zero.
- */
+/** No card in the frame — the commonest frame by far: a hand over the lens, an empty desk. */
 export const NoCard: Story = {
   args: { verdict: VERDICTS.noCard },
-  render: column("rectified"),
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(canvas.getByText("this frame: no card")).toBeInTheDocument();
-    await expect(canvas.getByText("no rectification")).toBeInTheDocument();
+    const match = within(canvasElement).getByRole("region", { name: "Match" });
+    await expect(within(match).getByText("this frame: no card")).toBeInTheDocument();
   },
 };
 
 /**
- * The detector threw, and the frame carries the sentence instead of an answer.
+ * The scanner panicked, and the frame carries the sentence instead of an answer.
  *
  * It draws exactly as {@link NoCard} does, which is the point rather than a shortcut: a panic
  * is a bug to be read in the log, and a panel that decorated it would invite a reader to treat
@@ -200,122 +133,31 @@ export const Panicked: Story = {
 };
 
 /**
- * `card-hashes.bin` is not on disk, so nothing can be named at all.
+ * The recogniser's files are there and did not load, so nothing can be named at all.
  *
- * The sentence stands **at the top of the panel**, above the figures it explains, and it carries
- * the path it looked at — the one thing a reader needs in order to fix it. Everything else about
- * the panel still draws: the detector works fine without a bundle, it simply has nothing to
- * compare against.
+ * The sentence stands **at the top of the panel**, above the figures it explains, in the load's
+ * own words.
  */
-export const BundleMissing: Story = {
-  args: { status: STATUS.missing, verdict: VERDICTS.noCard },
+export const RecognizerDidNotLoad: Story = {
+  args: { status: STATUS.corrupt, verdict: VERDICTS.noCard },
   play: async ({ canvasElement }) => {
     const match = within(canvasElement).getByRole("region", { name: "Match" });
-    await expect(within(match).getByText(/No reference bundle\. Put/)).toBeInTheDocument();
+    await expect(
+      within(match).getByText("The card recognizer did not load: gallery: bad magic."),
+    ).toBeInTheDocument();
   },
 };
 
 /**
- * The two `.rten` files are absent, so both OCR tiers stand down.
- *
- * The bundle is there and the appearance match carries the frame alone — a supported state
- * rather than a broken one, and the readouts say so once at the top instead of leaving a reader
- * to infer it from a column of em dashes.
+ * Where a frame's time went, open: the JPEG's decode, the recogniser's read, and what is left of
+ * the round trip for everything this side paid for.
  */
-export const ModelsMissing: Story = {
-  args: { status: STATUS.noModels },
-  render: column("readouts"),
-  play: async ({ canvasElement }) => {
-    const readouts = within(canvasElement).getByRole("region", { name: "Readouts" });
-    await expect(within(readouts).getByText(/No OCR models\. Put/)).toBeInTheDocument();
-  },
-};
-
-/**
- * Both tiers' last reads, on a frame that carried neither.
- *
- * **This is the ordinary case rather than an edge one**, and it is why the two reads are props
- * instead of verdict fields: the readers run on one eligible frame in four, so `verdict.ocr` is
- * `null` on three of them and a panel drawing the *frame's* reads blinks between them. The
- * verdict here is `voting` — `ocr: null`, `collector: null` — and the readouts are full anyway.
- *
- * Both reads failed to resolve, which is the half with somewhere to go wrong: `no name`, `no
- * printing`, the two attempted pairings and the line saying three more were dropped.
- */
-export const ReadoutsWithReads: Story = {
-  args: { lastOcr: READS.ocr, lastCollector: READS.collector },
-  render: column("readouts"),
-  play: async ({ canvasElement }) => {
-    const readouts = within(canvasElement).getByRole("region", { name: "Readouts" });
-    await expect(within(readouts).getByText("5torm of 5aruman!")).toBeInTheDocument();
-    await expect(within(readouts).getByText("no printing")).toBeInTheDocument();
-    await expect(within(readouts).getByText("+3 more pairings not shown")).toBeInTheDocument();
-  },
-};
-
-/**
- * Every knob the detector takes, open.
- *
- * Three segments and nine sliders in a 320px column — the row template is `76px / 1fr / 46px`,
- * which is the narrowest the name, the track and the figure all fit in. `send px` and
- * `detail wait` are last and are not among the seven: one is the size a frame is downscaled to
- * *before* it is sent and the other how long the pump waits before it grabs a detail image, so
- * the detector sees neither and neither has a `FrameOptions` field to live in.
- */
-export const ControlsOpen: Story = {
-  render: column("controls"),
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(canvas.getByRole("slider", { name: "decide at" })).toBeInTheDocument();
-    await expect(canvas.getByRole("slider", { name: "send px" })).toBeInTheDocument();
-    await expect(canvas.getByRole("slider", { name: "detail wait" })).toBeInTheDocument();
-  },
-};
-
-/**
- * The last Exact resolve, tier by tier: three reprints of Lightning Bolt the margin could not split.
- *
- * The title read reached every printing of the card, the collector line read nothing, and the
- * re-rank left three within the margin of each other — so the outcome is `ambiguous` and the
- * choices are the three the tray row would ask the reader to pick between, best first. All six
- * tiers draw, including the ones that changed nothing: "no read" is an answer about the card too.
- */
-export const Tiers: Story = {
-  render: () => <TiersOpen resolution={VERDICTS.exactAmbiguous.resolution} />,
-  play: async ({ canvasElement }) => {
-    const tiers = within(canvasElement).getByRole("region", { name: "Tiers" });
-    await expect(within(tiers).getByText("ambiguous")).toBeInTheDocument();
-    await expect(within(tiers).getByText("re-rank")).toBeInTheDocument();
-    await expect(within(tiers).getByText("margin 2.8 bits")).toBeInTheDocument();
-    await expect(within(tiers).getByText("113,375")).toBeInTheDocument();
-    await expect(within(tiers).getByText("Lightning Bolt — 2X2 117")).toBeInTheDocument();
-    await expect(within(tiers).getAllByRole("listitem")).toHaveLength(6 + 3);
-  },
-};
-
-/** Before any resolve has run — Fast mode, or Exact with no card held steady yet. */
-export const TiersBeforeAnyResolve: Story = {
-  render: () => <TiersOpen resolution={null} />,
-  play: async ({ canvasElement }) => {
-    const tiers = within(canvasElement).getByRole("region", { name: "Tiers" });
-    await expect(within(tiers).getByText(NO_RESOLVE)).toBeInTheDocument();
-  },
-};
-
-/**
- * The four developer panels a frame that reached matching can fill, all open at once.
- *
- * Not how a reader would use them — the whole point of the folds is that this column is one
- * heading per question — but it is the only view that shows the panels *stacked*, which is
- * where a figure row too wide for 320px turns up.
- */
-export const EverythingOpen: Story = {
+export const BudgetOpen: Story = {
   args: { verdict: VERDICTS.decided },
-  render: column("controls", "budget", "rectified", "readouts"),
+  render: column("budget"),
   play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    await expect(canvas.getByRole("region", { name: "Frame budget" })).toBeInTheDocument();
-    await expect(canvas.getByRole("region", { name: "Rectified" })).toBeInTheDocument();
-    await expect(canvas.getByRole("region", { name: "Readouts" })).toBeInTheDocument();
+    const budget = within(canvasElement).getByRole("region", { name: "Frame budget" });
+    await expect(within(budget).getByText("18.4 ms")).toBeInTheDocument();
+    await expect(within(budget).getByText("288.4 ms")).toBeInTheDocument();
   },
 };
