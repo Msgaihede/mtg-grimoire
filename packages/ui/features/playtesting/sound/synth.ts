@@ -832,6 +832,9 @@ export interface TableSynth {
   /** Make (or resume) the audio context. Called from a press, which a webview's autoplay rule
    *  requires before a context made outside one may sound. */
   unlock: () => void;
+  /** Set the gain everything plays at (0–1, `./volume`'s `volumeGain`). Kept until the context
+   *  is made, and eased over a few milliseconds after, so a dragged slider never clicks. */
+  setVolume: (gain: number) => void;
 }
 
 /** A context of the webview's, or `null` where there is none (jsdom, a host without audio). */
@@ -854,11 +857,14 @@ export function nextTake(takes: number, last: number | undefined, random = Math.
 
 /**
  * A synth that makes its context on first use — no audio is touched until the board sounds — and
- * plays nothing at all where `make` finds none.
+ * plays nothing at all where `make` finds none. The reader's volume is one gain between the graph
+ * and the speakers, after the compressor, so a quieter board keeps the same balance.
  */
 export function createTableSynth(make: () => AudioContext | null = webContext): TableSynth {
   let ctx: AudioContext | null = null;
   let graph: Graph | null = null;
+  let master: GainNode | null = null;
+  let volume = 1;
   let tried = false;
   const last = new Map<SoundId, number>();
 
@@ -866,7 +872,12 @@ export function createTableSynth(make: () => AudioContext | null = webContext): 
     if (!tried) {
       tried = true;
       ctx = make();
-      if (ctx !== null) graph = buildGraph(ctx);
+      if (ctx !== null) {
+        master = ctx.createGain();
+        master.gain.value = volume;
+        master.connect(ctx.destination);
+        graph = buildGraph(ctx, master);
+      }
     }
     if (ctx?.state === "suspended") void ctx.resume().catch(() => undefined);
     return graph;
@@ -874,6 +885,11 @@ export function createTableSynth(make: () => AudioContext | null = webContext): 
 
   return {
     unlock: () => void ready(),
+    setVolume: (gain) => {
+      volume = Math.max(0, Math.min(1, gain));
+      if (ctx !== null && master !== null)
+        master.gain.setTargetAtTime(volume, ctx.currentTime, 0.015);
+    },
     play: (id, delay = 0) => {
       const g = ready();
       if (g === null) return;

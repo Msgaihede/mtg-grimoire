@@ -29,6 +29,7 @@ import {
   withEmblems,
 } from "./fixtures";
 import { useTableSoundsMuted } from "../sound/muted";
+import { useTableSoundsVolume } from "../sound/volume";
 import { PlaytestBoard, zoneSize } from "./PlaytestBoard";
 
 // Spied, not replaced: the board's cards still register as they would, and the test can ask
@@ -126,7 +127,10 @@ describe("PlaytestBoard's stage button", () => {
 });
 
 describe("PlaytestBoard's sound button", () => {
-  afterEach(() => useTableSoundsMuted.getState().setMuted(false));
+  afterEach(() => {
+    useTableSoundsMuted.getState().setMuted(false);
+    useTableSoundsVolume.getState().setVolume(100);
+  });
 
   it("turns the board's sounds off and back on, the setting every board shares", () => {
     setup(turnFive().view);
@@ -135,6 +139,19 @@ describe("PlaytestBoard's sound button", () => {
     fireEvent.click(screen.getByRole("button", { name: "Turn sounds on" }));
     expect(useTableSoundsMuted.getState().muted).toBe(false);
     expect(screen.getByRole("button", { name: "Turn sounds off" })).toBeInTheDocument();
+  });
+
+  it("sets how loud the sounds are, and moving the slider while muted turns them back on", () => {
+    setup(turnFive().view);
+    const slider = screen.getByRole("slider", { name: "Sound volume" });
+    expect(slider).toHaveValue("100");
+    fireEvent.change(slider, { target: { value: "35" } });
+    expect(useTableSoundsVolume.getState().volume).toBe(35);
+    expect(slider).toHaveAttribute("aria-valuetext", "35%");
+    fireEvent.click(screen.getByRole("button", { name: "Turn sounds off" }));
+    fireEvent.change(slider, { target: { value: "60" } });
+    expect(useTableSoundsVolume.getState().volume).toBe(60);
+    expect(useTableSoundsMuted.getState().muted).toBe(false);
   });
 });
 
