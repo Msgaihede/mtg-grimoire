@@ -10,6 +10,7 @@ import {
   GAP,
   GRID_MIN_COLUMNS,
   isStacked,
+  listLayoutFor,
   makeFit,
   offsetPx,
   spanPx,
@@ -244,5 +245,41 @@ describe("makeFit", () => {
     expect(wide.rowsFit(20)).toBe(33);
     expect(wide.rowsFit(20, 30)).toBe(30);
     expect(wide.rowsFit(20, 500)).toBe(3);
+  });
+});
+
+/**
+ * Issue #1379: `listColumns` is the most columns a width carries, and a list was always drawn in
+ * all of them — three decks across two narrow tracks of a tall card, every name truncated over an
+ * empty lower half. A list now takes the fewest columns that hold it, and stretches its rows over
+ * the sliver a whole-row cut leaves only when it reaches the foot of its box.
+ */
+describe("listLayoutFor", () => {
+  it("takes the fewest columns that hold the rows, up to the width's most", () => {
+    expect(listLayoutFor(3, 5, 2)).toEqual({ columns: 1, full: false });
+    expect(listLayoutFor(5, 5, 2)).toEqual({ columns: 1, full: true });
+    expect(listLayoutFor(6, 5, 2)).toEqual({ columns: 2, full: false });
+    expect(listLayoutFor(10, 5, 2)).toEqual({ columns: 2, full: true });
+    expect(listLayoutFor(12, 3, 3)).toEqual({ columns: 3, full: true });
+  });
+
+  it("is full when the tallest column reaches the last whole row", () => {
+    // Seven rows in two columns of five lines: four in the first, which stops a line short.
+    expect(listLayoutFor(7, 5, 2)).toEqual({ columns: 2, full: false });
+    expect(listLayoutFor(9, 5, 2)).toEqual({ columns: 2, full: true });
+  });
+
+  it("answers the width's columns, not full, for no rows or no room", () => {
+    expect(listLayoutFor(0, 5, 2)).toEqual({ columns: 2, full: false });
+    expect(listLayoutFor(4, 0, 3)).toEqual({ columns: 3, full: false });
+  });
+
+  it("is what a fit answers over its own whole-row count", () => {
+    // 168px of body: three 48px rows and their two 6px gaps, a fourth does not fit.
+    const fit = makeFit({ w: 4, h: 2, widthPx: 452, heightPx: 220, density: "comfortable" });
+    expect(fit.listColumns).toBe(2);
+    expect(fit.listLayout(3, 48)).toEqual({ columns: 1, full: true });
+    expect(fit.listLayout(2, 48)).toEqual({ columns: 1, full: false });
+    expect(fit.listLayout(5, 48)).toEqual({ columns: 2, full: true });
   });
 });

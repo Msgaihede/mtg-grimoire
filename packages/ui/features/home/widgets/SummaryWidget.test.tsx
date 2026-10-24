@@ -17,7 +17,7 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { CollectionSummary, DeckRow, DeckValue, HomeWidget, WishlistSummary } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
@@ -340,23 +340,31 @@ describe("SummaryWidget", () => {
 });
 
 /**
- * What fits. Figures wrap, so the count is how many share a line times how many lines the body
- * has, capped by what the card's width in cells wants — and it is applied **after** the reader's
- * own picks, so a hidden figure never takes a place a shown one could have had.
+ * What fits. The figures are laid out over the whole body, so the count is every figure some
+ * arrangement holds at a readable size, number and label both — and it is applied **after** the
+ * reader's own picks, so a hidden figure never takes a place a shown one could have had.
  */
 describe("fitting the figures to the box", () => {
-  it("draws an honest pair on a two-cell tile", () => {
+  /** Issue #1379: a tile drew two figures whatever its height, over an empty card. A 2 × 2 holds
+   *  the three counts in a column; the value's nine characters do not fit beside them. */
+  it("draws every figure a two-cell tile holds, not a fixed pair", () => {
     renderWidget({ ...FULL, fit: fitOf(2, 2) });
 
     expect(pressed()).toEqual([
       "Collection: 1,196 cards, $2,437.19, 12 unpriced",
       "Decks: 2 decks, $120.25, 62 unpriced",
+      "Wishlist: 42 cards, $310.50, 3 unpriced",
     ]);
   });
 
-  it("draws a pair on a three-cell panel one row tall", () => {
+  it("draws all four on a two-cell tile three rows tall", () => {
+    renderWidget({ ...FULL, fit: fitOf(2, 3) });
+    expect(pressed()).toHaveLength(4);
+  });
+
+  it("draws three counts across a three-cell panel one row tall", () => {
     renderWidget({ ...FULL, fit: fitOf(3, 1) });
-    expect(pressed()).toHaveLength(2);
+    expect(pressed()).toHaveLength(3);
   });
 
   it("draws all four on a three-cell panel two rows tall", () => {
@@ -372,12 +380,20 @@ describe("fitting the figures to the box", () => {
   });
 
   it("skips the figures the reader hid and fits what is left", () => {
-    renderWidget({ ...FULL, config: { hide: ["collection"] }, fit: fitOf(2, 2) });
+    renderWidget({ ...FULL, config: { hide: ["collection", "decks"] }, fit: fitOf(2, 1) });
 
-    expect(pressed()).toEqual([
-      "Decks: 2 decks, $120.25, 62 unpriced",
-      "Wishlist: 42 cards, $310.50, 3 unpriced",
-    ]);
+    expect(pressed()).toEqual(["Wishlist: 42 cards, $310.50, 3 unpriced"]);
+  });
+
+  /** The figures are the whole body: the bigger the box, the bigger the numbers. */
+  it("draws the numbers larger on a larger card", () => {
+    renderWidget({ ...FULL, fit: fitOf(4, 1) });
+    const small = parseFloat(screen.getByText("1,196").parentElement!.style.fontSize);
+    cleanup();
+    renderWidget({ ...FULL, fit: fitOf(8, 3) });
+    const large = parseFloat(screen.getByText("1,196").parentElement!.style.fontSize);
+
+    expect(large).toBeGreaterThan(small);
   });
 
   /** A hand-edited `hide` holding things that are not words: the words still hide their figures,

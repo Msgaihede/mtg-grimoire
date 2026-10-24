@@ -238,6 +238,13 @@ export function ComingSoonFace({
   const tile = fit.tier === 0;
   const layout = layoutFor(fit);
   const shown = answer.sets.slice(0, layout.rows);
+  // The figure line the rows were counted under, so the list's columns and its stretch are asked of
+  // the same box its rows were cut to.
+  const listLayout = fit.listLayout(
+    shown.length,
+    ROW_PX,
+    layout.figures === 2 ? figuresPx(fit) : fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX,
+  );
   const figures: WidgetFigureItem[] = [
     {
       key: "previewed",
@@ -259,7 +266,7 @@ export function ComingSoonFace({
       />
       {/* No list at all when no row fits: an empty one would still take the body's gap. */}
       {shown.length > 0 && (
-        <WidgetRowList fit={fit} label="Announced sets">
+        <WidgetRowList fit={fit} label="Announced sets" layout={listLayout}>
           {shown.map((set) => {
             // The day counted once per set: the tile draws the short caption, and the press label
             // carries the whole one whatever the box is drawing.

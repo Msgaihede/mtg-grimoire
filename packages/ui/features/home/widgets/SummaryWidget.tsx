@@ -85,7 +85,7 @@ import {
 } from "../keys";
 import { widgetConfig } from "../layout";
 import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
-import { WidgetFigures, WidgetMessage, type WidgetFigureItem } from "../WidgetParts";
+import { figureGrid, WidgetFigures, WidgetMessage, type WidgetFigureItem } from "../WidgetParts";
 
 // The four keys this widget reads through live in `../keys`, and **two of them are shared**:
 // `collectionTotalKey` is also `CollectionValueWidget`'s and `wishlistTotalKey` is also
@@ -151,20 +151,27 @@ export function sumDeckValues(values: readonly DeckValue[]): {
 }
 
 /**
- * How many figures this box draws — the design's grid question, over the figures the reader kept.
+ * How many figures this box draws, over the figures the reader kept.
  *
  * **The reader's picks come first and the fit is applied to what is left**: a figure they switched
- * off is not a figure competing for room. Figures wrap, so what fits is how many share a line
- * (~110px each) times how many lines the body has (~40px each); what is *wanted* is by tier — a
- * two-cell tile is an honest pair, a three-cell panel is a pair on one row and all four on two, and
- * anything wider carries all four. Never fewer than one: a Summary with a figure left to draw draws
- * it rather than an empty body.
+ * off is not a figure competing for room. Then **every figure the box can hold at a readable size**
+ * — the most for which `figureGrid` finds an arrangement at all. A tier cap stood here until issue
+ * #1379 (a two-cell tile drew two figures, whatever its height), and a 2 × 3 Summary drew two small
+ * numbers over an empty card with room for all four. Never fewer than one: a Summary with a figure
+ * left to draw draws it rather than an empty body.
  */
-function figuresFor(fit: WidgetFit): number {
-  const perRow = Math.max(1, Math.floor(fit.widthPx / 110));
-  const rowsOfFigures = Math.max(1, Math.floor(fit.bodyHeightPx / 40));
-  const wanted = fit.tier >= 2 ? 4 : fit.tier === 1 ? (fit.h >= 2 ? 4 : 2) : 2;
-  return Math.max(1, Math.min(wanted, perRow * rowsOfFigures));
+function figuresFor(
+  fit: WidgetFit,
+  figures: readonly Pick<WidgetFigureItem, "label" | "value">[],
+): number {
+  for (let n = figures.length; n > 1; n--) {
+    const kept = figures.slice(0, n);
+    const longest = Math.max(1, ...kept.map((figure) => figure.value.length));
+    const label = Math.max(0, ...kept.map((figure) => figure.label.length));
+    const box = { widthPx: fit.bodyWidthPx, heightPx: fit.bodyHeightPx };
+    if (figureGrid(n, longest, box, label) !== null) return n;
+  }
+  return Math.min(1, figures.length);
 }
 
 export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
@@ -244,7 +251,10 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     );
   }
 
-  return <WidgetFigures figures={chosen.slice(0, figuresFor(fit))} fit={fit} />;
+  const drawn = chosen.slice(0, Math.max(1, figuresFor(fit, chosen)));
+  // `fill`: Summary *is* its figures, so they are the whole body — spread over it and drawn as large
+  // as it allows, rather than one small line over an empty card.
+  return <WidgetFigures figures={drawn} fit={fit} fill />;
 }
 
 /**

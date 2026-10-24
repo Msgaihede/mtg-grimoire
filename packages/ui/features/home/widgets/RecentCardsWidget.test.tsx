@@ -21,13 +21,14 @@ import { useAppStore } from "@/lib/store";
 import { makeFit, type WidgetFit } from "../fit";
 import { recentCardsKey } from "../keys";
 import {
-  artHeight,
   CAPTION_PX,
   EMPTY,
+  MIN_TILE_PX,
   RECENT_CARDS_READ,
   RecentCardsWidget,
-  STRIP_BAR_PX,
+  TILE_GAP_PX,
   tileCount,
+  tileGrid,
 } from "./RecentCardsWidget";
 
 function card(n: number): RecentCard {
@@ -90,13 +91,40 @@ describe("tileCount", () => {
   });
 });
 
-describe("artHeight", () => {
-  // The caption line and the strip's bar are both taken off the body whether or not they are
-  // drawn — the art must not move when the names are switched off or the strip overflows.
-  it("takes the caption and the scrollbar off the body, and a still draws no bar", () => {
-    const fit = fitFor(4, 2);
-    expect(artHeight(fit, false)).toBe(Math.floor(fit.bodyHeightPx - CAPTION_PX - STRIP_BAR_PX));
-    expect(artHeight(fit, true)).toBe(Math.floor(fit.bodyHeightPx - CAPTION_PX));
+describe("tileGrid", () => {
+  /** The box a grid draws, gaps and captions included. */
+  function drawn(grid: ReturnType<typeof tileGrid>) {
+    return {
+      width: grid.columns * grid.width + (grid.columns - 1) * TILE_GAP_PX,
+      height:
+        grid.rows * (Math.ceil((grid.width * 7) / 5) + CAPTION_PX) + (grid.rows - 1) * TILE_GAP_PX,
+    };
+  }
+
+  // Issue #1379: the strip was one row sized off the height and scrolled sideways, so nearly every
+  // footprint clipped its last tile. Every footprint the kind allows now fits on both axes.
+  it("fits every tile inside the body at every footprint, on both axes", () => {
+    for (let w = 2; w <= 8; w++) {
+      for (let h = 1; h <= 3; h++) {
+        const fit = fitFor(w, h);
+        const grid = tileGrid(tileCount(8, w), fit);
+        const box = drawn(grid);
+        expect(box.width, `${w}x${h}`).toBeLessThanOrEqual(fit.bodyWidthPx);
+        expect(box.height, `${w}x${h}`).toBeLessThanOrEqual(fit.bodyHeightPx + 1);
+      }
+    }
+  });
+
+  it("lays a wide band out in one row and a tall card in more", () => {
+    expect(tileGrid(8, fitFor(8, 2)).rows).toBe(1);
+    expect(tileGrid(4, fitFor(2, 3)).rows).toBe(2);
+  });
+
+  it("draws fewer tiles rather than tiles narrower than the floor", () => {
+    const fit = makeFit({ w: 2, h: 2, widthPx: 120, heightPx: 160, density: "comfortable" });
+    const grid = tileGrid(4, fit);
+    expect(grid.count).toBeLessThan(4);
+    expect(grid.width).toBeGreaterThanOrEqual(MIN_TILE_PX);
   });
 });
 
@@ -156,16 +184,14 @@ describe("RecentCardsWidget", () => {
     expect(caption).toHaveStyle({ visibility: "hidden" });
   });
 
-  it("sizes every tile from the body's height at five by seven", () => {
+  it("sizes every tile from the grid the body holds", () => {
     qc.setQueryData(recentCardsKey(RECENT_CARDS_READ), [card(1)]);
     draw();
-    const height = artHeight(fitFor(4, 2), false);
     const item = screen.getByRole("listitem");
-    // Floored, so the 5:7 frame is never taller than the height it was sized from.
-    expect(item).toHaveStyle({ width: `${Math.floor((height * 5) / 7)}px` });
+    expect(item).toHaveStyle({ width: `${tileGrid(1, fitFor(4, 2)).width}px` });
   });
 
-  // A catalogue preview opens nothing and scrolls nothing.
+  // A catalogue preview opens nothing; and since the tiles always fit, nothing scrolls either.
   it("draws a still as pictures rather than presses, clipped rather than scrolling", () => {
     qc.setQueryData(recentCardsKey(RECENT_CARDS_READ), [card(1), card(2)]);
     draw({ still: true });

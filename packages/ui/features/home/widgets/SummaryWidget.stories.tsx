@@ -194,10 +194,12 @@ export const Default: Story = {
 };
 
 /**
- * A two-cell tile — an honest pair rather than four figures crushed into 220px.
+ * A two-cell tile — every figure the box holds at a readable size, laid out over the whole body
+ * (issue #1379), rather than a fixed pair over an empty card.
  *
- * The pair is the first two the reader has not hidden, in the checklist's order, so the counts a
- * press opens a view with outrank the money on the smallest card.
+ * Figures are kept in the checklist's order, so the counts a press opens a view with outrank the
+ * money: here the three counts fit in a column, and the value's nine characters do not fit beside
+ * them.
  */
 export const Tile: Story = {
   args: { widget: summaryAt(2, 2) },
@@ -209,7 +211,7 @@ export const Tile: Story = {
       await summary.findByRole("button", { name: /^Collection: / }),
     ).toBeInTheDocument();
     await expect(summary.getByRole("button", { name: /^Decks: / })).toBeInTheDocument();
-    await expect(summary.queryByRole("button", { name: /^Wishlist: / })).not.toBeInTheDocument();
+    await expect(summary.getByRole("button", { name: /^Wishlist: / })).toBeInTheDocument();
     await expect(
       summary.queryByRole("button", { name: /^Collection value: / }),
     ).not.toBeInTheDocument();

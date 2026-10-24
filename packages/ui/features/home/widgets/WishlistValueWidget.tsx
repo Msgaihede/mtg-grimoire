@@ -47,11 +47,12 @@ import { ipc, ipcError, type BreakdownRow, type HomeWidget } from "@/lib/ipc";
 import { MANA_FILL, MANA_KEYS, MANA_LABEL, type ManaKey } from "@/lib/mana";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { footerLinePx } from "../fit";
 import { wishlistBreakdownKey, wishlistTotalKey } from "../keys";
 import {
   WidgetBars,
   WidgetFigures,
-  WidgetFooter,
+  WidgetFooterLine,
   WidgetMessage,
   WidgetRow,
   WidgetRowList,
@@ -95,10 +96,10 @@ const ROW_PX = 32;
  *  line in one padding. */
 const TWO_LINE_ROW_PX = 48;
 
-/** The figure line, comfortable and compact, and the footer line — the design's reservations. */
+/** The figure line, comfortable and compact — the design's reservations. The footer line is
+ *  `footerLinePx`, what one draws. */
 const FIGURES_PX = 74;
 const FIGURES_COMPACT_PX = 62;
-const FOOTER_PX = 22;
 
 /** The folded bucket's key. No breakdown vocabulary spells it — rarity words, colour letters, set
  *  codes, finishes and `any`/`unknown` — so it cannot collide with a real bucket. */
@@ -339,8 +340,10 @@ export function WishlistValueWidget({ widget, fit }: WidgetBodyProps): ReactElem
   const withFooter = fit.tier >= 2 && fit.h >= 2;
   const reserved =
     (withFigures ? (fit.compact ? FIGURES_COMPACT_PX : FIGURES_PX) : 0) +
-    (withFooter ? FOOTER_PX : 0);
-  const rowsOfRoom = fit.fitCount(twoLine ? TWO_LINE_ROW_PX : ROW_PX, reserved);
+    // One line, reserved at what one draws: the footer truncates rather than wrapping (issue #1379).
+    (withFooter ? footerLinePx(fit) : 0);
+  const rowH = twoLine ? TWO_LINE_ROW_PX : ROW_PX;
+  const rowsOfRoom = fit.fitCount(rowH, reserved);
   // A list lays its rows out in `listColumns`, so a whole row there holds that many buckets.
   const room = asList ? rowsOfRoom * fit.listColumns : rowsOfRoom;
   const shown = fitBuckets(rows, room, dimension);
@@ -405,7 +408,7 @@ export function WishlistValueWidget({ widget, fit }: WidgetBodyProps): ReactElem
         // empty wishlist — two different sentences, and this is the rarer one.
         <WidgetMessage>No prices for these cards yet.</WidgetMessage>
       ) : !charted ? null : asList ? (
-        <WidgetRowList fit={fit}>
+        <WidgetRowList fit={fit} layout={fit.listLayout(bars.length, rowH, reserved)}>
           {bars.map((bar) =>
             // A two-cell tile has no width for a name and a figure side by side, so the money
             // moves under the name in body ink — `WidgetRow`'s own rule for the tile.
@@ -417,14 +420,16 @@ export function WishlistValueWidget({ widget, fit }: WidgetBodyProps): ReactElem
           )}
         </WidgetRowList>
       ) : (
-        <WidgetBars bars={bars} fit={fit} />
+        // Cut to every whole bar the body holds: spread them over it rather than leaving the sliver
+        // a whole-bar cut leaves under the last one.
+        <WidgetBars bars={bars} fit={fit} fill={bars.length >= rowsOfRoom} />
       )}
       {charted && withFooter && (
-        <WidgetFooter>
-          {/* Where the money came from, then the cut — the provenance sentence's own full stop
-              dropped so the clause can ride after it. */}
-          {pricesAsOf(marketplace).replace(/\.$/, "")} · split by {dimensionWord}
-        </WidgetFooter>
+        <WidgetFooterLine
+          // Where the money came from, then the cut — the provenance sentence's own full stop
+          // dropped so the clause can ride after it.
+          line={`${pricesAsOf(marketplace).replace(/\.$/, "")} · split by ${dimensionWord}`}
+        />
       )}
     </>
   );
