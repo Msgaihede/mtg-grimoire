@@ -157,6 +157,12 @@ pub enum Ranking {
     /// cards that cover it, and when none does. What `models/neural.json` ships.
     #[default]
     Aimed,
+    /// [`Ranking::Aimed`]'s order, but **only the card under the target point votes**, or counts
+    /// as a card in front of the lens: a frame with no card under it is a frame with no vote and
+    /// no card, whatever its other cards scored. On the 124
+    /// readers' scans every rightly accepted frame was of the aimed card; on card-free frames
+    /// the false votes were mostly a blank or a cut-off card at the frame's edge.
+    Only,
 }
 
 impl Meta {
