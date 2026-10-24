@@ -221,8 +221,18 @@ const HELPERS = `(() => {
       .map((el) => ({ name: named(el) || el.tagName, ...box(el) }))
       .filter((c) => c.width < 43.5 || c.height < 43.5)
       .map((c) => c.name + ' ' + Math.round(c.width) + 'x' + Math.round(c.height));
+    /** An element inside its own sideways scroller (the tray peek's strip) may run past the edge:
+     *  that scroller clips it, and the scroller's own box is on screen. */
+    const clipped = (el) => {
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        if (!/^(auto|scroll|hidden|clip)$/.test(getComputedStyle(p).overflowX)) continue;
+        const pr = p.getBoundingClientRect();
+        if (pr.left >= -0.5 && pr.right <= innerWidth + 0.5) return true;
+      }
+      return false;
+    };
     const off = [...root.querySelectorAll('*')].filter(visible)
-      .filter((el) => { const r = el.getBoundingClientRect(); return r.right > innerWidth + 0.5 || r.left < -0.5; })
+      .filter((el) => { const r = el.getBoundingClientRect(); return (r.right > innerWidth + 0.5 || r.left < -0.5) && !clipped(el); })
       .map((el) => el.tagName + '.' + String(el.className).slice(0, 40));
     return { small, off, sideways: document.scrollingElement.scrollWidth > innerWidth, navTop: nav.top };
   };
