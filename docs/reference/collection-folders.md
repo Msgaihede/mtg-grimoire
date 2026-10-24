@@ -2096,7 +2096,7 @@ row's centre line.
 **Which folder a new one goes into, and a run of them** (issue #1058, 2026-10-15). A heading's Add
 folder stands in the `→` column at the row's far right (issue #599), a whole hairline from the name
 it belongs to, and readers could not tell whose button it was. So while it is hovered or keyed to
-(`data-shelf-add`), the row takes a `bg-surface/50` wash and the hairline, the glyph and the
+(`data-shelf-control`), the row takes a `bg-surface/50` wash and the hairline, the glyph and the
 folder's name turn gold — one line from the button to its parent — and its tooltip says the parent
 in words, `Add folder in Bulk`, as its accessible name always did. The path row's Add folder keeps
 its words and names the level as its tooltip (`addFolderIn`: the folder stood in, or
@@ -2105,6 +2105,13 @@ it is — the draft is drawn last among the siblings, so it is now just under th
 empties and keeps the caret (`FolderNameField`'s `round`, bumped by the page through the `Panel`
 updater, reset in place rather than remounted so the blur discard never sees the caret leave).
 Escape, ✕ or a click away ends the run and hands the caret back by the table below.
+
+**Every trailing control lights its row, not Add folder alone** (issue #1376, 2026-10-24). Rename,
+`⋯` and `→` stand in the same right-hand column as Add folder, a hairline from the name, and only
+Add folder drew the line — so the reader pointing at the others still could not tell whose they
+were. All four now carry `data-shelf-control`, and hovering or keying to any of them draws the same
+wash, gold hairline and gold name, on the collection and the wishlist alike (both draw
+`ShelfHeading`). The chevron stays out: it sits beside the name and already lights from it.
 
 **A heading's name folds its shelf, and the way into the folder is a `→` at the row's far right**
 (issue #599, 2026-09-28), which reverses the spec's decision 6 (*clicking a folder's title opens
