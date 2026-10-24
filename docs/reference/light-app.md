@@ -7865,7 +7865,7 @@ where the tray files and the commit (`useTrayCommit`, `reader/trayCommit.ts`), t
 (`useScannerStatus`) and the frame options. The desktop's suite did not move, and its Match strip
 is the same markup as `main`'s in eleven states.
 
-**What is the phone's is the arrangement**, because each of the desktop's is built for a pointer.
+**What is the phone's is the arrangement**, because each of the desktop's is built for a pointer. *(The arrangement below is the first build's; the scanner redesign of 2026-10-24 replaced it — see `apps/light/CLAUDE.md` §7 and card-scanner.md, *On the phone face*.)*
 One *Options* sheet stands in for the bar's four popovers, each mode's hint a sentence where the
 desktop has a tooltip. The camera's box is the stream's own shape, capped at 38dvh — a zero-basis
 grow collapses in a scrolling column. The status line folds onto two lines: at 330px the
