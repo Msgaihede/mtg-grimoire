@@ -30,6 +30,34 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.60.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.59.0...v0.60.0) (2026-10-24)
+
+
+### Features
+
+* drop cards onto a folder's contents, not just its heading ([a696f8d](https://github.com/Msgaihede/mtg-grimoire/commit/a696f8da8db364cd6ef61b15f0f88a50c93d5af0))
+* drop cards onto a folder's contents, not just its heading ([49a4857](https://github.com/Msgaihede/mtg-grimoire/commit/49a4857827280e9ddac117df5d428cf7c57df604)), closes [#1377](https://github.com/Msgaihede/mtg-grimoire/issues/1377)
+* **playtesting:** preview cards in the graveyard and exile dialogs ([62c6d09](https://github.com/Msgaihede/mtg-grimoire/commit/62c6d09e855060da898fa7a80dcc216a6bd10b0e))
+* **playtesting:** preview cards in the graveyard and exile dialogs ([aaa2767](https://github.com/Msgaihede/mtg-grimoire/commit/aaa2767a8499017dbb6f4415047413212cebea99)), closes [#1373](https://github.com/Msgaihede/mtg-grimoire/issues/1373)
+* **playtesting:** synthesized table sounds with a mute toggle ([994c84d](https://github.com/Msgaihede/mtg-grimoire/commit/994c84d29c79b69541382bf2d87722c367ca24ce))
+* **playtesting:** synthesized table sounds with a mute toggle ([10d51b4](https://github.com/Msgaihede/mtg-grimoire/commit/10d51b476357288d0a87c56d5c5e6b3d85bf4b32))
+* **scanner:** play a sound as each card lands, tiered by price ([2b234e2](https://github.com/Msgaihede/mtg-grimoire/commit/2b234e2832b5ecbf67768052a2a9ffcdb63eb3a4))
+* **scanner:** play a sound as each card lands, tiered by price ([f58db20](https://github.com/Msgaihede/mtg-grimoire/commit/f58db20368500cb78fd29f70f862391ab8a3d2cf))
+* **scanner:** put a past scan back in the tray from the scan history ([a80db7b](https://github.com/Msgaihede/mtg-grimoire/commit/a80db7bb1ac8054fbb7efe9511d6580d02bc073c))
+* **scanner:** put a past scan back in the tray from the scan history ([a8ed37b](https://github.com/Msgaihede/mtg-grimoire/commit/a8ed37bcb7feda25cd2fb33d77d8ab04b5c6463d)), closes [#1374](https://github.com/Msgaihede/mtg-grimoire/issues/1374)
+* wishlist value graph widget ([ea47e67](https://github.com/Msgaihede/mtg-grimoire/commit/ea47e6749f8e68358d88f1a5a6df69c4ae4bac40))
+* wishlist value graph widget ([#1378](https://github.com/Msgaihede/mtg-grimoire/issues/1378)) ([1102e04](https://github.com/Msgaihede/mtg-grimoire/commit/1102e047afe929f96e438a30441f7e35574c9d83))
+
+
+### Bug Fixes
+
+* **home:** make every widget fill its box without whitespace or scrollbars ([b1daad8](https://github.com/Msgaihede/mtg-grimoire/commit/b1daad89c5c6c50cab7da209ab499e0fdc0ec26c))
+* **home:** make every widget fill its box without whitespace or scrollbars ([b0da13a](https://github.com/Msgaihede/mtg-grimoire/commit/b0da13ac18b451e94f89209affd1ee6ea6121072)), closes [#1379](https://github.com/Msgaihede/mtg-grimoire/issues/1379)
+* **scanner:** add a second copy of the same printing laid on the decided card in Neural ([3fe47c2](https://github.com/Msgaihede/mtg-grimoire/commit/3fe47c212653ca4f0623a65d006bb89f83c78d27))
+* **scanner:** add a second copy of the same printing laid on the decided card in Neural ([cde0835](https://github.com/Msgaihede/mtg-grimoire/commit/cde0835ef79fc689584a958c68aa62b537aa7573)), closes [#1375](https://github.com/Msgaihede/mtg-grimoire/issues/1375)
+* **shelves:** light the heading row from every trailing folder control ([121eea7](https://github.com/Msgaihede/mtg-grimoire/commit/121eea7934533f2b1cfde2e6ad9dde9462980c5f))
+* **shelves:** light the heading row from every trailing folder control ([879cfce](https://github.com/Msgaihede/mtg-grimoire/commit/879cfce3e3be8a54d4947424279e710dcd18154e)), closes [#1376](https://github.com/Msgaihede/mtg-grimoire/issues/1376)
+
 ## [0.59.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.58.0...v0.59.0) (2026-10-22)
 
 

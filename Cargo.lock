@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "card-neural"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "clap",
  "image",
@@ -1863,7 +1863,7 @@ dependencies = [
 
 [[package]]
 name = "grimoire-core"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "grimoire-light"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "base64 0.22.1",
  "card-neural",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "grimoire-play"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "phase-ai",
  "phase-engine",
@@ -1924,7 +1924,7 @@ dependencies = [
 
 [[package]]
 name = "grimoire-scan"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "card-scanner",
  "image",
@@ -1935,7 +1935,7 @@ dependencies = [
 
 [[package]]
 name = "grimoire-web"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "card-scanner",
  "console_error_panic_hook",
@@ -3055,7 +3055,7 @@ dependencies = [
 
 [[package]]
 name = "mtg-grimoire"
-version = "0.59.0"
+version = "0.60.0"
 dependencies = [
  "card-neural",
  "card-scanner",
