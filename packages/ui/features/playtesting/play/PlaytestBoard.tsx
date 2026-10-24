@@ -8,7 +8,15 @@ import {
   type JSX,
   type MouseEvent,
 } from "react";
-import { ArrowRight, ChevronLeft, LoaderCircle, Menu, SkipForward } from "lucide-react";
+import {
+  ArrowRight,
+  ChevronLeft,
+  LoaderCircle,
+  Menu,
+  SkipForward,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import type {
   GameCard,
   GamePlace,
@@ -37,6 +45,7 @@ import { HelpPanel, LogPanel } from "../table/Panels";
 import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../table/ZonePile";
 import { dropAction, type DropAim, type TableAim, type TableDrag } from "../table/tableDrag";
 import { useLandingOf } from "../table/landing";
+import { useTableSoundsMuted } from "../sound/muted";
 import { useUndoKeys } from "../undo";
 import { ASPECT, acrossTables, handRow, type ZoneSize } from "../table/layout";
 import type { LogLine } from "../table/log";
@@ -193,6 +202,27 @@ const CHROME_BUTTON = cn(
   PRESS,
   FOCUS,
 );
+
+/**
+ * The board's sounds on or off, beside help and the log: a speaker, crossed out while muted. The
+ * sounds themselves are `PlaytestPage`'s (`../sound/useTableSounds`); this only flips the
+ * remembered setting (`../sound/muted`), which every board shares.
+ */
+function SoundButton(): JSX.Element {
+  const muted = useTableSoundsMuted((s) => s.muted);
+  const setMuted = useTableSoundsMuted((s) => s.setMuted);
+  const Icon = muted ? VolumeX : Volume2;
+  return (
+    <button
+      type="button"
+      aria-label={muted ? "Turn sounds on" : "Turn sounds off"}
+      onClick={() => setMuted(!muted)}
+      className={cn(CHROME_BUTTON, "size-9 rounded-full", muted && "text-dim")}
+    >
+      <Icon className="size-[18px]" aria-hidden="true" />
+    </button>
+  );
+}
 
 /**
  * Which side of the board a pointed card is on — a zone of that player — or `loose`: a spell on
@@ -793,11 +823,11 @@ export function PlaytestBoard({
           <div className="absolute top-0 left-1/2 -translate-x-1/2">
             <OpponentHand count={handCount} />
           </div>
-          {/* Right of their hand, and never under the help and log buttons: the box ends 116 px
-              from the edge, and a plate wider than it (a long deck name, the sandbox's stepper)
-              shortens its title rather than running under them. */}
+          {/* Right of their hand, and never under the sound, help and log buttons: the box ends
+              160 px from the edge, and a plate wider than it (a long deck name, the sandbox's
+              stepper) shortens its title rather than running under them. */}
           <div
-            className="absolute top-[5px] right-[116px] flex min-w-0"
+            className="absolute top-[5px] right-[160px] flex min-w-0"
             style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 64}px)` }}
           >
             <PlateFrame
@@ -844,6 +874,7 @@ export function PlaytestBoard({
       )}
 
       <div className={cn("absolute top-1.5 right-3 flex gap-2", LAYER.raised)}>
+        <SoundButton />
         <button
           type="button"
           aria-label="How to play"

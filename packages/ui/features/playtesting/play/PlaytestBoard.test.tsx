@@ -28,6 +28,7 @@ import {
   withAttachments,
   withEmblems,
 } from "./fixtures";
+import { useTableSoundsMuted } from "../sound/muted";
 import { PlaytestBoard, zoneSize } from "./PlaytestBoard";
 
 // Spied, not replaced: the board's cards still register as they would, and the test can ask
@@ -121,6 +122,19 @@ describe("PlaytestBoard's stage button", () => {
     expect(onNewGame).toHaveBeenCalled();
     fireEvent.click(within(over).getByRole("button", { name: "Back to setup" }));
     expect(onBack).toHaveBeenCalled();
+  });
+});
+
+describe("PlaytestBoard's sound button", () => {
+  afterEach(() => useTableSoundsMuted.getState().setMuted(false));
+
+  it("turns the board's sounds off and back on, the setting every board shares", () => {
+    setup(turnFive().view);
+    fireEvent.click(screen.getByRole("button", { name: "Turn sounds off" }));
+    expect(useTableSoundsMuted.getState().muted).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Turn sounds on" }));
+    expect(useTableSoundsMuted.getState().muted).toBe(false);
+    expect(screen.getByRole("button", { name: "Turn sounds off" })).toBeInTheDocument();
   });
 });
 
