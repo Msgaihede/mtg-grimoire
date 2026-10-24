@@ -93,9 +93,13 @@ const NEW_CARDS_LAND_AS = "New cards land as";
  * and a refusal comes back through `filterError`; this dock holds nothing but which popover is
  * open. That is what lets a story draw every state of it from arguments alone.
  *
- * **Its rows wrap rather than scroll.** The dock is the camera column's width, which shrinks to
- * 22rem beside a wide tray: there the Filters trigger drops to a line of its own, still at the far
- * end, rather than putting a horizontal scrollbar under the picture.
+ * **Two rows at every width, never a third** — a third would come out of the picture. The dock is
+ * the camera column's width (40rem down to 23rem, `ScannerPage`), so it folds in steps of its own
+ * width (`@container/dock`, its content box; measured 2026-10-24): under 34.125rem *Filters* moves
+ * to the far end of the second row, beside *Finish* and *Camera*; under 31rem the three triggers
+ * keep their values and glyphs and give their captions to their names alone, and the primary and
+ * the two halves close their padding. A trigger's value truncates rather than wrap the row: each
+ * is laid out from a 5.5rem basis, so a long filter summary or camera name never decides the line.
  *
  * **Every panel opens upwards**, over the picture: the dock is the foot of the view, and a panel
  * hung under it would open past the bottom of the window.
@@ -125,8 +129,10 @@ export function ScanDock({
   const cameraName = cameras.find((c) => c.deviceId === cameraId)?.label ?? "Default";
 
   return (
-    <div className="flex shrink-0 flex-col gap-2.5 rounded-lg border border-border bg-surface px-3.5 py-3">
-      <div className="flex flex-wrap items-center gap-2.5">
+    <div className="@container/dock shrink-0 rounded-lg border border-border bg-surface px-3.5 py-3">
+      {/* One wrapping box with a full-width break between its two rows, so *Filters* can move from
+          the first to the second by `order` alone — the break is the row gap. */}
+      <div className="flex flex-wrap items-center gap-x-2.5 @max-[31rem]/dock:gap-x-2">
         {pointAndShoot ? (
           <PrimaryPress
             label={shooting ? CANCEL_SCAN : SCAN_CARD}
@@ -166,14 +172,14 @@ export function ScanDock({
           // The row's far end, so the panel opens back across the dock rather than off it.
           align="end"
           tall
-          className="ml-auto"
+          className="ml-auto @max-[34.125rem]/dock:order-last"
           panelClassName="w-72"
         >
           <FiltersBody filters={filters} onFilters={onFilters} filterError={filterError} />
         </DockPopover>
-      </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+        <span aria-hidden="true" className="h-2.5 basis-full" />
+
         <DockPopover
           caption="Finish"
           value={FINISH_PREF_LABEL[finish]}
@@ -250,6 +256,7 @@ function PrimaryPress({
       onClick={onClick}
       className={cn(
         "inline-flex h-11 min-w-32 shrink-0 items-center justify-center gap-2 rounded-md border border-accent pr-4.5 pl-3.5 text-[15px] font-semibold whitespace-nowrap",
+        "@max-[31rem]/dock:min-w-0 @max-[31rem]/dock:pr-3.5 @max-[31rem]/dock:pl-3",
         outline ? "text-accent" : "bg-accent text-accent-fg",
         PRESS,
         FOCUS,
@@ -300,7 +307,7 @@ function HowScanningRuns({
             }}
             {...tip(hint)}
             className={cn(
-              "h-9.5 rounded-sm px-4 text-sm whitespace-nowrap coarse:min-h-[var(--target-min)]",
+              "h-9.5 rounded-sm px-4 text-sm whitespace-nowrap coarse:min-h-[var(--target-min)] @max-[31rem]/dock:px-3",
               "transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
               pressed ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
               FOCUS,
@@ -329,7 +336,7 @@ function HowScanningRuns({
  * a gap between them, which the name algorithm would fuse into one word; the label holds both in
  * the order they are drawn — `Filters: Any set`, `Finish: Detect`, `Camera: Logitech BRIO`.
  *
- * **Camera is the one to watch**, second on its row and 300px wide: at the camera column's 22rem
+ * **Camera is the one to watch**, second on its row and 300px wide: at the camera column's 23rem
  * floor its panel reaches past the dock's right edge and over the tray, which only a live pass at
  * the narrow rung can see.
  */
@@ -374,17 +381,18 @@ function DockPopover({
       align={align}
       // `min-w-0` so a long summary truncates inside the trigger instead of holding the whole
       // wrapped line at its full width: a flex item's floor is its content otherwise.
-      className={cn("min-w-0 max-w-full", className)}
+      className={cn("min-w-0 max-w-max grow basis-[5.5rem]", className)}
       triggerClassName={cn(
         FILTER_CONTROL,
         "inline-flex max-w-full items-center gap-1.5 px-2.5",
         tall && "h-11 px-3",
+        "@max-[31rem]/dock:px-2",
         filterChipState(active, refusal !== null),
       )}
       triggerContent={
         <>
           {icon}
-          <span className="shrink-0 text-dim">{caption}</span>
+          <span className="shrink-0 text-dim @max-[31rem]/dock:hidden">{caption}</span>
           <span className="min-w-0 truncate">{value}</span>
           <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
         </>

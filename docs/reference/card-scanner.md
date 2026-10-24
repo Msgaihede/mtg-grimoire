@@ -892,10 +892,25 @@ and the note under it) and, under point and shoot, the *Point at a card, then pr
 on the desktop and the hold prompt on the phone. **The desktop's pill is the HUD's `notice`**, laid
 in the HUD's own top flow under the corner row, so it never runs under *Reset evidence* (centred on
 its own, the 274px pill met the 143px press in any column under 584px) and wraps rather than
-overflows at the column's 22rem floor. **`ScanDock`** is under the picture:
+overflows at the column's 23rem floor. **`ScanDock`** is under the picture:
 *Filters*, *Finish* and *Camera* as anchored popovers, the *Point & shoot* switch, and the gold
 *Start*/*Stop* press (*Scan card* under point and shoot). History and the Developer switch are the
 page header's.
+
+**Nothing on the desktop page wraps** (the owner's call, 2026-10-24: a second line comes out of the
+picture or the cards). The canvas was drawn without the app's 208px rail, so at 1280–1440 the tray
+was too narrow for its header and footer on one line; now **the camera column gives way first, in
+steps** (`ScannerPage`'s `clamp` over `100cqw`): 40rem until the tray is down to 36rem, then to 31rem
+holding the tray at 36rem, then the tray to 24rem, then the camera to its 23rem floor — measured
+2026-10-24 at 776, 1032, 1192, 1672 and 2312px containers (the 1024 light face to a 2560 window):
+camera 372/496/596/640/840, tray 384/516/576/1012/1452. Each piece then folds by its own width:
+the dock (`@container/dock`) moves *Filters* to its second row under 34.125rem and gives its
+triggers' captions to their names under 31rem; the tray (`@container/tray`) turns *Add card…* to
+its glyph under 39.5rem, then closes *Worth* and its gaps, then keeps only the walk's count; its
+footer drops the finishes still to name from Add's words under 40rem, the captions under 32.75rem,
+and says *Add N* under 25.875rem. Every press keeps its whole name. A card's **chin is one line**
+on the `compact` stepper (24px buttons, WCAG 2.5.8's floor) over a 10.5rem tile floor — three
+tiles beside Windows' 15px scrollbar in a 36rem tray.
 
 **Start / Stop** (issue #774): the view opens stopped (issue #1317) — the camera
 comes on and nothing is read until the press. Stop pauses the pump while keeping the preview and the
@@ -930,9 +945,9 @@ that asks the reader something, or sits below the first floor, throws nothing.
 
 **The desktop tray** (`TrayPanel`): a header with the count, *Worth* (the tray's total at the
 reader's marketplace, drawn only once a copy has a price), the layout toggle and the `⋯` *Tray
-actions* menu (*Create deck…*, *Archive*, *Clear all…*); tiles of continuous cards, each with a chin
-for the finish and the quantity, a waiting tile spanning its printings; and a footer with *File into*,
-*Condition* and the gold *Add*.
+actions* menu (*Create deck…*, *Archive*, *Clear all…*); tiles of continuous cards, each with a
+one-line chin for the finish and the quantity, a waiting tile spanning its printings; and a footer
+with *File into*, *Condition* and the gold *Add* — each on one line at every width (above).
 
 ### Scan history
 

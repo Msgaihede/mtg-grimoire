@@ -133,6 +133,11 @@ export function QuantityStepper({
    * `xs` is the deck's row scale: a stepper inside a 150px grid tile or a 22px text row, where
    * `sm`'s 28px does not fit.
    *
+   * `compact` is **24px buttons, the smallest target WCAG 2.5.8 allows**, a 20px field (two
+   * digits) and 2px between them, and does not scale: the Scanner tray's card chin (the owner's
+   * choice, 2026-10-24), where it shares one line with the finish in a 168px tile — 72px against
+   * `sm`'s 112, which wrapped the chin to two lines.
+   *
    * `card` is the **36px** column drawn over a card face, and it is still the one size larger
    * than the default rather than smaller than `sm`. Everything else in this file sits in a *row*
    * of controls and is sized by the row; this one stands alone in a card's right margin, over an
@@ -176,7 +181,7 @@ export function QuantityStepper({
    * *ratio*; what the ratio is held against is a card whose size the reader chooses. See the
    * `box` map below and `lib/cardZoom.ts`.
    */
-  size?: "xs" | "card" | "sm" | "md";
+  size?: "xs" | "compact" | "card" | "sm" | "md";
   /** Which side of the control's own edge the focus outline is drawn on. `inset` for a stepper
    *  inside a box that clips — see {@link FOCUS_INSET}. */
   focus?: "outside" | "inset";
@@ -213,17 +218,19 @@ export function QuantityStepper({
   const box =
     size === "xs"
       ? "size-[calc(1.25rem*var(--control-scale,1))]"
-      : size === "card"
-        ? QUANTITY_STEPPER_CARD_BOX
-        : size === "sm"
-          ? "size-7"
-          : "size-9";
+      : size === "compact"
+        ? "size-6"
+        : size === "card"
+          ? QUANTITY_STEPPER_CARD_BOX
+          : size === "sm"
+            ? "size-7"
+            : "size-9";
   const text =
     size === "xs"
       ? "text-[calc(0.625rem*var(--control-scale,1))]"
       : size === "card"
         ? "text-[calc(1.03125rem*var(--control-scale,1))]"
-        : size === "sm"
+        : size === "sm" || size === "compact"
           ? "text-xs"
           : "text-sm";
   // `card` lying on its side is the Tokens & Emblems tile (issue #687): the field keeps the
@@ -232,11 +239,13 @@ export function QuantityStepper({
   const wide =
     size === "xs"
       ? "h-[calc(1.25rem*var(--control-scale,1))] w-[calc(2rem*var(--control-scale,1))]"
-      : size === "card"
-        ? "h-[calc(2.25rem*var(--control-scale,1))] w-[calc(3.5rem*var(--control-scale,1))] rounded-lg"
-        : size === "sm"
-          ? "h-7 w-12"
-          : "h-9 w-14";
+      : size === "compact"
+        ? "h-6 w-5"
+        : size === "card"
+          ? "h-[calc(2.25rem*var(--control-scale,1))] w-[calc(3.5rem*var(--control-scale,1))] rounded-lg"
+          : size === "sm"
+            ? "h-7 w-12"
+            : "h-9 w-14";
   // `fill` trades the fixed width for whatever the row has left. `min-w-0` beside it because a
   // flex item's floor is its content, and `w-14`'s replacement has to be allowed to shrink below
   // the digits it holds when the column is narrow.
@@ -248,9 +257,11 @@ export function QuantityStepper({
   const icon =
     size === "xs"
       ? "size-[calc(0.75rem*var(--control-scale,1))]"
-      : size === "card"
-        ? QUANTITY_STEPPER_CARD_ICON
-        : "size-3.5";
+      : size === "compact"
+        ? "size-3"
+        : size === "card"
+          ? QUANTITY_STEPPER_CARD_ICON
+          : "size-3.5";
   const ring = focus === "inset" ? FOCUS_INSET : FOCUS;
   const button = cn(BUTTON, tone === "art" && BUTTON_OVER_ART, ring, box);
   const clamp = (n: number) => Math.min(max, Math.max(min, n));
@@ -423,6 +434,7 @@ export function QuantityStepper({
     <span
       className={cn(
         "inline-flex items-center gap-[calc(0.25rem*var(--control-scale,1))]",
+        size === "compact" && "gap-0.5",
         vertical && "flex-col",
         // `flex` rather than `inline-flex`, so the span is a block that takes the row.
         fill && !vertical && "flex w-full",

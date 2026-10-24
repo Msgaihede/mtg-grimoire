@@ -232,16 +232,19 @@ const TILE_VARIANT: ImageVariant = "grid";
  * The grid's column template — an inline style, never an arbitrary Tailwind value, which is the
  * app's rule for a column template.
  *
- * `auto-fill` over a 9rem floor is the design: the tray is a third of a wide view and a 25rem
- * column below that, so the count falls out of the width — two columns at the narrow end, three
- * or four at the wide one. **The floor is `min(9rem, 50% − half a gap)` rather than 9rem alone**
- * so a tray squeezed under two 9rem columns still draws two rather than one card the width of the
- * tray; it is exactly 9rem wherever two 9rem columns fit — which is every width the page draws the
- * tray at. The half gap is `gap-x-3`'s, so the two have to move together. A waiting tile lays its
+ * `auto-fill` over a 10.5rem floor: the count falls out of the width — two columns at the narrow
+ * end, more at the wide one. **10.5rem is the chin's**: the finish holding `Unknown` (80px in the
+ * chin's `px-1.5`), the `compact` stepper (72px), the chin's gap and padding and the tile's border
+ * are 166px, so the chin is one line in every tile (the owner's choice over a two-line chin,
+ * 2026-10-24) — and a 36rem tray still holds three beside Windows' 15px scrollbar (531px: three
+ * 168px columns and two gaps are 528). **The floor is `min(10.5rem, 50% − half a gap)` rather than
+ * 10.5rem alone** so a tray squeezed under two such columns still draws two rather than one card
+ * the width of the tray; it is exactly 10.5rem wherever two fit — which is every width the page
+ * draws the tray at. The half gap is `gap-x-3`'s, so the two have to move together. A waiting tile lays its
  * candidates out on as many columns as it spans, with the same gap, so they are the size of the
  * tiles around them (issue #1004) — and on this template itself until the grid has been measured.
  */
-const TILE_COLUMNS = "repeat(auto-fill, minmax(min(9rem, calc(50% - 0.375rem)), 1fr))";
+const TILE_COLUMNS = "repeat(auto-fill, minmax(min(10.5rem, calc(50% - 0.375rem)), 1fr))";
 
 /**
  * A card that is a button rises a little under the pointer or the caret, with a shadow under it —
@@ -409,20 +412,27 @@ export function TrayPanel({
     // sentence — runs the whole height of the column the page gives it.
     <section
       aria-labelledby={titleId}
-      className="flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-surface"
+      // `@container/tray`: the header and the footer fold by the tray's own width. Its popups are
+      // anchored (absolute) and its dialogs are the page's, so the containment costs nothing here.
+      className="@container/tray flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-surface"
     >
-      {/* `flex-wrap` for a narrow tray: the title, its figures and the right-hand controls can be
-          wider than it together, and the right-hand group then wraps as one — still at the right
-          end — rather than pushing the `⋯` out of the tray. */}
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-3 py-2">
+      {/* **One line at every width** — a second would come out of the cards' room. Where the
+          header's words do not fit, they fold in steps of the tray's width (each step measured
+          2026-10-24, the widths in 12px and 14px Geist and 18px Cinzel): under 39.5rem *Add card…*
+          keeps only its glyph; under 35.75rem *Worth* keeps only its figure, the gaps close and the
+          title steps down; under 31.75rem the figure goes and the walk keeps only its count. Each
+          press keeps its whole name. The title truncates last. */}
+      <header className="flex items-center gap-x-3 border-b border-border px-3 py-2 @max-[35.75rem]/tray:gap-x-2">
         {/* **The name is spelled, not computed.** The title and its count are two elements with a
             gap between them, which the name algorithm fuses into `Scanned cards3`; the label says
             the whole phrase with the unit a bare digit leaves the reader to guess. */}
         <h3
           aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
-          className="flex items-baseline gap-2 font-heading text-lg leading-none"
+          className="flex min-w-0 items-baseline gap-2 font-heading text-lg leading-none @max-[35.75rem]/tray:text-base"
         >
-          <span id={titleId}>{title}</span>
+          <span id={titleId} className="min-w-0 truncate">
+            {title}
+          </span>
           <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
             {copies}
           </span>
@@ -431,8 +441,8 @@ export function TrayPanel({
             answered yet, has no worth to state — `$0.00` there would be a claim about cards
             nobody has priced. */}
         {worth.priced > 0 && (
-          <span className="inline-flex items-baseline gap-1.5 text-xs text-dim">
-            Worth{" "}
+          <span className="inline-flex shrink-0 items-baseline gap-1.5 text-xs text-dim @max-[31.75rem]/tray:hidden">
+            <span className="@max-[35.75rem]/tray:sr-only">Worth </span>
             <span className="font-mono text-sm tabular-nums text-text">
               {formatPrice(worth.total, currency)}
             </span>
@@ -456,10 +466,15 @@ export function TrayPanel({
             )}
           >
             <ArrowDown className="size-3.5" aria-hidden="true" />
-            {needYouLabel(asking)}
+            <span aria-hidden="true" className="@max-[31.75rem]/tray:hidden">
+              {needYouLabel(asking)}
+            </span>
+            <span aria-hidden="true" className="hidden tabular-nums @max-[31.75rem]/tray:inline">
+              {asking}
+            </span>
           </button>
         )}
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {onAddCard && (
             <button
               type="button"
@@ -473,7 +488,8 @@ export function TrayPanel({
               )}
             >
               <Plus className="size-3.5" aria-hidden="true" />
-              {ADD_CARD_LABEL}
+              {/* Words still, under the glyph alone: the press keeps its name. */}
+              <span className="@max-[39.5rem]/tray:sr-only">{ADD_CARD_LABEL}</span>
             </button>
           )}
           <LayoutToggle layout={layout} onLayout={onLayout} />
@@ -585,9 +601,12 @@ export function TrayPanel({
       )}
 
       {/* Where the cards go, how they are graded, and the press that sends them — the three things
-          the tray is *for*, so they stay in view while the rows scroll. The pickers wrap above the
-          press when the three no longer fit side by side, and the press keeps the far end. */}
-      <footer className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border p-3">
+          the tray is *for*, so they stay in view while the rows scroll. **One line at every
+          width**: the folder's name truncates first; under 40rem Add leaves out the finishes still
+          to name; under 32.75rem *File into* and *Condition* keep their words for a screen reader
+          alone (their pickers name themselves); under 25.875rem Add says *Add N*. Add's whole
+          sentence is its name at every width. */}
+      <footer className="flex items-center gap-x-3 border-t border-border p-3">
         {destination === undefined ? (
           <>
             <FolderPicker folderId={folderId} onFolder={onFolder} />
@@ -607,8 +626,10 @@ export function TrayPanel({
           // The reason while there is one; nothing while the write is in flight, where the spinner
           // already says what is happening and a sentence about emptiness would be untrue.
           {...tip(busy ? null : refusal)}
+          aria-label={addLabel(ready, needsFinish, destination?.name)}
           className={cn(
             "ml-auto inline-flex h-10 shrink-0 items-center gap-2 rounded-md bg-accent px-5 text-sm font-semibold text-accent-fg",
+            "@max-[25.875rem]/tray:px-4",
             "hover:bg-accent/90",
             PRESS,
             "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:bg-accent",
@@ -624,7 +645,20 @@ export function TrayPanel({
           )}
           {/* One label in both states: the name a reader pressed is the name the pending control
               keeps, and `aria-busy` is what says the write is under way. */}
-          {addLabel(ready, needsFinish, destination?.name)}
+          <span aria-hidden="true" className="@max-[40rem]/tray:hidden">
+            {addLabel(ready, needsFinish, destination?.name)}
+          </span>
+          {/* Without the finishes still to name (the header's walk counts them), so the folder
+              beside it keeps its name. */}
+          <span
+            aria-hidden="true"
+            className="hidden @max-[40rem]/tray:inline @max-[25.875rem]/tray:hidden"
+          >
+            {addLabel(ready, 0, destination?.name)}
+          </span>
+          <span aria-hidden="true" className="hidden @max-[25.875rem]/tray:inline">
+            Add {ready}
+          </span>
         </button>
       </footer>
     </section>
@@ -807,7 +841,7 @@ function ConditionPicker({
   const labelId = `${id}-label`;
   return (
     <div className="flex shrink-0 items-center gap-2">
-      <label id={labelId} htmlFor={id} className="text-xs text-dim">
+      <label id={labelId} htmlFor={id} className="text-xs text-dim @max-[32.75rem]/tray:sr-only">
         Condition
       </label>
       <Dropdown
@@ -1022,14 +1056,16 @@ function TrayRow({
           {waiting ? (
             <Choices row={row} onPick={onPick} />
           ) : (
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+            // **One line**, as the tray's every row (`TrayPanel`'s header says why): under 28rem
+            // *More printings…* says *Printings…*, its name the whole phrase.
+            <div className="flex items-center gap-x-2">
               {/* **An unknown finish wears the accent**, the colour this tray already asks its other
                   question in (`Pick a printing`, `1 needs you`) — a question for the reader,
                   never the destructive red, which would say something had gone wrong. The trigger
                   reads `Unknown` and the Add button counts it out; the border is what finds it in a
                   long list. */}
               {/* `contents`, so the mark the header's walk finds an unknown finish by adds no box to
-                  the wrapping row. On a known finish too: the walk only lands on a row whose
+                  the row. On a known finish too: the walk only lands on a row whose
                   finish is the question, so the mark costs nothing there. */}
               <span data-decision="" className="contents">
                 <Dropdown
@@ -1057,11 +1093,16 @@ function TrayRow({
                   aria-label={`More printings of ${label}`}
                   onClick={onMorePrintings}
                   className={cn(
-                    "rounded-md px-1 py-0.5 text-xs text-dim underline-offset-2 hover:text-text hover:underline",
+                    "shrink-0 rounded-md px-1 py-0.5 text-xs whitespace-nowrap text-dim underline-offset-2 hover:text-text hover:underline",
                     FOCUS,
                   )}
                 >
-                  More printings…
+                  <span aria-hidden="true" className="@max-[28rem]/tray:hidden">
+                    More printings…
+                  </span>
+                  <span aria-hidden="true" className="hidden @max-[28rem]/tray:inline">
+                    Printings…
+                  </span>
                 </button>
               )}
             </div>
@@ -1165,18 +1206,13 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
  * finger, which has no hover to find it with. It is the tile's first press, ahead of the picture,
  * as on a waiting tile (issue #1004); laid over the picture, so it takes a layer of its own.
  *
- * **The chin is always drawn**, the finish and the stepper being what a reader changes most. The
- * finish takes what the stepper leaves and never truncates — an `Unknown` there is a question, and
- * a question cut to `Unkn…` is not one — so on a tile too narrow for both on one line, which is
- * most of them, the stepper wraps under it. The basis is a fixed width rather than each label's
- * own, so every tile in a row wraps or not together and the row's chins stay one height.
- *
- * **Why not one row, as the design canvas draws it.** Measured 2026-10-24 in headless Edge, 12px
- * Geist: `Unknown` is 51.67px, so the `sm` finish trigger holding it (its border, `px-2` and 14px
- * chevron add 32) is 83.67px. A 149px tile's chin has 137px inside its border and padding; the
- * `sm` stepper is 112px, and even `xs`'s 80px leaves the finish 52 — short of the trigger at any
- * legible size (10px type and `px-1` still need 67px), and `xs`'s 20px buttons are under WCAG
- * 2.5.8's 24px. The canvas fits because its stepper is a 56px strip this app has no size for.
+ * **The chin is always drawn, on one line**, the finish and the stepper being what a reader changes
+ * most — a second line would make every card in the wall taller. The finish takes what the
+ * stepper leaves and never truncates in a tile at the grid's floor — an `Unknown` there is a
+ * question, and a question cut to `Unkn…` is not one: `Unknown` in the `sm` trigger at the chin's
+ * `px-1.5` is 79.67px (12px Geist, measured 2026-10-24), the `compact` stepper 72px, and a 10.5rem
+ * tile's chin holds both with its gap (`TILE_COLUMNS`). `compact` is 24px, WCAG 2.5.8's floor — `sm`'s 112px wrapped
+ * the chin to two lines in every tile, and `xs`'s 20px is under it.
  *
  * **The marks are the walls' own.** `CardArt`'s chip in the top-right says a foil or etched copy,
  * and a count laid on the top-left says more than one — `CountTag`, the bare number every surface
@@ -1285,14 +1321,17 @@ function TrayTile({
           )}
         </div>
 
-        {/* The chin: the finish taking what the stepper leaves, at a fixed basis — see above. */}
-        <div className="flex flex-wrap items-center gap-[5px] border-t border-border p-[5px]">
+        {/* The chin: the finish taking what the stepper leaves, on one line — see above. */}
+        <div className="flex items-center gap-1 border-t border-border p-1">
           {/* The mark the header's walk finds an unknown finish by. A box of its own here rather
               than the row's `contents`, because it is what grows. */}
-          <span data-decision="" className="grow basis-24">
+          <span data-decision="" className="min-w-0 flex-1">
             <Dropdown
               size="sm"
               fill
+              // `px-1.5` over `sm`'s `px-2`: the 4px that keep `Unknown` whole in a tile at the
+              // grid's floor (`TILE_COLUMNS`).
+              className="px-1.5"
               label={`Finish of ${label}`}
               value={row.finish}
               onChange={(v) => onFinish(v as ScannerTrayFinish)}
@@ -1302,7 +1341,7 @@ function TrayTile({
             />
           </span>
           <QuantityStepper
-            size="sm"
+            size="compact"
             min={1}
             value={row.quantity}
             onChange={onQuantity}
@@ -1552,7 +1591,7 @@ function FolderPicker({
     // The pair grows to a cap: in a wide tray a picker that took every pixel left would put the
     // Add button a hand's width from the destination it files into.
     <div className="flex min-w-0 max-w-80 flex-1 basis-48 items-center gap-2">
-      <span className="shrink-0 text-xs text-dim">File into</span>
+      <span className="shrink-0 text-xs text-dim @max-[32.75rem]/tray:sr-only">File into</span>
       <AnchoredPopup
         label={`Folder: ${name}`}
         panelLabel="Choose a folder"

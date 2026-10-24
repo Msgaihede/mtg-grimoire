@@ -96,8 +96,8 @@ vi.mock("@/lib/ipc", async (orig) => {
       deckFolderList: vi.fn(async () => []),
       // The tray's and the popup's prices. **Refused by default**, as the unmocked command was
       // here (there is no host to answer it), so no figure is drawn; the confetti's test quotes.
-      printingPrices: vi.fn(
-        async (): Promise<PrintingPrices[]> => Promise.reject("no prices in this suite"),
+      printingPrices: vi.fn(async (): Promise<PrintingPrices[]> =>
+        Promise.reject("no prices in this suite"),
       ),
     },
   };
@@ -699,12 +699,13 @@ describe("ScannerPage", () => {
     expect(videoBox(container)).toHaveClass("flex-1");
     expect(videoBox(container).classList.contains("shrink-0")).toBe(false);
     expect(videoBox(container).style.aspectRatio).toBe("");
-    // The camera column about 40rem, giving way to 22rem and growing to 52.5rem in a 140rem
-    // page container (a 2560 px window); the tray the rest of the width and never under 24rem.
+    // The camera column 40rem, giving way first in steps — to 31rem holding the tray at 36rem, then
+    // the tray to 24rem, then the camera to 23rem — and growing to 52.5rem in a 140rem page
+    // container (a 2560 px window); the tray the rest of the width and never under 24rem.
     const column = videoBox(container).parentElement;
     expect(column).toHaveClass(
-      "flex-[0_1_40rem]",
-      "min-w-[22rem]",
+      "flex-[0_1_clamp(23rem,100cqw_-_25.25rem,clamp(31rem,100cqw_-_37.25rem,40rem))]",
+      "min-w-[23rem]",
       "@min-[140rem]/scan:basis-[52.5rem]",
     );
     const side = tray().closest<HTMLElement>(".min-w-\\[24rem\\]");

@@ -15,7 +15,7 @@ controls a reader uses while feeding cards.
 **Developer** switch (the switch the scan bar carries today). Over a trade (the Trade page's scan
 dialog, `destination`) neither is drawn, as today.
 
-**Camera column**, about 40 rem wide (52.5 rem from a 140 rem page container — a 2560 px window), the tray taking the rest:
+**Camera column**, about 40 rem wide (52.5 rem from a 140 rem page container — a 2560 px window), the tray taking the rest. *Amended 2026-10-24 after a live check: the canvas had no app rail, so the camera now gives way first, in steps down to 31 rem, before the tray goes under 36 rem — and no row on the page wraps (see `docs/reference/card-scanner.md`).*
 
 - The **picture** fills the column's height.
 - Over the picture, top edge: the **match progress bar only** — a 4 px bar along the top edge

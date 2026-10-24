@@ -91,10 +91,10 @@ export const Icon: Story = {
   },
 };
 
-/** The desktop's camera column at its 22rem floor — the narrowest it is ever drawn. */
+/** The desktop's camera column at its 23rem floor — the narrowest it is ever drawn. */
 function AtTheFloor(args: ScanHudProps) {
   return (
-    <div className="relative h-[28rem] w-[22rem] overflow-hidden rounded-lg bg-black">
+    <div className="relative h-[28rem] w-[23rem] overflow-hidden rounded-lg bg-black">
       <ScanHud {...args} />
     </div>
   );

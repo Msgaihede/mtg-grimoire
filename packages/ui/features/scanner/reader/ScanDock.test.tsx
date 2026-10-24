@@ -78,6 +78,22 @@ describe("ScanDock", () => {
   });
 
   /**
+   * **Two rows at every width, never a third**: the dock folds by its own width
+   * (`@container/dock`) — *Filters* to the far end of the second row, then the triggers' captions
+   * into their names — over one wrapping box whose rows a full-width break divides.
+   */
+  it("keeps two rows, moving Filters to the second rather than wrapping a third", () => {
+    wrap(<ScanDock {...props()} />);
+    const filters = screen.getByRole("button", { name: /^Filters:/ });
+    const rows = filters.closest(".flex-wrap") as HTMLElement;
+    expect(rows.parentElement).toHaveClass("@container/dock");
+    expect(rows.querySelectorAll(":scope > .basis-full")).toHaveLength(1);
+    expect(filters.closest(".ml-auto")).toHaveClass("@max-[34.125rem]/dock:order-last");
+    // A caption folds into the name, which keeps it.
+    expect(screen.getByRole("button", { name: /^Finish: Detect$/ })).toBeInTheDocument();
+  });
+
+  /**
    * *How scanning runs*: a named pair of pressed buttons, the stored pref — and under point and
    * shoot the primary is one click, one card, with *Cancel scan* for a shot still looking.
    */

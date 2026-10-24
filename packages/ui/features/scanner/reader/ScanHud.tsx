@@ -74,7 +74,7 @@ export interface ScanHudProps {
    * What the picture says at its top centre — the desktop's point and shoot pill between shots
    * (`ShotReadyPill`) — or nothing. **Drawn in the HUD's own top flow, under the corner row**, so
    * it can never run under a press or the chip however narrow the column: centred on its own over
-   * a 22rem column, the 274px pill met the 143px *Reset evidence* below a 584px column.
+   * a 23rem column, the 274px pill met the 143px *Reset evidence* below a 584px column.
    */
   notice?: ReactNode;
 }
@@ -167,7 +167,7 @@ export function ScanHud({
         {/* The corner row: the presses against the right edge, the chip in what they leave and
             wrapping in it, so a long sentence never runs under a button. **Reversed and
             wrapping, the presses first**: where the room beside them is under the chip's 12rem
-            (both labelled presses leave it 47px in a 22rem column), the chip drops to a row of
+            (both labelled presses leave it 63px in a 23rem column), the chip drops to a row of
             its own under them rather than stand a word to a line. An empty chip asks for no room,
             so it never wraps a row of nothing. */}
         <div data-hud-corner="" className="flex flex-row-reverse flex-wrap items-start gap-2">

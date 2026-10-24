@@ -901,6 +901,41 @@ describe("TrayPanel's grid", () => {
     expect(unknown.classList.contains("border-accent")).toBe(true);
   });
 
+  /**
+   * **Nothing in the tray wraps** (the owner's call, 2026-10-24: a second line comes out of the
+   * cards' room). The chin is one line on the `compact` stepper; the header and the footer fold
+   * by the tray's own width (`@container/tray`), every press keeping its whole name as it does.
+   * The folds themselves are layout, measured in the page's stories; here the classes that make
+   * them, and the names that must survive them.
+   */
+  it("keeps the chin, the header and the footer each on one line, every press whole by name", () => {
+    wrap(
+      <TrayPanel
+        {...grid({ rows: [{ ...newer, finish: "unknown" }, older] })}
+        onAddCard={vi.fn()}
+      />,
+    );
+    for (const tile of tiles()) {
+      const finish = within(tile).getByRole("button", { name: /^Finish of/ });
+      const chin = finish.closest("[data-decision]")!.parentElement!;
+      expect(chin.className).not.toMatch(/flex-wrap/);
+      // `compact`'s 24px buttons — WCAG 2.5.8's floor — and not `sm`'s 28.
+      for (const step of within(chin).getAllByRole("button", { name: /^(In|De)crease/ })) {
+        expect(step).toHaveClass("size-6");
+      }
+    }
+    const header = screen.getByRole("heading", { name: /^Scanned cards/ }).closest("header")!;
+    const footer = screen.getByRole("button", { name: /^Add \d/ }).closest("footer")!;
+    expect(header.className).not.toMatch(/flex-wrap/);
+    expect(footer.className).not.toMatch(/flex-wrap/);
+    expect(header.closest("section")).toHaveClass("@container/tray");
+    // The folds hide words from the eye, never from a name.
+    expect(screen.getByRole("button", { name: "Add card…" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /^Add 1 to collection · 1 needs a finish$/ }),
+    ).toBeInTheDocument();
+  });
+
   it("draws each tile as a whole card, at a size larger than the row's thumbnail", () => {
     const { container } = wrap(<TrayPanel {...grid({ rows: [newer] })} />);
     const images = Array.from(container.querySelectorAll("img"));

@@ -177,13 +177,14 @@ export const FinishDetect: Story = {
 };
 
 /**
- * The camera column at its 22rem floor beside a wide tray: the first row wraps, Filters on a line
- * of its own and still at the far end, rather than a scrollbar under the picture.
+ * The camera column at its 23rem floor (the 1024px light face): still two rows — *Filters* at the
+ * far end of the second, beside *Finish* and *Camera*, the three keeping their values and glyphs
+ * and giving their captions to their names — never a third row, nor a scrollbar under the picture.
  */
 export const Narrow: Story = {
   decorators: [
     (Story) => (
-      <div className="w-[22rem]">
+      <div className="w-[23rem]">
         <Story />
       </div>
     ),
