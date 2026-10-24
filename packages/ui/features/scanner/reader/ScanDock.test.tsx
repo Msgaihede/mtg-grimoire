@@ -16,7 +16,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import type { CameraDevice } from "../useCamera";
-import { ScanBar, type ScanBarProps } from "./ScanBar";
+import { ScanDock, type ScanDockProps } from "./ScanDock";
 
 /**
  * Three cameras in the order a driver might list them — deliberately not alphabetical, so a list
@@ -28,7 +28,7 @@ const CAMERAS: readonly CameraDevice[] = [
   { deviceId: "cam-integrated", label: "Integrated Camera" },
 ];
 
-function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
+function props(over: Partial<ScanDockProps> = {}): ScanDockProps {
   return {
     scanning: true,
     onScanning: vi.fn(),
@@ -42,13 +42,9 @@ function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
     filtersDisabled: null,
     finish: "detect",
     onFinish: vi.fn(),
-    condition: "NONE",
-    onCondition: vi.fn(),
     cameras: CAMERAS,
     cameraId: "cam-brio",
     onCamera: vi.fn(),
-    developer: false,
-    onDeveloper: vi.fn(),
     ...over,
   };
 }
@@ -66,89 +62,144 @@ function wrap(ui: ReactElement) {
   return { ...result, rerender: (next: ReactElement) => result.rerender(provided(next)) };
 }
 
-describe("ScanBar", () => {
-  /** Point and shoot: the switch is a stored pref, and on it the press is one click, one card. */
+describe("ScanDock", () => {
+  /** The gold primary, worded as the spec words it: *Start* while stopped, *Stop* while running. */
+  it("starts and stops the scanner from its gold primary", async () => {
+    const user = userEvent.setup();
+    const onScanning = vi.fn();
+    const { rerender } = wrap(<ScanDock {...props({ scanning: false, onScanning })} />);
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    expect(onScanning).toHaveBeenLastCalledWith(true);
+
+    rerender(<ScanDock {...props({ scanning: true, onScanning })} />);
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Stop" }));
+    expect(onScanning).toHaveBeenLastCalledWith(false);
+  });
+
+  /**
+   * *How scanning runs*: a named pair of pressed buttons, the stored pref — and under point and
+   * shoot the primary is one click, one card, with *Cancel scan* for a shot still looking.
+   */
   it("trades Start and Stop for Scan card under point and shoot", async () => {
     const user = userEvent.setup();
     const onPointAndShoot = vi.fn();
     const onShoot = vi.fn();
-    const { rerender } = wrap(<ScanBar {...props({ onPointAndShoot, onShoot })} />);
-    const toggle = screen.getByRole("switch", { name: "Point & shoot" });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
-    await user.click(toggle);
-    expect(onPointAndShoot).toHaveBeenCalledWith(true);
-
-    rerender(<ScanBar {...props({ pointAndShoot: true, onPointAndShoot, onShoot })} />);
-    expect(screen.getByRole("switch", { name: "Point & shoot" })).toHaveAttribute(
-      "aria-checked",
+    const { rerender } = wrap(<ScanDock {...props({ onPointAndShoot, onShoot })} />);
+    const runs = screen.getByRole("group", { name: "How scanning runs" });
+    const halves = within(runs).getAllByRole("button");
+    expect(halves.map((b) => b.textContent)).toEqual(["Continuous", "Point & shoot"]);
+    expect(within(runs).getByRole("button", { name: "Continuous" })).toHaveAttribute(
+      "aria-pressed",
       "true",
     );
-    expect(screen.queryByRole("button", { name: /scanning/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    await user.click(within(runs).getByRole("button", { name: "Point & shoot" }));
+    expect(onPointAndShoot).toHaveBeenCalledExactlyOnceWith(true);
+
+    rerender(<ScanDock {...props({ pointAndShoot: true, onPointAndShoot, onShoot })} />);
+    expect(screen.getByRole("button", { name: "Point & shoot" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Continuous" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Scan card" }));
     expect(onShoot).toHaveBeenLastCalledWith(true);
 
     rerender(
-      <ScanBar {...props({ pointAndShoot: true, shooting: true, onPointAndShoot, onShoot })} />,
+      <ScanDock {...props({ pointAndShoot: true, shooting: true, onPointAndShoot, onShoot })} />,
     );
     await user.click(screen.getByRole("button", { name: "Cancel scan" }));
     expect(onShoot).toHaveBeenLastCalledWith(false);
   });
 
-  /** The way into the scan history (issue #989) is the Scanner view's alone. */
-  it("opens the scan history from its own press, handing up the button for the caret", async () => {
+  /** A press on the half already pressed is not a change — and must not stop a running scan. */
+  it("calls nothing for the half of How scanning runs that is already pressed", async () => {
     const user = userEvent.setup();
-    const onHistory = vi.fn();
-    wrap(<ScanBar {...props({ onHistory })} />);
-    const history = screen.getByRole("button", { name: "History" });
-    await user.click(history);
-    expect(onHistory).toHaveBeenCalledExactlyOnceWith(history);
-  });
-
-  it("draws no History where the host offers none", () => {
-    wrap(<ScanBar {...props({ developerSwitch: false })} />);
-    expect(screen.queryByRole("button", { name: "History" })).toBeNull();
+    const onPointAndShoot = vi.fn();
+    wrap(<ScanDock {...props({ onPointAndShoot })} />);
+    await user.click(screen.getByRole("button", { name: "Continuous" }));
+    expect(onPointAndShoot).not.toHaveBeenCalled();
   });
 
   /**
-   * **Detect leads the finish menu and is the one it opens on by default** — the reader decided it
-   * should be the default, and the order is the information (`FINISH_OPTIONS`' comment). A fixed
-   * finish is still one press away, and picking one is handed up as the finish itself.
+   * What the old bar also carried has gone where it is read: the condition to the tray's footer,
+   * *History* and the Developer switch to the page's header. None of them is the dock's.
    */
-  it("offers Detect first in the Defaults finish menu, then the three finishes", async () => {
+  it("draws no Defaults popover, no condition, no History and no Developer switch", () => {
+    wrap(<ScanDock {...props()} />);
+    expect(screen.queryByRole("button", { name: /^Defaults/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /condition/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: "History" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Developer" })).toBeNull();
+  });
+
+  /**
+   * **Detect leads the Finish menu and is the one it opens on by default** — the reader decided it
+   * should be the default, and the order is the information (`FINISH_CHOICES`' comment). A fixed
+   * finish is still one press away, and a press picks it, hands it up and closes the menu.
+   */
+  it("offers Detect first in the Finish menu, then the three finishes, and closes on a press", async () => {
     const user = userEvent.setup();
     const onFinish = vi.fn();
-    wrap(<ScanBar {...props({ onFinish })} />);
-    await user.click(
-      screen.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }),
-    );
+    wrap(<ScanDock {...props({ onFinish })} />);
+    const trigger = screen.getByRole("button", { name: "Finish: Detect" });
+    await user.click(trigger);
+    const panel = await screen.findByRole("dialog", { name: "Finish" });
+    expect(panel).toHaveTextContent("New cards land as");
     expect(
-      screen.getByText(
+      within(panel).getByText(
         "A card printed in one finish takes it. One printed in several waits in the tray for you to pick.",
       ),
     ).toBeInTheDocument();
-    const finish = screen.getByRole("button", { name: "Finish" });
-    expect(finish).toHaveTextContent("Detect");
-    await user.click(finish);
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+    const group = within(panel).getByRole("radiogroup", { name: "New cards land as" });
+    const radios = within(group).getAllByRole("radio");
+    expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual([
       "Detect",
       "Nonfoil",
       "Foil",
       "Etched",
     ]);
-    await user.click(screen.getByRole("option", { name: "Foil" }));
-    expect(onFinish).toHaveBeenCalledWith("foil");
+    expect(within(group).getByRole("radio", { checked: true })).toHaveAccessibleName("Detect");
+    // One Tab stop, and it is the checked radio's.
+    expect(radios.map((r) => r.tabIndex)).toEqual([0, -1, -1, -1]);
+    await user.click(within(group).getByRole("radio", { name: "Foil" }));
+    expect(onFinish).toHaveBeenCalledExactlyOnceWith("foil");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Finish" })).not.toBeInTheDocument(),
+    );
+    expect(trigger).toHaveFocus();
   });
 
-  it("names a fixed finish on the bar and says a new card starts in it", async () => {
+  it("names a fixed finish on its trigger and says a new card starts in it", async () => {
     const user = userEvent.setup();
-    wrap(<ScanBar {...props({ finish: "foil" })} />);
-    await user.click(screen.getByRole("button", { name: "Defaults: Foil · Condition not set" }));
-    expect(screen.getByText("Each new card starts in this finish.")).toBeInTheDocument();
+    wrap(<ScanDock {...props({ finish: "foil" })} />);
+    await user.click(screen.getByRole("button", { name: "Finish: Foil" }));
+    expect(await screen.findByText("Each new card starts in this finish.")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { checked: true })).toHaveAccessibleName("Foil");
+  });
+
+  it("chooses a finish on an arrow and keeps the menu open to walk on", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    wrap(<ScanDock {...props({ onFinish })} />);
+    await user.click(screen.getByRole("button", { name: "Finish: Detect" }));
+    await screen.findByRole("dialog", { name: "Finish" });
+    await user.tab();
+    expect(screen.getByRole("radio", { name: "Detect" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(onFinish).toHaveBeenCalledExactlyOnceWith("nonfoil");
+    expect(screen.getByRole("radio", { name: "Nonfoil" })).toHaveFocus();
+    expect(screen.getByRole("dialog", { name: "Finish" })).toBeInTheDocument();
   });
 
   it("draws no mode switch: the scanner has one way of reading", () => {
-    wrap(<ScanBar {...props()} />);
+    wrap(<ScanDock {...props()} />);
     expect(screen.queryByRole("group", { name: "Scan mode" })).toBeNull();
     for (const name of ["Fast", "Exact", "Neural"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
@@ -156,14 +207,14 @@ describe("ScanBar", () => {
   });
 
   it("says any set on the Filters button for empty filters", () => {
-    wrap(<ScanBar {...props()} />);
+    wrap(<ScanDock {...props()} />);
     const filters = screen.getByRole("button", { name: "Filters: Any set" });
     expect(filters).toHaveTextContent("Any set");
   });
 
   it("names the narrowing on the Filters button", () => {
     wrap(
-      <ScanBar
+      <ScanDock
         {...props({ filters: { sets: ["hob"], released_from: "2023-06-23", released_to: null } })}
       />,
     );
@@ -175,7 +226,7 @@ describe("ScanBar", () => {
   it("refuses the Filters popover with a reason, and keeps the button in reach", async () => {
     const user = userEvent.setup();
     wrap(
-      <ScanBar {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />,
+      <ScanDock {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />,
     );
     const filters = screen.getByRole("button", { name: "Filters: Any set" });
     expect(filters).toHaveAttribute("aria-disabled", "true");
@@ -187,37 +238,27 @@ describe("ScanBar", () => {
 
   it("closes the Filters popover when filters become unavailable, and does not reopen it after", async () => {
     const user = userEvent.setup();
-    const { rerender } = wrap(<ScanBar {...props()} />);
+    const { rerender } = wrap(<ScanDock {...props()} />);
     await user.click(screen.getByRole("button", { name: "Filters: Any set" }));
     expect(await screen.findByRole("dialog", { name: "Filters" })).toBeInTheDocument();
 
     rerender(
-      <ScanBar {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />,
+      <ScanDock {...props({ filtersDisabled: "Filters need card names, and none are loaded." })} />,
     );
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument(),
     );
 
-    rerender(<ScanBar {...props()} />);
+    rerender(<ScanDock {...props()} />);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(screen.queryByRole("dialog", { name: "Filters" })).not.toBeInTheDocument();
-  });
-
-  it("turns the developer panels on", async () => {
-    const user = userEvent.setup();
-    const onDeveloper = vi.fn();
-    wrap(<ScanBar {...props({ onDeveloper })} />);
-    const toggle = screen.getByRole("switch", { name: "Developer" });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
-    await user.click(toggle);
-    expect(onDeveloper).toHaveBeenCalledWith(true);
   });
 
   it("clears every filter from the popover", async () => {
     const user = userEvent.setup();
     const onFilters = vi.fn();
     wrap(
-      <ScanBar
+      <ScanDock
         {...props({
           onFilters,
           filters: { sets: ["hob", "ltr"], released_from: "2023-01-01", released_to: null },
@@ -240,7 +281,7 @@ describe("ScanBar", () => {
     const user = userEvent.setup();
     const onFilters = vi.fn();
     const filters = { sets: ["hob"], released_from: null, released_to: null };
-    const { rerender } = wrap(<ScanBar {...props({ onFilters, filters })} />);
+    const { rerender } = wrap(<ScanDock {...props({ onFilters, filters })} />);
     await user.click(screen.getByRole("button", { name: /^Filters:/ }));
     const toggle = await screen.findByRole("switch", { name: "Skip promos" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -248,7 +289,7 @@ describe("ScanBar", () => {
     await user.click(toggle);
     expect(onFilters).toHaveBeenLastCalledWith({ ...filters, exclude_promos: true });
 
-    rerender(<ScanBar {...props({ onFilters, filters: { ...filters, exclude_promos: true } })} />);
+    rerender(<ScanDock {...props({ onFilters, filters: { ...filters, exclude_promos: true } })} />);
     expect(screen.getByRole("switch", { name: "Skip promos" })).toHaveAttribute(
       "aria-checked",
       "true",
@@ -262,7 +303,7 @@ describe("ScanBar", () => {
 
   it("draws the last refusal inside the open popover as an alert", async () => {
     const user = userEvent.setup();
-    wrap(<ScanBar {...props({ filterError: "No set is called ZZZ." })} />);
+    wrap(<ScanDock {...props({ filterError: "No set is called ZZZ." })} />);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Filters: Any set" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("No set is called ZZZ.");
@@ -270,7 +311,7 @@ describe("ScanBar", () => {
 
   it("closes the popover on Escape and hands the caret back to its trigger", async () => {
     const user = userEvent.setup();
-    wrap(<ScanBar {...props()} />);
+    wrap(<ScanDock {...props()} />);
     const filters = screen.getByRole("button", { name: "Filters: Any set" });
     await user.click(filters);
     await screen.findByRole("dialog", { name: "Filters" });
@@ -280,14 +321,14 @@ describe("ScanBar", () => {
   });
 
   it("names the live camera on the Camera button", () => {
-    wrap(<ScanBar {...props()} />);
+    wrap(<ScanDock {...props()} />);
     expect(screen.getByRole("button", { name: /^Camera:/ })).toHaveAccessibleName(
       "Camera: Logitech BRIO",
     );
   });
 
   it("reads Default when the open camera is not one the list knows", () => {
-    wrap(<ScanBar {...props({ cameraId: null })} />);
+    wrap(<ScanDock {...props({ cameraId: null })} />);
     expect(screen.getByRole("button", { name: /^Camera:/ })).toHaveAccessibleName(
       "Camera: Default",
     );
@@ -295,7 +336,7 @@ describe("ScanBar", () => {
 
   it("lists the cameras alphabetically as radios, with the live one checked", async () => {
     const user = userEvent.setup();
-    wrap(<ScanBar {...props()} />);
+    wrap(<ScanDock {...props()} />);
     await user.click(screen.getByRole("button", { name: "Camera: Logitech BRIO" }));
     await screen.findByRole("dialog", { name: "Camera" });
     const group = screen.getByRole("radiogroup", { name: "Camera" });
@@ -315,7 +356,7 @@ describe("ScanBar", () => {
   it("switches camera on a press, and closes the popover", async () => {
     const user = userEvent.setup();
     const onCamera = vi.fn();
-    wrap(<ScanBar {...props({ onCamera })} />);
+    wrap(<ScanDock {...props({ onCamera })} />);
     const trigger = screen.getByRole("button", { name: "Camera: Logitech BRIO" });
     await user.click(trigger);
     await user.click(await screen.findByRole("radio", { name: "Integrated Camera" }));
@@ -329,7 +370,7 @@ describe("ScanBar", () => {
   it("switches camera on an arrow and keeps the list open to walk on", async () => {
     const user = userEvent.setup();
     const onCamera = vi.fn();
-    wrap(<ScanBar {...props({ onCamera })} />);
+    wrap(<ScanDock {...props({ onCamera })} />);
     await user.click(screen.getByRole("button", { name: "Camera: Logitech BRIO" }));
     await screen.findByRole("dialog", { name: "Camera" });
     // Reached the way a reader reaches it — the caret is on the panel, and one Tab lands on the
@@ -344,7 +385,7 @@ describe("ScanBar", () => {
 
   it("refuses the Camera popover when there is no camera, and says why", async () => {
     const user = userEvent.setup();
-    wrap(<ScanBar {...props({ cameras: [], cameraId: null })} />);
+    wrap(<ScanDock {...props({ cameras: [], cameraId: null })} />);
     const camera = screen.getByRole("button", { name: "Camera: Default" });
     expect(camera).toHaveAttribute("aria-disabled", "true");
     expect(camera).not.toBeDisabled();
@@ -362,7 +403,7 @@ describe("ScanBar", () => {
     const user = userEvent.setup();
     const onFilters = vi.fn();
     wrap(
-      <ScanBar
+      <ScanDock
         {...props({
           onFilters,
           filters: { sets: [], released_from: "2023-06-23", released_to: null },

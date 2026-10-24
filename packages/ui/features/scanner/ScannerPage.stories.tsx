@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ipc } from "@/lib/ipc";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "./fixtures";
+import { SHOT_READY_CLICK } from "./reader/readerText";
 import { ScannerPage } from "./ScannerPage";
 import type { ScannerPrefs, ScannerTrayRow } from "./types";
 import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
@@ -85,8 +86,10 @@ type Story = StoryObj<typeof meta>;
  * refusal every reader of this story actually meets, and `CameraDenied` above is what makes it
  * the shape jsdom meets too rather than a `TypeError` about a missing API.
  *
- * The bar and the tray beside the video are unaffected: prefs, the tray and `scanner_status` all
- * answer regardless of the camera, which is what lets the two halves of this view be tested apart.
+ * The header, the dock under the picture and the tray beside it are unaffected: prefs, the tray
+ * and `scanner_status` all answer regardless of the camera, which is what lets the two halves of
+ * this view be tested apart. No "Scanning stopped" veil either — the camera's sentence stands
+ * where the picture would be, and a veil over it would be two sentences on top of each other.
  *
  * **One press is not here, and its absence is the rule**: *Send scan…* stands beside *Reset
  * evidence* only while a camera is live and the scanner is running — a scan is the last couple
@@ -103,6 +106,11 @@ export const CameraRefused: Story = {
     ).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: "Send scan…" })).toBeNull();
+    // The page's header: the title, then the history and the way back to the panels.
+    await expect(canvas.getByRole("button", { name: "History" })).toBeInTheDocument();
+    await expect(canvas.getByRole("switch", { name: "Developer" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Start" })).toBeInTheDocument();
+    await expect(canvas.queryByText("Scanning stopped")).toBeNull();
   },
 };
 
@@ -117,7 +125,7 @@ export const RecognizerMissing: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const filters = await canvas.findByRole("button", { name: "Filters: Any set" });
-    // Greyed once the status has answered, which is after the bar is first drawn.
+    // Greyed once the status has answered, which is after the dock is first drawn.
     await waitFor(() => expect(filters).toHaveAttribute("aria-disabled", "true"));
     await expect(canvas.queryByRole("region", { name: "Scanner files" })).toBeNull();
   },
@@ -147,14 +155,18 @@ export const WithTray: Story = {
   },
 };
 
-/** The scanner uses the same settings dialog as the gallery, before any deck write. */
+/**
+ * The scanner uses the same settings dialog as the gallery, before any deck write — from the
+ * tray's ⋯ *Tray actions* menu.
+ */
 export const CreateDeckFromTray: Story = {
   render: () => <Written tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} />,
   parameters: { docs: { story: { inline: false, height: "800px" } } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByText("Urza's Saga");
-    await userEvent.click(canvas.getByRole("button", { name: "Create deck…" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Tray actions" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Create deck…" }));
     const dialog = await canvas.findByRole("dialog", { name: "New deck" });
     await expect(within(dialog).getByText(/scans stay in the tray/)).toBeVisible();
     await expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeVisible();
@@ -183,8 +195,8 @@ export const Developer: Story = {
 };
 
 /**
- * **Point and shoot**, stored on: the bar's press is *Scan card* — one click, one card — and the
- * picture says so in Start's place. The camera is refused here, so the press reads nothing.
+ * **Point and shoot**, stored on: the dock's primary is *Scan card* — one click, one card — and a
+ * pill at the top of the picture names it. The camera is refused here, so the press reads nothing.
  */
 export const PointAndShoot: Story = {
   render: () => <Written prefs={{ pointAndShoot: true }} />,
@@ -192,17 +204,20 @@ export const PointAndShoot: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
-    await expect(canvas.getByRole("switch", { name: "Point & shoot" })).toHaveAttribute(
-      "aria-checked",
+    const runs = canvas.getByRole("group", { name: "How scanning runs" });
+    await expect(within(runs).getByRole("button", { name: "Point & shoot" })).toHaveAttribute(
+      "aria-pressed",
       "true",
     );
-    await expect(canvas.queryByRole("button", { name: "Start scanning" })).toBeNull();
+    await expect(canvas.getByText(SHOT_READY_CLICK)).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Start" })).toBeNull();
   },
 };
 
 /**
- * *Archive* (issue #989): the resolved rows go to the scan history, not the collection, and the
- * tray empties — then *History* on the bar opens the dialog with the pile at the top, `Archived`.
+ * *Archive* (issue #989), from the tray's ⋯ menu: the resolved rows go to the scan history, not
+ * the collection, and the tray empties — then *History* in the page's header opens the dialog with
+ * the pile at the top, `Archived`.
  *
  * Through the fake's `scanner_tray_archive` and `scan_history_*`, the commands' own names.
  */
@@ -213,7 +228,8 @@ export const ArchiveTray: Story = {
     const canvas = within(canvasElement);
     const tray = await canvas.findByRole("region", { name: "Scanned cards" });
     await within(tray).findByText("Urza's Saga");
-    await userEvent.click(within(tray).getByRole("button", { name: "Archive" }));
+    await userEvent.click(within(tray).getByRole("button", { name: "Tray actions" }));
+    await userEvent.click(await within(tray).findByRole("button", { name: "Archive" }));
     await expect(await within(tray).findByText("Cards you scan appear here.")).toBeInTheDocument();
 
     await userEvent.click(canvas.getByRole("button", { name: "History" }));
