@@ -57,15 +57,24 @@ export function placePreview(
  *
  * `LAYER.raised`, and drawn after the hand: above the table's cards and a lifted card in hand,
  * below every menu and dialog.
+ *
+ * **`overDialog` is a card pointed at inside a zone dialog** (`LibraryDialog`, issue #1373): a
+ * graveyard or exile looked through is drawn at 120 px, too small to read. The preview then takes
+ * {@link LAYER.menuOverDialog}, the rung for what the reader opens from inside a dialog, so it
+ * clears the dialog's scrim — and leaves the wheel alone, since there the wheel scrolls the
+ * dialog's list, and a preview that opened under a resting pointer would otherwise stop the
+ * scroll dead. It keeps the board's width.
  */
 export function Inspect({
   pointed,
   width,
   onResize,
+  overDialog = false,
 }: {
   pointed: Pointed | null;
   width: number;
   onResize: (next: (width: number) => number) => void;
+  overDialog?: boolean;
 }): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null);
   const pointer = useRef({ x: 0, y: 0 });
@@ -112,7 +121,7 @@ export function Inspect({
 
   // The wheel resizes the open preview, and only the preview: the table under it does not scroll.
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || overDialog) return;
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY === 0 || e.ctrlKey) return;
       e.preventDefault();
@@ -120,7 +129,7 @@ export function Inspect({
     };
     window.addEventListener("wheel", onWheel, { passive: false });
     return () => window.removeEventListener("wheel", onWheel);
-  }, [visible, onResize]);
+  }, [visible, overDialog, onResize]);
 
   if (!visible) return null;
   const { card } = pointed;
@@ -138,7 +147,7 @@ export function Inspect({
       data-testid="card-inspect"
       className={cn(
         "pointer-events-none absolute top-0 left-0 flex flex-col gap-1.5 rounded-[14px] border border-border bg-surface p-2 shadow-lg",
-        LAYER.raised,
+        overDialog ? LAYER.menuOverDialog : LAYER.raised,
       )}
       style={{ width: width + 16 }}
     >

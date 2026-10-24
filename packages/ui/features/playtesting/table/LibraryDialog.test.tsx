@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { PlaytestAction, PlaytestSeat } from "@/lib/ipc";
@@ -166,5 +166,74 @@ describe("LibraryDialog", () => {
     // A card the rules do not let the reader cast from exile has nothing to press.
     const swords = within(screen.getByRole("group", { name: "Swords to Plowshares" }));
     expect(swords.queryAllByRole("button")).toEqual([]);
+  });
+
+  // Issue #1373: a card drawn at 120 px is pointed at the board, whose preview is readable.
+  describe("pointing at a card", () => {
+    const face = (name: string) =>
+      screen.getByRole("group", { name }).querySelector("[data-point]")!;
+
+    function point(look: ZoneLook, opponent = false, view = tableView()) {
+      const onPoint = vi.fn();
+      const onUnpoint = vi.fn();
+      render(
+        <LibraryDialog
+          look={look}
+          view={view}
+          opponent={opponent}
+          onAct={() => {}}
+          onClose={() => {}}
+          onPoint={onPoint}
+          onUnpoint={onUnpoint}
+        />,
+      );
+      return { onPoint, onUnpoint, view };
+    }
+
+    it("points a graveyard card at the board, and lets go when the pointer leaves", () => {
+      const { onPoint, onUnpoint, view } = point({
+        zone: "graveyard",
+        mode: "browse",
+        count: "all",
+      });
+      const elves = view.graveyard[1];
+      fireEvent.mouseEnter(face("Llanowar Elves"), { clientX: 40, clientY: 60 });
+      expect(onPoint).toHaveBeenCalledWith({
+        card: elves,
+        ids: [elves.id],
+        place: "graveyard",
+        line: "Llanowar Elves · in the graveyard",
+        at: { x: 40, y: 60 },
+      });
+      fireEvent.mouseLeave(face("Llanowar Elves"));
+      expect(onUnpoint).toHaveBeenCalledTimes(1);
+    });
+
+    it("names an opponent's exile as theirs", () => {
+      const view = { ...tableView(), exile: [gameCard("Counterspell")] };
+      const { onPoint } = point({ zone: "exile", mode: "browse", count: "all" }, true, view);
+      fireEvent.mouseEnter(face("Counterspell"));
+      expect(onPoint).toHaveBeenCalledWith(
+        expect.objectContaining({ place: "exile", line: "Counterspell · in their exile" }),
+      );
+    });
+
+    it("says where a library card is from the top", () => {
+      const { onPoint } = point({ zone: "library", mode: "scry", count: 3 });
+      fireEvent.mouseEnter(face("Forest"));
+      expect(onPoint).toHaveBeenLastCalledWith(
+        expect.objectContaining({ place: "libraryTop", line: "Forest · on top of the library" }),
+      );
+      fireEvent.mouseEnter(face("Sol Ring"));
+      expect(onPoint).toHaveBeenLastCalledWith(
+        expect.objectContaining({ line: "Sol Ring · 3 from the top" }),
+      );
+    });
+
+    it("lets go when the list scrolls the card out from under the pointer", () => {
+      const { onUnpoint } = point({ zone: "graveyard", mode: "browse", count: "all" });
+      fireEvent.scroll(screen.getByRole("list").parentElement!);
+      expect(onUnpoint).toHaveBeenCalledTimes(1);
+    });
   });
 });

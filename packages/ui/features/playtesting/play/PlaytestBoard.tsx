@@ -554,6 +554,10 @@ export function PlaytestBoard({
   const lookYou = (l: ZoneLook) => setLook({ look: l, side: "you" });
   const lookOpponent = (l: ZoneLook) => setLook({ look: l, side: "opponent" });
   const lookedAt = look === null || view === null ? undefined : seatOfPlayer(view, look.side);
+  /** A zone's dialog is open. A library is looked through only with the sandbox's moves working;
+   *  a graveyard or exile is public, and opens read-only without them. */
+  const looking =
+    look !== null && lookedAt !== undefined && (look.look.zone !== "library" || edits);
   const goldfish = view?.goldfish ?? false;
   /** The goldfish's life has reached 0 on this turn of the reader's; `null` while it is above. */
   const deadOn = goldfish ? (opponent?.deadOn ?? null) : null;
@@ -1133,7 +1137,12 @@ export function PlaytestBoard({
         </>
       )}
 
-      <Inspect pointed={current?.pointed ?? null} width={previewWidth} onResize={setPreviewWidth} />
+      <Inspect
+        pointed={current?.pointed ?? null}
+        width={previewWidth}
+        onResize={setPreviewWidth}
+        overDialog={looking}
+      />
 
       {panel === "help" && (
         <HelpPanel heading="Playing a game" onClose={() => setPanel(null)}>
@@ -1142,9 +1151,7 @@ export function PlaytestBoard({
       )}
       {panel === "log" && <LogPanel log={log} onClose={() => setPanel(null)} />}
 
-      {/* A library is looked through only with the sandbox's moves working; a graveyard or exile
-          is public, and opens read-only without them. */}
-      {look !== null && lookedAt !== undefined && (look.look.zone !== "library" || edits) && (
+      {looking && (
         <LibraryDialog
           look={look.look}
           view={lookedAt}
@@ -1152,7 +1159,12 @@ export function PlaytestBoard({
           opponent={look.side !== "you"}
           owner={playerPossessive(look.side, opponentCount)}
           onAct={onAct}
-          onClose={() => setLook(null)}
+          onPoint={look.side === "you" ? pointYou : pointThem[look.side]}
+          onUnpoint={unpoint}
+          onClose={() => {
+            setLook(null);
+            unpoint();
+          }}
         />
       )}
     </div>

@@ -5,6 +5,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { gameCard } from "../table/fixtures";
 import { tableDraggable } from "../table/tableDrag";
 import { tableCardWidth } from "../table/Battlefield";
+import { LAYER } from "@/lib/layers";
 import { INSPECT_DELAY } from "../table/Inspect";
 import type { Playmat } from "../table/types";
 import {
@@ -750,6 +751,29 @@ describe("PlaytestBoard's inspect preview", () => {
     expect(preview()).toBeInTheDocument();
 
     fireEvent.mouseLeave(card);
+    expect(preview()).not.toBeInTheDocument();
+  });
+
+  // Issue #1373: a graveyard or exile looked through is drawn small, and the preview is how a
+  // card in it is read — over the dialog's scrim, not under it.
+  it("opens over a zone's dialog on a card in it, and closes with the dialog", () => {
+    const view = goldfishTurn();
+    setup(
+      { ...view, you: { ...view.you, exile: [gameCard("Counterspell"), gameCard("Brainstorm")] } },
+      { opponentNames: GOLDFISH },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Exile, / }));
+    const dialog = screen.getByRole("dialog", { name: "Exile" });
+    const counterspell = within(dialog)
+      .getByRole("group", { name: "Counterspell" })
+      .querySelector("[data-point]")!;
+
+    fireEvent.mouseEnter(counterspell);
+    rest(INSPECT_DELAY);
+    expect(preview()).toHaveTextContent("Counterspell · in exile");
+    expect(preview()).toHaveClass(LAYER.menuOverDialog);
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
     expect(preview()).not.toBeInTheDocument();
   });
 

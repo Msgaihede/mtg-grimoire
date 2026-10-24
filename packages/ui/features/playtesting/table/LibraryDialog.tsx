@@ -6,7 +6,8 @@ import { cardImageUrl } from "@/lib/images";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import type { ZoneLook } from "./types";
+import { pointerAt } from "./Inspect";
+import type { Pointed, ZoneLook } from "./types";
 
 /**
  * A zone turned face up: the library's top cards (look at, scry, surveil), the whole library
@@ -36,6 +37,12 @@ import type { ZoneLook } from "./types";
  * foretold card in exile, a flashback card in the graveyard), whatever `readOnly` says — it is the
  * rules' play, not a hand move. It closes the dialog, since the cast may ask a question of its own.
  * A foretold card says so under it.
+ *
+ * **A card rested on opens the board's inspect preview** (issue #1373): at 120 px a card's text
+ * cannot be read, and the look is for reading it. Each card points itself at the board through
+ * `onPoint` / `onUnpoint` and carries `data-point`, as the opening hand's do, and the board lifts
+ * the preview over this dialog's scrim (`Inspect`'s `overDialog`). A scroll of the list lets go,
+ * since it carries the card out from under the pointer without a `mouseleave`.
  */
 export function LibraryDialog({
   look,
@@ -45,6 +52,8 @@ export function LibraryDialog({
   readOnly = false,
   opponent = false,
   owner = "The opponent's",
+  onPoint,
+  onUnpoint,
 }: {
   look: ZoneLook;
   view: Pick<PlaytestSeat, "libraryCards" | "graveyard" | "exile" | "library">;
@@ -55,6 +64,10 @@ export function LibraryDialog({
   /** Whose zone an `opponent` look is, as its title starts: "Opponent 2's" at a four-player
    *  table. */
   owner?: string;
+  /** The pointer has come onto a card: the board's inspect preview shows it once it rests. */
+  onPoint?: (pointed: Pointed) => void;
+  /** The pointer has left the card. Takes no argument — it is handed to `onMouseLeave` as is. */
+  onUnpoint?: () => void;
 }): JSX.Element {
   const [moved, setMoved] = useState(0);
   const [filter, setFilter] = useState("");
@@ -112,7 +125,7 @@ export function LibraryDialog({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+      <div className="min-h-0 flex-1 overflow-y-auto p-5" onScroll={() => onUnpoint?.()}>
         {cards.length === 0 ? (
           <p className="m-0 text-sm text-dim">{emptyLine(look, all.length, needle !== "")}</p>
         ) : (
@@ -124,17 +137,31 @@ export function LibraryDialog({
                 aria-label={card.name}
                 className="flex flex-col gap-1.5"
               >
-                {card.cardId !== null ? (
-                  <CardImage
-                    src={cardImageUrl(card.cardId, 0, "grid")}
-                    alt={card.name}
-                    className="block h-[168px] w-[120px] rounded-md"
-                  />
-                ) : (
-                  <span className="flex h-[168px] w-[120px] items-center justify-center rounded-md border border-border bg-surface p-2 text-center text-xs">
-                    {card.name}
-                  </span>
-                )}
+                <div
+                  data-point={card.id}
+                  onMouseEnter={(e) =>
+                    onPoint?.({
+                      card,
+                      ids: [card.id],
+                      place: look.zone === "library" ? "libraryTop" : look.zone,
+                      line: `${card.name} · ${placeLine(look, opponent, searching ? null : i)}`,
+                      at: pointerAt(e),
+                    })
+                  }
+                  onMouseLeave={() => onUnpoint?.()}
+                >
+                  {card.cardId !== null ? (
+                    <CardImage
+                      src={cardImageUrl(card.cardId, 0, "grid")}
+                      alt={card.name}
+                      className="block h-[168px] w-[120px] rounded-md"
+                    />
+                  ) : (
+                    <span className="flex h-[168px] w-[120px] items-center justify-center rounded-md border border-border bg-surface p-2 text-center text-xs">
+                      {card.name}
+                    </span>
+                  )}
+                </div>
                 {card.foretold && <span className="font-mono text-[11px] text-dim">Foretold</span>}
                 {look.zone === "library" && !searching && (
                   <span className="font-mono text-[11px] text-dim">
@@ -289,6 +316,19 @@ function placesFor(look: ZoneLook): [GamePlace, string][] {
   if (look.zone !== "exile") rows.push(["exile", "Exile"]);
   rows.push(["libraryTop", "Top"], ["libraryBottom", "Bottom"]);
   return rows;
+}
+
+/**
+ * Where a card in the look is, for the preview's caption: "in the graveyard", "in their exile",
+ * "on top of the library", "3 from the top". `index` is the card's place from the top in a look
+ * at the library in order, and `null` in a search, where the cards are in library order but the
+ * reader is looking for a name rather than a position.
+ */
+function placeLine(look: ZoneLook, opponent: boolean, index: number | null): string {
+  if (look.zone === "graveyard") return opponent ? "in their graveyard" : "in the graveyard";
+  if (look.zone === "exile") return opponent ? "in their exile" : "in exile";
+  if (index === null) return "in the library";
+  return index === 0 ? "on top of the library" : `${index + 1} from the top`;
 }
 
 function emptyLine(look: ZoneLook, total: number, filtering: boolean): string {
