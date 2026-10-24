@@ -25,8 +25,23 @@ import { ScannerPage } from "./ScannerPage";
  *
  * A camera that *does* open is answered by the fake's scripted pile — `pnpm mobile:dev` and
  * `pnpm mobile:scanner-smoke` are where that is watched; a story has no camera to open.
+ *
+ * **`onItsSide` holds the page on its side for the stories about the list's rows**: the page
+ * mounts its list column only there (upright the list is the tray sheet's), and the test run's
+ * jsdom answers every media query `false`. `matchMedia` answers `true` to the `landscape:`
+ * variant's query for as long as the story is up — what a workbench canvas wider than it is tall
+ * answers anyway. Narrowed with the viewport tool, the classes still draw the page upright, the
+ * column mounted and `hidden`.
  */
-function Refused({ tray, prefs }: { tray?: ScannerTrayRow[]; prefs?: Partial<ScannerPrefs> }) {
+function Refused({
+  tray,
+  prefs,
+  onItsSide = false,
+}: {
+  tray?: ScannerTrayRow[];
+  prefs?: Partial<ScannerPrefs>;
+  onItsSide?: boolean;
+}) {
   const restore = useState(() => {
     if (tray !== undefined) void ipc.setScannerTray(tray);
     if (prefs !== undefined) void ipc.setScannerPrefs({ ...DEFAULT_SCANNER_PREFS, ...prefs });
@@ -35,9 +50,33 @@ function Refused({ tray, prefs }: { tray?: ScannerTrayRow[]; prefs?: Partial<Sca
       configurable: true,
       value: { getUserMedia: () => Promise.reject(new DOMException("x", "NotAllowedError")) },
     });
+    const savedQuery = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    if (onItsSide) {
+      const ask = window.matchMedia.bind(window);
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: (query: string) =>
+          query === "(orientation: landscape)"
+            ? ({
+                matches: true,
+                media: query,
+                onchange: null,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                addListener: () => {},
+                removeListener: () => {},
+                dispatchEvent: () => false,
+              } as unknown as MediaQueryList)
+            : ask(query),
+      });
+    }
     return () => {
       if (saved === undefined) Reflect.deleteProperty(navigator, "mediaDevices");
       else Object.defineProperty(navigator, "mediaDevices", saved);
+      if (!onItsSide) return;
+      if (savedQuery === undefined) Reflect.deleteProperty(window, "matchMedia");
+      else Object.defineProperty(window, "matchMedia", savedQuery);
     };
   })[0];
   useEffect(() => restore, [restore]);
@@ -119,7 +158,7 @@ export const CameraRefused: Story = {
     await expect(canvas.queryByRole("button", { name: "Reset evidence" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "Send scan…" })).toBeNull();
     await expect(canvas.getByRole("button", { name: "Start" })).toBeInTheDocument();
-    // The peek's line and the list's: one drawn upright, the other on its side.
+    // The peek's line — and on its side the list's too, which the page mounts only there.
     await expect(await canvas.findAllByText("Cards you scan appear here.")).not.toHaveLength(0);
     await expect(canvas.getByRole("button", { name: "Add 0 to collection" })).toHaveAttribute(
       "aria-disabled",
@@ -142,7 +181,7 @@ export const CameraRefused: Story = {
  * upright, the peek's strip shows the newest cards and opens the same list as a sheet.
  */
 export const WithTray: Story = {
-  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} />,
+  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} onItsSide />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const tray = await canvas.findByRole("region", { name: "Scanned cards" });
@@ -171,7 +210,7 @@ export const WithTray: Story = {
  * removing it — and says what choosing it does.
  */
 export const FinishSheet: Story = {
-  render: () => <Refused tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} />,
+  render: () => <Refused tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} onItsSide />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(
@@ -257,7 +296,7 @@ export const FolderSheet: Story = {
  * goes, and the plan's sentence about the printing is said over the tray's bar, as it is for Add.
  */
 export const TrayActions: Story = {
-  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} />,
+  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} onItsSide />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByRole("button", { name: "Tray actions" }));
@@ -280,6 +319,7 @@ export const TrayActions: Story = {
  * reads and words, as a sheet's pages.
  */
 export const ScanHistory: Story = {
+  render: () => <Refused onItsSide />,
   parameters: { fake: { seed: "scanHistory" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

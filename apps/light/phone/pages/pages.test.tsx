@@ -211,9 +211,9 @@ describe("the card sheet", () => {
 describe("Scanner", () => {
   it("draws its tray and its bar where there is no camera at all", async () => {
     renderPhone(<PhoneFace />, { path: "/scanner" });
-    // The peek's line and the list's: one drawn upright, the other on its side.
-    expect(await screen.findAllByText("Cards you scan appear here.", {}, SETTLE)).toHaveLength(2);
-    expect(screen.getByRole("heading", { name: "Scanned cards, 0 copies" })).toBeInTheDocument();
+    // The peek's line, which opens the whole tray: upright the page mounts no list of its own.
+    expect(await screen.findAllByText("Cards you scan appear here.", {}, SETTLE)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Scanned cards, 0 copies" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Folder: Collection" })).toBeInTheDocument();
     // Its one press is drawn, refused, and says why.
     expect(screen.getByRole("button", { name: "Add 0 to collection" })).toHaveAccessibleDescription(

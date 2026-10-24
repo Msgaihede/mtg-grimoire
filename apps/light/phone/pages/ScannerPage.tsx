@@ -114,11 +114,12 @@ function isLandscape(): boolean {
 
 /**
  * **The phone is on its side** — the `landscape:` variant's own media query, asked from script for
- * the one thing a class cannot say: which shape of a component to draw (the Added popup's one
- * line, the hold prompt's short form). The arrangement itself is the classes', so the two always
- * agree. `useSyncExternalStore` and a fresh `matchMedia` per read, for `CardDetailModal`'s
- * `useFlankRoom`'s two reasons: no `setState` inside an effect, and no query built at import time,
- * before a test has said what the viewport is.
+ * what a class cannot say: which shape of a component to draw (the Added popup's one line, the
+ * hold prompt's short form), and whether the tray's list column is mounted at all. The
+ * arrangement itself is the classes', so the two always agree. `useSyncExternalStore` and a fresh
+ * `matchMedia` per read, for `CardDetailModal`'s `useFlankRoom`'s two reasons: no `setState`
+ * inside an effect, and no query built at import time, before a test has said what the viewport
+ * is.
  */
 function useLandscape(): boolean {
   return useSyncExternalStore(subscribeLandscape, isLandscape, () => false);
@@ -146,13 +147,15 @@ function useLandscape(): boolean {
  * the confetti and the Added popup.
  *
  * **On its side** (the `landscape:` variant, at any phone width) the same elements are laid out
- * by a grid: the controls, the picture and Start/Stop on the left; on the right, 22rem wide, the
+ * by a grid: the controls, the picture and Start/Stop on the left; on the right, 22rem wide —
+ * giving way to 14.5rem before the left column goes under the 22rem its controls need whole — the
  * tray's bar, its header (the count, the gold *N need you* that walks the questions, *Add card…*
  * and the `⋯`) and the whole list, scrolling by itself. No peek — the list it opens is there —
  * and the Added popup on one line. **Asked of the viewport, not a container**: the page's sheets
  * are mounted inside it, and a container is the containing block for a `fixed` scrim. The
- * list's column is in the page either way and only drawn on its side, so a turn of the phone
- * keeps the bar, the tray's place and every open sheet as they were.
+ * list's column is mounted only on its side (upright the list is the tray sheet's); a turn of
+ * the phone mounts or drops that column alone, and keeps the bar and every open sheet as they
+ * were.
  *
  * **Point and shoot is a hold of the picture itself** (`usePointAndShoot`, `HoldSurface`): it
  * reads while a finger is on it and pauses the moment it lifts. Under it there is no Start/Stop,
@@ -498,7 +501,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col overflow-hidden",
-          "landscape:grid landscape:grid-cols-[minmax(0,1fr)_22rem]",
+          // The tray's column is 22rem, and gives way first: down to 14.5rem, so that the
+          // scanner's keeps the 22rem its controls need whole (`ScanControls`) on a page down to
+          // 36.5rem — a 667px phone beside the 80px rail is 587px.
+          "landscape:grid landscape:grid-cols-[minmax(0,1fr)_clamp(14.5rem,100%_-_22rem,22rem)]",
           "landscape:grid-rows-[auto_auto_minmax(0,1fr)]",
         )}
       >
@@ -632,27 +638,32 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           />
         </div>
 
-        {/* On its side: the whole tray, `Tray`'s own header sticking over the one scroller. In
-            the page upright too, undrawn, so a turn of the phone keeps the list's place.
-            `relative` because a row's `sr-only` words are positioned, and the box carrying the
-            overflow has to hold them. */}
-        <div
-          data-tray-column=""
-          className={cn(
-            "relative hidden min-h-0 overflow-y-auto overscroll-contain px-4 pb-3",
-            "landscape:col-start-2 landscape:row-start-3 landscape:block landscape:border-l landscape:border-border",
-          )}
-        >
-          <Tray
-            rows={tray.rows}
-            onRows={(change) => tray.setRows(change(tray.latest()))}
-            flashKey={flashKey}
-            title={destination?.title}
-            marketplace={destination?.marketplace}
-            onAddCard={openAddCard}
-            onActions={openActions}
-          />
-        </div>
+        {/* On its side: the whole tray, `Tray`'s own header sticking over the one scroller.
+            **Mounted only on its side** (`landscape`, the variant's own query): upright the whole
+            tray is the sheet the peek opens, and a list kept undrawn under the page would be a
+            second one re-rendering on every frame the pump answers while that sheet is up. Still
+            `hidden` but on its side, so the classes alone decide what is drawn, as everywhere
+            else on the page. `relative` because a row's `sr-only` words are positioned, and the
+            box carrying the overflow has to hold them. */}
+        {landscape && (
+          <div
+            data-tray-column=""
+            className={cn(
+              "relative hidden min-h-0 overflow-y-auto overscroll-contain px-4 pb-3",
+              "landscape:col-start-2 landscape:row-start-3 landscape:block landscape:border-l landscape:border-border",
+            )}
+          >
+            <Tray
+              rows={tray.rows}
+              onRows={(change) => tray.setRows(change(tray.latest()))}
+              flashKey={flashKey}
+              title={destination?.title}
+              marketplace={destination?.marketplace}
+              onAddCard={openAddCard}
+              onActions={openActions}
+            />
+          </div>
+        )}
       </div>
 
       {/* **First of the page's sheets and dialogs**: they all paint at the one overlay rung, so

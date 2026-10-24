@@ -22,10 +22,11 @@ import { ActionSheet, SheetBack, SheetChoice, SheetRow } from "../deck/sheet";
 type Page = "main" | "filters" | "finish" | "condition" | "camera";
 
 /** `Detect` first, because it is the default and the one choice that is not a finish; then a
- *  printing's finishes, plain before the premium treatments — the desktop Defaults popover's order. */
+ *  printing's finishes, plain before the premium treatments — the desktop dock's Finish menu's
+ *  order. */
 const FINISH_PREFS: readonly ScannerFinishPref[] = [DETECT, ...FINISHES];
 
-/** What each default finish does, said under its name — the desktop popover's two captions. */
+/** What each default finish does, said under its name — the desktop Finish menu's two captions. */
 const finishNote = (pref: ScannerFinishPref): string =>
   pref === DETECT
     ? "A card printed in one finish takes it. One printed in several waits in the tray for you to pick."

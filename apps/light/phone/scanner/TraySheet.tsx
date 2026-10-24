@@ -3,7 +3,7 @@ import { ArrowDown, Ellipsis, Plus } from "lucide-react";
 import { Dialog } from "@grimoire/ui/components/Dialog";
 import { ADD_CARD_LABEL } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import {
-  needsDecision,
+  needYouCount,
   NEXT_DECISION_LABEL,
   totalCopies,
 } from "@grimoire/ui/features/scanner/reader/tray";
@@ -31,8 +31,9 @@ export function cardsNeedYou(n: number): string {
  *    marketplace (`Worth $161.77`, the priced rows' unit price × quantity) and how many copies
  *    that figure leaves out (`2 unpriced`), with *Add card…* and the `⋯` beside them, and the ✕.
  *    The `⋯` is the page's: it opens `TrayActionsSheet` over this one.
- * 2. **The tray's bar** — the folder and Add — **handed in as {@link bar}**, the page's own
- *    `TrayBar`: one bar with one folder sheet and one commit, wherever it is drawn.
+ * 2. **The tray's bar** — the folder and Add — **handed in as {@link bar}**: a second drawing of
+ *    the page's `TrayBar` (the page draws two, each with a folder sheet of its own) over the one
+ *    commit they share.
  * 3. **`N cards need you`** and a gold *Next* that walks the questions (`Tray`'s own walk, through
  *    {@link TrayWalk}), while any card waits on a printing or a finish.
  * 4. **The list** — `Tray` in scan order, each question on its own row — and only the list
@@ -142,7 +143,7 @@ function SheetBody({
   // The same read as the rows' own prices (`Tray` asks it too), so the figure and the rows agree.
   const { priceOf, currency } = useTrayPrices(rows, marketplace);
   const worth = trayWorth(rows, priceOf);
-  const waiting = rows.filter(needsDecision).length;
+  const waiting = needYouCount(rows);
 
   return (
     <>

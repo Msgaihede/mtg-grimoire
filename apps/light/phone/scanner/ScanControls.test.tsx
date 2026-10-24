@@ -45,6 +45,21 @@ describe("the controls over the picture", () => {
     expect(props.onPointAndShoot).toHaveBeenCalledWith(false);
   });
 
+  /**
+   * **Both words whole on a phone on its side** (measured: *Point & shoot* is 87px in its pressed
+   * weight). The pair asks for 13.25rem there — 89px of words a half — and beside the rail the
+   * two glyphs wrap under it rather than cut a word; never upright, and never below 600px wide,
+   * where the height is what the page has least of.
+   */
+  it("keeps the pair's words whole on its side, the glyphs wrapping under it beside the rail", () => {
+    controls();
+    const group = screen.getByRole("group", { name: "How scanning runs" });
+    expect(group).toHaveClass("flex-1", "landscape:flex-[1_1_13.25rem]");
+    const row = group.parentElement as HTMLElement;
+    expect(row).toHaveClass("landscape:min-[600px]:flex-wrap", "landscape:min-[600px]:justify-end");
+    expect(row).not.toHaveClass("flex-wrap", "landscape:flex-wrap");
+  });
+
   /** Start and Stop are the page's gold press under the picture, and point and shoot is a hold. */
   it("draws no Start, Stop or Scan of its own", () => {
     controls();

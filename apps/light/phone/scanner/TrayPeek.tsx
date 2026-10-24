@@ -4,7 +4,7 @@ import { ChevronUp } from "lucide-react";
 import { CardImage } from "@grimoire/ui/components/CardImage";
 import { CountTag } from "@grimoire/ui/components/CountTag";
 import {
-  needsDecision,
+  needYouCount,
   needYouLabel,
   totalCopies,
 } from "@grimoire/ui/features/scanner/reader/tray";
@@ -63,7 +63,7 @@ export function TrayPeek({
   const pressRef = useRef<HTMLButtonElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
   const copies = totalCopies(rows);
-  const waiting = rows.filter(needsDecision).length;
+  const waiting = needYouCount(rows);
   const shown = rows.slice(0, PEEK_ROWS);
 
   // A card that lands is the strip's first tile: slide back to it if the reader swiped away.

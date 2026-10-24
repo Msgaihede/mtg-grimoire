@@ -32,6 +32,23 @@ vi.mock("@grimoire/ui/features/scanner/useParked", async (original) => {
     usePageParked: () => useSyncExternalStore(parked.subscribe, parked.get),
   };
 });
+/**
+ * Every burst the page hands the confetti, render by render — the shared `TierConfetti` drawn
+ * under a wrapper that writes its prop down. jsdom lays nothing out, so the component itself
+ * throws nothing here; what the page owes it is the burst. Emptied after each test.
+ */
+const confetti = vi.hoisted(() => ({ bursts: [] as (ConfettiBurst | null)[] }));
+vi.mock("@grimoire/ui/features/scanner/reader/TierConfetti", async (original) => {
+  const real = await original<typeof import("@grimoire/ui/features/scanner/reader/TierConfetti")>();
+  const { createElement } = await import("react");
+  return {
+    ...real,
+    TierConfetti: (props: TierConfettiProps) => {
+      confetti.bursts.push(props.burst);
+      return createElement(real.TierConfetti, props);
+    },
+  };
+});
 
 import { FAKE_SCAN_ID, SCAN_INBOX_FULL } from "@grimoire/fake/db";
 import { printing } from "@grimoire/fake/fixtures";
@@ -51,6 +68,10 @@ import {
   STOP,
   STOPPED_TITLE,
 } from "@grimoire/ui/features/scanner/reader/readerText";
+import type {
+  ConfettiBurst,
+  TierConfettiProps,
+} from "@grimoire/ui/features/scanner/reader/TierConfetti";
 import { runClock } from "@grimoire/ui/features/scanner/submit/run";
 import {
   DB_BUSY,
@@ -72,7 +93,7 @@ import type { FakeParams } from "@grimoire/fake/world";
 import type { TrayDestination } from "@grimoire/ui/features/scanner/useTrayDestination";
 import { PhoneFace } from "../PhoneApp";
 import { ScannerPage } from "./ScannerPage";
-import { installLayout, renderPhone } from "../testing";
+import { holdOnItsSide, installLayout, renderPhone } from "../testing";
 
 /**
  * Generous on purpose, and the file's own test timeout with it: these tests pump frames through a
@@ -346,6 +367,12 @@ async function sayingAlert(): Promise<HTMLElement> {
   }, SETTLE);
   return found as HTMLElement;
 }
+/**
+ * The list's rows, name and quantity — the column beside the picture, **which the page mounts
+ * only on its side**: upright the list is the tray sheet's, opened from the peek. A test that
+ * reads or works the rows themselves holds the phone on its side first (`holdOnItsSide`), where
+ * they are on the page with no sheet over the picture.
+ */
 const trayRows = () =>
   within(screen.getByRole("region", { name: "Scanned cards" }))
     .queryAllByRole("listitem")
@@ -383,6 +410,7 @@ afterEach(async () => {
   restoreVideo = () => {};
   Object.defineProperty(navigator, "mediaDevices", { value: undefined, configurable: true });
   parked.set({ paused: false, released: false });
+  confetti.bursts.length = 0;
 });
 
 describe("the phone's Scanner page", () => {
@@ -390,8 +418,9 @@ describe("the phone's Scanner page", () => {
     // jsdom: `navigator.mediaDevices` is not there at all. Every other suite that walks through
     // this tab meets it like this.
     const { seen } = mount();
-    // The peek's and the list's: the one drawn upright, the other on its side.
-    expect(await screen.findAllByText("Cards you scan appear here.", {}, SETTLE)).toHaveLength(2);
+    // The peek's, and only the peek's: upright the page mounts no list beside it.
+    expect(await screen.findAllByText("Cards you scan appear here.", {}, SETTLE)).toHaveLength(1);
+    expect(document.querySelector("[data-tray-column]")).toBeNull();
     expect(await sayingAlert()).toHaveTextContent(/^Camera error: /);
     expect(screen.getByRole("heading", { level: 1, name: "Scanner" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add 0 to collection" })).toHaveAttribute(
@@ -457,6 +486,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("sends no frame until the stored tray has loaded, so a card never lands on an empty one", async () => {
+    holdOnItsSide();
     const { getUserMedia } = camera();
     restoreVideo = shimVideo();
     const cards = pile(1);
@@ -486,6 +516,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("lands each card the scanner decides once, newest first, and stores the tray", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
     const cards = pile(3);
@@ -555,6 +586,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("leaves the stored Developer switch alone, carrying it on through a write of another field", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
     const cards = pile(1);
@@ -577,6 +609,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("stops recognition and keeps the camera, and starts again on the same stream", async () => {
+    holdOnItsSide();
     const { stop, getUserMedia } = camera();
     restoreVideo = shimVideo();
     const cards = pile(1, "looking");
@@ -606,6 +639,7 @@ describe("the phone's Scanner page", () => {
    * No Start or Stop, and no Reset or Send: lifting the finger already ends the read.
    */
   it("reads while the picture is held under point and shoot, and pauses the moment it is let go", async () => {
+    holdOnItsSide();
     const { stop } = camera();
     restoreVideo = shimVideo();
     const cards = pile(1, "looking");
@@ -761,6 +795,7 @@ describe("the phone's Scanner page", () => {
 
   /** The printings a picture stands for ride the decision, and a card it cannot pin is a question. */
   it("lands a card the picture cannot pin to one printing as a question", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
     mount({
@@ -782,6 +817,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("lands an ambiguous card as a question, and a press on a candidate answers it", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
     const { seen } = mount({
@@ -822,6 +858,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("writes a row's edits to the stored tray — a quantity, a finish, a removal", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     const { seen } = mount({ tray: [...RESOLVED] });
     await screen.findByText("Urza's Saga", {}, SETTLE);
@@ -933,6 +970,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("files the tray in one commit, leaves what it did not take, and says what it filed", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     const { seen } = mount({ tray: [NEEDS_A_FINISH_ROW, ...RESOLVED], prefs: { condition: "NM" } });
     await userEvent.click(
@@ -962,6 +1000,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("keeps the copies a reader adds while the commit is in flight", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     let release: () => void = () => {};
     const gate = new Promise<void>((r) => (release = r));
@@ -995,6 +1034,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("keeps every row and says the backend's sentence when the commit is refused", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     mount({
       tray: [...RESOLVED],
@@ -1016,6 +1056,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("makes a deck of the scans and opens it, leaving the tray as it was", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     const made: unknown[] = [];
     const { seen } = mount({
@@ -1052,6 +1093,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("clears the tray only after a question that says how many copies will go", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     const { seen } = mount({ tray: [...RESOLVED] });
     const more = await screen.findByRole("button", { name: "Tray actions" }, SETTLE);
@@ -1079,6 +1121,7 @@ describe("the phone's Scanner page", () => {
    * words.
    */
   it("archives the tray into the scan history, filing nothing, and says so in one toast", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     const archived: { items: CollectionImportItem[]; remaining: ScannerTrayRow[] }[] = [];
     const { seen } = mount({
@@ -1116,6 +1159,7 @@ describe("the phone's Scanner page", () => {
   });
 
   it("keeps every row and says the backend's sentence over the bar when the archive is refused", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     mount({
       tray: [...RESOLVED],
@@ -1141,7 +1185,10 @@ describe("the phone's Scanner page", () => {
   it("opens the scan history from the tray's sheet, and hands the caret back to the ⋯", async () => {
     noCamera("NotAllowedError");
     mount({ fake: { seed: "scanHistory" } });
-    const more = await screen.findByRole("button", { name: "Tray actions" }, SETTLE);
+    // Upright, the tray's `⋯` is the sheet's, which the peek opens.
+    await userEvent.click(await screen.findByRole("button", { name: /^Scanned cards, / }, SETTLE));
+    const tray = await screen.findByRole("dialog", { name: /^Scanned cards, \d+ cop/ }, SETTLE);
+    const more = within(tray).getByRole("button", { name: "Tray actions" });
     await userEvent.click(more);
     await userEvent.click(
       within(await screen.findByRole("dialog", { name: "Scanned cards" })).getByRole("button", {
@@ -1165,6 +1212,7 @@ describe("the phone's Scanner page", () => {
    * caret back on the ⋯, one toast says so, and nothing is filed until the tray's own Add.
    */
   it("puts a past scan back in the tray from the history sheet, and says so once", async () => {
+    holdOnItsSide();
     noCamera("NotAllowedError");
     mount({ fake: { seed: "scanHistory" } });
     const more = await screen.findByRole("button", { name: "Tray actions" }, SETTLE);
@@ -1244,62 +1292,50 @@ describe("the phone's Scanner page", () => {
 
   /**
    * **On its side the tray is a column beside the picture** (the `landscape:` variant): the list
-   * and its header, no peek. Both are in the page either way — the classes are what draw one —
-   * so this asks the classes, and what a class cannot say: the Added popup's one line.
+   * and its header, no peek. The column is mounted only there — what script decides, asked of
+   * the same query — and the rest is the classes', so this asks the classes, and what a class
+   * cannot say: the Added popup's one line.
    */
   it("lays the list beside the picture on its side, with no peek, and the Added popup on one line", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
-    // Built whole: a spread of a real `MediaQueryList` would drop its prototype's methods.
-    const landscape = vi.spyOn(window, "matchMedia").mockImplementation(
-      (query: string) =>
-        ({
-          matches: query === "(orientation: landscape)",
-          media: query,
-          onchange: null,
-          addEventListener: () => {},
-          removeEventListener: () => {},
-          addListener: () => {},
-          removeListener: () => {},
-          dispatchEvent: () => false,
-        }) as unknown as MediaQueryList,
+    mount({ prefs: { finish: "nonfoil" }, over: () => ({ scanner_frame: pile(1).frame }) });
+    const column = (
+      await screen.findByRole("heading", { name: "Scanned cards, 0 copies" }, SETTLE)
+    ).closest("[data-tray-column]") as HTMLElement;
+    // Mounted on its side, and drawn by the classes alone: the grid's right column, scrolling by
+    // itself under the tray's own header (`Tray`'s, with the `⋯` handed in).
+    expect(column).toHaveClass("hidden", "landscape:block", "landscape:col-start-2");
+    expect(column).toHaveClass("overflow-y-auto");
+    expect(within(column).getByRole("button", { name: "Tray actions" })).toBeInTheDocument();
+    expect(within(column).getByRole("region", { name: "Scanned cards" })).toBeInTheDocument();
+    // The peek is undrawn on its side; the bar heads the right column.
+    expect(document.querySelector("[data-tray-peek-slot]")).toHaveClass("landscape:hidden");
+    expect(trayBar()).toHaveClass("landscape:col-start-2", "landscape:row-start-1");
+    // Two columns, the list's 22rem giving way to 14.5rem before the scanner's goes under the
+    // 22rem its controls need whole.
+    const page = trayBar().parentElement as HTMLElement;
+    expect(page).toHaveClass(
+      "landscape:grid",
+      "landscape:grid-cols-[minmax(0,1fr)_clamp(14.5rem,100%_-_22rem,22rem)]",
     );
-    try {
-      mount({ prefs: { finish: "nonfoil" }, over: () => ({ scanner_frame: pile(1).frame }) });
-      const column = (
-        await screen.findByRole("heading", { name: "Scanned cards, 0 copies" }, SETTLE)
-      ).closest("[data-tray-column]") as HTMLElement;
-      // Undrawn upright; on its side the grid's right column, scrolling by itself under the
-      // tray's own header (`Tray`'s, with the `⋯` handed in).
-      expect(column).toHaveClass("hidden", "landscape:block", "landscape:col-start-2");
-      expect(column).toHaveClass("overflow-y-auto");
-      expect(within(column).getByRole("button", { name: "Tray actions" })).toBeInTheDocument();
-      expect(within(column).getByRole("region", { name: "Scanned cards" })).toBeInTheDocument();
-      // The peek is undrawn on its side; the bar heads the right column.
-      expect(document.querySelector("[data-tray-peek-slot]")).toHaveClass("landscape:hidden");
-      expect(trayBar()).toHaveClass("landscape:col-start-2", "landscape:row-start-1");
-      // The page lays itself out as two columns, the list's 22rem.
-      const page = trayBar().parentElement as HTMLElement;
-      expect(page).toHaveClass("landscape:grid", "landscape:grid-cols-[minmax(0,1fr)_22rem]");
 
-      await start();
-      await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);
-      const landedCard = await waitFor(() => {
-        const card = cameraBox().querySelector<HTMLElement>("[data-landed]");
-        expect(card).not.toBeNull();
-        return card as HTMLElement;
-      }, SETTLE);
-      // One line: the name and the printing, and no label line over them.
-      expect(landedCard).toHaveTextContent("Urza's Saga");
-      expect(landedCard).not.toHaveTextContent("Added to scanned cards");
-      // The confetti's canvas is laid before the popup, so it flies from behind it.
-      const confetti = cameraBox().querySelector("canvas.size-full") as HTMLElement;
-      expect(
-        confetti.compareDocumentPosition(landedCard) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).not.toBe(0);
-    } finally {
-      landscape.mockRestore();
-    }
+    await start();
+    await waitFor(() => expect(trayRows()).toEqual([["Urza's Saga", "1"]]), SETTLE);
+    const landedCard = await waitFor(() => {
+      const card = cameraBox().querySelector<HTMLElement>("[data-landed]");
+      expect(card).not.toBeNull();
+      return card as HTMLElement;
+    }, SETTLE);
+    // One line: the name and the printing, and no label line over them.
+    expect(landedCard).toHaveTextContent("Urza's Saga");
+    expect(landedCard).not.toHaveTextContent("Added to scanned cards");
+    // The confetti's canvas is laid before the popup, so it flies from behind it.
+    const confetti = cameraBox().querySelector("canvas.size-full") as HTMLElement;
+    expect(
+      confetti.compareDocumentPosition(landedCard) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
   });
 
   it("draws the Added popup whole upright", async () => {
@@ -1315,7 +1351,62 @@ describe("the phone's Scanner page", () => {
     expect(landedCard).toHaveTextContent("Added to scanned cards");
   });
 
+  /**
+   * **The landing's price reaches the popup and the confetti by the sound's own ladder** — the
+   * desktop page's wiring, shared (`useLandedPrice`, `useLandedTier`, `TierConfetti`) over the
+   * fake's `scan_sounds`, a fresh install's $1, $10, $100, $1000: a card priced past a rung wears
+   * its figure bold gold and throws a burst at that rung.
+   */
+  it("throws confetti at the tier a landed card's price reaches, its figure gold", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    mount({
+      prefs: { finish: "nonfoil" },
+      over: () => ({
+        scanner_frame: pile(1).frame,
+        printing_prices: (args: { cardIds: string[] }) =>
+          args.cardIds.map((cardId) => ({
+            cardId,
+            finishPrices: { nonfoil: 150, foil: null, etched: null },
+          })),
+      }),
+    });
+    await start();
+    const figure = () => cameraBox().querySelector<HTMLElement>("[data-landed-price]");
+    await waitFor(() => expect(figure()).toHaveTextContent(/150\.00/), SETTLE);
+    expect(figure()).toHaveClass("font-semibold", "text-accent");
+    await waitFor(() => expect(last(confetti.bursts)).toMatchObject({ tier: "tier3" }), SETTLE);
+  });
+
+  /**
+   * A card that lands asking for a printing is quoted as its candidates' figure, plain, and throws
+   * nothing — a price for a card the reader has not said they hold is no tier, however high.
+   */
+  it("quotes a card that lands asking for a printing plainly, and throws no confetti for it", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    mount({
+      prefs: { finish: "nonfoil" },
+      over: () => ({
+        scanner_frame: frames(VERDICTS.voting, { ...VERDICTS.ambiguous, decision_seq: 1 }),
+        printing_prices: (args: { cardIds: string[] }) =>
+          args.cardIds.map((cardId) => ({
+            cardId,
+            finishPrices: { nonfoil: 250, foil: null, etched: null },
+          })),
+      }),
+    });
+    await start();
+    const figure = () => cameraBox().querySelector<HTMLElement>("[data-landed-price]");
+    await waitFor(() => expect(figure()).toHaveTextContent(/250\.00/), SETTLE);
+    expect(cameraBox().querySelector("[data-landed]")).toHaveAttribute("data-landed", "pick");
+    expect(figure()).toHaveClass("text-text");
+    expect(figure()).not.toHaveClass("text-accent");
+    expect(confetti.bursts.every((burst) => burst === null)).toBe(true);
+  });
+
   it("throws the scanner's evidence away on Reset evidence", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
     // An empty desk after the card, not a parked frame: a reset drains the frame on the wire
@@ -1435,6 +1526,7 @@ describe("sending a scan from the Scanner page", () => {
   });
 
   it("sends the run under the printing and finish the reader chooses, and shows the reference", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
     restoreFrames = numberedCanvas();
@@ -1633,6 +1725,7 @@ describe("sending a scan from the Scanner page", () => {
    * the press — and none.
    */
   it("draws no Send scan… where the page is mounted over a trade", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
     const cards = pile(0, "looking");
@@ -2027,6 +2120,7 @@ describe("what the Scanner page says when it cannot scan", () => {
    * prefs, the tray and the lease.
    */
   it("stays quiet on a host with no scanner session: no camera, no frame, the sentence where the picture would be", async () => {
+    holdOnItsSide();
     const { getUserMedia } = camera();
     restoreVideo = shimVideo();
     const refuse = () => {
@@ -2191,6 +2285,7 @@ describe("a Scanner page nobody is looking at", () => {
   });
 
   it("keeps what was scanned for the next visit", async () => {
+    holdOnItsSide();
     camera();
     restoreVideo = shimVideo();
     mount({ over: () => ({ scanner_frame: pile(1).frame }) });

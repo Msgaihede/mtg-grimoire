@@ -6,7 +6,7 @@ import { CardArt } from "@grimoire/ui/components/CardArt";
 import { CardImage } from "@grimoire/ui/components/CardImage";
 import { cardPrintingsKey } from "@grimoire/ui/features/card/cardKeys";
 import {
-  needsDecision,
+  needYouCount,
   needYouLabel,
   NEXT_DECISION_LABEL,
   nextDecisionKey,
@@ -226,7 +226,7 @@ export function Tray({
   const copies = totalCopies(rows);
   // Every card still asking something — a printing or a finish — as the peek, the tray sheet and
   // the desktop's header count them.
-  const waiting = rows.filter(needsDecision).length;
+  const waiting = needYouCount(rows);
   const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows, marketplace);
 
   const [asking, setAsking] = useState<Asking>(null);

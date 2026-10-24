@@ -37,6 +37,12 @@ const TRADE: Trade = {
  *
  * `open` and `side` are this host's state, as they are the page's: *Scan onto* really switches, a
  * finished Add really closes, and the button underneath opens it again.
+ *
+ * **Held on its side**, as a workbench canvas wider than it is tall holds it anyway: the scanner
+ * page mounts the tray's list column only there (upright the list is the tray sheet's), and the
+ * stories here read and press that list. `matchMedia` answers `true` to the `landscape:` variant's
+ * query for as long as the story is up — the test run's jsdom answers every query `false`.
+ * Narrowed with the viewport tool, the classes still draw the page upright.
  */
 function Host({
   trade,
@@ -58,9 +64,30 @@ function Host({
       configurable: true,
       value: { getUserMedia: () => Promise.reject(new DOMException("x", "NotAllowedError")) },
     });
+    const savedQuery = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    const ask = window.matchMedia.bind(window);
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) =>
+        query === "(orientation: landscape)"
+          ? ({
+              matches: true,
+              media: query,
+              onchange: null,
+              addEventListener: () => {},
+              removeEventListener: () => {},
+              addListener: () => {},
+              removeListener: () => {},
+              dispatchEvent: () => false,
+            } as unknown as MediaQueryList)
+          : ask(query),
+    });
     return () => {
       if (saved === undefined) Reflect.deleteProperty(navigator, "mediaDevices");
       else Object.defineProperty(navigator, "mediaDevices", saved);
+      if (savedQuery === undefined) Reflect.deleteProperty(window, "matchMedia");
+      else Object.defineProperty(window, "matchMedia", savedQuery);
     };
   })[0];
   useEffect(() => restore, [restore]);
@@ -221,7 +248,7 @@ export const NothingScanned: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const sheet = await canvas.findByRole("dialog", { name: "Scan cards" });
-    // The peek's line and the list's: the page draws one upright, the other on its side.
+    // The peek's line and, on its side, the list's — the page mounts that list only there.
     await expect(await within(sheet).findAllByText("Cards you scan appear here.")).not.toHaveLength(
       0,
     );

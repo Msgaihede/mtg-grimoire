@@ -93,7 +93,8 @@ const PHONES: [number, number][] = [
   [360, 800],
   [412, 915],
 ];
-/** A phone on its side: past the page's 720px, where its two columns stand side by side. */
+/** A phone on its side: wider than it is tall, where the page's two columns stand side by side
+ *  (the `landscape:` variant — the shape decides, not a width). */
 const SIDEWAYS: [number, number] = [800, 360];
 /** `PARK_GRACE_MS` in `packages/ui/features/scanner/useParked.ts`. */
 const PARK_GRACE_MS = 5000;
@@ -188,9 +189,15 @@ const HELPERS = `(() => {
     el.click();
     return true;
   };
-  /** The tray's rows as the page holds them — the list in the page is always mounted, drawn only
-   *  on a phone's side; upright it is \`hidden\` and the same rows are drawn in the tray sheet. */
-  const rows = () => [...document.querySelectorAll('[data-tray-column] [data-tray-row]')];
+  /** The tray's rows, name, finish and quantity — the list beside the picture on a phone's side,
+   *  which the page mounts only there, and upright the tray sheet's while it is open. */
+  const rows = () => [...document.querySelectorAll('[data-tray-column] [data-tray-row], [data-tray-sheet-list] [data-tray-row]')];
+  /** The peek's tiles, upright: one a row, newest first, for the newest 20 (\`PEEK_ROWS\`); a row
+   *  still waiting on a printing is a dashed \`Pick\` tile. */
+  const tiles = () => [...document.querySelectorAll('[data-tray-peek-slot] [data-tray-peek]')];
+  /** How many rows the tray holds, read off the page without opening anything: the list's on a
+   *  phone's side, the peek's tiles upright (so never past 20 there). */
+  const count = () => (document.querySelector('[data-tray-column]') === null ? tiles() : rows()).length;
   /** The rows a finger can reach now: the sheet's upright, the column's on its side. */
   const shownRows = () => [...document.querySelectorAll('[data-tray-row]')].filter(visible);
   /** The topmost sheet or dialog **other than the tray sheet**, which stays under the sheets
@@ -225,7 +232,7 @@ const HELPERS = `(() => {
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
     return hit !== null && (hit === el || el.contains(hit));
   };
-  window.smoke = { visible, named, controls, button, starting, press, rows, shownRows, sheet, trayList, peek, bar, status, box, measure, reachable };
+  window.smoke = { visible, named, controls, button, starting, press, rows, tiles, count, shownRows, sheet, trayList, peek, bar, status, box, measure, reachable };
 })()`;
 
 /** A tab on the light app at `path`, sized as a phone under a touch pointer and the dark theme. */
@@ -450,25 +457,15 @@ async function phone(send: Send, width: number, height: number) {
   await page.evaluate(`smoke.press(smoke.button('Close scanner options'), 'close')`);
   await page.until(`smoke.sheet() === null`, "the sheet to close");
   await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
-  await page.until(`smoke.rows().length >= 1`, "the first card to land");
-  const first = await page.evaluate<{ status: string; row: string }>(
-    `({ status: smoke.status(), row: smoke.rows()[0].textContent })`,
+  // Counted off the peek's tiles: upright the rows themselves are the tray sheet's, read in 4.
+  await page.until(`smoke.count() >= 1`, "the first card to land");
+  // The page's own word on the card that landed, upright: the Added popup over the picture.
+  const first = await page.evaluate<string>(
+    `document.querySelector('[data-camera-box]').textContent`,
   );
-  if (!/Urza's Saga/.test(first.row)) fail(`${at}: the first row is "${first.row}"`);
+  if (!/Urza's Saga/.test(first)) fail(`${at}: the first card over the picture is "${first}"`);
   await page.shot("scanning");
-  await page.until(`smoke.rows().length >= 2`, "the third card (the second is a second copy)");
-  const landed = await page.evaluate(
-    `smoke.rows().map((row) => [row.querySelector('span.text-sm').textContent, row.querySelector('output').textContent])`,
-  );
-  if (
-    JSON.stringify(landed) !==
-    JSON.stringify([
-      ["Ancient Tomb", "1"],
-      ["Urza's Saga", "2"],
-    ])
-  ) {
-    fail(`${at}: after three cards the tray reads ${JSON.stringify(landed)}`);
-  }
+  await page.until(`smoke.count() >= 2`, "the third card (the second is a second copy)");
 
   // ------------------------------------------------ 3. stop ------------------------------
   await page.evaluate(`smoke.press(smoke.button('Stop'), 'Stop')`);
@@ -480,7 +477,7 @@ async function phone(send: Send, width: number, height: number) {
     live: string;
     rows: number;
     note: string;
-  }>(`({ frames: window.seen.frames, live: ${TRACK}?.readyState, rows: smoke.rows().length,
+  }>(`({ frames: window.seen.frames, live: ${TRACK}?.readyState, rows: smoke.count(),
     note: document.querySelector('[data-camera-box]').textContent })`);
   if (later.frames.length !== stopped)
     fail(`${at}: ${later.frames.length - stopped} frames went out after Stop`);
@@ -494,10 +491,22 @@ async function phone(send: Send, width: number, height: number) {
     `${at}: ${later.frames.length} frames, every one the JPEG alone; 3 cards → 2 rows; Stop holds the picture`,
   );
 
-  // ------------------------------------------------ 4. a quantity, a folder ---------------
-  // The stepper is a row's, so the tray sheet is opened for it; the folder is the bar's, which the
-  // page keeps on screen over the picture.
+  // ------------------------------------------------ 4. the rows, a quantity, a folder ------
+  // The rows and their steppers are the tray sheet's upright, so it is opened for them; the folder
+  // is the bar's, which the page keeps on screen over the picture.
   await openTray(page);
+  const landed = await page.evaluate(
+    `smoke.rows().map((row) => [row.querySelector('span.text-sm').textContent, row.querySelector('output').textContent])`,
+  );
+  if (
+    JSON.stringify(landed) !==
+    JSON.stringify([
+      ["Ancient Tomb", "1"],
+      ["Urza's Saga", "2"],
+    ])
+  ) {
+    fail(`${at}: after three cards the tray reads ${JSON.stringify(landed)}`);
+  }
   await page.evaluate(`smoke.press(smoke.starting('One more Ancient Tomb'), 'the stepper')`);
   await page.until(
     `smoke.rows()[0].querySelector('output').textContent === '2'`,
@@ -532,7 +541,8 @@ async function phone(send: Send, width: number, height: number) {
   hold(`${at}, two rows`, await page.evaluate<Measurement>(`smoke.measure()`));
   for (const n of [5, 40]) {
     const was = await page.evaluate(withTray(rowsOf(n)));
-    await page.until(`smoke.rows().length === ${n}`, `${n} rows`);
+    // The peek draws the newest 20 (`PEEK_ROWS`); the whole count is the tray sheet's, below.
+    await page.until(`smoke.count() === ${Math.min(n, 20)}`, `${n} rows`);
     // The page itself: the bar on top, the peek below, nothing scrolling however long the tray.
     const m = await page.evaluate<
       Measurement & {
@@ -555,6 +565,7 @@ async function phone(send: Send, width: number, height: number) {
       fail(`${at}, ${n} rows: the bar or the peek runs off the screen or under the tab bar`);
     // The whole tray: the sheet, with its own bar, and a list that scrolls clear of it.
     await openTray(page);
+    await page.until(`smoke.rows().length === ${n}`, `${n} rows in the tray sheet`);
     const sheet = await page.evaluate<
       Measurement & {
         add: boolean;
@@ -583,13 +594,13 @@ async function phone(send: Send, width: number, height: number) {
     );
     await closeTray(page);
     await page.evaluate(withTray(JSON.stringify(was)));
-    await page.until(`smoke.rows().length === 2`, "the scanned rows back");
+    await page.until(`smoke.count() === 2`, "the scanned rows back");
   }
 
   // ------------------------------------------------ 6. Add --------------------------------
   await page.evaluate(`smoke.press(smoke.starting('Add 4 to collection', smoke.bar()), 'Add')`);
   await page.until(
-    `window.seen.commits.length === 1 && smoke.rows().length === 0`,
+    `window.seen.commits.length === 1 && smoke.count() === 0`,
     "the commit, and an empty tray",
   );
   const commit = await page.evaluate<{
@@ -667,7 +678,7 @@ async function phone(send: Send, width: number, height: number) {
   await page.until(`${TRACK}?.readyState === 'live'`, "the camera again");
   await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(
-    `smoke.rows().some((row) => /Pick a printing/.test(row.textContent))`,
+    `smoke.tiles().some((tile) => tile.textContent.trim() === 'Pick')`,
     "the card the scanner cannot pin to one printing",
     30_000,
   );
