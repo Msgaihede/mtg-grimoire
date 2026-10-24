@@ -632,6 +632,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 onRows={(update) => writeRows(update(tray.latest()))}
                 folderId={folderId}
                 onFolder={(id) => update({ folderId: id })}
+                condition={prefs.condition}
+                onCondition={(condition) => update({ condition })}
                 onCommit={onCommit}
                 // A deck is made from the collection's side of the scanner; a destination's
                 // host is in the middle of something else.

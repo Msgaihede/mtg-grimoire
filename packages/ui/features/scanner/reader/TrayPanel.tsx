@@ -1,11 +1,13 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
   Archive,
   ArrowDown,
   ChevronUp,
+  Ellipsis,
   Folder,
   FolderPlus,
+  Layers,
   LayoutGrid,
   List as ListIcon,
   LoaderCircle,
@@ -25,12 +27,14 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
+import { CONDITION_LABEL, CONDITIONS, type Condition } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
-import { FOCUS } from "@/lib/focus";
+import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl, type ImageVariant } from "@/lib/images";
+import { LAYER } from "@/lib/layers";
 import type {
   ScannerTrayChoice,
   ScannerTrayFinish,
@@ -54,6 +58,7 @@ import {
   EMPTY_REASON,
   needsDecision,
   needsFinishCount,
+  needYouLabel,
   NEXT_DECISION_LABEL,
   nextDecisionKey,
   pickChoice,
@@ -62,13 +67,14 @@ import {
   setFinish,
   setQuantity,
   totalCopies,
-  unresolvedCount,
 } from "./tray";
 
 // The Add button's words and the walk's name are `tray.ts`'s now — the light app's phone page says
 // the same ones — and are handed on from here for the importers that found them in this file.
 export { addLabel, NEXT_DECISION_LABEL };
 import { isKnownFinish, TRAY_FINISH_LABEL, trayFinishChoices } from "./trayFinish";
+import { trayWorth } from "./trayPrice";
+import { useGridColumns } from "./useGridColumns";
 import { useHeadLanded } from "./useHeadLanded";
 import { useTrayPrices } from "./useTrayPrices";
 
@@ -82,7 +88,20 @@ export interface TrayPanelProps {
   onRows: (update: (rows: ScannerTrayRow[]) => ScannerTrayRow[]) => void;
   folderId: number | null;
   onFolder: (id: number | null) => void;
+  /**
+   * The condition Add files every copy in — the stored `prefs.condition`, which the page hands
+   * down and the panel holds no copy of, like the folder. **Drawn in the footer beside the folder**
+   * because it is read at the press and nowhere else: a fact about where the cards are going, not
+   * about how the camera reads them. Unread with a {@link destination}, which files no condition.
+   */
+  condition: Condition;
+  /** The footer's *Condition* was set to another grade. */
+  onCondition: (condition: Condition) => void;
   onCommit: () => void;
+  /**
+   * *Create deck…* was pressed, from the header's `⋯` menu; absent draws no row. `opener` is the
+   * `⋯`, as for {@link onClearAll}.
+   */
   onCreateDeck?: (opener: HTMLElement) => void;
   committing: boolean;
   commitError: string | null;
@@ -100,8 +119,8 @@ export interface TrayPanelProps {
    * *Clear all…* was pressed — **a request, never the clear itself.** The page asks first, and it is
    * the page that has to: the tray is drawn inside the view's `@container/scan` box, which is the
    * containing block for anything `fixed`, so a confirmation mounted here would be a scrim the size
-   * of this column (`packages/ui/CLAUDE.md`, the `@container` rule). `opener` is the button, for the caret
-   * to come back to.
+   * of this column (`packages/ui/CLAUDE.md`, the `@container` rule). `opener` is the header's `⋯`
+   * — never the menu's own row, which goes with the menu — for the caret to come back to.
    */
   onClearAll: (opener: HTMLElement) => void;
   /**
@@ -218,9 +237,9 @@ const TILE_VARIANT: ImageVariant = "grid";
  * or four at the wide one. **The floor is `min(9rem, 50% − half a gap)` rather than 9rem alone**
  * so a tray squeezed under two 9rem columns still draws two rather than one card the width of the
  * tray; it is exactly 9rem wherever two 9rem columns fit — which is every width the page draws the
- * tray at. The half gap is `gap-x-3`'s, so the two have to move together, and a waiting tile lays
- * its candidates out on the same template with the same gap, so they are the size of the tiles
- * around them (issue #1004).
+ * tray at. The half gap is `gap-x-3`'s, so the two have to move together. A waiting tile lays its
+ * candidates out on as many columns as it spans, with the same gap, so they are the size of the
+ * tiles around them (issue #1004) — and on this template itself until the grid has been measured.
  */
 const TILE_COLUMNS = "repeat(auto-fill, minmax(min(9rem, calc(50% - 0.375rem)), 1fr))";
 
@@ -230,9 +249,11 @@ const TILE_COLUMNS = "repeat(auto-fill, minmax(min(9rem, calc(50% - 0.375rem)), 
  *
  * `translate` is its own longhand in Tailwind v4, as `scale` is (see `PRESS_STILL`), so the list
  * names it rather than `transform`. Reduced motion keeps the shadow and drops the travel, the way
- * `CardArt`'s hover zoom drops its scale. On the card's own box and never on the tile around it:
- * a transformed ancestor is the containing block for a `fixed` descendant, and the finish picker
- * under the card opens its panel from a `fixed` frame.
+ * `CardArt`'s hover zoom drops its scale. **A waiting tile's candidates wear it, and a resolved
+ * tile's picture does not**: that picture is the top of one bordered card that clips what is in it,
+ * so it has nowhere to rise to, and the card as a whole cannot rise either — a transformed ancestor
+ * is the containing block for a `fixed` descendant, and the finish picker in its chin opens its
+ * panel from a `fixed` frame.
  */
 const LIFT =
   "transition-[translate,box-shadow] duration-[var(--duration-fast)] ease-standard motion-reduce:transition-none " +
@@ -275,8 +296,12 @@ function choiceLabel(choice: ScannerTrayChoice): string {
  * from `rows` instead was one render old — a card the pump had just added and this panel had not
  * yet drawn was written away by the next press of a stepper.
  *
- * **The rows scroll and the footer does not.** A reader with forty cards scanned still has the
- * folder and the Add button in view, because those are what the tray is *for*.
+ * **The rows scroll and the header and footer do not.** A reader with forty cards scanned still has
+ * the folder, the condition and the Add button in view, because those are what the tray is *for* —
+ * and the header's figures with them: the copies, what they are worth at the tray's marketplace,
+ * and how many still need the reader, as the press that walks to the next one. The tray-wide
+ * presses that are not the point of it — *Create deck…*, *Archive*, *Clear all…* — wait in the
+ * header's `⋯`.
  *
  * **Two layouts over one set of rows, and only the drawing differs.** The grid lays each card out
  * as a tile you can read at a glance — the wide tray's default — and the list is the line per card
@@ -295,6 +320,8 @@ export function TrayPanel({
   onRows,
   folderId,
   onFolder,
+  condition,
+  onCondition,
   onCommit,
   onCreateDeck,
   committing,
@@ -314,22 +341,40 @@ export function TrayPanel({
   const title = destination?.title ?? "Scanned cards";
   const tip = useTooltip();
   const copies = totalCopies(rows);
-  const waiting = unresolvedCount(rows);
+  // The rows still asking the reader something — a printing or a finish — which is what the
+  // header's *N need you* counts and its walk stops at, one row per stop.
+  const asking = rows.filter(needsDecision).length;
   const ready = totalCopies(readyRows(rows));
   const needsFinish = needsFinishCount(rows);
   // The order `commitPlan` refuses in, so the drawing and the press agree.
   const refusal = addRefusal(rows);
-  const deckRefused = deckRefusal(rows);
   // Add and Archive put the same rows away, so either one in flight holds every press that would
   // act on them — the commit's own state, widened.
   const busy = committing || archiving;
   const refused = refusal !== null || busy;
-  const deciding = rows.some(needsDecision);
 
   // The walk's cursor: the row the last press landed on, by key — `nextDecisionKey` says why a key.
   // Read-only over `rows`, so it is free of `onRows`' rule: nothing here writes the tray.
   const [cursor, setCursor] = useState<string | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  // The grid's column count, for a waiting tile's span — read off the grid itself, since an
+  // `auto-fill` template decides it from the width (`useGridColumns`).
+  const [observeGrid, columns] = useGridColumns<HTMLUListElement>();
+  // **One element, two refs**: the walk and the landing scroll read `listRef` in either layout, and
+  // the grid's is also observed. Stable, so the grid is observed once rather than on every render;
+  // and the cleanup puts `listRef` down itself, because React calls a ref's returned cleanup *in
+  // place of* calling it with `null`.
+  const gridList = useCallback(
+    (el: HTMLUListElement | null) => {
+      listRef.current = el;
+      const stop = observeGrid(el);
+      return () => {
+        if (typeof stop === "function") stop();
+        listRef.current = null;
+      };
+    },
+    [observeGrid],
+  );
   // **A card that lands takes the tray back to its top** (issue #1320): the tray is newest first,
   // so a reader forty cards down would otherwise see nothing of the card they just scanned — not
   // its row, not its flash. A pick, a finish or a removal is no landing and scrolls nothing.
@@ -352,15 +397,14 @@ export function TrayPanel({
     row.querySelector<HTMLElement>("[data-decision] button")?.focus({ preventScroll: true });
   };
 
-  // Nothing to clear, or a commit about to file these very rows — the Add button's two states that
-  // are not about printings or finishes, since a card waiting on either can still be thrown away.
-  const clearRefused = rows.length === 0 || busy;
-  // **Archive is refused on Clear all's terms, not Add's**: greyed on an empty tray and while
-  // either press is in flight, and otherwise pressable — a row waiting on a printing is said by
-  // the press, in the plan's sentence above the rows, exactly as it would be for an Add.
-  const archiveShown = onArchive !== undefined && destination === undefined;
+  // An archive is the Scanner view's own history, and a side of a trade is not a pile to keep a
+  // record of here — so a destination draws no Archive whatever the page hands down.
+  const archive = destination === undefined ? onArchive : undefined;
   const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows, destination?.marketplace);
   const money: Money = { currency, marketplaceLabel };
+  // The same unit price each card shows, times its copies — so the figure in the header is the sum
+  // of the figures under the cards, and a card whose price has not been read yet is in neither.
+  const worth = trayWorth(rows, priceOf);
 
   // What a press on a card does — four writes, each a reducer call waiting for the latest rows, and
   // the printings dialog — built once here so the row and the tile cannot come to disagree.
@@ -381,9 +425,9 @@ export function TrayPanel({
       aria-labelledby={titleId}
       className="flex min-h-0 flex-1 flex-col rounded-lg border border-border bg-surface"
     >
-      {/* `flex-wrap` for a narrow tray: the title, a pending pick and the toggle can be wider than
-          it together, and the right-hand pair then wraps as one — still at the right end — rather
-          than pushing the toggle out of the tray. */}
+      {/* `flex-wrap` for a narrow tray: the title, its figures and the right-hand controls can be
+          wider than it together, and the right-hand group then wraps as one — still at the right
+          end — rather than pushing the `⋯` out of the tray. */}
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-3 py-2">
         {/* **The name is spelled, not computed.** The title and its count are two elements with a
             gap between them, which the name algorithm fuses into `Scanned cards3`; the label says
@@ -397,29 +441,39 @@ export function TrayPanel({
             {copies}
           </span>
         </h3>
-        <div className="ml-auto flex items-center gap-3">
-          {waiting > 0 && (
-            <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>
-          )}
-          {/* Hidden rather than greyed when nothing is waiting, like *More printings…* for a card
-              with no oracle id: a control that can do nothing is one a reader keeps trying. Gold,
-              because it walks the questions gold already marks — the dashed waiting tile and the
-              `Unknown` finish's border. */}
-          {deciding && (
-            <button
-              type="button"
-              onClick={nextDecision}
-              className={cn(
-                "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-2.5 text-xs text-accent",
-                "hover:bg-accent hover:text-accent-fg",
-                PRESS,
-                FOCUS,
-              )}
-            >
-              <ArrowDown className="size-3.5" aria-hidden="true" />
-              {NEXT_DECISION_LABEL}
-            </button>
-          )}
+        {/* **Only once a copy has a price.** A tray of unpriced cards, or one whose read has not
+            answered yet, has no worth to state — `$0.00` there would be a claim about cards
+            nobody has priced. */}
+        {worth.priced > 0 && (
+          <span className="inline-flex items-baseline gap-1.5 text-xs text-dim">
+            Worth{" "}
+            <span className="font-mono text-sm tabular-nums text-text">
+              {formatPrice(worth.total, currency)}
+            </span>
+          </span>
+        )}
+        {/* Hidden rather than greyed when nothing is waiting, like *More printings…* for a card
+            with no oracle id: a control that can do nothing is one a reader keeps trying. Gold,
+            because it walks the questions gold already marks — the dashed waiting tile and the
+            `Unknown` finish's border. **Named for the walk as well as the count**: the words say
+            how many, and a press on `2 need you` alone would not say where it goes. */}
+        {asking > 0 && (
+          <button
+            type="button"
+            aria-label={`${needYouLabel(asking)}: ${NEXT_DECISION_LABEL}`}
+            onClick={nextDecision}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-2.5 text-xs text-accent",
+              "hover:bg-accent hover:text-accent-fg",
+              PRESS,
+              FOCUS,
+            )}
+          >
+            <ArrowDown className="size-3.5" aria-hidden="true" />
+            {needYouLabel(asking)}
+          </button>
+        )}
+        <div className="ml-auto flex items-center gap-1.5">
           {onAddCard && (
             <button
               type="button"
@@ -436,64 +490,15 @@ export function TrayPanel({
               {ADD_CARD_LABEL}
             </button>
           )}
-          {/* **Drawn greyed rather than hidden on an empty tray**: a confirmed clear empties the
-              tray, and the caret the dialog hands back has to land on a control that is still
-              there — a hidden button would be a detached node and a silent `focus()`. */}
-          <button
-            type="button"
-            aria-disabled={clearRefused || undefined}
-            onClick={(e) => {
-              if (clearRefused) return;
-              onClearAll(e.currentTarget);
-            }}
-            {...tip(busy ? null : rows.length === 0 ? EMPTY_REASON : null)}
-            className={cn(
-              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-dim",
-              "hover:text-destructive",
-              PRESS,
-              "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:text-dim",
-              "aria-disabled:active:scale-100",
-              FOCUS,
-            )}
-          >
-            <Trash2 className="size-3.5" aria-hidden="true" />
-            Clear all…
-          </button>
-          {/* **Beside *Clear all…* and drawn on its rules** — greyed, never hidden, on an empty
-              tray, so a press that has just archived everything leaves the caret on a control
-              that is still there. No question first: nothing is thrown away, the rows go to the
-              history where the reader can read them back, and the toast says where. */}
-          {archiveShown && (
-            <button
-              type="button"
-              aria-disabled={clearRefused || undefined}
-              aria-busy={archiving || undefined}
-              onClick={() => {
-                if (clearRefused) return;
-                onArchive();
-              }}
-              {...tip(busy ? null : rows.length === 0 ? EMPTY_REASON : ARCHIVE_TIP)}
-              className={cn(
-                "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-dim",
-                "hover:text-text",
-                PRESS,
-                "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:text-dim",
-                "aria-disabled:active:scale-100",
-                FOCUS,
-              )}
-            >
-              {archiving ? (
-                <LoaderCircle
-                  className="size-3.5 animate-spin motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-              ) : (
-                <Archive className="size-3.5" aria-hidden="true" />
-              )}
-              Archive
-            </button>
-          )}
           <LayoutToggle layout={layout} onLayout={onLayout} />
+          <TrayActions
+            rows={rows}
+            busy={busy}
+            archiving={archiving}
+            onCreateDeck={onCreateDeck}
+            onArchive={archive}
+            onClearAll={onClearAll}
+          />
         </div>
       </header>
 
@@ -515,12 +520,12 @@ export function TrayPanel({
         </p>
       ) : layout === "grid" ? (
         // The list's scroller with a grid inside it: `relative` for the same reason, and `p-3.5`
-        // rather than `p-1.5` because a tile's card rises out of its box under the pointer and
-        // its shadow falls wider still — the top row's lift and the outer columns' focus outline
-        // both need room inside the clip. `content-start` so a short tray's rows stay at the top
-        // instead of being stretched down the column.
+        // rather than `p-1.5` because a waiting tile's candidates rise out of their box under the
+        // pointer and their shadow falls wider still — the top row's lift and the outer columns'
+        // focus outline both need room inside the clip. `content-start` so a short tray's rows stay
+        // at the top instead of being stretched down the column.
         <ul
-          ref={listRef}
+          ref={gridList}
           className="relative grid min-h-0 flex-1 content-start gap-x-3 gap-y-[18px] overflow-y-auto p-3.5"
           style={{ gridTemplateColumns: TILE_COLUMNS }}
         >
@@ -530,9 +535,11 @@ export function TrayPanel({
               <WaitingTile
                 key={row.key}
                 row={row}
+                columns={columns}
                 flash={row.key === flashKey}
                 onPick={on.onPick}
                 onRemove={on.onRemove}
+                onMorePrintings={on.onMorePrintings}
               />
             ) : (
               <TrayTile
@@ -577,32 +584,15 @@ export function TrayPanel({
         </p>
       )}
 
-      {/* The picker grows to a cap and the Add button is pushed to the far end: in a tray a third of
-          a wide window, a picker that took every pixel left would put the button a hand's width
-          from the destination it files into. Below the cap the row is what it always was — the
-          picker fills, and wraps above the button when the two no longer fit side by side. */}
-      <footer className="flex flex-wrap items-end gap-2 border-t border-border p-3">
-        {onCreateDeck && (
-          <button
-            type="button"
-            aria-disabled={deckRefused !== null || busy || undefined}
-            onClick={(e) => {
-              if (deckRefused !== null || busy) return;
-              onCreateDeck(e.currentTarget);
-            }}
-            {...tip(busy ? null : deckRefused)}
-            className={cn(
-              "inline-flex h-9 items-center rounded-md border border-border px-3 text-sm hover:border-accent hover:text-accent",
-              PRESS,
-              FOCUS,
-              "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:active:scale-100",
-            )}
-          >
-            Create deck…
-          </button>
-        )}
+      {/* Where the cards go, how they are graded, and the press that sends them — the three things
+          the tray is *for*, so they stay in view while the rows scroll. The pickers wrap above the
+          press when the three no longer fit side by side, and the press keeps the far end. */}
+      <footer className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border p-3">
         {destination === undefined ? (
-          <FolderPicker folderId={folderId} onFolder={onFolder} />
+          <>
+            <FolderPicker folderId={folderId} onFolder={onFolder} />
+            <ConditionPicker condition={condition} onCondition={onCondition} />
+          </>
         ) : (
           destination.summary?.(rows)
         )}
@@ -618,11 +608,11 @@ export function TrayPanel({
           // already says what is happening and a sentence about emptiness would be untrue.
           {...tip(busy ? null : refusal)}
           className={cn(
-            "ml-auto inline-flex h-9 shrink-0 items-center gap-2 rounded-md border border-accent px-4 text-sm text-accent",
-            "hover:bg-accent hover:text-accent-fg",
+            "ml-auto inline-flex h-10 shrink-0 items-center gap-2 rounded-md bg-accent px-5 text-sm font-semibold text-accent-fg",
+            "hover:bg-accent/90",
             PRESS,
-            "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:bg-transparent",
-            "aria-disabled:hover:text-accent aria-disabled:active:scale-100",
+            "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:bg-accent",
+            "aria-disabled:active:scale-100",
             FOCUS,
           )}
         >
@@ -638,6 +628,196 @@ export function TrayPanel({
         </button>
       </footer>
     </section>
+  );
+}
+
+/**
+ * The header's `⋯`: the tray-wide presses that are not the one it is for — *Create deck…*,
+ * *Archive* and *Clear all…*, in that order — in an `AnchoredPopup` under it.
+ *
+ * **Each row keeps the refusal it had as a header button**: `aria-disabled` rather than the
+ * attribute, the press doing nothing, and the reason in its tooltip. *Archive* and *Clear all…*
+ * refuse on the same terms — an empty tray, or a write already putting these rows away — and a
+ * card still waiting on a printing or a finish can be thrown away or archived all the same;
+ * *Create deck…* adds `deckRefusal`'s, since a deck files every row or none.
+ *
+ * **The opener a row hands up is the `⋯`, never the row.** The row goes with the menu the moment it
+ * is pressed, so a dialog that handed the caret back to it would be focusing a detached node and
+ * the caret would drop to `<body>`; the `⋯` is drawn for as long as the tray is. The menu is shut
+ * first, on Escape's own path, so the caret is already on the `⋯` when the page opens its dialog.
+ */
+function TrayActions({
+  rows,
+  busy,
+  archiving,
+  onCreateDeck,
+  onArchive,
+  onClearAll,
+}: {
+  rows: readonly ScannerTrayRow[];
+  busy: boolean;
+  archiving: boolean;
+  onCreateDeck?: (opener: HTMLElement) => void;
+  onArchive?: () => void;
+  onClearAll: (opener: HTMLElement) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const deckRefused = deckRefusal(rows);
+  // Nothing to clear, or a commit about to file these very rows.
+  const clearRefused = rows.length === 0 || busy;
+  // The reason, while there is one to give; none while a write is in flight, where the busy row
+  // already says what is happening and a sentence about emptiness would be untrue.
+  const emptyReason = busy ? null : rows.length === 0 ? EMPTY_REASON : null;
+  // `AnchoredPopup` keeps its trigger to itself, and it is the first button in its root — the
+  // panel is drawn after it.
+  const trigger = () => rootRef.current?.querySelector<HTMLElement>("button") ?? null;
+  const press = (close: () => void, act: (opener: HTMLElement) => void) => {
+    const opener = trigger();
+    close();
+    if (opener !== null) act(opener);
+  };
+
+  return (
+    <div ref={rootRef} className="flex">
+      <AnchoredPopup
+        label="Tray actions"
+        panelLabel="Tray actions"
+        icon={<Ellipsis className="size-4" aria-hidden="true" />}
+        // The layout toggle's square beside it, and its floor for a finger.
+        triggerClassName="size-8 coarse:min-w-[var(--target-min)]"
+        // Under the trigger rather than over its foot, and right-aligned: it is the header's last
+        // control, so a panel opening rightwards would leave the tray.
+        panelClassName="top-full mt-1 w-48 p-1"
+      >
+        {(close) => (
+          <ul className="flex flex-col">
+            {onCreateDeck && (
+              <TrayAction
+                label="Create deck…"
+                Icon={Layers}
+                held={deckRefused !== null || busy}
+                reason={busy ? null : deckRefused}
+                onPress={() => press(close, onCreateDeck)}
+              />
+            )}
+            {onArchive && (
+              <TrayAction
+                label="Archive"
+                Icon={Archive}
+                spinning={archiving}
+                held={clearRefused}
+                // What it does, while it can — the one thing the word does not say.
+                reason={busy ? null : rows.length === 0 ? EMPTY_REASON : ARCHIVE_TIP}
+                onPress={() =>
+                  press(close, () => {
+                    onArchive();
+                  })
+                }
+              />
+            )}
+            <TrayAction
+              label="Clear all…"
+              Icon={Trash2}
+              destructive
+              held={clearRefused}
+              reason={emptyReason}
+              onPress={() => press(close, onClearAll)}
+            />
+          </ul>
+        )}
+      </AnchoredPopup>
+    </div>
+  );
+}
+
+/** One row of the `⋯` menu: its icon and word, refused in place with its reason as a tooltip. */
+function TrayAction({
+  label,
+  Icon,
+  spinning = false,
+  destructive = false,
+  held,
+  reason,
+  onPress,
+}: {
+  label: string;
+  Icon: LucideIcon;
+  /** A write under way — the row spins and is `aria-busy`, and stays named what was pressed. */
+  spinning?: boolean;
+  destructive?: boolean;
+  /** The press does nothing. */
+  held: boolean;
+  /** The tooltip — why it is held, or what it does — or `null` for none. */
+  reason: string | null;
+  onPress: () => void;
+}) {
+  const tip = useTooltip();
+  return (
+    <li>
+      <button
+        type="button"
+        aria-disabled={held || undefined}
+        aria-busy={spinning || undefined}
+        onClick={() => {
+          if (!held) onPress();
+        }}
+        {...tip(reason)}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-text",
+          "transition-colors duration-150 hover:bg-bg motion-reduce:transition-none",
+          destructive && "hover:text-destructive",
+          "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:bg-transparent",
+          destructive && "aria-disabled:hover:text-text",
+          FOCUS,
+        )}
+      >
+        {spinning ? (
+          <LoaderCircle
+            className="size-3.5 shrink-0 animate-spin text-dim motion-reduce:animate-none"
+            aria-hidden="true"
+          />
+        ) : (
+          <Icon className="size-3.5 shrink-0 text-dim" aria-hidden="true" />
+        )}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+      </button>
+    </li>
+  );
+}
+
+/** The footer's grades, in the order a picker draws them — `CONDITIONS`' own, a scale. */
+const CONDITION_OPTIONS: DropdownOption[] = CONDITIONS.map((c) => ({
+  value: c,
+  label: CONDITION_LABEL[c],
+}));
+
+/**
+ * The footer's *Condition*: the grade Add files every copy in, captioned beside the picker the way
+ * *File into* captions the folder. The caption is a real `<label>` naming the trigger, so a press
+ * on the word opens it too.
+ */
+function ConditionPicker({
+  condition,
+  onCondition,
+}: {
+  condition: Condition;
+  onCondition: (condition: Condition) => void;
+}) {
+  const id = useId();
+  const labelId = `${id}-label`;
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <label id={labelId} htmlFor={id} className="text-xs text-dim">
+        Condition
+      </label>
+      <Dropdown
+        id={id}
+        labelledBy={labelId}
+        value={condition}
+        onChange={(v) => onCondition(v as Condition)}
+        options={CONDITION_OPTIONS}
+      />
+    </div>
   );
 }
 
@@ -844,7 +1024,7 @@ function TrayRow({
           ) : (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
               {/* **An unknown finish wears the accent**, the colour this tray already asks its other
-                  question in (`Pick a printing`, `1 card to pick`) — a question for the reader,
+                  question in (`Pick a printing`, `1 needs you`) — a question for the reader,
                   never the destructive red, which would say something had gone wrong. The trigger
                   reads `Unknown` and the Add button counts it out; the border is what finds it in a
                   long list. */}
@@ -969,16 +1149,27 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
 }
 
 /**
- * One resolved card in the grid: the card itself, and the list row's controls under it.
+ * One resolved card in the grid, as **one continuous bordered card**: the picture, then a chin with
+ * its finish and its quantity, then its name, printing and price.
  *
- * **The card is the *More printings…* press**, where the row spends a text link on it: a tile has a
- * picture big enough to aim at, and the one thing a reader does with a card they have just scanned
- * is check it is the right printing. It says so twice — in the button's name, and in a chip over
- * the card's foot while the pointer or the caret is on it — because a card that opens something
- * looks exactly like one that does not. **For a card with no oracle id it is not a button at all**,
- * for the row's reason: the all-printings dialog walks a card's printings by that id, so there is
- * no list to open, and a card that rises under the pointer and then does nothing is a control that
- * lies.
+ * **The picture is the *More printings…* press**, where the row spends a text link on it: a tile
+ * has a picture big enough to aim at, and the one thing a reader does with a card they have just
+ * scanned is check it is the right printing. It says so twice — in the button's name, and in a chip
+ * over the picture's foot while the pointer or the caret is on it — because a card that opens
+ * something looks exactly like one that does not. **For a card with no oracle id it is not a button
+ * at all**, for the row's reason: the all-printings dialog walks a card's printings by that id, so
+ * there is no list to open, and a card that answers the pointer and then does nothing is a control
+ * that lies.
+ *
+ * **Remove is the picture's top-right corner, shown on hover and focus** — and always under a
+ * finger, which has no hover to find it with. It is the tile's first press, ahead of the picture,
+ * as on a waiting tile (issue #1004); laid over the picture, so it takes a layer of its own.
+ *
+ * **The chin is always drawn**, the finish and the stepper being what a reader changes most. The
+ * finish takes what the stepper leaves and never truncates — an `Unknown` there is a question, and
+ * a question cut to `Unkn…` is not one — so on a tile too narrow for both on one line, which is
+ * most of them, the stepper wraps under it. The basis is a fixed width rather than each label's
+ * own, so every tile in a row wraps or not together and the row's chins stay one height.
  *
  * **The marks are the walls' own.** `CardArt`'s chip in the top-right says a foil or etched copy,
  * and a count laid on the top-left says more than one — `CountTag`, the bare number every surface
@@ -987,12 +1178,8 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
  * changed. The button's own name stays the row's `More printings of …` rather than growing a
  * count, so the name of the press does not change under a reader each time they step it.
  *
- * **Everything under the card keeps the row's names** — `Finish of …`, `Quantity of …`, `Remove …`
- * — so a reader, a screen reader and a test find the same control in either layout. The finish and
- * the stepper sit side by side on a wide tile and wrap onto two lines on a narrow one, each at its
- * own width. By the two controls' own classes the pair needs roughly 196px — reckoned, not measured
- * — which is wider than a tile in the page's 25rem column, so there it wraps; a wrapped pair
- * left-aligned under the name reads as the card's facts in a column rather than as an overflow.
+ * **Everything on the card keeps the row's names** — `Finish of …`, `Quantity of …`, `Remove …` —
+ * so a reader, a screen reader and a test find the same control in either layout.
  */
 function TrayTile({
   row,
@@ -1013,12 +1200,14 @@ function TrayTile({
   onRemove: () => void;
   onMorePrintings: () => void;
 }) {
+  const tip = useTooltip();
   const label = rowLabel(row);
   const printing = printingOf(row);
-  // The card and what is laid on it, drawn the same whether the box around it is a button or not.
-  // The count is flush with the card's left edge and inset from its top by the finish chip's own
-  // 4px, so the two marks start on one line; the box clips it to the card's rounded corner, which
-  // is how the deck's card face cuts the same banner.
+  // The picture and what is laid on it, drawn the same whether the box around it is a button or
+  // not. `CardArt`'s own frame is put down — no border, no corner — because the card around it is
+  // the frame now, and its corner is what clips the picture's. The count is flush with the
+  // picture's left edge and inset from its top by the finish chip's own 4px, so the two marks
+  // start on one line.
   const face = (
     <>
       <CardArt
@@ -1027,6 +1216,7 @@ function TrayTile({
         variant={TILE_VARIANT}
         finish={isKnownFinish(row.finish) ? row.finish : null}
         loading="lazy"
+        className="rounded-none border-0"
       />
       {row.quantity > 1 && (
         <CountTag
@@ -1035,119 +1225,164 @@ function TrayTile({
           className="absolute left-0 top-1"
         />
       )}
-      {flash && <TrayFlash stamp={row.addedAt} className="rounded-lg" />}
     </>
   );
 
   return (
-    <li data-tray-row={row.key} className="flex min-w-0 flex-col">
-      {/* The name and its remove over the card, so the remove is the tile's top-right corner — where
-          a waiting tile's is too (issue #1004). */}
-      <TileName name={row.name} label={label} onRemove={onRemove} />
-      {row.oracleId !== null ? (
-        // `overflow-hidden` clips what is laid on the card to its corners, and costs the lift
-        // nothing: an element's own shadow and focus outline are outside what its overflow clips.
-        <button
-          type="button"
-          aria-label={`More printings of ${label}`}
-          onClick={onMorePrintings}
-          className={cn("group relative block w-full overflow-hidden rounded-lg", LIFT, FOCUS)}
-        >
-          {face}
-          <span
-            aria-hidden="true"
+    <li data-tray-row={row.key} className="min-w-0">
+      <div className="relative flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-bg">
+        <div className="group/tile relative">
+          <button
+            type="button"
+            aria-label={`Remove ${label}`}
+            onClick={onRemove}
             className={cn(
-              "pointer-events-none absolute inset-x-2 bottom-2 rounded-md border border-border bg-bg/90 py-1.5",
-              "text-center text-xs text-text",
-              // Opacity alone, so there is no travel to take away — the opt-out is the sweep's
-              // rule for every tween rather than a change in what a reduced-motion reader sees.
+              "absolute right-1.5 top-1.5 grid size-7 place-items-center rounded-full border border-border bg-bg/90 text-dim hover:text-text",
+              LAYER.overlappingMark,
+              // Opacity alone, so there is no travel for reduced motion to take away.
               "opacity-0 transition-opacity duration-[var(--duration-fast)] ease-standard motion-reduce:transition-none",
-              "group-hover:opacity-100 group-focus-visible:opacity-100",
+              "group-hover/tile:opacity-100 group-focus-within/tile:opacity-100 coarse:opacity-100",
+              PRESS,
+              FOCUS,
             )}
           >
-            More printings…
-          </span>
-        </button>
-      ) : (
-        // Decoration beside the name set in type under it, as the row's thumbnail is.
-        <div aria-hidden="true" className="relative overflow-hidden rounded-lg">
-          {face}
+            <X className="size-3.5" aria-hidden="true" />
+          </button>
+          {row.oracleId !== null ? (
+            // The outline inside the button's own edge: the button is the card's whole width, and
+            // the card clips anything standing off it.
+            <button
+              type="button"
+              aria-label={`More printings of ${label}`}
+              onClick={onMorePrintings}
+              className={cn("group/pic relative block w-full", FOCUS_INSET)}
+            >
+              {face}
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "pointer-events-none absolute inset-x-2 bottom-2 rounded-md border border-border bg-bg/90 py-1.5",
+                  "text-center text-xs text-text",
+                  "opacity-0 transition-opacity duration-[var(--duration-fast)] ease-standard motion-reduce:transition-none",
+                  "group-hover/pic:opacity-100 group-focus-visible/pic:opacity-100",
+                )}
+              >
+                More printings…
+              </span>
+            </button>
+          ) : (
+            // Decoration over the name set in type under it, as the row's thumbnail is.
+            <div aria-hidden="true" className="relative">
+              {face}
+            </div>
+          )}
         </div>
-      )}
 
-      {/* The printing and its price share a line, the price at the right end where a column of
-          tiles lines its figures up. A tile with neither — a printing the corpus has no number
-          for, its price not read yet — draws no empty line. */}
-      {(printing !== "" || price !== undefined) && (
-        <div className="mt-1.5 flex min-w-0 items-baseline gap-2">
-          {printing !== "" && (
-            <span className="min-w-0 truncate font-mono text-[11px] leading-4 text-dim">
-              {printing}
+        {/* The chin: the finish taking what the stepper leaves, at a fixed basis — see above. */}
+        <div className="flex flex-wrap items-center gap-[5px] border-t border-border p-[5px]">
+          {/* The mark the header's walk finds an unknown finish by. A box of its own here rather
+              than the row's `contents`, because it is what grows. */}
+          <span data-decision="" className="grow basis-24">
+            <Dropdown
+              size="sm"
+              fill
+              label={`Finish of ${label}`}
+              value={row.finish}
+              onChange={(v) => onFinish(v as ScannerTrayFinish)}
+              options={finishOptions(row)}
+              // The row's rule: an unknown finish wears the accent, so it is found in a wall of tiles too.
+              active={!isKnownFinish(row.finish)}
+            />
+          </span>
+          <QuantityStepper
+            size="sm"
+            min={1}
+            value={row.quantity}
+            onChange={onQuantity}
+            label={`Quantity of ${label}`}
+          />
+        </div>
+
+        {/* The name, then the printing and its price on one line, the price at the right end where
+            a column of tiles lines its figures up. A tile with neither — a printing the corpus has
+            no number for, its price not read yet — draws no empty second line. */}
+        <div className="flex min-w-0 flex-col gap-0.5 border-t border-border px-2 pb-2 pt-1.5">
+          <span
+            {...tip(row.name, { whenClipped: true })}
+            className="min-w-0 truncate text-[13px] leading-5"
+          >
+            {row.name}
+          </span>
+          {(printing !== "" || price !== undefined) && (
+            <span className="flex min-w-0 items-baseline gap-1.5">
+              {printing !== "" && (
+                <span className="min-w-0 truncate font-mono text-[11px] leading-4 text-dim">
+                  {printing}
+                </span>
+              )}
+              <TrayPrice price={price} money={money} className="ml-auto text-xs leading-4" />
             </span>
           )}
-          <TrayPrice price={price} money={money} className="ml-auto text-[11px] leading-4" />
         </div>
-      )}
 
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {/* The row's `contents` mark, for the header's walk. */}
-        <span data-decision="" className="contents">
-          <Dropdown
-            size="sm"
-            label={`Finish of ${label}`}
-            value={row.finish}
-            onChange={(v) => onFinish(v as ScannerTrayFinish)}
-            options={finishOptions(row)}
-            // The row's rule: an unknown finish wears the accent, so it is found in a wall of tiles too.
-            active={!isKnownFinish(row.finish)}
-          />
-        </span>
-        <QuantityStepper
-          size="sm"
-          min={1}
-          value={row.quantity}
-          onChange={onQuantity}
-          label={`Quantity of ${label}`}
-        />
+        {/* Over the whole card, the chin with it: it is the card that landed. */}
+        {flash && <TrayFlash stamp={row.addedAt} className="rounded-lg" />}
       </div>
     </li>
   );
 }
 
 /**
- * A card still waiting on a pick, as a question the whole width of the tray.
+ * A card still waiting on a pick, **in its place in scan order**, as a question as wide as it has
+ * answers.
  *
- * **Its candidates are the tile**, laid out at the size of the cards around them, because what
- * tells two printings of one card apart is the frame — the set symbol, the border, the treatment
- * — and that is exactly what the list's 64px candidates reduce to a smudge. **Across the whole
- * tray, on the tray's own column template** (issue #1004): a question two columns wide stacked its
- * candidates two to a line, so three or four of them stood several cards tall and pushed the tiles
- * after them out of view. Full width, they take one line of the grid wherever the tray has as
- * many columns as there are candidates. The name, *Pick a printing* and the remove head the box,
- * the remove in its top-right corner where a resolved tile's is. The dashed gold edge marks the
- * tray's open question, the thing the header's *N cards to pick* is counting.
+ * **Its candidates are the tile**, each at the size of the cards around it, because what tells two
+ * printings of one card apart is the frame — the set symbol, the border, the treatment — and that
+ * is exactly what the list's 64px candidates reduce to a smudge. **It spans one column per
+ * candidate and one more for *More printings…*, and never more columns than the grid has**
+ * (`columns`, read off the grid by `useGridColumns`): more candidates than that wrap onto a second
+ * line inside the tile. No CSS can cap a `span` at an `auto-fill` grid's count — a span past the
+ * last track makes implicit ones and pushes the grid sideways — so until the grid has been measured
+ * it spans the whole width, the one span that is always safe. The name, *Pick a printing* and the
+ * remove head the box, the remove in its top-right corner where a resolved tile's is. The dashed
+ * gold edge marks the tray's open question, one of the things the header's *N need you* counts.
  *
- * **No finish, no stepper, no card to open** — the row's rule: none of them means anything until
- * the reader has said which printing this is. What stays is the way out: remove.
+ * ***More printings…* is the last cell**, a dashed outline the size of a card: the answer is not
+ * always among the candidates, and the all-printings dialog's pick settles the row the way a
+ * candidate's does (`setPrinting` clears the choices). Not drawn, and the span one less, for a card
+ * with no oracle id — there is no list of printings to open.
+ *
+ * **No finish, no stepper** — the row's rule: neither means anything until the reader has said
+ * which printing this is. What stays is the way out: remove.
  */
 function WaitingTile({
   row,
+  columns,
   flash,
   onPick,
   onRemove,
+  onMorePrintings,
 }: {
   row: ScannerTrayRow;
+  /** The grid's column count, or `0` before it has been measured. */
+  columns: number;
   flash: boolean;
   onPick: (cardId: string) => void;
   onRemove: () => void;
+  onMorePrintings: () => void;
 }) {
+  const label = rowLabel(row);
+  const more = row.oracleId !== null;
+  const cells = row.choices.length + (more ? 1 : 0);
+  const span = columns > 0 ? Math.min(cells, columns) : null;
   return (
     <li
       data-tray-row={row.key}
-      className="relative col-span-full flex min-w-0 flex-col rounded-lg border border-dashed border-accent/60 px-2.5 pt-1.5 pb-2.5"
+      className="relative flex min-w-0 flex-col rounded-lg border border-dashed border-accent/60 px-2.5 pt-1.5 pb-2.5"
+      style={{ gridColumn: span === null ? "1 / -1" : `span ${span}` }}
     >
       {flash && <TrayFlash stamp={row.addedAt} className="rounded-lg" />}
-      <TileName name={row.name} label={rowLabel(row)} onRemove={onRemove}>
+      <TileName name={row.name} label={label} onRemove={onRemove}>
         <span className="shrink-0 text-xs font-medium text-accent">Pick a printing</span>
       </TileName>
       <div
@@ -1155,11 +1390,29 @@ function WaitingTile({
         aria-label={`Printings of ${row.name}`}
         data-decision=""
         className="grid gap-3"
-        style={{ gridTemplateColumns: TILE_COLUMNS }}
+        style={{
+          gridTemplateColumns: span === null ? TILE_COLUMNS : `repeat(${span}, minmax(0, 1fr))`,
+        }}
       >
         {row.choices.map((choice) => (
           <ChoiceCard key={choice.cardId} choice={choice} onPick={() => onPick(choice.cardId)} />
         ))}
+        {more && (
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-label={`More printings of ${label}`}
+            onClick={onMorePrintings}
+            className={cn(
+              "grid w-full place-items-center rounded-lg border border-dashed border-border px-2.5 text-center text-[13px] text-dim",
+              "transition-colors duration-[var(--duration-fast)] ease-standard hover:border-accent hover:text-accent motion-reduce:transition-none",
+              FOCUS,
+            )}
+            style={{ aspectRatio: CARD_ASPECT }}
+          >
+            More printings…
+          </button>
+        )}
       </div>
     </li>
   );
@@ -1198,10 +1451,10 @@ function ChoiceCard({ choice, onPick }: { choice: ScannerTrayChoice; onPick: () 
 }
 
 /**
- * A tile's name line, at the top of the tile: the card's name, cut short with the whole of it on
- * hover, anything the tile adds after it, and the remove press at its right end — the tile's
- * top-right corner (issue #1004). 24px, a size down from the row's, because it shares a line with
- * 13px type rather than with a stepper.
+ * A waiting tile's name line, at the top of the tile: the card's name, cut short with the whole of
+ * it on hover, anything the tile adds after it, and the remove press at its right end — the tile's
+ * top-right corner, where a resolved tile's remove is too (issue #1004). 24px, a size down from the
+ * row's, because it shares a line with 13px type rather than with a stepper.
  */
 function TileName({
   name,
@@ -1241,7 +1494,11 @@ function TileName({
 }
 
 /**
- * Where the tray files, behind a button naming the destination.
+ * Where the tray files, behind a button naming the destination, captioned *File into*.
+ *
+ * **The caption is beside the button, not in its name.** The button is named `Folder: <name>` —
+ * the folder is what it says and what a press changes — and the caption is the footer's sentence
+ * around it, read as text: *File into* · the folder · *Condition* · the grade · *Add*.
  *
  * **The reader's own folders and nothing else.** A deck's group and `Recently removed` are folder
  * kinds the cabinet draws but nothing may be filed into by hand — since schema v25 a live deck owns
@@ -1285,37 +1542,42 @@ function FolderPicker({
         : (mine.find((folder) => folder.id === folderId)?.name ?? ROOT_LABEL);
 
   return (
-    <AnchoredPopup
-      label={`Folder: ${name}`}
-      panelLabel="Choose a folder"
-      align="start"
-      className="min-w-0 max-w-72 flex-1 basis-40"
-      triggerClassName={cn(
-        "inline-flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-border px-2.5",
-        "text-sm text-dim hover:text-text",
-        PRESS,
-      )}
-      triggerContent={
-        <>
-          <Folder className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-left text-text">{name}</span>
-          <ChevronUp className="size-3.5 shrink-0" aria-hidden="true" />
-        </>
-      }
-      // Over the trigger rather than under it, and grown from the corner it is pinned by. `p-1`
-      // because `MoveToFolder`'s inline list carries its own inset for its rows' hover.
-      panelClassName="bottom-full top-auto mb-1 w-64 origin-bottom-left p-1"
-    >
-      {(close) => (
-        <FolderChoices
-          nodes={nodes}
-          folderId={folderId}
-          onFolder={onFolder}
-          newFolder={newFolder}
-          close={close}
-        />
-      )}
-    </AnchoredPopup>
+    // The pair grows to a cap: in a wide tray a picker that took every pixel left would put the
+    // Add button a hand's width from the destination it files into.
+    <div className="flex min-w-0 max-w-80 flex-1 basis-48 items-center gap-2">
+      <span className="shrink-0 text-xs text-dim">File into</span>
+      <AnchoredPopup
+        label={`Folder: ${name}`}
+        panelLabel="Choose a folder"
+        align="start"
+        className="min-w-0 flex-1"
+        triggerClassName={cn(
+          "inline-flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-border px-2.5",
+          "text-sm text-dim hover:text-text",
+          PRESS,
+        )}
+        triggerContent={
+          <>
+            <Folder className="size-3.5 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate text-left text-text">{name}</span>
+            <ChevronUp className="size-3.5 shrink-0" aria-hidden="true" />
+          </>
+        }
+        // Over the trigger rather than under it, and grown from the corner it is pinned by. `p-1`
+        // because `MoveToFolder`'s inline list carries its own inset for its rows' hover.
+        panelClassName="bottom-full top-auto mb-1 w-64 origin-bottom-left p-1"
+      >
+        {(close) => (
+          <FolderChoices
+            nodes={nodes}
+            folderId={folderId}
+            onFolder={onFolder}
+            newFolder={newFolder}
+            close={close}
+          />
+        )}
+      </AnchoredPopup>
+    </div>
   );
 }
 

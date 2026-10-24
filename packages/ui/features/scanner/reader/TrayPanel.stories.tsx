@@ -1,14 +1,15 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
+import type { Condition } from "@/lib/conditions";
 import type { ScannerTrayLayout, ScannerTrayRow } from "@/lib/ipc";
 import { NEEDS_A_FINISH_ROW, TRAY_ROWS, VERDICTS } from "../fixtures";
 import { rowFromDecision } from "./tray";
 import { TrayPanel, type TrayPanelProps } from "./TrayPanel";
 
 /**
- * The tray with its rows, folder and layout held, so a press in the workbench does what it does in
- * the app.
+ * The tray with its rows, folder, condition and layout held, so a press in the workbench does what
+ * it does in the app.
  *
  * `TrayPanel` owns no copy of its rows — every write goes back through `onRows` — so a story drawn
  * straight from `args` would be a stepper that never moves and a pick that never settles; the
@@ -18,6 +19,7 @@ import { TrayPanel, type TrayPanelProps } from "./TrayPanel";
 function Held(args: TrayPanelProps) {
   const [rows, setRows] = useState<ScannerTrayRow[]>(() => [...args.rows]);
   const [folderId, setFolderId] = useState<number | null>(args.folderId);
+  const [condition, setCondition] = useState<Condition>(args.condition);
   const [layout, setLayout] = useState<ScannerTrayLayout>(args.layout);
   return (
     <TrayPanel
@@ -32,6 +34,11 @@ function Held(args: TrayPanelProps) {
       onFolder={(id) => {
         setFolderId(id);
         args.onFolder(id);
+      }}
+      condition={condition}
+      onCondition={(next) => {
+        setCondition(next);
+        args.onCondition(next);
       }}
       layout={layout}
       onLayout={(next) => {
@@ -71,6 +78,8 @@ const meta = {
     onRows: fn(),
     folderId: null,
     onFolder: fn(),
+    condition: "NONE",
+    onCondition: fn(),
     onCommit: fn(),
     onCreateDeck: fn(),
     committing: false,
@@ -186,8 +195,9 @@ export const AllNeedFinish: Story = {
 
 /**
  * A pile with two open questions — a printing to pick at the head and a finish further down — and
- * the header's walk between them: each press scrolls the tray to the next card needing a decision
- * and puts the caret on the control that answers it, round to the first again past the last.
+ * the header's *N need you* walking between them: each press scrolls the tray to the next card
+ * needing a decision and puts the caret on the control that answers it, round to the first again
+ * past the last.
  */
 export const NextDecision: Story = {
   args: {
@@ -195,7 +205,7 @@ export const NextDecision: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const next = canvas.getByRole("button", { name: "Next card needing a decision" });
+    const next = canvas.getByRole("button", { name: /: Next card needing a decision$/ });
     await userEvent.click(next);
     const printings = canvas.getByRole("group", { name: `Printings of ${waiting.name}` });
     await expect(within(printings).getAllByRole("button")[0]).toHaveFocus();
@@ -219,14 +229,33 @@ export const Committing: Story = {
 };
 
 /**
- * *Archive* offered (issue #989): beside *Clear all…* in the header, on the plain Scanner only —
- * the rows an Add would take go to the scan history instead of the collection. A press is the
- * page's to act on.
+ * The header's `⋯` open: *Create deck…*, *Archive* and *Clear all…*, the tray-wide presses that are
+ * not the one it is for. Each keeps its refusal — greyed in place, the reason in its tooltip.
+ */
+export const ActionsMenu: Story = {
+  args: { rows: TRAY_ROWS.filter((row) => row.choices.length === 0), onArchive: fn() },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Tray actions" }));
+    const menu = canvas.getByRole("dialog", { name: "Tray actions" });
+    await expect(
+      within(menu)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Create deck…", "Archive", "Clear all…"]);
+  },
+};
+
+/**
+ * *Archive* offered (issue #989): in the header's `⋯` beside *Clear all…*, on the plain Scanner
+ * only — the rows an Add would take go to the scan history instead of the collection. A press is
+ * the page's to act on.
  */
 export const Archive: Story = {
   args: { rows: TRAY_ROWS.filter((row) => row.choices.length === 0), onArchive: fn() },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Tray actions" }));
     const archive = canvas.getByRole("button", { name: "Archive" });
     await expect(archive).not.toHaveAttribute("aria-disabled");
     await userEvent.click(archive);
@@ -243,6 +272,7 @@ export const Archiving: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Tray actions" }));
     await expect(canvas.getByRole("button", { name: "Archive" })).toHaveAttribute(
       "aria-busy",
       "true",
@@ -275,10 +305,11 @@ export const CommitRefused: Story = {
 };
 
 /**
- * The grid, as the page opens on it, a third of a wide window across — `TRAY_ROWS` as tiles: the
- * waiting Lightning Bolt across the whole grid with its candidates to press, the playset in progress
- * wearing its count, the foil wearing its chip, and the first card scanned. The second row is
- * flashed as a bump would leave it.
+ * The grid, as the page opens on it, a third of a wide window across — `TRAY_ROWS` as one card a
+ * tile, each with its chin: the waiting Lightning Bolt spanning its candidates and *More
+ * printings…* (as many columns as the grid has, at most), the playset in progress wearing its
+ * count, the foil wearing its chip, and the first card scanned. The second row is flashed as a bump
+ * would leave it.
  */
 export const Grid: Story = {
   args: { layout: "grid", flashKey: TRAY_ROWS[1]?.key ?? null },
@@ -300,7 +331,7 @@ export const Grid: Story = {
 
 /**
  * The same tray in the 25rem column the page draws below 88rem: two columns, a tile too narrow for
- * its finish and its stepper side by side, so the pair wraps under the name.
+ * its finish and its stepper side by side, so the stepper wraps under the finish in the chin.
  */
 export const GridInColumn: Story = {
   args: { layout: "grid" },

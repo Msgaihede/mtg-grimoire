@@ -1,5 +1,5 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -105,6 +105,8 @@ function props(over: Partial<TrayPanelProps> = {}): TrayPanelProps {
     onRows: vi.fn(),
     folderId: null,
     onFolder: vi.fn(),
+    condition: "NONE",
+    onCondition: vi.fn(),
     onCommit: vi.fn(),
     committing: false,
     commitError: null,
@@ -129,6 +131,20 @@ function edit(onRows: ReturnType<typeof vi.fn>, rows: ScannerTrayRow[]): Scanner
   return update(rows);
 }
 
+/**
+ * Open the header's `⋯` and answer its menu — where *Create deck…*, *Archive* and *Clear all…* live.
+ * `user` is either the default instance or a test's own `setup()`.
+ */
+async function openActions(user: Pick<UserEvent, "click"> = userEvent): Promise<HTMLElement> {
+  await user.click(screen.getByRole("button", { name: "Tray actions" }));
+  return screen.getByRole("dialog", { name: "Tray actions" });
+}
+
+/** The header's walk, named for the count and the walk together. */
+function walkName(needYou: string): string {
+  return `${needYou}: ${NEXT_DECISION_LABEL}`;
+}
+
 /** Under the providers the page mounts above it: the folder list is a query, and the add's refusal
  *  is a tooltip that binds to nothing without its provider. */
 function wrap(ui: ReactElement) {
@@ -141,12 +157,32 @@ function wrap(ui: ReactElement) {
 }
 
 describe("TrayPanel", () => {
-  it("opens deck creation with the button as its focus return target", async () => {
+  /**
+   * *Create deck…* is a row of the header's `⋯` menu, and the opener it hands up is the `⋯` — the
+   * row goes with the menu, and a dialog handing the caret back to it would drop it to `<body>`.
+   */
+  it("opens deck creation from the ⋯ menu, with the ⋯ as its focus return target", async () => {
+    const user = userEvent.setup();
     const onCreateDeck = vi.fn();
     wrap(<TrayPanel {...props({ onCreateDeck })} />);
-    const button = screen.getByRole("button", { name: "Create deck…" });
-    await userEvent.click(button);
-    expect(onCreateDeck).toHaveBeenCalledWith(button);
+    const menu = await openActions(user);
+    await user.click(within(menu).getByRole("button", { name: "Create deck…" }));
+    const more = screen.getByRole("button", { name: "Tray actions" });
+    expect(onCreateDeck).toHaveBeenCalledExactlyOnceWith(more);
+    // The menu is shut on Escape's path, so the caret is already on the ⋯.
+    expect(more).toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: "Tray actions" })).not.toBeInTheDocument();
+  });
+
+  it("lists Create deck…, Archive and Clear all… in the ⋯ menu, in that order", async () => {
+    const user = userEvent.setup();
+    wrap(<TrayPanel {...props({ onCreateDeck: vi.fn(), onArchive: vi.fn() })} />);
+    const menu = await openActions(user);
+    expect(
+      within(menu)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Create deck…", "Archive", "Clear all…"]);
   });
 
   it.each(["empty", "printing", "finish", "committing"])(
@@ -162,7 +198,8 @@ describe("TrayPanel", () => {
               ? [{ ...base, finish: "unknown" as const }]
               : [base];
       wrap(<TrayPanel {...props({ rows, onCreateDeck, committing: state === "committing" })} />);
-      const button = screen.getByRole("button", { name: "Create deck…" });
+      const menu = await openActions();
+      const button = within(menu).getByRole("button", { name: "Create deck…" });
       expect(button).toHaveAttribute("aria-disabled", "true");
       await userEvent.click(button);
       expect(onCreateDeck).not.toHaveBeenCalled();
@@ -241,10 +278,35 @@ describe("TrayPanel", () => {
 
   it("offers the walk to the next decision only while a card is waiting on one", () => {
     const { unmount } = wrap(<TrayPanel {...props()} />);
-    expect(screen.queryByRole("button", { name: NEXT_DECISION_LABEL })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: new RegExp(`${NEXT_DECISION_LABEL}$`) }),
+    ).not.toBeInTheDocument();
     unmount();
     wrap(<TrayPanel {...props({ rows: [newer, { ...older, finish: "unknown" }] })} />);
-    expect(screen.getByRole("button", { name: NEXT_DECISION_LABEL })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: walkName("1 needs you") })).toHaveTextContent(
+      "1 needs you",
+    );
+  });
+
+  /**
+   * **The count is the walk's stops** — a printing to pick and a finish to name each count once, a
+   * row at a time, and a settled row not at all — and the press walks to the first of them.
+   */
+  it("says how many cards need the reader, and walks to the first of them", async () => {
+    const user = userEvent.setup();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    const unknown: ScannerTrayRow = { ...older, finish: "unknown", quantity: 3 };
+    wrap(<TrayPanel {...grid({ rows: [newer, waiting, unknown] })} />);
+    const needYou = screen.getByRole("button", { name: walkName("2 need you") });
+    expect(needYou).toHaveTextContent("2 need you");
+    expect(screen.queryByText(/to pick$/)).not.toBeInTheDocument();
+    await user.click(needYou);
+    const first = waiting.choices[0];
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", {
+        name: `${first.name} — ${first.setCode.toUpperCase()} ${first.collectorNumber}`,
+      }),
+    );
   });
 
   /**
@@ -256,7 +318,7 @@ describe("TrayPanel", () => {
     const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
     const unknown: ScannerTrayRow = { ...older, finish: "unknown" };
     wrap(<TrayPanel {...props({ rows: [waiting, newer, unknown] })} />);
-    const next = screen.getByRole("button", { name: NEXT_DECISION_LABEL });
+    const next = screen.getByRole("button", { name: walkName("2 need you") });
     const first = waiting.choices[0];
 
     await user.click(next);
@@ -286,7 +348,7 @@ describe("TrayPanel", () => {
     Element.prototype.scrollTo = scrollTo as unknown as typeof Element.prototype.scrollTo;
     try {
       wrap(<TrayPanel {...props({ rows: [newer, { ...older, finish: "unknown" }] })} />);
-      await user.click(screen.getByRole("button", { name: NEXT_DECISION_LABEL }));
+      await user.click(screen.getByRole("button", { name: walkName("1 needs you") }));
       expect(scrollTo).toHaveBeenCalledTimes(1);
       expect(scrollTo.mock.contexts[0]).toBe(screen.getAllByRole("list")[0]);
     } finally {
@@ -505,10 +567,12 @@ describe("TrayPanel", () => {
     const onRows = vi.fn();
     const onClearAll = vi.fn();
     wrap(<TrayPanel {...props({ onRows, onClearAll })} />);
-    const clear = screen.getByRole("button", { name: "Clear all…" });
+    const clear = within(await openActions(user)).getByRole("button", { name: "Clear all…" });
     expect(clear).not.toHaveAttribute("aria-disabled");
     await user.click(clear);
-    expect(onClearAll).toHaveBeenCalledExactlyOnceWith(clear);
+    expect(onClearAll).toHaveBeenCalledExactlyOnceWith(
+      screen.getByRole("button", { name: "Tray actions" }),
+    );
     expect(onRows).not.toHaveBeenCalled();
   });
 
@@ -517,7 +581,7 @@ describe("TrayPanel", () => {
     const onClearAll = vi.fn();
     const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
     wrap(<TrayPanel {...grid({ rows: [waiting, newer], onClearAll })} />);
-    await user.click(screen.getByRole("button", { name: "Clear all…" }));
+    await user.click(within(await openActions(user)).getByRole("button", { name: "Clear all…" }));
     expect(onClearAll).toHaveBeenCalledTimes(1);
   });
 
@@ -525,7 +589,7 @@ describe("TrayPanel", () => {
     const user = userEvent.setup();
     const onClearAll = vi.fn();
     wrap(<TrayPanel {...props({ rows: [], onClearAll })} />);
-    const clear = screen.getByRole("button", { name: "Clear all…" });
+    const clear = within(await openActions(user)).getByRole("button", { name: "Clear all…" });
     expect(clear).toHaveAttribute("aria-disabled", "true");
     await user.click(clear);
     expect(onClearAll).not.toHaveBeenCalled();
@@ -535,7 +599,7 @@ describe("TrayPanel", () => {
     const user = userEvent.setup();
     const onClearAll = vi.fn();
     wrap(<TrayPanel {...props({ committing: true, onClearAll })} />);
-    const clear = screen.getByRole("button", { name: "Clear all…" });
+    const clear = within(await openActions(user)).getByRole("button", { name: "Clear all…" });
     expect(clear).toHaveAttribute("aria-disabled", "true");
     await user.click(clear);
     expect(onClearAll).not.toHaveBeenCalled();
@@ -550,7 +614,7 @@ describe("TrayPanel", () => {
     const onRows = vi.fn();
     const onArchive = vi.fn();
     wrap(<TrayPanel {...props({ onRows, onArchive })} />);
-    const archive = screen.getByRole("button", { name: "Archive" });
+    const archive = within(await openActions(user)).getByRole("button", { name: "Archive" });
     expect(archive).not.toHaveAttribute("aria-disabled");
     await user.click(archive);
     expect(onArchive).toHaveBeenCalledTimes(1);
@@ -562,7 +626,7 @@ describe("TrayPanel", () => {
     const onArchive = vi.fn();
     const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
     wrap(<TrayPanel {...grid({ rows: [waiting, newer], onArchive })} />);
-    await user.click(screen.getByRole("button", { name: "Archive" }));
+    await user.click(within(await openActions(user)).getByRole("button", { name: "Archive" }));
     expect(onArchive).toHaveBeenCalledTimes(1);
   });
 
@@ -571,33 +635,36 @@ describe("TrayPanel", () => {
     const onArchive = vi.fn();
     const onCommit = vi.fn();
     const empty = wrap(<TrayPanel {...props({ rows: [], onArchive })} />);
-    expect(screen.getByRole("button", { name: "Archive" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(
+      within(await openActions(user)).getByRole("button", { name: "Archive" }),
+    ).toHaveAttribute("aria-disabled", "true");
     empty.unmount();
 
     const filing = wrap(<TrayPanel {...props({ committing: true, onArchive })} />);
-    await user.click(screen.getByRole("button", { name: "Archive" }));
+    await user.click(within(await openActions(user)).getByRole("button", { name: "Archive" }));
     filing.unmount();
 
     wrap(<TrayPanel {...props({ archiving: true, onArchive, onCommit })} />);
-    const archive = screen.getByRole("button", { name: "Archive" });
+    const menu = await openActions(user);
+    const archive = within(menu).getByRole("button", { name: "Archive" });
     expect(archive).toHaveAttribute("aria-busy", "true");
     await user.click(archive);
-    // Add and Clear all are held too: the archive is putting these very rows away.
-    await user.click(screen.getByRole("button", { name: /^Add \d+ to collection/ }));
-    expect(screen.getByRole("button", { name: "Clear all…" })).toHaveAttribute(
+    // Clear all is held too: the archive is putting these very rows away.
+    expect(within(menu).getByRole("button", { name: "Clear all…" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
+    // And so is Add.
+    await user.click(screen.getByRole("button", { name: /^Add \d+ to collection/ }));
     expect(onArchive).not.toHaveBeenCalled();
     expect(onCommit).not.toHaveBeenCalled();
   });
 
-  it("draws no Archive when the page offers none", () => {
+  it("draws no Archive when the page offers none", async () => {
     wrap(<TrayPanel {...props()} />);
-    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+    const menu = await openActions();
+    expect(within(menu).queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Clear all…" })).toBeInTheDocument();
   });
 
   /**
@@ -643,6 +710,19 @@ describe("TrayPanel", () => {
     expect(within(list).queryByRole("button", { name: "Burn" })).not.toBeInTheDocument();
     await user.click(within(list).getByRole("button", { name: "Rares" }));
     expect(onFolder).toHaveBeenCalledWith(7);
+  });
+
+  it("captions the folder File into, and files at the footer's condition", async () => {
+    const user = userEvent.setup();
+    const onCondition = vi.fn();
+    wrap(<TrayPanel {...props({ condition: "LP", onCondition })} />);
+    const footer = screen.getByRole("button", { name: "Add 2 to collection" }).closest("footer")!;
+    expect(within(footer).getByText("File into")).toBeInTheDocument();
+    expect(within(footer).getByRole("button", { name: "Folder: Collection" })).toBeInTheDocument();
+    const condition = within(footer).getByRole("button", { name: "Condition" });
+    expect(condition).toHaveTextContent("Lightly played");
+    await pickOption(user, "Condition", "Near mint");
+    expect(onCondition).toHaveBeenCalledExactlyOnceWith("NM");
   });
 
   it("makes a new folder at the top level from the folder popup, and picks it", async () => {
@@ -728,6 +808,35 @@ describe("TrayPanel's prices", () => {
     expect(within(items[1]).queryByText("$1.00")).not.toBeInTheDocument();
   });
 
+  it("states no worth while no copy has a price", async () => {
+    wrap(<TrayPanel {...props()} />);
+    // The read has answered — every row unpriced — so a worth would be drawn by now.
+    await screen.findAllByText("Not priced at TCGplayer");
+    expect(screen.getByRole("region", { name: "Scanned cards" })).not.toHaveTextContent(/Worth/);
+  });
+
+  /**
+   * **Each priced row's unit price times its copies, to the cent** — the figure under each card,
+   * summed; an unpriced card and a card still waiting on a pick are in no figure.
+   */
+  it("heads the tray with what its priced copies are worth", async () => {
+    printingPrices.mockResolvedValueOnce([
+      { cardId: "a", finishPrices: { nonfoil: 42.19, foil: null, etched: null } },
+      { cardId: "b", finishPrices: { nonfoil: 39.86, foil: null, etched: null } },
+      { cardId: "c", finishPrices: { nonfoil: null, foil: null, etched: null } },
+    ]);
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    const rows: ScannerTrayRow[] = [
+      { ...newer, key: "a", cardId: "a", quantity: 1 },
+      { ...older, key: "b", cardId: "b", quantity: 3 },
+      { ...newer, key: "c", cardId: "c", name: "Mox Unquoted", quantity: 1 },
+      waiting,
+    ];
+    wrap(<TrayPanel {...grid({ rows })} />);
+    const header = screen.getByRole("region", { name: "Scanned cards" }).querySelector("header")!;
+    await waitFor(() => expect(header).toHaveTextContent("Worth $161.77"));
+  });
+
   it("prices a tile under its card, beside the printing", async () => {
     printingPrices.mockResolvedValueOnce(quoted);
     wrap(<TrayPanel {...grid({ rows: [storm] })} />);
@@ -739,7 +848,8 @@ describe("TrayPanel's prices", () => {
   it("prices an Unknown finish along the printing's cheapest finish first", async () => {
     printingPrices.mockResolvedValueOnce(quoted);
     wrap(<TrayPanel {...props({ rows: [{ ...storm, finish: "unknown" }] })} />);
-    expect(await screen.findByText("$0.25")).toBeInTheDocument();
+    // In the row — the header's worth says the same figure for a tray of one copy.
+    expect(await within(screen.getByRole("listitem")).findByText("$0.25")).toBeInTheDocument();
   });
 
   it("asks nothing for a row still waiting on a pick, and draws it no price", async () => {
@@ -770,6 +880,25 @@ describe("TrayPanel's grid", () => {
       within(items[1]).getByRole("button", { name: "More printings of Honored Hierarch — ORI 17" }),
     ).toBeInTheDocument();
     expect(items[1]).toHaveTextContent("ORI 17");
+  });
+
+  it("draws each tile as one card: the picture, a chin with its finish and stepper, then its name", () => {
+    wrap(<TrayPanel {...grid({ rows: [{ ...newer, finish: "unknown" }, older] })} />);
+    for (const tile of tiles()) {
+      const picture = within(tile).getByRole("button", { name: /^More printings of/ });
+      const finish = within(tile).getByRole("button", { name: /^Finish of/ });
+      const quantity = within(tile).getByRole("spinbutton", { name: /^Quantity of/ });
+      const chin = finish.closest("[data-decision]")!.parentElement!;
+      expect(chin).toContainElement(quantity);
+      expect(chin).not.toContainElement(picture);
+      // Under the picture, over the name.
+      expect(chin.previousElementSibling).toContainElement(picture);
+      expect(chin.nextElementSibling).toHaveTextContent(/^(Storm of Saruman|Honored Hierarch)/);
+    }
+    // An unknown finish reads `Unknown`, whole, in the accent the tray asks its questions in.
+    const unknown = screen.getByRole("button", { name: "Finish of Storm of Saruman — LTR 72" });
+    expect(unknown).toHaveTextContent("Unknown");
+    expect(unknown.classList.contains("border-accent")).toBe(true);
   });
 
   it("draws each tile as a whole card, at a size larger than the row's thumbnail", () => {
@@ -906,7 +1035,8 @@ describe("TrayPanel's grid", () => {
     wrap(<TrayPanel {...grid({ rows: [waiting, newer], onRows })} />);
 
     const choices = screen.getByRole("group", { name: `Printings of ${waiting.name}` });
-    expect(within(choices).getAllByRole("button")).toHaveLength(waiting.choices.length);
+    // Each candidate, and *More printings…* after them.
+    expect(within(choices).getAllByRole("button")).toHaveLength(waiting.choices.length + 1);
     const tile = choices.closest("li")!;
     expect(within(tile).getByText("Pick a printing")).toBeInTheDocument();
     // Nothing on a waiting tile acts on a card it might not be.
@@ -914,9 +1044,6 @@ describe("TrayPanel's grid", () => {
       within(tile).queryByRole("button", { name: /^Increase Quantity of/ }),
     ).not.toBeInTheDocument();
     expect(within(tile).queryByRole("button", { name: /^Finish of/ })).not.toBeInTheDocument();
-    expect(
-      within(tile).queryByRole("button", { name: /^More printings of/ }),
-    ).not.toBeInTheDocument();
 
     const choice = waiting.choices[1];
     await user.click(
@@ -935,7 +1062,7 @@ describe("TrayPanel's grid", () => {
     const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
     const unknown: ScannerTrayRow = { ...older, finish: "unknown" };
     wrap(<TrayPanel {...grid({ rows: [newer, waiting, unknown] })} />);
-    const next = screen.getByRole("button", { name: NEXT_DECISION_LABEL });
+    const next = screen.getByRole("button", { name: walkName("2 need you") });
     await user.click(next);
     expect(document.activeElement).toBe(
       within(screen.getByRole("group", { name: `Printings of ${waiting.name}` })).getAllByRole(
@@ -957,15 +1084,104 @@ describe("TrayPanel's grid", () => {
     expect(edit(onRows, [waiting, newer]).map((r) => r.key)).toEqual(["newer"]);
   });
 
+  it("offers More printings… as a waiting tile's last cell, and none for a card with no oracle id", async () => {
+    const user = userEvent.setup();
+    const onMorePrintings = vi.fn();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    const { unmount } = wrap(<TrayPanel {...grid({ rows: [waiting, newer], onMorePrintings })} />);
+    const cells = within(
+      screen.getByRole("group", { name: `Printings of ${waiting.name}` }),
+    ).getAllByRole("button");
+    const more = cells[cells.length - 1];
+    expect(more).toHaveAccessibleName(`More printings of ${waiting.name}`);
+    expect(more).toHaveTextContent("More printings…");
+    await user.click(more);
+    expect(onMorePrintings).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ key: "waiting" }),
+    );
+    unmount();
+
+    wrap(<TrayPanel {...grid({ rows: [{ ...waiting, oracleId: null }, newer] })} />);
+    expect(
+      within(screen.getByRole("group", { name: `Printings of ${waiting.name}` })).getAllByRole(
+        "button",
+      ),
+    ).toHaveLength(waiting.choices.length);
+  });
+
   /**
-   * Issue #1004: a waiting tile spans every column the grid has, and every tile's remove is the
-   * first press in it — its top-right corner, before the card or the candidates under it.
+   * **A waiting tile spans its candidates and *More printings…*, never more columns than the grid
+   * has** — and the grid's count is read off the grid as it resizes, which jsdom cannot do: the
+   * observer and the resolved template are stubbed here, and only a live pass can say a browser
+   * resolves them so.
    */
-  it("lays a waiting tile across the whole grid, with each tile's remove ahead of its card", () => {
+  it("spans a waiting tile over its printings and More printings…, never wider than the grid", () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          callbacks.push(callback);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    let template = "150px 150px 150px 150px 150px";
+    const real = window.getComputedStyle.bind(window);
+    // Only the grid's template is answered by hand; everything else asks jsdom.
+    const spy = vi.spyOn(window, "getComputedStyle").mockImplementation((el, pseudo) => {
+      const style = real(el, pseudo);
+      if (!(el instanceof HTMLUListElement)) return style;
+      return new Proxy(style, {
+        get: (target, prop) =>
+          prop === "gridTemplateColumns" ? template : Reflect.get(target, prop, target),
+      });
+    });
+    const fire = () =>
+      act(() => {
+        for (const callback of callbacks) callback([], {} as ResizeObserver);
+      });
+    try {
+      const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+      const orphan: ScannerTrayRow = {
+        ...rowFromDecision(ambiguous, { finish: "nonfoil" }, 2, "orphan"),
+        oracleId: null,
+      };
+      wrap(<TrayPanel {...grid({ rows: [waiting, newer, orphan] })} />);
+      const [question, , other] = screen.getAllByRole("listitem");
+      expect(waiting.choices).toHaveLength(3);
+
+      // Five columns: three printings and More printings… take four of them, and a card with no
+      // printings to open one less.
+      fire();
+      expect(question.style.gridColumn).toBe("span 4");
+      expect(other.style.gridColumn).toBe("span 3");
+
+      // Two columns: never wider than the grid, the four cells two to a line inside it.
+      template = "180px 180px";
+      fire();
+      expect(question.style.gridColumn).toBe("span 2");
+      expect(within(question).getByRole("group").style.gridTemplateColumns).toBe(
+        "repeat(2, minmax(0, 1fr))",
+      );
+    } finally {
+      spy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /**
+   * Issue #1004: every tile's remove is the first press in it — its top-right corner, before the
+   * card or the candidates under it. Before the grid has been measured a waiting tile spans the
+   * whole of it, the one span that can never push the grid sideways.
+   */
+  it("lays an unmeasured waiting tile across the whole grid, with each tile's remove ahead of its card", () => {
     const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
     wrap(<TrayPanel {...grid({ rows: [waiting, newer] })} />);
     const [question, tile] = screen.getAllByRole("listitem");
-    expect(question).toHaveClass("col-span-full");
+    expect(question.style.gridColumn).toBe("1 / -1");
     expect(within(question).getAllByRole("button")[0]).toHaveAccessibleName(
       `Remove ${waiting.name}`,
     );
@@ -1026,10 +1242,11 @@ describe("TrayPanel filing somewhere that is not the collection", () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
-  it("draws no Archive — the scan history is the Scanner view's own", () => {
+  it("draws no Archive — the scan history is the Scanner view's own", async () => {
     wrap(<TrayPanel {...props({ destination, onArchive: vi.fn() })} />);
-    expect(screen.queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Clear all…" })).toBeInTheDocument();
+    const menu = await openActions();
+    expect(within(menu).queryByRole("button", { name: "Archive" })).not.toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: "Clear all…" })).toBeInTheDocument();
   });
 
   it("draws no folder to file into, and asks for no folder list", async () => {
@@ -1038,9 +1255,13 @@ describe("TrayPanel filing somewhere that is not the collection", () => {
     // The price read has answered, so the folder read would have gone out by now too.
     await screen.findAllByText("Not priced at TCGplayer");
     expect(screen.queryByRole("button", { name: /^Folder:/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("File into")).not.toBeInTheDocument();
     expect(collectionFolderList).not.toHaveBeenCalled();
+    // A destination files no condition either.
+    expect(screen.queryByRole("button", { name: "Condition" })).not.toBeInTheDocument();
     // The page leaves the deck's press out with it.
-    expect(screen.queryByRole("button", { name: "Create deck…" })).not.toBeInTheDocument();
+    const menu = await openActions();
+    expect(within(menu).queryByRole("button", { name: "Create deck…" })).not.toBeInTheDocument();
   });
 
   it("draws the destination's summary where the folder stood, handed the rows on screen", () => {
@@ -1064,7 +1285,8 @@ describe("TrayPanel filing somewhere that is not the collection", () => {
       />,
     );
     // Cardmarket quotes in euros, and the figure is written as one.
-    expect(await screen.findByText(/2[.,]50/)).toHaveTextContent("€");
+    // In the row — the header's worth says the same figure for a tray of one copy.
+    expect(await within(screen.getByRole("listitem")).findByText(/2[.,]50/)).toHaveTextContent("€");
     expect(printingPrices).toHaveBeenLastCalledWith([newer.cardId], "cardmarket");
   });
 
