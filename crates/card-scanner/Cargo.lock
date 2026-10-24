@@ -96,7 +96,7 @@ checksum = "8f1fe948ff07f4bd06c30984e69f5b4899c516a3ef74f34df92a2df2ab535495"
 
 [[package]]
 name = "card-neural"
-version = "0.60.0"
+version = "0.61.0"
 dependencies = [
  "clap",
  "image",
