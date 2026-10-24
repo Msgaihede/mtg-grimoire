@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Ellipsis } from "lucide-react";
 import { useBulkUndoAction } from "@grimoire/ui/components/UndoNotice";
 import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
@@ -39,7 +40,9 @@ import {
 } from "@grimoire/ui/features/scanner/verdictText";
 import { ConfirmDialog } from "@grimoire/ui/features/settings/ConfirmDialog";
 import { plural } from "@grimoire/ui/lib/counts";
+import { FOCUS } from "@grimoire/ui/lib/focus";
 import { ipcError, type ScanBatch, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
+import { PRESS } from "@grimoire/ui/lib/motion";
 import { notify } from "@grimoire/ui/lib/notifications";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ReceiptBar } from "../deck/receipt";
@@ -52,7 +55,8 @@ import { OptionsSheet } from "../scanner/OptionsSheet";
 import { ScanControls } from "../scanner/ScanControls";
 import { ScannerDataSlot } from "../scanner/ScannerDataSlot";
 import { Tray } from "../scanner/Tray";
-import { destinationName, TrayFooter } from "../scanner/TrayFooter";
+import { TrayActionsSheet } from "../scanner/TrayActionsSheet";
+import { destinationName, TrayBar } from "../scanner/TrayBar";
 import { CREATE_DECK_FLOOR } from "./parts";
 
 /**
@@ -309,6 +313,11 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const [clearing, setClearing] = useState<ScannerTrayRow[] | null>(null);
   const clearOpener = useRef<HTMLElement | null>(null);
 
+  // The tray's actions (`⋯`), and the press that opened them: *Create deck…*, *Clear all…* and
+  // *Scan history* hand the caret back to it when their own dialog or sheet shuts.
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsOpener = useRef<HTMLElement | null>(null);
+
   // *Create deck…*: the tray as it stood when the dialog opened.
   const [deckRows, setDeckRows] = useState<ScannerTrayRow[] | null>(null);
   const deckOpener = useRef<HTMLElement | null>(null);
@@ -445,43 +454,79 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
         <div className="shrink-0 min-[720px]:col-start-2 min-[720px]:border-l min-[720px]:border-border">
           <ReceiptBar receipt={receipt} />
-          <TrayFooter
-            rows={tray.rows}
-            folders={folderList.folders}
-            foldersPending={folderList.query.isPending}
-            folderId={folderId}
-            onFolder={(id) => {
-              // A press on the folder already chosen writes nothing.
-              if (id !== prefs.folderId) update({ folderId: id });
-            }}
-            onCommit={onCommit}
-            committing={destination === undefined ? committing : handOff.committing}
-            commitError={destination === undefined ? commitError : handOff.error}
-            destination={destination}
-            onCreateDeck={(opener) => {
-              deckOpener.current = opener;
-              scannedDeck.reset();
-              setDeckRows([...tray.latest()]);
-            }}
-            onClearAll={(opener) => {
-              clearOpener.current = opener;
-              setClearing(tray.latest());
-            }}
-            // The archive and its history are the Scanner tab's own record: over a trade the page
-            // is already a sheet, and files somewhere else (the footer hides both for one too).
-            onArchive={destination === undefined ? onArchive : undefined}
-            archiving={destination === undefined && archiving}
-            onHistory={
-              destination === undefined
-                ? (opener) => {
-                    historyOpener.current = opener;
-                    setHistoryOpen(true);
-                  }
-                : undefined
-            }
-          />
+          {/* The tray's bar and its `⋯`, still at the foot of the page until the page itself is
+              rearranged around the picture. */}
+          <footer className="flex items-center gap-2 border-t border-border bg-surface pr-4">
+            <div className="min-w-0 flex-1">
+              <TrayBar
+                rows={tray.rows}
+                folders={folderList.folders}
+                foldersPending={folderList.query.isPending}
+                folderId={folderId}
+                condition={prefs.condition}
+                onFolder={(id) => {
+                  // A press on the folder already chosen writes nothing.
+                  if (id !== prefs.folderId) update({ folderId: id });
+                }}
+                onCommit={onCommit}
+                committing={destination === undefined ? committing : handOff.committing}
+                commitError={destination === undefined ? commitError : handOff.error}
+                archiving={destination === undefined && archiving}
+                destination={destination}
+              />
+            </div>
+            <button
+              type="button"
+              aria-label="Tray actions"
+              aria-haspopup="dialog"
+              onClick={(e) => {
+                actionsOpener.current = e.currentTarget;
+                setActionsOpen(true);
+              }}
+              className={cn(
+                "flex size-11 shrink-0 items-center justify-center rounded-md border border-border text-dim",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              <Ellipsis aria-hidden className="size-5" />
+            </button>
+          </footer>
         </div>
       </div>
+
+      <TrayActionsSheet
+        open={actionsOpen}
+        onClose={() => setActionsOpen(false)}
+        onDismiss={() => {
+          setActionsOpen(false);
+          actionsOpener.current?.focus();
+        }}
+        rows={tray.rows}
+        committing={destination === undefined ? committing : handOff.committing}
+        archiving={destination === undefined && archiving}
+        destination={destination}
+        onCreateDeck={() => {
+          deckOpener.current = actionsOpener.current;
+          scannedDeck.reset();
+          setDeckRows([...tray.latest()]);
+        }}
+        onClearAll={() => {
+          clearOpener.current = actionsOpener.current;
+          setClearing(tray.latest());
+        }}
+        // The archive and its history are the Scanner tab's own record: over a trade the page is
+        // already a sheet, and files somewhere else (the sheet hides both for one too).
+        onArchive={destination === undefined ? onArchive : undefined}
+        onHistory={
+          destination === undefined
+            ? () => {
+                historyOpener.current = actionsOpener.current;
+                setHistoryOpen(true);
+              }
+            : undefined
+        }
+      />
 
       <OptionsSheet
         open={optionsOpen}

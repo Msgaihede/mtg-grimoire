@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { ArrowDown, ChevronRight, Minus, Plus, X } from "lucide-react";
@@ -84,6 +84,16 @@ const WORDED = cn(
 type Asking = { key: string; page: "finish" | "printing" } | null;
 
 /**
+ * The tray's walk through its open questions, handed to a host that draws the walk's press
+ * itself — the tray sheet's *Next* (`TraySheet`). The same walk as the header's own press.
+ */
+export interface TrayWalk {
+  /** Bring the next row still waiting on a decision to the middle of the list, the caret onto
+   *  its question — round to the top again past the last. Nothing when no row is waiting. */
+  next: () => void;
+}
+
+/**
  * How long after a sheet closes the caret is still put back if it has fallen out of the page.
  * Long enough for the write the sheet made to be drawn — a tick, through the tray's cache — and
  * short enough that a card scanned later never moves a caret the reader has since put down.
@@ -146,8 +156,14 @@ function revealTrayTop(section: HTMLElement) {
  * which at 44px a control does not fit under a 156px tile; so the phone draws the list and leaves
  * the stored `trayLayout` — the desktop's, in the same row of prefs — unread and unwritten.
  *
- * **It scrolls with the page**, not in a box of its own: the page's footer is what stays put. A
- * card that lands brings its heading back when the reader has scrolled past it ({@link revealTrayTop}).
+ * **It scrolls with whatever holds it**, not in a box of its own: the page's column, or the tray
+ * sheet's list (`TraySheet`). A card that lands brings its heading back when the reader has
+ * scrolled past it ({@link revealTrayTop}).
+ *
+ * **The tray sheet draws its own header** — the title and count, the worth, *Add card…* and the
+ * `⋯`, with the walk under the tray's bar — so it mounts this with `header={false}` and walks the
+ * questions through {@link TrayWalk}, handed back on `ref`: the walk stays this list's, which is
+ * the one that knows where its rows are.
  */
 export function Tray({
   rows,
@@ -156,6 +172,8 @@ export function Tray({
   title = "Scanned cards",
   marketplace,
   onAddCard,
+  header = true,
+  ref,
 }: {
   rows: readonly ScannerTrayRow[];
   /** An edit, as a function of the rows — never the rows this render drew. */
@@ -171,6 +189,11 @@ export function Tray({
   /** *Add card…* was pressed (issue #978): the page opens the search and pauses the scanner under
    *  it. Handed the press, for the caret to come back to. Absent draws no button. */
   onAddCard?: (opener: HTMLElement) => void;
+  /** Draw the heading, its count and its presses. `false` where the host draws a header of its
+   *  own (`TraySheet`); the list is then named by {@link title} alone. */
+  header?: boolean;
+  /** The walk through the open questions, for a host whose header holds the walk's press. */
+  ref?: Ref<TrayWalk>;
 }) {
   const titleId = useId();
   const sectionRef = useRef<HTMLElement>(null);
@@ -226,8 +249,14 @@ export function Tray({
     const to = handBack.current;
     if (asking !== null || to === null) return;
     const active = document.activeElement;
+    // "Inside the sheet that is leaving" is a dialog that does not hold this tray: drawn inside
+    // the tray sheet, every control here is inside *a* dialog, and a caret the reader has put on
+    // one of them since is where it belongs.
+    const dialog = active?.closest('[role="dialog"]') ?? null;
     const adrift =
-      active === null || active === document.body || active.closest('[role="dialog"]') !== null;
+      active === null ||
+      active === document.body ||
+      (dialog !== null && !dialog.contains(sectionRef.current));
     if (!adrift) return;
     const row = Array.from(
       listRef.current?.querySelectorAll<HTMLElement>("[data-tray-row]") ?? [],
@@ -256,65 +285,79 @@ export function Tray({
     // The caret goes to the question itself, so the answer is one press away.
     row.querySelector<HTMLElement>("[data-decision]")?.focus({ preventScroll: true });
   };
+  useImperativeHandle(ref, () => ({ next: nextDecision }));
 
   return (
-    <section ref={sectionRef} aria-labelledby={titleId} className="flex flex-col">
-      <header className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1">
-        {/* The name is spelled, not computed: the title and its count are two elements a gap
-            apart, which the name algorithm fuses into `Scanned cards3`. */}
-        <h2
-          aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
-          className="flex items-baseline gap-2 font-heading text-lg leading-none"
-        >
-          <span id={titleId}>{title}</span>
-          <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
-            {copies}
-          </span>
-        </h2>
-        {waiting > 0 && (
-          <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing is
-              one a reader keeps trying. Gold, because it walks the questions gold already marks. */}
-          {deciding && (
-            <button
-              type="button"
-              onClick={nextDecision}
-              className={cn(
-                "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
-                "text-xs text-accent",
-                PRESS,
-                FOCUS,
-              )}
-            >
-              <ArrowDown aria-hidden className="size-3.5" />
-              {NEXT_DECISION_LABEL}
-            </button>
+    <section
+      ref={sectionRef}
+      aria-labelledby={header ? titleId : undefined}
+      aria-label={header ? undefined : title}
+      className="flex flex-col"
+    >
+      {header && (
+        <header className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1">
+          {/* The name is spelled, not computed: the title and its count are two elements a gap
+              apart, which the name algorithm fuses into `Scanned cards3`. */}
+          <h2
+            aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
+            className="flex items-baseline gap-2 font-heading text-lg leading-none"
+          >
+            <span id={titleId}>{title}</span>
+            <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
+              {copies}
+            </span>
+          </h2>
+          {waiting > 0 && (
+            <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>
           )}
-          {onAddCard && (
-            <button
-              type="button"
-              aria-haspopup="dialog"
-              onClick={(e) => onAddCard(e.currentTarget)}
-              className={cn(
-                "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-border px-3",
-                "text-xs text-text",
-                PRESS,
-                FOCUS,
-              )}
-            >
-              <Plus aria-hidden className="size-3.5" />
-              {ADD_CARD_LABEL}
-            </button>
-          )}
-        </div>
-      </header>
+          <div className="ml-auto flex items-center gap-2">
+            {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing
+                is one a reader keeps trying. Gold, because it walks the questions gold already
+                marks. */}
+            {deciding && (
+              <button
+                type="button"
+                onClick={nextDecision}
+                className={cn(
+                  "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
+                  "text-xs text-accent",
+                  PRESS,
+                  FOCUS,
+                )}
+              >
+                <ArrowDown aria-hidden className="size-3.5" />
+                {NEXT_DECISION_LABEL}
+              </button>
+            )}
+            {onAddCard && (
+              <button
+                type="button"
+                aria-haspopup="dialog"
+                onClick={(e) => onAddCard(e.currentTarget)}
+                className={cn(
+                  "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-border px-3",
+                  "text-xs text-text",
+                  PRESS,
+                  FOCUS,
+                )}
+              >
+                <Plus aria-hidden className="size-3.5" />
+                {ADD_CARD_LABEL}
+              </button>
+            )}
+          </div>
+        </header>
+      )}
 
       {rows.length === 0 ? (
         <p className="py-6 text-center text-sm text-dim">Cards you scan appear here.</p>
       ) : (
-        <ul ref={listRef} className="flex flex-col">
+        <ul
+          ref={listRef}
+          // Headless, the line above the first row is the host's — the tray sheet's bar or walk
+          // ends on one — and a row's own would draw it twice.
+          className={cn("flex flex-col", !header && "[&>li:first-child]:border-t-0")}
+        >
           {rows.map((row) => (
             <TrayRow
               key={row.key}
