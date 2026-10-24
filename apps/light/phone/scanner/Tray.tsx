@@ -1,12 +1,13 @@
 import { useEffect, useId, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { ArrowDown, ChevronRight, Minus, Plus, X } from "lucide-react";
+import { ArrowDown, ChevronRight, Ellipsis, Minus, Plus, X } from "lucide-react";
 import { CardArt } from "@grimoire/ui/components/CardArt";
 import { CardImage } from "@grimoire/ui/components/CardImage";
 import { cardPrintingsKey } from "@grimoire/ui/features/card/cardKeys";
 import {
   needsDecision,
+  needYouLabel,
   NEXT_DECISION_LABEL,
   nextDecisionKey,
   pickChoice,
@@ -15,7 +16,6 @@ import {
   setPrinting,
   setQuantity,
   totalCopies,
-  unresolvedCount,
 } from "@grimoire/ui/features/scanner/reader/tray";
 import {
   isKnownFinish,
@@ -30,6 +30,7 @@ import { plural } from "@grimoire/ui/lib/counts";
 import { parseFinishes } from "@grimoire/ui/lib/finish";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@grimoire/ui/lib/images";
+import { LAYER } from "@grimoire/ui/lib/layers";
 import { ipc, ipcError, type ScannerTrayChoice, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import type { Currency, MarketplaceId } from "@grimoire/ui/lib/marketplace";
 import { DURATION, PRESS, seconds, TRANSITION } from "@grimoire/ui/lib/motion";
@@ -59,6 +60,17 @@ function choiceLabel(choice: ScannerTrayChoice): string {
   const printing = printingOf(choice);
   return printing === "" ? choice.name : `${choice.name} — ${printing}`;
 }
+
+/**
+ * A 44px press in a tray header — *Add card…* and the `⋯` — the tray's own and the tray sheet's
+ * (`TraySheet`), which draws a header of its own over a headless tray. Each adds its width and its
+ * type.
+ */
+export const HEADER_PRESS = cn(
+  "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border",
+  PRESS,
+  FOCUS,
+);
 
 /** A 44px square press on a row: the stepper's two and the remove. */
 const SQUARE = cn(
@@ -156,9 +168,15 @@ function revealTrayTop(section: HTMLElement) {
  * which at 44px a control does not fit under a 156px tile; so the phone draws the list and leaves
  * the stored `trayLayout` — the desktop's, in the same row of prefs — unread and unwritten.
  *
- * **It scrolls with whatever holds it**, not in a box of its own: the page's column, or the tray
- * sheet's list (`TraySheet`). A card that lands brings its heading back when the reader has
- * scrolled past it ({@link revealTrayTop}).
+ * **It scrolls with whatever holds it**, not in a box of its own: the page's column on a phone on
+ * its side, or the tray sheet's list (`TraySheet`). A card that lands brings its heading back when
+ * the reader has scrolled past it ({@link revealTrayTop}).
+ *
+ * **Its own header** (the scanner redesign, 2026-10-24) is the desktop tray's in the phone's sizes:
+ * the title and the copy count, a gold **_N need you_** while any card waits on a printing or a
+ * finish — the press that walks to the next one — then *Add card…* and, where the host hands one
+ * in, the `⋯` that opens the tray's actions. It **sticks to the top of the scroller** the tray is
+ * in, so a reader forty rows down still has the walk and the `⋯`.
  *
  * **The tray sheet draws its own header** — the title and count, the worth, *Add card…* and the
  * `⋯`, with the walk under the tray's bar — so it mounts this with `header={false}` and walks the
@@ -172,6 +190,7 @@ export function Tray({
   title = "Scanned cards",
   marketplace,
   onAddCard,
+  onActions,
   header = true,
   ref,
 }: {
@@ -189,6 +208,9 @@ export function Tray({
   /** *Add card…* was pressed (issue #978): the page opens the search and pauses the scanner under
    *  it. Handed the press, for the caret to come back to. Absent draws no button. */
   onAddCard?: (opener: HTMLElement) => void;
+  /** The header's `⋯` was pressed: the page opens the tray's actions (`TrayActionsSheet`). Handed
+   *  the press, for the caret to come back to. Absent draws no `⋯`. */
+  onActions?: (opener: HTMLElement) => void;
   /** Draw the heading, its count and its presses. `false` where the host draws a header of its
    *  own (`TraySheet`); the list is then named by {@link title} alone. */
   header?: boolean;
@@ -202,8 +224,9 @@ export function Tray({
     if (sectionRef.current !== null) revealTrayTop(sectionRef.current);
   });
   const copies = totalCopies(rows);
-  const waiting = unresolvedCount(rows);
-  const deciding = rows.some(needsDecision);
+  // Every card still asking something — a printing or a finish — as the peek, the tray sheet and
+  // the desktop's header count them.
+  const waiting = rows.filter(needsDecision).length;
   const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows, marketplace);
 
   const [asking, setAsking] = useState<Asking>(null);
@@ -295,54 +318,69 @@ export function Tray({
       className="flex flex-col"
     >
       {header && (
-        <header className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1">
+        // Sticky over the rows scrolling under it, on the page's ground so they do not show
+        // through, at the table header's rung.
+        <header
+          className={cn(
+            "sticky top-0 flex min-h-11 flex-wrap items-center gap-x-2 gap-y-1 bg-bg py-1.5",
+            LAYER.header,
+          )}
+        >
           {/* The name is spelled, not computed: the title and its count are two elements a gap
               apart, which the name algorithm fuses into `Scanned cards3`. */}
           <h2
             aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
-            className="flex items-baseline gap-2 font-heading text-lg leading-none"
+            className="flex min-w-0 items-baseline gap-2 font-heading text-lg leading-none"
           >
-            <span id={titleId}>{title}</span>
+            <span id={titleId} className="truncate">
+              {title}
+            </span>
             <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
               {copies}
             </span>
           </h2>
+          {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing is
+              one a reader keeps trying. Gold, because it walks the questions gold already marks;
+              named both halves — how many, and what the press does. */}
           {waiting > 0 && (
-            <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>
+            <button
+              type="button"
+              aria-label={`${needYouLabel(waiting)}: ${NEXT_DECISION_LABEL}`}
+              onClick={nextDecision}
+              className={cn(
+                "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
+                "text-xs font-medium text-accent",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              <ArrowDown aria-hidden className="size-3.5" />
+              {needYouLabel(waiting)}
+            </button>
           )}
+          {/* Wrapped onto a line of their own when the walk takes the room: a 22rem column holds
+              the title, the walk and the `⋯`, and not *Add card…* as well. */}
           <div className="ml-auto flex items-center gap-2">
-            {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing
-                is one a reader keeps trying. Gold, because it walks the questions gold already
-                marks. */}
-            {deciding && (
-              <button
-                type="button"
-                onClick={nextDecision}
-                className={cn(
-                  "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
-                  "text-xs text-accent",
-                  PRESS,
-                  FOCUS,
-                )}
-              >
-                <ArrowDown aria-hidden className="size-3.5" />
-                {NEXT_DECISION_LABEL}
-              </button>
-            )}
             {onAddCard && (
               <button
                 type="button"
                 aria-haspopup="dialog"
                 onClick={(e) => onAddCard(e.currentTarget)}
-                className={cn(
-                  "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-border px-3",
-                  "text-xs text-text",
-                  PRESS,
-                  FOCUS,
-                )}
+                className={cn(HEADER_PRESS, "px-3 text-xs text-text")}
               >
                 <Plus aria-hidden className="size-3.5" />
                 {ADD_CARD_LABEL}
+              </button>
+            )}
+            {onActions && (
+              <button
+                type="button"
+                aria-label="Tray actions"
+                aria-haspopup="dialog"
+                onClick={(e) => onActions(e.currentTarget)}
+                className={cn(HEADER_PRESS, "w-11 text-dim")}
+              >
+                <Ellipsis aria-hidden className="size-5" />
               </button>
             )}
           </div>

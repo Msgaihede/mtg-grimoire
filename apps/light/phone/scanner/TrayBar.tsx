@@ -97,6 +97,7 @@ export function TrayBar({
   commitError,
   archiving = false,
   destination,
+  onSheet,
 }: {
   rows: readonly ScannerTrayRow[];
   /** Every collection folder, every kind — the reader's own are picked out here. */
@@ -117,8 +118,19 @@ export function TrayBar({
   /** Where the tray files when that is not the collection. `folders`, `folderId`, `condition`
    *  and `onFolder` are then unread. */
   destination?: TrayDestinationFace;
+  /**
+   * Told `true` as the folder sheet opens and `false` as it shuts, whichever way — a host that
+   * stops something while a sheet of its own is over the page (the Scanner page ends a point and
+   * shoot hold) counts this one too.
+   */
+  onSheet?: (open: boolean) => void;
 }) {
   const [folderOpen, setFolderOpen] = useState(false);
+  // Every opening and shutting of the folder sheet, told to the host as it is made.
+  const showFolders = (open: boolean) => {
+    setFolderOpen(open);
+    onSheet?.(open);
+  };
   // Which page of the folder sheet is up: the folders, or a new one's name.
   const [folderPage, setFolderPage] = useState<"list" | "new">("list");
   const newFolder = useTrayNewFolder(onFolder);
@@ -140,7 +152,7 @@ export function TrayBar({
   const name = destinationName(mine, folderId) ?? (foldersPending ? "…" : UNREAD_FOLDER);
 
   const closeFolders = () => {
-    setFolderOpen(false);
+    showFolders(false);
     folderRef.current?.focus();
   };
 
@@ -170,7 +182,7 @@ export function TrayBar({
             aria-haspopup="dialog"
             onClick={() => {
               setFolderPage("list");
-              setFolderOpen(true);
+              showFolders(true);
             }}
             className={cn(
               "inline-flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md border border-border px-3 py-1",
@@ -245,7 +257,7 @@ export function TrayBar({
         closeLabel="Close folders"
         // A press on the scrim leaves the caret where the reader put it; Escape, the ✕ and a
         // choice hand it back to the press that opened the sheet, which is always on the page.
-        onClose={() => setFolderOpen(false)}
+        onClose={() => showFolders(false)}
         onDismiss={closeFolders}
       >
         {folderPage === "new" ? (

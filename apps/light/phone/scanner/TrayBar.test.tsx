@@ -209,6 +209,27 @@ describe("the tray's bar", () => {
     expect(folder).toHaveFocus();
   });
 
+  /** The Scanner page ends a point and shoot hold while any sheet of its own is over the page. */
+  it("tells its host each time the folder sheet opens and shuts", async () => {
+    const onSheet = vi.fn();
+    mount({ onSheet });
+    const folder = screen.getByRole("button", { name: "Folder: Collection" });
+    await userEvent.click(folder);
+    expect(onSheet).toHaveBeenLastCalledWith(true);
+    await screen.findByRole("dialog", { name: "Folder for scanned cards" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(onSheet).toHaveBeenLastCalledWith(false);
+
+    // Shut by a choice, too.
+    await userEvent.click(folder);
+    expect(onSheet).toHaveBeenLastCalledWith(true);
+    const sheet = await screen.findByRole("dialog", { name: "Folder for scanned cards" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Trade binder" }));
+    expect(onSheet).toHaveBeenLastCalledWith(false);
+    expect(onSheet).toHaveBeenCalledTimes(4);
+  });
+
   it("picks the root as null", async () => {
     const props = mount({ folderId: BINDER.id });
     await userEvent.click(screen.getByRole("button", { name: "Folder: Trade binder" }));

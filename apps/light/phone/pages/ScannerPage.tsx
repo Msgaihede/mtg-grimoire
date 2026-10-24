@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ArrowDown, Ellipsis, Play, Plus, Square } from "lucide-react";
+import { Play, Square } from "lucide-react";
 import { useBulkUndoAction } from "@grimoire/ui/components/UndoNotice";
 import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
-import { ADD_CARD_LABEL, AddCardDialog } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
+import { AddCardDialog } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { AddedToast } from "@grimoire/ui/features/scanner/reader/AddedToast";
 import {
   HeldChip,
@@ -18,12 +18,7 @@ import {
   putBackTitle,
 } from "@grimoire/ui/features/scanner/history/historyWords";
 import { putBack } from "@grimoire/ui/features/scanner/history/putBack";
-import {
-  needsDecision,
-  needYouLabel,
-  NEXT_DECISION_LABEL,
-  totalCopies,
-} from "@grimoire/ui/features/scanner/reader/tray";
+import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
 import { withoutCommitted } from "@grimoire/ui/features/scanner/reader/trayCommit";
 import { useLandedPrice } from "@grimoire/ui/features/scanner/reader/useLandedPrice";
 import { useLandedTier } from "@grimoire/ui/features/scanner/reader/useLandedTier";
@@ -67,7 +62,7 @@ import { HoldSurface } from "../scanner/HoldSurface";
 import { OptionsSheet } from "../scanner/OptionsSheet";
 import { ScanControls } from "../scanner/ScanControls";
 import { ScannerDataSlot } from "../scanner/ScannerDataSlot";
-import { Tray, type TrayWalk } from "../scanner/Tray";
+import { Tray } from "../scanner/Tray";
 import { TrayActionsSheet } from "../scanner/TrayActionsSheet";
 import { destinationName, TrayBar } from "../scanner/TrayBar";
 import { TrayPeek } from "../scanner/TrayPeek";
@@ -248,12 +243,16 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // *Create deck…*: the tray as it stood when the dialog opened.
   const [deckRows, setDeckRows] = useState<ScannerTrayRow[] | null>(null);
   const deckOpener = useRef<HTMLElement | null>(null);
+  // The page's own tray bar's folder sheet (`TrayBar`'s `onSheet`). The tray sheet's copy of the
+  // bar opens its folder sheet over the tray sheet, which already counts.
+  const [folderSheetOpen, setFolderSheetOpen] = useState(false);
   // Any of the page's own sheets or dialogs over the picture.
   const overlaid =
     traySheetOpen ||
     optionsOpen ||
     actionsOpen ||
     historyOpen ||
+    folderSheetOpen ||
     clearing !== null ||
     deckRows !== null;
 
@@ -432,9 +431,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     breakRun();
   }, [inForce, breakRun]);
 
-  // **The HUD's two presses are continuous scanning's alone** — while it runs, never under point
-  // and shoot, where lifting the finger already ends the read. *Send scan…* by `sendable` besides.
-  const hudPresses = !pointAndShoot && scanning;
+  // **The HUD's two presses are continuous scanning's alone** — while it runs over a live
+  // picture, never under point and shoot, where lifting the finger already ends the read, and
+  // never over the camera's own refusal. *Send scan…* by `sendable` besides.
+  const hudPresses = !pointAndShoot && scanning && camera.kind === "live";
   // What the chip over the picture has to say while recognition runs: the loop's failures, a
   // refused reset and a Send scan pressed too soon — a busy database, a frame the host turned
   // away, a camera that has only just started. The detector's own refusal (no card in this
@@ -443,6 +443,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // and the hook drops its sentence with the press. **A Send scan that opened nothing is never
   // silent** — one that said nothing is a button that looks broken.
   const hudNote = reading ? (loop.error ?? resetError ?? submit.error) : null;
+  // What the HUD draws and announces — the match strip's state.
+  const strip = matchStrip(reading ? loop.verdict : null, lastAdded);
+  // The HUD has a chip to show: the strip's own error, or the note. **The held chip gives way to
+  // it** — both sit at the top of the picture — and the surface's `aria-pressed` and the progress
+  // bar still say a hold is reading.
+  const hudSays = strip.tone === "error" || hudNote !== null;
   // The picture's notes and its hold stand only over a picture: not over the camera's own
   // refusal, nor a host with no session, each of which is said where the picture would be.
   const pictureUp = unavailable === null && camera.kind !== "error";
@@ -461,15 +467,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     pickOpener.current = opener;
     setPicking(true);
   };
-  // The tray's walk through its open questions, for the list's header on a phone on its side.
-  const walk = useRef<TrayWalk>(null);
-
   /**
    * The tray's bar — one drawing for the page and one for the tray sheet (`TraySheet`'s `bar`),
    * each with its own folder sheet over the same pref and the same commit. `quiet` keeps the
-   * page's own copy from saying a refusal while the sheet's copy over it is saying the same one.
+   * page's own copy from saying a refusal while the sheet's copy over it is saying the same one;
+   * `onSheet` is the page's copy's alone, for {@link overlaid}.
    */
-  const trayBar = (quiet: boolean) => (
+  const trayBar = (quiet: boolean, onSheet?: (open: boolean) => void) => (
     <TrayBar
       rows={tray.rows}
       folders={folderList.folders}
@@ -485,6 +489,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       commitError={quiet ? null : destination === undefined ? commitError : handOff.error}
       archiving={destination === undefined && archiving}
       destination={destination}
+      onSheet={onSheet}
     />
   );
 
@@ -503,7 +508,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           data-scanner-bar=""
           className="shrink-0 landscape:col-start-2 landscape:row-start-1 landscape:border-l landscape:border-border"
         >
-          {trayBar(traySheetOpen)}
+          {trayBar(traySheetOpen, setFolderSheetOpen)}
           {/* Muted while the tray sheet is open: its own copy, under its bar, says the line. */}
           <ReceiptBar receipt={receipt} muted={traySheetOpen} />
         </div>
@@ -534,12 +539,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             verdict={reading ? loop.verdict : null}
             unavailable={unavailable}
           >
+            {/* Under point and shoot, the prompt only while no card is up: the Added popup stands
+                where it does, and stays up after the finger lifts. */}
             {pictureUp &&
               (pointAndShoot ? (
                 shot.shooting ? (
-                  <HeldChip />
+                  !hudSays && <HeldChip />
                 ) : (
-                  <HoldPrompt compact={landscape} />
+                  shownLanding === null && <HoldPrompt compact={landscape} />
                 )
               ) : (
                 !scanning && <StoppedVeil />
@@ -562,7 +569,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             />
             {unavailable === null && (
               <ScanHud
-                strip={matchStrip(reading ? loop.verdict : null, lastAdded)}
+                strip={strip}
                 live={reading && camera.kind === "live"}
                 variant="icon"
                 onReset={hudPresses ? onReset : undefined}
@@ -625,32 +632,26 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           />
         </div>
 
-        {/* On its side: the whole tray, its header over the one scroller. In the page upright
-            too, undrawn, so a turn of the phone keeps the list's place. */}
+        {/* On its side: the whole tray, `Tray`'s own header sticking over the one scroller. In
+            the page upright too, undrawn, so a turn of the phone keeps the list's place.
+            `relative` because a row's `sr-only` words are positioned, and the box carrying the
+            overflow has to hold them. */}
         <div
           data-tray-column=""
-          className="hidden min-h-0 flex-col landscape:col-start-2 landscape:row-start-3 landscape:flex landscape:border-l landscape:border-border"
+          className={cn(
+            "relative hidden min-h-0 overflow-y-auto overscroll-contain px-4 pb-3",
+            "landscape:col-start-2 landscape:row-start-3 landscape:block landscape:border-l landscape:border-border",
+          )}
         >
-          <TrayHeader
-            title={destination?.title ?? "Scanned cards"}
+          <Tray
             rows={tray.rows}
-            onNext={() => walk.current?.next()}
+            onRows={(change) => tray.setRows(change(tray.latest()))}
+            flashKey={flashKey}
+            title={destination?.title}
+            marketplace={destination?.marketplace}
             onAddCard={openAddCard}
             onActions={openActions}
           />
-          {/* `relative` because a row's `sr-only` words are positioned, and the box carrying the
-              overflow has to hold them. */}
-          <div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-3">
-            <Tray
-              ref={walk}
-              header={false}
-              rows={tray.rows}
-              onRows={(change) => tray.setRows(change(tray.latest()))}
-              flashKey={flashKey}
-              title={destination?.title}
-              marketplace={destination?.marketplace}
-            />
-          </div>
         </div>
       </div>
 
@@ -815,95 +816,5 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         />
       </div>
     </>
-  );
-}
-
-/** A 44px press in the list's header: *Add card…* and the `⋯`. */
-const HEADER_PRESS = cn(
-  "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border",
-  PRESS,
-  FOCUS,
-);
-
-/**
- * The tray's header over the list on a phone on its side — the desktop tray's header in the
- * phone's sizes (the scanner redesign, 2026-10-24): the title and the copy count, a gold
- * **_N need you_** while any card waits on a printing or a finish, which walks to the next one
- * (`Tray`'s own walk, through `TrayWalk`), then *Add card…* and the `⋯` that opens the tray's
- * actions. It wraps rather than truncating the presses: the column is 22rem, and the walk, while
- * it is drawn, takes the room *Add card…* needed.
- *
- * Upright the same four things are the peek's line and the tray sheet's header.
- */
-function TrayHeader({
-  title,
-  rows,
-  onNext,
-  onAddCard,
-  onActions,
-}: {
-  title: string;
-  rows: readonly ScannerTrayRow[];
-  /** Walk to the next card waiting on the reader. */
-  onNext: () => void;
-  /** *Add card…* — handed the press, for the caret. */
-  onAddCard: (opener: HTMLElement) => void;
-  /** The `⋯` — handed the press, for the caret. */
-  onActions: (opener: HTMLElement) => void;
-}) {
-  const copies = totalCopies(rows);
-  const waiting = rows.filter(needsDecision).length;
-  return (
-    <header className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-4 py-1.5">
-      {/* The name is spelled, not computed: the title and its count are two elements a gap apart,
-          which the name algorithm fuses into `Scanned cards3`. */}
-      <h2
-        aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
-        className="flex min-w-0 items-baseline gap-2 font-heading text-lg leading-none"
-      >
-        <span className="truncate">{title}</span>
-        <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
-          {copies}
-        </span>
-      </h2>
-      {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing is one
-          a reader keeps trying. Its name is both halves — how many, and what the press does. */}
-      {waiting > 0 && (
-        <button
-          type="button"
-          aria-label={`${needYouLabel(waiting)}: ${NEXT_DECISION_LABEL}`}
-          onClick={onNext}
-          className={cn(
-            "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
-            "text-xs font-medium text-accent",
-            PRESS,
-            FOCUS,
-          )}
-        >
-          <ArrowDown aria-hidden className="size-3.5" />
-          {needYouLabel(waiting)}
-        </button>
-      )}
-      <div className="ml-auto flex items-center gap-2">
-        <button
-          type="button"
-          aria-haspopup="dialog"
-          onClick={(e) => onAddCard(e.currentTarget)}
-          className={cn(HEADER_PRESS, "px-3 text-xs text-text")}
-        >
-          <Plus aria-hidden className="size-3.5" />
-          {ADD_CARD_LABEL}
-        </button>
-        <button
-          type="button"
-          aria-label="Tray actions"
-          aria-haspopup="dialog"
-          onClick={(e) => onActions(e.currentTarget)}
-          className={cn(HEADER_PRESS, "w-11 text-dim")}
-        >
-          <Ellipsis aria-hidden className="size-5" />
-        </button>
-      </div>
-    </header>
   );
 }

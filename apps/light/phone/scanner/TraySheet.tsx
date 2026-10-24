@@ -16,19 +16,12 @@ import type { MarketplaceId } from "@grimoire/ui/lib/marketplace";
 import { PRESS } from "@grimoire/ui/lib/motion";
 import { formatPrice } from "@grimoire/ui/lib/prices";
 import { cn } from "@grimoire/ui/lib/utils";
-import { Tray, type TrayWalk } from "./Tray";
+import { HEADER_PRESS, Tray, type TrayWalk } from "./Tray";
 
 /** `2 cards need you`, `1 card needs you` — the walk's line in the tray sheet. */
 export function cardsNeedYou(n: number): string {
   return `${plural(n, "card")} ${verb(n, "needs", "need")} you`;
 }
-
-/** A 44px press in the sheet's header row: *Add card…* and the `⋯`. */
-const HEADER_PRESS = cn(
-  "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border",
-  PRESS,
-  FOCUS,
-);
 
 /**
  * The whole tray on the upright phone page, as a sheet over it (the scanner redesign,

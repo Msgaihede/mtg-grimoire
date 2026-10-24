@@ -640,7 +640,6 @@ describe("the phone's Scanner page", () => {
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
 
     fireEvent.pointerUp(hold, { pointerId: 1 });
-    expect(await within(cameraBox()).findByText(HOLD_TITLE)).toBeInTheDocument();
     expect(within(cameraBox()).queryByText(SCANNING_CHIP)).toBeNull();
     expect(hold).toHaveAttribute("aria-pressed", "false");
     // One frame may have been on the wire as the finger lifted; nothing after it.
@@ -649,6 +648,8 @@ describe("the phone's Scanner page", () => {
     await act(() => new Promise((r) => setTimeout(r, 120)));
     expect(cards.sent.length).toBe(released);
     expect(stop).not.toHaveBeenCalled();
+    // The prompt is back once the card the hold landed has been put away.
+    expect(await within(cameraBox()).findByText(HOLD_TITLE, {}, SETTLE)).toBeInTheDocument();
   });
 
   /**
@@ -675,10 +676,69 @@ describe("the phone's Scanner page", () => {
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
 
+    // The tray bar's own folder sheet counts as one of the page's sheets.
     fireEvent.pointerDown(hold, { pointerId: 3 });
+    expect(hold).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Folder: Collection" }));
+    await screen.findByRole("dialog", { name: "Folder for scanned cards" }, SETTLE);
+    expect(hold).toHaveAttribute("aria-pressed", "false");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
+
+    fireEvent.pointerDown(hold, { pointerId: 4 });
     expect(hold).toHaveAttribute("aria-pressed", "true");
     act(() => parked.set({ paused: true, released: false }));
     expect(hold).toHaveAttribute("aria-pressed", "false");
+  });
+
+  /**
+   * **The hold prompt waits for the Added popup**: both stand at the foot of the picture, and
+   * under point and shoot the card stays up after the finger lifts.
+   */
+  it("draws no hold prompt while the card a hold landed is up, and draws it again after", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    mount({
+      prefs: { pointAndShoot: true, finish: "nonfoil" },
+      over: () => ({ scanner_frame: pile(1).frame }),
+    });
+    const hold = await screen.findByRole("button", { name: "Hold to scan" }, SETTLE);
+    expect(await within(cameraBox()).findByText(HOLD_TITLE, {}, SETTLE)).toBeInTheDocument();
+    fireEvent.pointerDown(hold, { pointerId: 1 });
+    await waitFor(() => expect(cameraBox().querySelector("[data-landed]")).not.toBeNull(), SETTLE);
+    fireEvent.pointerUp(hold, { pointerId: 1 });
+    expect(hold).toHaveAttribute("aria-pressed", "false");
+    // Let go, the card is still up — and the prompt is not under it.
+    expect(cameraBox().querySelector("[data-landed]")).not.toBeNull();
+    expect(within(cameraBox()).queryByText(HOLD_TITLE)).toBeNull();
+    // The popup puts itself away after its hold, and the prompt comes back.
+    await waitFor(() => expect(cameraBox().querySelector("[data-landed]")).toBeNull(), SETTLE);
+    expect(within(cameraBox()).getByText(HOLD_TITLE)).toBeInTheDocument();
+  });
+
+  /**
+   * **The held chip gives way to the HUD's chip** (both at the top of the picture): the surface's
+   * `aria-pressed` and the progress bar go on saying the hold is reading.
+   */
+  it("draws no held chip while the HUD has something to say over the picture", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    mount({
+      prefs: { pointAndShoot: true },
+      over: () => ({
+        scanner_frame: () =>
+          new Promise((_, refuse) => setTimeout(() => refuse(new Error(DB_BUSY)), 5)),
+      }),
+    });
+    const hold = await screen.findByRole("button", { name: "Hold to scan" }, SETTLE);
+    fireEvent.pointerDown(hold, { pointerId: 1 });
+    expect(within(cameraBox()).getByText(SCANNING_CHIP)).toBeInTheDocument();
+    expect(await within(cameraBox()).findByText(DB_BUSY, {}, SETTLE)).toBeInTheDocument();
+    expect(within(cameraBox()).queryByText(SCANNING_CHIP)).toBeNull();
+    expect(hold).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(cameraBox()).getByRole("progressbar", { name: "Match progress" }),
+    ).toBeInTheDocument();
   });
 
   it("switches how scanning runs from the controls, storing it, and lands stopped either way", async () => {
@@ -1190,18 +1250,29 @@ describe("the phone's Scanner page", () => {
   it("lays the list beside the picture on its side, with no peek, and the Added popup on one line", async () => {
     camera();
     restoreVideo = shimVideo();
-    const asked = window.matchMedia;
-    const landscape = vi.spyOn(window, "matchMedia").mockImplementation((query: string) => ({
-      ...asked(query),
-      matches: query === "(orientation: landscape)",
-    }));
+    // Built whole: a spread of a real `MediaQueryList` would drop its prototype's methods.
+    const landscape = vi.spyOn(window, "matchMedia").mockImplementation(
+      (query: string) =>
+        ({
+          matches: query === "(orientation: landscape)",
+          media: query,
+          onchange: null,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          addListener: () => {},
+          removeListener: () => {},
+          dispatchEvent: () => false,
+        }) as unknown as MediaQueryList,
+    );
     try {
       mount({ prefs: { finish: "nonfoil" }, over: () => ({ scanner_frame: pile(1).frame }) });
       const column = (
         await screen.findByRole("heading", { name: "Scanned cards, 0 copies" }, SETTLE)
       ).closest("[data-tray-column]") as HTMLElement;
-      // Undrawn upright, a flex column of its own on its side, at the grid's right.
-      expect(column).toHaveClass("hidden", "landscape:flex", "landscape:col-start-2");
+      // Undrawn upright; on its side the grid's right column, scrolling by itself under the
+      // tray's own header (`Tray`'s, with the `⋯` handed in).
+      expect(column).toHaveClass("hidden", "landscape:block", "landscape:col-start-2");
+      expect(column).toHaveClass("overflow-y-auto");
       expect(within(column).getByRole("button", { name: "Tray actions" })).toBeInTheDocument();
       expect(within(column).getByRole("region", { name: "Scanned cards" })).toBeInTheDocument();
       // The peek is undrawn on its side; the bar heads the right column.
@@ -1355,9 +1426,11 @@ describe("sending a scan from the Scanner page", () => {
     expect(await sayingAlert()).toHaveTextContent(
       "MTG Grimoire needs camera access to scan a card.",
     );
-    // Started: the reset is there; the press that needs a picture is not.
+    // Started, and still neither corner press: both stand over a live picture, never over the
+    // camera's own refusal.
     await start();
-    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: STOP })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
   });
 
