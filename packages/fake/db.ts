@@ -7293,6 +7293,17 @@ function cardMatchesText(card: FakeCard | null, text: string): boolean {
 
 /* ------------------------------------------------------------------ derivations ------- */
 
+/** `cards.finishes` read as `scan_history::get_batch` reads it: a JSON list of words, or none. */
+function finishWords(json: string | null): string[] {
+  if (json === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(json);
+    return Array.isArray(parsed) && parsed.every((f) => typeof f === "string") ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function cardById(db: FakeDb, id: string | null): FakeCard | null {
   if (id === null) return null;
   return db.cards.find((c) => c.id === id) ?? null;
@@ -13967,6 +13978,9 @@ export function readHandlers(db: FakeDb) {
             layout: card?.layout ?? null,
             finish: line.finish,
             quantity: line.quantity,
+            // `serde_json::from_str` of `cards.finishes`, unfiltered — the crate keeps any word.
+            finishes: card ? finishWords(card.finishes) : [],
+            printingGone: card === null,
           };
         }),
       });

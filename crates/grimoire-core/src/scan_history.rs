@@ -32,6 +32,15 @@
 //! is written — `trade_lines`' insurance, so a batch from last year still says what was scanned
 //! when a sync has dropped the printing it names.
 //!
+//! # A batch can go back into the tray
+//!
+//! *Put back in tray* (issue #1374) is the page's: it reads a batch with [`get_batch`] and lands
+//! its lines in the tray as rows, where the reader files or archives them again like any scan —
+//! the way back from a pile filed by mistake and removed again. Nothing here writes for it: the
+//! tray is the page's to write, whole. So a line answers the two facts a row needs that the line
+//! does not store — the printing's finishes, and whether the printing is still in `cards` at all
+//! ([`ScanBatchLine::printing_gone`]), since a row naming one that is not is a row no Add can file.
+//!
 //! # Neither table syncs
 //!
 //! A batch describes what was in front of one device's camera. The collection rows an Add files
@@ -82,6 +91,14 @@ pub struct ScanBatchLine {
     pub layout: Option<String>,
     pub finish: String,
     pub quantity: i64,
+    /// The finishes the printing exists in, read from `cards` now — what a tray row put back from
+    /// this line offers in its finish control. Empty when the printing has gone or `cards` names
+    /// none, which constrains nothing.
+    pub finishes: Vec<String>,
+    /// Whether the printing has left `cards` since the batch was written. Such a line still reads
+    /// (its remembered name, set and number) but cannot go back into the tray: an Add would
+    /// refuse it.
+    pub printing_gone: bool,
 }
 
 /// One batch in the list: who it is, what put it away, and how much of it there is.
@@ -313,7 +330,7 @@ pub fn get_batch(conn: &Connection, id: i64) -> Result<Option<ScanBatch>, String
             "SELECT l.id, l.card_id, c.oracle_id, coalesce(c.name, l.name),
                     coalesce(c.set_code, l.set_code), c.set_name,
                     coalesce(c.collector_number, l.collector_number), c.rarity, c.layout,
-                    l.finish, l.quantity
+                    l.finish, l.quantity, c.finishes, c.id IS NULL
                FROM scan_batch_lines l
                LEFT JOIN cards c ON c.id = l.card_id
               WHERE l.batch_id = ?1
@@ -334,6 +351,11 @@ pub fn get_batch(conn: &Connection, id: i64) -> Result<Option<ScanBatch>, String
                 layout: r.get(8)?,
                 finish: r.get(9)?,
                 quantity: r.get(10)?,
+                finishes: r
+                    .get::<_, Option<String>>(11)?
+                    .and_then(|json| serde_json::from_str(&json).ok())
+                    .unwrap_or_default(),
+                printing_gone: r.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -475,6 +497,32 @@ mod tests {
         );
         assert_eq!(batch.lines[1].name, "Tarmogoyf");
         assert_eq!(batch.lines[1].set_name.as_deref(), Some("Future Sight"));
+        assert!(batch.lines.iter().all(|l| !l.printing_gone));
+    }
+
+    #[test]
+    fn a_line_answers_its_printings_finishes_for_the_tray() {
+        let conn = open();
+        conn.execute(
+            r#"UPDATE cards SET finishes = '["nonfoil","foil"]' WHERE id = 'goyf'"#,
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE cards SET finishes = NULL WHERE id = 'bolt'", [])
+            .unwrap();
+        let id = record_batch(
+            &conn,
+            &[item("goyf", "foil", 1), item("bolt", "nonfoil", 1)],
+            ARCHIVED,
+            None,
+        )
+        .unwrap();
+        let lines = get_batch(&conn, id).unwrap().unwrap().lines;
+        assert_eq!(lines[0].finishes, vec!["nonfoil", "foil"]);
+        assert!(
+            lines[1].finishes.is_empty(),
+            "a printing with no finishes listed constrains nothing"
+        );
     }
 
     #[test]
@@ -512,6 +560,11 @@ mod tests {
             ("fut", "153")
         );
         assert_eq!(line.oracle_id, None);
+        assert!(
+            line.printing_gone,
+            "a line whose printing has gone cannot go back into the tray"
+        );
+        assert!(line.finishes.is_empty());
     }
 
     #[test]

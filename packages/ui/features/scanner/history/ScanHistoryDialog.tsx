@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Archive, FolderInput, Pencil, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, FolderInput, Pencil, Trash2 } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { Dialog } from "@/components/Dialog";
 import { FinishMark } from "@/components/FinishMark";
@@ -21,6 +21,8 @@ import {
   deleteSentence,
   EMPTY_HISTORY,
   PICK_A_SCAN,
+  PUT_BACK_HINT,
+  PUT_BACK_LABEL,
   SCAN_HISTORY_TITLE,
   scanWhen,
 } from "./historyWords";
@@ -41,6 +43,11 @@ import {
  * record's own: Rename, and Delete — which asks first, and says the collection is not touched,
  * because a reader deleting the record of a pile they filed is afraid of exactly that.
  *
+ * **And one press that is the tray's, not the record's: *Put back in tray*** (issue #1374). It
+ * hands the batch to the page (`onPutBack`), which lands its lines in the tray and closes this —
+ * the way back from a pile filed by mistake and taken out again. The batch stays as it was: a
+ * record of what was put away then, beside the new one the next Add or Archive writes.
+ *
  * **Opened from the Scanner view's bar alone**, and mounted by the page as a sibling of its
  * `@container/scan` box rather than inside it — a container is the containing block for a `fixed`
  * scrim (`packages/ui/CLAUDE.md`'s `@container` rule). The delete question is a sibling of this
@@ -56,8 +63,11 @@ export function ScanHistoryDialog({
   open,
   onDismiss,
   onClose,
+  onPutBack,
 }: {
   open: boolean;
+  /** *Put back in tray*: the page lands the batch's lines in its tray, says so, and closes this. */
+  onPutBack: (batch: ScanBatch) => void;
   /** Escape and the ✕: hand the caret back to the bar's *History*, then close. */
   onDismiss: () => void;
   /** A press on the scrim. The reader is already somewhere else. */
@@ -88,6 +98,7 @@ export function ScanHistoryDialog({
         onClose={onClose}
       >
         <HistoryBody
+          onPutBack={onPutBack}
           onDelete={(batch, opener) => {
             deleteOpener.current = opener;
             setDeleting(batch);
@@ -116,8 +127,10 @@ export function ScanHistoryDialog({
  * typed are a session and never outlive a close.
  */
 function HistoryBody({
+  onPutBack,
   onDelete,
 }: {
+  onPutBack: (batch: ScanBatch) => void;
   onDelete: (batch: ScanBatchSummary, opener: HTMLElement) => void;
 }) {
   const list = useScanHistoryList();
@@ -176,7 +189,12 @@ function HistoryBody({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {batch.data ? (
           // Keyed by the batch, so a rename half typed on one is not carried onto the next.
-          <BatchView key={batch.data.summary.id} batch={batch.data} onDelete={onDelete} />
+          <BatchView
+            key={batch.data.summary.id}
+            batch={batch.data}
+            onPutBack={onPutBack}
+            onDelete={onDelete}
+          />
         ) : batch.isError ? (
           <p role="alert" className="px-5 py-4 text-sm text-destructive">
             {ipcError(batch.error)}
@@ -293,9 +311,11 @@ function Entry({
  */
 function BatchView({
   batch,
+  onPutBack,
   onDelete,
 }: {
   batch: ScanBatch;
+  onPutBack: (batch: ScanBatch) => void;
   onDelete: (batch: ScanBatchSummary, opener: HTMLElement) => void;
 }) {
   const tip = useTooltip();
@@ -366,6 +386,18 @@ function BatchView({
             </p>
           )}
         </div>
+        <button
+          type="button"
+          onClick={() => onPutBack(batch)}
+          className={cn(
+            PANEL_BUTTON,
+            "inline-flex h-8 shrink-0 items-center gap-1.5 px-2.5 text-xs hover:text-accent",
+          )}
+          {...tip(PUT_BACK_HINT)}
+        >
+          <ArchiveRestore className="size-3.5" aria-hidden="true" />
+          {PUT_BACK_LABEL}
+        </button>
         <button
           type="button"
           onClick={(e) => onDelete(summary, e.currentTarget)}

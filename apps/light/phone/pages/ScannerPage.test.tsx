@@ -1018,6 +1018,44 @@ describe("the phone's Scanner page", () => {
     expect(more).toHaveFocus();
   });
 
+  /**
+   * *Put back in tray* (issue #1374): a batch's lines land in the tray, the sheet closes with the
+   * caret back on the ⋯, one toast says so, and nothing is filed until the tray's own Add.
+   */
+  it("puts a past scan back in the tray from the history sheet, and says so once", async () => {
+    noCamera("NotAllowedError");
+    mount({ fake: { seed: "scanHistory" } });
+    const more = await screen.findByRole("button", { name: "Tray actions" }, SETTLE);
+    await userEvent.click(more);
+    await userEvent.click(
+      within(await screen.findByRole("dialog", { name: "Scanned cards" })).getByRole("button", {
+        name: "Scan history",
+      }),
+    );
+    const sheet = await screen.findByRole("dialog", { name: "Scan history" }, SETTLE);
+    await userEvent.click(await within(sheet).findByRole("button", { name: /^Scan 1/ }, SETTLE));
+    const batch = await within(sheet).findByRole("region", { name: "Scan 1" }, SETTLE);
+    await userEvent.click(within(batch).getByRole("button", { name: "Put back in tray" }));
+
+    await waitFor(
+      () => expect(screen.queryByRole("dialog", { name: "Scan history" })).toBeNull(),
+      SETTLE,
+    );
+    expect(more).toHaveFocus();
+    await waitFor(
+      () =>
+        expect(trayRows()).toEqual([
+          ["Urza's Saga", "4"],
+          ["Lightning Bolt", "1"],
+        ]),
+      SETTLE,
+    );
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Put 5 cards from “Scan 1” back in the tray",
+      tone: "success",
+    });
+  });
+
   it("throws the scanner's evidence away on Reset evidence", async () => {
     camera();
     restoreVideo = shimVideo();
