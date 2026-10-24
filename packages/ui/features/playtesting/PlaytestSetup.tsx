@@ -1,8 +1,9 @@
-import { Fragment, useId, useMemo, useState, type JSX, type ReactNode } from "react";
+import { useId, useMemo, useState, type JSX, type ReactNode } from "react";
 import { CircleCheck, CircleHelp, Fish, Play, Plus, TriangleAlert, X } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { CardImage } from "@/components/CardImage";
 import { FILTER_FIELD, FILTER_FOCUS, ToggleChip } from "@/components/FilterChips";
+import { PageBar, type PageCrumb } from "@/components/PageBar";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { coverUrl } from "@/features/decks/deckCover";
@@ -280,13 +281,15 @@ export function PlaytestSetup({
 
   if (loading || playable.length === 0) {
     return (
-      <section className="flex h-full items-center justify-center px-6">
-        <h2 className="sr-only">Playtesting</h2>
-        <p className="m-0 text-sm text-dim">
-          {loading
-            ? "Reading your decks…"
-            : "Playtesting needs a deck to play. Make one in Decks, then come back."}
-        </p>
+      <section className="flex h-full min-h-0 flex-col">
+        <PageBar title="Playtesting" />
+        <div className="flex min-h-0 flex-1 items-center justify-center px-6">
+          <p className="m-0 text-sm text-dim">
+            {loading
+              ? "Reading your decks…"
+              : "Playtesting needs a deck to play. Make one in Decks, then come back."}
+          </p>
+        </div>
       </section>
     );
   }
@@ -294,7 +297,7 @@ export function PlaytestSetup({
   const mirror = ready && opponents === 1 && seated[0]?.id === seated[1]?.id;
 
   return (
-    <section className="flex h-full min-h-0">
+    <section className="flex h-full min-h-0 flex-col">
       <h2 className="sr-only">Playtesting</h2>
       <DeckWall
         decks={playable}
@@ -305,82 +308,84 @@ export function PlaytestSetup({
         isSeated={(deck) => seated.some((d) => d?.id === deck.id)}
         cornerFor={cornerFor}
         onPick={seatDeck}
-      />
-
-      <aside
-        aria-label="Game setup"
-        className="flex w-[26rem] shrink-0 flex-col gap-6 overflow-y-auto border-l border-border bg-surface/45 p-6"
-      >
-        <Gamemodes mode={held.mode} onMode={(mode) => pick({ mode })} />
-
-        <div className="flex flex-col gap-2.5">
-          <h3 className={LABEL}>Seats</h3>
-          <ol aria-label="Seats" className="m-0 flex list-none flex-col gap-2 p-0">
-            {seated.map((deck, seat) => (
-              <SeatRow
-                // A seat is its place at the table, which never moves.
-                key={seat}
-                title={title(seat)}
-                deck={deck}
-                variant={held.seats[seat].variant}
-                active={seat === active}
-                state={
-                  deck === undefined
-                    ? undefined
-                    : supportOf(deck.id, dealt(deck, held.seats[seat].variant))
-                }
-                onActivate={() => setChosen(seat)}
-                onVariant={(variant) => setSeat(seat, { ...held.seats[seat], variant })}
-                onClear={() => {
-                  setSeat(seat, EMPTY_SEAT);
-                  setChosen(seat);
-                }}
-              />
-            ))}
-            {opponents === 0 && <GoldfishSeat />}
-          </ol>
-        </div>
-
-        {opponents > 0 && (
-          <Segmented
-            label="AI skill"
-            options={DIFFICULTIES}
-            value={held.difficulty}
-            onPick={(difficulty) => pick({ difficulty })}
-          />
-        )}
-
-        <div className="mt-auto flex flex-col gap-2 pt-2">
-          <button
-            type="button"
-            // `aria-disabled`, never the attribute: a `disabled` button leaves the tab order, and
-            // this one ungreys as the reader seats decks.
-            aria-disabled={!ready}
-            onClick={start}
-            className={cn(
-              "inline-flex h-12 items-center justify-center gap-2.5 rounded-full border",
-              "text-[15px] font-semibold transition-colors motion-reduce:transition-none",
-              PRESS,
-              FOCUS,
-              ready
-                ? "border-accent bg-accent text-accent-fg hover:bg-accent/90"
-                : "cursor-default border-border bg-surface text-dim active:scale-100",
-            )}
+        beside={
+          <aside
+            aria-label="Game setup"
+            // `pt-3`: the page bar's rule is the edge above it, 12px off as under the wall.
+            className="flex w-[26rem] shrink-0 flex-col gap-6 overflow-y-auto border-l border-border bg-surface/45 px-6 pb-6 pt-3"
           >
-            <Play className="size-4 fill-current" aria-hidden="true" />
-            Start game
-          </button>
-          <p className="m-0 min-h-4 text-center text-xs text-dim">
-            {!ready
-              ? firstEmpty === 0
-                ? "Pick your deck to start."
-                : `Pick a deck for ${title(firstEmpty)} to start.`
-              : mirror
-                ? "A mirror match."
-                : null}
-          </p>
-        </div>
-      </aside>
+            <Gamemodes mode={held.mode} onMode={(mode) => pick({ mode })} />
+
+            <div className="flex flex-col gap-2.5">
+              <h3 className={LABEL}>Seats</h3>
+              <ol aria-label="Seats" className="m-0 flex list-none flex-col gap-2 p-0">
+                {seated.map((deck, seat) => (
+                  <SeatRow
+                    // A seat is its place at the table, which never moves.
+                    key={seat}
+                    title={title(seat)}
+                    deck={deck}
+                    variant={held.seats[seat].variant}
+                    active={seat === active}
+                    state={
+                      deck === undefined
+                        ? undefined
+                        : supportOf(deck.id, dealt(deck, held.seats[seat].variant))
+                    }
+                    onActivate={() => setChosen(seat)}
+                    onVariant={(variant) => setSeat(seat, { ...held.seats[seat], variant })}
+                    onClear={() => {
+                      setSeat(seat, EMPTY_SEAT);
+                      setChosen(seat);
+                    }}
+                  />
+                ))}
+                {opponents === 0 && <GoldfishSeat />}
+              </ol>
+            </div>
+
+            {opponents > 0 && (
+              <Segmented
+                label="AI skill"
+                options={DIFFICULTIES}
+                value={held.difficulty}
+                onPick={(difficulty) => pick({ difficulty })}
+              />
+            )}
+
+            <div className="mt-auto flex flex-col gap-2 pt-2">
+              <button
+                type="button"
+                // `aria-disabled`, never the attribute: a `disabled` button leaves the tab
+                // order, and this one ungreys as the reader seats decks.
+                aria-disabled={!ready}
+                onClick={start}
+                className={cn(
+                  "inline-flex h-12 items-center justify-center gap-2.5 rounded-full border",
+                  "text-[15px] font-semibold transition-colors motion-reduce:transition-none",
+                  PRESS,
+                  FOCUS,
+                  ready
+                    ? "border-accent bg-accent text-accent-fg hover:bg-accent/90"
+                    : "cursor-default border-border bg-surface text-dim active:scale-100",
+                )}
+              >
+                <Play className="size-4 fill-current" aria-hidden="true" />
+                Start game
+              </button>
+              <p className="m-0 min-h-4 text-center text-xs text-dim">
+                {!ready
+                  ? firstEmpty === 0
+                    ? "Pick your deck to start."
+                    : `Pick a deck for ${title(firstEmpty)} to start.`
+                  : mirror
+                    ? "A mirror match."
+                    : null}
+              </p>
+            </div>
+          </aside>
+        }
+      />
     </section>
   );
 }
@@ -420,6 +425,7 @@ function DeckWall({
   isSeated,
   cornerFor,
   onPick,
+  beside,
 }: {
   decks: readonly DeckRow[];
   folders: readonly DeckFolder[];
@@ -429,6 +435,8 @@ function DeckWall({
   isSeated: (deck: DeckRow) => boolean;
   cornerFor: (deck: DeckRow) => ReactNode;
   onPick: (deck: DeckRow) => void;
+  /** The column beside the wall, under the page bar with it — the game's setup. */
+  beside: ReactNode;
 }): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.deckGallery);
   const fieldId = useId();
@@ -467,12 +475,25 @@ function DeckWall({
     n = n.folder.parentId === null ? null : (byFolder.get(n.folder.parentId) ?? null);
   }
   const parent = trail.length > 1 ? trail[trail.length - 2] : null;
-  const crumbs =
+  /**
+   * The page bar's trail: `Playtesting`, then every drawer above the open one — the Decks page's
+   * trail with the page's own word as its root, so the bar names the page wherever the wall is.
+   * The root is words at the top level and on the flat wall, and the way back to the top level
+   * inside a folder (named so the drawn word leads its name, WCAG 2.5.3).
+   */
+  const pageTrail: PageCrumb[] =
     trail.length === 0
-      ? []
+      ? [{ label: "Playtesting" }]
       : [
-          { id: null, name: ROOT_LABEL },
-          ...trail.slice(0, -1).map((n) => ({ id: n.folder.id, name: n.folder.name })),
+          {
+            label: "Playtesting",
+            name: "Playtesting, back to all decks",
+            onOpen: () => setFolderId(null),
+          },
+          ...trail.slice(0, -1).map((n) => ({
+            label: n.folder.name,
+            onOpen: () => setFolderId(n.folder.id),
+          })),
         ];
   const heading = flat ? EVERY_DECK : (openNode?.folder.name ?? ROOT_LABEL);
   const counts = [
@@ -492,119 +513,112 @@ function DeckWall({
     }));
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto p-6">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        {crumbs.length > 0 && (
-          <nav aria-label="Folder path" className="flex items-baseline gap-2">
-            {crumbs.map((crumb) => (
-              <Fragment key={crumb.id ?? "root"}>
-                <button
-                  type="button"
-                  onClick={() => setFolderId(crumb.id)}
-                  className={cn(
-                    "rounded-sm font-heading text-sm leading-none text-dim hover:text-text",
-                    FOCUS,
-                  )}
-                >
-                  {crumb.name}
-                </button>
-                <span aria-hidden="true" className="text-border">
-                  /
-                </span>
-              </Fragment>
-            ))}
-          </nav>
-        )}
-        <h3 className="m-0 font-heading text-xl font-normal leading-none">{heading}</h3>
-        <span className="font-mono text-[0.7rem] tabular-nums text-dim">{counts}</span>
-        <div className="ml-auto flex items-center gap-2">
-          <p
-            aria-live="polite"
-            className="m-0 inline-flex h-8 items-center gap-2 rounded-full border border-accent/50 bg-accent/10 px-3 text-sm text-dim"
-          >
-            <span aria-hidden="true" className="size-1.5 rounded-full bg-accent" />
-            <span>
-              Picking for <span className="font-medium text-accent">{pickingFor}</span>
-            </span>
-          </p>
-          {(folders.length > 0 || viewAll) && (
-            <ViewAllToggle
-              pressed={viewAll}
-              name="View all decks"
-              onToggle={() => setViewAll(!viewAll)}
+    <>
+      {/* **The page bar** ("Page & Section Headings", option A): the wall's heading row as the
+          page's, across the setup column as well as the wall, as on the Decks page — the trail,
+          the level on screen as the title, its counts as meta, and the row's controls against
+          the right edge. An `h3`, under the view's `h2`, as the wall's heading always was. */}
+      <PageBar
+        trail={pageTrail}
+        title={heading}
+        titleAs="h3"
+        meta={counts}
+        actions={
+          <>
+            <p
+              aria-live="polite"
+              className="m-0 inline-flex h-8 items-center gap-2 rounded-full border border-accent/50 bg-accent/10 px-3 text-sm text-dim"
+            >
+              <span aria-hidden="true" className="size-1.5 rounded-full bg-accent" />
+              <span>
+                Picking for <span className="font-medium text-accent">{pickingFor}</span>
+              </span>
+            </p>
+            {(folders.length > 0 || viewAll) && (
+              <ViewAllToggle
+                pressed={viewAll}
+                name="View all decks"
+                onToggle={() => setViewAll(!viewAll)}
+              />
+            )}
+          </>
+        }
+      />
+      <div className="flex min-h-0 flex-1">
+        {/* `pt-3`: 12px under the bar's rule, the Decks page's gap; no side padding, so the
+            wall lines up with the title above it. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto pb-6 pr-6 pt-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <label htmlFor={fieldId} className="sr-only">
+              Filter decks by name
+            </label>
+            <input
+              id={fieldId}
+              type="search"
+              value={filter.query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => clearFieldOnEscape(e, filter.query, () => setQuery(""))}
+              placeholder="Filter decks by name…"
+              className={cn(
+                FILTER_FIELD,
+                FILTER_FOCUS,
+                "min-w-40 max-w-[22rem] flex-1 border-border bg-surface px-3",
+                "placeholder:text-dim focus:border-accent",
+              )}
             />
-          )}
-        </div>
-      </div>
+            {formats.length > 1 && (
+              <div role="group" aria-label="Format" className="flex flex-wrap items-center gap-1">
+                {formats.map((format) => (
+                  <ToggleChip
+                    key={format.key}
+                    label={format.label}
+                    title={`${format.label} format, ${plural(format.count, "deck")}`}
+                    pressed={filter.formats.includes(format.key)}
+                    onClick={() => toggleFormat(format.key)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor={fieldId} className="sr-only">
-          Filter decks by name
-        </label>
-        <input
-          id={fieldId}
-          type="search"
-          value={filter.query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => clearFieldOnEscape(e, filter.query, () => setQuery(""))}
-          placeholder="Filter decks by name…"
-          className={cn(
-            FILTER_FIELD,
-            FILTER_FOCUS,
-            "min-w-40 max-w-[22rem] flex-1 border-border bg-surface px-3",
-            "placeholder:text-dim focus:border-accent",
-          )}
-        />
-        {formats.length > 1 && (
-          <div role="group" aria-label="Format" className="flex flex-wrap items-center gap-1">
-            {formats.map((format) => (
-              <ToggleChip
-                key={format.key}
-                label={format.label}
-                title={`${format.label} format, ${plural(format.count, "deck")}`}
-                pressed={filter.formats.includes(format.key)}
-                onClick={() => toggleFormat(format.key)}
+          <ul aria-label="Your decks" className="m-0 grid list-none p-0" style={wallStyle(zoom)}>
+            {openNode !== null && !flat && (
+              <ParentDeckFolderPickCard
+                label={parent?.folder.name ?? ROOT_LABEL}
+                zoom={zoom}
+                onOpen={() => setFolderId(parent?.folder.id ?? null)}
+              />
+            )}
+            {childFolders.map((node) => (
+              <DeckFolderPickCard
+                key={node.folder.id}
+                node={node}
+                members={decksUnder(node, decks, folderOf)}
+                zoom={zoom}
+                onOpen={setFolderId}
               />
             ))}
-          </div>
-        )}
+            {shown.map((deck) => (
+              <DeckPickTile
+                key={deck.id}
+                deck={deck}
+                pips={marks.pipsByDeck.get(deck.id) ?? null}
+                bracketLabel={marks.bracketFor(deck)}
+                bracketExpected={marks.bracketExpectedFor(deck)}
+                zoom={zoom}
+                picked={isSeated(deck)}
+                onPick={onPick}
+                corner={cornerFor(deck)}
+              />
+            ))}
+          </ul>
+          {filtering && shown.length === 0 && (
+            <p className="m-0 py-12 text-center text-sm text-dim">No decks match this filter</p>
+          )}
+        </div>
+        {beside}
       </div>
-
-      <ul aria-label="Your decks" className="m-0 grid list-none p-0" style={wallStyle(zoom)}>
-        {openNode !== null && !flat && (
-          <ParentDeckFolderPickCard
-            label={parent?.folder.name ?? ROOT_LABEL}
-            zoom={zoom}
-            onOpen={() => setFolderId(parent?.folder.id ?? null)}
-          />
-        )}
-        {childFolders.map((node) => (
-          <DeckFolderPickCard
-            key={node.folder.id}
-            node={node}
-            members={decksUnder(node, decks, folderOf)}
-            zoom={zoom}
-            onOpen={setFolderId}
-          />
-        ))}
-        {shown.map((deck) => (
-          <DeckPickTile
-            key={deck.id}
-            deck={deck}
-            pips={marks.pipsByDeck.get(deck.id) ?? null}
-            bracketLabel={marks.bracketFor(deck)}
-            bracketExpected={marks.bracketExpectedFor(deck)}
-            zoom={zoom}
-            picked={isSeated(deck)}
-            onPick={onPick}
-            corner={cornerFor(deck)}
-          />
-        ))}
-      </ul>
-      {filtering && shown.length === 0 && (
-        <p className="m-0 py-12 text-center text-sm text-dim">No decks match this filter</p>
-      )}
-    </div>
+    </>
   );
 }
 

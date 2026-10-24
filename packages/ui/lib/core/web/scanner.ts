@@ -595,7 +595,10 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     return statusOf(built, { present: neuralHeld, error: neuralError });
   }
 
-  async function frame(args: CallArgs | undefined): Promise<unknown> {
+  async function frame(
+    args: CallArgs | undefined,
+    options: CallOptions | undefined,
+  ): Promise<unknown> {
     touch();
     if (!(args instanceof Uint8Array)) return Promise.reject("A scanner frame is bytes.");
     let built: Live;
@@ -612,7 +615,11 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
     } catch (error) {
       return paced(sentenceOf(error));
     }
-    return ask(built.port, frameMessage(nextId++, args));
+    // The body is the frame, or the frame and its full-resolution copy split at the length
+    // header — a length that cannot split it is this call's refusal, as on the desktop.
+    const outgoing = frameMessage(nextId++, args, options?.headers);
+    if (typeof outgoing === "string") return Promise.reject(outgoing);
+    return ask(built.port, outgoing);
   }
 
   async function reset(): Promise<null> {
@@ -661,7 +668,7 @@ export function answeringScanner(inner: Core, env: ScanEnv = pageScanEnv()): Cor
         case STATUS_COMMAND:
           return said(status());
         case FRAME_COMMAND:
-          return said(frame(args));
+          return said(frame(args, options));
         case RESET_COMMAND:
           return said(reset());
         case FILTERS_COMMAND:

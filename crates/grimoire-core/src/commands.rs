@@ -50,10 +50,11 @@
 //! entries.
 //!
 //! **A `bytes` call's arguments are its headers.** A desktop capture is a raw request body with
-//! its sidecar's JSON in a request header; a host of the table has no headers to send, so the
-//! page puts the same object where the arguments go — `{"x-scanner-capture": "<json>"}` beside
-//! the body (`packages/ui/lib/core/table.ts`, and the web host's `protocol.ts`); a frame carries
-//! none, and its arguments are `{}`. The arm hands that object to the body as a [`Carried`],
+//! its sidecar's JSON in a request header, and a frame with its full-resolution copy behind it
+//! says where the frame ends in another; a host of the table has no headers to send, so the
+//! page puts the same object where the arguments go — `{"x-scanner-capture": "<json>"}` or
+//! `{"x-scanner-full": "<n>"}` beside the body (`packages/ui/lib/core/table.ts`, and the web
+//! host's `protocol.ts`); a frame alone carries none, and its arguments are `{}`. The arm hands that object to the body as a [`Carried`],
 //! whole and unparsed, beside whatever named arguments the entry declares — the scanner's two
 //! declare none. **The body crosses as the
 //! host can carry it**: base64 in `core_call`'s `body` on Android, where Tauri takes no raw
@@ -167,8 +168,9 @@ pub(crate) fn needs_body(name: &str, body: Option<Vec<u8>>) -> Result<Vec<u8>, S
 /// — the headers a raw request would have had (the module doc says why they ride there).
 ///
 /// Handed to a `bytes` body unparsed, because a header is read by the module that owns the
-/// payload and by its rules — a sidecar that does not parse is a refusal and an absent one is
-/// not (`scanner::capture_from`) — which a typed argument struct could not say. Arguments that
+/// payload and by its rules — a sidecar or a frame length that does not parse is a refusal and
+/// an absent one is not (`scanner::capture_from`, `scanner::frame_from`) — which a typed
+/// argument struct could not say. Arguments that
 /// were no object — `null`, or none at all — carried nothing.
 #[derive(Debug, Clone, Default)]
 pub struct Carried(serde_json::Map<String, Value>);
@@ -930,13 +932,15 @@ commands! {
     // capture are refused on a page in one sentence, inside the functions
     // (`scanner::not_in_a_browser_yet`).
     blocking scanner_status in scanner() = |state| state.scanner.status();
-    // The table's two `bytes` entries: the body is the JPEG, and a capture's arguments are the
-    // desktop's header by name (`Carried`, `scanner::Header::of_json`); a frame's carry nothing.
-    // Admitted before the body is decoded, so a refused frame costs no decode; `loaded` is taken
-    // and let go inside `ScannerState::frame`, on the blocking pool, with no `.await` under it.
-    bytes scanner_frame in scanner() = |state, raw, _carried| {
+    // The table's two `bytes` entries: the body is the JPEG — or the frame and its
+    // full-resolution copy back to back — and the call's arguments are the desktop's headers by
+    // name (`Carried`, `scanner::Header::of_json`). Admitted before the body is split or
+    // decoded, so a refused frame costs neither; `loaded` is taken and let go inside
+    // `ScannerState::frame`, on the blocking pool, with no `.await` under it.
+    bytes scanner_frame in scanner() = |state, raw, carried| {
         let _lease = state.scanner.admit(PAGE)?;
-        state.scanner.frame(&raw)
+        let (jpeg, full) = frame_from(&raw, &|name| Header::of_json(carried.get(name)))?;
+        state.scanner.frame(jpeg, full)
     };
     blocking scanner_reset in scanner() = |state| {
         let _lease = state.scanner.admit(PAGE)?;
@@ -3058,10 +3062,42 @@ mod tests {
         .await
         .expect("a verdict");
         assert_eq!(older["frame"], json!({ "w": 160, "h": 120 }), "{older}");
-        // A body cut short is the decoder's refusal, as a verdict.
-        let cut_short = call("scanner_frame", json!({}), Some(TINY_JPEG[..20].to_vec()))
-            .await
-            .expect("a verdict for a frame that is not one");
+        // The full frame: two JPEGs in one body, the first one's length in the arguments under
+        // the desktop's header name. **What this can show is where the frame ends**: the two
+        // halves are held byte for byte by `scanner::tests`, over `frame_from`. And "the frame
+        // decodes" alone would show nothing — a JPEG decoder stops at the end-of-image marker,
+        // so the whole pair taken as the frame is the same 160×120 picture.
+        let mut pair = TINY_JPEG.to_vec();
+        pair.extend_from_slice(TINY_JPEG);
+        let split = TINY_JPEG.len().to_string();
+        let paired = call(
+            "scanner_frame",
+            json!({ "x-scanner-full": split }),
+            Some(pair.clone()),
+        )
+        .await
+        .expect("a verdict for the pair");
+        assert_eq!(paired["frame"], json!({ "w": 160, "h": 120 }), "{paired}");
+        // A length that cannot split the body is the reader's refusal, never a verdict.
+        let unsplit = call(
+            "scanner_frame",
+            json!({ "x-scanner-full": "0" }),
+            Some(pair.clone()),
+        )
+        .await
+        .expect_err("a length of zero");
+        assert!(unsplit.contains("zero"), "{unsplit}");
+        // So the cut is put where it hurts: twenty bytes in, the frame is the head of a JPEG
+        // and nothing more, and the session says it could not decode it. An entry that ignored
+        // the header would have decoded the whole picture, as above. A body cut short is the
+        // decoder's refusal, as a verdict.
+        let cut_short = call(
+            "scanner_frame",
+            json!({ "x-scanner-full": "20" }),
+            Some(pair.clone()),
+        )
+        .await
+        .expect("a verdict for a frame that is not one");
         assert_eq!(cut_short["ok"], false, "{cut_short}");
         assert_eq!(cut_short["frame"], json!({ "w": 0, "h": 0 }), "{cut_short}");
         let said = cut_short["error"].as_str().expect("why");

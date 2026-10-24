@@ -8,7 +8,9 @@
 //!   in the table's own words, and `packages/ui/lib/core` picks this transport by asking nothing of the
 //!   page (see [`HOST_MARK`]). **The scanner's commands are among them** (phase 7, step 7.3):
 //!   a camera frame is `core_call { name: "scanner_frame", args: {}, body: <the JPEG, base64> }`,
-//!   decoded here and judged by the core's session on the blocking pool.
+//!   decoded here and judged by the core's session on the blocking pool — or, when the last
+//!   verdict asked for the full-resolution copy, `args: { "x-scanner-full": "<the frame's
+//!   length>" }` and the two JPEGs back to back in `body`, split by the core's `frame_from`.
 //!   This host needs nothing of its own for it — the page's camera is the WebView's, granted
 //!   through the manifest's `CAMERA` permission by wry's own `onPermissionRequest`, as the
 //!   pairing scanner's already is; the video is a `srcObject` and the frame a canvas `toBlob`

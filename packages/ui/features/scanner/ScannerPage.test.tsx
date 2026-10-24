@@ -1378,6 +1378,7 @@ describe("ScannerPage", () => {
         replaces_previous: false,
         // One finish: Detect files it nonfoil, the saga row's own finish.
         finishes: ["nonfoil"],
+        finish_mark: null,
       },
     };
     let land!: (v: ScannerVerdict) => void;

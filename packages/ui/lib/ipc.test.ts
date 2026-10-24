@@ -125,6 +125,9 @@ import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs
 import sessionRs from "../../../crates/card-scanner/src/session.rs?raw";
 import filtersRs from "../../../crates/card-scanner/src/filters.rs?raw";
 import referenceRs from "../../../crates/card-scanner/src/reference.rs?raw";
+// The finish mark (2026-10-24, brought back for the Neural scanner): the collector line's
+// separator, measured on full-resolution frames — `DecisionView::finish_mark`'s type.
+import finishRs from "../../../crates/card-scanner/src/finish.rs?raw";
 import ipcBarrel from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
@@ -4367,19 +4370,44 @@ describe("ipc argument names match the Rust command signatures", () => {
    * **The call shape, and this is the only pin it has.**
    *
    * A camera frame has no fields to name, so it is Tauri's raw byte body — the JPEG and nothing
-   * else, since there is one scanner (2026-10-24): no options header and no detail frame behind
-   * it. A header sent here would be read by nothing, and a body with more than the frame in it
-   * is a JPEG the decoder refuses.
+   * else, since there is one scanner (2026-10-24): no options header. A header sent with a frame
+   * alone would be read by nothing, and a body with more than the frame in it is a JPEG the
+   * decoder refuses.
    */
-  it("scanner_frame sends the frame as its bytes alone, with no header", async () => {
+  it("scanner_frame sends a frame alone as its bytes, with no header", async () => {
     const jpeg = new Uint8Array([1, 2, 3]);
     await ipc.scannerFrame(jpeg);
     expect(invoke).toHaveBeenCalledWith("scanner_frame", jpeg);
     expect(invoke.mock.lastCall).toHaveLength(2);
-    expect(ipc.scannerFrame).toHaveLength(1);
     expect(scannerRsDesktop).toMatch(
       /pub async fn scanner_frame\(\s*state: tauri::State<'_, Arc<AppState>>,\s*request: tauri::ipc::Request<'_>,/,
     );
+  });
+
+  /**
+   * **The full frame is the frame's tail, and the header is the only thing that says where the
+   * frame ends.** `scanner::frame_from` cuts the body at `x-scanner-full`'s number, so a length
+   * counted off the wrong array — the full frame's, or the concatenation's — hands the decoder
+   * half a JPEG. Nothing type-checks it: the header name is a string on both sides.
+   */
+  it("scanner_frame puts a full frame behind the frame, with the frame's length in a header", async () => {
+    const jpeg = new Uint8Array([1, 2, 3]);
+    const full = new Uint8Array([7, 8, 9, 10]);
+    await ipc.scannerFrame(jpeg, full);
+    expect(invoke).toHaveBeenCalledWith("scanner_frame", new Uint8Array([1, 2, 3, 7, 8, 9, 10]), {
+      headers: { "x-scanner-full": "3" },
+    });
+  });
+
+  it("scanner_frame with a null or empty full frame is the frame alone, with no header", async () => {
+    const jpeg = new Uint8Array([1, 2, 3]);
+    await ipc.scannerFrame(jpeg, null);
+    expect(invoke).toHaveBeenLastCalledWith("scanner_frame", jpeg);
+    expect(invoke.mock.lastCall).toHaveLength(2);
+    // The far end refuses an empty full frame in words, so the page must never send one.
+    await ipc.scannerFrame(jpeg, new Uint8Array());
+    expect(invoke).toHaveBeenLastCalledWith("scanner_frame", jpeg);
+    expect(invoke.mock.lastCall).toHaveLength(2);
   });
 
   /**
@@ -4874,21 +4902,24 @@ describe("multi-window's cross-boundary names", () => {
   });
 
   /**
-   * **The one header name, on both sides of both wires.** The desktop reads it off Tauri's
+   * **The two header names, on both sides of both wires.** The desktop reads them off Tauri's
    * request and a light host off the call's arguments (`packages/ui/lib/core/table.ts` sends the
-   * headers object as `args`), and both hand `scanner::capture_from` a lookup by this name —
-   * defined once, in the core. The page spells it by hand in `ipc.ts`, so a renamed constant is a
-   * capture whose sidecar is silently empty on every host. A frame carries no header at all
-   * since there is one scanner (2026-10-24), and the two it used to carry are gone from the core.
+   * headers object as `args`), and both hand `scanner::capture_from` / `frame_from` a lookup by
+   * these names — defined once, in the core. The page spells each by hand in `ipc.ts`, so a
+   * renamed constant is a capture whose sidecar is silently empty, or a frame and its full copy
+   * decoded as one JPEG, on every host. The options header a frame used to carry is gone from
+   * the core since there is one scanner (2026-10-24).
    */
-  it("names the scanner's one header as the engine names it, and a frame sends none", async () => {
+  it("names the scanner's two headers as the engine names them", async () => {
     expect(scannerRsCore).toContain('pub const CAPTURE_HEADER: &str = "x-scanner-capture";');
+    expect(scannerRsCore).toContain('pub const FULL_HEADER: &str = "x-scanner-full";');
     expect(scannerRsCore).not.toMatch(/pub const (OPTIONS|DETAIL)_HEADER/);
     // And not a second time in the desktop's file, where they lived until the table took them.
-    expect(scannerRsDesktop).not.toMatch(/pub const (OPTIONS|DETAIL|CAPTURE)_HEADER/);
+    expect(scannerRsDesktop).not.toMatch(/pub const (OPTIONS|DETAIL|CAPTURE|FULL)_HEADER/);
 
     invoke.mockResolvedValue({});
     await ipc.scannerFrame(new Uint8Array([1]));
+    await ipc.scannerFrame(new Uint8Array([1]), new Uint8Array([2]));
     await ipc.scannerCapture(new Uint8Array([1]), {
       expected: "",
       reported: "",
@@ -4899,7 +4930,7 @@ describe("multi-window's cross-boundary names", () => {
     const sent = invoke.mock.calls.flatMap(([, , options]) =>
       Object.keys((options as { headers?: Record<string, string> } | undefined)?.headers ?? {}),
     );
-    expect(sent).toEqual(["x-scanner-capture"]);
+    expect(sent.sort()).toEqual(["x-scanner-capture", "x-scanner-full"]);
   });
 
   /**
@@ -6606,6 +6637,11 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // the scanner answers from sets the reader excluded.
     ["ScannerDecision", sessionRs, "DecisionView"],
     ["ScannerChoice", sessionRs, "ChoiceView"],
+    // **The finish mark**, nested in `DecisionView::finish_mark`, which is what files a row's
+    // finish under Detect. `StandingView`'s reason once more: a renamed `reading` leaves the
+    // decision agreeing field for field while every mark arrives with no reading, and a tray
+    // under Detect files every two-finish printing as Unknown with nothing on screen to say why.
+    ["ScannerFinishMark", finishRs, "FinishMark"],
     ["ScanFilters", filtersRs, "ScanFilters"],
     ["ScannerLabel", referenceRs, "Label"],
     ["ScannerCandidate", referenceRs, "Candidate"],
@@ -7049,6 +7085,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       // The scanner's, which this side prefixes for the reason `renamed` gives for pairing's.
       ScannerAssetSource: { enum: "AssetSource", in: "grimoire-core/src/scanner.rs" },
       ScannerOutcome: { enum: "Outcome", in: "card-scanner/src/session.rs" },
+      ScannerMarkReading: { enum: "MarkReading", in: "card-scanner/src/finish.rs" },
       SyncPhase: { consts: ["PHASES"], in: "grimoire-core/src/sync.rs" },
       ReviewTable: { consts: ["REVIEWABLE"], in: "sync_engine/commands.rs" },
       // The table's three, which this side names for the game rather than the view.

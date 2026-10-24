@@ -132,13 +132,25 @@ pub fn rank(
         let bonus = if c.accepted { 2.0 } else { 1.0 };
         c.prominence = (area(&c.quad).abs() / (w * h)).sqrt() / (0.25 + dist) * bonus;
     }
-    let aimed_first = ranking == Ranking::Aimed;
+    let aimed_first = matches!(ranking, Ranking::Aimed | Ranking::Only);
     cards.sort_by(|a, b| {
         (aimed_first && b.aimed)
             .cmp(&(aimed_first && a.aimed))
             .then(b.prominence.total_cmp(&a.prominence))
     });
-    judge(cards, th)
+    let mut read = judge(cards, th);
+    if ranking == Ranking::Only {
+        // Nor is a card anywhere else in front of the lens: a detection beside the aim point
+        // keeps neither the box on the page nor a decision from being forgotten.
+        read.present = read
+            .cards
+            .iter()
+            .any(|c| c.aimed && c.detection.score >= th.det_accept);
+        if !read.best().is_some_and(|b| b.aimed) {
+            (read.accepted, read.supported, read.instant, read.weak) = (false, false, false, false);
+        }
+    }
+    read
 }
 
 /// Judge the first of the ranked cards against the thresholds.
@@ -527,6 +539,31 @@ mod tests {
             r.cards.iter().map(|c| c.aimed).collect::<Vec<_>>(),
             [true, false]
         );
+    }
+
+    #[test]
+    fn only_the_card_under_the_target_votes_or_is_in_front_of_the_lens() {
+        // A recognised card at the frame's edge and nothing under the middle: Aimed votes for
+        // it, Only takes the frame for one with no card.
+        let edge = || vec![unranked_at(1, 15.0, 30.0, 0.82, 0.33)];
+        let r = ranked(Ranking::Aimed, edge(), &th());
+        assert!(r.accepted && r.instant && r.present);
+        let r = ranked(Ranking::Only, edge(), &th());
+        assert!(!r.accepted && !r.supported && !r.instant && !r.weak);
+        assert!(
+            !r.present,
+            "a card beside the aim point is not the card in front of the lens"
+        );
+        assert_eq!(
+            r.best().map(|b| b.scored.card),
+            Some(1),
+            "its read is still reported"
+        );
+
+        // With the card under the middle, Only judges the frame as Aimed does.
+        let r = ranked(Ranking::Only, binder_page(), &th());
+        assert_eq!(r.best().map(|b| b.scored.card), Some(2));
+        assert!(!r.accepted && r.supported && r.present);
     }
 
     #[test]

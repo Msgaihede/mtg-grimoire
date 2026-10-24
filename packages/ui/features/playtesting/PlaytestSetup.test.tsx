@@ -286,15 +286,19 @@ describe("PlaytestSetup", () => {
     expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Casual pod folder, 1 deck" }));
     // The path back up, and the way out on the wall itself.
-    const path = screen.getByRole("navigation", { name: "Folder path" });
+    const path = screen.getByRole("navigation", { name: "Page trail" });
     expect(
       within(path)
         .getAllByRole("button")
         .map((b) => b.textContent),
-    ).toEqual(["All decks", "Commander"]);
+    ).toEqual(["Playtesting", "Commander"]);
+    expect(screen.getByRole("heading", { name: "Casual pod" })).toBeInTheDocument();
     await userEvent.click(tile("Kenrith Pod"));
     expect(seat("You")).toHaveAccessibleName("You: Kenrith Pod");
-    await userEvent.click(within(path).getByRole("button", { name: "All decks" }));
+    await userEvent.click(
+      within(path).getByRole("button", { name: "Playtesting, back to all decks" }),
+    );
+    expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument();
     expect(tile("Boros Aggro")).toBeInTheDocument();
   });
 

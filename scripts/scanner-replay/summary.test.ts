@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { pass, results, run } from "./fixture.ts";
 import { parseResults } from "./results.ts";
-import { breakdowns, compare, percent, summaryMarkdown, tally } from "./summary.ts";
+import { breakdowns, compare, finishLines, finishTally, percent, summaryMarkdown, tally } from "./summary.ts";
 
 const four = [
   run({ id: "a", scores: ["printing", "printing"] }),
@@ -11,6 +11,24 @@ const four = [
 ];
 
 describe("the replay's summary", () => {
+  it("scores each finish mark against the reader's finish, and tables it only when results carry one", () => {
+    const runs = [
+      run({ id: "f1", finish: "foil", passes: [pass("Neural", "printing", { finish_mark: "foil", finish: { marks: [], reading: "foil" } })] }),
+      run({ id: "f2", finish: "foil", passes: [pass("Neural", "printing", { finish_mark: null, finish: { marks: [], reading: "unknown" } })] }),
+      run({ id: "n1", finish: "nonfoil", passes: [pass("Neural", "printing", { finish_mark: "foil", finish: null })] }),
+      run({ id: "e1", finish: "etched", passes: [pass("Neural", "printing", { finish_mark: "foil" })] }),
+    ];
+    expect(finishTally(runs, "Neural", (p) => p.finish_mark)).toEqual({
+      foil: { right: 1, wrong: 0, unknown: 0, none: 1 },
+      nonfoil: { right: 0, wrong: 1, unknown: 0, none: 0 },
+    });
+    expect(finishTally(runs, "Neural", (p) => p.finish?.reading).foil).toEqual({ right: 1, wrong: 0, unknown: 1, none: 0 });
+    expect(finishLines(runs)).toContain("## Finish mark");
+    expect(summaryMarkdown(results(runs), null)).toMatch(/^\| Neural, full-frame bands \| 2 \| 1 \| 0 \| 1 \| 0 \| 1 \|/m);
+    // Results written before the mark was recorded have no such section.
+    expect(finishLines(four)).toEqual([]);
+  });
+
   it("counts a pass, with the right card holding the right printing", () => {
     expect(tally(four, "As scanned")).toMatchObject({ n: 4, printing: 1, card: 2, wrong: 1, undecided: 0, error: 1 });
     expect(tally(four, "Neural")).toMatchObject({ printing: 1, card: 1, wrong: 1, undecided: 1 });

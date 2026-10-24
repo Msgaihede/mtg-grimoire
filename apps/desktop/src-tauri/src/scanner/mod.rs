@@ -6,10 +6,10 @@
 //! 2026-10-07 — until then the commands' bodies and the body parsing were here too). The Neural
 //! scanner's files, built in on every build, which [`compiled`] hands the core's
 //! `ScannerState::carry` as the app starts. **The raw request** a frame and a capture arrive in:
-//! [`frame_payload`] and `capture_payload` take Tauri's `InvokeBody` (and, for a capture, its
-//! `HeaderMap`), refuse a JSON body in words, and hand the bytes on — a frame's whole body is the
-//! JPEG, and a capture's sidecar is read by the core's `capture_from`, whose header name and
-//! sentences are shared with the command table. And **the `#[tauri::command]`s**,
+//! [`frame_payload`] and `capture_payload` take Tauri's `InvokeBody` and `HeaderMap`, refuse a
+//! JSON body in words, and hand the bytes and a header lookup to the core's `frame_from` and
+//! `capture_from`, which do the reading — the header names, the full-frame split and every
+//! sentence are the core's, shared with the command table. And **the `#[tauri::command]`s**,
 //! each of which fetches what only Tauri can give it — the state, the calling webview's label
 //! for the core's lease, the request — and calls the core function the table's entry of the
 //! same name calls. The lease is admitted here, on the IPC task and before the body is read,
@@ -53,15 +53,23 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Header<'a> {
     }
 }
 
-/// The frame: the request body, whole — a JPEG, owned, because the decode runs on another thread
-/// than the request lives on.
+/// What [`frame_payload`] reads out of one request: the frame, and its full-resolution copy if
+/// one came — owned, because the decode runs on another thread than the request lives on.
+pub type FramePayload = (Vec<u8>, Option<Vec<u8>>);
+
+/// The frame from the request body, and the full-resolution copy behind it if [`FULL_HEADER`]
+/// says there is one — the core's [`frame_from`] over Tauri's request, which has the reasons:
+/// one body carrying two JPEGs, and a length header that is present and wrong being a refusal.
 ///
 /// **What is this host's is the refusal of a JSON body**: Tauri hands a command its arguments
 /// either way, and a frame sent as JSON is a page that built the call wrong — said in words
 /// rather than read as an empty frame.
-pub fn frame_payload(body: &InvokeBody) -> Result<Vec<u8>, String> {
+pub fn frame_payload(body: &InvokeBody, headers: &HeaderMap) -> Result<FramePayload, String> {
     match body {
-        InvokeBody::Raw(bytes) => Ok(bytes.clone()),
+        InvokeBody::Raw(bytes) => {
+            let (jpeg, full) = frame_from(bytes, &|name| header(headers, name))?;
+            Ok((jpeg.to_vec(), full.map(<[u8]>::to_vec)))
+        }
         InvokeBody::Json(_) => Err("the frame has to arrive as a raw request body".to_string()),
     }
 }
@@ -99,9 +107,9 @@ pub async fn scanner_frame(
     // with its camera already open would otherwise pay one per frame to be told no. The guard is
     // held through the decode, so a slow frame cannot let the lease lapse under itself.
     let _lease = state.scanner.admit(webview.label())?;
-    let jpeg = frame_payload(request.body())?;
+    let (jpeg, full) = frame_payload(request.body(), request.headers())?;
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || state.scanner.frame(&jpeg))
+    tauri::async_runtime::spawn_blocking(move || state.scanner.frame(&jpeg, full.as_deref()))
         .await
         .map_err(|e| format!("the scanner thread failed: {e}"))?
 }
@@ -327,17 +335,71 @@ mod tests {
         }
     }
 
-    /// The frame is the body, byte for byte.
+    /// With no length header the frame is the body, byte for byte — the body exactly as it was
+    /// before the full copy existed.
     #[test]
-    fn a_raw_body_is_the_frame() {
+    fn a_raw_body_with_no_header_is_the_frame() {
         let body = InvokeBody::Raw(vec![1, 2, 3]);
-        assert_eq!(frame_payload(&body).expect("payload"), vec![1, 2, 3]);
+        let (jpeg, full) = frame_payload(&body, &HeaderMap::new()).expect("payload");
+        assert_eq!(jpeg, vec![1, 2, 3]);
+        assert_eq!(full, None);
+    }
+
+    /// The page's own shape: the frame, then its full-resolution copy, one body, with the frame's
+    /// length in the header.
+    #[test]
+    fn a_full_header_splits_the_body_into_the_frame_and_the_full_frame() {
+        let body = InvokeBody::Raw(vec![1, 2, 3, 7, 8, 9, 10]);
+        let mut headers = HeaderMap::new();
+        headers.insert(FULL_HEADER, "3".parse().expect("value"));
+        let (jpeg, full) = frame_payload(&body, &headers).expect("payload");
+        assert_eq!(jpeg, vec![1, 2, 3]);
+        assert_eq!(full, Some(vec![7, 8, 9, 10]));
+    }
+
+    /// Every wrong length is a sentence rather than a split somewhere else: a mis-split body is a
+    /// frame decoded from half a JPEG, and the verdict for it would describe neither picture.
+    #[test]
+    fn a_frame_length_that_cannot_split_the_body_is_a_sentence() {
+        let body = InvokeBody::Raw(vec![1, 2, 3, 4]);
+        let refused = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(FULL_HEADER, value.parse().expect("value"));
+            frame_payload(&body, &headers).expect_err(value)
+        };
+        let err = refused("three");
+        assert!(err.contains("not a number"), "{err}");
+        let err = refused("-1");
+        assert!(err.contains("not a number"), "{err}");
+        let err = refused("0");
+        assert!(err.contains("zero"), "{err}");
+        // Past the end, and exactly at it — the second leaves an empty full frame.
+        let err = refused("9");
+        assert!(err.contains("no full frame"), "{err}");
+        let err = refused("4");
+        assert!(err.contains("no full frame"), "{err}");
+        // A header outside visible ASCII is there and unreadable: a refusal in Tauri's words.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            FULL_HEADER,
+            tauri::http::HeaderValue::from_bytes(&[0xE9]).expect("an opaque value"),
+        );
+        let err = frame_payload(&body, &headers).expect_err("an unreadable length");
+        assert!(
+            err.starts_with("the frame's length did not parse: "),
+            "{err}"
+        );
+        // One byte short of the end is still a split, however small the full frame.
+        let mut headers = HeaderMap::new();
+        headers.insert(FULL_HEADER, "3".parse().expect("value"));
+        let (jpeg, full) = frame_payload(&body, &headers).expect("payload");
+        assert_eq!((jpeg, full), (vec![1, 2, 3], Some(vec![4])));
     }
 
     #[test]
     fn a_json_body_is_a_sentence_not_a_panic() {
         let body = InvokeBody::Json(serde_json::json!({ "jpeg": "AQID", "options": {} }));
-        let err = frame_payload(&body).expect_err("a json frame");
+        let err = frame_payload(&body, &HeaderMap::new()).expect_err("a json frame");
         assert!(err.contains("raw request body"), "{err}");
         let err = capture_payload(&body, &HeaderMap::new()).expect_err("a json capture");
         assert!(err.contains("raw request body"), "{err}");

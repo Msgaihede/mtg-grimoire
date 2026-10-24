@@ -63,14 +63,21 @@ describe("the scanner Worker's session", () => {
 
   it("passes a frame through, and the module's refusal as an err", async () => {
     const { session, glue, posted } = harness();
-    await session.handle({ kind: "frame", id: 4, jpeg: bytes(1, 2) });
-    expect(glue.frame).toHaveBeenCalledWith(bytes(1, 2));
+    await session.handle({ kind: "frame", id: 4, jpeg: bytes(1, 2), full: null });
+    expect(glue.frame).toHaveBeenCalledWith(bytes(1, 2), null);
     glue.set_filters.mockReturnValue('{"err":"these filters match no printing"}');
     await session.handle({ kind: "filters", id: 5, filters: "{}" });
     expect(posted).toEqual([
       { kind: "ok", id: 4, result: { ok: true, decision_seq: 0 } },
       { kind: "err", id: 5, message: "these filters match no printing" },
     ]);
+  });
+
+  it("passes a frame's full-resolution copy to the module beside it", async () => {
+    const { session, glue, posted } = harness();
+    await session.handle({ kind: "frame", id: 4, jpeg: bytes(1, 2), full: bytes(7, 8, 9) });
+    expect(glue.frame).toHaveBeenCalledWith(bytes(1, 2), bytes(7, 8, 9));
+    expect(posted).toEqual([{ kind: "ok", id: 4, result: { ok: true, decision_seq: 0 } }]);
   });
 
   it("hands the Neural files to the module, and puts its refusal or its nothing in the envelope", async () => {
@@ -126,7 +133,7 @@ describe("the scanner Worker's session", () => {
     });
     const files = { detector: bytes(1), embedder: bytes(2), gallery: bytes(3), meta: bytes(4) };
     await session.handle({ kind: "neural", id: 1, ...files });
-    await session.handle({ kind: "frame", id: 2, jpeg: bytes(1) });
+    await session.handle({ kind: "frame", id: 2, jpeg: bytes(1), full: null });
     expect(posted).toEqual([
       { kind: "trapped", id: 1, message: "RuntimeError: unreachable" },
       { kind: "trapped", id: 2, message: AFTER_A_TRAP },
@@ -173,7 +180,7 @@ describe("the scanner Worker's session", () => {
     glue.frame.mockImplementation(() => {
       throw Object.assign(new Error("unreachable"), { name: "RuntimeError" });
     });
-    await session.handle({ kind: "frame", id: 1, jpeg: bytes(1) });
+    await session.handle({ kind: "frame", id: 1, jpeg: bytes(1), full: null });
     await session.handle({ kind: "reset", id: 2 });
     await session.handle({ kind: "memory", id: 3 });
     expect(posted).toEqual([

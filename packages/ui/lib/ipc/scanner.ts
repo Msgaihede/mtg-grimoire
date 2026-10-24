@@ -270,6 +270,32 @@ export interface ScannerTracked {
  */
 export type ScannerOutcome = "resolved" | "ambiguous";
 
+/**
+ * What the collector line's separator says about the finish — `MarkReading` in
+ * `crates/card-scanner/src/finish.rs`, snake-cased by serde. A foil prints a ★ between the set
+ * code and the language and a non-foil a •; `unknown` is no separator found, or one that measured
+ * between the two.
+ *
+ * **Two finishes and never three**: the mark knows star from dot and nothing else, so no reading
+ * here is ever `etched`.
+ */
+export type ScannerMarkReading = "foil" | "nonfoil" | "unknown";
+
+/**
+ * The separator, measured on full-resolution frames of the card — `FinishMark` in `finish.rs`.
+ * Every figure is `null` when no mark was found at all, which is a different fact from a mark
+ * that was found and measured ambiguous.
+ */
+export interface ScannerFinishMark {
+  reading: ScannerMarkReading;
+  /** The mark's height over the line's letter height. */
+  height: number | null;
+  /** The mark's area over the letter height squared. */
+  area: number | null;
+  /** The mark's area over its convex hull's — near 1 for a dot, lower for a star's points. */
+  solidity: number | null;
+}
+
 /** One printing an ambiguous decision offers — `ChoiceView` in `session.rs`. */
 export interface ScannerChoice {
   id: string;
@@ -317,6 +343,13 @@ export interface ScannerDecision {
    * through on rather than a type error.
    */
   finishes: string[];
+  /**
+   * The collector line's separator, measured on the full-resolution frames the page sent of this
+   * card ({@link ScannerVerdict.wants_full}), or `null` when none was measured — always, until a
+   * host turns the session's finish switch on. `reader/trayFinish.ts` is what turns this and
+   * {@link finishes} into a row's finish.
+   */
+  finish_mark: ScannerFinishMark | null;
 }
 
 /**
@@ -345,6 +378,13 @@ export interface ScannerVerdict {
   decision_seq: number;
   /** The decided card, on every committed frame; `null` otherwise. */
   decision: ScannerDecision | null;
+  /**
+   * The **next** frame should carry its full-resolution copy — the same video frame at the
+   * camera's own resolution, which the session cuts the card's collector band out of for the
+   * finish mark. A prediction: the loop sends the copy on the one frame after a verdict that
+   * asked, never on every frame, and a frame without one costs only the mark.
+   */
+  wants_full: boolean;
 }
 
 /**
@@ -468,10 +508,25 @@ export const scannerCommands = {
   /** `scanner::scanner_status`. Lazy: the first call loads the recogniser and the card names. */
   scannerStatus: () => invoke<ScannerStatus>("scanner_status"),
   /**
-   * `scanner::scanner_frame`. **The JPEG is the whole of the call**: a frame is bytes with no
-   * fields to name, so it is the body, and nothing rides beside it.
+   * `scanner::scanner_frame`. A frame is bytes with no fields to name, so the JPEG is the body.
+   *
+   * **A `full` copy rides in the same body, behind the frame**, and `x-scanner-full` is the
+   * frame's byte length — the one fact the far end needs to split the two. It is the same video
+   * frame at the camera's resolution, which the session cuts the collector band out of for the
+   * finish mark, so the pair has to arrive in one request: two would let a second frame's pixels
+   * stand in for the first's corners. With no full copy (or an empty one) the call is byte for
+   * byte the frame alone — no header, no copy — because the far end refuses an empty full frame
+   * in words, and every frame but the one after a verdict's `wants_full` carries none.
    */
-  scannerFrame: (jpeg: Uint8Array) => invoke<ScannerVerdict>("scanner_frame", jpeg),
+  scannerFrame: (jpeg: Uint8Array, full?: Uint8Array | null) => {
+    if (full == null || full.length === 0) return invoke<ScannerVerdict>("scanner_frame", jpeg);
+    const body = new Uint8Array(jpeg.length + full.length);
+    body.set(jpeg, 0);
+    body.set(full, jpeg.length);
+    return invoke<ScannerVerdict>("scanner_frame", body, {
+      headers: { "x-scanner-full": String(jpeg.length) },
+    });
+  },
   /** `scanner::scanner_reset`. The reader pressed reset, or the next card is coming. */
   scannerReset: () => invoke<void>("scanner_reset"),
   /** `scanner::scanner_capture`. The JPEG is the body, as {@link ipc.scannerFrame}'s is, and the
