@@ -1,26 +1,33 @@
 import { useEffect, useRef, useState, type JSX } from "react";
-import { PageRule, PageTitle } from "@/components/PageBar";
+import { Bug, History } from "lucide-react";
+import { FILTER_CONTROL } from "@/components/FilterChips";
+import { PageBar } from "@/components/PageBar";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
 import { plural } from "@/lib/counts";
+import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { ScanBatch } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
 import { leftOutSentence, putBackTitle } from "./history/historyWords";
 import { putBack } from "./history/putBack";
 import { ScanHistoryDialog } from "./history/ScanHistoryDialog";
 import { Overlay } from "./Overlay";
 import { AddCardDialog } from "./reader/AddCardDialog";
 import { AddedToast } from "./reader/AddedToast";
-import { MatchStrip } from "./reader/MatchStrip";
-import { SCANNING_STOPPED, SHOT_READY_CLICK } from "./reader/readerText";
-import { ScanBar } from "./reader/ScanBar";
+import { ShotReadyPill, StoppedVeil } from "./reader/PictureNotes";
+import { matchStrip } from "./reader/readerText";
+import { ScanDock } from "./reader/ScanDock";
+import { ScanHud } from "./reader/ScanHud";
+import { TierConfetti } from "./reader/TierConfetti";
 import { setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
 import { withoutCommitted } from "./reader/trayCommit";
 import { TrayPanel } from "./reader/TrayPanel";
 import { useLandedPrice } from "./reader/useLandedPrice";
+import { useLandedTier } from "./reader/useLandedTier";
 import { ScannerPanels } from "./ScannerPanels";
 import { useScanSounds } from "./sounds/useScanSounds";
 import { SubmitScanDialog } from "./submit/SubmitScanDialog";
@@ -47,8 +54,9 @@ import { SCANNER_OPEN_ELSEWHERE, SCANNER_OPENS_HERE_LATER } from "./verdictText"
 // its cards by the same rules: `useTrayLanding.ts`, `useScannerStatus.ts`, `reader/trayCommit.ts`.
 
 /**
- * The Scanner view: the reader's bar across the top, the camera and one line saying what it is
- * doing, and the review tray beside it — with today's developer panels one switch away.
+ * The Scanner view: the page's header, the camera column — the picture, with how close the
+ * scanner is to a card drawn on it, and the dock of controls under it — and the review tray beside
+ * it, with today's developer panels one switch away.
  *
  * **Gated above the live view.** One window scans at a time (spec §5.3): the scanner is a lease
  * the window using it keeps renewing, and whether another holds it has to be answered *before* the
@@ -58,18 +66,20 @@ import { SCANNER_OPEN_ELSEWHERE, SCANNER_OPENS_HERE_LATER } from "./verdictText"
  * live view's heartbeat is the real gate and asks again the moment it is refused.
  *
  * **The camera and the panels are two halves on purpose.** `useCamera` and `useScanLoop` own
- * the stream and the pump; `ScanBar`, `TrayPanel` and `ScannerPanels` are pure and take what
- * they draw as props, so each is tested from fixtures and storied without a camera, and a change
- * to a panel never touches the loop.
+ * the stream and the pump; `ScanDock`, `ScanHud`, `TrayPanel` and `ScannerPanels` are pure and
+ * take what they draw as props, so each is tested from fixtures and storied without a camera, and
+ * a change to a panel never touches the loop.
  *
  * **`destination` is the same view filing somewhere else** — a side of a trade, from the dialog
  * that mounts this over the Trade page (`TrayDestination`). Absent, which is the Scanner view,
  * nothing below is any different from before the prop. With one: Add hands the ready rows to the
- * destination and wears its words, the folder and *Create deck…* are not drawn, and neither are
- * the developer panels or their switch — they are the Scanner view's, and a stored switch flipped
- * from inside a dialog would be found on by a reader who never saw a panel. Everything else is
- * the scanner as it stands, **the tray included**: it is one stored row, so cards already in it
- * are in this list too, and the tray says so.
+ * destination and wears its words, the folder and *Create deck…* are not drawn, and neither is
+ * the page's header nor the developer panels. The dialog is already titled, and the header's
+ * *History* and Developer switch are the Scanner view's: a dialog opened from inside another
+ * dialog is a stack the reader did not ask for, and a stored switch flipped from inside a dialog
+ * would be found on by a reader who never saw a panel. Everything else is the scanner as it
+ * stands, **the tray included**: it is one stored row, so cards already in it are in this list
+ * too, and the tray says so.
  */
 export function ScannerPage({ destination }: { destination?: TrayDestination }): JSX.Element {
   const elsewhere = useScannerElsewhere();
@@ -99,7 +109,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const { prefs, update, inForce, filterError, loaded, unavailable } = useScannerPrefs();
   // The developer panels are the Scanner view's own; a destination's host draws none of them.
   const developer = destination === undefined && prefs.developer;
-  // **Stopped until the reader presses Start scanning** (issue #1317): opening the view turns the
+  // **Stopped until the reader presses Start** (issue #1317): opening the view turns the
   // camera on, not recognition. Session-only: a Start or Stop survives minimize/restore, and a new
   // visit starts stopped again.
   const [scanning, setScanning] = useState(false);
@@ -140,7 +150,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const writeRows = (rows: ScannerTrayRow[]) => tray.setRows(rows);
 
   // One card, into the tray — once per `decision_seq`, built on `tray.latest()`, in the finish
-  // the Defaults popover holds as the card lands (`useTrayLanding`).
+  // the dock's Finish menu holds as the card lands (`useTrayLanding`).
   const { onDecision, onPicked, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
     tray,
     prefs.finish,
@@ -167,11 +177,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const maySend = useMaySendScans();
 
   /**
-   * **Point and shoot** (`usePointAndShoot`): with the pref on, the bar's *Scan card* runs the pump
-   * until one card lands, and Start/Stop is not drawn. Over anything that pauses the pump the shot
-   * is over, so a dialog closing never resumes one. `reading` is whichever of the two is running
-   * — what the overlay, the strip and the sentences over the picture follow; `armed` is whether
-   * the reader is scanning at all, so a card that ended its own shot still lands over the camera.
+   * **Point and shoot** (`usePointAndShoot`): with the pref on, the dock's *Scan card* runs the
+   * pump until one card lands, and Start/Stop is not drawn. Over anything that pauses the pump the
+   * shot is over, so a dialog closing never resumes one. `reading` is whichever of the two is
+   * running — what the overlay, the progress bar and the notes over the picture follow; `armed` is
+   * whether the reader is scanning at all, so a card that ended its own shot still lands over the
+   * camera.
    */
   const pointAndShoot = prefs.pointAndShoot;
   const shot = usePointAndShoot({
@@ -203,8 +214,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     },
   });
 
-  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
-  const landedPrice = useLandedPrice(armed ? landed : null, destination?.marketplace);
+  // The card over the camera — the popup's, and so the confetti's: nothing lands over a picture
+  // whose reader is not scanning.
+  const shown = armed ? landed : null;
+  // What it costs — at the tray's marketplace, so it is its row's figure — and the rung of the
+  // sound ladder that reaches, which colours the figure and throws the confetti.
+  const landedPrice = useLandedPrice(shown, destination?.marketplace);
+  const landedTier = useLandedTier(shown, destination?.marketplace);
   // **A sound for each card that lands, and for each row the reader settles** — `needs-input`
   // while a card asks something, otherwise the jingle its price reaches on the reader's ladder
   // (Settings → Scanner). Not gated on `armed`: a card that ends its own shot still landed.
@@ -222,9 +238,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    *
    * The command can fail — a poisoned mutex, a scanner thread that did not come back — and a
    * discarded rejection is a press that visibly did nothing and said nothing. It goes in the
-   * strip under the video, behind the detector's own sentence: the same failure that stops a
-   * reset stops every frame, and the frame's line names it better. Cleared on the next press
-   * rather than on a timer, so a reader who tries again sees the second answer, not the first.
+   * note chip at the picture's top-left (`ScanHud`), behind the loop's own error: the same
+   * failure that stops a reset stops every frame, and the frame's line names it better. Cleared
+   * on the next press rather than on a timer, so a reader who tries again sees the second answer,
+   * not the first.
    */
   const [resetError, setResetError] = useState<string | null>(null);
 
@@ -276,8 +293,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    *
    * **While there can be a run** — a camera live *and* recognition running. Stopped, the pump
    * has let its frames go (a run never spans a Stop) and is sending none, so there is nothing to
-   * send and no press is drawn: the stopped sentence over the picture already says what would
-   * bring one back.
+   * send and no press is drawn: the stopped veil over the picture already says what would bring
+   * one back.
    *
    * **Only in the Scanner view itself — never over a trade** (the owner's decision,
    * 2026-10-11). Mounted with a `destination` this page is already inside a dialog, and its
@@ -290,7 +307,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * hook says why that silence is a rule and not an omission. A lapse while the dialog is open
    * is not this page's either: the engine refuses the send, and the dialog draws the refusal.
    *
-   * **The filters it says are the ones in force** (`inForce`), not the ones the bar is drawing:
+   * **The filters it says are the ones in force** (`inForce`), not the ones the dock is drawing:
    * `prefs.filters` moves the moment the reader changes it, before the session has taken the
    * change, and is put back if the session refuses it.
    */
@@ -381,7 +398,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       notify.success(`Archived ${plural(kept.copies, "card")} to Scan history`);
     });
   };
-  /** The scan history's dialog, and the bar's *History* that opened it, for the caret. */
+  /** The scan history's dialog, and the header's *History* that opened it, for the caret. */
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyOpener = useRef<HTMLElement | null>(null);
   /**
@@ -451,112 +468,94 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     });
   };
 
-  // The scanner's own refusal of a frame is a developer's sentence — no card found in it —
-  // and the reader has the status line for what it means to them. The loop's failures, a refused
-  // reset and a *Send scan…* pressed too soon are not the detector's, and every reader gets
-  // those. **A press that opened nothing is never silent**: it takes this line over from the
-  // detector's own sentence, which a Developer reader is otherwise shown on every frame with no
-  // card in it. It is not said while recognition is stopped, where the line is the stopped
-  // sentence's: the press is not drawn there, and the hook drops its sentence with the press.
-  const detectorSentence =
-    developer && loop.verdict?.ok === false && submit.error === null
-      ? (loop.verdict.error ?? "")
-      : (loop.error ?? resetError ?? submit.error ?? "");
+  // What the HUD's note chip says. The loop's failures and a *Send scan…* pressed too soon are
+  // said only while recognition runs; **a refused reset is said stopped too**, because Reset is a
+  // press the reader can make over a stopped picture and a press that opened nothing is never
+  // silent. The scanner's own refusal of a frame (no card found in it) is the detector's sentence,
+  // not the reader's: the Developer panels carry it, and in the chip it would blink frame by
+  // frame in an assertive alert.
+  const hudNote = (reading ? (loop.error ?? resetError ?? submit.error) : resetError) || null;
+  // **The HUD's presses stand over a live picture alone** — the phone page's rule: not over the
+  // camera's own refusal, nor over a host with no session, each of which is a sentence where the
+  // picture would be, and a Reset there would ask a session that has no picture to weigh. Unlike
+  // the phone's, *Reset evidence* stays drawn stopped and between shots, as the spec's corner
+  // has it — the note above says why a reset refused there is still said.
+  const pictureLive = camera.kind === "live" && unavailable === null;
 
   return (
     // **`@container/scan` because the split answers this view's own width, never the window's** —
-    // there is no viewport branch in this app. Below 88rem the tray is a 400px column and the
-    // developer panels stack under it in one scroller; from 88rem the camera takes two thirds of
-    // what the developer column leaves, the tray the other third, and the panels get a column of
-    // their own. A container is the containing block for anything `fixed` inside it, so nothing
-    // that must cover the window may mount in here — and nothing does: the dropdowns measure the
-    // block they land in, the all-printings dialog is drawn at the app root, and the page's five
-    // dialogs — *Clear all…*, *Create deck…*, *Send scan…*, *Add card…* and *History* — are this
-    // fragment's other children, siblings of the box and not inside it.
+    // there is no viewport branch in this app. **The camera column gives way first, in steps**
+    // (the owner's choice, 2026-10-24 — the canvas was drawn without the app's 208px rail, which
+    // left the tray too narrow at 1280–1440 for its header and footer on one line): 40rem until the
+    // tray is down to 36rem, then down to 31rem holding the tray at 36rem, then the tray gives way
+    // down to 24rem, then the camera again to its 23rem floor — each step `clamp`'s, over the
+    // container's width (`100cqw`) less the tray's step and the 1.25rem gap. 52.5rem from a
+    // 140rem container (a 2560px window less the rail and padding). With
+    // the developer panels on, below 88rem they stack under the tray in one scroller, and from
+    // 88rem they get a column of their own beside it. A container is the containing block for
+    // anything `fixed` inside it, so nothing that must cover the window may mount in here — and
+    // nothing does: the dropdowns measure the block they land in, the all-printings dialog is
+    // drawn at the app root, and the page's five dialogs — *Clear all…*, *Create deck…*, *Send
+    // scan…*, *Add card…* and *History* — are this fragment's other children, siblings of the box
+    // and not inside it.
     <>
       <section className="@container/scan flex h-full flex-col gap-3">
-        {/* Not shown: the page title at the start of the bar below draws the view's name, and
-            this heading names it for assistive tech, as the other views' do — so that title is a
-            `div`. */}
+        {/* Not shown: the page bar's title below draws the view's name, and this heading names
+            it for assistive tech, as the other views' do — so that title is a `div`. It is here
+            over a trade too, where no header is drawn. */}
         <h2 className="sr-only">Scanner</h2>
 
-        <ScanBar
-          scanning={scanning}
-          onScanning={setScanning}
-          pointAndShoot={pointAndShoot}
-          onPointAndShoot={(on) => {
-            // Either way the switch lands stopped: a shot ends with the pref, and Start is
-            // pressed afresh — the view's own rule, a visit starts stopped (issue #1317).
-            setScanning(false);
-            update({ pointAndShoot: on });
-          }}
-          shooting={shot.shooting}
-          onShoot={(on) => (on ? shot.start(loop.clearReads, "card") : shot.stop())}
-          filters={prefs.filters}
-          onFilters={(filters) => update({ filters })}
-          filterError={filterError}
-          // A host with no session has nothing to narrow, and a filter changed there would be
-          // drawn, never taken and never stored.
-          filtersDisabled={unavailable ?? filtersDisabled}
-          finish={prefs.finish}
-          onFinish={(finish) => update({ finish })}
-          condition={prefs.condition}
-          onCondition={(condition) => update({ condition })}
-          developer={developer}
-          onDeveloper={(on) => update({ developer: on })}
-          developerSwitch={destination === undefined}
-          cameras={cameras}
-          // The camera that opened; while a switch is starting, the one asked for — so the trigger
-          // does not read `Default` for the moment between two cameras.
-          cameraId={camera.kind === "live" ? camera.deviceId : prefs.cameraId}
-          // A press on the camera already chosen changes nothing, and must not restart the stream.
-          onCamera={(cameraId) => {
-            if (cameraId !== prefs.cameraId) update({ cameraId });
-          }}
-          // The history is the Scanner view's: over a trade the page is already a dialog.
-          onHistory={
-            destination === undefined
-              ? (opener) => {
-                  historyOpener.current = opener;
-                  setHistoryOpen(true);
-                }
-              : undefined
-          }
-          // **The page bar, drawn by the scan bar** ("Page & Section Headings", 2026-10-21): the
-          // title as its first item and the rule under it, so naming the view costs the
-          // camera no height. Not over a trade, whose dialog is already titled.
-          lead={destination === undefined ? <PageTitle title="Scanner" titleAs="div" /> : undefined}
-        />
-        {destination === undefined && <PageRule />}
+        {/* **The page's header** ("Page & Section Headings", 2026-10-21): the title, then the
+            scan history and the way back to the developer panels against the right edge, and the
+            rule under it. Not over a trade: the dialog is already titled, and both presses are
+            the Scanner view's own (the component's doc says why). */}
+        {destination === undefined && (
+          <PageBar
+            title="Scanner"
+            titleAs="div"
+            actions={
+              <>
+                <HistoryButton
+                  onOpen={(opener) => {
+                    historyOpener.current = opener;
+                    setHistoryOpen(true);
+                  }}
+                />
+                <DeveloperSwitch on={developer} onChange={(on) => update({ developer: on })} />
+              </>
+            }
+          />
+        )}
 
-        <div className="flex min-h-0 flex-1 gap-4">
-          {/* The camera's column: how close the scanner is to a card, then the picture. */}
-          <div className="flex min-w-0 flex-1 flex-col gap-3 @min-[88rem]/scan:flex-[2_1_0%]">
-            {/* **The reader's one line, above the picture rather than under it**, with the card the
-                scanner is leaning towards and how close it is: a reader holding a card watches the
-                bar fill, and a line under a tall camera is a line below where they are looking. */}
-            <MatchStrip
-              verdict={reading ? loop.verdict : null}
-              lastAdded={lastAdded}
-              onReset={onReset}
-              // Offered only where `sendable` says: a run to send, the Scanner view itself, and
-              // a supporter's device. Without a live camera, or stopped, the box under the strip
-              // is already saying why not; of the membership nothing is said at all.
-              onSend={sendable ? submit.open : undefined}
-            />
-            {/* The column is the height, and the video box takes what the strip above it and the
-                notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
-                `Overlay`'s canvas with it): at two thirds of a wide view the box is nearer square
-                than 16:9, and a letterboxed feed there is a strip with black above and below. */}
+        <div className="flex min-h-0 flex-1 gap-5">
+          {/* The camera's column: the picture, with everything the scanner says drawn on it, and
+              the dock of controls under it. */}
+          <div className="flex min-w-[23rem] flex-[0_1_clamp(23rem,100cqw_-_25.25rem,clamp(31rem,100cqw_-_37.25rem,40rem))] flex-col gap-3 @min-[140rem]/scan:basis-[52.5rem]">
+            {/* The column is the height, and the video box takes what the notes and the dock
+                under it leave. **Cropped rather than letterboxed** (`object-cover`, and
+                `Overlay`'s canvas with it): a column this shape is nearer square than 16:9, and a
+                letterboxed feed there is a strip with black above and below. */}
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
               <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
               <Overlay videoRef={videoRef} verdict={reading ? loop.verdict : null} />
-              <AddedToast card={armed ? landed : null} onDone={clearLanded} price={landedPrice} />
-              {!reading && (
-                <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
-                  {pointAndShoot ? SHOT_READY_CLICK : SCANNING_STOPPED}
-                </p>
+              {/* **Stopped, the picture dims behind the press that begins it** — continuous only,
+                  and only over a picture: a refused camera or a host with no session puts its own
+                  sentence where the picture would be, and a veil laid over that would be two
+                  centred sentences on top of each other. */}
+              {!pointAndShoot && !scanning && camera.kind !== "error" && unavailable === null && (
+                <StoppedVeil />
               )}
+              {/* Before the popup, so the pieces leave from behind the card; thrown only for a
+                  landing the popup is showing, at a price tier. A `null` burst throws nothing and
+                  stops nothing, so a jackpot still in the air when the popup goes finishes. */}
+              <TierConfetti
+                burst={
+                  shown !== null && landedTier !== null
+                    ? { stamp: shown.stamp, tier: landedTier }
+                    : null
+                }
+              />
+              <AddedToast card={shown} onDone={clearLanded} price={landedPrice} tier={landedTier} />
               {camera.kind === "error" && (
                 <p
                   role="alert"
@@ -578,17 +577,35 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                   {unavailable}
                 </p>
               )}
-              {/* The detector's own sentence, in a strip that is *emptied* rather than removed: a
-                  frame that fails is the ordinary case at nine answers a second, and a box that
-                  grew and shrank with each one would be the loudest thing on the screen. Two lines
-                  of room, held whether or not there is anything to put in it. At the top of the
-                  picture, because the bottom is where a landed card is laid. */}
-              <p
-                className="absolute left-3 top-2 min-h-[2.5em] text-xs text-dim"
-                aria-live="polite"
-              >
-                {reading ? detectorSentence : ""}
-              </p>
+              {/* **How close the scanner is to a card, drawn on the picture** (`ScanHud`): the bar
+                  along the top edge, *Reset evidence* and *Send scan…* in the top-right corner, the
+                  one error it has to say under the bar, and the visually hidden live region that
+                  announces what the old Match strip said. Last, and on its own layer, so its
+                  presses stay above everything else in the box. **Not drawn on a host with no
+                  session**, as on the phone: its status would say *Point the camera at a card*
+                  under a sentence saying there is no scanner. */}
+              {unavailable === null && (
+                <ScanHud
+                  strip={matchStrip(reading ? loop.verdict : null, lastAdded)}
+                  // No bar over the camera's own refusal: nothing is being matched there.
+                  live={reading && camera.kind === "live"}
+                  variant="labelled"
+                  onReset={pictureLive ? onReset : undefined}
+                  // Offered only where `sendable` says: a run to send, the Scanner view itself,
+                  // and a supporter's device. Without a live camera, or stopped, the picture is
+                  // already saying why not; of the membership nothing is said at all.
+                  onSend={sendable ? submit.open : undefined}
+                  note={hudNote}
+                  // Point and shoot between two shots: what the next one is taken with — in the
+                  // HUD's own flow, under *Reset evidence*, which it would otherwise run under in
+                  // a column narrower than 584px.
+                  notice={
+                    pointAndShoot && !shot.shooting && camera.kind !== "error" ? (
+                      <ShotReadyPill />
+                    ) : null
+                  }
+                />
+              )}
             </div>
             {/* Whatever the status still has to say — the recogniser's files, there and not
                 loaded. */}
@@ -602,22 +619,51 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 ))}
               </div>
             )}
+
+            <ScanDock
+              scanning={scanning}
+              onScanning={setScanning}
+              pointAndShoot={pointAndShoot}
+              onPointAndShoot={(on) => {
+                // Either way the switch lands stopped: a shot ends with the pref, and Start is
+                // pressed afresh — the view's own rule, a visit starts stopped (issue #1317).
+                setScanning(false);
+                update({ pointAndShoot: on });
+              }}
+              shooting={shot.shooting}
+              onShoot={(on) => (on ? shot.start(loop.clearReads, "card") : shot.stop())}
+              filters={prefs.filters}
+              onFilters={(filters) => update({ filters })}
+              filterError={filterError}
+              // A host with no session has nothing to narrow, and a filter changed there would be
+              // drawn, never taken and never stored.
+              filtersDisabled={unavailable ?? filtersDisabled}
+              finish={prefs.finish}
+              onFinish={(finish) => update({ finish })}
+              cameras={cameras}
+              // The camera that opened; while a switch is starting, the one asked for — so the
+              // trigger does not read `Default` for the moment between two cameras.
+              cameraId={camera.kind === "live" ? camera.deviceId : prefs.cameraId}
+              // A press on the camera already chosen changes nothing, and must not restart the
+              // stream.
+              onCamera={(cameraId) => {
+                if (cameraId !== prefs.cameraId) update({ cameraId });
+              }}
+            />
           </div>
 
-          {/* **The tray's side, and below 88rem it is one fixed column.** With the developer panels
-              off it is the tray alone, and the tray is the column's height — its cards scroll and
-              its Add button stays put. With them on the column scrolls by itself, so opening a panel
-              never moves the video, and the tray is capped rather than shrunk: a `min-h-0` item in a
-              scroller hands its height to the panels beside it.
-              **From 88rem it is a row instead**, grown from a basis of the developer column plus the
-              gap (22.25rem, or nothing with the panels off) against the camera's 2 — so the camera
-              gets two thirds of what the panels leave and the tray the third, and the panels scroll
-              in a column of their own beside it. */}
+          {/* **The tray's side: the rest of the width, and never under 24rem.** With the
+              developer panels off it is the tray alone, and the tray is the column's height — its
+              cards scroll and its Add button stays put. With them on, below 88rem the side scrolls
+              by itself, so opening a panel never moves the video, and the tray is capped rather
+              than shrunk: a `min-h-0` item in a scroller hands its height to the panels beside it.
+              **From 88rem it is a row instead**, the panels scrolling in a column of their own
+              beside the tray — its floor then the tray's 24rem, the gap and the panels' 21.25rem. */}
           <div
             className={
               developer
-                ? "relative flex w-[25rem] shrink-0 flex-col gap-4 overflow-auto @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_22.25rem] @min-[88rem]/scan:flex-row @min-[88rem]/scan:overflow-visible"
-                : "flex w-[25rem] shrink-0 flex-col @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_0%]"
+                ? "relative flex min-w-[24rem] flex-1 flex-col gap-4 overflow-auto @min-[88rem]/scan:min-w-[46.25rem] @min-[88rem]/scan:flex-row @min-[88rem]/scan:overflow-visible"
+                : "flex min-w-[24rem] flex-1 flex-col"
             }
           >
             <div
@@ -632,6 +678,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 onRows={(update) => writeRows(update(tray.latest()))}
                 folderId={folderId}
                 onFolder={(id) => update({ folderId: id })}
+                condition={prefs.condition}
+                onCondition={(condition) => update({ condition })}
                 onCommit={onCommit}
                 // A deck is made from the collection's side of the scanner; a destination's
                 // host is in the middle of something else.
@@ -740,7 +788,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         onClose={() => setHistoryOpen(false)}
       />
       {/* A card into the staging tray, not the collection: no toast, as for a scan — the row's
-          flash and the strip's line say it landed, and the tray's Add is the write that toasts. */}
+          flash and the popup over the camera say it landed, and the tray's Add is the write that
+          toasts. */}
       <AddCardDialog
         open={picking}
         finishPref={prefs.finish}
@@ -756,5 +805,65 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         onClose={() => setPicking(false)}
       />
     </>
+  );
+}
+
+/**
+ * *History* in the page's header — the scan history's dialog (issue #989), which the page mounts
+ * outside its `@container/scan` box for the `@container` rule. `opener` is the button, for the
+ * caret to come back to. Drawn only in the Scanner view itself: over a trade the page is already a
+ * dialog, and a dialog opened from inside another is a stack the reader did not ask for.
+ */
+function HistoryButton({ onOpen }: { onOpen: (opener: HTMLElement) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => onOpen(e.currentTarget)}
+      aria-haspopup="dialog"
+      className={cn(
+        FILTER_CONTROL,
+        "inline-flex items-center gap-1.5 px-2.5",
+        "border-border text-dim hover:border-accent hover:text-accent",
+        FOCUS,
+      )}
+    >
+      <History className="size-3.5 shrink-0" aria-hidden="true" />
+      History
+    </button>
+  );
+}
+
+/**
+ * The way back to today's panels, at the header's far end.
+ *
+ * `role="switch"` named by its own word, so the state is `aria-checked` and the name never moves
+ * under a reader's finger. Accent when on and quiet until hovered when off — the Settings page's
+ * switch tone, drawn in the header's 36px box rather than imported from that page's recipe, which
+ * is `Panel.tsx`'s argument about a class string crossing a feature boundary.
+ *
+ * Not drawn over a trade: a host that never draws the developer panels has nothing for it to bring
+ * back, and the switch is a stored pref the Scanner view would then open with.
+ */
+function DeveloperSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={() => onChange(!on)}
+      className={cn(
+        FILTER_CONTROL,
+        "inline-flex items-center gap-1.5 px-2.5",
+        FOCUS,
+        on
+          ? "border-accent text-accent"
+          : "border-border text-dim hover:border-accent hover:text-accent",
+      )}
+    >
+      {/* `Bug` and not `Wrench`: the wrench is Deck settings' glyph, and one picture for two
+          unrelated controls is a vocabulary a reader has to unlearn. */}
+      <Bug className="size-3.5 shrink-0" aria-hidden="true" />
+      Developer
+    </button>
   );
 }

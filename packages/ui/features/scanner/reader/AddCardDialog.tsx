@@ -21,7 +21,8 @@ export const SCANNER_PAUSED = "Scanning is paused while this is open.";
 export interface AddCardDialogProps {
   open: boolean;
   /**
-   * The Defaults popover's finish. A fixed one is chosen for the reader wherever the picked
+   * The reader's Finish choice (the desktop dock's Finish menu, the phone's options sheet). A
+   * fixed one is chosen for the reader wherever the picked
    * printing comes in it — the same "this pile is all one finish" a scan lands under; `detect`
    * chooses nothing a printing does not settle by itself.
    */
@@ -75,12 +76,12 @@ export function AddCardDialog({
   );
 }
 
-/** A finish, and whose choice it was — `SubmitScanDialog`'s, plus the Defaults' own. */
+/** A finish, and whose choice it was — `SubmitScanDialog`'s, plus the Finish choice's own. */
 type FinishChoice = { value: Finish; by: "reader" | "printing" | "default" };
 
 /**
  * The finish a newly chosen printing opens with. A printing sold one way settles it; a finish the
- * reader pressed is kept where the new printing comes in it; then the Defaults' fixed finish, on
+ * reader pressed is kept where the new printing comes in it; then the Finish choice's fixed one, on
  * the same condition. Anything else is asked — never guessed.
  */
 function finishFor(

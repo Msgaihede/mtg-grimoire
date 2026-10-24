@@ -25,8 +25,23 @@ import { ScannerPage } from "./ScannerPage";
  *
  * A camera that *does* open is answered by the fake's scripted pile — `pnpm mobile:dev` and
  * `pnpm mobile:scanner-smoke` are where that is watched; a story has no camera to open.
+ *
+ * **`onItsSide` holds the page on its side for the stories about the list's rows**: the page
+ * mounts its list column only there (upright the list is the tray sheet's), and the test run's
+ * jsdom answers every media query `false`. `matchMedia` answers `true` to the `landscape:`
+ * variant's query for as long as the story is up — what a workbench canvas wider than it is tall
+ * answers anyway. Narrowed with the viewport tool, the classes still draw the page upright, the
+ * column mounted and `hidden`.
  */
-function Refused({ tray, prefs }: { tray?: ScannerTrayRow[]; prefs?: Partial<ScannerPrefs> }) {
+function Refused({
+  tray,
+  prefs,
+  onItsSide = false,
+}: {
+  tray?: ScannerTrayRow[];
+  prefs?: Partial<ScannerPrefs>;
+  onItsSide?: boolean;
+}) {
   const restore = useState(() => {
     if (tray !== undefined) void ipc.setScannerTray(tray);
     if (prefs !== undefined) void ipc.setScannerPrefs({ ...DEFAULT_SCANNER_PREFS, ...prefs });
@@ -35,9 +50,33 @@ function Refused({ tray, prefs }: { tray?: ScannerTrayRow[]; prefs?: Partial<Sca
       configurable: true,
       value: { getUserMedia: () => Promise.reject(new DOMException("x", "NotAllowedError")) },
     });
+    const savedQuery = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    if (onItsSide) {
+      const ask = window.matchMedia.bind(window);
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        writable: true,
+        value: (query: string) =>
+          query === "(orientation: landscape)"
+            ? ({
+                matches: true,
+                media: query,
+                onchange: null,
+                addEventListener: () => {},
+                removeEventListener: () => {},
+                addListener: () => {},
+                removeListener: () => {},
+                dispatchEvent: () => false,
+              } as unknown as MediaQueryList)
+            : ask(query),
+      });
+    }
     return () => {
       if (saved === undefined) Reflect.deleteProperty(navigator, "mediaDevices");
       else Object.defineProperty(navigator, "mediaDevices", saved);
+      if (!onItsSide) return;
+      if (savedQuery === undefined) Reflect.deleteProperty(window, "matchMedia");
+      else Object.defineProperty(window, "matchMedia", savedQuery);
     };
   })[0];
   useEffect(() => restore, [restore]);
@@ -48,11 +87,13 @@ function Refused({ tray, prefs }: { tray?: ScannerTrayRow[]; prefs?: Partial<Sca
  * The phone face's Scanner page, in a box as tall as the page between a phone's two bars.
  *
  * **As wide as the canvas, not boxed at 360**, where `Phone/Shell` is. The page lays itself out
- * by the *viewport's* width — below 720px one scrolling column over the footer, from 720px the
- * camera's column beside the tray's — so a 360px box in a wide
- * canvas would draw the wide arrangement squeezed into a phone's width, which is a picture of
- * nothing. Narrow the canvas with the workbench's viewport tool to see it as a phone held upright
- * draws it; the measurements at 360 and 412 are `pnpm mobile:scanner-smoke`'s.
+ * by the *viewport's* orientation (the scanner redesign, 2026-10-24) — upright, one column that
+ * fits the screen: the tray's bar, the controls, the picture, Start and the tray's peek; on its
+ * side, the camera's column beside the tray's list — so a 360px box in a wide canvas would draw
+ * the side-on arrangement squeezed into a phone's width, which is a picture of nothing. The
+ * workbench's canvas is wider than it is tall, so it draws the page on its side; narrow it with
+ * the viewport tool to see it as a phone held upright draws it. The measurements at 360 and 412
+ * are `pnpm mobile:scanner-smoke`'s.
  *
  * **Each docs story has a frame of its own**: the page opens sheets and dialogs, which cover the
  * window they are in.
@@ -74,10 +115,12 @@ const meta = {
       story: { inline: false, height: "660px" },
       description: {
         component:
-          "The desktop reader's parts in the phone's idioms: a bar with one Options press, the " +
-          "camera shaped by its stream, the status line on two lines, the review tray as rows a " +
-          "thumb can work, and a footer — the destination and Add — that stays put while the " +
-          "rest scrolls. The tray and the prefs are the same two rows the desktop face reads.",
+          "The desktop reader's parts in the phone's idioms, picture first: the folder and Add " +
+          "at the head, then Continuous | Point & shoot with Filters and Options, the picture " +
+          "filling the middle with the progress bar and the corner presses over it, the gold " +
+          "Start, and the tray's peek opening the whole tray as a sheet. On its side the tray's " +
+          "list stands beside the picture. Point & shoot is a hold of the picture itself. The " +
+          "tray and the prefs are the same two rows the desktop face reads.",
       },
     },
   },
@@ -89,16 +132,19 @@ type Story = StoryObj<typeof meta>;
 /**
  * The camera refused and nothing scanned: every reader's first paint until they press Allow.
  *
- * The bar, the tray and the footer are drawn regardless — the prefs, the tray and `scanner_status`
- * answer whatever the camera does. Add stays on the page, greyed, **with its reason in words under
- * it**: the desktop says that reason in a tooltip, which a finger never opens.
+ * The controls, the tray and its bar are drawn regardless — the prefs, the tray and
+ * `scanner_status` answer whatever the camera does. The camera's sentence is where the picture
+ * would be, and nothing else is laid over it: no stopped veil over a camera that is not on. Add
+ * stays on the bar, greyed, **with its reason as its accessible description**: the desktop says
+ * that reason in a tooltip, which a finger never opens, and the tray's gold *N need you* is what
+ * tells a sighted reader there is a question first.
  *
- * **_Send scan…_ is not drawn here** — the status line's second press, beside *Reset evidence*,
- * stands only while a camera is live and the scanner is running: a scan is the last couple of
- * seconds of frames it was shown, and here it has been shown none. (And only on a supporter's
- * device, which this story's world is not either.) Its dialog is the desktop's
- * own and is storied there (`Scanner/Reader/Send scan dialog`); a story has no camera to open
- * one from.
+ * **Neither _Reset evidence_ nor _Send scan…_ is drawn here** — the picture's two corner presses
+ * stand only while continuous scanning runs, and *Send scan…* only with a camera live besides: a
+ * scan is the last couple of seconds of frames it was shown, and here it has been shown none.
+ * (And only on a supporter's device, which this story's world is not either.) Its dialog is the
+ * desktop's own and is storied there (`Scanner/Reader/Send scan dialog`); a story has no camera
+ * to open one from.
  */
 export const CameraRefused: Story = {
   play: async ({ canvasElement }) => {
@@ -106,17 +152,21 @@ export const CameraRefused: Story = {
     await expect(
       await canvas.findByText("MTG Grimoire needs camera access to scan a card."),
     ).toBeInTheDocument();
-    await expect(canvas.getByRole("status", { name: "Scanner status" })).toHaveTextContent(
-      "Point the camera at a card",
-    );
-    await expect(canvas.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    // Watched before it has anything to say: nothing is being matched with no picture.
+    await expect(canvas.getByRole("status", { name: "Scanner status" })).toBeEmptyDOMElement();
+    await expect(canvas.queryByText("Scanning stopped")).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Reset evidence" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "Send scan…" })).toBeNull();
-    await expect(await canvas.findByText("Cards you scan appear here.")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Start" })).toBeInTheDocument();
+    // The peek's line — and on its side the list's too, which the page mounts only there.
+    await expect(await canvas.findAllByText("Cards you scan appear here.")).not.toHaveLength(0);
     await expect(canvas.getByRole("button", { name: "Add 0 to collection" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
-    await expect(canvas.getByText("Nothing scanned yet")).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Add 0 to collection" }),
+    ).toHaveAccessibleDescription("Nothing scanned yet");
   },
 };
 
@@ -126,26 +176,30 @@ export const CameraRefused: Story = {
  *
  * The two questions the tray asks are both here and both gold: the waiting row is its three
  * candidates, each a whole card to press, and the unread finish is a press reading `Unknown`. The
- * header's walk lands on each in turn. Add is refused while a printing is unpicked, and says so.
+ * header's gold *2 need you* walks to each in turn. Add is refused while a printing is unpicked,
+ * and says so to a screen reader. On its side (this canvas) the list stands beside the picture;
+ * upright, the peek's strip shows the newest cards and opens the same list as a sheet.
  */
 export const WithTray: Story = {
-  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} />,
+  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} onItsSide />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const tray = await canvas.findByRole("region", { name: "Scanned cards" });
     await expect(await within(tray).findByText("Urza's Saga")).toBeInTheDocument();
     await expect(
-      within(tray).getByRole("heading", { name: "Scanned cards, 7 copies" }),
+      canvas.getByRole("heading", { name: "Scanned cards, 7 copies" }),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "2 need you: Next card needing a decision" }),
     ).toBeInTheDocument();
     const question = within(tray).getByRole("group", { name: "Printings of Lightning Bolt" });
     await expect(within(question).getAllByRole("button")).toHaveLength(3);
     await expect(
       within(tray).getByRole("button", { name: "Finish of Lightning Bolt — STA 105: Unknown" }),
     ).toBeInTheDocument();
-    await expect(
-      canvas.getByRole("button", { name: "Add 6 to collection · 1 needs a finish" }),
-    ).toHaveAttribute("aria-disabled", "true");
-    await expect(canvas.getByText("Pick a printing for every card first")).toBeInTheDocument();
+    const add = canvas.getByRole("button", { name: "Add 6 to collection · 1 needs a finish" });
+    await expect(add).toHaveAttribute("aria-disabled", "true");
+    await expect(add).toHaveAccessibleDescription("Pick a printing for every card first");
   },
 };
 
@@ -156,7 +210,7 @@ export const WithTray: Story = {
  * removing it — and says what choosing it does.
  */
 export const FinishSheet: Story = {
-  render: () => <Refused tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} />,
+  render: () => <Refused tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} onItsSide />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(
@@ -175,8 +229,9 @@ export const FinishSheet: Story = {
 };
 
 /**
- * Everything that is not on the bar, behind its one press: how scanning runs, the filters, the
- * tray's two defaults.
+ * Everything that is not on the page, behind the controls' Options press: the filters and the
+ * tray's two defaults. How scanning runs is not here — it is the controls' *Continuous | Point &
+ * shoot*.
  *
  * No Camera row — this device has one camera or none, so there is no choice to draw — and no
  * Developer switch: the developer panels are the desktop's.
@@ -191,6 +246,7 @@ export const Options: Story = {
       .getAllByRole("button")
       .map((row) => row.textContent);
     await expect(rows.some((row) => row?.startsWith("Scan mode"))).toBe(false);
+    await expect(rows.some((row) => row?.startsWith("Scanning"))).toBe(false);
     await expect(rows).toContain("FiltersAny set");
     await expect(rows).toContain("FinishFoil");
     await expect(rows).toContain("ConditionNear mint");
@@ -199,8 +255,23 @@ export const Options: Story = {
 };
 
 /**
- * Where the tray files, opened from the footer: the Collection, then the reader's own folders,
- * nested — and nothing the app owns. A drawer set aside is offered, and marked.
+ * The controls' Filters press: the options sheet opened straight on its filters page — the set
+ * picker, the promo switch and the release window — with the way back to the sheet's first page
+ * at its head.
+ */
+export const Filters: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Filters" }));
+    const sheet = await canvas.findByRole("dialog", { name: "Scanner options" });
+    await expect(within(sheet).getByLabelText("Released from")).toBeInTheDocument();
+    await expect(within(sheet).getByRole("switch", { name: "Skip promos" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * Where the tray files, opened from the tray's bar: the Collection, then the reader's own
+ * folders, nested — and nothing the app owns. A drawer set aside is offered, and marked.
  */
 export const FolderSheet: Story = {
   render: () => <Refused tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} />,
@@ -216,15 +287,17 @@ export const FolderSheet: Story = {
 };
 
 /**
- * The tray's other acts, behind the footer's `⋯`: *Archive* (issue #989) — the rows Add would
- * take, kept in the scan history and filed nowhere — *Create deck…*, *Clear all…*, and the way
- * into the *Scan history*. Each refused act stays drawn and says why on its second line.
+ * The tray's other acts, behind the tray header's `⋯` (the list's on its side, the tray sheet's
+ * upright): on its side *Add card…* first — the list's one-line header has no room for it —
+ * then *Archive* (issue #989) — the rows Add would take, kept in the scan history and filed
+ * nowhere — *Create deck…*, *Clear all…*, and the way into the *Scan history*. Each refused act
+ * stays drawn and says why on its second line.
  *
  * Here a printing is still unpicked, so the deck is refused in words while Archive is not: it
- * goes, and the plan's sentence about the printing is said over the footer, as it is for Add.
+ * goes, and the plan's sentence about the printing is said over the tray's bar, as it is for Add.
  */
 export const TrayActions: Story = {
-  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} />,
+  render: () => <Refused tray={[NEEDS_A_FINISH_ROW, ...TRAY_ROWS]} onItsSide />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(await canvas.findByRole("button", { name: "Tray actions" }));
@@ -233,7 +306,13 @@ export const TrayActions: Story = {
       .getAllByRole("button")
       .map((row) => row.querySelector("span.truncate")?.textContent)
       .filter((label) => label !== undefined);
-    await expect(rows).toEqual(["Archive", "Create deck…", "Clear all…", "Scan history"]);
+    await expect(rows).toEqual([
+      "Add card…",
+      "Archive",
+      "Create deck…",
+      "Clear all…",
+      "Scan history",
+    ]);
     await expect(within(sheet).getByRole("button", { name: "Archive" })).not.toHaveAttribute(
       "aria-disabled",
     );
@@ -247,6 +326,7 @@ export const TrayActions: Story = {
  * reads and words, as a sheet's pages.
  */
 export const ScanHistory: Story = {
+  render: () => <Refused onItsSide />,
   parameters: { fake: { seed: "scanHistory" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -269,13 +349,14 @@ export const ScanHistory: Story = {
 /**
  * A build with nothing to scan with — no recogniser and no card names. The slot under the camera
  * draws nothing — the recogniser is never a reader's to place — and the Filters row in Options is
- * refused, with its reason.
+ * refused, with its reason: the controls' Filters press opens the sheet's first page, where the
+ * row says why, rather than a filters page that would be drawn and never taken.
  */
 export const RecognizerMissing: Story = {
   parameters: { fake: { fault: "scannerMissing" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(await canvas.findByRole("button", { name: "Scanner options" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Filters" }));
     const sheet = await canvas.findByRole("dialog", { name: "Scanner options" });
     await waitFor(() =>
       expect(within(sheet).getByRole("button", { name: /^Filters/ })).toHaveTextContent(
@@ -298,6 +379,6 @@ export const OpenElsewhere: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText(SCANNER_OPEN_ELSEWHERE)).toBeInTheDocument();
     await expect(canvas.queryByRole("region", { name: "Scanned cards" })).toBeNull();
-    await expect(canvas.queryByRole("button", { name: /^(Start|Stop) scanning$/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^(Start|Stop)$/ })).toBeNull();
   },
 };

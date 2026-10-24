@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CardSummary,
   CollectionFolder,
+  PrintingPrices,
   ScanBatch,
   ScanBatchSummary,
   ScannerPrefs,
@@ -13,6 +14,7 @@ import type {
   SearchResponse,
   SupporterStatus,
 } from "@/lib/ipc";
+import type { ConfettiBurst, TierConfettiProps } from "./reader/TierConfetti";
 import { useNotifications } from "@/lib/notifications";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import { DEFAULT_SCANNER_PREFS, NEEDS_A_FINISH_ROW, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
@@ -92,6 +94,31 @@ vi.mock("@/lib/ipc", async (orig) => {
       deckLastFormat: vi.fn(async () => null),
       formatSpecs: vi.fn(async () => []),
       deckFolderList: vi.fn(async () => []),
+      // The tray's and the popup's prices. **Refused by default**, as the unmocked command was
+      // here (there is no host to answer it), so no figure is drawn; the confetti's test quotes.
+      printingPrices: vi.fn(async (): Promise<PrintingPrices[]> =>
+        Promise.reject("no prices in this suite"),
+      ),
+    },
+  };
+});
+/**
+ * Every burst the page hands the confetti, render by render — the real `TierConfetti` drawn under
+ * a wrapper that writes its prop down. jsdom lays nothing out, so the component itself throws
+ * nothing here (its canvas is 0×0); what the page owes it is the burst, and this is where a test
+ * reads it. Emptied after each test.
+ */
+const confetti = vi.hoisted(() => ({ bursts: [] as (ConfettiBurst | null)[] }));
+/** The burst the page handed the confetti on its latest render. */
+const lastBurst = () => confetti.bursts[confetti.bursts.length - 1];
+vi.mock("./reader/TierConfetti", async (orig) => {
+  const real = await orig<typeof import("./reader/TierConfetti")>();
+  const { createElement } = await import("react");
+  return {
+    ...real,
+    TierConfetti: (props: TierConfettiProps) => {
+      confetti.bursts.push(props.burst);
+      return createElement(real.TierConfetti, props);
     },
   };
 });
@@ -122,7 +149,7 @@ vi.mock("./useWindowParked", async () => {
   };
 });
 import { ipc } from "@/lib/ipc";
-import { SCANNING_STOPPED, SHOT_READY_CLICK } from "./reader/readerText";
+import { SHOT_READY_CLICK, STOPPED_NOTE, STOPPED_TITLE } from "./reader/readerText";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
 import { runClock } from "./submit/run";
@@ -141,7 +168,7 @@ function mount() {
 
 /** The press the view waits for before it reads anything: it opens stopped (issue #1317). */
 async function start() {
-  fireEvent.click(await screen.findByRole("button", { name: "Start scanning" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Start" }));
 }
 
 /** The camera, answered. A refusal is the state most of these tests want the video box in. */
@@ -268,20 +295,41 @@ function row(container: HTMLElement): HTMLElement {
   return found;
 }
 
-/** The detector's own strip, inside the video box. */
-function strip(container: HTMLElement): HTMLElement {
-  const found = videoBox(container).querySelector<HTMLElement>("[aria-live='polite']");
-  if (found === null) throw new Error("no detector strip in the video box");
-  return found;
+/**
+ * The note chip's region, under the progress bar at the picture's top-left (`ScanHud`) — where the
+ * loop's error, a refused reset and a *Send scan…* pressed too soon are said. Found through the HUD's live region, so it is also an
+ * assertion that the HUD is drawn on the picture.
+ */
+function hudNote(container: HTMLElement): HTMLElement {
+  const hud = within(videoBox(container)).getByRole("status", {
+    name: "Scanner status",
+  }).parentElement;
+  if (hud === null) throw new Error("no HUD over the picture");
+  return within(hud).getByRole("alert");
 }
 
-/** The reader's one line — the Match strip's row, above the camera. */
+/** The reader's one line — the HUD's visually hidden live region, which says what the old Match
+ *  strip said. */
 function statusLine(): HTMLElement {
   return screen.getByRole("status", { name: "Scanner status" });
 }
 
 function tray(): HTMLElement {
   return screen.getByRole("region", { name: "Scanned cards" });
+}
+
+/**
+ * *Create deck…*, *Archive* and *Clear all…* live in the tray's ⋯ menu; this opens it and hands
+ * back the ⋯, which is also the opener those presses hand the page for the caret.
+ */
+async function trayActions(
+  user: { click: (element: Element) => Promise<void> } = userEvent,
+  region: HTMLElement = tray(),
+): Promise<HTMLElement> {
+  const more = within(region).getByRole("button", { name: "Tray actions" });
+  await user.click(more);
+  await screen.findByRole("dialog", { name: "Tray actions" });
+  return more;
 }
 
 const BINDER: CollectionFolder = {
@@ -327,6 +375,7 @@ const COMMANDS = [
   ipc.scanHistoryDelete,
   ipc.collectionImportCommit,
   ipc.collectionFolderList,
+  ipc.printingPrices,
 ];
 
 let restoreCanvas = () => {};
@@ -343,6 +392,7 @@ afterEach(() => {
   COMMANDS.forEach((command) => vi.mocked(command).mockReset());
   Object.defineProperty(navigator, "mediaDevices", { value: undefined, configurable: true });
   parkedStore.set({ paused: false, released: false });
+  confetti.bursts.length = 0;
 });
 
 describe("ScannerPage", () => {
@@ -352,8 +402,8 @@ describe("ScannerPage", () => {
     vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
     mount();
     await screen.findByText("Urza's Saga");
-    const opener = screen.getByRole("button", { name: "Create deck…" });
-    await userEvent.click(opener);
+    const opener = await trayActions();
+    await userEvent.click(screen.getByRole("button", { name: "Create deck…" }));
     const dialog = await screen.findByRole("dialog", { name: "New deck" });
     expect(within(dialog).getByText(/scans stay in the tray/)).toBeInTheDocument();
     expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeInTheDocument();
@@ -366,7 +416,7 @@ describe("ScannerPage", () => {
     expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
   });
 
-  it("opens stopped, with the camera live, and reads nothing until Start scanning is pressed", async () => {
+  it("opens stopped, with the camera live, and reads nothing until Start is pressed", async () => {
     const restore = shimVideo();
     const getUserMedia = vi.fn(() =>
       Promise.resolve({ getTracks: () => [{ stop: () => {} }] } as unknown as MediaStream),
@@ -375,16 +425,16 @@ describe("ScannerPage", () => {
     paced();
     try {
       mount();
-      const press = await screen.findByRole("button", { name: "Start scanning" });
-      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
+      const press = await screen.findByRole("button", { name: "Start" });
+      expect(screen.getByText(STOPPED_TITLE)).toBeInTheDocument();
       await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(ipc.scannerFrame).not.toHaveBeenCalled();
       fireEvent.click(press);
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
       expect(getUserMedia).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText(SCANNING_STOPPED)).toBeNull();
-      expect(screen.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+      expect(screen.queryByText(STOPPED_TITLE)).toBeNull();
+      expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
     } finally {
       restore();
     }
@@ -404,9 +454,9 @@ describe("ScannerPage", () => {
       mount();
       await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
-      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      await user.click(screen.getByRole("button", { name: "Stop" }));
       expect(stop).not.toHaveBeenCalled();
-      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
+      expect(screen.getByText(STOPPED_TITLE)).toBeInTheDocument();
       expect(tray()).toHaveTextContent(TRAY_ROWS[0].name);
       await new Promise((resolve) => setTimeout(resolve, 50));
       const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
@@ -415,7 +465,7 @@ describe("ScannerPage", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(getUserMedia).toHaveBeenCalledTimes(1);
       expect(ipc.scannerFrame).toHaveBeenCalledTimes(sent);
-      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      await user.click(screen.getByRole("button", { name: "Start" }));
       expect(getUserMedia).toHaveBeenCalledTimes(1);
       await waitFor(() =>
         expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent),
@@ -527,11 +577,11 @@ describe("ScannerPage", () => {
       mount();
       await start();
       await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
-      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      await user.click(screen.getByRole("button", { name: "Stop" }));
       await act(async () => opened({ getTracks: () => [{ stop }] } as unknown as MediaStream));
       expect(stop).not.toHaveBeenCalled();
       expect(ipc.scannerFrame).not.toHaveBeenCalled();
-      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      await user.click(screen.getByRole("button", { name: "Start" }));
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
       expect(getUserMedia).toHaveBeenCalledTimes(1);
     } finally {
@@ -570,26 +620,62 @@ describe("ScannerPage", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Scanner" })).toHaveClass("sr-only");
   });
 
-  it("reserves the detector's strip whether or not there is a sentence in it", async () => {
+  /**
+   * The note's region is always mounted and only its words come and go (`ScanHud`): a region that
+   * first appears with its sentence already inside announces nothing. A refused camera is not a
+   * note — its sentence stands where the picture would be.
+   */
+  it("keeps the note's region on the picture whether or not there is a note in it", async () => {
     refused();
     const { container } = mount();
     await screen.findByRole("status", { name: "Scanner status" });
-    expect(strip(container)).toHaveTextContent("");
-    // Two lines of room, kept whether the strip is empty or full, so the video box above it
-    // does not change height the moment the detector has something to say.
-    expect(strip(container)).toHaveClass("min-h-[2.5em]");
+    expect(hudNote(container)).toHaveTextContent("");
     await screen.findByText("MTG Grimoire needs camera access to scan a card.");
-    expect(strip(container)).toHaveTextContent("");
+    expect(hudNote(container)).toHaveTextContent("");
   });
 
-  it("names what the scanner is doing in the strip above the camera", async () => {
+  /** The live region says nothing while stopped — the veil does — and the strip's words once
+   *  recognition runs. */
+  it("announces what the scanner is doing once it is reading, and nothing before", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // The first frame never answers: the strip stays on what it says before any verdict.
+    frames();
+    try {
+      mount();
+      await screen.findByRole("button", { name: "Start" });
+      expect(statusLine()).toHaveTextContent("");
+      await start();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Point the camera at a card"));
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **The HUD's presses and its bar stand over a live picture alone**, as on the phone: a refused
+   * camera is a sentence where the picture would be, with nothing to reset, nothing to send and
+   * nothing being matched — so no press, no bar, and an empty announcement even once Start is
+   * pressed. The note's region stays mounted (`keeps the note's region on the picture…` says why).
+   */
+  it("draws no press and no bar over a refused camera, Start pressed or not", async () => {
     refused();
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
-    mount();
-    await waitFor(() => expect(statusLine()).toHaveTextContent("Point the camera at a card"));
+    const { container } = mount();
+    await screen.findByText("MTG Grimoire needs camera access to scan a card.");
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+
+    await start();
+    await screen.findByRole("button", { name: "Stop" });
+    expect(screen.queryByRole("progressbar", { name: "Match progress" })).toBeNull();
+    expect(statusLine()).toHaveTextContent("");
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
+    expect(hudNote(container)).toHaveTextContent("");
   });
 
-  it("prints the frame's own refusal in that strip once the developer panels are on", async () => {
+  it("keeps the frame's own refusal out of the note, developer panels or not", async () => {
     const restore = shimVideo();
     opens();
     storedPrefs({ developer: true });
@@ -597,7 +683,9 @@ describe("ScannerPage", () => {
     try {
       const { container } = mount();
       await start();
-      await waitFor(() => expect(strip(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""));
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Point the camera at a card"));
+      // The detector's sentence is a developer's, and in the chip it would blink frame by frame.
+      expect(hudNote(container)).toHaveTextContent("");
     } finally {
       restore();
     }
@@ -611,6 +699,71 @@ describe("ScannerPage", () => {
     expect(videoBox(container)).toHaveClass("flex-1");
     expect(videoBox(container).classList.contains("shrink-0")).toBe(false);
     expect(videoBox(container).style.aspectRatio).toBe("");
+    // The camera column 40rem, giving way first in steps — to 31rem holding the tray at 36rem, then
+    // the tray to 24rem, then the camera to 23rem — and growing to 52.5rem in a 140rem page
+    // container (a 2560 px window); the tray the rest of the width and never under 24rem.
+    const column = videoBox(container).parentElement;
+    expect(column).toHaveClass(
+      "flex-[0_1_clamp(23rem,100cqw_-_25.25rem,clamp(31rem,100cqw_-_37.25rem,40rem))]",
+      "min-w-[23rem]",
+      "@min-[140rem]/scan:basis-[52.5rem]",
+    );
+    const side = tray().closest<HTMLElement>(".min-w-\\[24rem\\]");
+    expect(side).not.toBeNull();
+    expect(side).toHaveClass("flex-1");
+    expect(row(container)).toContainElement(side);
+  });
+
+  /**
+   * **The dock is under the picture**, in the camera column: the gold primary, *How scanning
+   * runs*, Filters, then Finish and Camera. What the old bar also carried is elsewhere — the
+   * condition in the tray's footer, *History* and the Developer switch in the page's header.
+   */
+  it("draws the dock under the picture, and History and the Developer switch in the header", async () => {
+    refused();
+    const { container } = mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+    const column = videoBox(container).parentElement as HTMLElement;
+    for (const name of ["Start", "Filters: Any set", "Finish: Detect", "Camera: Default"]) {
+      expect(within(column).getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(within(column).getByRole("group", { name: "How scanning runs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Defaults/ })).toBeNull();
+
+    // The header: before the layout row, beside the title, and in neither column.
+    const history = screen.getByRole("button", { name: "History" });
+    const developer = screen.getByRole("switch", { name: "Developer" });
+    expect(row(container)).not.toContainElement(history);
+    expect(row(container)).not.toContainElement(developer);
+    expect(history.compareDocumentPosition(row(container))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(screen.getByText("Scanner", { selector: "div" })).toBeInTheDocument();
+  });
+
+  /**
+   * **Stopped, the picture dims behind "Scanning stopped"** and what begins it — the camera still
+   * on — and the veil lifts at Start and comes back at Stop.
+   */
+  it("dims the picture behind Scanning stopped until Start, and again after Stop", async () => {
+    const restore = shimVideo();
+    opens();
+    paced();
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await screen.findByRole("button", { name: "Start" });
+      const veil = within(videoBox(container)).getByText(STOPPED_TITLE).parentElement;
+      expect(veil).toHaveAttribute("role", "status");
+      expect(veil).toHaveTextContent(STOPPED_NOTE);
+
+      await user.click(screen.getByRole("button", { name: "Start" }));
+      expect(screen.queryByText(STOPPED_TITLE)).toBeNull();
+      expect(screen.queryByText(STOPPED_NOTE)).toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "Stop" }));
+      expect(within(videoBox(container)).getByText(STOPPED_TITLE)).toBeInTheDocument();
+    } finally {
+      restore();
+    }
   });
 
   it("shows the Match panel behind the Developer switch, and hides it again", async () => {
@@ -635,13 +788,21 @@ describe("ScannerPage", () => {
     );
   });
 
-  /** Beside the bar for every reader since #740 — not behind the Developer switch. */
+  /**
+   * Beside the bar for every reader since #740 — not behind the Developer switch — and over a
+   * stopped picture too, where the phone draws none: a live camera is the one condition.
+   */
   it("hands the reset press straight to the command, with the Developer panels off", async () => {
-    refused();
-    mount();
-    expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
-    expect(vi.mocked(ipc.scannerReset)).toHaveBeenCalled();
+    const restore = shimVideo();
+    opens();
+    try {
+      mount();
+      expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
+      await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
+      expect(vi.mocked(ipc.scannerReset)).toHaveBeenCalled();
+    } finally {
+      restore();
+    }
   });
 
   /**
@@ -649,15 +810,44 @@ describe("ScannerPage", () => {
    * rejection, so a poisoned scanner state or a thread that did not come back was a button
    * that visibly did nothing — the evidence stayed on screen with no sentence anywhere.
    */
-  it("puts a refused reset in the strip under the video", async () => {
-    refused();
-    vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
-    const { container } = mount();
-    await start();
-    await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
-    await waitFor(() =>
-      expect(strip(container)).toHaveTextContent("the scanner state is poisoned"),
-    );
+  it("puts a refused reset in the note over the picture", async () => {
+    const restore = shimVideo();
+    opens();
+    paced();
+    try {
+      const { container } = mount();
+      await start();
+      // The pump's start resets the session itself (issue #1318); the refusal is the press's.
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
+      await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
+      await waitFor(() =>
+        expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned"),
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("puts a refused reset in the note while stopped too", async () => {
+    const restore = shimVideo();
+    opens();
+    paced();
+    try {
+      const { container } = mount();
+      await start();
+      // The pump's start resets the session itself (issue #1318); the refusal is the press's.
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
+      await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
+      await waitFor(() =>
+        expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned"),
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+      expect(hudNote(container)).toHaveTextContent("the scanner state is poisoned");
+    } finally {
+      restore();
+    }
   });
 
   it("files a capture under the five fields the sidecar has, read off the last verdict", async () => {
@@ -755,13 +945,17 @@ describe("ScannerPage", () => {
     try {
       const { container } = mount();
       const press = await screen.findByRole("button", { name: "Scan card" });
-      expect(screen.queryByRole("button", { name: "Start scanning" })).toBeNull();
-      expect(screen.getByText(SHOT_READY_CLICK)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+      // Between shots a pill on the picture names the press, and the picture is not veiled.
+      expect(within(videoBox(container)).getByText(SHOT_READY_CLICK)).toBeInTheDocument();
+      expect(screen.queryByText(STOPPED_TITLE)).toBeNull();
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(ipc.scannerFrame).not.toHaveBeenCalled();
 
       fireEvent.click(press);
       expect(await screen.findByRole("button", { name: "Cancel scan" })).toBeInTheDocument();
+      // A shot is running: the pill has gone.
+      expect(screen.queryByText(SHOT_READY_CLICK)).toBeNull();
       await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
       // The shot is over once its card has landed, and the card is still said over the camera.
       expect(await screen.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
@@ -804,10 +998,43 @@ describe("ScannerPage", () => {
     }
   });
 
-  it("stores point and shoot from the bar's switch, and lands stopped", async () => {
+  /**
+   * **The pill between shots stands under *Reset evidence*, never on it.** Centred on its own at
+   * the picture's top, the 274px pill met the 143px press in any column under 584px — the light
+   * web app's desktop face at 1024px is about 372px. It is the HUD's notice, in the HUD's top
+   * flow after the corner row, so it is placed below whatever that row holds: the presses, and a
+   * chip dropped under them.
+   */
+  it("draws the pill between shots under the corner's presses, in the HUD's own flow", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ pointAndShoot: true });
+    try {
+      const { container } = mount();
+      await screen.findByRole("button", { name: "Scan card" });
+      const reset = await screen.findByRole("button", { name: "Reset evidence" });
+      const pill = within(videoBox(container)).getByText(SHOT_READY_CLICK).closest("p");
+      const corner = reset.closest("[data-hud-corner]");
+      if (pill === null || corner === null) throw new Error("no pill or no corner row");
+      // Not positioned by itself: a block in the flow the corner row heads.
+      expect(pill).toHaveAttribute("role", "status");
+      expect(pill.className).not.toMatch(/\babsolute\b|\btop-/);
+      const flow = corner.parentElement;
+      expect(flow).toHaveAttribute("data-hud-top");
+      expect(flow).toHaveClass("flex", "flex-col");
+      expect(pill.parentElement).toBe(flow);
+      expect(corner.compareDocumentPosition(pill)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    } finally {
+      restore();
+    }
+  });
+
+  it("stores point and shoot from How scanning runs, and lands stopped", async () => {
     refused();
     mount();
-    const toggle = await screen.findByRole("switch", { name: "Point & shoot" });
+    const runs = await screen.findByRole("group", { name: "How scanning runs" });
+    const toggle = within(runs).getByRole("button", { name: "Point & shoot" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(toggle);
     await waitFor(() =>
       expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({
@@ -816,6 +1043,10 @@ describe("ScannerPage", () => {
       }),
     );
     expect(await screen.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
+    expect(within(runs).getByRole("button", { name: "Point & shoot" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   /** The card that just landed is laid over the camera, named as the tray filed it. */
@@ -831,6 +1062,75 @@ describe("ScannerPage", () => {
       await waitFor(() => expect(videoBox(container)).toHaveTextContent("Added to scanned cards"));
       expect(videoBox(container)).toHaveTextContent("Storm of Saruman");
       expect(videoBox(container)).toHaveTextContent("LTR · 72 · Nonfoil");
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **The landing's price reaches the popup and the confetti by the sound's own ladder**
+   * (`useLandedTier`, Settings → Scanner — $1, $10, $100, $1000 on a fresh install): a card
+   * priced past a rung wears its figure bold gold and throws one burst at that rung, keyed on its
+   * landing. A card that lands asking for a printing is quoted as the span of its candidates,
+   * plain, and throws none — a price for a card the reader has not said they hold is no tier.
+   */
+  it("throws confetti at the tier a landed card's price reaches, its figure gold, and none for a pick", async () => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ finish: "nonfoil" });
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    const bolts = VERDICTS.ambiguous.decision?.choices ?? [];
+    expect(bolts).toHaveLength(3);
+    vi.mocked(ipc.printingPrices).mockResolvedValue([
+      { cardId: "storm-of-saruman-ltr-72", finishPrices: { nonfoil: 12, foil: 30, etched: null } },
+      ...bolts.map((choice, n) => ({
+        cardId: choice.id,
+        finishPrices: { nonfoil: [1.5, 3, 40][n] ?? null, foil: null, etched: null },
+      })),
+    ]);
+    // The decided card lands and lies there past the loop's gap between two decisions
+    // (`DECISION_GAP_FRAMES`), each frame a few milliseconds late (`paced`'s reason); then a
+    // frame waits for the test to lay the pick down, and every frame after it is parked.
+    const shown: ScannerVerdict[] = [
+      VERDICTS.voting,
+      ...Array<ScannerVerdict>(5).fill(VERDICTS.decided),
+    ];
+    let next: ((verdict: ScannerVerdict) => void) | undefined;
+    let asked = 0;
+    vi.mocked(ipc.scannerFrame).mockImplementation(() => {
+      const at = asked++;
+      const verdict = shown[at];
+      if (verdict !== undefined) {
+        return new Promise((resolve) => setTimeout(() => resolve(verdict), 5));
+      }
+      if (at === shown.length) return new Promise((resolve) => (next = resolve));
+      return new Promise(() => {});
+    });
+    /** The landings thrown so far: one stamp a burst, whatever the renders in between. */
+    const thrown = () => new Set(confetti.bursts.flatMap((burst) => (burst ? [burst] : [])));
+    const figure = (container: HTMLElement) =>
+      videoBox(container).querySelector<HTMLElement>("[data-landed-price]");
+    try {
+      const { container } = mount();
+      await start();
+      await waitFor(() => expect(figure(container)).toHaveTextContent(/12\.00/));
+      expect(figure(container)).toHaveClass("font-semibold", "text-accent");
+      await waitFor(() => expect(lastBurst()).toMatchObject({ tier: "tier2" }));
+      const stamps = new Set([...thrown()].map((burst) => burst.stamp));
+      expect(stamps.size).toBe(1);
+
+      await waitFor(() => expect(next).toBeDefined());
+      await act(async () => next?.(VERDICTS.ambiguous));
+      await waitFor(() => expect(figure(container)).toHaveTextContent(/1\.50 – \$?40\.00/));
+      expect(videoBox(container).querySelector("[data-landed]")).toHaveAttribute(
+        "data-landed",
+        "pick",
+      );
+      expect(figure(container)).toHaveClass("text-text");
+      expect(figure(container)).not.toHaveClass("text-accent");
+      // The pick's renders hand the confetti nothing, and no second landing was thrown.
+      expect(lastBurst()).toBeNull();
+      expect(new Set([...thrown()].map((burst) => burst.stamp))).toEqual(stamps);
     } finally {
       restore();
     }
@@ -881,7 +1181,7 @@ describe("ScannerPage", () => {
     );
   });
 
-  /** A new row is born in the Defaults popover's finish — the prefs', not a literal. */
+  /** A new row is born in the dock's Finish — the prefs', not a literal. */
   it("stamps a new row with the prefs' finish", async () => {
     const restore = shimVideo();
     opens();
@@ -1177,8 +1477,8 @@ describe("ScannerPage", () => {
    */
   /**
    * *Clear all…* (issue #738) asks before it throws a pile of scans away. Cancel keeps every row and
-   * hands the caret back to the button; the dialog is drawn outside the view's `@container/scan`
-   * box, because a container is the containing block for a `fixed` scrim.
+   * hands the caret back to the tray's ⋯, where the press came from; the dialog is drawn outside the
+   * view's `@container/scan` box, because a container is the containing block for a `fixed` scrim.
    */
   it("asks before clearing the tray, and a cancel keeps every row", async () => {
     refused();
@@ -1188,8 +1488,9 @@ describe("ScannerPage", () => {
     const { container } = mount();
     await screen.findByRole("region", { name: "Scanned cards" });
 
-    const clear = await within(tray()).findByRole("button", { name: "Clear all…" });
-    await user.click(clear);
+    await within(tray()).findByText("Urza's Saga");
+    const more = await trayActions(user);
+    await user.click(screen.getByRole("button", { name: "Clear all…" }));
     const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
     expect(dialog).toHaveTextContent(
       "5 scanned copies will leave the tray without being added to your collection.",
@@ -1201,7 +1502,7 @@ describe("ScannerPage", () => {
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length);
-    expect(clear).toHaveFocus();
+    expect(more).toHaveFocus();
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(ipc.setScannerTray).not.toHaveBeenCalled();
   });
@@ -1213,15 +1514,21 @@ describe("ScannerPage", () => {
     mount();
     await screen.findByRole("region", { name: "Scanned cards" });
 
-    const clear = await within(tray()).findByRole("button", { name: "Clear all…" });
-    await user.click(clear);
+    await within(tray()).findByText("Urza's Saga");
+    const more = await trayActions(user);
+    await user.click(screen.getByRole("button", { name: "Clear all…" }));
     const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
     await user.click(within(dialog).getByRole("button", { name: "Clear tray" }));
 
     expect(await within(tray()).findByText("Cards you scan appear here.")).toBeInTheDocument();
-    // The caret is back on the button it left, which is still drawn — refused, on an empty tray.
-    expect(clear).toHaveFocus();
-    expect(clear).toHaveAttribute("aria-disabled", "true");
+    // The caret is back on the ⋯ it left, and *Clear all…* is still in its menu — refused, on an
+    // empty tray.
+    expect(more).toHaveFocus();
+    await trayActions(user);
+    expect(screen.getByRole("button", { name: "Clear all…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     await waitFor(() => expect(vi.mocked(ipc.setScannerTray).mock.lastCall?.[0]).toEqual([]), {
       timeout: 2000,
     });
@@ -1252,7 +1559,9 @@ describe("ScannerPage", () => {
       mount();
       await start();
       await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
-      await user.click(await within(tray()).findByRole("button", { name: "Clear all…" }));
+      await within(tray()).findByText("Urza's Saga");
+      await trayActions(user);
+      await user.click(screen.getByRole("button", { name: "Clear all…" }));
       const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
 
       land(VERDICTS.decided);
@@ -1300,7 +1609,9 @@ describe("ScannerPage", () => {
     mount();
     await screen.findByRole("region", { name: "Scanned cards" });
 
-    await user.click(await within(tray()).findByRole("button", { name: "Archive" }));
+    await within(tray()).findByText("Urza's Saga");
+    await trayActions(user);
+    await user.click(screen.getByRole("button", { name: "Archive" }));
     await waitFor(() => expect(ipc.scannerTrayArchive).toHaveBeenCalledTimes(1));
     expect(ipc.scannerTrayArchive).toHaveBeenCalledWith(importItems(known, "NONE"), [
       NEEDS_A_FINISH_ROW,
@@ -1324,7 +1635,9 @@ describe("ScannerPage", () => {
     mount();
     await screen.findByRole("region", { name: "Scanned cards" });
 
-    await user.click(await within(tray()).findByRole("button", { name: "Archive" }));
+    await within(tray()).findByText("Urza's Saga");
+    await trayActions(user);
+    await user.click(screen.getByRole("button", { name: "Archive" }));
     expect(await within(tray()).findByText("The database is busy.")).toBeInTheDocument();
     expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length);
     expect(useNotifications.getState().notices[0]).toMatchObject({
@@ -1341,7 +1654,9 @@ describe("ScannerPage", () => {
     mount();
     await screen.findByRole("region", { name: "Scanned cards" });
 
-    await user.click(await within(tray()).findByRole("button", { name: "Archive" }));
+    await within(tray()).findByText("Urza's Saga");
+    await trayActions(user);
+    await user.click(screen.getByRole("button", { name: "Archive" }));
     expect(
       await within(tray()).findByText(/still waiting for a printing to be picked/),
     ).toBeInTheDocument();
@@ -1349,7 +1664,7 @@ describe("ScannerPage", () => {
   });
 
   /** The history's dialog is the page's, mounted outside `@container/scan` like *Clear all…*'s. */
-  it("opens the scan history from the bar, outside the view's container, and hands the caret back", async () => {
+  it("opens the scan history from the header, outside the view's container, and hands the caret back", async () => {
     refused();
     const user = userEvent.setup();
     const { container } = mount();
@@ -1532,12 +1847,15 @@ describe("ScannerPage sending a scan", () => {
     vi.spyOn(runClock, "now").mockImplementation(() => (at += 10));
   });
 
-  /** No live picture, no press: the box under the strip is already saying why. */
+  /**
+   * No live picture, no press — and no *Reset evidence* beside it either, as on the phone: the box
+   * under the HUD is already saying why.
+   */
   it("does not offer the press while the camera is refused", async () => {
     refused();
     mount();
     await screen.findByText("MTG Grimoire needs camera access to scan a card.");
-    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
   });
 
@@ -1695,6 +2013,37 @@ describe("ScannerPage sending a scan", () => {
   });
 
   /**
+   * **Both presses on the picture wear their words** on the desktop — its glyph *and* what it does,
+   * in a pill at the picture's top-right — and neither is inside the live region: a button is not
+   * news.
+   */
+  it("draws Reset evidence and Send scan… on the picture, each with its words", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    paced();
+    try {
+      const { container } = mount();
+      await start();
+      await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
+      const send = await screen.findByRole("button", { name: "Send scan…" });
+      const reset = screen.getByRole("button", { name: "Reset evidence" });
+      for (const [press, words] of [
+        [reset, "Reset evidence"],
+        [send, "Send scan…"],
+      ] as const) {
+        expect(press).toHaveTextContent(words);
+        expect(press).not.toHaveAttribute("aria-label");
+        expect(videoBox(container)).toContainElement(press);
+        expect(statusLine()).not.toContainElement(press);
+      }
+      expect(send).toHaveAttribute("aria-haspopup", "dialog");
+    } finally {
+      restore();
+    }
+  });
+
+  /**
    * **Recognition pauses behind the dialog** (issue #977) — a card left under the lens while the
    * reader picks a printing must not land in the tray — and resumes when it closes. The run in the
    * dialog is the one frozen at the press.
@@ -1764,14 +2113,15 @@ describe("ScannerPage sending a scan", () => {
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
       expect(screen.getByRole("button", { name: "Send scan…" })).toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
-      await waitFor(() => expect(statusLine()).toHaveTextContent("Looking"));
+      await user.click(screen.getByRole("button", { name: "Stop" }));
+      // Stopped, the live region says nothing: the veil over the picture is what speaks.
+      await waitFor(() => expect(statusLine()).toHaveTextContent(""));
       // The camera is still live and its picture still moving; the press is gone all the same.
       expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
       expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
-      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
+      expect(screen.getByText(STOPPED_TITLE)).toBeInTheDocument();
 
-      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      await user.click(screen.getByRole("button", { name: "Start" }));
       expect(await screen.findByRole("button", { name: "Send scan…" })).toBeInTheDocument();
       expect(ipc.scannerSubmit).not.toHaveBeenCalled();
     } finally {
@@ -1796,21 +2146,21 @@ describe("ScannerPage sending a scan", () => {
       const { container } = mount();
       await start();
       await waitFor(() => expect(statusLine()).toHaveTextContent("Plains"));
-      expect(strip(container)).toHaveTextContent("");
+      expect(hudNote(container)).toHaveTextContent("");
 
       await user.click(screen.getByRole("button", { name: "Send scan…" }));
-      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
+      expect(hudNote(container)).toHaveTextContent(SCAN_TOO_SHORT);
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(ipc.scannerSubmit).not.toHaveBeenCalled();
       expect(ipc.searchCards).not.toHaveBeenCalled();
 
       // Stopped, the press is gone and so is its sentence: *press again* with nothing to press
-      // would be an instruction nobody can follow. The line is the stopped sentence's.
-      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      // would be an instruction nobody can follow. The picture is the stopped veil's.
+      await user.click(screen.getByRole("button", { name: "Stop" }));
       expect(screen.queryByText(SCAN_TOO_SHORT)).toBeNull();
-      expect(screen.getByText(SCANNING_STOPPED)).toBeInTheDocument();
+      expect(screen.getByText(STOPPED_TITLE)).toBeInTheDocument();
       // …and it does not come back unasked when the scanner does.
-      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      await user.click(screen.getByRole("button", { name: "Start" }));
       await screen.findByRole("button", { name: "Send scan…" });
       expect(screen.queryByText(SCAN_TOO_SHORT)).toBeNull();
     } finally {
@@ -1819,10 +2169,10 @@ describe("ScannerPage sending a scan", () => {
   });
 
   /**
-   * With the Developer panels on, the line over the camera is the detector's own on every frame
-   * with no card in it — and a press that opened nothing still has to be heard over that.
+   * With the Developer panels on, frames with no card in them still leave the note to the
+   * reader's own failures — and a press that opened nothing has to be heard.
    */
-  it("says a press came too soon over the detector's own sentence, with the Developer panels on", async () => {
+  it("says a press came too soon, with the Developer panels on", async () => {
     const restore = shimVideo();
     opens();
     storedPrefs({ developer: true });
@@ -1831,11 +2181,11 @@ describe("ScannerPage sending a scan", () => {
     try {
       const { container } = mount();
       await start();
-      await waitFor(() => expect(strip(container)).toHaveTextContent(VERDICTS.noCard.error ?? ""));
+      await screen.findByRole("button", { name: "Send scan…" });
 
       await user.click(screen.getByRole("button", { name: "Send scan…" }));
-      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
-      expect(strip(container)).not.toHaveTextContent("no quadrilateral");
+      expect(hudNote(container)).toHaveTextContent(SCAN_TOO_SHORT);
+      expect(hudNote(container)).not.toHaveTextContent("no quadrilateral");
       expect(screen.queryByRole("dialog")).toBeNull();
     } finally {
       restore();
@@ -1845,7 +2195,7 @@ describe("ScannerPage sending a scan", () => {
   /** The Filters popover's release date, set as a reader sets it: sent to the session at once. */
   async function narrowTo(user: ReturnType<typeof userEvent.setup>, from: string) {
     await user.click(screen.getByRole("button", { name: "Filters: Any set" }));
-    // `fireEvent`, as the bar's own suite does: a date field has no text for user-event to type.
+    // `fireEvent`, as the dock's own suite does: a date field has no text for user-event to type.
     fireEvent.change(await screen.findByLabelText("Released from"), { target: { value: from } });
     // Drawn at once, whatever the session goes on to say of it.
     const drawn = await screen.findByRole("button", { name: new RegExp(`^Filters: .*${from}`) });
@@ -1961,7 +2311,7 @@ describe("ScannerPage sending a scan", () => {
 
       // Not one frame has been judged under the new filters, so there is nothing to send yet.
       await user.click(screen.getByRole("button", { name: "Send scan…" }));
-      expect(strip(container)).toHaveTextContent(SCAN_TOO_SHORT);
+      expect(hudNote(container)).toHaveTextContent(SCAN_TOO_SHORT);
       expect(screen.queryByRole("dialog", { name: "Send this scan" })).toBeNull();
       // The strip goes on naming the card: this was the run's break, not the evidence's.
       expect(statusLine()).toHaveTextContent("Plains");
@@ -2064,7 +2414,7 @@ describe("ScannerPage sending a scan", () => {
         expect(screen.getByRole("button", { name: "Reset evidence" })).toBeEnabled();
         // …and nothing on the view names what is missing, in text or in a label.
         expect(said(container)).not.toMatch(NAMES_A_MEMBERSHIP);
-        expect(strip(container)).toHaveTextContent("");
+        expect(hudNote(container)).toHaveTextContent("");
       } finally {
         restore();
       }
@@ -2123,7 +2473,7 @@ describe("ScannerPage sending a scan", () => {
         await framesGoBy(6);
         expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
         // The refusal is not drawn anywhere either: it is not this view's to explain.
-        expect(strip(container)).toHaveTextContent("");
+        expect(hudNote(container)).toHaveTextContent("");
       } finally {
         restore();
       }
@@ -2288,6 +2638,10 @@ describe("ScannerPage on a host with no scanner session", () => {
       const said = await screen.findByText(SCANNER_NOT_IN_A_BROWSER_YET);
       expect(said).toHaveAttribute("role", "alert");
       expect(videoBox(container)).toContainElement(said);
+      // No HUD over that sentence, as on the phone: no status that would say *Point the camera at
+      // a card*, and no Reset asking a session that is not there.
+      expect(screen.queryByRole("status", { name: "Scanner status" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
       // Long enough for a pump to have gone round many times, had one started.
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect(getUserMedia).not.toHaveBeenCalled();
@@ -2565,15 +2919,22 @@ describe("ScannerPage with a destination", () => {
       "Urza's Saga",
     );
     expect(screen.queryByRole("button", { name: /^Folder:/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Create deck…" })).toBeNull();
     expect(screen.queryByRole("switch", { name: "Developer" })).toBeNull();
     // The scan history is the Scanner view's own: no way into it, and no way to add to it.
     expect(screen.queryByRole("button", { name: "History" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Match" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Frame budget" })).toBeNull();
-    // The rest of the bar is the scanner's own.
+    // No page header either: the dialog is already titled.
+    expect(screen.queryByText("Scanner", { selector: "div" })).toBeNull();
+    // The rest of the dock is the scanner's own.
     expect(screen.getByRole("button", { name: "Filters: Any set" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start" })).toBeInTheDocument();
+    // The tray's ⋯ opened, so the two presses are asked about where they would be drawn.
+    await trayActions(userEvent, theirTray());
+    const menu = screen.getByRole("dialog", { name: "Tray actions" });
+    expect(within(menu).getByRole("button", { name: "Clear all…" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: "Create deck…" })).toBeNull();
+    expect(within(menu).queryByRole("button", { name: "Archive" })).toBeNull();
   });
 
   it("says what the tray already held, and words the clear for the destination", async () => {
@@ -2586,7 +2947,8 @@ describe("ScannerPage with a destination", () => {
     expect(await within(region).findByRole("note")).toHaveTextContent(
       /^5 cards were already in the scanner's tray\./,
     );
-    await user.click(within(region).getByRole("button", { name: "Clear all…" }));
+    await trayActions(user, region);
+    await user.click(screen.getByRole("button", { name: "Clear all…" }));
     const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
     expect(dialog).toHaveTextContent(
       "5 scanned copies will leave the tray without being added to their side.",

@@ -38,6 +38,17 @@ function Harness({
 const box = () => screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt" });
 
 describe("QuantityStepper", () => {
+  /** `compact` is 24px a button — WCAG 2.5.8's floor, never under it — for the Scanner tray's chin. */
+  it("draws compact as 24px buttons around a two-digit field", () => {
+    render(
+      <QuantityStepper value={12} onChange={() => {}} size="compact" label="Quantity of Bolt" />,
+    );
+    for (const name of ["Increase Quantity of Bolt", "Decrease Quantity of Bolt"]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("size-6");
+    }
+    expect(screen.getByRole("spinbutton", { name: "Quantity of Bolt" })).toHaveClass("h-6", "w-5");
+  });
+
   /**
    * Both buttons are named after the thing being counted, not after the control: a screen
    * reader in a list of forty printings otherwise hears "Increase" forty times with no way

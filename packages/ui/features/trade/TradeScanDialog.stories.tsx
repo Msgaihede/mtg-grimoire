@@ -148,7 +148,13 @@ export const TheirSide: Story = {
     );
     await expect(within(tray).getByText("Scanned so far")).toBeInTheDocument();
     await expect(within(dialog).queryByRole("button", { name: /^Folder:/ })).toBeNull();
-    await expect(within(dialog).queryByRole("button", { name: "Create deck…" })).toBeNull();
+    // The tray's `⋯` offers no deck — asked with the menu open, where the row would be.
+    await userEvent.click(within(tray).getByRole("button", { name: "Tray actions" }));
+    const actions = within(tray).getByRole("dialog", { name: "Tray actions" });
+    await expect(within(actions).getByRole("button", { name: "Clear all…" })).toBeInTheDocument();
+    await expect(within(actions).queryByRole("button", { name: "Create deck…" })).toBeNull();
+    // Shut again, so the frame the story ends on is the tray it is about.
+    await userEvent.keyboard("{Escape}");
   },
 };
 

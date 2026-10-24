@@ -9,6 +9,8 @@ import {
   headLanded,
   importItems,
   MAX_TRAY_ROWS,
+  needYouCount,
+  needYouLabel,
   NO_FINISHED_ROWS,
   needsDecision,
   needsFinishCount,
@@ -512,6 +514,19 @@ describe("tray", () => {
       expect(needsDecision(finish)).toBe(true);
     });
 
+    /**
+     * The one count behind every *N need you*: rows, one stop of the walk each — a row of unknown
+     * finish bumped to three copies is still one question — so the chip, the sheet's line and the
+     * desktop's header agree by construction.
+     */
+    it("counts the rows still asking something, not their copies", () => {
+      expect(needYouCount([])).toBe(0);
+      expect(needYouCount([known])).toBe(0);
+      expect(needYouCount([pick, known, finish])).toBe(2);
+      expect(needYouCount([{ ...finish, quantity: 3 }, known])).toBe(1);
+      expect(needYouLabel(needYouCount([pick, known, finish]))).toBe("2 need you");
+    });
+
     it("walks the waiting rows in the tray's order, skipping the settled ones, and wraps", () => {
       const rows = [pick, known, finish];
       expect(nextDecisionKey(rows, null)).toBe("pick");
@@ -700,5 +715,13 @@ describe("addBatch (issue #1374)", () => {
     );
     expect(() => addBatch(full, [batchLine({})], 1, keys())).toThrow(BATCH_WONT_FIT);
     expect(addBatch(full.slice(1), [batchLine({})], 1, keys()).rows).toHaveLength(MAX_TRAY_ROWS);
+  });
+});
+
+describe("needYouLabel", () => {
+  it("agrees with the count", () => {
+    expect(needYouLabel(1)).toBe("1 needs you");
+    expect(needYouLabel(2)).toBe("2 need you");
+    expect(needYouLabel(3)).toBe("3 need you");
   });
 });

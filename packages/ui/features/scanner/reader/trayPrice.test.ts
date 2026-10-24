@@ -10,6 +10,7 @@ import {
   trayPriceIds,
   trayPriceMap,
   trayRowPrice,
+  trayWorth,
 } from "./trayPrice";
 
 const resolved = VERDICTS.resolved.decision!;
@@ -101,5 +102,31 @@ describe("the scan popup's price (issue #1321)", () => {
   it("writes one figure for a span whose ends meet, and both ends otherwise", () => {
     expect(formatPriceSpan({ low: 4, high: 4 }, "usd")).toBe("$4.00");
     expect(formatPriceSpan({ low: 0.25, high: 1.5 }, "usd")).toBe("$0.25 – $1.50");
+  });
+});
+
+describe("trayWorth", () => {
+  it("sums price x quantity to the cent and counts the copies it could not price", () => {
+    const rows = [
+      row({ key: "a", cardId: "a", quantity: 1 }),
+      row({ key: "b", cardId: "b", quantity: 3 }),
+      row({ key: "c", cardId: "c", quantity: 1 }),
+      row({ key: "d", cardId: "d", quantity: 1 }),
+    ];
+    const prices: Record<string, number | null | undefined> = {
+      a: 42.19,
+      b: 39.86,
+      c: null,
+      d: undefined,
+    };
+    expect(trayWorth(rows, (r) => prices[r.cardId])).toEqual({
+      total: 161.77,
+      priced: 4,
+      unpriced: 1,
+    });
+  });
+
+  it("is zero over an empty tray", () => {
+    expect(trayWorth([], () => 1)).toEqual({ total: 0, priced: 0, unpriced: 0 });
   });
 });

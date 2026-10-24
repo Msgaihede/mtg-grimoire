@@ -12,30 +12,33 @@
 // `scanner_frame` answers each frame the page really sends with the next step of a scripted pile
 // of cards (`packages/fake/scannerScript.ts`). So what is proved, at 360×800 and at 412×915:
 //
-//   1. the page opens the camera once its prefs have loaded, and shapes the picture's box by the
-//      stream — inside the screen, with the status line and the tray's heading still on it;
-//   2. the page opens stopped (issue #1317) — no frame goes out until *Start scanning* is pressed;
+//   1. the page opens the camera once its prefs have loaded, and the picture fills what the
+//      controls, *Start* and the tray's peek leave — cropped, not letterboxed, inside the screen,
+//      with the tray's bar (the folder and Add) above it and the peek (*Scanned cards*) below;
+//   2. the page opens stopped (issue #1317) — no frame goes out until *Start* is pressed;
 //      then frames go out as the JPEG alone, **with no options and no detail picture**, and each
 //      card the script decides lands in the tray once — the second copy of a card counts onto
 //      its row;
-//   3. *Stop scanning* stops the frames and keeps the picture;
+//   3. *Stop* stops the frames and keeps the picture;
 //   4. a quantity steps, a folder is chosen from the sheet and stored;
 //   5. nothing scrolls sideways, every control is at least 44px under the coarse pointer, and the
-//      footer — the destination and Add — is on screen and pressable with 5 rows and with 40;
+//      tray's bar — the folder and Add — is on screen and pressable with 5 rows and with 40, as is
+//      the same bar in the tray sheet (the peek's press), whose list scrolls clear of it;
 //   6. *Add* is one `scanner_tray_commit` for the chosen folder, the tray empties and the receipt
 //      says what was filed;
 //   7. leaving the page stops the camera's track, and so does hiding it past the grace;
 //   8. the card the script cannot pin to one printing waits in the tray as a question, and a
 //      press on a candidate answers it;
-//   9. on its side at 800×360 the camera's column and the tray's stand side by side, with nothing
-//      off the screen, no control under 44px and Add under a thumb;
+//   9. on its side at 800×360 the camera's column and the tray's stand side by side (the peek is
+//      gone; the right column holds the bar and the whole list), with nothing off the screen, no
+//      control under 44px and Add under a thumb;
 //  10. with the camera refused the page lands on its sentence;
 //  11. *Send scan…* is a supporter's, and sends a run of frames and never one picture: on a
 //      device with no membership behind it the press is not drawn over a running scanner and
 //      nothing on the page names one; on a supporter's (`?fault=patreonGroupEntitled`), stopped,
 //      the press is not drawn;
-//      over a running scanner it stands beside *Reset evidence* and leaves the match bar
-//      room; pressed before the scanner has answered enough frames it opens nothing and says
+//      over a running scanner it stands in the picture's corner beside *Reset evidence*, clear
+//      of the match progress bar along its top edge; pressed before the scanner has answered enough frames it opens nothing and says
 //      so; then its dialog holds the last frames the scanner was given, each kept at the
 //      camera's own size up to 1920 pixels wide — each drawn from the very text it will send,
 //      the last one showing, a slider and a *Play* through them — with
@@ -90,7 +93,8 @@ const PHONES: [number, number][] = [
   [360, 800],
   [412, 915],
 ];
-/** A phone on its side: past the page's 720px, where its two columns stand side by side. */
+/** A phone on its side: wider than it is tall, where the page's two columns stand side by side
+ *  (the `landscape:` variant — the shape decides, not a width). */
 const SIDEWAYS: [number, number] = [800, 360];
 /** `PARK_GRACE_MS` in `packages/ui/features/scanner/useParked.ts`. */
 const PARK_GRACE_MS = 5000;
@@ -185,20 +189,50 @@ const HELPERS = `(() => {
     el.click();
     return true;
   };
-  const rows = () => [...document.querySelectorAll('[data-tray-row]')];
-  const sheet = () => document.querySelector('[role="dialog"]');
+  /** The tray's rows, name, finish and quantity — the list beside the picture on a phone's side,
+   *  which the page mounts only there, and upright the tray sheet's while it is open. */
+  const rows = () => [...document.querySelectorAll('[data-tray-column] [data-tray-row], [data-tray-sheet-list] [data-tray-row]')];
+  /** The peek's tiles, upright: one a row, newest first, for the newest 20 (\`PEEK_ROWS\`); a row
+   *  still waiting on a printing is a dashed \`Pick\` tile. */
+  const tiles = () => [...document.querySelectorAll('[data-tray-peek-slot] [data-tray-peek]')];
+  /** How many rows the tray holds, read off the page without opening anything: the list's on a
+   *  phone's side, the peek's tiles upright (so never past 20 there). */
+  const count = () => (document.querySelector('[data-tray-column]') === null ? tiles() : rows()).length;
+  /** The rows a finger can reach now: the sheet's upright, the column's on its side. */
+  const shownRows = () => [...document.querySelectorAll('[data-tray-row]')].filter(visible);
+  /** The topmost sheet or dialog **other than the tray sheet**, which stays under the sheets
+   *  opened from its rows; \`null\` when there is none. */
+  const sheet = () => [...document.querySelectorAll('[role="dialog"]')]
+    .filter((d) => d.querySelector('[data-tray-sheet-list]') === null && visible(d)).at(-1) ?? null;
+  /** The tray sheet's list, while that sheet is open. */
+  const trayList = () => document.querySelector('[data-tray-sheet-list]');
+  /** The peek's press (*Scanned cards, 6 copies*), drawn upright only. */
+  const peek = () => controls(document.querySelector('[data-tray-peek-slot]') ?? document.body)
+    .find((b) => named(b).startsWith('Scanned cards'));
+  /** The folder and Add, and the receipt under them. */
+  const bar = () => document.querySelector('[data-scanner-bar]');
   const status = () => document.querySelector('[role="status"][aria-label="Scanner status"]')?.textContent ?? '';
   const box = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
   /** The page as a phone holds it: what is too small for a thumb, what hangs off the side, and
-   *  where the footer stands against the tab bar. \`root\` is the page, or a sheet over it. */
+   *  where the tab bar stands. \`root\` is the page, or a sheet over it. */
   const measure = (root = document.querySelector('main')) => {
     const nav = document.querySelector('nav[aria-label="Views"]').getBoundingClientRect();
     const small = controls(root)
       .map((el) => ({ name: named(el) || el.tagName, ...box(el) }))
       .filter((c) => c.width < 43.5 || c.height < 43.5)
       .map((c) => c.name + ' ' + Math.round(c.width) + 'x' + Math.round(c.height));
+    /** An element inside its own sideways scroller (the tray peek's strip) may run past the edge:
+     *  that scroller clips it, and the scroller's own box is on screen. */
+    const clipped = (el) => {
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        if (!/^(auto|scroll|hidden|clip)$/.test(getComputedStyle(p).overflowX)) continue;
+        const pr = p.getBoundingClientRect();
+        if (pr.left >= -0.5 && pr.right <= innerWidth + 0.5) return true;
+      }
+      return false;
+    };
     const off = [...root.querySelectorAll('*')].filter(visible)
-      .filter((el) => { const r = el.getBoundingClientRect(); return r.right > innerWidth + 0.5 || r.left < -0.5; })
+      .filter((el) => { const r = el.getBoundingClientRect(); return (r.right > innerWidth + 0.5 || r.left < -0.5) && !clipped(el); })
       .map((el) => el.tagName + '.' + String(el.className).slice(0, 40));
     return { small, off, sideways: document.scrollingElement.scrollWidth > innerWidth, navTop: nav.top };
   };
@@ -208,7 +242,7 @@ const HELPERS = `(() => {
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
     return hit !== null && (hit === el || el.contains(hit));
   };
-  window.smoke = { visible, named, controls, button, starting, press, rows, sheet, status, box, measure, reachable };
+  window.smoke = { visible, named, controls, button, starting, press, rows, tiles, count, shownRows, sheet, trayList, peek, bar, status, box, measure, reachable };
 })()`;
 
 /** A tab on the light app at `path`, sized as a phone under a touch pointer and the dark theme. */
@@ -345,6 +379,25 @@ const withTray = (rows: string) => `(async () => {
   return was;
 })()`;
 
+/**
+ * Upright, the tray is behind the peek: press it and wait for the tray sheet, whose rows are the
+ * ones a finger can reach. On a phone's side the list is already the right column, and there is
+ * no peek to press.
+ */
+async function openTray(page: Awaited<ReturnType<typeof openPage>>) {
+  if (!(await page.evaluate<boolean>(`smoke.peek() !== undefined`))) return;
+  await page.evaluate(`smoke.press(smoke.peek(), 'the tray peek')`);
+  await page.until(`smoke.trayList() !== null`, "the tray sheet");
+  await sleep(350);
+}
+
+/** Close the tray sheet, if it is up, and wait for it to go. */
+async function closeTray(page: Awaited<ReturnType<typeof openPage>>) {
+  if (!(await page.evaluate<boolean>(`smoke.trayList() !== null`))) return;
+  await page.evaluate(`smoke.press(smoke.button('Close scanned cards'), 'close the tray sheet')`);
+  await page.until(`smoke.trayList() === null`, "the tray sheet to close");
+}
+
 async function phone(send: Send, width: number, height: number) {
   const at = `${width}x${height}`;
   const page = await openPage(send, width, height, "/scanner");
@@ -358,26 +411,30 @@ async function phone(send: Send, width: number, height: number) {
   const cam = await page.evaluate<{
     stream: string;
     frame: Box;
-    headingBottom: number;
-    footerTop: number;
+    barBottom: number;
+    peekTop: number;
+    peekBottom: number;
+    navTop: number;
     fit: string;
   }>(`(() => {
     const video = document.querySelector('video');
     const frame = smoke.box(document.querySelector('[data-camera-box]'));
-    const heading = smoke.box([...document.querySelectorAll('h2')].find((h) => /Scanned cards/.test(h.textContent)));
-    const footer = smoke.box(document.querySelector('main footer'));
-    return { stream: video.videoWidth + 'x' + video.videoHeight, frame, headingBottom: heading.bottom, footerTop: footer.top,
+    const bar = smoke.box(smoke.bar());
+    const peek = smoke.box(smoke.peek());
+    return { stream: video.videoWidth + 'x' + video.videoHeight, frame, barBottom: bar.bottom, peekTop: peek.top, peekBottom: peek.bottom,
+             navTop: smoke.measure().navTop,
              fit: getComputedStyle(video).objectFit + '/' + getComputedStyle(document.querySelector('[data-camera-box] canvas')).objectFit };
   })()`);
   if (cam.frame.width < width - 40) fail(`${at}: the camera's box is ${cam.frame.width}px wide`);
+  // It fills what the page leaves, so only a floor: the page is fixed to the screen.
   if (cam.frame.height < 150) fail(`${at}: the camera's box is ${cam.frame.height}px tall`);
-  if (cam.frame.height > height * 0.38 + 1)
-    fail(`${at}: the camera's box is ${cam.frame.height}px — over its cap`);
   if (cam.fit !== "cover/cover") fail(`${at}: the video and the overlay are fitted ${cam.fit}`);
-  if (cam.headingBottom > cam.footerTop)
-    fail(`${at}: the tray's heading is under the footer before any scroll`);
+  if (cam.barBottom > cam.frame.top + 0.5)
+    fail(`${at}: the tray's bar (folder, Add) runs into the picture`);
+  if (cam.frame.bottom > cam.peekTop + 0.5) fail(`${at}: the picture runs under the tray's peek`);
+  if (cam.peekBottom > cam.navTop + 0.5) fail(`${at}: the tray's peek runs under the tab bar`);
   say(
-    `${at}: camera ${cam.stream} in a ${Math.round(cam.frame.width)}x${Math.round(cam.frame.height)}px box, tray heading on screen`,
+    `${at}: camera ${cam.stream} in a ${Math.round(cam.frame.width)}x${Math.round(cam.frame.height)}px box between the bar and the peek, both on screen`,
   );
 
   // ------------------------------------------------ 2. cards land ------------------------
@@ -409,29 +466,19 @@ async function phone(send: Send, width: number, height: number) {
   await page.until(`window.seen.prefs.at(-1)?.finish === 'nonfoil'`, "the finish to be stored");
   await page.evaluate(`smoke.press(smoke.button('Close scanner options'), 'close')`);
   await page.until(`smoke.sheet() === null`, "the sheet to close");
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
-  await page.until(`smoke.rows().length >= 1`, "the first card to land");
-  const first = await page.evaluate<{ status: string; row: string }>(
-    `({ status: smoke.status(), row: smoke.rows()[0].textContent })`,
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
+  // Counted off the peek's tiles: upright the rows themselves are the tray sheet's, read in 4.
+  await page.until(`smoke.count() >= 1`, "the first card to land");
+  // The page's own word on the card that landed, upright: the Added popup over the picture.
+  const first = await page.evaluate<string>(
+    `document.querySelector('[data-camera-box]').textContent`,
   );
-  if (!/Urza's Saga/.test(first.row)) fail(`${at}: the first row is "${first.row}"`);
+  if (!/Urza's Saga/.test(first)) fail(`${at}: the first card over the picture is "${first}"`);
   await page.shot("scanning");
-  await page.until(`smoke.rows().length >= 2`, "the third card (the second is a second copy)");
-  const landed = await page.evaluate(
-    `smoke.rows().map((row) => [row.querySelector('span.text-sm').textContent, row.querySelector('output').textContent])`,
-  );
-  if (
-    JSON.stringify(landed) !==
-    JSON.stringify([
-      ["Ancient Tomb", "1"],
-      ["Urza's Saga", "2"],
-    ])
-  ) {
-    fail(`${at}: after three cards the tray reads ${JSON.stringify(landed)}`);
-  }
+  await page.until(`smoke.count() >= 2`, "the third card (the second is a second copy)");
 
   // ------------------------------------------------ 3. stop ------------------------------
-  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Stop'), 'Stop')`);
   await sleep(400);
   const stopped = await page.evaluate<number>(`window.seen.frames.length`);
   await sleep(900);
@@ -440,7 +487,7 @@ async function phone(send: Send, width: number, height: number) {
     live: string;
     rows: number;
     note: string;
-  }>(`({ frames: window.seen.frames, live: ${TRACK}?.readyState, rows: smoke.rows().length,
+  }>(`({ frames: window.seen.frames, live: ${TRACK}?.readyState, rows: smoke.count(),
     note: document.querySelector('[data-camera-box]').textContent })`);
   if (later.frames.length !== stopped)
     fail(`${at}: ${later.frames.length - stopped} frames went out after Stop`);
@@ -454,14 +501,30 @@ async function phone(send: Send, width: number, height: number) {
     `${at}: ${later.frames.length} frames, every one the JPEG alone; 3 cards → 2 rows; Stop holds the picture`,
   );
 
-  // ------------------------------------------------ 4. a quantity, a folder ---------------
+  // ------------------------------------------------ 4. the rows, a quantity, a folder ------
+  // The rows and their steppers are the tray sheet's upright, so it is opened for them; the folder
+  // is the bar's, which the page keeps on screen over the picture.
+  await openTray(page);
+  const landed = await page.evaluate(
+    `smoke.rows().map((row) => [row.querySelector('span.text-sm').textContent, row.querySelector('output').textContent])`,
+  );
+  if (
+    JSON.stringify(landed) !==
+    JSON.stringify([
+      ["Ancient Tomb", "1"],
+      ["Urza's Saga", "2"],
+    ])
+  ) {
+    fail(`${at}: after three cards the tray reads ${JSON.stringify(landed)}`);
+  }
   await page.evaluate(`smoke.press(smoke.starting('One more Ancient Tomb'), 'the stepper')`);
   await page.until(
     `smoke.rows()[0].querySelector('output').textContent === '2'`,
     "the quantity to step",
   );
+  await closeTray(page);
 
-  await page.evaluate(`smoke.press(smoke.starting('Folder: '), 'the destination')`);
+  await page.evaluate(`smoke.press(smoke.starting('Folder: ', smoke.bar()), 'the destination')`);
   await page.until(
     `smoke.sheet() !== null && /Folder for scanned cards/.test(smoke.sheet().textContent)`,
     "the folder sheet",
@@ -476,8 +539,8 @@ async function phone(send: Send, width: number, height: number) {
     return name;
   })()`);
   await page.until(
-    `smoke.sheet() === null && smoke.starting('Folder: ') && smoke.named(smoke.starting('Folder: ')) === ${JSON.stringify(`Folder: ${folder}`)}`,
-    "the chosen folder on the footer",
+    `smoke.sheet() === null && smoke.starting('Folder: ', smoke.bar()) && smoke.named(smoke.starting('Folder: ', smoke.bar())) === ${JSON.stringify(`Folder: ${folder}`)}`,
+    "the chosen folder on the bar",
   );
   const stored = await page.until<string>(
     `window.seen.prefs.at(-1)?.folderId`,
@@ -488,46 +551,66 @@ async function phone(send: Send, width: number, height: number) {
   hold(`${at}, two rows`, await page.evaluate<Measurement>(`smoke.measure()`));
   for (const n of [5, 40]) {
     const was = await page.evaluate(withTray(rowsOf(n)));
-    await page.until(`smoke.rows().length === ${n}`, `${n} rows`);
+    // The peek draws the newest 20 (`PEEK_ROWS`); the whole count is the tray sheet's, below.
+    await page.until(`smoke.count() === ${Math.min(n, 20)}`, `${n} rows`);
+    // The page itself: the bar on top, the peek below, nothing scrolling however long the tray.
     const m = await page.evaluate<
       Measurement & {
-        footerTop: number;
-        footerBottom: number;
+        barTop: number;
+        barBottom: number;
+        add: boolean;
+        folder: boolean;
+        peekBottom: number;
+      }
+    >(`(() => {
+      const bar = smoke.bar();
+      const b = smoke.box(bar);
+      return { ...smoke.measure(), barTop: b.top, barBottom: b.bottom, add: smoke.reachable(smoke.starting('Add ', bar)),
+        folder: smoke.reachable(smoke.starting('Folder: ', bar)), peekBottom: smoke.box(smoke.peek()).bottom };
+    })()`);
+    hold(`${at}, ${n} rows`, m);
+    if (!m.add || !m.folder)
+      fail(`${at}, ${n} rows: the bar is not under a thumb (Add ${m.add}, folder ${m.folder})`);
+    if (m.barTop < -0.5 || m.peekBottom > m.navTop + 0.5)
+      fail(`${at}, ${n} rows: the bar or the peek runs off the screen or under the tab bar`);
+    // The whole tray: the sheet, with its own bar, and a list that scrolls clear of it.
+    await openTray(page);
+    await page.until(`smoke.rows().length === ${n}`, `${n} rows in the tray sheet`);
+    const sheet = await page.evaluate<
+      Measurement & {
         add: boolean;
         folder: boolean;
         scrolls: boolean;
         lastRow: number;
-        mainBottom: number;
+        listBottom: number;
       }
     >(`(() => {
-      const main = document.querySelector('main');
-      const footer = main.querySelector('footer');
-      const add = smoke.starting('Add ', footer);
-      const scroller = main.querySelector('.overflow-y-auto');
-      scroller.scrollTop = scroller.scrollHeight;
-      const f = smoke.box(footer);
-      return { ...smoke.measure(), footerTop: f.top, footerBottom: f.bottom, add: smoke.reachable(add), folder: smoke.reachable(smoke.starting('Folder: ', footer)),
-        scrolls: scroller.scrollHeight > scroller.clientHeight, lastRow: smoke.box(smoke.rows().at(-1)).bottom, mainBottom: smoke.box(main).bottom };
+      const dialog = document.querySelector('[data-tray-sheet-list]').closest('[role="dialog"]');
+      const list = smoke.trayList();
+      list.scrollTop = list.scrollHeight;
+      return { ...smoke.measure(dialog), add: smoke.reachable(smoke.starting('Add ', dialog)), folder: smoke.reachable(smoke.starting('Folder: ', dialog)),
+        scrolls: list.scrollHeight > list.clientHeight, lastRow: smoke.box(smoke.shownRows().at(-1)).bottom, listBottom: smoke.box(list).bottom };
     })()`);
-    hold(`${at}, ${n} rows`, m);
-    if (!m.add || !m.folder)
-      fail(`${at}, ${n} rows: the footer is not under a thumb (Add ${m.add}, folder ${m.folder})`);
-    if (m.footerBottom > m.navTop + 0.5 || m.mainBottom > m.navTop + 0.5)
-      fail(`${at}, ${n} rows: the footer runs under the tab bar`);
-    if (m.lastRow > m.footerTop + 0.5)
-      fail(`${at}, ${n} rows: the last row cannot be scrolled clear of the footer`);
+    hold(`${at}, ${n} rows, the tray sheet`, sheet);
+    if (!sheet.add || !sheet.folder)
+      fail(
+        `${at}, ${n} rows: the sheet's bar is not under a thumb (Add ${sheet.add}, folder ${sheet.folder})`,
+      );
+    if (sheet.lastRow > sheet.listBottom + 0.5)
+      fail(`${at}, ${n} rows: the last row cannot be scrolled into the sheet`);
     if (n === 40) await page.shot("forty-rows");
     say(
-      `${at}: ${n} rows — footer ${Math.round(m.footerTop)}–${Math.round(m.footerBottom)} over the tab bar at ${Math.round(m.navTop)}, Add and the folder pressable, list ${m.scrolls ? "scrolls" : "fits"}`,
+      `${at}: ${n} rows — the bar at ${Math.round(m.barTop)}–${Math.round(m.barBottom)} and the peek above the tab bar at ${Math.round(m.navTop)}, Add and the folder pressable; the tray sheet's list ${sheet.scrolls ? "scrolls" : "fits"} and keeps its own Add in reach`,
     );
+    await closeTray(page);
     await page.evaluate(withTray(JSON.stringify(was)));
-    await page.until(`smoke.rows().length === 2`, "the scanned rows back");
+    await page.until(`smoke.count() === 2`, "the scanned rows back");
   }
 
   // ------------------------------------------------ 6. Add --------------------------------
-  await page.evaluate(`smoke.press(smoke.starting('Add 4 to collection'), 'Add')`);
+  await page.evaluate(`smoke.press(smoke.starting('Add 4 to collection', smoke.bar()), 'Add')`);
   await page.until(
-    `window.seen.commits.length === 1 && smoke.rows().length === 0`,
+    `window.seen.commits.length === 1 && smoke.count() === 0`,
     "the commit, and an empty tray",
   );
   const commit = await page.evaluate<{
@@ -535,9 +618,7 @@ async function phone(send: Send, width: number, height: number) {
     folderId: string;
     remaining: unknown[];
     receipt: string;
-  }>(
-    `({ ...window.seen.commits[0], receipt: document.querySelector('main footer').parentElement.textContent })`,
-  );
+  }>(`({ ...window.seen.commits[0], receipt: smoke.bar().textContent })`);
   const copies = commit.items.reduce((sum, item) => sum + item.quantity, 0);
   if (commit.folderId !== stored) fail(`${at}: filed to ${commit.folderId}, chosen ${stored}`);
   if (copies !== 4 || commit.remaining.length !== 0)
@@ -605,19 +686,20 @@ async function phone(send: Send, width: number, height: number) {
   // ------------------------------------------------ 8. a card with a question ------------
   await page.go("/scanner");
   await page.until(`${TRACK}?.readyState === 'live'`, "the camera again");
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(
-    `smoke.rows().some((row) => /Pick a printing/.test(row.textContent))`,
+    `smoke.tiles().some((tile) => tile.textContent.trim() === 'Pick')`,
     "the card the scanner cannot pin to one printing",
     30_000,
   );
-  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Stop'), 'Stop')`);
+  await openTray(page);
   const asking = await page.evaluate<
     Measurement & { rows: number; choices: string[]; status: string }
   >(`(() => {
-    const row = smoke.rows()[0];
+    const row = smoke.shownRows()[0];
     row.scrollIntoView({ block: 'start' });
-    return { ...smoke.measure(), rows: smoke.rows().length, choices: smoke.controls(row).map(smoke.named), status: smoke.status() };
+    return { ...smoke.measure(smoke.trayList()?.closest('[role="dialog"]') ?? undefined), rows: smoke.rows().length, choices: smoke.controls(row).map(smoke.named), status: smoke.status() };
   })()`);
   hold(`${at}, a row waiting on a pick`, asking);
   if (asking.choices.filter((name) => /^Lightning Bolt — /.test(name)).length !== 3) {
@@ -650,6 +732,7 @@ async function phone(send: Send, width: number, height: number) {
     `smoke.sheet() === null && smoke.starting('More printings of Lightning Bolt — 2X2 117') !== undefined`,
     "the printing handed back",
   );
+  await closeTray(page);
   say(
     `${at}: ${asking.rows} rows, the fifth card waits with three candidates; a press settles it, and the printings sheet hands another back`,
   );
@@ -678,7 +761,7 @@ async function phone(send: Send, width: number, height: number) {
     });
     return true;
   })()`);
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(`window.answered >= 8`, "a device with no membership to scan on", 30_000);
   const stranger = await page.evaluate<{ sends: string[]; said: boolean }>(`(() => {
     const main = document.querySelector('main');
@@ -693,10 +776,7 @@ async function phone(send: Send, width: number, height: number) {
   // The rest is a supporter's device: the same page, in the world where the relay knows it.
   await page.go("/scanner?fault=patreonGroupEntitled");
   await page.until(`${TRACK}?.readyState === 'live'`, "a supporter's camera");
-  await page.until(
-    `smoke.button('Start scanning') !== undefined`,
-    "a supporter's scanner to open stopped",
-  );
+  await page.until(`smoke.button('Start') !== undefined`, "a supporter's scanner to open stopped");
   await sleep(400);
   const idle = await page.evaluate<{ press: boolean; live: string | undefined }>(
     `({ press: smoke.button('Send scan…') !== undefined, live: ${TRACK}?.readyState })`,
@@ -733,7 +813,7 @@ async function phone(send: Send, width: number, height: number) {
     });
     return true;
   })()`);
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(
     `smoke.button('Send scan…') !== undefined`,
     "Send scan… to be offered over a running scanner",
@@ -1076,44 +1156,43 @@ async function sideways(send: Send, width: number, height: number) {
     `${TRACK}?.readyState === 'live' && document.querySelector('video').videoWidth > 0`,
     "the camera",
   );
-  await page.evaluate(`smoke.press(smoke.button('Start scanning'), 'Start scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Start'), 'Start')`);
   await page.until(`smoke.rows().length >= 2`, "three cards");
-  await page.evaluate(`smoke.press(smoke.button('Stop scanning'), 'Stop scanning')`);
+  await page.evaluate(`smoke.press(smoke.button('Stop'), 'Stop')`);
   await sleep(300);
   const m = await page.evaluate<
     Measurement & {
       camera: Box;
       tray: Box;
-      footer: Box;
+      bar: Box;
+      peek: boolean;
       mainBottom: number;
       add: boolean;
       folder: boolean;
     }
   >(`(() => {
     const main = document.querySelector('main');
-    const footer = main.querySelector('footer');
+    const bar = smoke.bar();
     const camera = smoke.box(document.querySelector('[data-camera-box]'));
-    const tray = smoke.box(main.querySelector('section'));
-    const f = smoke.box(footer);
-    return { ...smoke.measure(), camera, tray, footer: f, mainBottom: smoke.box(main).bottom,
-      add: smoke.reachable(smoke.starting('Add ', footer)), folder: smoke.reachable(smoke.starting('Folder: ', footer)) };
+    const tray = smoke.box(main.querySelector('[data-tray-column]'));
+    return { ...smoke.measure(), camera, tray, bar: smoke.box(bar), peek: smoke.peek() !== undefined, mainBottom: smoke.box(main).bottom,
+      add: smoke.reachable(smoke.starting('Add ', bar)), folder: smoke.reachable(smoke.starting('Folder: ', bar)) };
   })()`);
   hold(at, m);
+  if (m.peek) fail(`${at}: the peek is drawn beside a tray that is already a column`);
   if (m.camera.right > m.tray.left)
     fail(`${at}: the camera's column and the tray's are not side by side`);
-  if (Math.abs(m.camera.top - m.tray.top) > 80)
-    fail(
-      `${at}: the tray starts ${Math.round(m.tray.top - m.camera.top)}px below the camera — one column, not two`,
-    );
+  if (m.bar.left < m.camera.right - 0.5 || m.tray.top > m.camera.bottom)
+    fail(`${at}: the tray's bar and list do not stand beside the camera — one column, not two`);
   if (m.tray.width < 300) fail(`${at}: the tray's column is ${m.tray.width}px wide`);
   if (m.camera.width < 200) fail(`${at}: the camera's box is ${m.camera.width}px wide`);
   if (!m.add || !m.folder)
-    fail(`${at}: the footer is not under a thumb (Add ${m.add}, folder ${m.folder})`);
-  if (m.footer.bottom > m.mainBottom + 0.5 || m.footer.bottom > height + 0.5)
-    fail(`${at}: the footer runs off the screen`);
+    fail(`${at}: the bar is not under a thumb (Add ${m.add}, folder ${m.folder})`);
+  if (m.tray.bottom > m.mainBottom + 0.5 || m.tray.bottom > height + 0.5)
+    fail(`${at}: the tray's column runs off the screen`);
   await page.shot("sideways");
   say(
-    `${at}: side by side — camera ${Math.round(m.camera.width)}x${Math.round(m.camera.height)}, tray ${Math.round(m.tray.width)}px beside it, footer ${Math.round(m.footer.top)}–${Math.round(m.footer.bottom)}, Add and the folder pressable`,
+    `${at}: side by side — camera ${Math.round(m.camera.width)}x${Math.round(m.camera.height)}, tray ${Math.round(m.tray.width)}px beside it with its bar on top, no peek, Add and the folder pressable`,
   );
   const thrown = await page.evaluate<string[]>(`window.thrown`);
   if (thrown.length > 0) fail(`${at}: the page threw — ${thrown.join(" | ")}`);
@@ -1146,7 +1225,7 @@ async function run() {
   if (quiet.thrown.length > 0) fail(`a refused camera threw — ${quiet.thrown.join(" | ")}`);
   if (!quiet.tray) fail("a refused camera leaves no tray on the page");
   await refused.shot("camera-refused");
-  say(`camera refused: "${sentence}" — the bar, the tray and the footer still drawn`);
+  say(`camera refused: "${sentence}" — the bar and the peek still drawn`);
 }
 
 /**

@@ -1,12 +1,13 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { ArrowDown, ChevronRight, Minus, Plus, X } from "lucide-react";
+import { ArrowDown, ChevronRight, Ellipsis, Minus, Plus, X } from "lucide-react";
 import { CardArt } from "@grimoire/ui/components/CardArt";
 import { CardImage } from "@grimoire/ui/components/CardImage";
 import { cardPrintingsKey } from "@grimoire/ui/features/card/cardKeys";
 import {
-  needsDecision,
+  needYouCount,
+  needYouLabel,
   NEXT_DECISION_LABEL,
   nextDecisionKey,
   pickChoice,
@@ -15,7 +16,6 @@ import {
   setPrinting,
   setQuantity,
   totalCopies,
-  unresolvedCount,
 } from "@grimoire/ui/features/scanner/reader/tray";
 import {
   isKnownFinish,
@@ -23,13 +23,13 @@ import {
   trayFinishChoices,
   UNKNOWN_FINISH,
 } from "@grimoire/ui/features/scanner/reader/trayFinish";
-import { ADD_CARD_LABEL } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { useHeadLanded } from "@grimoire/ui/features/scanner/reader/useHeadLanded";
 import { useTrayPrices } from "@grimoire/ui/features/scanner/reader/useTrayPrices";
 import { plural } from "@grimoire/ui/lib/counts";
 import { parseFinishes } from "@grimoire/ui/lib/finish";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { CARD_ASPECT, cardImageUrl } from "@grimoire/ui/lib/images";
+import { LAYER } from "@grimoire/ui/lib/layers";
 import { ipc, ipcError, type ScannerTrayChoice, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import type { Currency, MarketplaceId } from "@grimoire/ui/lib/marketplace";
 import { DURATION, PRESS, seconds, TRANSITION } from "@grimoire/ui/lib/motion";
@@ -60,6 +60,17 @@ function choiceLabel(choice: ScannerTrayChoice): string {
   return printing === "" ? choice.name : `${choice.name} — ${printing}`;
 }
 
+/**
+ * A 44px press in a tray header — the `⋯` in the tray's own, *Add card…* and the `⋯` in the tray
+ * sheet's (`TraySheet`), which draws a header of its own over a headless tray. Each adds its width
+ * and its type.
+ */
+export const HEADER_PRESS = cn(
+  "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border",
+  PRESS,
+  FOCUS,
+);
+
 /** A 44px square press on a row: the stepper's two and the remove. */
 const SQUARE = cn(
   "flex size-11 shrink-0 items-center justify-center rounded-md border border-border",
@@ -82,6 +93,16 @@ const WORDED = cn(
 
 /** Which list a row's sheet is open on. */
 type Asking = { key: string; page: "finish" | "printing" } | null;
+
+/**
+ * The tray's walk through its open questions, handed to a host that draws the walk's press
+ * itself — the tray sheet's *Next* (`TraySheet`). The same walk as the header's own press.
+ */
+export interface TrayWalk {
+  /** Bring the next row still waiting on a decision to the middle of the list, the caret onto
+   *  its question — round to the top again past the last. Nothing when no row is waiting. */
+  next: () => void;
+}
 
 /**
  * How long after a sheet closes the caret is still put back if it has fallen out of the page.
@@ -146,8 +167,22 @@ function revealTrayTop(section: HTMLElement) {
  * which at 44px a control does not fit under a 156px tile; so the phone draws the list and leaves
  * the stored `trayLayout` — the desktop's, in the same row of prefs — unread and unwritten.
  *
- * **It scrolls with the page**, not in a box of its own: the page's footer is what stays put. A
- * card that lands brings its heading back when the reader has scrolled past it ({@link revealTrayTop}).
+ * **It scrolls with whatever holds it**, not in a box of its own: the page's column on a phone on
+ * its side, or the tray sheet's list (`TraySheet`). A card that lands brings its heading back when
+ * the reader has scrolled past it ({@link revealTrayTop}).
+ *
+ * **Its own header** (the scanner redesign, 2026-10-24) is **one 44px line**, as the design draws
+ * it in a 22rem column: the title and the copy count, a gold **_N need you_** while any card waits
+ * on a printing or a finish — the press that walks to the next one — and, where the host hands one
+ * in, the `⋯` that opens the tray's actions. *Add card…* is not on it: a fourth press does not fit
+ * the line beside the walk, so the page puts it in those actions (`TrayActionsSheet`'s first row).
+ * It **sticks to the top of the scroller** the tray is in, so a reader forty rows down still has
+ * the walk and the `⋯`.
+ *
+ * **The tray sheet draws its own header** — the title and count, the worth, *Add card…* and the
+ * `⋯`, with the walk under the tray's bar — so it mounts this with `header={false}` and walks the
+ * questions through {@link TrayWalk}, handed back on `ref`: the walk stays this list's, which is
+ * the one that knows where its rows are.
  */
 export function Tray({
   rows,
@@ -155,7 +190,9 @@ export function Tray({
   flashKey,
   title = "Scanned cards",
   marketplace,
-  onAddCard,
+  onActions,
+  header = true,
+  ref,
 }: {
   rows: readonly ScannerTrayRow[];
   /** An edit, as a function of the rows — never the rows this render drew. */
@@ -168,9 +205,14 @@ export function Tray({
   /** Whose prices the rows are quoted at — a destination's, where it has one. Absent is the
    *  reader's own marketplace. */
   marketplace?: MarketplaceId;
-  /** *Add card…* was pressed (issue #978): the page opens the search and pauses the scanner under
-   *  it. Handed the press, for the caret to come back to. Absent draws no button. */
-  onAddCard?: (opener: HTMLElement) => void;
+  /** The header's `⋯` was pressed: the page opens the tray's actions (`TrayActionsSheet`). Handed
+   *  the press, for the caret to come back to. Absent draws no `⋯`. */
+  onActions?: (opener: HTMLElement) => void;
+  /** Draw the heading, its count and its presses. `false` where the host draws a header of its
+   *  own (`TraySheet`); the list is then named by {@link title} alone. */
+  header?: boolean;
+  /** The walk through the open questions, for a host whose header holds the walk's press. */
+  ref?: Ref<TrayWalk>;
 }) {
   const titleId = useId();
   const sectionRef = useRef<HTMLElement>(null);
@@ -179,8 +221,9 @@ export function Tray({
     if (sectionRef.current !== null) revealTrayTop(sectionRef.current);
   });
   const copies = totalCopies(rows);
-  const waiting = unresolvedCount(rows);
-  const deciding = rows.some(needsDecision);
+  // Every card still asking something — a printing or a finish — as the peek, the tray sheet and
+  // the desktop's header count them.
+  const waiting = needYouCount(rows);
   const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows, marketplace);
 
   const [asking, setAsking] = useState<Asking>(null);
@@ -226,8 +269,14 @@ export function Tray({
     const to = handBack.current;
     if (asking !== null || to === null) return;
     const active = document.activeElement;
+    // "Inside the sheet that is leaving" is a dialog that does not hold this tray: drawn inside
+    // the tray sheet, every control here is inside *a* dialog, and a caret the reader has put on
+    // one of them since is where it belongs.
+    const dialog = active?.closest('[role="dialog"]') ?? null;
     const adrift =
-      active === null || active === document.body || active.closest('[role="dialog"]') !== null;
+      active === null ||
+      active === document.body ||
+      (dialog !== null && !dialog.contains(sectionRef.current));
     if (!adrift) return;
     const row = Array.from(
       listRef.current?.querySelectorAll<HTMLElement>("[data-tray-row]") ?? [],
@@ -256,65 +305,90 @@ export function Tray({
     // The caret goes to the question itself, so the answer is one press away.
     row.querySelector<HTMLElement>("[data-decision]")?.focus({ preventScroll: true });
   };
+  useImperativeHandle(ref, () => ({ next: nextDecision }));
 
   return (
-    <section ref={sectionRef} aria-labelledby={titleId} className="flex flex-col">
-      <header className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-1">
-        {/* The name is spelled, not computed: the title and its count are two elements a gap
-            apart, which the name algorithm fuses into `Scanned cards3`. */}
-        <h2
-          aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
-          className="flex items-baseline gap-2 font-heading text-lg leading-none"
+    <section
+      ref={sectionRef}
+      aria-labelledby={header ? titleId : undefined}
+      aria-label={header ? undefined : title}
+      className="flex flex-col"
+    >
+      {header && (
+        // Sticky over the rows scrolling under it, on the page's ground so they do not show
+        // through, at the table header's rung.
+        <header
+          className={cn(
+            // `-mr-3`: the `⋯` runs into the column's right padding, as the design draws it — its
+            // glyph is centred in 44px, so it still stands clear of the edge, and the title keeps
+            // the 12px a two-figure count and a two-figure walk take on a 22rem column.
+            "sticky top-0 -mr-3 flex h-11 items-center gap-2 bg-bg",
+            LAYER.header,
+          )}
         >
-          <span id={titleId}>{title}</span>
-          <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
-            {copies}
-          </span>
-        </h2>
-        {waiting > 0 && (
-          <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>
-        )}
-        <div className="ml-auto flex items-center gap-2">
+          {/* The name is spelled, not computed: the title and its count are two elements a gap
+              apart, which the name algorithm fuses into `Scanned cards3`. */}
+          <h2
+            aria-label={`${title}, ${plural(copies, "copy", "copies")}`}
+            className="flex min-w-0 items-baseline gap-1.5 font-heading text-base leading-none landscape:max-[760px]:text-sm"
+          >
+            <span id={titleId} className="truncate">
+              {title}
+            </span>
+            <span aria-hidden="true" className="font-mono text-sm tabular-nums text-dim">
+              {copies}
+            </span>
+          </h2>
           {/* Hidden rather than greyed when nothing is waiting: a control that can do nothing is
-              one a reader keeps trying. Gold, because it walks the questions gold already marks. */}
-          {deciding && (
+              one a reader keeps trying. Gold words with no box, because it walks the questions
+              gold already marks and a box would not fit the line; named both halves — how many,
+              and what the press does. */}
+          {waiting > 0 && (
             <button
               type="button"
+              aria-label={`${needYouLabel(waiting)}: ${NEXT_DECISION_LABEL}`}
               onClick={nextDecision}
               className={cn(
-                "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-3",
-                "text-xs text-accent",
+                "ml-auto inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md px-2",
+                "text-[13px] font-medium whitespace-nowrap text-accent",
                 PRESS,
                 FOCUS,
               )}
             >
-              <ArrowDown aria-hidden className="size-3.5" />
-              {NEXT_DECISION_LABEL}
+              {/* Dropped on a phone on its side under 760px, where the column is under 22rem:
+                  the words say it, and the title keeps the room. */}
+              <ArrowDown aria-hidden className="size-3.5 landscape:max-[760px]:hidden" />
+              {needYouLabel(waiting)}
             </button>
           )}
-          {onAddCard && (
+          {onActions && (
             <button
               type="button"
+              aria-label="Tray actions"
               aria-haspopup="dialog"
-              onClick={(e) => onAddCard(e.currentTarget)}
+              onClick={(e) => onActions(e.currentTarget)}
               className={cn(
-                "inline-flex h-11 shrink-0 items-center gap-1.5 rounded-md border border-border px-3",
-                "text-xs text-text",
+                "inline-flex size-11 shrink-0 items-center justify-center rounded-md text-dim",
+                waiting === 0 && "ml-auto",
                 PRESS,
                 FOCUS,
               )}
             >
-              <Plus aria-hidden className="size-3.5" />
-              {ADD_CARD_LABEL}
+              <Ellipsis aria-hidden className="size-5" />
             </button>
           )}
-        </div>
-      </header>
+        </header>
+      )}
 
       {rows.length === 0 ? (
         <p className="py-6 text-center text-sm text-dim">Cards you scan appear here.</p>
       ) : (
-        <ul ref={listRef} className="flex flex-col">
+        <ul
+          ref={listRef}
+          // Headless, the line above the first row is the host's — the tray sheet's bar or walk
+          // ends on one — and a row's own would draw it twice.
+          className={cn("flex flex-col", !header && "[&>li:first-child]:border-t-0")}
+        >
           {rows.map((row) => (
             <TrayRow
               key={row.key}
@@ -530,7 +604,9 @@ function TrayRow({
           )}
         </div>
       ) : (
-        <div key="settled" className="relative flex items-center gap-2">
+        // `gap-1.5`: a 22rem column on a phone on its side holds the printing, the finish and
+        // the stepper on one line with a printing's set and number whole.
+        <div key="settled" className="relative flex items-center gap-1.5">
           {row.oracleId !== null ? (
             <button
               type="button"

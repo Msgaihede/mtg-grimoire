@@ -15,7 +15,7 @@ import type {
   TradeLineInput,
   TradeSide,
 } from "@grimoire/ui/lib/ipc";
-import { installLayout, renderPhone } from "../testing";
+import { holdOnItsSide, installLayout, renderPhone } from "../testing";
 import { TradeScan } from "./TradeScan";
 
 /**
@@ -150,8 +150,9 @@ describe("the phone's trade scanner", () => {
   it("adds the scanned cards to the side it is on, each line marked as a scan, and closes", async () => {
     const { seen, onClose } = mount({ tray: RESOLVED, side: "theirs" });
     const panel = await sheet();
+    // The peek's line, the tray's own head upright: the list itself is the tray sheet's.
     expect(
-      await within(panel).findByRole("heading", { name: "Scanned for their side, 5 copies" }, SETTLE),
+      await within(panel).findByRole("button", { name: "Scanned for their side, 5 copies" }, SETTLE),
     ).toBeInTheDocument();
     await userEvent.click(within(panel).getByRole("button", { name: "Add 5 to their side" }));
 
@@ -209,6 +210,8 @@ describe("the phone's trade scanner", () => {
   });
 
   it("leaves a card that still needs a finish, says what went in a line, and stays open over it", async () => {
+    // The list beside the picture, where the page mounts it: on its side.
+    holdOnItsSide();
     const { seen, onClose } = mount({ tray: [NEEDS_A_FINISH_ROW, ...RESOLVED] });
     const panel = await sheet();
     await userEvent.click(
@@ -236,6 +239,8 @@ describe("the phone's trade scanner", () => {
   });
 
   it("keeps every card in the tray when the trade refuses them, and says the refusal", async () => {
+    // The list beside the picture, where the page mounts it: on its side.
+    holdOnItsSide();
     const { seen, onClose } = mount({
       tray: RESOLVED,
       add: () => {
@@ -248,10 +253,13 @@ describe("the phone's trade scanner", () => {
       await within(panel).findByRole("button", { name: "Add 5 to their side" }, SETTLE),
     );
     await waitFor(() => expect(seen.added).toHaveLength(1), SETTLE);
-    const footer = within(panel).getByRole("button", { name: "Add 5 to their side" }).closest("footer");
+    // Over the tray's bar, the one the press is on (the scanner page's `data-scanner-bar`).
+    const bar = within(panel)
+      .getByRole("button", { name: "Add 5 to their side" })
+      .closest("[data-scanner-bar]");
     await waitFor(
       () =>
-        expect(within(footer as HTMLElement).getByRole("alert")).toHaveTextContent(
+        expect(within(bar as HTMLElement).getByRole("alert")).toHaveTextContent(
           "This trade is finished. Reopen it to change it.",
         ),
       SETTLE,
@@ -264,6 +272,8 @@ describe("the phone's trade scanner", () => {
   });
 
   it("draws no folder and no deck: the tray's other act is Clear all…, worded for the side", async () => {
+    // The list's `⋯` beside the picture, where the page mounts it: on its side.
+    holdOnItsSide();
     mount({ tray: RESOLVED, side: "mine" });
     const panel = await sheet();
     await within(panel).findByRole("button", { name: "Add 5 to your side" }, SETTLE);
@@ -289,9 +299,10 @@ describe("the phone's trade scanner", () => {
     await settled();
     mount({ tray: [] });
     const empty = await sheet();
+    // The peek's line: upright the scanner page mounts no list beside it.
     expect(
-      await within(empty).findByText("Cards you scan appear here.", {}, SETTLE),
-    ).toBeInTheDocument();
+      await within(empty).findAllByText("Cards you scan appear here.", {}, SETTLE),
+    ).toHaveLength(1);
     expect(within(empty).queryByRole("note")).toBeNull();
   });
 
@@ -302,7 +313,7 @@ describe("the phone's trade scanner", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Close the scanner" }));
     expect(onClose).toHaveBeenCalledTimes(1);
     // Gone at once, not at the end of the panel's fade.
-    expect(screen.queryByRole("region", { name: "Scanned for their side" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Stop scanning" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Scanned for their side/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^(Start|Stop)$/ })).toBeNull();
   });
 });

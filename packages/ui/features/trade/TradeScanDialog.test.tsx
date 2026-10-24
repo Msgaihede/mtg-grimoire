@@ -332,8 +332,10 @@ describe("TradeScanDialog", () => {
     expect(await within(tray).findByRole("note")).toHaveTextContent(
       "5 cards were already in the scanner's tray. They are in this list and go onto their side with the rest.",
     );
-    // The reader's way out is on the page with it.
-    expect(within(tray).getByRole("button", { name: "Clear all…" })).not.toHaveAttribute(
+    // The reader's way out is on the page with it, in the tray's `⋯`.
+    await userEvent.click(within(tray).getByRole("button", { name: "Tray actions" }));
+    const actions = within(tray).getByRole("dialog", { name: "Tray actions" });
+    expect(within(actions).getByRole("button", { name: "Clear all…" })).not.toHaveAttribute(
       "aria-disabled",
     );
   });
@@ -348,7 +350,8 @@ describe("TradeScanDialog", () => {
   it("words the clear question for the side, not the collection", async () => {
     mount({ tray: RESOLVED, side: "mine" });
     const tray = await screen.findByRole("region", { name: "Scanned for your side" });
-    await userEvent.click(await within(tray).findByRole("button", { name: "Clear all…" }));
+    await userEvent.click(await within(tray).findByRole("button", { name: "Tray actions" }));
+    await userEvent.click(within(tray).getByRole("button", { name: "Clear all…" }));
     expect(await screen.findByRole("dialog", { name: "Clear the tray" })).toHaveTextContent(
       "5 scanned copies will leave the tray without being added to your side.",
     );
@@ -361,13 +364,19 @@ describe("TradeScanDialog", () => {
     const panel = await dialog();
     await within(panel).findByText("Urza's Saga");
     expect(within(panel).queryByRole("button", { name: /^Folder:/ })).toBeNull();
-    expect(within(panel).queryByRole("button", { name: "Create deck…" })).toBeNull();
     expect(within(panel).queryByRole("button", { name: /to collection/ })).toBeNull();
+    // The tray's `⋯` offers no deck — asked with the menu open, where the row would be.
+    await userEvent.click(within(panel).getByRole("button", { name: "Tray actions" }));
+    const actions = within(panel).getByRole("dialog", { name: "Tray actions" });
+    expect(within(actions).getByRole("button", { name: "Clear all…" })).toBeInTheDocument();
+    expect(within(actions).queryByRole("button", { name: "Create deck…" })).toBeNull();
+    await userEvent.keyboard("{Escape}");
     expect(within(panel).queryByRole("switch", { name: "Developer" })).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "History" })).toBeNull();
     expect(within(panel).queryByRole("region", { name: "Match" })).toBeNull();
     // The scanner's own controls are all still there.
     expect(within(panel).getByRole("button", { name: "Filters: Any set" })).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: "Start scanning" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Start" })).toBeInTheDocument();
     // And the stored switch was not written by merely opening here.
     expect(ipc.setScannerPrefs).not.toHaveBeenCalled();
   });
@@ -412,7 +421,7 @@ describe("TradeScanDialog", () => {
     const { onClose } = mount({ tray: [] });
     const panel = await dialog();
     // The scanner opens stopped (issue #1317); started, the camera is open and its first frame out.
-    await userEvent.click(await within(panel).findByRole("button", { name: "Start scanning" }));
+    await userEvent.click(await within(panel).findByRole("button", { name: "Start" }));
     await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
     expect(stop).not.toHaveBeenCalled();
     await userEvent.keyboard("{Escape}");

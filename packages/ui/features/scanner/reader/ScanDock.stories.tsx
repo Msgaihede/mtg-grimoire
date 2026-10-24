@@ -1,10 +1,9 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import type { Condition } from "@/lib/conditions";
 import type { ScanFilters, ScannerFinishPref } from "@/lib/ipc";
 import type { CameraDevice } from "../useCamera";
-import { ScanBar, type ScanBarProps } from "./ScanBar";
+import { ScanDock, type ScanDockProps } from "./ScanDock";
 
 /**
  * A desk with three cameras, listed in a driver's order rather than the alphabet's, so the panel
@@ -17,25 +16,23 @@ const CAMERAS: readonly CameraDevice[] = [
 ];
 
 /**
- * The row with its values held, so a press in the workbench moves what it would move in the app.
+ * The dock with its values held, so a press in the workbench moves what it would move in the app.
  *
- * `ScanBar` is controlled end to end — the page owns the prefs — so a story drawn straight from
- * `args` would be a row whose Start never turns to Stop and whose Clear clears nothing. The args seed the
- * state and still receive every call, so the Actions panel reads exactly what the page would be
- * handed. A camera press is held as though the new stream opened at once — in the app the tick
- * waits for it.
+ * `ScanDock` is controlled end to end — the page owns the prefs — so a story drawn straight from
+ * `args` would be a dock whose Start never turns to Stop and whose Clear clears nothing. The args
+ * seed the state and still receive every call, so the Actions panel reads exactly what the page
+ * would be handed. A camera press is held as though the new stream opened at once — in the app the
+ * tick waits for it.
  */
-function Held(args: ScanBarProps) {
+function Held(args: ScanDockProps) {
   const [scanning, setScanning] = useState(args.scanning);
   const [pointAndShoot, setPointAndShoot] = useState(args.pointAndShoot);
   const [shooting, setShooting] = useState(args.shooting);
   const [filters, setFilters] = useState<ScanFilters>(args.filters);
   const [finish, setFinish] = useState<ScannerFinishPref>(args.finish);
-  const [condition, setCondition] = useState<Condition>(args.condition);
   const [cameraId, setCameraId] = useState<string | null>(args.cameraId);
-  const [developer, setDeveloper] = useState(args.developer);
   return (
-    <ScanBar
+    <ScanDock
       {...args}
       scanning={scanning}
       onScanning={(on) => {
@@ -63,28 +60,18 @@ function Held(args: ScanBarProps) {
         setFinish(f);
         args.onFinish(f);
       }}
-      condition={condition}
-      onCondition={(c) => {
-        setCondition(c);
-        args.onCondition(c);
-      }}
       cameraId={cameraId}
       onCamera={(id) => {
         setCameraId(id);
         args.onCamera(id);
-      }}
-      developer={developer}
-      onDeveloper={(on) => {
-        setDeveloper(on);
-        args.onDeveloper(on);
       }}
     />
   );
 }
 
 const meta = {
-  title: "Scanner/Reader/Scan bar",
-  component: ScanBar,
+  title: "Scanner/Reader/Scan dock",
+  component: ScanDock,
   tags: ["autodocs"],
   render: (args) => <Held {...args} />,
   args: {
@@ -100,78 +87,64 @@ const meta = {
     filtersDisabled: null,
     finish: "detect",
     onFinish: fn(),
-    condition: "NONE",
-    onCondition: fn(),
     cameras: CAMERAS,
     cameraId: "cam-brio",
     onCamera: fn(),
-    developer: false,
-    onDeveloper: fn(),
   },
   decorators: [
-    // The Scanner view's content column at the app's narrow rung — `ScannerPage.stories.tsx`'s
-    // 1032px — with room under the row for a popover to open into, since both are anchored to
-    // their trigger and a canvas cut at the row's own height would clip them.
+    // The camera column at its 40rem, with the dock at its foot and room above it: every panel
+    // opens upwards over the picture, and a canvas cut at the dock's own height would clip them.
     (Story) => (
-      <div className="min-h-[26rem] w-[1032px] max-w-full p-2">
+      <div className="flex min-h-[30rem] w-[40rem] max-w-full flex-col justify-end p-2">
         <Story />
       </div>
     ),
   ],
-} satisfies Meta<typeof ScanBar>;
+} satisfies Meta<typeof ScanDock>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * What a reader opens the view on: no narrowing, the finish detected per card, no condition,
- * panels off.
+ * What a reader opens the view on, running: *Stop* gold, *Continuous* pressed, no narrowing, the
+ * finish detected per card and the camera that opened named.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Continuous" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(canvas.getByRole("button", { name: "Filters: Any set" })).toBeInTheDocument();
-    await expect(
-      canvas.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }),
-    ).toBeInTheDocument();
-  },
-};
-
-/**
- * The Scanner view's bar, with the way into the scan history (issue #989) at its far end beside
- * the Developer switch. A host that passes no `onHistory` — the scanner over a trade — draws none.
- */
-export const WithHistory: Story = {
-  args: { onHistory: fn() },
-  play: async ({ canvasElement, args }) => {
-    const canvas = within(canvasElement);
-    const history = canvas.getByRole("button", { name: "History" });
-    await userEvent.click(history);
-    await expect(args.onHistory).toHaveBeenCalledWith(history);
+    await expect(canvas.getByRole("button", { name: "Finish: Detect" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Camera: Logitech BRIO" })).toBeInTheDocument();
   },
 };
 
 export const StartAndStop: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole("button", { name: "Stop scanning" }));
-    await userEvent.click(canvas.getByRole("button", { name: "Start scanning" }));
-    await expect(canvas.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "Stop" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Start" }));
+    await expect(canvas.getByRole("button", { name: "Stop" })).toBeInTheDocument();
   },
 };
 
 /**
- * **Point and shoot**: the switch beside the press trades Start and Stop for *Scan card* — one
- * click, one card. While a shot is looking the same press reads *Cancel scan*; in the app the shot
- * ends by itself once a card lands.
+ * **Point and shoot**: *How scanning runs* trades Start and Stop for *Scan card* — one click, one
+ * card. While a shot is looking the same press reads *Cancel scan*, drawn as a gold outline; in the
+ * app the shot ends by itself once a card lands.
  */
 export const PointAndShoot: Story = {
   args: { scanning: false },
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole("switch", { name: "Point & shoot" }));
+    const runs = canvas.getByRole("group", { name: "How scanning runs" });
+    await userEvent.click(within(runs).getByRole("button", { name: "Point & shoot" }));
     await expect(args.onPointAndShoot).toHaveBeenCalledWith(true);
-    await expect(canvas.queryByRole("button", { name: "Start scanning" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Start" })).toBeNull();
     await userEvent.click(canvas.getByRole("button", { name: "Scan card" }));
     await expect(args.onShoot).toHaveBeenLastCalledWith(true);
     await userEvent.click(canvas.getByRole("button", { name: "Cancel scan" }));
@@ -181,24 +154,44 @@ export const PointAndShoot: Story = {
 };
 
 /**
- * The Defaults popover open on **Detect**: the one finish choice that is not a finish, first in the
- * list, and a caption that says what becomes of a card it cannot read — the reader meets `Unknown`
- * in the tray already knowing why.
+ * The Finish menu open on **Detect**: the one choice that is not a finish, first in the list
+ * under "New cards land as", and a caption that says what becomes of a card it cannot read — the
+ * reader meets `Unknown` in the tray already knowing why.
  */
-export const DefaultsDetect: Story = {
+export const FinishDetect: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(
-      canvas.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }),
-    );
+    await userEvent.click(canvas.getByRole("button", { name: "Finish: Detect" }));
     await expect(
       await canvas.findByText(
         "A card printed in one finish takes it. One printed in several waits in the tray for you to pick.",
       ),
     ).toBeInTheDocument();
-    await userEvent.click(canvas.getByRole("button", { name: "Finish" }));
-    const options = canvas.getAllByRole("option").map((o) => o.textContent);
-    await expect(options.slice(0, 4)).toEqual(["Detect", "Nonfoil", "Foil", "Etched"]);
+    const group = canvas.getByRole("radiogroup", { name: "New cards land as" });
+    await expect(
+      within(group)
+        .getAllByRole("radio")
+        .map((r) => r.getAttribute("aria-label")),
+    ).toEqual(["Detect", "Nonfoil", "Foil", "Etched"]);
+  },
+};
+
+/**
+ * The camera column at its 23rem floor (the 1024px light face): still two rows — *Filters* at the
+ * far end of the second, beside *Finish* and *Camera*, the three keeping their values and glyphs
+ * and giving their captions to their names — never a third row, nor a scrollbar under the picture.
+ */
+export const Narrow: Story = {
+  decorators: [
+    (Story) => (
+      <div className="w-[23rem]">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "Filters: Any set" })).toBeInTheDocument();
   },
 };
 
@@ -211,7 +204,6 @@ export const WithFilters: Story = {
   args: {
     filters: { sets: ["hob", "ltr"], released_from: "2023-06-23", released_to: "2024-12-31" },
     finish: "foil",
-    condition: "NM",
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

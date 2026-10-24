@@ -5,13 +5,14 @@
  * **Rust measures, TypeScript decides.** The session hands over the decided printing's finishes
  * from the corpus and the collector line's separator as it measured it (a ★ on a foil, a • on a
  * non-foil); which of those wins, and when neither is enough, is this module's and nobody
- * else's. `tray.ts` never sees the Defaults popover's `detect`: the page asks {@link trayFinish}
- * as each card lands and hands the reducer a finish, or `unknown`.
+ * else's. `tray.ts` never sees the finish choice's `detect` (the desktop dock's Finish menu, the
+ * phone's options sheet): the page asks {@link trayFinish} as each card lands and hands the
+ * reducer a finish, or `unknown`.
  */
 import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
 import type { ScannerDecision, ScannerFinishPref, ScannerTrayFinish } from "../types";
 
-/** The Defaults popover's policy word — `scanner::DETECT_FINISH`, and not a finish. */
+/** The Finish choice's policy word — `scanner::DETECT_FINISH`, and not a finish. */
 export const DETECT: ScannerFinishPref = "detect";
 
 /** A tray row the scanner could not settle the finish of. */
@@ -77,7 +78,7 @@ function asFinish(word: string): Finish | null {
  * The finish a new tray row takes for this decision.
  *
  * **A fixed preference is the answer wherever the printing exists in it** — Nonfoil, Foil or Etched
- * in the Defaults popover is a reader saying "this pile is all one finish", and nothing the camera
+ * as the Finish choice is a reader saying "this pile is all one finish", and nothing the camera
  * reads overrules them. **The corpus does**: a preference the decided printing was never made in —
  * Nonfoil on a foil-only promo — is no answer for that card, so it is decided as `detect` would
  * decide it (issue #982).

@@ -288,7 +288,8 @@ lens since: the reader changed a filter with one physical card on the mat throug
 break (§4) or a reset forgets the previous decision, so the same card presented again is `false`
 and adds; a filter change keeps it, which is the whole point of it. Asked once per decision.
 
-**Under the Defaults' *Detect* policy (`scanner::DETECT_FINISH`) a row's finish is
+**Under the *Detect* finish choice — the desktop dock's Finish menu, the phone's options sheet
+(`scanner::DETECT_FINISH`) — a row's finish is
 `reader/trayFinish.ts`'s, in three rungs, first answer wins**: a printing that exists in one finish
 takes it; otherwise the decision's `finish_mark` (§10, *The finish mark*), when it read `foil` or
 `nonfoil` and the printing exists in that finish — a corpus that lists no finishes constrains
@@ -610,7 +611,7 @@ that does not exist trains a reader to disbelieve the table.
 
 | File | Owns |
 | --- | --- |
-| `ScannerPage.tsx` | The view: the Match strip over the camera, the tray beside it, and the developer column |
+| `ScannerPage.tsx` | The view: the HUD over the camera and the dock under it, the tray beside it, and the developer column |
 | `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (with a `catch` of its own — a throwing `drawImage`/`toBlob` outside one froze the loop with `error` still `null`), the reset on start and the decision gap (§5), the run a Send takes, and the full-resolution copy sent on the frame after a verdict's `wants_full` — the run's kept copy, copied, where the page keeps them, and one `grabKept` draw for that frame alone where it does not |
 | `useCamera.ts` | The stream: `getUserMedia`, or the reader's camera by `deviceId: { exact }` falling back to the default when it has gone; one `stopAll` every exit goes through; the wait for `loadedmetadata`. It opens nothing while its `deviceId` is `undefined`, which holds the camera shut until the stored choice has loaded. `useCameraDevices` lists the `videoinput`s, re-read on `devicechange` and once a camera is live |
 | `useScannerHold.ts`, `useScannerElsewhere.ts`, `useParked.ts`, `useWindowParked.ts` | The lease's heartbeat and gate; pause at once and let go after `PARK_GRACE_MS` |
@@ -619,7 +620,7 @@ that does not exist trains a reader to disbelieve the table.
 | `usePointAndShoot.ts` | A press's read (§10, *The tray*) |
 | `Overlay.tsx` | The canvas over the video — the card the frame votes for |
 | `ScannerPanels.tsx`, `panels/` | The Developer column (§10) |
-| `verdictText.ts`, `reader/readerText.ts` | The pure sentence functions the panels, the strip, the tests and the stories share |
+| `verdictText.ts`, `reader/readerText.ts` | The pure sentence functions the panels, the HUD, the tests and the stories share |
 | `fixtures.ts` | The canned verdicts the tests and the stories are both driven from |
 
 **The overlay scales its strokes with the canvas**: the canvas is sized to the video's own pixels
@@ -630,7 +631,7 @@ does**: a `<canvas>` is a replaced element whose intrinsic size is its `width`/`
 **25% too tall** in the panel column (2026-09-08). Both moved to `object-cover` on 2026-10-01; a
 card at the very edge can now be read outside what the box shows.
 
-**The row is the height, and the video box takes what the Match strip leaves.** The split answers
+**The row is the height, and the video box takes what the dock leaves.** The split answers
 the view's own width through `@container/scan`, never the window's. Below 88rem the tray is a
 `w-[25rem]` column with the developer panels under it in one scroller; from 88rem the camera gets two
 thirds of what the panels leave, the tray the third, and the panels a 340px column of their own.
@@ -842,7 +843,8 @@ camera say *Printing updated*, never *Added*.
 **The commit is one `scanner_tray_commit(items, folderId, remaining)`**: the collection import in
 `add` mode **and** the tray that is left, in one transaction (`collection::commit_import_with`), so an
 app closed before a debounced tray write cannot leave committed rows in the stored tray. One condition
-for the whole commit, from the Defaults popover; finish is per row. **All or nothing**: a refusal keeps
+for the whole commit, the reader's *Condition* (the tray's footer on the desktop, the options sheet
+on the phone); finish is per row. **All or nothing**: a refusal keeps
 every row and puts the backend's sentence above them; a success removes **only the rows it
 committed**. `remaining` and the lines are worked out when the commit actually goes out and again when
 it answers, because the camera keeps running — a second press over rows a first press took finds them
@@ -865,27 +867,64 @@ own finish (`reader/trayPrice.ts`; for `unknown` the chain `nonfoil → foil →
 a pick asks nothing and draws nothing; a unit price, never the row's total; an em dash when the
 marketplace does not quote that printing in that finish.
 
-**The Match strip above the camera is the reader's whole view of the session** (`readerText.ts`'s
-`matchStrip`, drawn by `reader/MatchStrip.tsx`): a pill, the card's name and printing, one sentence and
-a bar, and none of the developer vocabulary. **The row is the live region** (`role="status"`, *Scanner
-status*), with the name `aria-hidden` while the tone is *progress*, because the leader can change frame
-to frame. **The Matched name is the tray's row**, and that rung asks for `verdict.decision`, so a
+**The Scan HUD over the camera is the reader's whole view of the session** (`readerText.ts`'s
+`matchStrip` says it; `reader/ScanHud.tsx` draws it, redesigned 2026-10-24): a 4px bar along the
+picture's top edge, *Reset evidence* and *Send scan…* in its top-right corner (a labelled press on
+the desktop and an icon on the phone, over a live picture with a session only — never over the
+camera's refusal or a host's sentence; the phone draws them while continuous scanning runs, the
+desktop's Reset stopped and between shots too) and a chip under the bar for the one error it has to
+say, and none of the developer vocabulary. **The bar is drawn only over a live picture**, and its
+fill is a `scaleX` from the left edge, not a width. **The chip drops to a row of its own under the
+presses** where the room beside them is under 12rem (both labelled presses leave it 47px in the
+desktop column's 22rem) — the corner row is reversed and wraps, so the presses keep the corner. The pill, name and sentence the old Match
+strip drew above the camera are gone from view: the Added popup names the card that landed. **The
+accessible arrangement came across unchanged: a visually hidden live region** (`role="status"`,
+*Scanner status*, always mounted), with the name left out of what it announces while the tone is
+*progress*, because the leader can change frame to frame. **The chip is `role="alert"`** and says
+only the reader's failures (the loop's, a refused reset, a *Send scan…* pressed too soon), never the
+detector's own per-frame sentence, which is the Developer panels'; a refused reset is said stopped
+too. **The Matched name is the tray's row**, and that rung asks for `verdict.decision`, so a
 committed frame with no decision cannot call the last card matched over the one in the camera. An
 ambiguous decision names the card only when every choice shares one name.
 
-**Start scanning / Stop scanning** (issue #774): the view opens stopped (issue #1317) — the camera
+**The rest of what is drawn on the picture** (`reader/PictureNotes.tsx`): the stopped veil (a title
+and the note under it) and, under point and shoot, the *Point at a card, then press Scan card* pill
+on the desktop and the hold prompt on the phone. **The desktop's pill is the HUD's `notice`**, laid
+in the HUD's own top flow under the corner row, so it never runs under *Reset evidence* (centred on
+its own, the 274px pill met the 143px press in any column under 584px) and wraps rather than
+overflows at the column's 23rem floor. **`ScanDock`** is under the picture:
+*Filters*, *Finish* and *Camera* as anchored popovers, the *Point & shoot* switch, and the gold
+*Start*/*Stop* press (*Scan card* under point and shoot). History and the Developer switch are the
+page header's.
+
+**Nothing on the desktop page wraps** (the owner's call, 2026-10-24: a second line comes out of the
+picture or the cards). The canvas was drawn without the app's 208px rail, so at 1280–1440 the tray
+was too narrow for its header and footer on one line; now **the camera column gives way first, in
+steps** (`ScannerPage`'s `clamp` over `100cqw`): 40rem until the tray is down to 36rem, then to 31rem
+holding the tray at 36rem, then the tray to 24rem, then the camera to its 23rem floor — measured
+2026-10-24 at 776, 1032, 1192, 1672 and 2312px containers (the 1024 light face to a 2560 window):
+camera 372/496/596/640/840, tray 384/516/576/1012/1452. Each piece then folds by its own width:
+the dock (`@container/dock`) moves *Filters* to its second row under 34.125rem and gives its
+triggers' captions to their names under 31rem; the tray (`@container/tray`) turns *Add card…* to
+its glyph under 39.5rem, then closes *Worth* and its gaps, then keeps only the walk's count; its
+footer drops the finishes still to name from Add's words under 40rem, the captions under 32.75rem,
+and says *Add N* under 25.875rem. Every press keeps its whole name. A card's **chin is one line**
+on the `compact` stepper (24px buttons, WCAG 2.5.8's floor) over a 10.5rem tile floor — three
+tiles beside Windows' 15px scrollbar in a 36rem tray.
+
+**Start / Stop** (issue #774): the view opens stopped (issue #1317) — the camera
 comes on and nothing is read until the press. Stop pauses the pump while keeping the preview and the
 tray; a frame still being encoded is discarded, and an in-flight answer cannot add to the tray.
 **Point and shoot reads for the length of a press** (2026-10-22): Neural decides on one clear frame,
 so a camera carried from one card to the next filed whatever passed under it. With
 `ScannerPrefs.pointAndShoot` on, **a click of _Scan card_ on the desktop face** runs the pump until one
-card lands, and **a hold of _Scan_ on the phone face** reads while a finger is on it (Space holds it
-from a keyboard; an Enter or an assistive tech's activation is one card's shot). What a press does is
+card lands, and **a hold of the picture on the phone face** (`HoldSurface`, named *Hold to scan*) reads while a
+finger is on it (Space holds it from a keyboard; an Enter or an assistive tech's activation is one card's shot). What a press does is
 `usePointAndShoot.ts`, shared by both pages: every shot is news (it starts with `clearReads`, so a
 second copy laid where the first lay is filed); a shot never outlives what pauses the pump; and *Send
 scan…* is offered during a shot only.
 
-**_Reset evidence_ sits at the bar's end, for every reader** (issue #740), outside the live region.
+**_Reset evidence_ sits in the HUD's corner, for every reader** (issue #740), outside the live region.
 **Reset is a boundary for outstanding frames too** (issue #781): the pump clears its verdict,
 invalidates any unfinished grab or answer, drains the outstanding frame and only then calls
 `scanner_reset`, because the host's blocking tasks can take the session mutex in either order. The
@@ -895,7 +934,20 @@ tray stays intact, and the decision gap is cleared.
 `LANDED_HOLD_MS`) — its picture, a tick, the name, the set, number and finish, *Added again ×N* on a
 bump, *Printing updated* on a re-read, the first two candidates fanned for a pick — and closes its
 line with a price (issue #1321, `reader/useLandedPrice.ts`: the card's figure, or the span across a
-pick's candidates). It is `aria-hidden`, since the strip says the same.
+pick's candidates). It is `aria-hidden`, since the HUD's live region says the same.
+
+**A landing at a price tier throws confetti over the picture** (`reader/TierConfetti.tsx`, pieces and
+motion in `confetti.ts`, the tier from `useLandedTier`): the sound's own ladder (`priceTier` against
+the reader's floors), so more pieces and more colours the higher the tier, and for the jackpot rain
+from the top, a gold flash and a glow round the edge. It draws on a `<canvas>` (no elements, no
+runtime style) and is placed before the popup so the pieces leave from behind the card; a landing
+that asks the reader something, or sits below the first floor, throws nothing.
+
+**The desktop tray** (`TrayPanel`): a header with the count, *Worth* (the tray's total at the
+reader's marketplace, drawn only once a copy has a price), the layout toggle and the `⋯` *Tray
+actions* menu (*Create deck…*, *Archive*, *Clear all…*); tiles of continuous cards, each with a
+one-line chin for the finish and the quantity, a waiting tile spanning its printings; and a footer
+with *File into*, *Condition* and the gold *Add* — each on one line at every width (above).
 
 ### Scan history
 
@@ -917,7 +969,7 @@ carrying the printing's name, set and number beside the soft `card_id`. The hist
 keeps nothing, and with a trade `destination` neither Archive nor History is drawn. **History** on the
 bar opens `ScanHistoryDialog` (`features/scanner/history/`), under one `["scanHistory"]` root; its
 delete question is a `Dialog` at `layer="stacked"`. Neither table syncs and the mirror writes neither.
-On the phone face both are rows of the tray footer's `⋯` sheet, and the history is
+On the phone face both are rows of the tray actions sheet (`TrayActionsSheet`, opened by the tray header's `⋯`), and the history is
 `scanner/HistorySheet.tsx`, an `ActionSheet` whose question is a page, not a second dialog.
 
 ### Put back in tray (issue #1374, 2026-10-24)
@@ -925,7 +977,7 @@ On the phone face both are rows of the tray footer's `⋯` sheet, and the histor
 **A past scan can go back into the tray**, so a pile filed by mistake and taken out of the
 collection again (or archived when it was meant to be filed) is not lost: the batch's lines land
 in the tray and the reader files or archives them again with the tray's own presses — into the
-folder, and at the condition, the Defaults say now. The press is _Put back in tray_: a button
+folder, and at the condition, the tray's *File into* and *Condition* say now. The press is _Put back in tray_: a button
 beside _Delete…_ in `ScanHistoryDialog`'s batch header, and a sheet row above _Rename_ in the
 phone's `HistorySheet`. Each face hands the batch to its page (`onPutBack`), which closes the
 history, hands the caret back to the press that opened it, and toasts _Put N cards from “Scan 4”
@@ -1316,19 +1368,27 @@ The arrangement, because each of the desktop's is built for a pointer and a wide
 
 | Desktop | Phone | Why |
 | --- | --- | --- |
-| `ScanBar`: anchored popovers, a *Point & shoot* switch and a Developer switch | `ScanControls`: *Stop scanning* (or, under point and shoot, *Scan* held) and one press opening `OptionsSheet` — Scanning, Filters, Finish, Condition, Camera as pages of one bottom sheet | An anchored panel has nowhere to be anchored at 360px. The Camera row is drawn only with more than one camera. No Developer switch |
-| The video is a `flex-1` box in a column that is the view's height | `CameraBox`: the column's width at the **stream's own aspect ratio**, 4:3 until a stream reports one, capped at 38dvh (60dvh from 720px) | The page is a scrolling column, where a zero-basis grow collapses to nothing (§9, *The view*) |
-| `MatchStrip` on one row | `MatchLine`: the pill, name and printing on one line, the instruction on the next | At 330px one row has no room for a name |
+| `ScanDock`: anchored popovers, a *Point & shoot* switch and *Start*/*Stop*; the Developer switch is the page header's | `ScanControls` (*How scanning runs*, *Filters*, *Scanner options*) over the picture, *Start*/*Stop* under it (under point and shoot, the picture itself is held: `HoldSurface`), and the options press opening `OptionsSheet` — Filters, Finish, Condition, Camera as pages of one bottom sheet, opened straight on Filters by the *Filters* press (`startPage`); how scanning runs is `ScanControls`' segmented switch on the page, not a sheet page | An anchored panel has nowhere to be anchored at 360px. The Camera row is drawn only with more than one camera. No Developer switch |
+| The video is a `flex-1` box in a column that is the view's height | `CameraBox`: a `flex-1 min-h-0` box **filling what the controls, Start/Stop and the tray's peek leave**, cropped (`object-cover`) rather than letterboxed | The page no longer scrolls, so a zero-basis grow is safe; it collapsed to nothing in the old scrolling column (§9, *The view*), which is why the box was once shaped by the stream's aspect |
+| `ScanHud` over the picture, with the Added popup | The same parts, the popup on one line when the phone is on its side. No match line | The page fits the screen and nothing scrolls, so the picture takes what is left |
 | `TrayPanel`: a grid or a list; 28px controls; tooltips | `Tray`: rows; the printing and the finish are 44px presses opening sheets; a 44px stepper; a waiting row is its candidates as whole cards three to a line | A 44px finish and stepper do not fit under a 156px tile, so `trayLayout` is left unread |
 | *More printings…* opens `AllPrintingsDialog` | A sheet of the card's printings (`cardPrintingsKey`), each a press calling `setPrinting` | The choice carries the printing's `finishes`, so a printing sold one way settles an `Unknown` row |
-| The tray's footer and header presses; *History* on the bar | `TrayFooter`, outside the page's scroller: the destination press, a `⋯` sheet (*Archive*, *Create deck…*, *Clear all…*, *Scan history*), and Add | **A refusal is words on the page**, never a tooltip |
+| The tray's footer and header presses; *History* in the page header | `TrayBar` above the controls (the folder, the Condition and Add), a peek (`TrayPeek`) that opens the tray as a sheet, and a `⋯` actions sheet (*Archive*, *Create deck…*, *Clear all…*, *Scan history*) in the tray header | **A refusal is words on the page**, never a tooltip |
 | `useWindowParked`: Tauri's minimize | `usePageParked`: the document's own visibility, released from its first render on a page that mounts hidden | A phone reports a hidden page, which WebView2 does not |
 | A host with no session draws its sentence where the picture would be | The same, in `CameraBox`; the status line is not drawn and the Filters row is refused with the sentence | No camera is asked for and no frame sent; the tray still reads, edits and files |
 
-**From 720px wide** the camera's column and the tray's stand side by side, each scrolling by itself:
-a 22rem tray, the camera the rest. It asks the viewport, not a container, because the page's sheets are
-mounted inside it. **Not from 600px**, the rail's breakpoint: measured there, the tray was a 288px
-column beside a camera 200×113.
+**On its side** (the `landscape:` variant, at any width) the camera's column and the tray's stand side by
+side, and only the tray's column scrolls (the list under its own header, one 44px line: the count,
+*N need you* and the `⋯`, whose sheet holds *Add card…* on its side). **No row on the page wraps**,
+a second line being taken from the picture. The tray is 22rem and gives way first, down to 18.5rem
+(a card's printing, finish and stepper at their narrowest), so the camera's column keeps the 20.5rem
+*Continuous | Point & shoot* needs whole beside the two 44px glyphs, its words a step smaller on its
+side (*Point & shoot* 81px at 13px): both whole from a 740 × 360 phone beside the 80px rail up;
+narrower, the words are cut short on their one line (measured 2026-10-24 at 568–932px wide). The
+list's column is mounted only on its side — upright the list is the tray sheet's. This replaced a 720px-wide rule
+(2026-10-24): the phone's shape decides, not its width. It asks the viewport, not a container, because
+the page's sheets are mounted inside it. Measured at 600px, the rail's breakpoint, the old rule's tray
+was a 288px column beside a camera 200×113.
 
 ### The fake's session is a script
 

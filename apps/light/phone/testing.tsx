@@ -32,6 +32,35 @@ export function installLayout(): void {
 }
 
 /**
+ * **Hold the phone on its side** for the rest of the test: `matchMedia` answers `true` to the
+ * `landscape:` variant's own query, `(orientation: landscape)`, and `false` to every other, as the
+ * suite's own stub does. Lifted when the test finishes (`onTestFinished`), so call it from inside
+ * one.
+ *
+ * What it changes is what script asks of that query — the Scanner page's `useLandscape`, which
+ * mounts the tray's list column only on its side (upright the list is the tray sheet's) and draws
+ * the Added popup on one line. jsdom applies no stylesheet, so the `landscape:` classes change
+ * nothing a test can see either way.
+ */
+export function holdOnItsSide(): void {
+  // Built whole: a spread of a real `MediaQueryList` would drop its prototype's methods.
+  const query = vi.spyOn(window, "matchMedia").mockImplementation(
+    (media: string) =>
+      ({
+        matches: media === "(orientation: landscape)",
+        media,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
+  );
+  onTestFinished(() => query.mockRestore());
+}
+
+/**
  * Render a piece of the phone face over the Storybook fake.
  *
  * The file calling this must mock Tauri's three API modules with the fake's, **in the file

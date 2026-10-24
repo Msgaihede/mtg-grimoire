@@ -1,21 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import {
-  Archive,
-  ChevronRight,
-  Ellipsis,
-  Folder,
-  FolderPlus,
-  History,
-  Layers,
-  LoaderCircle,
-  Trash2,
-} from "lucide-react";
+import { ChevronRight, Folder, FolderPlus, LoaderCircle } from "lucide-react";
 import { SCAN_HISTORY_TITLE } from "@grimoire/ui/features/scanner/history/historyWords";
 import {
   addLabel,
   addRefusal,
-  deckRefusal,
-  EMPTY_REASON,
   needsFinishCount,
   readyRows,
   totalCopies,
@@ -27,6 +15,7 @@ import {
   useTrayNewFolder,
   type TrayNewFolder,
 } from "@grimoire/ui/features/scanner/useTrayNewFolder";
+import { CONDITION_LABEL, type Condition } from "@grimoire/ui/lib/conditions";
 import { FOCUS } from "@grimoire/ui/lib/focus";
 import { buildFolderTree, flattenFolders } from "@grimoire/ui/lib/folderTree";
 import type { CollectionFolder, ScannerTrayRow } from "@grimoire/ui/lib/ipc";
@@ -41,7 +30,8 @@ export const ROOT_LABEL = "Collection";
 /** What the destination's press reads when it files to a folder whose name is not known. */
 export const UNREAD_FOLDER = "Folder name unavailable";
 
-/** What a row of the `⋯` sheet says while an Archive is out — the Add's `Adding to …` for it. */
+/** What a row of the tray's actions says while an Archive is out — the Add's `Adding to …` for
+ *  it (`TrayActionsSheet`). */
 export const ARCHIVING = `Archiving to ${SCAN_HISTORY_TITLE}…`;
 
 /**
@@ -63,55 +53,51 @@ export function destinationName(
 }
 
 /**
- * What the tray is *for*, at the foot of the page where it stays put: where the cards go, and the
- * press that files them.
+ * What the tray is *for*, in one row at the head of the page (the scanner redesign, 2026-10-24):
+ * where the cards go, and the press that files them. It was the page's footer until then.
  *
- * **Outside the page's scroller**, the desktop tray's own rule one face over — a reader with forty
- * cards scanned still has the destination and Add under their thumb.
+ * **One component in two places**: the page draws it at its top, and the tray sheet draws the
+ * page's own copy under its header (`TraySheet`'s `bar`), so a reader looking at the whole tray
+ * still has the destination and Add under their thumb.
  *
- * - **The destination** is a press naming it (`Folder: Collection`) that opens the reader's own
- *   folders as a sheet — `CopyActions`' cabinet: the root, then the drawers the reader made, nested.
- *   A deck's group and `Recently removed` are not places the tray could ever land, so they are not
- *   in the list. Picking writes nothing but the choice (`prefs.folderId`); the commit is Add's.
- *   *New folder…* under the list (issue #1357) is a page of the same sheet — a name and Create —
- *   that makes the folder at the top level and picks it (`useTrayNewFolder`).
- * - **Add** says both halves of what it will do — `Add 8 to collection · 2 need a finish` — and
- *   while it cannot go it stays drawn, greyed, **with the reason in words under it**. The desktop
- *   says that reason in a tooltip, which a finger never opens.
- * - **`⋯`** opens the tray's other acts — *Archive*, *Create deck…*, *Clear all…* and *Scan
- *   history* — as sheet rows, each saying why it is refused where it is (`SheetRow`'s second line),
- *   again in place of a tooltip.
- * - **Archive** (issue #989) puts away the rows Add would take, into the scan history and not
- *   the collection — the desktop tray's Archive, refused on *Clear all…*'s terms (an empty tray,
- *   or either press in flight). A row waiting on a printing is said by the press, in the plan's
- *   sentence in the alert above, as it would be for an Add. **Either press in flight holds the
- *   other**: they put the same rows away.
- * - **Scan history** opens the history's sheet — a request; the page owns it.
+ * - **The destination** is a press naming the folder, with **the condition under it** — the two
+ *   things Add reads, said where Add is. It opens the reader's own folders as a sheet —
+ *   `CopyActions`' cabinet: the root, then the drawers the reader made, nested. A deck's group
+ *   and `Recently removed` are not places the tray could ever land, so they are not in the list.
+ *   Picking writes nothing but the choice (`prefs.folderId`); the commit is Add's. *New folder…*
+ *   under the list (issue #1357) is a page of the same sheet — a name and Create — that makes the
+ *   folder at the top level and picks it (`useTrayNewFolder`). The condition is set in the
+ *   options sheet; here it is only said.
+ * - **Add** draws `Add 8` and is *named* both halves of what it will do — `Add 8 to collection ·
+ *   2 need a finish` — the whole sentence a screen reader hears. While it cannot go it stays
+ *   drawn, greyed, and **the reason is its accessible description**, in words. There is no line
+ *   of it under the press any more (the owner's design): the tray's gold *N need you* is what
+ *   tells a sighted reader there is a question to answer first, and a finger has no hover, so the
+ *   desktop's tooltip is no answer here either.
+ * - **The tray's other acts** — *Archive*, *Create deck…*, *Clear all…*, *Scan history* — are not
+ *   here: they are `TrayActionsSheet`, opened by the tray's own `⋯`.
  *
- * A refused commit puts the backend's own sentence above the two rows, as an alert; a commit that
- * went through is the page's receipt line.
+ * A refused commit puts the backend's own sentence above the row, as an alert; a commit that went
+ * through is the page's receipt line.
  *
  * **With a `destination`** — the tray filing onto a side of a trade rather than into the
  * collection (`useTrayDestination.ts`) — the folder's press gives its place to the destination's
- * own summary, Add and the two pending lines take its words, and `⋯` holds *Clear all…* alone: a
- * folder and a deck are both questions about the collection, and the archive and its history are
- * the Scanner tab's own record. Absent, the footer is the Scanner page's, as it was.
+ * own summary, and Add takes its words: a folder and a condition are questions about the
+ * collection.
  */
-export function TrayFooter({
+export function TrayBar({
   rows,
   folders,
   foldersPending,
   folderId,
+  condition,
   onFolder,
   onCommit,
   committing,
   commitError,
-  onCreateDeck,
-  onClearAll,
-  onArchive,
   archiving = false,
-  onHistory,
   destination,
+  onSheet,
 }: {
   rows: readonly ScannerTrayRow[];
   /** Every collection folder, every kind — the reader's own are picked out here. */
@@ -120,35 +106,38 @@ export function TrayFooter({
   foldersPending: boolean;
   /** Where the tray files — the effective folder, `null` for the root. */
   folderId: number | null;
+  /** What Add files every card as (`prefs.condition`), said under the folder. */
+  condition: Condition;
   onFolder: (id: number | null) => void;
   onCommit: () => void;
   committing: boolean;
   commitError: string | null;
-  /** *Create deck…* — a request; the page owns the dialog. Handed the `⋯`, for the caret. */
-  onCreateDeck: (opener: HTMLElement) => void;
-  /** *Clear all…* — a request, never the clear itself: the page asks first. */
-  onClearAll: (opener: HTMLElement) => void;
-  /** *Archive* — the tray into the scan history. Absent draws no row, and so does a
-   *  {@link destination}. */
-  onArchive?: () => void;
-  /** The archive is in flight — {@link committing}'s counterpart; it greys the same presses. */
+  /** An Archive is in flight (`TrayActionsSheet`) — {@link committing}'s counterpart: it puts the
+   *  same rows away, so it holds Add too. */
   archiving?: boolean;
-  /** *Scan history* — a request; the page owns the sheet. Handed the `⋯`, for the caret. Absent
-   *  draws no row, and so does a {@link destination}. */
-  onHistory?: (opener: HTMLElement) => void;
-  /** Where the tray files when that is not the collection. `folders`, `folderId`, `onFolder` and
-   *  `onCreateDeck` are then unread. */
+  /** Where the tray files when that is not the collection. `folders`, `folderId`, `condition`
+   *  and `onFolder` are then unread. */
   destination?: TrayDestinationFace;
+  /**
+   * Told `true` as the folder sheet opens and `false` as it shuts, whichever way — a host that
+   * stops something while a sheet of its own is over the page (the Scanner page ends a point and
+   * shoot hold) counts this one too.
+   */
+  onSheet?: (open: boolean) => void;
 }) {
-  const [sheet, setSheet] = useState<"folder" | "more" | null>(null);
+  const [folderOpen, setFolderOpen] = useState(false);
+  // Every opening and shutting of the folder sheet, told to the host as it is made.
+  const showFolders = (open: boolean) => {
+    setFolderOpen(open);
+    onSheet?.(open);
+  };
   // Which page of the folder sheet is up: the folders, or a new one's name.
   const [folderPage, setFolderPage] = useState<"list" | "new">("list");
   const newFolder = useTrayNewFolder(onFolder);
   const reasonId = useId();
+  const conditionId = useId();
   // The destination's press, which its sheet hands the caret back to.
   const folderRef = useRef<HTMLButtonElement>(null);
-  // The `⋯`, which both of its rows hand to the page: the caret comes back to it.
-  const moreRef = useRef<HTMLButtonElement>(null);
   const mine = useMemo(() => folders.filter((folder) => folder.kind === "user"), [folders]);
   const nodes = useMemo(() => flattenFolders(buildFolderTree(mine, [])), [mine]);
 
@@ -161,13 +150,16 @@ export function TrayFooter({
   // While the list is still loading a named folder has no name yet, and one the list never
   // answered for has none at all: the collection's word would be a wrong answer either way.
   const name = destinationName(mine, folderId) ?? (foldersPending ? "…" : UNREAD_FOLDER);
-  // What a row of the `⋯` sheet says while the press is out.
-  const adding = archiving ? ARCHIVING : `Adding to ${destination?.name ?? "your collection"}…`;
-  const archiveShown = onArchive !== undefined && destination === undefined;
-  const historyShown = onHistory !== undefined && destination === undefined;
+
+  const closeFolders = () => {
+    showFolders(false);
+    folderRef.current?.focus();
+  };
 
   return (
-    <footer className="flex shrink-0 flex-col gap-2 border-t border-border bg-surface px-4 py-2">
+    // `relative` for the `sr-only` reason below: it is positioned, and wherever this row is drawn
+    // inside a scroller it must be held by a box of its own.
+    <div className="relative flex shrink-0 flex-col gap-2 border-b border-border bg-surface px-4 py-2">
       {commitError !== null && (
         <p
           role="alert"
@@ -182,103 +174,96 @@ export function TrayFooter({
           <button
             ref={folderRef}
             type="button"
-            // Named outright: the icon, the name and the chevron are three elements a gap apart.
+            // Named outright: the icon, the two lines and the chevron are four elements a gap
+            // apart. The condition is the press's description rather than its name — it is
+            // what Add reads, not where the press goes.
             aria-label={`Folder: ${name}`}
+            aria-describedby={conditionId}
             aria-haspopup="dialog"
             onClick={() => {
               setFolderPage("list");
-              setSheet("folder");
+              showFolders(true);
             }}
             className={cn(
-              "inline-flex h-11 min-w-0 flex-1 items-center gap-2 rounded-md border border-border px-3 text-sm",
+              "inline-flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md border border-border px-3 py-1",
               PRESS,
               FOCUS,
             )}
           >
             <Folder aria-hidden className="size-4 shrink-0 text-dim" />
-            <span className="min-w-0 flex-1 truncate text-left">{name}</span>
+            <span className="flex min-w-0 flex-1 flex-col text-left">
+              <span className="truncate text-sm leading-snug">{name}</span>
+              <span className="truncate text-xs leading-snug text-dim">
+                {CONDITION_LABEL[condition]}
+              </span>
+            </span>
             <ChevronRight aria-hidden className="size-4 shrink-0 text-dim" />
           </button>
         ) : (
-          // The folder's place, so `⋯` stays at the right end whether or not there is a summary.
+          // The folder's place, so Add stays at the right end whether or not there is a summary.
           <div className="flex min-h-11 min-w-0 flex-1 items-center">
             {destination.summary?.(rows)}
           </div>
         )}
         <button
           type="button"
-          ref={moreRef}
-          aria-label="Tray actions"
-          aria-haspopup="dialog"
-          onClick={() => setSheet("more")}
+          // The whole sentence, which the two words drawn begin: `Add 8` is what fits beside
+          // the folder at 360px, and `Add 8 to collection · 2 need a finish` is what it does.
+          // One name in both states — `aria-busy` is what says the write is under way.
+          aria-label={addLabel(ready, needsFinish, destination?.name)}
+          aria-disabled={refused || undefined}
+          aria-busy={committing || undefined}
+          // The reason is the press's description, so it is read with the press. Nothing while a
+          // write is in flight: the press is held, and the spinner (an Add) or the actions'
+          // rows (an Archive) say which write.
+          aria-describedby={refusal !== null && !busy ? reasonId : undefined}
+          onClick={() => {
+            if (!refused) onCommit();
+          }}
           className={cn(
-            "flex size-11 shrink-0 items-center justify-center rounded-md border border-border text-dim",
+            "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md bg-accent px-4",
+            "text-sm font-medium whitespace-nowrap text-accent-fg tabular-nums",
             PRESS,
+            "aria-disabled:cursor-default aria-disabled:opacity-45 aria-disabled:active:scale-100",
             FOCUS,
           )}
         >
-          <Ellipsis aria-hidden className="size-5" />
+          {committing && (
+            <LoaderCircle
+              aria-hidden
+              className="size-4 shrink-0 animate-spin motion-reduce:animate-none"
+            />
+          )}
+          Add {ready}
         </button>
       </div>
-
-      <button
-        type="button"
-        aria-disabled={refused || undefined}
-        aria-busy={committing || undefined}
-        // The reason is the press's description, so it is read with the press and not only by a
-        // reader who goes looking under it.
-        aria-describedby={refusal !== null && !busy ? reasonId : undefined}
-        onClick={() => {
-          if (!refused) onCommit();
-        }}
-        className={cn(
-          "inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-accent px-4 py-2",
-          "text-sm font-medium text-accent",
-          PRESS,
-          "aria-disabled:cursor-default aria-disabled:opacity-45 aria-disabled:active:scale-100",
-          FOCUS,
-        )}
-      >
-        {committing && (
-          <LoaderCircle
-            aria-hidden
-            className="size-4 shrink-0 animate-spin motion-reduce:animate-none"
-          />
-        )}
-        {/* One label in both states: the name a reader pressed is the name the pending control
-            keeps, and `aria-busy` is what says the write is under way. */}
-        {addLabel(ready, needsFinish, destination?.name)}
-      </button>
-      {/* The reason while there is one; nothing while a write is in flight — the press is held,
-          and the spinner (an Add) or the `⋯` sheet's rows (an Archive) say which write. */}
+      {/* Words a screen reader is given and the page does not draw. The condition is drawn in the
+          press, but the press's name replaces its contents, so its description says it whole; the
+          design has no refusal line, and a description has to be an element to point at. */}
+      {destination === undefined && (
+        <span id={conditionId} className="sr-only">
+          {`Condition: ${CONDITION_LABEL[condition]}`}
+        </span>
+      )}
       {refusal !== null && !busy && (
-        <p id={reasonId} className="text-center text-xs leading-snug text-dim">
+        <span id={reasonId} className="sr-only">
           {refusal}
-        </p>
+        </span>
       )}
 
       <ActionSheet
-        open={sheet === "folder"}
+        open={folderOpen}
         title="Folder for scanned cards"
         closeLabel="Close folders"
         // A press on the scrim leaves the caret where the reader put it; Escape, the ✕ and a
         // choice hand it back to the press that opened the sheet, which is always on the page.
-        onClose={() => setSheet(null)}
-        onDismiss={() => {
-          setSheet(null);
-          folderRef.current?.focus();
-        }}
+        onClose={() => showFolders(false)}
+        onDismiss={closeFolders}
       >
         {folderPage === "new" ? (
           <>
             <SheetBack label={NEW_FOLDER_LABEL} onBack={() => setFolderPage("list")} />
-            <NewFolderPage
-              newFolder={newFolder}
-              onCreated={() => {
-                setSheet(null);
-                folderRef.current?.focus();
-              }}
-            />
+            <NewFolderPage newFolder={newFolder} onCreated={closeFolders} />
           </>
         ) : (
           <>
@@ -288,8 +273,7 @@ export function TrayFooter({
                 current={folderId === null}
                 onPick={() => {
                   onFolder(null);
-                  setSheet(null);
-                  folderRef.current?.focus();
+                  closeFolders();
                 }}
               />
               {nodes.map(({ folder, depth }) => (
@@ -301,8 +285,7 @@ export function TrayFooter({
                   note={folder.locked ? "set aside" : undefined}
                   onPick={() => {
                     onFolder(folder.id);
-                    setSheet(null);
-                    folderRef.current?.focus();
+                    closeFolders();
                   }}
                 />
               ))}
@@ -323,71 +306,7 @@ export function TrayFooter({
           </>
         )}
       </ActionSheet>
-
-      <ActionSheet
-        open={sheet === "more"}
-        title="Scanned cards"
-        closeLabel="Close tray actions"
-        onClose={() => setSheet(null)}
-        onDismiss={() => {
-          setSheet(null);
-          moreRef.current?.focus();
-        }}
-      >
-        <ul>
-          {archiveShown && (
-            <SheetRow
-              label="Archive"
-              Icon={Archive}
-              // Clear all's terms: what a commit is about to file, or nothing at all, cannot be
-              // archived. Said in words on the row, where the desktop has a tooltip.
-              reason={busy ? adding : rows.length === 0 ? EMPTY_REASON : null}
-              onPress={() => {
-                setSheet(null);
-                moreRef.current?.focus();
-                onArchive();
-              }}
-            />
-          )}
-          {destination === undefined && (
-            <SheetRow
-              label="Create deck…"
-              Icon={Layers}
-              reason={busy ? adding : deckRefusal(rows)}
-              onPress={() => {
-                setSheet(null);
-                if (moreRef.current !== null) onCreateDeck(moreRef.current);
-              }}
-            />
-          )}
-          <SheetRow
-            label="Clear all…"
-            Icon={Trash2}
-            destructive
-            // Nothing to clear, or a commit about to file these very rows — a card waiting on a
-            // printing or a finish can still be thrown away.
-            reason={busy ? adding : rows.length === 0 ? EMPTY_REASON : null}
-            onPress={() => {
-              setSheet(null);
-              if (moreRef.current !== null) onClearAll(moreRef.current);
-            }}
-          />
-          {/* Last, and never refused: the history is there whatever the tray holds — an empty
-              tray is the usual moment to look back at what was put away. */}
-          {historyShown && (
-            <SheetRow
-              label={SCAN_HISTORY_TITLE}
-              Icon={History}
-              opens
-              onPress={() => {
-                setSheet(null);
-                if (moreRef.current !== null) onHistory(moreRef.current);
-              }}
-            />
-          )}
-        </ul>
-      </ActionSheet>
-    </footer>
+    </div>
   );
 }
 

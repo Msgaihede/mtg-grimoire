@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { createRef, useState, type RefObject } from "react";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -11,9 +11,11 @@ import { NEEDS_A_FINISH_ROW, TRAY_ROWS } from "@grimoire/ui/features/scanner/fix
 import { NEXT_DECISION_LABEL } from "@grimoire/ui/features/scanner/reader/tray";
 import type { ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import { renderPhone } from "../testing";
-import { Tray } from "./Tray";
+import { Tray, type TrayWalk } from "./Tray";
 
 const SETTLE = { timeout: 3000 };
+/** The header's walk, whatever count it is drawn with: `2 need you: Next card needing a decision`. */
+const WALK = new RegExp(`^\\d+ needs? you: ${NEXT_DECISION_LABEL}$`);
 const [BOLT, SAGA, TOMB, LOTUS] = TRAY_ROWS;
 
 /**
@@ -27,8 +29,21 @@ function mount(
     flashKey = null,
     drawnLate = false,
     scroller = false,
+    header,
+    walk,
+    inDialog = false,
+    onActions,
   }: {
     flashKey?: string | null;
+    /** `Tray`'s own: the header's `⋯`, drawn only when handed. */
+    onActions?: (opener: HTMLElement) => void;
+    /** `Tray`'s own prop: `false` is the tray sheet's headless list. */
+    header?: boolean;
+    /** Where the tray hands its walk, as the tray sheet holds it. */
+    walk?: RefObject<TrayWalk | null>;
+    /** Mount the tray inside a dialog that holds it, with a press of its own beside it — the tray
+     *  sheet's arrangement. */
+    inDialog?: boolean;
     /** Mount the tray in a box that scrolls, as the page's own column is. */
     scroller?: boolean;
     /**
@@ -52,8 +67,11 @@ function mount(
     };
     return (
       <Tray
+        ref={walk}
+        header={header}
         rows={rows}
         flashKey={flashKey}
+        onActions={onActions}
         onRows={(change) => {
           held.latest = change(held.latest);
           const drawn = held.latest;
@@ -64,7 +82,12 @@ function mount(
     );
   }
   renderPhone(
-    scroller ? (
+    inDialog ? (
+      <div role="dialog" aria-label="The tray's sheet">
+        <button type="button">Elsewhere</button>
+        <Held />
+      </div>
+    ) : scroller ? (
       <div data-testid="scroller" style={{ overflowY: "auto" }}>
         <Held />
       </div>
@@ -87,7 +110,7 @@ describe("the phone's review tray", () => {
     expect(screen.getByText("Cards you scan appear here.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Scanned cards, 0 copies" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Scanned cards" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: NEXT_DECISION_LABEL })).toBeNull();
+    expect(screen.queryByRole("button", { name: WALK })).toBeNull();
   });
 
   it("draws the rows in the order it is handed them, newest first, and counts copies", () => {
@@ -98,7 +121,43 @@ describe("the phone's review tray", () => {
     expect(names).toEqual(["Lightning Bolt", "Urza's Saga", "Ancient Tomb", "Black Lotus"]);
     // Six copies in four rows: the count is copies.
     expect(screen.getByRole("heading", { name: "Scanned cards, 6 copies" })).toBeInTheDocument();
-    expect(screen.getByText("1 card to pick")).toBeInTheDocument();
+    // The one waiting on a printing, as the header's gold walk: how many, and what it does.
+    expect(
+      screen.getByRole("button", { name: `1 needs you: ${NEXT_DECISION_LABEL}` }),
+    ).toHaveTextContent("1 needs you");
+  });
+
+  /** The redesign's header: the desktop tray's words, a finish to name counted with a printing. */
+  it("counts a finish to name with a printing to pick, as the peek and the desktop do", () => {
+    mount([NEEDS_A_FINISH_ROW, SAGA, BOLT, TOMB]);
+    expect(
+      screen.getByRole("button", { name: `2 need you: ${NEXT_DECISION_LABEL}` }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **One 44px line**, as the design draws it in a 22rem column: the title, the walk and the `⋯`,
+   * and no *Add card…* — a fourth press would wrap the line, taking the room from the list (the
+   * page puts it in the tray's actions instead).
+   */
+  it("draws the ⋯ only where the host hands it in, on one line with no Add card…", async () => {
+    const onActions = vi.fn();
+    mount([NEEDS_A_FINISH_ROW, SAGA], { onActions });
+    const actions = screen.getByRole("button", { name: "Tray actions" });
+    expect(actions).toHaveAttribute("aria-haspopup", "dialog");
+    await userEvent.click(actions);
+    expect(onActions).toHaveBeenCalledWith(actions);
+    expect(screen.queryByRole("button", { name: "Add card…" })).toBeNull();
+    const header = screen.getByRole("heading").closest("header") as HTMLElement;
+    // Sticks over the rows scrolling under it, at the table header's rung — and never wraps.
+    expect(header).toHaveClass("sticky", "top-0", "z-20", "h-11");
+    expect(header).not.toHaveClass("flex-wrap");
+    expect(within(header).getByRole("button", { name: /^1 needs you/ })).toBeInTheDocument();
+  });
+
+  it("draws no ⋯ for a host that handed in none", () => {
+    mount([SAGA]);
+    expect(screen.queryByRole("button", { name: "Tray actions" })).toBeNull();
   });
 
   it("steps a quantity on the tray as it is, not as it was drawn", async () => {
@@ -285,7 +344,7 @@ describe("the phone's review tray", () => {
     expect(
       await screen.findByRole("button", { name: "Finish of Lightning Bolt — STA 105: Nonfoil" }),
     ).toBeInTheDocument();
-    expect(screen.queryByText("1 card to pick")).toBeNull();
+    expect(screen.queryByRole("button", { name: WALK })).toBeNull();
   });
 
   it("opens every printing of a card as a sheet, and hands the one pressed back to the tray", async () => {
@@ -361,7 +420,7 @@ describe("the phone's review tray", () => {
 
   it("walks the cards that still need a decision, landing on the question", async () => {
     mount([NEEDS_A_FINISH_ROW, SAGA, BOLT, TOMB]);
-    const next = screen.getByRole("button", { name: NEXT_DECISION_LABEL });
+    const next = screen.getByRole("button", { name: WALK });
     await userEvent.click(next);
     expect(
       screen.getByRole("button", { name: "Finish of Lightning Bolt — STA 105: Unknown" }),
@@ -373,6 +432,53 @@ describe("the phone's review tray", () => {
     expect(
       screen.getByRole("button", { name: "Finish of Lightning Bolt — STA 105: Unknown" }),
     ).toHaveFocus();
+  });
+
+  it("draws no heading of its own where its host draws one, and is named by its title", () => {
+    mount([...TRAY_ROWS], { header: false });
+    expect(screen.queryByRole("heading")).toBeNull();
+    expect(screen.queryByRole("button", { name: WALK })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Tray actions" })).toBeNull();
+    const list = screen.getByRole("region", { name: "Scanned cards" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(4);
+  });
+
+  it("walks the questions for a host that draws the walk's press itself", () => {
+    const walk = createRef<TrayWalk>();
+    mount([NEEDS_A_FINISH_ROW, SAGA, BOLT, TOMB], { header: false, walk });
+    act(() => walk.current?.next());
+    expect(
+      screen.getByRole("button", { name: "Finish of Lightning Bolt — STA 105: Unknown" }),
+    ).toHaveFocus();
+    act(() => walk.current?.next());
+    expect(screen.getByRole("button", { name: "Lightning Bolt — 2X2 117" })).toHaveFocus();
+  });
+
+  /**
+   * Drawn inside the tray sheet, every control of the tray is inside *a* dialog — so "the caret
+   * is still inside the sheet that is leaving" has to mean a dialog that does not hold the tray,
+   * or a card landing in the next moment takes the caret from wherever the reader put it.
+   */
+  it("inside a dialog that holds it, leaves a caret the reader has since moved where they put it", async () => {
+    const held = mount([SAGA, TOMB], { header: false, inDialog: true });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Finish of Ancient Tomb — TMP 315: Foil" }),
+    );
+    await userEvent.click(
+      within(await screen.findByRole("dialog", { name: "Ancient Tomb" })).getByRole("button", {
+        name: "Etched",
+      }),
+    );
+    // The hand-back still lands: the sheet that left is not the one holding the tray.
+    expect(
+      screen.getByRole("button", { name: "Finish of Ancient Tomb — TMP 315: Etched" }),
+    ).toHaveFocus();
+
+    // The reader moves on at once, and a card lands while the hand-back is still armed.
+    const elsewhere = screen.getByRole("button", { name: "Elsewhere" });
+    act(() => elsewhere.focus());
+    act(() => held.set([{ ...BOLT, addedAt: SAGA.addedAt + 1 }, ...held.latest]));
+    expect(elsewhere).toHaveFocus();
   });
 
   it("washes the row the page marks, and no other", () => {

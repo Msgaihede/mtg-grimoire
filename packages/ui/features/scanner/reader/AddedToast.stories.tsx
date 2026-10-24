@@ -10,7 +10,8 @@ import { AddedToast, landedFrom, type AddedToastProps } from "./AddedToast";
 /**
  * The overlay inside a camera-sized black box, as the page draws it — so where the card sits and
  * how far the edge flash reaches read as they do over the camera — with a press under it that lands
- * the same card again, because the whole point of the thing is an entrance.
+ * the same card again, because the whole point of the thing is an entrance. A compact card gets the
+ * short picture it is for: a phone on its side.
  *
  * **The card stays up after its hold.** `onDone` reaches the Actions panel and nothing else: the
  * page answers it by putting the card away, and a workbench story that emptied itself after two
@@ -24,8 +25,19 @@ function Held(args: AddedToastProps) {
     args.card === null ? null : { ...args.card, stamp: `${args.card.stamp}#${landings}` };
   return (
     <div className="flex flex-col items-start gap-3">
-      <div className="relative h-[28rem] w-[46rem] max-w-full overflow-hidden rounded-lg bg-black">
-        <AddedToast card={card} onDone={args.onDone} price={args.price} />
+      <div
+        className={cn(
+          "relative max-w-full overflow-hidden rounded-lg bg-black",
+          args.compact === true ? "h-[12.5rem] w-[25rem]" : "h-[28rem] w-[46rem]",
+        )}
+      >
+        <AddedToast
+          card={card}
+          onDone={args.onDone}
+          price={args.price}
+          tier={args.tier}
+          compact={args.compact}
+        />
       </div>
       <button
         type="button"
@@ -111,5 +123,34 @@ export const PickAPrinting: Story = {
     await expect(canvas.getByText("Pick a printing")).toBeInTheDocument();
     await expect(canvas.getByText("3 printings match — pick in the tray")).toBeInTheDocument();
     await expect(canvas.getByText("$0.89 – $4.20")).toBeInTheDocument();
+  },
+};
+
+/**
+ * A card worth the first rung of the sound ladder or more (Settings → Scanner; $1 by default): the
+ * figure bold and gold, on the same line the landing's sound crosses.
+ */
+export const GoldPrice: Story = {
+  name: "Gold price",
+  args: { price: "$27,500.00", tier: "jackpot" },
+  play: async ({ canvasElement }) => {
+    const price = within(canvasElement).getByText("$27,500.00");
+    await expect(price).toHaveClass("text-accent");
+    await expect(price).toHaveClass("font-semibold");
+  },
+};
+
+/**
+ * On a phone on its side the picture is short, so the card is one line: the picture, the tick, the
+ * name, the printing and the price, with no label line over them.
+ */
+export const Compact: Story = {
+  args: { price: "$27,500.00", tier: "jackpot", compact: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.queryByText("Added to scanned cards")).toBeNull();
+    await expect(canvas.getByText("Black Lotus")).toBeInTheDocument();
+    await expect(canvas.getByText("LEA · 232 · Nonfoil")).toBeInTheDocument();
+    await expect(canvas.getByText("$27,500.00")).toBeInTheDocument();
   },
 };

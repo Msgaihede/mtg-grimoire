@@ -71,9 +71,9 @@ type Story = StoryObj<typeof meta>;
  * Evidence accumulating, with a second candidate still in the standings.
  *
  * The leader's votes at five eighths of the bar. This is what most frames look like: the answer
- * is probably right and the scanner has not said so yet. The card's name and the bar are the
- * Match strip's above the camera (`Scanner/Reader/Match strip`); this panel is the numbers under
- * them.
+ * is probably right and the scanner has not said so yet. The bar is drawn over the camera picture
+ * and the card's name announced from there (`Scanner/Reader/Scan HUD`); this panel is the numbers
+ * under them.
  */
 export const Voting: Story = {
   play: async ({ canvasElement }) => {

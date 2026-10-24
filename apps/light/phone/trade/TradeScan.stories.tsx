@@ -37,6 +37,12 @@ const TRADE: Trade = {
  *
  * `open` and `side` are this host's state, as they are the page's: *Scan onto* really switches, a
  * finished Add really closes, and the button underneath opens it again.
+ *
+ * **Held on its side**, as a workbench canvas wider than it is tall holds it anyway: the scanner
+ * page mounts the tray's list column only there (upright the list is the tray sheet's), and the
+ * stories here read and press that list. `matchMedia` answers `true` to the `landscape:` variant's
+ * query for as long as the story is up — the test run's jsdom answers every query `false`.
+ * Narrowed with the viewport tool, the classes still draw the page upright.
  */
 function Host({
   trade,
@@ -58,9 +64,30 @@ function Host({
       configurable: true,
       value: { getUserMedia: () => Promise.reject(new DOMException("x", "NotAllowedError")) },
     });
+    const savedQuery = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    const ask = window.matchMedia.bind(window);
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) =>
+        query === "(orientation: landscape)"
+          ? ({
+              matches: true,
+              media: query,
+              onchange: null,
+              addEventListener: () => {},
+              removeEventListener: () => {},
+              addListener: () => {},
+              removeListener: () => {},
+              dispatchEvent: () => false,
+            } as unknown as MediaQueryList)
+          : ask(query),
+    });
     return () => {
       if (saved === undefined) Reflect.deleteProperty(navigator, "mediaDevices");
       else Object.defineProperty(navigator, "mediaDevices", saved);
+      if (savedQuery === undefined) Reflect.deleteProperty(window, "matchMedia");
+      else Object.defineProperty(window, "matchMedia", savedQuery);
     };
   })[0];
   useEffect(() => restore, [restore]);
@@ -96,9 +123,9 @@ function Host({
  * The phone's trade scanner: the Scanner page as a full-height sheet over a trade.
  *
  * **As wide as the canvas, not boxed at 360**, for `Phone/Scanner`'s reason: the page inside lays
- * itself out by the *viewport's* width — one column below 720px, the camera beside the tray from
- * there — so a 360px box in a wide canvas would draw the wide arrangement squeezed. Narrow the
- * canvas with the workbench's viewport tool to see it as a phone held upright draws it.
+ * itself out by the *viewport's* orientation — one column upright, the camera beside the tray on
+ * its side — so a 360px box in a wide canvas would draw the side-on arrangement squeezed. Narrow
+ * the canvas with the workbench's viewport tool to see it as a phone held upright draws it.
  */
 const meta = {
   title: "Phone/Trade scan",
@@ -221,7 +248,10 @@ export const NothingScanned: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const sheet = await canvas.findByRole("dialog", { name: "Scan cards" });
-    await expect(await within(sheet).findByText("Cards you scan appear here.")).toBeInTheDocument();
+    // The peek's line and, on its side, the list's — the page mounts that list only there.
+    await expect(await within(sheet).findAllByText("Cards you scan appear here.")).not.toHaveLength(
+      0,
+    );
     await expect(within(sheet).queryByRole("note")).toBeNull();
     await expect(within(sheet).getByRole("button", { name: "Add 0 to their side" })).toHaveAttribute(
       "aria-disabled",

@@ -6,6 +6,7 @@ import {
   DEFAULT_SCAN_SOUNDS,
   ladderRefusal,
   landingNeedsInput,
+  priceTier,
   settledRows,
   soundForPrice,
   TIERS_MUST_CLIMB,
@@ -107,5 +108,14 @@ describe("the ladder", () => {
     for (const tier of ["tier1", "tier2", "tier3", "jackpot"] as const) {
       expect(defaults).toContain(`${tier}: ${DEFAULT_SCAN_SOUNDS[tier].toFixed(1)},`);
     }
+  });
+});
+
+describe("priceTier", () => {
+  it("is the highest floor reached, and null below the first or unpriced", () => {
+    expect(priceTier(0.99, DEFAULT_SCAN_SOUNDS)).toBeNull();
+    expect(priceTier(1, DEFAULT_SCAN_SOUNDS)).toBe("tier1");
+    expect(priceTier(1700.99, DEFAULT_SCAN_SOUNDS)).toBe("jackpot");
+    expect(priceTier(null, DEFAULT_SCAN_SOUNDS)).toBeNull();
   });
 });

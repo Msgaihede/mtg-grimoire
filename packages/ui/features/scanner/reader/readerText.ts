@@ -1,6 +1,7 @@
 /**
- * What the reader's half of the Scanner says: the Match strip above the camera — where the
- * scanner has got to with the card in front of it — and what the filters are narrowing it to.
+ * What the reader's half of the Scanner says: the HUD over the camera picture (`ScanHud`, whose
+ * hidden live region says what the old Match strip did) — where the scanner has got to with the
+ * card in front of it — the notes on the picture, and what the filters are narrowing it to.
  *
  * `verdictText.ts` is the developer panels' vocabulary — votes, distances — and **none of those
  * words may reach here**. The reader's view never shows a vote or a distance; it
@@ -12,28 +13,35 @@ import type { ScanFilters, ScannerChoice, ScannerLabel, ScannerVerdict } from "@
 import { barFill } from "../verdictText";
 
 /**
- * What the picture says while recognition is stopped — both Scanner surfaces', so the press it
- * names is the one each of them draws. A view opens stopped (issue #1317), so this is the first
- * thing it says too: "begin", not "resume".
+ * The redesigned page's words, shared by both Scanner surfaces — the spec's "Words" section,
+ * verbatim. The camera's press, its two modes and the picture's two resting states.
  */
-export const SCANNING_STOPPED = "Scanning stopped. Press Start scanning to begin.";
+export const START = "Start";
+export const STOP = "Stop";
+export const SCAN_CARD = "Scan card";
+export const CANCEL_SCAN = "Cancel scan";
+export const CONTINUOUS = "Continuous";
+/** The picture while recognition is stopped: a title and the note under it. */
+export const STOPPED_TITLE = "Scanning stopped";
+export const STOPPED_NOTE = "Press Start to begin. The camera stays on.";
+/** The picture under point and shoot on the phone, where the press is a hold. */
+export const HOLD_TITLE = "Hold the picture to scan";
+export const HOLD_NOTE = "Scanning pauses the moment you let go.";
+/** The chip over the picture while a read is in flight. */
+export const SCANNING_CHIP = "Scanning";
 
 /** Point and shoot's name — the desktop bar's switch and the phone's options row. */
 export const POINT_AND_SHOOT = "Point & shoot";
 
 /**
- * What the picture says between two shots under point and shoot ({@link SCANNING_STOPPED}'s place)
- * — one sentence a face, because the press each names is that face's own: a click of *Scan card*
- * on the desktop's bar, a hold of *Scan* on the phone's.
+ * What the picture says between two shots under point and shoot on the desktop, where the press
+ * is a click of *Scan card* (the phone's picture says {@link HOLD_TITLE} instead).
  */
 export const SHOT_READY_CLICK = "Point at a card, then press Scan card.";
-export const SHOT_READY_HOLD = "Point at a card, then press and hold Scan.";
 
 /** What point and shoot does, said where it is switched: the desktop's tooltip, the phone's note. */
 export const POINT_AND_SHOOT_CLICK_HINT =
   "Read one card per press of Scan card, so moving the camera between cards reads nothing.";
-export const POINT_AND_SHOOT_HOLD_HINT =
-  "Hold Scan to read. The scanner pauses the moment you let go, so moving between cards reads nothing.";
 /** The other way, under its name on the phone's sheet. */
 export const CONTINUOUS_HINT = "Start once, and every card the camera sees is read until you stop.";
 
@@ -91,8 +99,8 @@ export type LastAdded = {
 export type StripTone = "idle" | "progress" | "done" | "attention" | "error";
 
 /**
- * Everything the Match strip draws, as one value — so every state it can be in is a return of
- * {@link matchStrip} and `MatchStrip` decides nothing but how each field looks.
+ * Everything the Scan HUD says about a match, as one value — so every state it can be in is a
+ * return of {@link matchStrip} and `ScanHud` decides nothing but how each field looks.
  */
 export interface StripState {
   /** The pill: a word, or a count of printings, saying where the scanner has got to. */

@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 import { NEEDS_A_FINISH_ROW, TRAY_ROWS } from "@grimoire/ui/features/scanner/fixtures";
 import type { CollectionFolder, ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import { renderPhone } from "../testing";
-import { ARCHIVING, destinationName, TrayFooter, UNREAD_FOLDER } from "./TrayFooter";
+import { destinationName, TrayBar, UNREAD_FOLDER } from "./TrayBar";
 
 const RESOLVED = TRAY_ROWS.filter((row) => row.choices.length === 0);
 
@@ -32,7 +32,7 @@ const REMOVED = folder({ id: 10, name: "Recently removed", kind: "removed" });
 const FOLDERS = [BINDER, RARES, DECK_GROUP, REMOVED];
 
 function mount(
-  over: Partial<Parameters<typeof TrayFooter>[0]> = {},
+  over: Partial<Parameters<typeof TrayBar>[0]> = {},
   options: Parameters<typeof renderPhone>[1] = {},
 ) {
   const props = {
@@ -40,60 +40,90 @@ function mount(
     folders: FOLDERS as readonly CollectionFolder[],
     foldersPending: false,
     folderId: null as number | null,
+    condition: "NM" as const,
     onFolder: vi.fn(),
     onCommit: vi.fn(),
     committing: false,
     commitError: null as string | null,
-    onCreateDeck: vi.fn(),
-    onClearAll: vi.fn(),
-    onArchive: vi.fn(),
-    onHistory: vi.fn(),
     ...over,
   };
-  renderPhone(<TrayFooter {...props} />, options);
+  renderPhone(<TrayBar {...props} />, options);
   return props;
 }
 
-describe("the tray's footer", () => {
-  it("files the tray on Add, and says how many copies it will take", async () => {
+describe("the tray's bar", () => {
+  it("files the tray on Add, drawn short and named the whole sentence", async () => {
     const props = mount();
     const add = screen.getByRole("button", { name: "Add 5 to collection" });
+    // `Add 5` is what fits beside the folder; the name is what the press does.
+    expect(add).toHaveTextContent(/^Add 5$/);
     expect(add).not.toHaveAttribute("aria-disabled");
     await userEvent.click(add);
     expect(props.onCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("says both halves when some cards still need a finish", () => {
+  it("names both halves when some cards still need a finish, and draws the count alone", () => {
     mount({ rows: [NEEDS_A_FINISH_ROW, ...RESOLVED] });
-    expect(
-      screen.getByRole("button", { name: "Add 5 to collection · 1 needs a finish" }),
-    ).toBeInTheDocument();
+    const add = screen.getByRole("button", { name: "Add 5 to collection · 1 needs a finish" });
+    expect(add).toHaveTextContent(/^Add 5$/);
   });
 
-  it("stays drawn and says why, in words on the page, when there is nothing to add", async () => {
+  it("draws no refusal line: the reason is the greyed press's description, and nothing else", async () => {
     const props = mount({ rows: [] });
     const add = screen.getByRole("button", { name: "Add 0 to collection" });
     expect(add).toHaveAttribute("aria-disabled", "true");
     expect(add).not.toBeDisabled();
-    // On the page, not in a tooltip: a finger has no hover. And tied to the press, so it is
-    // read with it rather than only by a reader who goes looking under it.
-    expect(screen.getByText("Nothing scanned yet")).toBeVisible();
+    // Read with the press — never a tooltip, which a finger cannot open…
     expect(add).toHaveAccessibleDescription("Nothing scanned yet");
+    // …and not drawn under it either: the one element holding the words is visually hidden.
+    const words = screen.getAllByText("Nothing scanned yet");
+    expect(words).toHaveLength(1);
+    expect(words[0]).toHaveClass("sr-only");
     await userEvent.click(add);
     expect(props.onCommit).not.toHaveBeenCalled();
   });
 
-  it("says a printing has to be picked, and that a finish has to be", () => {
+  it("says a printing has to be picked, to a screen reader, on the press", () => {
     mount({ rows: [...TRAY_ROWS] });
-    expect(screen.getByText("Pick a printing for every card first")).toBeInTheDocument();
+    // The waiting row's copy counts among the six: it has a finish, only not a printing.
+    expect(screen.getByRole("button", { name: "Add 6 to collection" })).toHaveAccessibleDescription(
+      "Pick a printing for every card first",
+    );
   });
 
   it("says a tray of nothing but unknown finishes needs one", () => {
     mount({ rows: [NEEDS_A_FINISH_ROW] });
-    expect(screen.getByText("Pick a finish for at least one card first")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Add 0 to collection · 1 needs a finish" }),
-    ).toHaveAttribute("aria-disabled", "true");
+    const add = screen.getByRole("button", { name: "Add 0 to collection · 1 needs a finish" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).toHaveAccessibleDescription("Pick a finish for at least one card first");
+  });
+
+  it("says the condition Add files as under the folder, and describes the press with it", () => {
+    mount({ condition: "LP" });
+    const press = screen.getByRole("button", { name: "Folder: Collection" });
+    expect(within(press).getByText("Lightly played")).toBeInTheDocument();
+    expect(press).toHaveAccessibleDescription("Condition: Lightly played");
+  });
+
+  it("says a condition nobody chose in the reader's words", () => {
+    mount({ condition: "NONE" });
+    expect(screen.getByRole("button", { name: "Folder: Collection" })).toHaveAccessibleDescription(
+      "Condition: Not set",
+    );
+  });
+
+  it("holds Add while an archive is out, without a reason — the archive is the press saying so", async () => {
+    const props = mount({ archiving: true });
+    const add = screen.getByRole("button", { name: "Add 5 to collection" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).not.toHaveAttribute("aria-describedby");
+    await userEvent.click(add);
+    expect(props.onCommit).not.toHaveBeenCalled();
+  });
+
+  it("draws none of the tray's other acts: they are the actions sheet's", () => {
+    mount();
+    expect(screen.queryByRole("button", { name: "Tray actions" })).toBeNull();
   });
 
   it("describes a press it can make by nothing", () => {
@@ -169,7 +199,7 @@ describe("the tray's footer", () => {
     expect(screen.getByRole("button", { name: "Folder: Trade binder" })).toHaveFocus();
   });
 
-  it("hands the caret back to the press that opened a sheet when it is dismissed", async () => {
+  it("hands the caret back to the folder's press when its sheet is dismissed", async () => {
     mount();
     const folder = screen.getByRole("button", { name: "Folder: Collection" });
     await userEvent.click(folder);
@@ -177,16 +207,27 @@ describe("the tray's footer", () => {
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(folder).toHaveFocus();
+  });
 
-    const more = screen.getByRole("button", { name: "Tray actions" });
-    await userEvent.click(more);
-    await userEvent.click(
-      within(await screen.findByRole("dialog", { name: "Scanned cards" })).getByRole("button", {
-        name: "Close tray actions",
-      }),
-    );
+  /** The Scanner page ends a point and shoot hold while any sheet of its own is over the page. */
+  it("tells its host each time the folder sheet opens and shuts", async () => {
+    const onSheet = vi.fn();
+    mount({ onSheet });
+    const folder = screen.getByRole("button", { name: "Folder: Collection" });
+    await userEvent.click(folder);
+    expect(onSheet).toHaveBeenLastCalledWith(true);
+    await screen.findByRole("dialog", { name: "Folder for scanned cards" });
+    await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(more).toHaveFocus();
+    expect(onSheet).toHaveBeenLastCalledWith(false);
+
+    // Shut by a choice, too.
+    await userEvent.click(folder);
+    expect(onSheet).toHaveBeenLastCalledWith(true);
+    const sheet = await screen.findByRole("dialog", { name: "Folder for scanned cards" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Trade binder" }));
+    expect(onSheet).toHaveBeenLastCalledWith(false);
+    expect(onSheet).toHaveBeenCalledTimes(4);
   });
 
   it("picks the root as null", async () => {
@@ -265,119 +306,9 @@ describe("the tray's footer", () => {
     expect(within(sheet).queryByRole("form", { name: "New folder" })).toBeNull();
     expect(within(sheet).getByRole("list", { name: "Folders" })).toBeInTheDocument();
   });
-
-  it("asks the page to make a deck and to clear, handing it the press the caret returns to", async () => {
-    const props = mount();
-    const more = screen.getByRole("button", { name: "Tray actions" });
-    await userEvent.click(more);
-    let sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    await userEvent.click(within(sheet).getByRole("button", { name: "Create deck…" }));
-    expect(props.onCreateDeck).toHaveBeenCalledWith(more);
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-
-    await userEvent.click(more);
-    sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    await userEvent.click(within(sheet).getByRole("button", { name: "Clear all…" }));
-    expect(props.onClearAll).toHaveBeenCalledWith(more);
-  });
-
-  it("says why a deck cannot be made yet, in the row's own name", async () => {
-    const props = mount({ rows: [NEEDS_A_FINISH_ROW, ...RESOLVED] });
-    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    // A greyed row's name includes its reason.
-    const deck = within(sheet).getByRole("button", {
-      name: /^Create deck…\s*Choose a finish for every card first$/,
-    });
-    expect(deck).toHaveAttribute("aria-disabled", "true");
-    await userEvent.click(deck);
-    expect(props.onCreateDeck).not.toHaveBeenCalled();
-    // A card waiting on a finish can still be thrown away.
-    expect(within(sheet).getByRole("button", { name: "Clear all…" })).not.toHaveAttribute(
-      "aria-disabled",
-    );
-  });
-
-  it("refuses both of the tray's other acts on an empty tray, each in words", async () => {
-    const props = mount({ rows: [] });
-    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    const clear = within(sheet).getByRole("button", { name: /^Clear all…\s*Nothing scanned yet$/ });
-    await userEvent.click(clear);
-    expect(props.onClearAll).not.toHaveBeenCalled();
-    expect(
-      within(sheet).getByRole("button", { name: /^Create deck…\s*Nothing scanned yet$/ }),
-    ).toHaveAttribute("aria-disabled", "true");
-  });
-
-  /** Archive (issue #989): the desktop tray's press, as a row of the `⋯` sheet. */
-  it("archives from the tray's sheet, closing it and handing the caret back to the ⋯", async () => {
-    const props = mount();
-    const more = screen.getByRole("button", { name: "Tray actions" });
-    await userEvent.click(more);
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    await userEvent.click(within(sheet).getByRole("button", { name: "Archive" }));
-    expect(props.onArchive).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(more).toHaveFocus();
-  });
-
-  it("refuses Archive on an empty tray in words, as it refuses Clear all…", async () => {
-    const props = mount({ rows: [] });
-    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    const archive = within(sheet).getByRole("button", { name: /^Archive\s*Nothing scanned yet$/ });
-    expect(archive).toHaveAttribute("aria-disabled", "true");
-    await userEvent.click(archive);
-    expect(props.onArchive).not.toHaveBeenCalled();
-  });
-
-  it("leaves a card waiting on a printing to the press, which says the plan's sentence", async () => {
-    // Clear all's terms, not Add's: the press goes, and `useTrayCommit` refuses it in words.
-    mount({ rows: [...TRAY_ROWS] });
-    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    expect(within(sheet).getByRole("button", { name: "Archive" })).not.toHaveAttribute(
-      "aria-disabled",
-    );
-  });
-
-  it("holds Add and every other act while an archive is out, saying where the cards are going", async () => {
-    const props = mount({ archiving: true });
-    const add = screen.getByRole("button", { name: "Add 5 to collection" });
-    expect(add).toHaveAttribute("aria-disabled", "true");
-    await userEvent.click(add);
-    expect(props.onCommit).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    for (const label of ["Archive", "Create deck…", "Clear all…"]) {
-      expect(
-        within(sheet).getByRole("button", { name: new RegExp(`^${label}\\s*${ARCHIVING}$`) }),
-      ).toHaveAttribute("aria-disabled", "true");
-    }
-  });
-
-  it("opens the scan history from the tray's sheet, handing the page the ⋯", async () => {
-    const props = mount({ rows: [] });
-    const more = screen.getByRole("button", { name: "Tray actions" });
-    await userEvent.click(more);
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    // Never refused: an empty tray is the usual moment to look back.
-    await userEvent.click(within(sheet).getByRole("button", { name: "Scan history" }));
-    expect(props.onHistory).toHaveBeenCalledWith(more);
-  });
-
-  it("draws neither row where the page hands it neither", async () => {
-    mount({ onArchive: undefined, onHistory: undefined });
-    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    expect(within(sheet).queryByRole("button", { name: /Archive/ })).toBeNull();
-    expect(within(sheet).queryByRole("button", { name: /Scan history/ })).toBeNull();
-  });
 });
 
-describe("the tray's footer, filing somewhere that is not the collection", () => {
+describe("the tray's bar, filing somewhere that is not the collection", () => {
   const destination = { title: "Scanned for their side", name: "their side" };
 
   it("names its press with the destination, and files on it", async () => {
@@ -394,36 +325,14 @@ describe("the tray's footer, filing somewhere that is not the collection", () =>
     expect(add).toHaveAccessibleDescription("Pick a finish for at least one card first");
   });
 
-  it("draws no folder, and the destination's summary in its place", () => {
+  it("draws no folder and no condition, and the destination's summary in their place", () => {
     const summary = vi.fn((rows: readonly ScannerTrayRow[]) => (
       <p>Scanned so far: {rows.length}</p>
     ));
     mount({ destination: { ...destination, summary } });
     expect(screen.queryByRole("button", { name: /^Folder:/ })).toBeNull();
+    expect(screen.queryByText("Near mint")).toBeNull();
     expect(screen.getByText("Scanned so far: 3")).toBeInTheDocument();
     expect(summary).toHaveBeenLastCalledWith(RESOLVED);
-  });
-
-  it("offers Clear all… and no deck", async () => {
-    const props = mount({ destination });
-    const more = screen.getByRole("button", { name: "Tray actions" });
-    await userEvent.click(more);
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    expect(within(sheet).queryByRole("button", { name: /Create deck/ })).toBeNull();
-    // The archive and its history are the Scanner tab's record, whatever the page hands in.
-    expect(within(sheet).queryByRole("button", { name: /Archive/ })).toBeNull();
-    expect(within(sheet).queryByRole("button", { name: /Scan history/ })).toBeNull();
-    await userEvent.click(within(sheet).getByRole("button", { name: "Clear all…" }));
-    expect(props.onClearAll).toHaveBeenCalledWith(more);
-    expect(props.onCreateDeck).not.toHaveBeenCalled();
-  });
-
-  it("says where the cards are going while the write is out", async () => {
-    mount({ destination, committing: true });
-    await userEvent.click(screen.getByRole("button", { name: "Tray actions" }));
-    const sheet = await screen.findByRole("dialog", { name: "Scanned cards" });
-    expect(
-      within(sheet).getByRole("button", { name: /^Clear all…\s*Adding to their side…$/ }),
-    ).toHaveAttribute("aria-disabled", "true");
   });
 });

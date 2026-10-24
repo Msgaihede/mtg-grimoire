@@ -1,10 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Play, Square } from "lucide-react";
 import { useBulkUndoAction } from "@grimoire/ui/components/UndoNotice";
 import { CreateDeckDialog } from "@grimoire/ui/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@grimoire/ui/features/decks/useNewDeckFormat";
 import { AddCardDialog } from "@grimoire/ui/features/scanner/reader/AddCardDialog";
 import { AddedToast } from "@grimoire/ui/features/scanner/reader/AddedToast";
-import { SCANNING_STOPPED, SHOT_READY_HOLD } from "@grimoire/ui/features/scanner/reader/readerText";
+import {
+  HeldChip,
+  HoldPrompt,
+  StoppedVeil,
+} from "@grimoire/ui/features/scanner/reader/PictureNotes";
+import { matchStrip, START, STOP } from "@grimoire/ui/features/scanner/reader/readerText";
+import { ScanHud } from "@grimoire/ui/features/scanner/reader/ScanHud";
+import { TierConfetti } from "@grimoire/ui/features/scanner/reader/TierConfetti";
 import {
   leftOutSentence,
   putBackTitle,
@@ -13,6 +21,7 @@ import { putBack } from "@grimoire/ui/features/scanner/history/putBack";
 import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
 import { withoutCommitted } from "@grimoire/ui/features/scanner/reader/trayCommit";
 import { useLandedPrice } from "@grimoire/ui/features/scanner/reader/useLandedPrice";
+import { useLandedTier } from "@grimoire/ui/features/scanner/reader/useLandedTier";
 import { useScanSounds } from "@grimoire/ui/features/scanner/sounds/useScanSounds";
 import { SubmitScanDialog } from "@grimoire/ui/features/scanner/submit/SubmitScanDialog";
 import { useMaySendScans } from "@grimoire/ui/features/scanner/submit/useMaySendScans";
@@ -39,7 +48,9 @@ import {
 } from "@grimoire/ui/features/scanner/verdictText";
 import { ConfirmDialog } from "@grimoire/ui/features/settings/ConfirmDialog";
 import { plural } from "@grimoire/ui/lib/counts";
+import { FOCUS } from "@grimoire/ui/lib/focus";
 import { ipcError, type ScanBatch, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
+import { PRESS } from "@grimoire/ui/lib/motion";
 import { notify } from "@grimoire/ui/lib/notifications";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ReceiptBar } from "../deck/receipt";
@@ -47,12 +58,15 @@ import { useListReceipt } from "../lists/receipt";
 import { navigate } from "../router";
 import { CameraBox } from "../scanner/CameraBox";
 import { HistorySheet } from "../scanner/HistorySheet";
-import { MatchLine } from "../scanner/MatchLine";
+import { HoldSurface } from "../scanner/HoldSurface";
 import { OptionsSheet } from "../scanner/OptionsSheet";
 import { ScanControls } from "../scanner/ScanControls";
 import { ScannerDataSlot } from "../scanner/ScannerDataSlot";
 import { Tray } from "../scanner/Tray";
-import { destinationName, TrayFooter } from "../scanner/TrayFooter";
+import { TrayActionsSheet } from "../scanner/TrayActionsSheet";
+import { destinationName, TrayBar } from "../scanner/TrayBar";
+import { TrayPeek } from "../scanner/TrayPeek";
+import { TraySheet } from "../scanner/TraySheet";
 import { CREATE_DECK_FLOOR } from "./parts";
 
 /**
@@ -85,6 +99,32 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
   return <LiveScanner destination={destination} />;
 }
 
+/** The one question this page asks of the viewport besides the face's own width (`useFace`). */
+const LANDSCAPE = "(orientation: landscape)";
+
+function subscribeLandscape(onChange: () => void): () => void {
+  const query = window.matchMedia(LANDSCAPE);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function isLandscape(): boolean {
+  return window.matchMedia(LANDSCAPE).matches;
+}
+
+/**
+ * **The phone is on its side** — the `landscape:` variant's own media query, asked from script for
+ * what a class cannot say: which shape of a component to draw (the Added popup's one line, the
+ * hold prompt's short form), and whether the tray's list column is mounted at all. The
+ * arrangement itself is the classes', so the two always agree. `useSyncExternalStore` and a fresh
+ * `matchMedia` per read, for `CardDetailModal`'s `useFlankRoom`'s two reasons: no `setState`
+ * inside an effect, and no query built at import time, before a test has said what the viewport
+ * is.
+ */
+function useLandscape(): boolean {
+  return useSyncExternalStore(subscribeLandscape, isLandscape, () => false);
+}
+
 /**
  * **The desktop reader's parts, in the phone's own idioms.**
  *
@@ -92,22 +132,35 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
  * (`useCamera`), the frame pump and its one-add-per-card edge (`useScanLoop`), the tray and the
  * prefs (`useTray`, `useScannerPrefs` — the same two rows the desktop face of this install reads),
  * the lease (`useScannerHold`), how a card lands (`useTrayLanding`), where it files and the commit
- * (`useTrayFolder`, `useTrayCommit`), the sentences (`readerText`, `verdictText`), and the two
- * things laid over the picture (`Overlay`, `AddedToast`). The desktop *page* cannot be drawn here —
- * it reads the app store and the window, and lays a 25rem tray beside the camera — so what is the
- * phone's is the arrangement, in `../scanner/`: a bar with one `Options` press in place of four
- * popovers, the camera shaped by its stream, the status line folded onto two lines, the tray as
- * rows a thumb can work, and a footer that stays put.
+ * (`useTrayFolder`, `useTrayCommit`), the sentences (`readerText`, `verdictText`), and everything
+ * laid over the picture (`ScanHud`, `PictureNotes`, `TierConfetti`, `AddedToast`). The desktop
+ * *page* cannot be drawn here — it reads the app store and the window — so what is the phone's is
+ * the arrangement, in `../scanner/`.
  *
- * **Top to bottom, in one scroller**: the bar, the camera, the status line, the tray. **The footer
- * is outside it** — the destination and Add are what the tray is for, and a reader forty cards
- * down still has them. **From 720px wide** (a phone on its side, a tablet) the camera's column and
- * the tray's stand side by side, each scrolling by itself, with the footer under the tray; the
- * scroller is then no box at all, so its two children are laid out by the page's grid. The tray's
- * column is 22rem, a little over the 328px its rows were measured in at 360, and the camera takes
- * the rest. **Not from 600**, where the frame's rail begins: tried there, the page between the
- * rail and the edge is 520px, which left the tray a 288px column — its printing press 43px wide —
- * beside a camera 200px across. Between 600 and 720 it is the phone's one column, wider.
+ * **Upright, the page fits the screen and nothing scrolls** (the scanner redesign, 2026-10-24),
+ * top to bottom: the tray's bar — the folder and Add, with the receipt line under it — then the
+ * controls (`ScanControls`), **the picture, filling what is left** (`CameraBox`), the gold
+ * Start/Stop (continuous only), and the tray's peek (`TrayPeek`), which opens the whole tray as a
+ * sheet (`TraySheet`). Everything over the picture is the camera box's children: the HUD — the
+ * progress bar, *Reset evidence* and *Send scan…* while continuous scanning runs, the chip for an
+ * error — the stopped veil, point and shoot's prompt or held chip and its hold (`HoldSurface`),
+ * the confetti and the Added popup.
+ *
+ * **On its side** (the `landscape:` variant, at any phone width) the same elements are laid out
+ * by a grid: the controls, the picture and Start/Stop on the left; on the right, 22rem wide —
+ * giving way to 18.5rem before the left column goes under the 20.5rem its controls need whole —
+ * the tray's bar, its header on one line (the count, the gold *N need you* that walks the
+ * questions, and the `⋯`, whose sheet holds *Add card…* here) and the whole list, scrolling by
+ * itself. **No row on the page wraps** at any shape: a second line is taken from the picture. No peek — the list it opens is there —
+ * and the Added popup on one line. **Asked of the viewport, not a container**: the page's sheets
+ * are mounted inside it, and a container is the containing block for a `fixed` scrim. The
+ * list's column is mounted only on its side (upright the list is the tray sheet's); a turn of
+ * the phone mounts or drops that column alone, and keeps the bar and every open sheet as they
+ * were.
+ *
+ * **Point and shoot is a hold of the picture itself** (`usePointAndShoot`, `HoldSurface`): it
+ * reads while a finger is on it and pauses the moment it lifts. Under it there is no Start/Stop,
+ * and no *Reset evidence* or *Send scan…* either — lifting the finger already ends the read.
  *
  * **The rules the desktop page holds, held here**:
  *
@@ -133,18 +186,19 @@ export function ScannerPage({ destination }: { destination?: TrayDestination }) 
  * **On a host with no scanner session** — a web page, until the light app's web step
  * (`useScannerPrefs`' `unavailable`) — the prefs never count as loaded, so both gates below stay
  * shut: no camera is asked for and no frame is sent. The engine's sentence is drawn where the
- * picture would be, the status line and its Reset are not drawn (one would say *Point the camera
- * at a card* and the other would ask a session that is not there), and the filters are refused
- * with the sentence, since one changed there would be drawn and never taken. The tray still
- * reads, edits and files: those are rows, and a page has the rows.
+ * picture would be, the HUD is not drawn (its status would say *Point the camera at a card* and
+ * its Reset would ask a session that is not there), and the filters are refused with the
+ * sentence, since one changed there would be drawn and never taken. The tray still reads, edits
+ * and files: those are rows, and a page has the rows.
  */
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { prefs, update, inForce, filterError, loaded, unavailable } = useScannerPrefs();
-  // The desktop's: stopped until Start scanning is pressed (issue #1317), and session-only — a
-  // Start or Stop survives the page being hidden and shown.
+  // The desktop's: stopped until Start is pressed (issue #1317), and session-only — a Start or
+  // Stop survives the page being hidden and shown.
   const [scanning, setScanning] = useState(false);
   const parked = usePageParked();
+  const landscape = useLandscape();
   // `undefined` until the prefs are in, which holds the camera shut; and again once the page has
   // been hidden past its grace — its tracks are stopped, and coming back asks afresh.
   const camera = useCamera(videoRef, loaded && !parked.released ? prefs.cameraId : undefined);
@@ -170,19 +224,61 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // Read above the loop, as on the desktop: a device that may send scans keeps its run's frames
   // at full resolution.
   const maySend = useMaySendScans();
-  // **Point and shoot** — the desktop page's, with this face's press: *Scan* reads while it is
-  // held and pauses the moment it is let go (`usePointAndShoot`, `ScanControls`' `HoldToScan`).
-  // Anything that pauses the pump ends the hold, so a release lost behind a sheet or another app
-  // never leaves the scanner reading. `reading` and `armed` are the desktop page's two words.
+
+  // The tray's whole list as a sheet over the upright page, and the peek that opened it.
+  const [traySheetOpen, setTraySheetOpen] = useState(false);
+  const traySheetOpener = useRef<HTMLElement | null>(null);
+  // The options sheet, the page it opens on (the controls' Filters opens it on its filters page),
+  // and the press that opened it.
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [optionsStart, setOptionsStart] = useState<"filters" | undefined>(undefined);
+  const optionsOpener = useRef<HTMLElement | null>(null);
+  // The tray's actions (`⋯`), and the press that opened them — the tray sheet's header, or the
+  // list's on a phone on its side: *Create deck…*, *Clear all…* and *Scan history* hand the caret
+  // back to it when their own dialog or sheet shuts.
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsOpener = useRef<HTMLElement | null>(null);
+  // The scan history's sheet, and the press that opened it, for the caret.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyOpener = useRef<HTMLElement | null>(null);
+  // *Clear all…*: the rows the reader was asked about, and the press that asked, for the caret.
+  const [clearing, setClearing] = useState<ScannerTrayRow[] | null>(null);
+  const clearOpener = useRef<HTMLElement | null>(null);
+  // *Create deck…*: the tray as it stood when the dialog opened.
+  const [deckRows, setDeckRows] = useState<ScannerTrayRow[] | null>(null);
+  const deckOpener = useRef<HTMLElement | null>(null);
+  // The page's own tray bar's folder sheet (`TrayBar`'s `onSheet`). The tray sheet's copy of the
+  // bar opens its folder sheet over the tray sheet, which already counts.
+  const [folderSheetOpen, setFolderSheetOpen] = useState(false);
+  // Any of the page's own sheets or dialogs over the picture.
+  const overlaid =
+    traySheetOpen ||
+    optionsOpen ||
+    actionsOpen ||
+    historyOpen ||
+    folderSheetOpen ||
+    clearing !== null ||
+    deckRows !== null;
+
+  // **Point and shoot** — the desktop page's, with this face's press: the picture itself, held,
+  // reads, and pauses the moment it is let go (`usePointAndShoot`, `HoldSurface`). Anything that
+  // pauses the pump ends the hold, and so does a sheet or dialog of the page's opening over the
+  // picture, so a release lost behind a sheet or another app never leaves the scanner reading —
+  // the surface's own blur says the same where a browser moved the caret, and this says it where
+  // one did not. `reading` and `armed` are the desktop page's two words.
   const pointAndShoot = prefs.pointAndShoot;
   const shot = usePointAndShoot({
     on: pointAndShoot,
-    interrupted: parked.paused || sending || picking,
+    interrupted: parked.paused || sending || picking || overlaid,
   });
   const reading = pointAndShoot ? shot.shooting : scanning;
   const armed = pointAndShoot || scanning;
-  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure.
-  const landedPrice = useLandedPrice(armed ? landed : null, destination?.marketplace);
+  // The landing the popup is showing, if any — the confetti is thrown for that one and no other.
+  const shownLanding = armed ? landed : null;
+  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure —
+  // and the rung of the sound ladder it reaches, which colours the figure and sizes the confetti.
+  const landedPrice = useLandedPrice(shownLanding, destination?.marketplace);
+  const landedTier = useLandedTier(shownLanding, destination?.marketplace);
   // A sound for each card that lands and each row the reader settles — the desktop page's.
   useScanSounds({ landed, rows: tray.rows, at: destination?.marketplace });
 
@@ -206,7 +302,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   const { folderId, folderList } = useTrayFolder(prefs.folderId, loaded, update);
   // Archive (issue #989) is the commit's plan into the scan history instead, and shares its
-  // in-flight state and its one refusal slot — the footer's alert says either press's refusal.
+  // in-flight state and its one refusal slot — the bar's alert says either press's refusal.
   const {
     commit,
     committing,
@@ -224,8 +320,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const handOff = useTrayDestination({ tray, destination });
 
   /**
-   * What the last Add did, as the phone's other writes report: one line at the foot of the page.
-   * The commit never rejects — a refusal is `commitError`'s, drawn in the footer above the press —
+   * What the last Add did, as the phone's other writes report: one line under the tray's bar.
+   * The commit never rejects — a refusal is `commitError`'s, drawn in the bar above the press —
    * so the line speaks only for a commit that went through. `Undo` is offered only where the
    * backend handed back a ticket, which for a tray commit it does not today (issue #555: the
    * filed lines left the stored tray in the same write).
@@ -263,7 +359,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * *Archive*: the rows an Add would take, kept in the scan history and filed nowhere. **One
    * toast, in the desktop's words** — the tray empties under the reader and the cards are not in
    * the collection, so the toast is what says where to find them again. No receipt line: there is
-   * nothing to take back, and the toast already says it. A refusal is the footer's alert, as an
+   * nothing to take back, and the toast already says it. A refusal is the bar's alert, as an
    * Add's is.
    */
   const onArchive = () => {
@@ -272,9 +368,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       notify.success(`Archived ${plural(kept.copies, "card")} to Scan history`);
     });
   };
-  // The scan history's sheet, and the press that opened it, for the caret.
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const historyOpener = useRef<HTMLElement | null>(null);
   /**
    * *Put back in tray* (issue #1374): a past scan's lines into the tray, built on `tray.latest()`,
    * and the history closed so the reader sees them land. **One toast** — the cards are in the
@@ -297,7 +390,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     return true;
   };
 
-  // A refusal to reset has somewhere to go: the line over the picture, cleared by the next press.
+  // A refusal to reset has somewhere to go: the chip over the picture, cleared by the next press.
   const [resetError, setResetError] = useState<string | null>(null);
   const onReset = () => {
     setResetError(null);
@@ -305,18 +398,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     loop.reset().catch((e: unknown) => setResetError(ipcError(e)));
   };
 
-  // *Clear all…*: the rows the reader was asked about, and the press that asked, for the caret.
-  const [clearing, setClearing] = useState<ScannerTrayRow[] | null>(null);
-  const clearOpener = useRef<HTMLElement | null>(null);
-
-  // *Create deck…*: the tray as it stood when the dialog opened.
-  const [deckRows, setDeckRows] = useState<ScannerTrayRow[] | null>(null);
-  const deckOpener = useRef<HTMLElement | null>(null);
   const scannedDeck = useScannedDeck(deckRows ?? []);
   const newDeckFormat = useNewDeckFormat();
-
-  const [optionsOpen, setOptionsOpen] = useState(false);
-  const optionsOpener = useRef<HTMLElement | null>(null);
 
   // *Send scan…*: the last couple of seconds the scanner was shown, to its maker, under the card
   // a reader says the last of them shows — the desktop page's hook and its dialog, both shared.
@@ -333,7 +416,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // so nothing here hints at one. A lapse while the dialog is open is the engine's to refuse.
   // **The filters it says are the ones in force** (`inForce`), not the ones the sheet is drawing:
   // `prefs.filters` moves before the session has taken a change, and goes back if it is refused.
-  // Under point and shoot a run lives only as long as its hold, so the press is drawn during one.
   const sendable = destination === undefined && maySend && camera.kind === "live" && reading;
   const submit = useScanSubmit({
     recent: loop.recent,
@@ -353,135 +435,307 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     breakRun();
   }, [inForce, breakRun]);
 
-  // What the picture has to say: that recognition is stopped, or the loop's failures, a refused
-  // reset and a Send scan pressed too soon — a busy database, a frame the host turned away, a
-  // camera that has only just started. The detector's own refusal (no card in this frame) is a
-  // developer's sentence and is not said here. Nothing on a host with no session, where the box
-  // holds the engine's sentence instead.
-  //
-  // **A Send scan that opened nothing is never silent** — one that said nothing is a button that
-  // looks broken. Stopped, the line is the stopped sentence's alone: the press is not drawn
-  // there, and the hook drops its sentence with the press.
-  const cameraNote =
-    unavailable !== null
-      ? null
-      : !reading
-        ? pointAndShoot
-          ? SHOT_READY_HOLD
-          : SCANNING_STOPPED
-        : (loop.error ?? resetError ?? submit.error);
+  // **The HUD's two presses are continuous scanning's alone** — while it runs over a live
+  // picture, never under point and shoot, where lifting the finger already ends the read, and
+  // never over the camera's own refusal. *Send scan…* by `sendable` besides.
+  const hudPresses = !pointAndShoot && scanning && camera.kind === "live";
+  // What the chip over the picture has to say while recognition runs: the loop's failures, a
+  // refused reset and a Send scan pressed too soon — a busy database, a frame the host turned
+  // away, a camera that has only just started. The detector's own refusal (no card in this
+  // frame) is a developer's sentence and is not said here. **Not running, the picture's own note
+  // is the whole of what is said** (`StoppedVeil`, `HoldPrompt`): the press is not drawn there,
+  // and the hook drops its sentence with the press. **A Send scan that opened nothing is never
+  // silent** — one that said nothing is a button that looks broken.
+  const hudNote = reading ? (loop.error ?? resetError ?? submit.error) : null;
+  // What the HUD draws and announces — the match strip's state.
+  const strip = matchStrip(reading ? loop.verdict : null, lastAdded);
+  // The HUD has a chip to show: the strip's own error, or the note. **The held chip gives way to
+  // it** — both sit at the top of the picture — and the surface's `aria-pressed` and the progress
+  // bar still say a hold is reading.
+  const hudSays = strip.tone === "error" || hudNote !== null;
+  // The picture's notes and its hold stand only over a picture: not over the camera's own
+  // refusal, nor a host with no session, each of which is said where the picture would be.
+  const pictureUp = unavailable === null && camera.kind !== "error";
+  // The confetti for the landing the popup is showing, at the tier its price reaches — none below
+  // the first rung, unpriced, or for a landing that asks the reader something.
+  const burst =
+    shownLanding !== null && landedTier !== null
+      ? { stamp: shownLanding.stamp, tier: landedTier }
+      : null;
+
+  const openActions = (opener: HTMLElement) => {
+    actionsOpener.current = opener;
+    setActionsOpen(true);
+  };
+  const openAddCard = (opener: HTMLElement) => {
+    pickOpener.current = opener;
+    setPicking(true);
+  };
+  /**
+   * The tray's bar — one drawing for the page and one for the tray sheet (`TraySheet`'s `bar`),
+   * each with its own folder sheet over the same pref and the same commit. `quiet` keeps the
+   * page's own copy from saying a refusal while the sheet's copy over it is saying the same one;
+   * `onSheet` is the page's copy's alone, for {@link overlaid}.
+   */
+  const trayBar = (quiet: boolean, onSheet?: (open: boolean) => void) => (
+    <TrayBar
+      rows={tray.rows}
+      folders={folderList.folders}
+      foldersPending={folderList.query.isPending}
+      folderId={folderId}
+      condition={prefs.condition}
+      onFolder={(id) => {
+        // A press on the folder already chosen writes nothing.
+        if (id !== prefs.folderId) update({ folderId: id });
+      }}
+      onCommit={onCommit}
+      committing={destination === undefined ? committing : handOff.committing}
+      commitError={quiet ? null : destination === undefined ? commitError : handOff.error}
+      archiving={destination === undefined && archiving}
+      destination={destination}
+      onSheet={onSheet}
+    />
+  );
 
   return (
     <>
       <div
         className={cn(
-          "flex min-h-0 flex-1 flex-col min-[720px]:grid",
-          "min-[720px]:grid-cols-[minmax(0,1fr)_22rem]",
-          "min-[720px]:grid-rows-[minmax(0,1fr)_auto]",
+          "flex min-h-0 flex-1 flex-col overflow-hidden",
+          // **Nothing on this page wraps**: a second line is taken from the picture. The tray's
+          // column is 22rem and gives way first, so that the scanner's keeps the 20.5rem its
+          // controls need whole on one line (`ScanControls`) — both are whole from a 42.5rem page,
+          // a 740px phone beside the 80px rail. The tray stops at 18.5rem, a card's row of
+          // presses (printing, finish, stepper) at its narrowest; on a page narrower than 39rem
+          // the scanner's column gives way instead, its words cut short on their one line.
+          "landscape:grid landscape:grid-cols-[minmax(0,1fr)_clamp(18.5rem,100%_-_20.5rem,22rem)]",
+          "landscape:grid-rows-[auto_auto_minmax(0,1fr)]",
         )}
       >
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain min-[720px]:contents">
-          <div className="flex flex-col gap-3 px-4 pt-3 pb-3 min-[720px]:row-span-2 min-[720px]:min-h-0 min-[720px]:overflow-y-auto">
-            <ScanControls
-              scanning={scanning}
-              onScanning={setScanning}
-              pointAndShoot={pointAndShoot}
-              shooting={shot.shooting}
-              onHold={(held) => (held ? shot.start(loop.clearReads, "release") : shot.stop())}
-              onTap={() => (shot.shooting ? shot.stop() : shot.start(loop.clearReads, "card"))}
-              onOptions={(opener) => {
-                optionsOpener.current = opener;
-                setOptionsOpen(true);
-              }}
-            />
-            <CameraBox
-              videoRef={videoRef}
-              camera={camera}
-              verdict={reading ? loop.verdict : null}
-              note={cameraNote}
-              unavailable={unavailable}
-            >
-              <AddedToast card={armed ? landed : null} onDone={clearLanded} price={landedPrice} />
-            </CameraBox>
-            {/* What the status still has to say of the scanner's own files. */}
-            <ScannerDataSlot status={status} />
-            {unavailable === null && (
-              <MatchLine
-                verdict={reading ? loop.verdict : null}
-                lastAdded={lastAdded}
-                onReset={onReset}
-                // Offered only where `sendable` says, as on the desktop: a run to send, the
-                // Scanner tab itself, and a supporter's device. With no camera live, or stopped,
-                // the box above is saying why not; of the membership nothing is said at all.
-                onSend={sendable ? submit.open : undefined}
+        {/* The folder and Add, and what the last Add did — the page's head upright, the tray
+            column's head on its side. */}
+        <div
+          data-scanner-bar=""
+          className="shrink-0 landscape:col-start-2 landscape:row-start-1 landscape:border-l landscape:border-border"
+        >
+          {trayBar(traySheetOpen, setFolderSheetOpen)}
+          {/* Muted while the tray sheet is open: its own copy, under its bar, says the line. */}
+          <ReceiptBar receipt={receipt} muted={traySheetOpen} />
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-3 landscape:col-start-1 landscape:row-span-3 landscape:row-start-1 landscape:px-3">
+          <ScanControls
+            pointAndShoot={pointAndShoot}
+            onPointAndShoot={(on) => {
+              // Either way the page lands stopped, as on the desktop: a hold ends with the pref,
+              // and Start is pressed afresh.
+              setScanning(false);
+              update({ pointAndShoot: on });
+            }}
+            onFilters={(opener) => {
+              optionsOpener.current = opener;
+              setOptionsStart("filters");
+              setOptionsOpen(true);
+            }}
+            onOptions={(opener) => {
+              optionsOpener.current = opener;
+              setOptionsStart(undefined);
+              setOptionsOpen(true);
+            }}
+          />
+          <CameraBox
+            videoRef={videoRef}
+            camera={camera}
+            verdict={reading ? loop.verdict : null}
+            unavailable={unavailable}
+          >
+            {/* Under point and shoot, the prompt only while no card is up: the Added popup stands
+                where it does, and stays up after the finger lifts. */}
+            {pictureUp &&
+              (pointAndShoot ? (
+                shot.shooting ? (
+                  !hudSays && <HeldChip />
+                ) : (
+                  shownLanding === null && <HoldPrompt compact={landscape} />
+                )
+              ) : (
+                !scanning && <StoppedVeil />
+              ))}
+            {pictureUp && pointAndShoot && (
+              <HoldSurface
+                shooting={shot.shooting}
+                onHold={(held) => (held ? shot.start(loop.clearReads, "release") : shot.stop())}
+                onTap={() => (shot.shooting ? shot.stop() : shot.start(loop.clearReads, "card"))}
               />
             )}
-          </div>
-          <div className="px-4 pb-3 min-[720px]:min-h-0 min-[720px]:overflow-y-auto min-[720px]:border-l min-[720px]:border-border min-[720px]:pt-2">
-            {/* A destination's warning that the tray was not empty when this opened — above the
-                rows it is about. A note, not an alert: nothing has gone wrong, and it is there
-                from the first paint. */}
-            {handOff.notice !== null && (
-              <p
-                role="note"
-                className="mb-2 rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-xs leading-snug"
-              >
-                {handOff.notice}
-              </p>
+            {/* Before the popup, so the pieces fly from behind it. */}
+            <TierConfetti burst={burst} originBottom={landscape ? 36 : undefined} />
+            <AddedToast
+              card={shownLanding}
+              onDone={clearLanded}
+              price={landedPrice}
+              tier={landedTier}
+              compact={landscape}
+            />
+            {unavailable === null && (
+              <ScanHud
+                strip={strip}
+                live={reading && camera.kind === "live"}
+                variant="icon"
+                onReset={hudPresses ? onReset : undefined}
+                // Offered only where `sendable` says, as on the desktop: a run to send, the
+                // Scanner tab itself, and a supporter's device. With no camera live the box is
+                // saying why not; of the membership nothing is said at all.
+                onSend={hudPresses && sendable ? submit.open : undefined}
+                note={hudNote}
+              />
             )}
+          </CameraBox>
+          {/* What the status still has to say of the scanner's own files. */}
+          <ScannerDataSlot status={status} />
+          {/* Continuous only: under point and shoot the picture itself is the press. */}
+          {!pointAndShoot && (
+            <button
+              type="button"
+              onClick={() => setScanning(!scanning)}
+              className={cn(
+                "inline-flex h-11 w-full shrink-0 items-center justify-center gap-2 rounded-md bg-accent",
+                "text-sm font-semibold text-accent-fg",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              {scanning ? (
+                <Square aria-hidden className="size-3.5" />
+              ) : (
+                <Play aria-hidden className="size-3.5" />
+              )}
+              {scanning ? STOP : START}
+            </button>
+          )}
+        </div>
+
+        {/* A destination's warning that the tray was not empty when this opened — over the
+            peek upright, over the list on its side. A note, not an alert: nothing has gone
+            wrong, and it is there from the first paint. */}
+        {handOff.notice !== null && (
+          <div className="shrink-0 px-4 pb-2 landscape:col-start-2 landscape:row-start-2 landscape:border-l landscape:border-border landscape:pt-2">
+            <p
+              role="note"
+              className="rounded-md border border-accent/40 bg-accent/10 px-3 py-2 text-xs leading-snug"
+            >
+              {handOff.notice}
+            </p>
+          </div>
+        )}
+
+        {/* Upright: the newest cards, a press away from the whole tray. */}
+        <div data-tray-peek-slot="" className="shrink-0 landscape:hidden">
+          <TrayPeek
+            rows={tray.rows}
+            flashKey={flashKey}
+            title={destination?.title}
+            onOpen={(opener) => {
+              traySheetOpener.current = opener;
+              setTraySheetOpen(true);
+            }}
+          />
+        </div>
+
+        {/* On its side: the whole tray, `Tray`'s own header sticking over the one scroller.
+            **Mounted only on its side** (`landscape`, the variant's own query): upright the whole
+            tray is the sheet the peek opens, and a list kept undrawn under the page would be a
+            second one re-rendering on every frame the pump answers while that sheet is up. Still
+            `hidden` but on its side, so the classes alone decide what is drawn, as everywhere
+            else on the page. `relative` because a row's `sr-only` words are positioned, and the
+            box carrying the overflow has to hold them. */}
+        {landscape && (
+          <div
+            data-tray-column=""
+            className={cn(
+              "relative hidden min-h-0 overflow-y-auto overscroll-contain px-3 pb-3",
+              "landscape:col-start-2 landscape:row-start-3 landscape:block landscape:border-l landscape:border-border",
+            )}
+          >
             <Tray
               rows={tray.rows}
               onRows={(change) => tray.setRows(change(tray.latest()))}
               flashKey={flashKey}
               title={destination?.title}
               marketplace={destination?.marketplace}
-              onAddCard={(opener) => {
-                pickOpener.current = opener;
-                setPicking(true);
-              }}
+              onActions={openActions}
             />
           </div>
-        </div>
-
-        <div className="shrink-0 min-[720px]:col-start-2 min-[720px]:border-l min-[720px]:border-border">
-          <ReceiptBar receipt={receipt} />
-          <TrayFooter
-            rows={tray.rows}
-            folders={folderList.folders}
-            foldersPending={folderList.query.isPending}
-            folderId={folderId}
-            onFolder={(id) => {
-              // A press on the folder already chosen writes nothing.
-              if (id !== prefs.folderId) update({ folderId: id });
-            }}
-            onCommit={onCommit}
-            committing={destination === undefined ? committing : handOff.committing}
-            commitError={destination === undefined ? commitError : handOff.error}
-            destination={destination}
-            onCreateDeck={(opener) => {
-              deckOpener.current = opener;
-              scannedDeck.reset();
-              setDeckRows([...tray.latest()]);
-            }}
-            onClearAll={(opener) => {
-              clearOpener.current = opener;
-              setClearing(tray.latest());
-            }}
-            // The archive and its history are the Scanner tab's own record: over a trade the page
-            // is already a sheet, and files somewhere else (the footer hides both for one too).
-            onArchive={destination === undefined ? onArchive : undefined}
-            archiving={destination === undefined && archiving}
-            onHistory={
-              destination === undefined
-                ? (opener) => {
-                    historyOpener.current = opener;
-                    setHistoryOpen(true);
-                  }
-                : undefined
-            }
-          />
-        </div>
+        )}
       </div>
+
+      {/* **First of the page's sheets and dialogs**: they all paint at the one overlay rung, so
+          document order is their stacking, and every one below can open over this one — the one
+          Escape and Back close first has to be the one drawn on top. */}
+      <TraySheet
+        open={traySheetOpen}
+        onClose={() => setTraySheetOpen(false)}
+        onDismiss={() => {
+          setTraySheetOpen(false);
+          traySheetOpener.current?.focus();
+        }}
+        title={destination?.title}
+        rows={tray.rows}
+        onRows={(change) => tray.setRows(change(tray.latest()))}
+        flashKey={flashKey}
+        marketplace={destination?.marketplace}
+        onAddCard={openAddCard}
+        onActions={openActions}
+        bar={
+          <>
+            {trayBar(false)}
+            <ReceiptBar receipt={receipt} />
+          </>
+        }
+      />
+
+      <TrayActionsSheet
+        open={actionsOpen}
+        onClose={() => setActionsOpen(false)}
+        onDismiss={() => {
+          setActionsOpen(false);
+          actionsOpener.current?.focus();
+        }}
+        rows={tray.rows}
+        committing={destination === undefined ? committing : handOff.committing}
+        archiving={destination === undefined && archiving}
+        destination={destination}
+        // On its side the tray's one-line header has no room for *Add card…*, so it is the first
+        // row here; upright the tray sheet's header draws its own, and this sheet opens over that.
+        onAddCard={
+          landscape
+            ? () => {
+                pickOpener.current = actionsOpener.current;
+                setPicking(true);
+              }
+            : undefined
+        }
+        onCreateDeck={() => {
+          deckOpener.current = actionsOpener.current;
+          scannedDeck.reset();
+          setDeckRows([...tray.latest()]);
+        }}
+        onClearAll={() => {
+          clearOpener.current = actionsOpener.current;
+          setClearing(tray.latest());
+        }}
+        // The archive and its history are the Scanner tab's own record: over a trade the page is
+        // already a sheet, and files somewhere else (the sheet hides both for one too).
+        onArchive={destination === undefined ? onArchive : undefined}
+        onHistory={
+          destination === undefined
+            ? () => {
+                historyOpener.current = actionsOpener.current;
+                setHistoryOpen(true);
+              }
+            : undefined
+        }
+      />
 
       <OptionsSheet
         open={optionsOpen}
@@ -490,13 +744,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
           setOptionsOpen(false);
           optionsOpener.current?.focus();
         }}
-        pointAndShoot={pointAndShoot}
-        onPointAndShoot={(on) => {
-          // Either way the page lands stopped, as on the desktop: a hold ends with the pref, and
-          // Start is pressed afresh.
-          setScanning(false);
-          update({ pointAndShoot: on });
-        }}
+        startPage={optionsStart}
         filters={prefs.filters}
         onFilters={(filters) => update({ filters })}
         filterError={filterError}

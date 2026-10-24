@@ -13,7 +13,7 @@ import {
 } from "./tray";
 
 /**
- * The words both Scanner surfaces say — the desktop in a tooltip, the phone on the page. They were `TrayPanel`'s, `ScanBar`'s and the desktop page's
+ * The words both Scanner surfaces say — the desktop in a tooltip, the phone on the page. They were `TrayPanel`'s, `ScanBar`'s (now `ScanDock`) and the desktop page's
  * own until the phone page needed the same ones (light app step 7.6).
  */
 

@@ -108,3 +108,40 @@ export function formatPriceSpan(span: PriceSpan, currency: Currency): string {
     ? formatPrice(span.low, currency)
     : `${formatPrice(span.low, currency)} – ${formatPrice(span.high, currency)}`;
 }
+
+/** What a tray's rows are worth together, and how many copies that figure leaves out. */
+export interface TrayWorth {
+  /** Price × quantity summed over the rows that have a price, rounded to the cent. */
+  total: number;
+  /** Copies behind {@link total}. */
+  priced: number;
+  /** Copies whose price is `null` — a card nobody quotes. */
+  unpriced: number;
+}
+
+/**
+ * The tray header's figures: the worth of the rows, and the copies it could not count.
+ *
+ * **`undefined` from `priceOf` is "not read yet"** and counts in neither figure, like
+ * `useTrayPrices`' own two states: calling a card unpriced before anyone has asked would be a
+ * claim about it. `null` is unpriced, and is counted so the header can say so.
+ */
+export function trayWorth(
+  rows: readonly ScannerTrayRow[],
+  priceOf: (row: ScannerTrayRow) => number | null | undefined,
+): TrayWorth {
+  let cents = 0;
+  let priced = 0;
+  let unpriced = 0;
+  for (const row of rows) {
+    const price = priceOf(row);
+    if (price === undefined) continue;
+    if (price === null) {
+      unpriced += row.quantity;
+      continue;
+    }
+    cents += Math.round(price * 100) * row.quantity;
+    priced += row.quantity;
+  }
+  return { total: cents / 100, priced, unpriced };
+}
