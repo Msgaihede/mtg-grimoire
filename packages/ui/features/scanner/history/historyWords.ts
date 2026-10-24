@@ -62,3 +62,32 @@ export function deleteSentence(batch: Pick<ScanBatchSummary, "name" | "status">)
     ? `“${batch.name}” will be removed from your scan history. The cards it added stay in your collection.`
     : `“${batch.name}” will be removed from your scan history. Your collection is not affected.`;
 }
+
+/**
+ * The press that lands a past scan back in the tray (issue #1374), where the reader files or
+ * archives it again — the way back from a pile filed by mistake and taken out again.
+ */
+export const PUT_BACK_LABEL = "Put back in tray";
+
+/** What the press does, for its tooltip: nothing is filed until the tray's own Add. */
+export const PUT_BACK_HINT =
+  "Puts these cards back in the scanner's tray, to add to your collection or archive again.";
+
+/** The toast's title once a pile has landed: `Put 12 cards from “Scan 4” back in the tray`. */
+export function putBackTitle(batch: Pick<ScanBatchSummary, "name">, copies: number): string {
+  return `Put ${plural(copies, "card")} from “${batch.name}” back in the tray`;
+}
+
+/**
+ * The cards a put-back left out because their printing has left the card database — the toast's
+ * body, or `undefined` when none was. **Said, never silent**: a reader counting the pile back in
+ * must not find it short with no word why.
+ */
+export function leftOutSentence(left: number): string | undefined {
+  if (left === 0) return undefined;
+  return `${plural(left, "card")} ${left === 1 ? "is" : "are"} no longer in the card database and ${left === 1 ? "was" : "were"} left out.`;
+}
+
+/** A put-back with nothing to land: every printing in the batch has left the card database. */
+export const NOTHING_TO_PUT_BACK =
+  "None of its cards are in the card database any more, so there is nothing to put back.";

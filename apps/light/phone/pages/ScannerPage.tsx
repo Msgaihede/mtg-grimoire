@@ -8,6 +8,11 @@ import {
   SCANNING_STOPPED,
   SHOT_READY_HOLD,
 } from "@grimoire/ui/features/scanner/reader/readerText";
+import {
+  leftOutSentence,
+  putBackTitle,
+} from "@grimoire/ui/features/scanner/history/historyWords";
+import { putBack } from "@grimoire/ui/features/scanner/history/putBack";
 import { totalCopies } from "@grimoire/ui/features/scanner/reader/tray";
 import { withoutCommitted } from "@grimoire/ui/features/scanner/reader/trayCommit";
 import { useLandedPrice } from "@grimoire/ui/features/scanner/reader/useLandedPrice";
@@ -42,7 +47,7 @@ import {
 } from "@grimoire/ui/features/scanner/verdictText";
 import { ConfirmDialog } from "@grimoire/ui/features/settings/ConfirmDialog";
 import { plural } from "@grimoire/ui/lib/counts";
-import { ipcError, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
+import { ipcError, type ScanBatch, type ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import { notify } from "@grimoire/ui/lib/notifications";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ReceiptBar } from "../deck/receipt";
@@ -284,6 +289,27 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // The scan history's sheet, and the press that opened it, for the caret.
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyOpener = useRef<HTMLElement | null>(null);
+  /**
+   * *Put back in tray* (issue #1374): a past scan's lines into the tray, built on `tray.latest()`,
+   * and the history closed so the reader sees them land. **One toast** — the cards are in the
+   * tray, not the collection, so it says where they went and that the tray's Add files them; a
+   * pile short of printings that have left the card database says so in its body.
+   */
+  const onPutBack = (batch: ScanBatch): boolean => {
+    const outcome = putBack(tray, batch);
+    if (!outcome.ok) {
+      notify.error(`Couldn't put “${batch.summary.name}” back in the tray`, {
+        body: outcome.sentence,
+      });
+      return false;
+    }
+    setHistoryOpen(false);
+    historyOpener.current?.focus();
+    notify.success(putBackTitle(batch.summary, outcome.copies), {
+      body: leftOutSentence(outcome.left),
+    });
+    return true;
+  };
 
   // A refusal to reset has somewhere to go: the line over the picture, cleared by the next press.
   const [resetError, setResetError] = useState<string | null>(null);
@@ -551,6 +577,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
       <HistorySheet
         open={historyOpen}
+        onPutBack={onPutBack}
         onClose={() => setHistoryOpen(false)}
         onDismiss={() => {
           setHistoryOpen(false);

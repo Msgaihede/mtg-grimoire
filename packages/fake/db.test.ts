@@ -25049,6 +25049,9 @@ describe("scan history", () => {
         layout: BOLT.layout,
         finish: "foil",
         quantity: 2,
+        // Read off `cards` now, for a tray row put back from the line (issue #1374).
+        finishes: JSON.parse(BOLT.finishes),
+        printingGone: false,
       },
       {
         id: 1,
@@ -25062,6 +25065,8 @@ describe("scan history", () => {
         layout: null,
         finish: "nonfoil",
         quantity: 1,
+        finishes: [],
+        printingGone: true,
       },
     ]);
     expect(r.scan_history_get({ id: 8 })).toBeNull();

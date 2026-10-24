@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CardSummary,
   CollectionFolder,
+  ScanBatch,
   ScanBatchSummary,
   ScannerAssetsOwed,
   ScannerPrefs,
@@ -1408,6 +1409,92 @@ describe("ScannerPage", () => {
     await user.click(within(dialog).getByRole("button", { name: "Close scan history" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(history).toHaveFocus();
+  });
+
+  /**
+   * *Put back in tray* (issue #1374): a past scan's lines land in the tray as settled rows, the
+   * history closes with the caret back on *History*, one toast says how many — and nothing is
+   * filed until the tray's own Add. A line whose printing has gone is left out, and said.
+   */
+  it("puts a past scan back in the tray, filing nothing, and says so once", async () => {
+    refused();
+    const summary: ScanBatchSummary = {
+      id: 4,
+      name: "Friday pile",
+      status: "filed",
+      folderId: null,
+      folderName: null,
+      condition: "NM",
+      lineCount: 2,
+      copies: 4,
+      coverCardId: "card-saga",
+      createdAt: 1_790_000_000,
+    };
+    const batch: ScanBatch = {
+      summary,
+      lines: [
+        {
+          id: 1,
+          cardId: "card-saga",
+          oracleId: "o-saga",
+          name: "Urza's Saga",
+          setCode: "mh2",
+          setName: "Modern Horizons 2",
+          collectorNumber: "259",
+          rarity: "rare",
+          layout: "saga",
+          finish: "nonfoil",
+          quantity: 3,
+          finishes: ["nonfoil", "foil"],
+          printingGone: false,
+        },
+        {
+          id: 2,
+          cardId: "card-gone",
+          oracleId: null,
+          name: "Gone Card",
+          setCode: "xyz",
+          setName: null,
+          collectorNumber: "1",
+          rarity: null,
+          layout: null,
+          finish: "nonfoil",
+          quantity: 1,
+          finishes: [],
+          printingGone: true,
+        },
+      ],
+    };
+    vi.mocked(ipc.scanHistoryList).mockResolvedValue([summary]);
+    vi.mocked(ipc.scanHistoryGet).mockResolvedValue(batch);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    const history = screen.getByRole("button", { name: "History" });
+    await user.click(history);
+    const dialog = await screen.findByRole("dialog", { name: "Scan history" });
+    await within(dialog).findByRole("list", { name: "Cards in Friday pile" });
+    await user.click(within(dialog).getByRole("button", { name: "Put back in tray" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(history).toHaveFocus();
+    await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+    expect(within(tray()).getByText("Urza's Saga")).toBeInTheDocument();
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Put 3 cards from “Friday pile” back in the tray",
+      body: "1 card is no longer in the card database and was left out.",
+      tone: "success",
+    });
+    // Stored behind the reader like any tray change, and filed nowhere.
+    await waitFor(() =>
+      expect(ipc.setScannerTray).toHaveBeenLastCalledWith([
+        expect.objectContaining({ cardId: "card-saga", finish: "nonfoil", quantity: 3 }),
+      ]),
+    );
+    expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
+    expect(ipc.scannerTrayArchive).not.toHaveBeenCalled();
   });
 
   it("sends mode: exact on the next frame once Exact is pressed", async () => {

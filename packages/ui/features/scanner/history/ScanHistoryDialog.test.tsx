@@ -62,6 +62,8 @@ function line(over: Partial<ScanBatchLine>): ScanBatchLine {
     layout: "saga",
     finish: "nonfoil",
     quantity: 2,
+    finishes: ["nonfoil", "foil"],
+    printingGone: false,
     ...over,
   };
 }
@@ -98,6 +100,9 @@ const SEEDED: Record<number, ScanBatch> = {
   },
 };
 
+/** What *Put back in tray* handed the page — the page's to land, so the dialog only hands it. */
+const putBack = vi.fn<(batch: ScanBatch) => void>();
+
 /** The dialog open, and its opener, as the page holds them. */
 function Host() {
   const [open, setOpen] = useState(true);
@@ -108,6 +113,7 @@ function Host() {
       </button>
       <ScanHistoryDialog
         open={open}
+        onPutBack={putBack}
         onDismiss={() => setOpen(false)}
         onClose={() => setOpen(false)}
       />
@@ -137,6 +143,7 @@ async function opened() {
 let stored: Record<number, ScanBatch> = {};
 beforeEach(() => {
   stored = structuredClone(SEEDED);
+  putBack.mockReset();
   scanHistoryList.mockReset().mockImplementation(async () =>
     Object.values(stored)
       .map((batch) => batch.summary)
@@ -190,6 +197,20 @@ describe("ScanHistoryDialog", () => {
     expect(
       within(within(dialog).getByRole("navigation", { name: "Scans" })).getAllByRole("button")[0],
     ).toHaveAttribute("aria-current", "true");
+  });
+
+  it("hands the batch it draws to the page on Put back in tray (issue #1374)", async () => {
+    const user = userEvent.setup();
+    mount();
+    const dialog = await opened();
+    await user.click(await within(dialog).findByRole("button", { name: /^Scan 2/ }));
+    await within(dialog).findByRole("list", { name: "Cards in Scan 2" });
+    await user.click(within(dialog).getByRole("button", { name: "Put back in tray" }));
+    expect(putBack).toHaveBeenCalledTimes(1);
+    expect(putBack.mock.calls[0]?.[0]).toEqual(stored[2]);
+    // The record is not touched: nothing renamed, nothing deleted.
+    expect(scanHistoryRename).not.toHaveBeenCalled();
+    expect(scanHistoryDelete).not.toHaveBeenCalled();
   });
 
   it("shows another batch on a press", async () => {

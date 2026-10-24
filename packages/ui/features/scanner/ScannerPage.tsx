@@ -5,8 +5,11 @@ import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
 import { plural } from "@/lib/counts";
 import { ipc, ipcError } from "@/lib/ipc";
+import type { ScanBatch } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
+import { leftOutSentence, putBackTitle } from "./history/historyWords";
+import { putBack } from "./history/putBack";
 import { ScanHistoryDialog } from "./history/ScanHistoryDialog";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
@@ -402,6 +405,26 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   /** The scan history's dialog, and the bar's *History* that opened it, for the caret. */
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyOpener = useRef<HTMLElement | null>(null);
+  /**
+   * *Put back in tray* (issue #1374): a past scan's lines into the tray, built on `tray.latest()`,
+   * and the history closed so the reader sees them land. **One toast** — the cards are in the
+   * tray, not the collection, so it says where they went and that the tray's Add files them; a
+   * pile short of printings that have left the card database says so in its body.
+   */
+  const onPutBack = (batch: ScanBatch) => {
+    const outcome = putBack(tray, batch);
+    if (!outcome.ok) {
+      notify.error(`Couldn't put “${batch.summary.name}” back in the tray`, {
+        body: outcome.sentence,
+      });
+      return;
+    }
+    setHistoryOpen(false);
+    historyOpener.current?.focus();
+    notify.success(putBackTitle(batch.summary, outcome.copies), {
+      body: leftOutSentence(outcome.left),
+    });
+  };
 
   /** Where a commit filed, as the toast names it: a folder's name, or the collection's. A folder
    *  the list does not hold (it would not load, and the stored id went to the backend as it
@@ -747,6 +770,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       <SubmitScanDialog run={submit.run} onDismiss={submit.onDismiss} onClose={submit.onClose} />
       <ScanHistoryDialog
         open={historyOpen}
+        onPutBack={onPutBack}
         onDismiss={() => {
           setHistoryOpen(false);
           historyOpener.current?.focus();

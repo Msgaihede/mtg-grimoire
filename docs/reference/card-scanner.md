@@ -4242,6 +4242,35 @@ whatever page it is on. It is not a place — the URL does not change — and ev
 the list. A batch whose read answers `null` (deleted on the desktop face meanwhile) sends the
 sheet back to the list.
 
+### Put back in tray (issue #1374, 2026-10-24)
+
+**A past scan can go back into the tray**, so a pile filed by mistake and taken out of the
+collection again (or archived when it was meant to be filed) is not lost: the batch's lines land
+in the tray and the reader files or archives them again with the tray's own presses — into the
+folder, and at the condition, the Defaults say now. The press is _Put back in tray_: a button
+beside _Delete…_ in `ScanHistoryDialog`'s batch header, and a sheet row above _Rename_ in the
+phone's `HistorySheet`. Each face hands the batch to its page (`onPutBack`), which closes the
+history, hands the caret back to the press that opened it, and toasts _Put N cards from “Scan 4”
+back in the tray_.
+
+**It is the page's, not the engine's**: the tray is the page's to write, whole, so no command
+writes for it. `history/putBack.ts` reads `tray.latest()` (every tray writer's rule) and writes
+through `setRows`, so the rows are stored by the same debounced write as any other change and
+filed by nothing until Add. The rows are `reader/tray.ts`'s `addBatch`: one settled row per line
+(no pick to make), at the head of the tray in the batch's order, never bumping the newest row,
+with the line's finish fitted to the printing's finishes as they are now (`fitFinish` — a finish
+the printing no longer has asks again). A tray that would pass `MAX_TRAY_ROWS` (5,000, the store's
+`scanner::MAX_TRAY_ROWS`) is refused before anything is built.
+
+**`scan_history_get` answers the two facts a row needs that a line does not store**: each line's
+`finishes`, read from `cards` now, and `printingGone` — the printing has left `cards` since the
+batch was written. Such a line still reads in the history but is left out of a put-back (no Add
+could file it), and the toast's body says how many copies were. A batch whose every printing has
+gone puts back nothing and says so (`NOTHING_TO_PUT_BACK`).
+
+**The batch is not touched**: it stays the record of what was put away then, and the next Add or
+Archive of those rows writes a batch of its own.
+
 ### The Developer switch and the Tiers panel
 
 **§9's panels moved behind a Developer switch at the end of the bar, stored in `scanner_prefs`.**

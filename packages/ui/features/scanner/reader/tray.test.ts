@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { ScannerDecision } from "@/lib/ipc";
+import type { ScanBatchLine, ScannerDecision } from "@/lib/ipc";
 import {
+  addBatch,
   addDecision,
+  BATCH_WONT_FIT,
   addPicked,
   commitPlan,
   headLanded,
   importItems,
+  MAX_TRAY_ROWS,
   NO_FINISHED_ROWS,
   needsDecision,
   needsFinishCount,
@@ -592,5 +595,111 @@ describe("tray", () => {
     // A word another build wrote, and the empty string a hand-edited row could hold, still draw a tray.
     expect(trayLayoutOf("stacks")).toBe("grid");
     expect(trayLayoutOf("")).toBe("grid");
+  });
+});
+
+/** One line of a past scan, as `scan_history_get` answers it. */
+function batchLine(over: Partial<ScanBatchLine>): ScanBatchLine {
+  return {
+    id: 1,
+    cardId: "saga",
+    oracleId: "o-saga",
+    name: "Urza's Saga",
+    setCode: "mh2",
+    setName: "Modern Horizons 2",
+    collectorNumber: "259",
+    rarity: "rare",
+    layout: "saga",
+    finish: "foil",
+    quantity: 2,
+    finishes: ["nonfoil", "foil"],
+    printingGone: false,
+    ...over,
+  };
+}
+
+describe("addBatch (issue #1374)", () => {
+  const keys = () => {
+    let n = 0;
+    return () => `back-${++n}`;
+  };
+
+  it("lands every line as a settled row at the head, in the batch's order", () => {
+    const existing = rowFromDecision(resolved, { finish: "nonfoil" }, 1, "old");
+    const { rows, copies, left } = addBatch(
+      [existing],
+      [
+        batchLine({ id: 1 }),
+        batchLine({
+          id: 2,
+          cardId: "bolt",
+          name: "Lightning Bolt",
+          quantity: 1,
+          finish: "nonfoil",
+        }),
+      ],
+      99,
+      keys(),
+    );
+    expect(rows.map((r) => r.key)).toEqual(["back-1", "back-2", "old"]);
+    expect(rows[0]).toEqual({
+      key: "back-1",
+      cardId: "saga",
+      oracleId: "o-saga",
+      name: "Urza's Saga",
+      setCode: "mh2",
+      collectorNumber: "259",
+      finish: "foil",
+      finishes: ["nonfoil", "foil"],
+      quantity: 2,
+      choices: [],
+      addedAt: 99,
+    });
+    expect(rows[2]).toBe(existing);
+    expect(copies).toBe(3);
+    expect(left).toBe(0);
+    // Settled: an Add files them as they stand.
+    expect(unresolvedCount(rows)).toBe(0);
+  });
+
+  it("never bumps the newest row, even for the same printing in the same finish", () => {
+    const first = addBatch([], [batchLine({})], 1, keys()).rows;
+    const again = addBatch(first, [batchLine({})], 2, keys()).rows;
+    expect(again).toHaveLength(2);
+    expect(totalCopies(again)).toBe(4);
+  });
+
+  it("fits a finish the printing no longer has, asking again rather than guessing", () => {
+    const { rows } = addBatch(
+      [],
+      [
+        batchLine({ finish: "foil", finishes: ["nonfoil", "etched"] }),
+        batchLine({ id: 2, finish: "nonfoil", finishes: ["foil"] }),
+        batchLine({ id: 3, finish: "etched", finishes: [] }),
+      ],
+      1,
+      keys(),
+    );
+    expect(rows.map((r) => r.finish)).toEqual(["unknown", "foil", "etched"]);
+  });
+
+  it("leaves out a line whose printing has gone, and counts its copies", () => {
+    const { rows, copies, left } = addBatch(
+      [],
+      [batchLine({}), batchLine({ id: 2, cardId: "gone", printingGone: true, quantity: 3 })],
+      1,
+      keys(),
+    );
+    expect(rows.map((r) => r.cardId)).toEqual(["saga"]);
+    expect(copies).toBe(2);
+    expect(left).toBe(3);
+  });
+
+  it("refuses a pile the tray's store would refuse, before building it", () => {
+    const full = Array.from({ length: MAX_TRAY_ROWS }, (_, i) =>
+      rowFromDecision(resolved, { finish: "nonfoil" }, 1, `k${i}`),
+    );
+    expect(() => addBatch(full, [batchLine({})], 1, keys())).toThrow(BATCH_WONT_FIT);
+    expect(addBatch(full.slice(1), [batchLine({})], 1, keys()).rows).toHaveLength(MAX_TRAY_ROWS);
   });
 });

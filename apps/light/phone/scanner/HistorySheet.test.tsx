@@ -10,11 +10,15 @@ vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 import type { CommandTable } from "@grimoire/fake/scope";
 import type { FakeParams } from "@grimoire/fake/world";
 import { EMPTY_HISTORY } from "@grimoire/ui/features/scanner/history/historyWords";
+import type { ScanBatch } from "@grimoire/ui/lib/ipc";
 import { useNotifications } from "@grimoire/ui/lib/notifications";
 import { renderPhone } from "../testing";
 import { HistorySheet } from "./HistorySheet";
 
 const SETTLE = { timeout: 5_000 };
+
+/** What *Put back in tray* handed the page, and whether the page says it landed. */
+let putBack = vi.fn<(batch: ScanBatch) => boolean>();
 
 /** The sheet over a world, open, with a press that opened it — for the caret to come back to. */
 function Harness() {
@@ -24,7 +28,16 @@ function Harness() {
       <button type="button" onClick={() => setOpen(true)}>
         Open history
       </button>
-      <HistorySheet open={open} onClose={() => setOpen(false)} onDismiss={() => setOpen(false)} />
+      <HistorySheet
+        open={open}
+        onPutBack={(batch) => {
+          const landed = putBack(batch);
+          if (landed) setOpen(false);
+          return landed;
+        }}
+        onClose={() => setOpen(false)}
+        onDismiss={() => setOpen(false)}
+      />
     </>
   );
 }
@@ -159,6 +172,27 @@ describe("the phone's scan history", () => {
         "“Bob's binder” will be removed from your scan history. Your collection is not affected.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("hands a batch to the page on Put back in tray, and opens on the list next time (issue #1374)", async () => {
+    putBack = vi.fn(() => true);
+    mount();
+    const batch = await openBatch("Scan 1");
+    await userEvent.click(within(batch).getByRole("button", { name: "Put back in tray" }));
+    expect(putBack).toHaveBeenCalledTimes(1);
+    expect(putBack.mock.calls[0]?.[0].summary.name).toBe("Scan 1");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
+    await userEvent.click(screen.getByRole("button", { name: "Open history" }));
+    expect(await within(sheet()).findByRole("list", { name: "Scans" }, SETTLE)).toBeInTheDocument();
+  });
+
+  it("stays on the batch when the page could not put it back", async () => {
+    putBack = vi.fn(() => false);
+    mount();
+    const batch = await openBatch("Scan 1");
+    await userEvent.click(within(batch).getByRole("button", { name: "Put back in tray" }));
+    expect(putBack).toHaveBeenCalledTimes(1);
+    expect(within(sheet()).getByRole("region", { name: "Scan 1" })).toBeInTheDocument();
   });
 
   it("starts on the list again after a close", async () => {
