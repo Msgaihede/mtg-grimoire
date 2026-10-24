@@ -3558,8 +3558,23 @@ watch's change in the other modes: a second copy, `replaces_previous` false — 
 printing is the one the last decision named**, which is the card's own look wavering long enough,
 and replaces its row. The frames of the other look are kept for the printing evidence, so it
 chooses the second printing on them. Not measured on readers' scans; the test is the stacked pile.
-Two copies of one look are still one decision, as in the other modes: lift the first away for five
-frames, or use the tray's quantity stepper.
+
+**Another copy of the same printing laid on the decided card adds (#1375).** Two copies of one
+look look alike, so nothing about the second card says it is there — but laying it does. While a
+card is decided the agreement remembers where it was on its last vote, and counts the frames
+running with a card in front of the lens that vote for no look of it: the hand and the card being
+laid over it. After **two** (`Rules::relaid_after`), the decided card agreed again **somewhere
+else** — its bounds overlapping where it lay by less than **0.92** (`Rules::relaid_overlap`, about
+4% of its width) — is decided again (`Decision::relaid`). Both halves are needed: a hand
+passing over the card leaves it where it lay, and a card held and moved is never hidden from the
+lens. Frames with no card at all neither count nor end the run, so a card fumbled out of sight is
+still the stretch break's to judge. The session takes the new decision as the one standing — the
+same look, so the same printing, and no frame of the copy is kept for the evidence — with
+`replaces_previous` false, so the tray bumps the row it filed (`addDecision`: a resolved decision
+on the newest row's printing, in the same known finish). **Neither number was measured on a
+camera**; the test is a pile dropped card by card. What it cannot see: a copy laid exactly where
+the first lay, and a copy whose laying never hid the first from the detector — the stretch break
+and the tray's quantity stepper are still the answers there.
 
 **On the 124 readers' scans** (card-scanner's replay, 2026-10-20, the shipped files and
 thresholds, **before the printing evidence below**, judged on the decision held after the last
