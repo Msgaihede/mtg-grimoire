@@ -1403,7 +1403,9 @@ mod tests {
         wish(&conn, "o3", Some("free"), None, 1);
 
         crate::price_history::snapshot(&conn).unwrap();
-        let rows: Vec<(String, String, Option<String>, Option<f64>, i64)> = conn
+        /// `(wish, finish, card_id, price, copies)`.
+        type WishRow = (String, String, Option<String>, Option<f64>, i64);
+        let rows: Vec<WishRow> = conn
             .prepare(
                 "SELECT wish, finish, card_id, price, copies FROM wish_snapshots
                   WHERE marketplace = 'tcgplayer' AND day = date('now') ORDER BY wish",
