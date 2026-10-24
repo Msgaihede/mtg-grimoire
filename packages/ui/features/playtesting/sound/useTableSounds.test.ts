@@ -4,6 +4,7 @@ import type { PlaytestAction, PlaytestHappened } from "@/lib/ipc";
 import { useTableSoundsMuted } from "./muted";
 import type { TableSynth } from "./synth";
 import { useTableSounds } from "./useTableSounds";
+import { useTableSoundsVolume } from "./volume";
 
 const drew: PlaytestHappened = { type: "drew", seat: "you", name: "Island" };
 const tapped: PlaytestHappened = {
@@ -16,7 +17,11 @@ const tapped: PlaytestHappened = {
 
 function setup(initial: readonly PlaytestHappened[] = []) {
   const play = vi.fn<TableSynth["play"]>();
-  const synth = { play, unlock: vi.fn<TableSynth["unlock"]>() };
+  const synth = {
+    play,
+    unlock: vi.fn<TableSynth["unlock"]>(),
+    setVolume: vi.fn<TableSynth["setVolume"]>(),
+  };
   const onAct = vi.fn<(a: PlaytestAction) => void>();
   const hook = renderHook(({ happened }) => useTableSounds(happened, onAct, synth), {
     initialProps: { happened: initial },
@@ -27,6 +32,7 @@ function setup(initial: readonly PlaytestHappened[] = []) {
 
 afterEach(() => {
   act(() => useTableSoundsMuted.getState().setMuted(false));
+  act(() => useTableSoundsVolume.getState().setVolume(100));
 });
 
 describe("useTableSounds", () => {
@@ -72,5 +78,14 @@ describe("useTableSounds", () => {
     const { synth } = setup();
     window.dispatchEvent(new Event("pointerdown"));
     expect(synth.unlock).toHaveBeenCalledTimes(1);
+  });
+
+  it("plays at the reader's volume, and follows the slider", () => {
+    const { synth } = setup();
+    expect(synth.setVolume).toHaveBeenLastCalledWith(1);
+    act(() => useTableSoundsVolume.getState().setVolume(50));
+    expect(synth.setVolume).toHaveBeenLastCalledWith(0.25);
+    act(() => useTableSoundsVolume.getState().setVolume(0));
+    expect(synth.setVolume).toHaveBeenLastCalledWith(0);
   });
 });

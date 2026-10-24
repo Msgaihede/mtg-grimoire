@@ -26,6 +26,10 @@ class FakeParam {
     if (v <= 0) throw new RangeError(`exponential ramp to ${v}`);
     this.ramps.push(v);
   }
+  setTargetAtTime(v: number, t: number, k: number) {
+    finite(v, t, k);
+    this.value = v;
+  }
 }
 
 function finite(...xs: number[]) {
@@ -186,5 +190,19 @@ describe("createTableSynth", () => {
     expect(resumed).toBe(1);
     const starts = ctx.sources.filter((s) => s.started.length > 0).map((s) => s.started[0]);
     expect(Math.min(...starts)).toBeCloseTo(10.52);
+  });
+
+  it("plays through the reader's volume, set before the context is made or after", () => {
+    const ctx = fake();
+    const synth = createTableSynth(() => ctx);
+    synth.setVolume(0.25);
+    synth.play("draw");
+    // The first gain made is the volume, wired straight to the speakers.
+    const master = ctx.params[0];
+    expect(master.value).toBe(0.25);
+    synth.setVolume(2);
+    expect(master.value).toBe(1);
+    synth.setVolume(0);
+    expect(master.value).toBe(0);
   });
 });

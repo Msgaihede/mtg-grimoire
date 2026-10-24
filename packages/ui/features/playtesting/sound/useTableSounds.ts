@@ -3,6 +3,7 @@ import type { PlaytestAction, PlaytestHappened } from "@/lib/ipc";
 import { atPress, cuesFor } from "./cues";
 import { useTableSoundsMuted } from "./muted";
 import { createTableSynth, type TableSynth } from "./synth";
+import { useTableSoundsVolume, volumeGain } from "./volume";
 
 /** The one synth for every board: its audio context is made on the first sound, never before. */
 const shared = createTableSynth();
@@ -21,6 +22,9 @@ const shared = createTableSynth();
  * gesture start suspended, and the first beat's sounds come from an IPC answer, not a click; so
  * every press on the page (`pointerdown`, `keydown`) makes or resumes it — cheap after the first.
  * Nothing is made while muted.
+ *
+ * **The level is the synth's** (`setVolume`, from `./volume`): a sound already ringing follows
+ * the slider, and a sound only waits for the level, never the other way round.
  */
 export function useTableSounds(
   happened: readonly PlaytestHappened[],
@@ -28,9 +32,12 @@ export function useTableSounds(
   synth: TableSynth = shared,
 ): (action: PlaytestAction) => void {
   const muted = useTableSoundsMuted((s) => s.muted);
+  const volume = useTableSoundsVolume((s) => s.volume);
   const pending = useRef<PlaytestAction | null>(null);
   /** The beat last heard: a strict-mode remount runs the effect again on the same one. */
   const heard = useRef<readonly PlaytestHappened[] | null>(null);
+
+  useEffect(() => synth.setVolume(volumeGain(volume)), [volume, synth]);
 
   useEffect(() => {
     if (muted) return;

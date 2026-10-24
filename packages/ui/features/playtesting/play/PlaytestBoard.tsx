@@ -14,6 +14,7 @@ import {
   LoaderCircle,
   Menu,
   SkipForward,
+  Volume1,
   Volume2,
   VolumeX,
 } from "lucide-react";
@@ -46,6 +47,7 @@ import { CommandZone, ExileZone, GraveyardZone, LibraryZone } from "../table/Zon
 import { dropAction, type DropAim, type TableAim, type TableDrag } from "../table/tableDrag";
 import { useLandingOf } from "../table/landing";
 import { useTableSoundsMuted } from "../sound/muted";
+import { useTableSoundsVolume } from "../sound/volume";
 import { useUndoKeys } from "../undo";
 import { ASPECT, acrossTables, handRow, type ZoneSize } from "../table/layout";
 import type { LogLine } from "../table/log";
@@ -204,23 +206,59 @@ const CHROME_BUTTON = cn(
 );
 
 /**
- * The board's sounds on or off, beside help and the log: a speaker, crossed out while muted. The
- * sounds themselves are `PlaytestPage`'s (`../sound/useTableSounds`); this only flips the
- * remembered setting (`../sound/muted`), which every board shares.
+ * The board's sounds, beside help and the log: a speaker that turns them on or off, crossed out
+ * while silent, and under it — while the pointer rests on it or focus is in it — a slider for how
+ * loud they are. The sounds themselves are `PlaytestPage`'s (`../sound/useTableSounds`); this only
+ * sets the remembered settings (`../sound/muted`, `../sound/volume`), which every board shares.
+ *
+ * The slider hangs below the band rather than beside the speaker, so the opponent's plate box
+ * keeps its 160 px. Moving it while muted turns the sounds back on: the reader is asking to hear
+ * them, and the level they move to is the one they will hear.
  */
-function SoundButton(): JSX.Element {
+function SoundControls(): JSX.Element {
   const muted = useTableSoundsMuted((s) => s.muted);
   const setMuted = useTableSoundsMuted((s) => s.setMuted);
-  const Icon = muted ? VolumeX : Volume2;
+  const volume = useTableSoundsVolume((s) => s.volume);
+  const setVolume = useTableSoundsVolume((s) => s.setVolume);
+  const Icon = muted || volume === 0 ? VolumeX : volume < 50 ? Volume1 : Volume2;
   return (
-    <button
-      type="button"
-      aria-label={muted ? "Turn sounds on" : "Turn sounds off"}
-      onClick={() => setMuted(!muted)}
-      className={cn(CHROME_BUTTON, "size-9 rounded-full", muted && "text-dim")}
-    >
-      <Icon className="size-[18px]" aria-hidden="true" />
-    </button>
+    <div className="group relative">
+      <button
+        type="button"
+        aria-label={muted ? "Turn sounds on" : "Turn sounds off"}
+        onClick={() => setMuted(!muted)}
+        className={cn(CHROME_BUTTON, "size-9 rounded-full", muted && "text-dim")}
+      >
+        <Icon className="size-[18px]" aria-hidden="true" />
+      </button>
+      <div className="absolute top-full left-1/2 hidden -translate-x-1/2 pt-2 group-focus-within:block group-hover:block">
+        <div className="flex h-9 items-center gap-2 rounded-full border border-border bg-surface px-3">
+          <input
+            type="range"
+            aria-label="Sound volume"
+            aria-valuetext={`${volume}%`}
+            min={0}
+            max={100}
+            step={5}
+            value={volume}
+            onChange={(e) => {
+              setVolume(Number(e.target.value));
+              if (muted) setMuted(false);
+            }}
+            className={cn("block w-24 accent-accent", muted && "opacity-60", FOCUS)}
+          />
+          <span
+            aria-hidden="true"
+            className={cn(
+              "w-9 text-right text-[13px] tabular-nums",
+              muted ? "text-dim" : "text-text",
+            )}
+          >
+            {volume}%
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -874,7 +912,7 @@ export function PlaytestBoard({
       )}
 
       <div className={cn("absolute top-1.5 right-3 flex gap-2", LAYER.raised)}>
-        <SoundButton />
+        <SoundControls />
         <button
           type="button"
           aria-label="How to play"

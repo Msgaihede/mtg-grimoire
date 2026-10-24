@@ -890,6 +890,13 @@ woken from a press, since a webview starts a context made outside a gesture susp
 device in `localStorage` (`grimoire.playtest.muted`) and never synced. The opponent's plate box
 ends 160 px from the edge to leave it room.
 
+**The volume slider** (issue #1390) hangs under the speaker while the pointer rests on it or focus
+is in it, so it takes none of the band's width. Its level, 0–100 in steps of 5, is remembered the
+same way (`grimoire.playtest.volume`, absent at full) and apart from mute, so unmuting returns to
+it; moving the slider while muted unmutes. The synth plays it as one gain after the compressor, at
+the level's square (loudness as heard), eased over 15 ms so a drag never clicks. The speaker shows
+a low-volume glyph under 50 and is crossed out at 0.
+
 ## What is not there yet
 
 - **Holding priority over your own spell.** The reader's own spell on top never stops them, so
