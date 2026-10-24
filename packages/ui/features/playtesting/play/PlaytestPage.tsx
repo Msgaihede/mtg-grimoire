@@ -4,6 +4,7 @@ import { useEdition } from "@/lib/edition";
 import { LAYER } from "@/lib/layers";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { useTableSounds } from "../sound/useTableSounds";
 import { EndGameDialog } from "./EndGameDialog";
 import type { HeldGame } from "./heldGame";
 import { PlaytestBoard } from "./PlaytestBoard";
@@ -33,6 +34,9 @@ import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
  * a dialog open over the board takes the key first. **While the opponent's turn is being played
  * back it skips the replay instead** — a reader pressing Escape then wants the animation gone,
  * not the game.
+ *
+ * **The board's sounds are made here** (`../sound/useTableSounds`), from the game's beats and
+ * the board's actions, for both ways onto it; the board draws only their mute button.
  */
 export function PlaytestPage({
   picks,
@@ -56,6 +60,9 @@ export function PlaytestPage({
   onBack: () => void;
 }): JSX.Element {
   const game = usePlaytestGame(picks, held);
+  // Every action the board takes goes through the sounds, so a press can sound and its answer
+  // be heard with what it was.
+  const act = useTableSounds(game.lastHappened, game.act);
   const edition = useEdition();
   /** Which way out is being asked about — kept while the question closes, so its words stay. */
   const [asking, setAsking] = useState<"back" | "newGame">("back");
@@ -101,7 +108,7 @@ export function PlaytestPage({
           happened={game.lastHappened}
           replaying={game.replaying}
           onSkip={game.skip}
-          onAct={game.act}
+          onAct={act}
           onBack={back}
           onNewGame={newGame}
         />
