@@ -397,7 +397,13 @@ async function phoneFace(
       fail(`on the phone face the card sync never finished: ${JSON.stringify(sync)}`);
   }
   const prefs = await engine("scanner_prefs");
-  await engine("set_scanner_prefs", { prefs: { ...prefs, finish: "nonfoil" } });
+  await engine("set_scanner_prefs", {
+    prefs: {
+      ...prefs,
+      finish: "nonfoil",
+      filters: { ...(prefs.filters as object), sets: ["mh2"] },
+    },
+  });
   const before = site.asked.length;
 
   await page.press("the Scanner tab", `${TABS}.querySelector('a[href="/scanner"]')`);
@@ -426,6 +432,7 @@ async function phoneFace(
   );
   if ((await sideways()) > 0)
     fail(`with a card in the tray the phone's Scanner scrolls ${await sideways()}px sideways`);
+  await page.press("Stop scanning", buttonSaying("Stop scanning"));
   await page.press("Add", ADD);
   await page.until(
     "on the phone face, the tray was filed",
@@ -524,8 +531,16 @@ async function main() {
 
   // The finish is the reader's to fix for this run: a printing made in more than one finish
   // lands with its finish unknown, and a row with an unknown finish is one Add leaves in the tray.
+  // So is the set: the recogniser knows every printing, and a look that eleven Counterspells share
+  // is a choice among all eleven — of which these seven cards hold one.
   const prefs = await engine("scanner_prefs");
-  await engine("set_scanner_prefs", { prefs: { ...prefs, finish: "nonfoil" } });
+  await engine("set_scanner_prefs", {
+    prefs: {
+      ...prefs,
+      finish: "nonfoil",
+      filters: { ...(prefs.filters as object), sets: ["mh2"] },
+    },
+  });
 
   // ---- 2. the Scanner, stopped, and nothing of Neural's fetched ----------------------------------
   await page.press("the sidebar's Scanner", sidebar("Scanner"));
@@ -562,6 +577,9 @@ async function main() {
     `ok  ${CARD.name} was recognised and is in the tray (${ms(performance.now() - pressed)} after the press); ` +
       "the recogniser's four files were fetched once each",
   );
+  // Stopped before anything else: the camera is one picture on a loop, and the agreement goes on
+  // deciding while it runs — on a corpus of seven cards, often a printing these cards lack.
+  await page.press("Stop scanning", buttonSaying("Stop scanning"));
 
   // ---- 4. the session -------------------------------------------------------------------------
   const status = await engine("scanner_status");
@@ -596,7 +614,6 @@ async function main() {
   );
 
   // ---- 6. sixty frames, timed ---------------------------------------------------------------------
-  await page.press("Stop scanning", buttonSaying("Stop scanning"));
   await pause(1500);
   await engine("scanner_reset");
   const timed = await page.evaluate<{
