@@ -52,8 +52,12 @@ export function load_neural_evidence(
   bands: Uint8Array,
 ): string | undefined;
 
-/** One frame, a JPEG. Answers the verdict exactly as the desktop's `scanner_frame` serialises it. */
-export function frame(jpeg: Uint8Array): string;
+/**
+ * One frame, a JPEG, and — when the last verdict's `wants_full` asked — the same frame at the
+ * camera's resolution, cut only for the finish mark (left out, or empty, is none). Answers the
+ * verdict exactly as the desktop's `scanner_frame` serialises it.
+ */
+export function frame(jpeg: Uint8Array, full?: Uint8Array | null): string;
 
 /** Forget the card in front of the lens, keeping the session. */
 export function reset(): string;

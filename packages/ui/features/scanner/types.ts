@@ -25,6 +25,8 @@ export type {
   ScannerTracked,
   ScannerOutcome,
   ScannerChoice,
+  ScannerMarkReading,
+  ScannerFinishMark,
   ScannerDecision,
   ScannerVerdict,
   ScannerPrefs,

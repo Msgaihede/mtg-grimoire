@@ -54,6 +54,7 @@
  * `ScannerVerdict`/`ScannerFrameSize`/
  * `ScannerStanding`/`ScannerTracked`/
  * `ScannerDecision`/`ScannerChoice`                — `crates/card-scanner/src/session.rs`
+ * `ScannerFinishMark`                              — `crates/card-scanner/src/finish.rs`
  * `ScanFilters`                                    — `crates/card-scanner/src/filters.rs`
  * `ScannerLabel`/`ScannerCandidate`/`ScannerMatch`  — `crates/card-scanner/src/reference.rs`
  *

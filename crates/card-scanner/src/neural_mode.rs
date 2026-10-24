@@ -17,6 +17,15 @@
 //!   bits still holds; `margin` is the lead over the best other card × 128.
 //! - `tracked`: the vote rule's shape — `committed` while a decision stands, `confidence` the
 //!   votes held over what deciding takes, `decide_at` 2.
+//! - `wants_full`: a full-resolution copy of the next frame is asked for while a card is in
+//!   front of the lens and undecided, and for [`MARK_WAIT`] frames after each decision — its
+//!   collector band, cut through the corners found here, is where the finish mark is measured
+//!   ([`crate::finish`]); in the ~960 px frame the separator is three or four pixels.
+//! - `finish_mark`: **only with [`Session::set_neural_finish`] on**, which no host turns on yet —
+//!   what the decided card's full-frame bands agree on, and a decision whose printing exists in
+//!   more than one finish waits up to [`MARK_WAIT`] frames for a full frame before it is made. Off,
+//!   the marks are measured all the same and only reported ([`Session::neural_finish_report`]),
+//!   for the replay to score.
 //! - `decision`: see [`neural_decision`], or [`evidence_decision`] once the set symbol and
 //!   collector band evidence is loaded — it chooses the printing, never the card, nor when the
 //!   decision is made. **`decision_seq` moves once, when
@@ -45,6 +54,7 @@ use super::{
     DECODE_ERROR_PREFIX,
 };
 use crate::{
+    finish::{FinishMark, MarkReading},
     host::Stopwatch,
     ids::{format_uuid, Id, Mask},
     reference::{Candidate, MatchReport, Reference},
@@ -66,10 +76,22 @@ pub const NEURAL_UNAVAILABLE_ERROR: &str = "the Neural scanner's models are not 
 /// would not run, or a frame too small to read. A failure, as an undecodable JPEG is.
 pub const NEURAL_ERROR_PREFIX: &str = "neural: ";
 
+/// Frames a decision asks for a full frame after it is made — and, with
+/// [`Session::set_neural_finish`] on, the most frames a decision on a printing of several finishes
+/// waits for one before it is made without a mark. A page sends the full frame with the frame
+/// after the one that asked, so two frames is one full frame for certain and usually two.
+pub const MARK_WAIT: u32 = 2;
+
+/// Collector bands kept from full frames of the card being counted or decided.
+const KEPT_BANDS: usize = 3;
+
 /// What the recogniser keeps on the session.
 #[derive(Default)]
 pub(crate) struct NeuralMode {
     loaded: Option<Loaded>,
+    /// [`Session::set_neural_finish`]: a decision carries the measured finish mark, and waits
+    /// for it. Off until the mark is measured on readers' scans.
+    finish: bool,
 }
 
 /// The recogniser, its agreement across frames, the clock its frames are timed by, and what the
@@ -102,6 +124,36 @@ struct Loaded {
     frames_seen: Vec<Seen>,
     /// The last decision the evidence chose the printing of.
     report: Option<EvidenceReport>,
+    /// Collector bands cut from full frames, each with the card group it is of: the card being
+    /// counted's, or the decided one's. Never more than [`KEPT_BANDS`].
+    bands: Vec<(u32, image::RgbImage)>,
+    /// The finish mark measured on each band of the standing (or waiting) decision's card,
+    /// against its printing's set code: what [`Session::neural_finish_report`] reports.
+    marks: Vec<FinishMark>,
+    /// Frames since the standing decision was made: a full frame is asked for while this is
+    /// under [`MARK_WAIT`].
+    since_decision: u32,
+    /// A decision made and not yet given, waiting for its finish mark — see [`Waiting`].
+    waiting: Option<Waiting>,
+}
+
+/// A decision the agreement has made that is held back for a full frame's finish mark, with
+/// [`Session::set_neural_finish`] on, on a printing that exists in more than one finish.
+#[derive(Clone, Debug)]
+struct Waiting {
+    view: DecisionView,
+    card: u32,
+    /// Frames waited so far; at [`MARK_WAIT`] the decision is made without a mark.
+    frames: u32,
+}
+
+/// The finish marks measured for the standing decision — for the replay, not the page.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct FinishReport {
+    /// Each full-frame band's mark, oldest first.
+    pub marks: Vec<FinishMark>,
+    /// What they agree on: the reading more of them gave, and `unknown` on a tie.
+    pub reading: MarkReading,
 }
 
 /// One voting frame of the card being counted, as the printing evidence weighs it.
@@ -151,6 +203,10 @@ impl NeuralMode {
             l.frames = 0;
             l.frames_seen.clear();
             l.report = None;
+            l.bands.clear();
+            l.marks.clear();
+            l.since_decision = 0;
+            l.waiting = None;
         }
     }
 
@@ -186,8 +242,29 @@ impl Session {
             index: None,
             frames_seen: Vec::new(),
             report: None,
+            bands: Vec::new(),
+            marks: Vec::new(),
+            since_decision: 0,
+            waiting: None,
         });
         Ok(())
+    }
+
+    /// Whether a decision carries the finish mark measured on full frames, and waits up to
+    /// [`MARK_WAIT`] frames for one when its printing exists in more than one finish. **Off by
+    /// default, and no host turns it on**: the replay does (`--neural-finish`), to measure it on
+    /// readers' scans, which are kept at full resolution. Full frames are asked for and marks
+    /// measured either way.
+    pub fn set_neural_finish(&mut self, on: bool) {
+        self.neural.finish = on;
+    }
+
+    /// The finish marks measured for the standing decision, and what they agree on — for the
+    /// replay, not the page. `None` without a decision or without a mark measured.
+    pub fn neural_finish_report(&self) -> Option<FinishReport> {
+        let l = self.neural.loaded.as_ref()?;
+        let agreed = crate::finish::agreed(&l.marks)?;
+        Some(FinishReport { marks: l.marks.clone(), reading: agreed.reading })
     }
 
     /// Give the recogniser its printing evidence — the set symbol and collector band networks
@@ -236,9 +313,12 @@ impl Session {
 
     /// One frame — see the module doc. The thresholds travel with the models (`neural.json`)
     /// and the agreement's rules are `card-neural`'s own, so a frame takes no options.
-    pub(super) fn neural_frame(&mut self, jpeg: &[u8]) -> Verdict {
+    ///
+    /// `full` is the same frame at the camera's resolution, when the page sent one: only the
+    /// voted-for card's collector band is cut from it, for the finish mark.
+    pub(super) fn neural_frame(&mut self, jpeg: &[u8], full: Option<&[u8]>) -> Verdict {
         if self.neural.loaded.is_some() {
-            return self.neural_read(jpeg);
+            return self.neural_read(jpeg, full);
         }
         self.neural_unavailable()
     }
@@ -256,7 +336,7 @@ impl Session {
 
     /// Decode, read, and hand the read to [`Session::neural_verdict`]. A frame that fails here
     /// is not counted: the agreement never hears of it.
-    fn neural_read(&mut self, jpeg: &[u8]) -> Verdict {
+    fn neural_read(&mut self, jpeg: &[u8], full: Option<&[u8]>) -> Verdict {
         let decode_started = Stopwatch::start();
         let source = match super::decode_frame(jpeg) {
             Ok(i) => i,
@@ -304,8 +384,16 @@ impl Session {
             }
             _ => None,
         };
+        // The full frame is decoded only for a frame with a card in front of the lens.
+        let band = match (&read, full) {
+            (Ok(read), Some(full)) => read
+                .best()
+                .filter(|_| read.present)
+                .and_then(|b| full_band(full, frame, &b.quad).map(|band| (b.scored.card, band))),
+            _ => None,
+        };
         match read {
-            Ok(read) => self.neural_verdict(&read, seen, now_ms, frame, decode_ms, read_ms),
+            Ok(read) => self.neural_verdict(&read, seen, band, now_ms, frame, decode_ms, read_ms),
             Err(e) => self.neural_failed(format!("{NEURAL_ERROR_PREFIX}{e}"), frame, decode_ms),
         }
     }
@@ -317,11 +405,15 @@ impl Session {
     /// One read, counted by the agreement at `now_ms` and answered as a verdict — the decision
     /// bookkeeping of the scanner, apart from the models so it can be driven with reads made by hand.
     ///
-    /// `seen` is what the read keeps for the printing evidence ([`keep`]), `None` without it.
+    /// `seen` is what the read keeps for the printing evidence ([`keep`]), `None` without it;
+    /// `band` the voted-for card's collector band cut from this frame's full copy ([`full_band`]),
+    /// with the card group it is of.
+    #[allow(clippy::too_many_arguments)]
     fn neural_verdict(
         &mut self,
         read: &card_neural::Read,
         seen: Option<Seen>,
+        band: Option<(u32, image::RgbImage)>,
         now_ms: f64,
         frame: FrameSize,
         decode_ms: f32,
@@ -329,7 +421,7 @@ impl Session {
     ) -> Verdict {
         let reference = self.reference.clone();
         let r = reference.as_deref();
-        let (mask, top) = (&self.mask, self.top);
+        let (mask, top, finish) = (&self.mask, self.top, self.neural.finish);
         let Some(l) = self.neural.loaded.as_mut() else {
             return self.neural_unavailable();
         };
@@ -373,19 +465,36 @@ impl Session {
         l.decisions = decisions;
         let standing = l.agreement.decision().map(|d| (d.entry, d.score));
         let gallery = l.recognizer.gallery();
+        // A band is kept for the card it is of; another card's starts the bands over.
+        let band_card = band.as_ref().map(|(card, _)| *card);
+        if let Some((card, img)) = band {
+            if l.bands.first().is_some_and(|(c, _)| *c != card) {
+                l.bands.clear();
+            }
+            l.bands.push((card, img));
+            if l.bands.len() > KEPT_BANDS {
+                l.bands.remove(0);
+            }
+        }
+        l.since_decision = l.since_decision.saturating_add(1);
         let fresh = match standing {
             None => {
                 l.decided = None;
+                l.waiting = None;
+                l.marks.clear();
                 None
             }
             // The same look laid again: what was decided of it holds, as the first copy's frames
-            // are the only ones the printing evidence kept.
-            Some(_) if relaid && l.decided.is_some() => l.decided.clone(),
+            // are the only ones the printing evidence kept — its mark included.
+            Some(_) if relaid && l.decided.is_some() => {
+                l.since_decision = 0;
+                l.decided.clone()
+            }
             Some((entry, score)) if new => {
                 let chosen = l.index.as_ref().and_then(|evidence| {
                     evidence_decision(gallery, r, mask, entry, &l.frames_seen, evidence)
                 });
-                Some(match chosen {
+                let d = match chosen {
                     Some((d, report)) => {
                         l.report = Some(report);
                         d
@@ -394,9 +503,57 @@ impl Session {
                         l.report = None;
                         neural_decision(gallery, r, mask, entry, score)
                     }
-                })
+                };
+                // The separator is measured once the printing is known: where it sits on the
+                // line depends on how long that printing's set code is.
+                let card = gallery.card(entry);
+                let letters = set_len(&d);
+                l.since_decision = 0;
+                l.marks = l
+                    .bands
+                    .iter()
+                    .filter(|(c, _)| *c == card)
+                    .filter_map(|(_, band)| Some(crate::finish::finish_mark(band, letters?)))
+                    .collect();
+                l.waiting = None;
+                if !finish {
+                    Some(d)
+                } else if l.marks.is_empty() && needs_mark(&d) {
+                    // Held back: given on the frame a full frame's mark comes, or MARK_WAIT
+                    // frames from now without one.
+                    l.decided = None;
+                    l.waiting = Some(Waiting { view: d, card, frames: 0 });
+                    None
+                } else {
+                    Some(with_mark(d, &l.marks))
+                }
             }
-            Some(_) => None,
+            Some((entry, _)) => {
+                // A later full frame of the decided card: its mark is measured too, and gives the
+                // decision when it is still waiting for one.
+                let card = gallery.card(entry);
+                if band_card == Some(card) {
+                    let letters = match &l.waiting {
+                        Some(w) => set_len(&w.view),
+                        None => l.decided.as_ref().and_then(set_len),
+                    };
+                    if let (Some((_, band)), Some(letters)) = (l.bands.last(), letters) {
+                        l.marks.push(crate::finish::finish_mark(band, letters));
+                    }
+                }
+                match l.waiting.take() {
+                    Some(mut w) if w.card == card => {
+                        w.frames += 1;
+                        if !l.marks.is_empty() || w.frames >= MARK_WAIT {
+                            Some(with_mark(w.view, &l.marks))
+                        } else {
+                            l.waiting = Some(w);
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }
         };
 
         // The decided look first, then the look the votes are counting when it is another card.
@@ -431,7 +588,13 @@ impl Session {
         for s in &mut standings {
             s.share = if total > 0.0 { s.evidence / total } else { 0.0 };
         }
-        let committed = standing.is_some();
+        // A decision waiting for its mark is not yet one the page has been given.
+        let committed = standing.is_some() && l.waiting.is_none();
+        // A full frame with the next one while a card is in front of the lens and undecided, or
+        // just decided. Without labels no set code says where the separator is.
+        let wants_full = r.is_some()
+            && read.present
+            && (standing.is_none() || l.waiting.is_some() || l.since_decision < MARK_WAIT);
         let tracked = TrackedView {
             committed,
             confidence: if committed { 1.0 } else { progress },
@@ -489,8 +652,39 @@ impl Session {
         v.r#match = report;
         v.tracked = Some(tracked);
         v.decision = decision;
+        v.wants_full = wants_full;
         v
     }
+}
+
+/// The collector band of the card at `quad` — found in a `frame`-sized frame — cut from `full`,
+/// the same frame at the camera's size: the band the separator is measured on. `None` for a full
+/// frame that will not decode or cannot be the same picture ([`super::full_scale`]), or a quad
+/// that admits no homography.
+fn full_band(full: &[u8], frame: FrameSize, quad: &card_neural::frame::Quad) -> Option<image::RgbImage> {
+    let img = super::decode_frame(full).ok()?.into_rgb8();
+    let (kx, ky) = super::full_scale((frame.w, frame.h), img.dimensions())?;
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let pixels = card_neural::Frame::new(w, h, img.into_raw()).ok()?;
+    let scaled = quad.map(|p| card_neural::frame::Point { x: p.x * kx, y: p.y * ky });
+    crate::finish::collector_band(&pixels, &scaled)
+}
+
+/// How many letters the decided printing's set code has: where the separator sits on the line.
+fn set_len(d: &DecisionView) -> Option<usize> {
+    d.label.as_ref().map(|l| l.set.chars().count())
+}
+
+/// Whether the mark could say anything the corpus does not — `trayFinish`'s rungs: a printing
+/// that exists in one finish is that finish, and an ambiguous decision's printing is provisional.
+fn needs_mark(d: &DecisionView) -> bool {
+    d.outcome == Outcome::Ambiguous || d.finishes.len() != 1
+}
+
+/// `view` with the mark `marks` agree on.
+fn with_mark(mut view: DecisionView, marks: &[FinishMark]) -> DecisionView {
+    view.finish_mark = crate::finish::agreed(marks);
+    view
 }
 
 /// A cosine as the page's distances read it: **(1 − cos) / 2**, 0 for the picture itself and 1
@@ -591,6 +785,7 @@ fn decision_view(
             .collect(),
         replaces_previous: false,
         finishes: finishes(&printing),
+        finish_mark: None,
     }
 }
 
@@ -858,7 +1053,7 @@ mod tests {
 
         /// A read, with what `neural_read` would have kept of it for the printing evidence.
         fn feed_seen(s: &mut Session, read: &Read, seen: Option<Seen>, at_ms: f64) -> Verdict {
-            s.neural_verdict(read, seen, at_ms, FrameSize { w: 640, h: 480 }, 0.0, 0.0)
+            s.neural_verdict(read, seen, None, at_ms, FrameSize { w: 640, h: 480 }, 0.0, 0.0)
         }
 
         /// One accepted frame of `entry`.
@@ -1646,6 +1841,124 @@ mod tests {
             };
             s.load_neural_evidence(files).expect("the evidence in git loads");
             assert!(s.has_neural_evidence());
+        }
+
+        /// A session over a reference that labels look `a`'s printing — set `hob`, so a
+        /// three-letter code — in `finishes`.
+        fn finished(finishes: &[&str]) -> (Session, u32) {
+            let mut s = session(None);
+            let a = single_looks(&s, 1)[0];
+            let printing = *gallery(&s).printing(a);
+            let mut r = session_tests::labelled();
+            let label = Label {
+                name: "Card 20".into(),
+                set: "hob".into(),
+                number: "9".into(),
+                lang: "en".into(),
+                released: "2025-01-01".into(),
+            };
+            r.add_label(printing, Some(session_tests::id(20)), label);
+            r.set_finishes(printing, finishes.iter().map(|f| f.to_string()).collect());
+            s.reference = Some(std::sync::Arc::new(r));
+            (s, a)
+        }
+
+        /// A frame voting for `entry` that came with a full frame, whose collector band of the
+        /// card is a dot: a mark that reads non-foil.
+        fn vote_with_band(s: &mut Session, entry: u32, at_ms: f64) -> Verdict {
+            let read = naming(s, entry, true);
+            let card = gallery(s).card(entry);
+            let band = crate::finish::test_bands::collector_band(crate::finish::test_bands::Separator::Dot);
+            s.neural_verdict(&read, None, Some((card, band)), at_ms, FrameSize { w: 640, h: 480 }, 0.0, 0.0)
+        }
+
+        #[test]
+        fn a_full_frame_is_asked_for_while_a_card_is_undecided_and_just_after_its_decision() {
+            let (mut s, a) = finished(&["nonfoil", "foil"]);
+            assert!(vote(&mut s, a, 0.0).wants_full, "a card counted toward a decision");
+            let decided = vote(&mut s, a, 100.0);
+            assert_eq!(decided.decision_seq, 1, "the finish is off: decided at once");
+            assert!(decided.decision.expect("decided").finish_mark.is_none());
+            let asks: Vec<bool> = (0..3).map(|i| vote(&mut s, a, 200.0 + 100.0 * i as f64).wants_full).collect();
+            assert_eq!(asks.len() as u32, MARK_WAIT + 1);
+            assert_eq!(asks, [true, false, false], "{MARK_WAIT} frames from the deciding one");
+            assert!(!feed(&mut s, &empty(), 600.0).wants_full, "no card, no full frame");
+
+            // Without labels no set code says where the separator is: nothing is asked.
+            let mut bare = session(None);
+            assert!(!vote(&mut bare, a, 0.0).wants_full);
+        }
+
+        #[test]
+        fn with_the_finish_off_marks_are_measured_and_only_reported() {
+            let (mut s, a) = finished(&["nonfoil", "foil"]);
+            vote(&mut s, a, 0.0);
+            assert_eq!(vote(&mut s, a, 100.0).decision_seq, 1);
+            assert!(s.neural_finish_report().is_none(), "no full frame yet");
+            let v = vote_with_band(&mut s, a, 200.0);
+            assert!(v.decision.expect("held").finish_mark.is_none(), "the decision is not changed");
+            let report = s.neural_finish_report().expect("a band of the decided card");
+            assert_eq!(report.marks.len(), 1);
+            assert_eq!(report.reading, MarkReading::Nonfoil);
+        }
+
+        #[test]
+        fn with_the_finish_on_a_decision_of_two_finishes_waits_for_a_full_frame() {
+            let (mut s, a) = finished(&["nonfoil", "foil"]);
+            s.set_neural_finish(true);
+            vote(&mut s, a, 0.0);
+            let held = vote(&mut s, a, 100.0);
+            assert_eq!(held.decision_seq, 0, "held for its mark");
+            assert!(held.decision.is_none() && held.wants_full);
+            assert!(!held.tracked.expect("tracked").committed, "not yet a decision the page has");
+            let given = vote_with_band(&mut s, a, 200.0);
+            assert_eq!(given.decision_seq, 1);
+            let mark = given.decision.expect("decided").finish_mark.expect("the full frame's mark");
+            assert_eq!(mark.reading, MarkReading::Nonfoil);
+            // A band that came before the decision is measured at it: no wait.
+            let (mut s, a) = finished(&["nonfoil", "foil"]);
+            s.set_neural_finish(true);
+            vote_with_band(&mut s, a, 0.0);
+            let at_once = vote(&mut s, a, 100.0);
+            assert_eq!(at_once.decision_seq, 1);
+            assert_eq!(at_once.decision.expect("decided").finish_mark.map(|m| m.reading), Some(MarkReading::Nonfoil));
+        }
+
+        #[test]
+        fn with_the_finish_on_a_decision_waits_no_more_than_the_mark_wait() {
+            let (mut s, a) = finished(&["nonfoil", "foil"]);
+            s.set_neural_finish(true);
+            vote(&mut s, a, 0.0);
+            assert_eq!(vote(&mut s, a, 100.0).decision_seq, 0);
+            let seqs: Vec<u64> =
+                (0..MARK_WAIT).map(|i| vote(&mut s, a, 200.0 + 100.0 * i as f64).decision_seq).collect();
+            assert_eq!(seqs, [0, 1], "made without a mark on the last frame it may wait");
+            assert!(vote(&mut s, a, 500.0).decision.expect("decided").finish_mark.is_none());
+
+            // A printing of one finish is that finish: nothing to wait for.
+            let (mut s, a) = finished(&["foil"]);
+            s.set_neural_finish(true);
+            vote(&mut s, a, 0.0);
+            assert_eq!(vote(&mut s, a, 100.0).decision_seq, 1);
+        }
+
+        #[test]
+        fn a_full_band_is_the_cards_band_cut_from_the_same_frame_at_its_size() {
+            let jpeg = |w: u32, h: u32| {
+                let img = image::RgbImage::from_pixel(w, h, image::Rgb([90, 90, 90]));
+                let mut out = Vec::new();
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+                    .encode_image(&img)
+                    .expect("encode");
+                out
+            };
+            let frame = FrameSize { w: 640, h: 480 };
+            let band = full_band(&jpeg(1280, 960), frame, &quad()).expect("a band");
+            let size = (crate::finish::BAND_WIDTH as u32, crate::finish::BAND_HEIGHT as u32);
+            assert_eq!(band.dimensions(), size);
+            assert!(full_band(&jpeg(320, 240), frame, &quad()).is_none(), "smaller: not the frame");
+            assert!(full_band(&jpeg(1280, 720), frame, &quad()).is_none(), "another aspect");
+            assert!(full_band(b"not a jpeg", frame, &quad()).is_none());
         }
     }
 }

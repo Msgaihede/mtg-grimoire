@@ -38,6 +38,13 @@
 //! any change to the scanner. **A scan the reader sent with no card in it is skipped**, by name
 //! ([`card_scanner::replay::NO_CARD`]): nothing here scores a false positive yet.
 //!
+//! **The finish mark is measured on the full frames** (2026-10-24): a frame the previous verdict
+//! asked a full copy for (`wants_full`) is fed with the stored frame beside it
+//! ([`Session::frame_with_full`]), as a page sends its kept copy, and each pass records the mark
+//! its decision carries (`finish_mark`) and the marks measured (`finish`). `--neural-finish` turns
+//! the mark on ([`Session::set_neural_finish`]); a run kept at the pump's own size has no full
+//! frame to give.
+//!
 //! **No wall clock decides anything**: the agreement reads the label's times, so a run answers
 //! the same on a loaded machine and frames are fed as fast as they decode.
 
@@ -97,6 +104,11 @@ struct Args {
     /// evidence thresholds without copying the models.
     #[arg(long)]
     neural_evidence_meta: Option<PathBuf>,
+    /// Turn the finish mark on (`Session::set_neural_finish`): a decision carries the mark its
+    /// full-frame bands agree on, and one whose printing exists in several finishes waits for it.
+    /// Off, as every host has it, the marks are only reported, in `finish`.
+    #[arg(long)]
+    neural_finish: bool,
 }
 
 /// `crates/card-neural/models/` beside this crate — where the recogniser's files are in git.
@@ -200,6 +212,8 @@ struct Ingredients {
     neural: card_scanner::neural::Files<'static>,
     /// The set symbol and collector band files. `None` replays a pass that records no evidence.
     neural_evidence: Option<card_scanner::neural::evidence::EvidenceFiles<'static>>,
+    /// `--neural-finish`.
+    neural_finish: bool,
 }
 
 impl Ingredients {
@@ -212,6 +226,7 @@ impl Ingredients {
         if let Some(e) = &self.neural_evidence {
             session.load_neural_evidence(e.clone()).map_err(|e| format!("neural evidence: {e}"))?;
         }
+        session.set_neural_finish(self.neural_finish);
         Ok(session)
     }
 
@@ -291,6 +306,8 @@ struct FrameOut {
     decided: Option<String>,
     /// Only a failure of the scanner on this frame — never "no card in this frame".
     error: Option<String>,
+    /// The frame went with its full-resolution copy, as the verdict before it asked.
+    full: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -320,6 +337,12 @@ struct PassOut {
     /// With evidence loaded: the candidate printings of its last decision and what each
     /// scored, so the thresholds can be tuned offline. `null` otherwise.
     evidence: Option<card_scanner::session::EvidenceReport>,
+    /// The finish mark the decision held at the last frame carries — `null` unless
+    /// `--neural-finish` is on and a full frame of the card came.
+    finish_mark: Option<card_scanner::finish::MarkReading>,
+    /// The marks measured on the decided card's full-frame bands and what they agree on, whether
+    /// or not the decision carries them. `null` without a band of it.
+    finish: Option<card_scanner::session::FinishReport>,
 }
 
 impl PassOut {
@@ -340,6 +363,8 @@ impl PassOut {
             frames: Vec::with_capacity(frames),
             error: None,
             evidence: None,
+            finish_mark: None,
+            finish: None,
         }
     }
 }
@@ -353,6 +378,7 @@ fn frame_out(v: &Verdict) -> FrameOut {
         distance: v.r#match.as_ref().and_then(|m| m.candidates.first()).map(|c| c.distance as f32),
         decided: v.decision.as_ref().map(|d| d.printing.clone()),
         error: v.failure().map(str::to_string),
+        full: false,
     }
 }
 
@@ -377,10 +403,16 @@ fn run_pass(
     let mut seq = 0u64;
     let mut last: Option<Verdict> = None;
     let first_ms = label.run.first().map_or(0, |f| f.ms);
+    let mut wants_full = false;
     for (i, jpeg) in frames.iter().enumerate() {
         // The frame's own time, for the agreement (see `LabelClock`).
         label_time(label.run.get(i).map_or(0, |f| f.ms).saturating_sub(first_ms) as f64);
-        let v = session.frame(jpeg);
+        // At the size the scanner was given it, not the size the inbox keeps it at; the kept
+        // size goes beside it when the verdict before asked for it, as a page sends its copy.
+        let sent = as_sent(jpeg);
+        let full = (wants_full && matches!(sent, Cow::Owned(_))).then_some(*jpeg);
+        let v = session.frame_with_full(&sent, full);
+        wants_full = v.wants_full;
         let n = i + 1;
         if let Some(msg) = v.failure() {
             failure.get_or_insert_with(|| format!("frame {n}: {msg}"));
@@ -390,15 +422,17 @@ fn run_pass(
             out.decision_frame = Some(n);
             out.first_decision_frame.get_or_insert(n);
         }
-        out.frames.push(frame_out(&v));
+        out.frames.push(FrameOut { full: full.is_some(), ..frame_out(&v) });
         last = Some(v);
     }
     out.decisions = seq;
     out.evidence = session.neural_evidence_report();
+    out.finish = session.neural_finish_report();
     let Some(last) = last else { return out };
     out.confidence = last.tracked.as_ref().map(|t| t.confidence);
     out.distance = out.frames.last().and_then(|f| f.distance);
     if let Some(d) = &last.decision {
+        out.finish_mark = d.finish_mark.map(|m| m.reading);
         let got_oracle = d.oracle_id.clone().or_else(|| oracle_of(&d.printing));
         out.score = score(&label.card.id, truth_oracle, Some(&d.printing), got_oracle.as_deref());
         out.ambiguous = d.outcome == Outcome::Ambiguous;
@@ -605,10 +639,9 @@ fn parallel<T: Send>(count: usize, jobs: usize, work: impl Fn(usize) -> T + Sync
 fn replay_file((label, path): &Ready, ingredients: &Ingredients) -> Result<RunOut, Skipped> {
     let skip = |why: String| Skipped { id: label.id.clone(), why };
     let run = std::fs::read(path).map_err(|e| skip(format!("run: {e}")))?;
+    // As the inbox keeps them: each pass brings a frame down to the pump's size itself, and
+    // hands the kept size beside it when asked (`run_pass`).
     let frames = cut(label, &run).map_err(skip)?;
-    // At the size the scanner was given each frame, not the size the inbox keeps it at.
-    let sent: Vec<Cow<[u8]>> = frames.iter().map(|frame| as_sent(frame)).collect();
-    let frames: Vec<&[u8]> = sent.iter().map(AsRef::as_ref).collect();
     Ok(replay_run(label, &frames, ingredients))
 }
 
@@ -661,7 +694,10 @@ fn run(args: Args) -> Result<(), String> {
     let conn = open_corpus(&args.corpus)?;
     let (labels, oracles, known) = labels_from_corpus(&conn)?;
     let ingredients =
-        Ingredients { labels, oracles, known, neural: pinned(neural), neural_evidence };
+        Ingredients {
+            labels, oracles, known, neural: pinned(neural), neural_evidence,
+            neural_finish: args.neural_finish,
+        };
     drop(ingredients.session()?);
 
     let mut skipped = Vec::new();
@@ -771,7 +807,7 @@ mod tests {
                 pinned(card_scanner::neural::read_dir(&neural_models_in_tree()).expect("in git"))
             })
             .clone();
-        Ingredients { labels: encoder.finish(), oracles, known, neural, neural_evidence: None }
+        Ingredients { labels: encoder.finish(), oracles, known, neural, neural_evidence: None, neural_finish: false }
     }
 
     fn label_for(printing: Id, frames: &[Vec<u8>]) -> ScanLabel {
@@ -944,10 +980,10 @@ mod tests {
             keys(pass),
             set(&["name", "score", "ambiguous", "settled", "choices", "true_in_choices", "got",
                 "first_decision_frame", "decision_frame", "decisions", "confidence", "distance",
-                "frames", "error", "evidence"])
+                "frames", "error", "evidence", "finish_mark", "finish"])
         );
         assert_eq!(keys(&pass["got"]), set(&["id", "name", "set", "number"]));
-        assert_eq!(keys(&pass["frames"][0]), set(&["ok", "confidence", "distance", "decided", "error"]));
+        assert_eq!(keys(&pass["frames"][0]), set(&["ok", "confidence", "distance", "decided", "error", "full"]));
     }
 
     /// `--only` text that no scan carries is said so, with the text.

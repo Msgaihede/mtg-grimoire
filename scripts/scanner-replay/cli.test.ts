@@ -11,6 +11,7 @@ describe("parseArgs", () => {
       jobs: null,
       neuralEvidence: null,
       neuralEvidenceMeta: null,
+      neuralFinish: false,
       noBuild: false,
     });
   });
@@ -19,7 +20,7 @@ describe("parseArgs", () => {
     const args = parseArgs([
       "--baseline", "first", "--save-baseline", "v2", "--only", "bolt", "--only", "abc",
       "--corpus", "c.db", "--jobs", "4",
-      "--neural-evidence", "ev", "--neural-evidence-meta", "n.json", "--no-build",
+      "--neural-evidence", "ev", "--neural-evidence-meta", "n.json", "--neural-finish", "--no-build",
     ]);
     expect(args).toEqual({
       baseline: "first",
@@ -29,6 +30,7 @@ describe("parseArgs", () => {
       jobs: "4",
       neuralEvidence: "ev",
       neuralEvidenceMeta: "n.json",
+      neuralFinish: true,
       noBuild: true,
     });
   });

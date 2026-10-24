@@ -109,6 +109,7 @@ const ran = spawnSync(
     ...(args.jobs ? ["--jobs", args.jobs] : []),
     ...(args.neuralEvidence ? ["--neural-evidence", args.neuralEvidence] : []),
     ...(args.neuralEvidenceMeta ? ["--neural-evidence-meta", args.neuralEvidenceMeta] : []),
+    ...(args.neuralFinish ? ["--neural-finish"] : []),
   ],
   { cwd: ROOT, stdio: "inherit" },
 );

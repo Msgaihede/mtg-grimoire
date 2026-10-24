@@ -16,6 +16,8 @@ export type FrameNow = {
   decided: string | null;
   /** Set only for a frame the session could not process: a panic or an undecodable JPEG. */
   error: string | null;
+  /** The frame went with its full-resolution copy, as the verdict before it asked; absent in older results. */
+  full?: boolean;
 };
 export type FrameThen = { ms: number; ok: boolean; decided: string | null };
 /** One candidate printing of a decision and what the evidence scored it. */
@@ -58,6 +60,19 @@ export type Pass = {
   error: string | null;
   /** A pass replayed with the evidence files loaded; null otherwise. */
   evidence: Evidence | null;
+  /** The finish mark the decision held at the end carries (`--neural-finish`); null without one, absent in older results. */
+  finish_mark?: MarkReading | null;
+  /** The marks measured on the decided card's full-frame bands, whether or not the decision carries them; null without a band, absent in older results. */
+  finish?: FinishReport | null;
+};
+/** `finish::MarkReading`: what the collector line's separator said. */
+export type MarkReading = "foil" | "nonfoil" | "unknown";
+/** The finish marks a pass measured on the decided card's full-frame bands. */
+export type FinishReport = {
+  /** Each band's mark as the crate serialises it, oldest first. */
+  marks: unknown[];
+  /** What they agree on. */
+  reading: MarkReading;
 };
 export type Run = {
   id: string;

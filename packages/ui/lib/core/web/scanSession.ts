@@ -86,7 +86,7 @@ export function createScanSession(
           ),
         );
       case "frame":
-        return glue.frame(message.jpeg);
+        return glue.frame(message.jpeg, message.full);
       case "reset":
         return glue.reset();
       case "filters":

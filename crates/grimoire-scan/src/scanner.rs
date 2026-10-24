@@ -233,11 +233,17 @@ impl Scanner {
     /// One frame through the session: `{"ok": <Verdict>}`, the verdict serialised as the
     /// desktop's `scanner_frame` serialises it. `jpeg` is the frame, whole.
     ///
+    /// `full` is the same frame at the camera's resolution, sent when the last verdict's
+    /// `wants_full` asked for it, for the finish mark (`Session::frame_with_full`); none, or no
+    /// bytes, is none. The recogniser never reads it, so a full frame that is not a picture costs
+    /// the mark and never the frame.
+    ///
     /// A JPEG that will not decode is not an `err`: it is a verdict, `ok: false` with the
     /// decoder's sentence, exactly as on the desktop — and so is a frame before the Neural files
     /// have loaded, with the crate's sentence for that.
-    pub fn frame(&mut self, jpeg: &[u8]) -> String {
-        ok(self.session.frame(jpeg))
+    pub fn frame(&mut self, jpeg: &[u8], full: Option<&[u8]>) -> String {
+        let full = full.filter(|bytes| !bytes.is_empty());
+        ok(self.session.frame_with_full(jpeg, full))
     }
 
     /// Forget the card in front of the lens, keeping the session: `{"ok":null}`.
@@ -452,7 +458,7 @@ mod tests {
             sentence.starts_with("Filters need card names"),
             "{sentence}"
         );
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None));
         assert_eq!(verdict["ok"], false);
     }
 
@@ -465,7 +471,7 @@ mod tests {
         let expected = bare.frame(&frame);
 
         let mut scanner = Scanner::new();
-        let verdict = answered(&scanner.frame(&frame));
+        let verdict = answered(&scanner.frame(&frame, None));
         assert_eq!(verdict["ok"], false);
         assert_eq!(verdict["matcher"], false);
         assert_eq!(verdict["error"], NEURAL_UNAVAILABLE_ERROR);
@@ -502,7 +508,7 @@ mod tests {
         for i in 0..3 {
             let frame = card_frame_jpeg(i);
             let expected = direct.frame(&frame);
-            let text = scanner.frame(&frame);
+            let text = scanner.frame(&frame, None);
             // The envelope around the crate's own serialisation, and nothing re-ordered.
             assert!(text.starts_with(r#"{"ok":{"ok":"#), "{text}");
             assert_eq!(
@@ -513,12 +519,35 @@ mod tests {
         }
     }
 
+    /// **A full frame changes nothing the recogniser says**: it is cut only for the finish mark,
+    /// which is off until a host turns it on. One that is not a picture, or has no bytes, is a
+    /// verdict the same as no full frame at all — the frame is never refused for it.
+    #[test]
+    fn a_full_frame_never_changes_the_frames_verdict() {
+        for full in [&b"not a jpeg"[..], b""] {
+            let mut plain = loaded();
+            assert_eq!(load_neural(&mut plain, neural_files()), None);
+            let mut paired = loaded();
+            assert_eq!(load_neural(&mut paired, neural_files()), None);
+            for i in 0..3 {
+                let frame = card_frame_jpeg(i);
+                let expected = answered(&plain.frame(&frame, None));
+                let verdict = answered(&paired.frame(&frame, Some(full)));
+                assert_eq!(
+                    without_timings(verdict),
+                    without_timings(expected),
+                    "frame {i}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_frame_that_is_not_a_picture_is_a_verdict() {
         let mut scanner = loaded();
         assert_eq!(load_neural(&mut scanner, neural_files()), None);
         for not_a_picture in [&b""[..], b"not a jpeg", &[0xff, 0xd8, 0xff, 0xe0, 0, 16]] {
-            let verdict = answered(&scanner.frame(not_a_picture));
+            let verdict = answered(&scanner.frame(not_a_picture, None));
             assert_eq!(verdict["ok"], false);
             // **The decoder's own refusal, and not a panic the session caught.** Natively
             // `Session::guarded` turns a panic into this same shape — `ok: false` and a
@@ -675,7 +704,7 @@ mod tests {
         let mut scanner = loaded();
         assert!(!scanner.has_neural());
         // Unloaded, a frame is a verdict that says so — never an `err`, never a trap.
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None));
         assert_eq!(verdict["ok"], false);
         assert_eq!(verdict["error"], NEURAL_UNAVAILABLE_ERROR);
 
@@ -683,7 +712,7 @@ mod tests {
         assert!(scanner.has_neural());
         // The labelled session is the one that took them: its names and filters stand.
         assert_eq!(scanner.set_filters(LTR), r#"{"ok":null}"#);
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None));
         // Read by the networks this time: the drawn card is no card they know — a frame with no
         // card in it — and not a session without its files.
         assert_ne!(verdict["error"], NEURAL_UNAVAILABLE_ERROR, "{verdict}");
@@ -755,7 +784,7 @@ mod tests {
             let sentence = refusal.unwrap_or_else(|| panic!("{what} loaded"));
             assert!(!sentence.is_empty(), "{what}");
             assert!(!scanner.has_neural(), "{what}");
-            let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
+            let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None));
             assert_eq!(
                 verdict["error"], NEURAL_UNAVAILABLE_ERROR,
                 "{what}: {sentence}"
@@ -792,7 +821,7 @@ mod tests {
         assert!(!refusal.expect("refused after the recogniser").is_empty());
         // The recogniser stands: a frame is read by its networks, as it was before.
         assert!(scanner.has_neural());
-        let verdict = answered(&scanner.frame(&card_frame_jpeg(0)));
+        let verdict = answered(&scanner.frame(&card_frame_jpeg(0), None));
         assert_ne!(verdict["error"], NEURAL_UNAVAILABLE_ERROR, "{verdict}");
         assert!(verdict["tracked"].is_object(), "{verdict}");
     }
