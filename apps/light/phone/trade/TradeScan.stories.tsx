@@ -96,9 +96,9 @@ function Host({
  * The phone's trade scanner: the Scanner page as a full-height sheet over a trade.
  *
  * **As wide as the canvas, not boxed at 360**, for `Phone/Scanner`'s reason: the page inside lays
- * itself out by the *viewport's* width — one column below 720px, the camera beside the tray from
- * there — so a 360px box in a wide canvas would draw the wide arrangement squeezed. Narrow the
- * canvas with the workbench's viewport tool to see it as a phone held upright draws it.
+ * itself out by the *viewport's* orientation — one column upright, the camera beside the tray on
+ * its side — so a 360px box in a wide canvas would draw the side-on arrangement squeezed. Narrow
+ * the canvas with the workbench's viewport tool to see it as a phone held upright draws it.
  */
 const meta = {
   title: "Phone/Trade scan",
@@ -221,7 +221,10 @@ export const NothingScanned: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const sheet = await canvas.findByRole("dialog", { name: "Scan cards" });
-    await expect(await within(sheet).findByText("Cards you scan appear here.")).toBeInTheDocument();
+    // The peek's line and the list's: the page draws one upright, the other on its side.
+    await expect(await within(sheet).findAllByText("Cards you scan appear here.")).not.toHaveLength(
+      0,
+    );
     await expect(within(sheet).queryByRole("note")).toBeNull();
     await expect(within(sheet).getByRole("button", { name: "Add 0 to their side" })).toHaveAttribute(
       "aria-disabled",

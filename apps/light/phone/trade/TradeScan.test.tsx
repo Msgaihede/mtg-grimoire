@@ -248,10 +248,13 @@ describe("the phone's trade scanner", () => {
       await within(panel).findByRole("button", { name: "Add 5 to their side" }, SETTLE),
     );
     await waitFor(() => expect(seen.added).toHaveLength(1), SETTLE);
-    const footer = within(panel).getByRole("button", { name: "Add 5 to their side" }).closest("footer");
+    // Over the tray's bar, the one the press is on (the scanner page's `data-scanner-bar`).
+    const bar = within(panel)
+      .getByRole("button", { name: "Add 5 to their side" })
+      .closest("[data-scanner-bar]");
     await waitFor(
       () =>
-        expect(within(footer as HTMLElement).getByRole("alert")).toHaveTextContent(
+        expect(within(bar as HTMLElement).getByRole("alert")).toHaveTextContent(
           "This trade is finished. Reopen it to change it.",
         ),
       SETTLE,
@@ -289,9 +292,10 @@ describe("the phone's trade scanner", () => {
     await settled();
     mount({ tray: [] });
     const empty = await sheet();
+    // The peek's line and the list's: the scanner page draws one upright, the other on its side.
     expect(
-      await within(empty).findByText("Cards you scan appear here.", {}, SETTLE),
-    ).toBeInTheDocument();
+      await within(empty).findAllByText("Cards you scan appear here.", {}, SETTLE),
+    ).toHaveLength(2);
     expect(within(empty).queryByRole("note")).toBeNull();
   });
 
@@ -303,6 +307,6 @@ describe("the phone's trade scanner", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
     // Gone at once, not at the end of the panel's fade.
     expect(screen.queryByRole("region", { name: "Scanned for their side" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Stop scanning" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^(Start|Stop)$/ })).toBeNull();
   });
 });

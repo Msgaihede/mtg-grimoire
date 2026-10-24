@@ -1,12 +1,9 @@
 import { useId, useState } from "react";
-import { Camera, Check, Crosshair, Gauge, ListFilter, Sparkles } from "lucide-react";
+import { Camera, Check, Gauge, ListFilter, Sparkles } from "lucide-react";
 import {
   CAMERA_CHOICE_NOTE,
-  CONTINUOUS_HINT,
   filterSummary,
   NO_FILTERS,
-  POINT_AND_SHOOT,
-  POINT_AND_SHOOT_HOLD_HINT,
   SKIP_PROMOS,
   SKIP_PROMOS_NOTE,
 } from "@grimoire/ui/features/scanner/reader/readerText";
@@ -22,13 +19,7 @@ import { sortOptions } from "@grimoire/ui/lib/options";
 import { cn } from "@grimoire/ui/lib/utils";
 import { ActionSheet, SheetBack, SheetChoice, SheetRow } from "../deck/sheet";
 
-type Page = "main" | "trigger" | "filters" | "finish" | "condition" | "camera";
-
-/** The two ways to run the scanner, as the Scanning page lists them — the bar's press for each. */
-const TRIGGERS = [
-  { pointAndShoot: false, label: "Start and stop", note: CONTINUOUS_HINT },
-  { pointAndShoot: true, label: POINT_AND_SHOOT, note: POINT_AND_SHOOT_HOLD_HINT },
-] as const;
+type Page = "main" | "filters" | "finish" | "condition" | "camera";
 
 /** `Detect` first, because it is the default and the one choice that is not a finish; then a
  *  printing's finishes, plain before the premium treatments — the desktop Defaults popover's order. */
@@ -48,16 +39,14 @@ const DATE_FIELD = cn(
 );
 
 /**
- * Everything about a scan that is not on the bar, as a sheet — the desktop bar's Filters, Defaults
- * and Camera popovers, drawn for a finger.
+ * Everything about a scan that is not on the page, as a sheet — the desktop dock's Filters, Finish
+ * and Camera popovers and the tray's condition, drawn for a finger.
  *
  * **Rows that open lists, each saying what it is set to** (`SheetRow`'s value), and each list a
  * page of this one sheet: the popovers are anchored panels, which at 360px have nowhere to be
  * anchored. Every choice is written as it is pressed, as on the desktop — the camera is running
  * behind the sheet, and the next card should be read under what the sheet says.
  *
- * - **Scanning** — *Start and stop*, or *Point & shoot*: the bar's press becomes *Scan*, read
- *   while held (`usePointAndShoot`). The desktop's switch on its bar, as a page of two choices.
  * - **Filters** — the set picker, the promo switch and the release window, sent as they are changed. A refusal from
  *   the session (*No printing matches these filters.*) is said in words under the fields, and the
  *   row itself is refused, with its reason, where the scanner has no card names to filter by.
@@ -66,6 +55,12 @@ const DATE_FIELD = cn(
  * - **Camera** — drawn only where there is a choice to make: a device with one camera, or none,
  *   has no row. The tick follows the camera that is open, not the one last pressed.
  *
+ * **Opened two ways** (the scanner redesign, 2026-10-24): the controls' *Scanner options* opens it
+ * on its first page, and their *Filters* on the filters page itself (`startPage`) — whose way back
+ * is still to the first page. A Filters press while the filters are refused opens the first page
+ * instead, where the row says why in words. **How scanning runs is not here any more**: its
+ * *Continuous | Point & shoot* is on the page (`ScanControls`).
+ *
  * **No Developer switch.** The developer panels are the desktop's — the pref is shared with the
  * desktop face of the same install, so it is left alone rather than written.
  */
@@ -73,8 +68,7 @@ export function OptionsSheet({
   open,
   onClose,
   onDismiss,
-  pointAndShoot,
-  onPointAndShoot,
+  startPage,
   filters,
   onFilters,
   filterError,
@@ -92,9 +86,11 @@ export function OptionsSheet({
   onClose: () => void;
   /** Escape and the ✕: closed, and the caret handed back to the press that opened it. */
   onDismiss: () => void;
-  /** The stored point-and-shoot pref. */
-  pointAndShoot: boolean;
-  onPointAndShoot: (on: boolean) => void;
+  /**
+   * The page the sheet opens on, read each time it opens: `filters` for the controls' *Filters*
+   * press, absent for the first page. A refused filters page opens the first one instead.
+   */
+  startPage?: "filters";
   filters: ScanFilters;
   onFilters: (filters: ScanFilters) => void;
   /** The session's last refusal of a filter, in its words. */
@@ -110,17 +106,20 @@ export function OptionsSheet({
   cameraId: string | null;
   onCamera: (deviceId: string) => void;
 }) {
-  const [page, setPage] = useState<Page>("main");
+  const first: Page = startPage === "filters" && filtersDisabled === null ? "filters" : "main";
+  const [page, setPage] = useState<Page>(first);
+  // Each opening starts on the page it was opened for — React's "adjusting state when a prop
+  // changes", so the first frame of the sheet is already that page. Nothing is reset on the way
+  // out, so the page the reader was on stays drawn while the sheet fades.
+  const [shown, setShown] = useState(open);
+  if (open !== shown) {
+    setShown(open);
+    if (open) setPage(first);
+  }
+  // A filters page whose filters have since been refused (the status answered after the sheet
+  // opened) is the first page, where the row says why: one changed there would never be taken.
+  const showing: Page = page === "filters" && filtersDisabled !== null ? "main" : page;
   const back = () => setPage("main");
-  // Either way out starts the sheet on its first page next time.
-  const close = () => {
-    setPage("main");
-    onClose();
-  };
-  const dismiss = () => {
-    setPage("main");
-    onDismiss();
-  };
   const cameraName = cameras.find((c) => c.deviceId === cameraId)?.label ?? "Default";
 
   return (
@@ -128,18 +127,11 @@ export function OptionsSheet({
       open={open}
       title="Scanner options"
       closeLabel="Close scanner options"
-      onClose={close}
-      onDismiss={dismiss}
+      onClose={onClose}
+      onDismiss={onDismiss}
     >
-      {page === "main" && (
+      {showing === "main" && (
         <ul>
-          <SheetRow
-            label="Scanning"
-            value={pointAndShoot ? POINT_AND_SHOOT : "Start and stop"}
-            Icon={Crosshair}
-            opens
-            onPress={() => setPage("trigger")}
-          />
           <SheetRow
             label="Filters"
             value={filterSummary(filters)}
@@ -174,34 +166,14 @@ export function OptionsSheet({
         </ul>
       )}
 
-      {page === "trigger" && (
-        <>
-          <SheetBack label="Scanning" onBack={back} />
-          <ul aria-label="Ways to scan">
-            {TRIGGERS.map((t) => (
-              <SheetChoice
-                key={t.label}
-                label={t.label}
-                note={t.note}
-                current={t.pointAndShoot === pointAndShoot}
-                onPick={() => {
-                  onPointAndShoot(t.pointAndShoot);
-                  back();
-                }}
-              />
-            ))}
-          </ul>
-        </>
-      )}
-
-      {page === "filters" && (
+      {showing === "filters" && (
         <>
           <SheetBack label="Filters" onBack={back} />
           <FiltersPage filters={filters} onFilters={onFilters} filterError={filterError} />
         </>
       )}
 
-      {page === "finish" && (
+      {showing === "finish" && (
         <>
           <SheetBack label="Finish" onBack={back} />
           <ul aria-label="Default finishes">
@@ -221,7 +193,7 @@ export function OptionsSheet({
         </>
       )}
 
-      {page === "condition" && (
+      {showing === "condition" && (
         <>
           <SheetBack label="Condition" onBack={back} />
           <p className="px-4 pt-3 pb-1 text-xs leading-snug text-dim">
@@ -244,7 +216,7 @@ export function OptionsSheet({
         </>
       )}
 
-      {page === "camera" && (
+      {showing === "camera" && (
         <>
           <SheetBack label="Camera" onBack={back} />
           {/* Alphabetical: the order `enumerateDevices` answers in is the driver's. */}

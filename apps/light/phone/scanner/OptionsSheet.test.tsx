@@ -1,4 +1,5 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { useState } from "react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -27,8 +28,6 @@ function mount(over: Partial<Parameters<typeof OptionsSheet>[0]> = {}) {
     open: true,
     onClose: vi.fn(),
     onDismiss: vi.fn(),
-    pointAndShoot: false,
-    onPointAndShoot: vi.fn(),
     filters: NO_FILTERS,
     onFilters: vi.fn(),
     filterError: null as string | null,
@@ -44,6 +43,42 @@ function mount(over: Partial<Parameters<typeof OptionsSheet>[0]> = {}) {
   };
   renderPhone(<OptionsSheet {...props} />);
   return props;
+}
+
+/**
+ * The sheet as the page holds it: shut until one of the two presses opens it — *Scanner options*
+ * on the first page, *Filters* on the filters page — and shut again by Escape or the ✕.
+ */
+function Opened() {
+  const [state, setState] = useState<{ open: boolean; startPage?: "filters" }>({ open: false });
+  const shut = () => setState((was) => ({ ...was, open: false }));
+  return (
+    <>
+      <button type="button" onClick={() => setState({ open: true })}>
+        Options press
+      </button>
+      <button type="button" onClick={() => setState({ open: true, startPage: "filters" })}>
+        Filters press
+      </button>
+      <OptionsSheet
+        open={state.open}
+        startPage={state.startPage}
+        onClose={shut}
+        onDismiss={shut}
+        filters={NO_FILTERS}
+        onFilters={() => {}}
+        filterError={null}
+        filtersDisabled={null}
+        finish="detect"
+        onFinish={() => {}}
+        condition="NONE"
+        onCondition={() => {}}
+        cameras={[]}
+        cameraId={null}
+        onCamera={() => {}}
+      />
+    </>
+  );
 }
 
 const sheet = () => screen.findByRole("dialog", { name: "Scanner options" });
@@ -67,6 +102,8 @@ describe("the scanner's options sheet", () => {
       .getAllByRole("button")
       .map((b) => b.textContent);
     expect(rows.some((row) => row?.startsWith("Scan mode"))).toBe(false);
+    // How scanning runs is on the page now (`ScanControls`), not a row here.
+    expect(rows.some((row) => row?.startsWith("Scanning"))).toBe(false);
     expect(rows).toContain("FiltersHOB, LTR · from 2023-06-23");
     expect(rows).toContain("FinishFoil");
     expect(rows).toContain("ConditionNear mint");
@@ -80,27 +117,44 @@ describe("the scanner's options sheet", () => {
     expect(within(dialog).queryByRole("switch")).toBeNull();
   });
 
-  it("switches to point and shoot from its page, saying what each way does", async () => {
-    const props = mount();
-    expect(
-      within(await sheet())
-        .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toContain("ScanningStart and stop");
-    await open(/^Scanning/);
+  it("opens on its filters page when asked, with the way back to the first page", async () => {
+    mount({ startPage: "filters" });
     const dialog = await sheet();
-    const ways = within(within(dialog).getByRole("list", { name: "Ways to scan" })).getAllByRole(
-      "button",
-    );
-    expect(ways.map((w) => w.textContent)).toEqual([
-      "Start and stopStart once, and every card the camera sees is read until you stop.",
-      "Point & shootHold Scan to read. The scanner pauses the moment you let go, so moving between cards reads nothing.",
-    ]);
-    expect(ways[0]).toHaveAttribute("aria-current", "true");
-    await userEvent.click(ways[1]);
-    expect(props.onPointAndShoot).toHaveBeenCalledWith(true);
-    // Back on the first page.
-    expect(within(dialog).getByRole("button", { name: /^Filters/ })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Released from")).toBeInTheDocument();
+    expect(within(dialog).getByRole("switch", { name: "Skip promos" })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: /^Filters/ }));
+    expect(within(dialog).getByRole("button", { name: /^Finish/ })).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Released from")).toBeNull();
+  });
+
+  it("opens on the page it is opened for, each time it opens", async () => {
+    renderPhone(<Opened />);
+    const shut = async () => {
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    };
+    await userEvent.click(screen.getByRole("button", { name: "Filters press" }));
+    expect(within(await sheet()).getByLabelText("Released from")).toBeInTheDocument();
+    await shut();
+
+    // From Options: the first page, though the sheet was last on the filters.
+    await userEvent.click(screen.getByRole("button", { name: "Options press" }));
+    expect(within(await sheet()).getByRole("button", { name: /^Condition/ })).toBeInTheDocument();
+    await open(/^Finish/);
+    await shut();
+
+    // …and from Filters again: the filters page, not the one it was last on.
+    await userEvent.click(screen.getByRole("button", { name: "Filters press" }));
+    expect(within(await sheet()).getByLabelText("Released from")).toBeInTheDocument();
+  });
+
+  it("opens on the first page, where the row says why, when the filters are refused", async () => {
+    mount({ startPage: "filters", filtersDisabled: FILTERS_NEED_NAMES });
+    const dialog = await sheet();
+    expect(within(dialog).queryByLabelText("Released from")).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: /^Filters\s*Filters need the card database/ }),
+    ).toHaveAttribute("aria-disabled", "true");
   });
 
   it("refuses the filters, with the reason in the row's name, where the scanner has no card names", async () => {

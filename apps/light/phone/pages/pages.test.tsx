@@ -209,9 +209,10 @@ describe("the card sheet", () => {
 // every other suite leans on: several of them walk through this tab as a neutral "away" page, in a
 // jsdom with no camera to ask, and it has to stand up there without a word.
 describe("Scanner", () => {
-  it("draws its tray and its footer where there is no camera at all", async () => {
+  it("draws its tray and its bar where there is no camera at all", async () => {
     renderPhone(<PhoneFace />, { path: "/scanner" });
-    expect(await screen.findByText("Cards you scan appear here.", {}, SETTLE)).toBeInTheDocument();
+    // The peek's line and the list's: one drawn upright, the other on its side.
+    expect(await screen.findAllByText("Cards you scan appear here.", {}, SETTLE)).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "Scanned cards, 0 copies" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Folder: Collection" })).toBeInTheDocument();
     // Its one press is drawn, refused, and says why.
