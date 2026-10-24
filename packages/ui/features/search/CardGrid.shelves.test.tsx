@@ -1694,3 +1694,83 @@ describe("CardGrid keeps a carried heading under the pointer through a fold", ()
     }
   });
 });
+
+/**
+ * **A shelf's contents are a drop target** (issue #1377): `renderContents` is drawn once per shelf,
+ * in a box laid behind every tile row of that shelf — so a card let go anywhere among the shelf's
+ * tiles lands in that shelf, not only on its heading. The box's place is derived from the rows the
+ * wall drew, never written out by hand.
+ */
+describe("CardGrid shelf contents", () => {
+  const contents = (s: Shelf) => <span data-contents={s.id} />;
+  const boxOf = (container: HTMLElement, id: number) =>
+    container.querySelector<HTMLElement>(`[data-contents="${id}"]`)?.parentElement ?? null;
+  const tileRowsOf = (container: HTMLElement, id: number) =>
+    rowsDrawn(container).filter(
+      (r) => r.dataset.shelfRow === "tiles" && r.getAttribute("data-shelf-id") === String(id),
+    );
+
+  it("draws one box per shelf, spanning its tile rows with half a gap around the tiles", () => {
+    const { container } = wall(
+      shelves(
+        [
+          { shelf: BINDER, tiles: [tile("a", "Card A"), tile("b", "Card B"), tile("c", "Card C")] },
+          { shelf: TRADE, tiles: [tile("d", "Card D")] },
+        ],
+        { renderContents: contents },
+      ),
+    );
+
+    const rows = tileRowsOf(container, BINDER.id);
+    expect(rows).toHaveLength(3);
+    const first = offsetOf(rows[0]);
+    const pitch = offsetOf(rows[1]) - first;
+    const box = boxOf(container, BINDER.id)!;
+    // Half a gap (6px) above the first row; three pitches less the trailing gap, plus 6px each end.
+    expect(box.style.top).toBe(`${first - 6}px`);
+    expect(box.style.height).toBe(`${offsetOf(rows[2]) - first + pitch}px`);
+    expect(box).toHaveAttribute("aria-hidden", "true");
+    expect(box).toHaveClass("pointer-events-none");
+    expect(container.querySelectorAll("[data-contents]")).toHaveLength(2);
+    // Before every row, so the tiles paint over it.
+    const sizer = box.parentElement!;
+    expect([...sizer.children].indexOf(box)).toBeLessThan(
+      [...sizer.children].indexOf(rowsDrawn(container)[0]),
+    );
+  });
+
+  it("indents a nested shelf's box with its tiles", () => {
+    const { container } = wall(
+      shelves(
+        [
+          { shelf: BINDER, tiles: [tile("a", "Card A")] },
+          { shelf: STAPLES, tiles: [tile("c", "Card C")] },
+        ],
+        { renderContents: contents },
+      ),
+    );
+
+    const root = parseFloat(boxOf(container, BINDER.id)!.style.left);
+    const nested = parseFloat(boxOf(container, STAPLES.id)!.style.left);
+    expect(nested - root).toBe(SHELF_INDENT_PX);
+  });
+
+  it("draws nothing for a shelf the page answers null for, nor for an empty shelf", () => {
+    const { container } = wall(
+      shelves(
+        [
+          { shelf: BINDER, tiles: [tile("a", "Card A")] },
+          { shelf: TRADE, tiles: [tile("d", "Card D")] },
+          { shelf: shelf(5, "Empty"), tiles: [] },
+        ],
+        { renderContents: (s) => (s.id === TRADE.id ? null : contents(s)) },
+      ),
+    );
+
+    expect(
+      [...container.querySelectorAll("[data-contents]")].map((c) =>
+        c.getAttribute("data-contents"),
+      ),
+    ).toEqual([String(BINDER.id)]);
+  });
+});

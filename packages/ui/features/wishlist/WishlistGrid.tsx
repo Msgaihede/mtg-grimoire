@@ -61,6 +61,8 @@ export interface WishShelves {
   renderEmpty: (shelf: Shelf) => ReactNode;
   renderLabel: (group: "decks" | "managed") => ReactNode;
   renderSticky: (shelf: Shelf | null, scrollToTop: () => void) => ReactNode;
+  /** A shelf's tiles as a card target — `CardGrid`'s `renderContents` (issue #1377). */
+  renderContents?: (shelf: Shelf) => ReactNode;
   /** The shelf `CardGrid` scrolls into view — the heading of a folder being added (spec §3.8). */
   revealShelfId?: number | null;
 }
@@ -607,6 +609,7 @@ export const WishlistGrid = memo(function WishlistGrid({
           renderEmpty: shelves.renderEmpty,
           renderLabel: shelves.renderLabel,
           renderSticky: shelves.renderSticky,
+          renderContents: shelves.renderContents,
           revealShelfId: shelves.revealShelfId ?? null,
         };
   const badge = useMemo(() => wishBadgeOf(collectionFolders), [collectionFolders]);

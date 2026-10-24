@@ -15,13 +15,30 @@ import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { RarityGem } from "@/components/RarityGem";
-import { TABLE_BAND_HEIGHT, VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
+import {
+  TABLE_BAND_HEIGHT,
+  VirtualTable,
+  type RowRenderProps,
+  type TableColumn,
+} from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { shelfColumn } from "@/features/shelves/ShelfPlace";
-import { collectionDraggable } from "@/features/collection/collectionDrag";
+import {
+  collectionDraggable,
+  readCollectionDrop,
+  type CollectionDrop,
+} from "@/features/collection/collectionDrag";
+import { SHELF_CONTENTS_ATTR } from "@/features/shelves/ShelfContents";
+import { useShelfContentsDropTarget } from "@/features/shelves/useShelfDrag";
+import {
+  shelfContentsKey,
+  shelfTarget,
+  type CardTarget,
+} from "@/features/collection/CollectionShelfParts";
 import { CONDITION_LABEL, CONDITION_NOT_SET, type Condition } from "@/lib/conditions";
 import { useDragRecord } from "@/lib/dndTarget";
+import { DROP_OVER } from "@/lib/dropMarks";
 import { finishLabel, isFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
@@ -438,6 +455,13 @@ export interface CollectionTableShelves {
   renderEmpty: (shelf: Shelf) => ReactNode;
   renderSticky: (shelf: Shelf | null, scrollToTop: () => void) => ReactNode;
   /**
+   * **Which shelves' rows take a card** (issue #1377) — the page's card policy for a shelf, or
+   * `undefined` for one that takes none. Each row of a shelf that takes one is a target filing
+   * into that shelf, as its heading is, and every row of the shelf lights while a card is over any
+   * of them. Absent: no row is a target. Read at draw time, like the drawings.
+   */
+  cardsFor?: (shelf: Shelf) => CardTarget | undefined;
+  /**
    * The shelf whose heading band to bring into view — `CardGrid`'s `revealShelfId`, the table's
    * half: Add folder's draft heading while its field is open, and afterwards the heading the caret
    * is being handed back to (after Add folder in a heading, or a Move up / Move down). Handed to
@@ -490,6 +514,8 @@ function shelvedRows(
   shelfAt: (Shelf | null)[];
   /** The indent of the shelf each drawn entry is filed under — what its rails are counted from. */
   indentOf: ReadonlyMap<TableRow, number>;
+  /** The shelf each drawn entry is filed under — where a card let go on its row lands. */
+  shelfOf: ReadonlyMap<TableRow, Shelf>;
 } {
   // The shelf the drawing stops after, or `null` to draw every one.
   let edge: number | null = null;
@@ -503,6 +529,7 @@ function shelvedRows(
   const rows: TableRow[] = [];
   const shelfAt: (Shelf | null)[] = [];
   const indentOf = new Map<TableRow, number>();
+  const shelfOf = new Map<TableRow, Shelf>();
   const drawn = new Set<number>();
   for (const [index, row] of layout.entries()) {
     // Past the edge shelf's rows: a label, heading or empty box for a later shelf ends the drawing.
@@ -524,10 +551,11 @@ function shelvedRows(
         rows.push(entry);
         shelfAt.push(row.shelf);
         indentOf.set(entry, row.shelf.indent);
+        shelfOf.set(entry, row.shelf);
       }
     }
   }
-  return { rows, shelfAt, indentOf };
+  return { rows, shelfAt, indentOf, shelfOf };
 }
 
 /**
@@ -587,6 +615,7 @@ function DraggableRow({
   name,
   typeLine,
   folderId,
+  dropRef,
   children,
   ...rest
 }: {
@@ -595,8 +624,21 @@ function DraggableRow({
   name: string | null;
   typeLine: string | null;
   folderId: number | null;
-} & ComponentProps<"div">) {
+  /** A drop target on the same element — {@link ShelfRow}'s. */
+  dropRef?: (element: HTMLElement | null) => () => void;
+} & Omit<ComponentProps<"div">, "ref">) {
   const ref = useRef<HTMLDivElement>(null);
+  const attach = useCallback(
+    (element: HTMLDivElement | null) => {
+      ref.current = element;
+      const release = dropRef?.(element);
+      return () => {
+        ref.current = null;
+        release?.();
+      };
+    },
+    [dropRef],
+  );
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
@@ -613,9 +655,43 @@ function DraggableRow({
     });
   }, [entryId, cardId, name, typeLine, folderId]);
   return (
-    <div ref={ref} {...rest}>
+    <div ref={attach} {...rest}>
       {children}
     </div>
+  );
+}
+
+/**
+ * A row of a shelf that takes a card (issue #1377): {@link DraggableRow}, and a card target on the
+ * same element filing into the row's shelf — the shelf's heading's policy, bound to that shelf.
+ * dnd-kit keys its registry by entity id, so a row is both something to pick up and somewhere to
+ * let go; the row being carried is in its own shelf, which the policy refuses.
+ *
+ * **A wash and no ring** while a card is over any row of the shelf: the rows are flush, so a ring
+ * per row would draw a stack of boxes where the reader should see one shelf.
+ */
+function ShelfRow({
+  shelf,
+  cards,
+  className,
+  ...row
+}: ComponentProps<typeof DraggableRow> & { shelf: Shelf; cards: CardTarget }) {
+  const to = shelfTarget(shelf);
+  const drop = useShelfContentsDropTarget(
+    {
+      read: readCollectionDrop,
+      canDrop: (one: CollectionDrop) => cards.canDrop(one, to),
+      onDrop: (one: CollectionDrop) => cards.onDrop(one, to),
+    },
+    shelfContentsKey(shelf),
+  );
+  return (
+    <DraggableRow
+      {...row}
+      {...{ [SHELF_CONTENTS_ATTR]: drop.over ? "over" : "" }}
+      dropRef={drop.attach}
+      className={cn(className, drop.over && DROP_OVER)}
+    />
   );
 }
 
@@ -896,6 +972,35 @@ export const CollectionTable = memo(function CollectionTable({
     [shelved, shelves, scrollToTop],
   );
 
+  /**
+   * One entry's row: picked up as a copy, and — on a shelf that takes a card — a place to let one
+   * go too, filing into the row's shelf as its heading would (issue #1377).
+   */
+  const dataRow = (props: RowRenderProps, row: CollectionRow): ReactNode => {
+    const rowProps = {
+      entryId: row.id,
+      cardId: row.cardId,
+      name: row.name,
+      typeLine: row.typeLine,
+      folderId: row.folderId,
+      ...props,
+      // The red edge's reason, in words — see `ruleBreaks`.
+      "aria-description": ruleBreaks?.has(row.id) ? RULE_BREAK : undefined,
+      onContextMenu: rowMenu?.(row),
+      onKeyDown: (e: ReactKeyboardEvent) => {
+        props.onKeyDown?.(e);
+        rowMenuKey?.(row)(e);
+      },
+    };
+    const shelf = shelved?.shelfOf.get(row);
+    const cards = shelf ? shelves?.cardsFor?.(shelf) : undefined;
+    return shelf && cards ? (
+      <ShelfRow {...rowProps} shelf={shelf} cards={cards} />
+    ) : (
+      <DraggableRow {...rowProps} />
+    );
+  };
+
   return (
     <div ref={frame} className="contents">
       <VirtualTable
@@ -954,27 +1059,7 @@ export const CollectionTable = memo(function CollectionTable({
         // the keyboard's route to the *card* away in the act of adding one to its menu. A press
         // inside the quantity stepper is left alone by the primitive, which tests for a field
         // before it builds anything.
-        renderRow={(props, row) =>
-          isBand(row) ? (
-            <div {...props} />
-          ) : (
-            <DraggableRow
-              entryId={row.id}
-              cardId={row.cardId}
-              name={row.name}
-              typeLine={row.typeLine}
-              folderId={row.folderId}
-              {...props}
-              // The red edge's reason, in words — see `ruleBreaks`.
-              aria-description={ruleBreaks?.has(row.id) ? RULE_BREAK : undefined}
-              onContextMenu={rowMenu?.(row)}
-              onKeyDown={(e) => {
-                props.onKeyDown?.(e);
-                rowMenuKey?.(row)(e);
-              }}
-            />
-          )
-        }
+        renderRow={(props, row) => (isBand(row) ? <div {...props} /> : dataRow(props, row))}
       />
     </div>
   );

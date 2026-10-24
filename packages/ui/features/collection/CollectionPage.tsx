@@ -109,6 +109,7 @@ import {
 } from "./collectionWall";
 import {
   CollectionEmptyShelf,
+  CollectionShelfContents,
   CollectionShelfHeading,
   CollectionShelfSticky,
   type CardTarget,
@@ -2539,6 +2540,19 @@ export function CollectionPage() {
   );
 
   /**
+   * **Which shelves take a card** — Not sorted and the reader's own folders, never the app's own
+   * shelves nor a folder still being named. One answer for a shelf's heading and for its contents
+   * (its tiles on the wall, its rows in the table — issue #1377), so the two never disagree about
+   * where a card may land.
+   */
+  const shelfCards = useCallback(
+    (shelf: Shelf): CardTarget | undefined =>
+      shelf.id !== NEW_FOLDER_SHELF && (shelf.kind === "folder" || shelf.kind === "unfiled")
+        ? cardTarget
+        : undefined,
+    [cardTarget],
+  );
+  /**
    * One shelf's heading, wired (spec §3.2, §3.8, §6). **The reader's own folder is the only kind
    * that gets anything a press could be refused for** — Add folder, Rename, the ⋯, a folder drop
    * and a drag — because the backend refuses every one of them for a deck group and `Recently
@@ -2591,11 +2605,7 @@ export function CollectionPage() {
           onRename={mine ? () => openRename(mine.id) : undefined}
           renaming={renaming}
           menu={mine ? folderRowMenu(mine) : undefined}
-          cards={
-            shelf.id !== NEW_FOLDER_SHELF && (shelf.kind === "folder" || shelf.kind === "unfiled")
-              ? cardTarget
-              : undefined
-          }
+          cards={shelfCards(shelf)}
           folders={
             mine
               ? {
@@ -2631,7 +2641,7 @@ export function CollectionPage() {
       openNewFolder,
       openRename,
       folderRowMenu,
-      cardTarget,
+      shelfCards,
       canPlaceFolder,
       placeFolder,
     ],
@@ -2640,6 +2650,14 @@ export function CollectionPage() {
   const renderEmpty = useCallback(
     (shelf: Shelf) => <CollectionEmptyShelf shelf={shelf} cards={cardTarget} />,
     [cardTarget],
+  );
+  /** A shelf's tiles as a card target (issue #1377) — wherever its heading would take the card. */
+  const renderContents = useCallback(
+    (shelf: Shelf) => {
+      const cards = shelfCards(shelf);
+      return cards ? <CollectionShelfContents shelf={shelf} cards={cards} /> : null;
+    },
+    [shelfCards],
   );
   const renderSticky = useCallback(
     (shelf: Shelf | null, scrollToTop: () => void) => (
@@ -2675,9 +2693,19 @@ export function CollectionPage() {
       renderEmpty,
       renderLabel,
       renderSticky,
+      renderContents,
       revealShelfId,
     }),
-    [sections, tilesOf, headingFor, renderEmpty, renderLabel, renderSticky, revealShelfId],
+    [
+      sections,
+      tilesOf,
+      headingFor,
+      renderEmpty,
+      renderLabel,
+      renderSticky,
+      renderContents,
+      revealShelfId,
+    ],
   );
   /**
    * The table's half. `layout`, `rowsOf` and `complete` are what its rows are built from and each
@@ -2703,6 +2731,7 @@ export function CollectionPage() {
       renderLabel,
       renderEmpty,
       renderSticky,
+      cardsFor: shelfCards,
       revealShelfId,
     }),
     [
@@ -2713,6 +2742,7 @@ export function CollectionPage() {
       renderLabel,
       renderEmpty,
       renderSticky,
+      shelfCards,
       revealShelfId,
     ],
   );
