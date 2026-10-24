@@ -10,6 +10,7 @@
  * | an empty folder's dashed box | a card | files it there |
  * | an empty `Not sorted`'s dashed box | a card | un-files it to the root |
  * | the sticky bar | a card | files it into the shelf the reader is scrolled inside |
+ * | a folder's or `Not sorted`'s contents (its tiles, its table rows) | a card | files it there, as its heading would (issue #1377) |
  *
  * **Only the path row's segments take a folder besides a heading** (`CollectionBreadcrumb`); a
  * heading's lead segments and the sticky bar's are buttons and nothing else.
@@ -22,10 +23,12 @@
  */
 import { useCallback, useRef, type ReactElement } from "react";
 import { EmptyShelf } from "@/features/shelves/EmptyShelf";
+import { ShelfContents } from "@/features/shelves/ShelfContents";
 import { useTakeHeadingCaret, type HeadingCaret } from "@/features/shelves/headingCaret";
 import { ShelfHeading, type ShelfHeadingProps } from "@/features/shelves/ShelfHeading";
 import { ShelfStickyBar } from "@/features/shelves/ShelfStickyBar";
 import {
+  useShelfContentsDropTarget,
   useShelfDragSource,
   useShelfDropTarget,
   useShelfStickyDropTarget,
@@ -136,6 +139,38 @@ export function CollectionEmptyShelf({
     onDrop: (one: CollectionDrop) => cards.onDrop(one, to),
   });
   return <EmptyShelf dropRef={drop.attach} dropMark={drop.mark} />;
+}
+
+/**
+ * **The key a shelf's contents targets share** — `useShelfContentsDropTarget`'s `shelf`, so every
+ * table row of one shelf lights while a card is over any of them. Scoped to this cabinet, since
+ * the wishlist's shelf ids are a different table's.
+ */
+export function shelfContentsKey(shelf: Shelf): string {
+  return `collection:${shelf.id}`;
+}
+
+/**
+ * A shelf's tiles (issue #1377) — the box the wall lays behind them, a card target filing into
+ * that shelf exactly as its heading does.
+ */
+export function CollectionShelfContents({
+  shelf,
+  cards,
+}: {
+  shelf: Shelf;
+  cards: CardTarget;
+}): ReactElement {
+  const to = shelfTarget(shelf);
+  const drop = useShelfContentsDropTarget(
+    {
+      read: readCollectionDrop,
+      canDrop: (one: CollectionDrop) => cards.canDrop(one, to),
+      onDrop: (one: CollectionDrop) => cards.onDrop(one, to),
+    },
+    shelfContentsKey(shelf),
+  );
+  return <ShelfContents dropRef={drop.attach} over={drop.over} />;
 }
 
 /**

@@ -8,9 +8,10 @@
  * orphaned.
  *
  * **Anything lands on a shelf target only while the pointer is inside it** (`pointerOnly`, on both
- * halves). Spec §6's targets are headings, empty boxes, the sticky bar and path segments — never
- * tiles, table rows or blank wall — and dnd-kit's default detector falls back to the carried
- * thing's *rectangle* when the pointer is in no target, which made the nearest heading take a card
+ * halves). Spec §6's targets are headings, empty boxes, the sticky bar and path segments, and since
+ * issue #1377 a shelf's contents — its tiles, its table rows ({@link useShelfContentsDropTarget})
+ * — but never blank wall; and dnd-kit's default detector falls back to the carried thing's
+ * *rectangle* when the pointer is in no target, which made the nearest heading take a card
  * released on another shelf's tiles (live pass, "Extra, found during 3"). The folder half takes the
  * same rule because the table view does not fold away during a folder drag, so a heading carried
  * over card rows would land beside whichever heading it overlapped. What it gives up is the grid's
@@ -25,7 +26,7 @@
  * result named like a ref as a ref object and flags every read beside it
  * (`features/home/stickyNoteDrag.ts` carries the finding).
  */
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { useDndDropTarget, useDndTargetRef } from "@/lib/dndTarget";
 import {
   folderDraggable,
@@ -165,6 +166,75 @@ export function useShelfStickyDropTarget<T>(card: ShelfCardDrop<T>): {
     overlay: true,
   });
   return { attach, mark: over ? "over" : armed ? "armed" : "none" };
+}
+
+/**
+ * How many of a shelf's contents targets the pointer is over right now, by the caller's key —
+ * what lets every row of one shelf wear the mark when a card is over any one of them. Counted
+ * rather than set, because moving between two rows of one shelf is one `dragover` that drops one
+ * and raises the other, and the order their effects run in is not this file's to promise.
+ */
+const contentsOver = new Map<string, number>();
+const contentsListeners = new Set<() => void>();
+
+function holdContentsOver(key: string): () => void {
+  contentsOver.set(key, (contentsOver.get(key) ?? 0) + 1);
+  for (const notify of contentsListeners) notify();
+  return () => {
+    const left = (contentsOver.get(key) ?? 1) - 1;
+    if (left > 0) contentsOver.set(key, left);
+    else contentsOver.delete(key);
+    for (const notify of contentsListeners) notify();
+  };
+}
+
+function subscribeToContentsOver(notify: () => void): () => void {
+  contentsListeners.add(notify);
+  return () => {
+    contentsListeners.delete(notify);
+  };
+}
+
+/**
+ * **A shelf's contents as a card target** (issue #1377) — the tiles of a shelf on the wall, the
+ * rows of a shelf in the table: a card let go anywhere on them files into that shelf, exactly as
+ * it would on the shelf's heading.
+ *
+ * **Pointer-inside, like every other shelf target** (`pointerOnly`): the contents sit flush
+ * against the next shelf's heading, and the default's shape fallback would hand a card released
+ * on one shelf's tiles to whichever neighbour the carried card overlapped — the defect that rule
+ * was written for. With the contents a target of their own, that release now lands in the shelf
+ * the pointer is in, which is what the reader aimed at.
+ *
+ * **`over` and never `armed`.** An armed mark is raised on every eligible target at `dragstart`,
+ * and every shelf's contents are eligible for nearly every drag — a wall that washed gold from top
+ * to bottom the moment a card was lifted would say nothing. The headings already carry that hint.
+ *
+ * `shelf` keys the shared answer: every target registered under one key reads `over` while the
+ * pointer is in any of them, so a table's rows of one shelf light together. `null` takes nothing.
+ */
+export function useShelfContentsDropTarget<T>(
+  card: ShelfCardDrop<T>,
+  shelf: string | null,
+): { attach: AttachDrop; over: boolean } {
+  const { ref, attach } = useDndTargetRef();
+  const { over } = useDndDropTarget({
+    ref,
+    read: card.read,
+    canDrop: shelf === null ? NEVER : card.canDrop,
+    onDrop: card.onDrop,
+    pointerOnly: true,
+  });
+  useEffect(() => {
+    if (!over || shelf === null) return;
+    return holdContentsOver(shelf);
+  }, [over, shelf]);
+  const shared = useSyncExternalStore(
+    subscribeToContentsOver,
+    () => shelf !== null && (contentsOver.get(shelf) ?? 0) > 0,
+    () => false,
+  );
+  return { attach, over: shared };
 }
 
 /**

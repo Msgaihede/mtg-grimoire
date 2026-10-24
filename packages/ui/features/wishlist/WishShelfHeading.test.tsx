@@ -1,10 +1,11 @@
 import { render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SHELF_CONTENTS_ATTR } from "@/features/shelves/ShelfContents";
 import { SHELF_HEADING_ATTR } from "@/features/shelves/ShelfHeading";
 import { SHELF_STICKY_ATTR } from "@/features/shelves/ShelfStickyBar";
 import type { Shelf } from "@/lib/shelves";
 import { boxed, startPointerDrag } from "@/test-drag";
-import { WishShelfHeading, WishShelfSticky } from "./WishShelfHeading";
+import { WishShelfContents, WishShelfHeading, WishShelfSticky } from "./WishShelfHeading";
 import { wishDraggable, type WishDrag } from "./wishDrag";
 
 /**
@@ -91,5 +92,25 @@ describe("WishShelfSticky", () => {
 
     expect(onBar).toHaveBeenCalledWith({ kind: "wish", wish: WISH });
     expect(onHeading).not.toHaveBeenCalled();
+  });
+});
+
+/** **A shelf's tiles take a wish** (issue #1377), filing it as the shelf's heading would. */
+describe("WishShelfContents", () => {
+  it("takes a wish released on a shelf's tiles and marks only while over them", async () => {
+    const onDrop = vi.fn();
+    const { container } = render(
+      <WishShelfContents shelf={SOMEDAY} cards={{ canDrop: () => true, onDrop }} />,
+    );
+    const box = boxed(container.querySelector<HTMLElement>(`[${SHELF_CONTENTS_ATTR}]`)!, 200, 300);
+
+    const held = await startPointerDrag(wishSource());
+    await held.leave();
+    expect(box).toHaveAttribute(SHELF_CONTENTS_ATTR, "");
+    await held.moveTo(100, 350);
+    expect(box).toHaveAttribute(SHELF_CONTENTS_ATTR, "over");
+    await held.drop();
+
+    expect(onDrop).toHaveBeenCalledWith({ kind: "wish", wish: WISH });
   });
 });

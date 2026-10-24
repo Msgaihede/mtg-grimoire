@@ -102,8 +102,10 @@ import { wholeWishlistQuery, type SweepScope } from "./wholeWishlistQuery";
 import {
   WishEmptyShelf,
   WishManagedEmpty,
+  WishShelfContents,
   WishShelfHeading,
   WishShelfSticky,
+  wishContentsKey,
 } from "./WishShelfHeading";
 import {
   countTotals,
@@ -1749,6 +1751,22 @@ export function WishlistPage() {
   );
   const renderLabel = useCallback((group: "decks" | "managed") => <ShelfLabel group={group} />, []);
   /**
+   * **Which shelves' contents take a card** (issue #1377) — its tiles on the wall, its rows in the
+   * table — filing into the shelf as its heading would. A deck's managed folder takes no hand
+   * write, so its contents register nothing rather than a target that always refuses.
+   */
+  const contentsDrops = useCallback(
+    (shelf: Shelf) => (shelf.kind === "managed" ? undefined : cardDrops(shelf)),
+    [cardDrops],
+  );
+  const renderContents = useCallback(
+    (shelf: Shelf) => {
+      const cards = contentsDrops(shelf);
+      return cards ? <WishShelfContents shelf={shelf} cards={cards} /> : null;
+    },
+    [contentsDrops],
+  );
+  /**
    * The shelf bar, for both views — the wall's and the table's (`scrollTableTop`, below).
    *
    * **It draws no Top while the filter quick bar is down** (spec §6.3): the quick bar has one of its
@@ -1806,9 +1824,19 @@ export function WishlistPage() {
       renderEmpty,
       renderLabel,
       renderSticky,
+      renderContents,
       revealShelfId,
     }),
-    [sections, rowsOf, renderHeading, renderEmpty, renderLabel, renderSticky, revealShelfId],
+    [
+      sections,
+      rowsOf,
+      renderHeading,
+      renderEmpty,
+      renderLabel,
+      renderSticky,
+      renderContents,
+      revealShelfId,
+    ],
   );
   /** Each drawn shelf's indent — the table's rails for a wish row are its shelf's (spec §3.3). */
   const indentByShelf = useMemo(
@@ -1818,6 +1846,21 @@ export function WishlistPage() {
   const indentOf = useCallback(
     (row: WishRow) => indentByShelf.get(shelfOfWish(row)) ?? 0,
     [indentByShelf],
+  );
+  /** Each drawn shelf by id — the shelf a wish's row files a dropped card into (issue #1377). */
+  const drawnShelfById = useMemo(
+    () => new Map(sections.map(({ shelf }) => [shelf.id, shelf])),
+    [sections],
+  );
+  const contentsOf = useCallback(
+    (row: WishRow) => {
+      const shelf = drawnShelfById.get(shelfOfWish(row));
+      const cards = shelf === undefined ? undefined : contentsDrops(shelf);
+      return shelf === undefined || cards === undefined
+        ? undefined
+        : { key: wishContentsKey(shelf), cards };
+    },
+    [drawnShelfById, contentsDrops],
   );
 
   /** The table's rows, interleaved (spec §3.10) — complete once no page remains to load. */
@@ -1910,8 +1953,18 @@ export function WishlistPage() {
         return renderSticky(table.owners[index] ?? null, scrollTableTop);
       },
       indentOf,
+      contentsOf,
     }),
-    [renderHeading, renderEmpty, renderLabel, table, renderSticky, scrollTableTop, indentOf],
+    [
+      renderHeading,
+      renderEmpty,
+      renderLabel,
+      table,
+      renderSticky,
+      scrollTableTop,
+      indentOf,
+      contentsOf,
+    ],
   );
 
   const failure = query.isError

@@ -424,6 +424,11 @@ heading carries its card target and its folder target **on one element** (`useSh
 `packages/ui/features/shelves/useShelfDrag.ts`), which the entity-id registry described above allowed all
 along. See [Shelves](#shelves-2026-09-26).
 
+**Since issue #1377 (2026-10-24) a shelf's contents take a wish too** — its tiles on the wall
+(`WishShelfContents`, drawn behind them through `GridSections.renderContents`) and its rows in the
+table (`WishTableBands.contentsOf`), filing through the same `cardDrops` as the heading. A deck's
+managed folder's contents register nothing, since the folder takes no hand write.
+
 ### `WishDrop`, the discriminator the wishlist never had (2026-09-07)
 
 The search sidebar put a **third** kind of thing in the air over a folder card: a card nobody
@@ -1445,7 +1450,7 @@ they were before the press. Findings B and C, both known and accepted, are recor
 | `packages/ui/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
 | ~~`packages/ui/features/wishlist/WishFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band, beside `ManagedWishFolders.tsx`. A folder is a shelf heading |
 | `packages/ui/features/wishlist/wishShelfPlan.ts` | The wishlist's reading of the shelves: `toShelfFolder`, `NEW_FOLDER_SHELF`, `effectiveCounts`, `countTotals`, `shelfStat`, `foldedForDrag` and the table's `shelfTable` |
-| `packages/ui/features/wishlist/WishShelfHeading.tsx` | The heading, the sticky bar and the empty box, each wired to `readWishDrop` and this page's filing policy |
+| `packages/ui/features/wishlist/WishShelfHeading.tsx` | The heading, the sticky bar, the empty box and a shelf's tiles (`WishShelfContents`, issue #1377), each wired to `readWishDrop` and this page's filing policy |
 | `packages/ui/features/wishlist/useWishDrops.ts` | The page's filing policy, out of `WishlistPage` since issue #557: `canFile` / `fileWish`, `addWish`, `cardDrops`, and the folder drops `folderPlacement` / `placeFolder` and `canMoveInto` / `moveInto` |
 | `packages/ui/features/wishlist/WishFolderPanel.tsx` | The strip of folder questions — `Move to folder…`, `Delete…`, `Clear…` — with `FolderQuestion`, `DeleteFolderConfirm`, `ClearFolderConfirm` and `ROOT_LABEL`; out of `WishlistPage` since issue #557 |
 | `packages/ui/features/wishlist/useWishEntryWrites.ts` | The stepper, the removal, the filing, back to any printing, and `settleWhole`; the optimistic patch, snapshot and restore are `packages/ui/lib/useOptimisticEntries.ts`, shared with the collection since issue #557 |

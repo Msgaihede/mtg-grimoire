@@ -49,6 +49,7 @@ import {
   rowHeight,
   rowOfTile,
   rowStartOf,
+  type LayoutRow,
   type ShelfSection,
 } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
@@ -394,6 +395,14 @@ export interface GridSections<T extends GridCard> {
    * inside, or `null` when there is none to name; `scrollToTop` is the bar's **Top**, held still.
    */
   renderSticky: (shelf: Shelf | null, scrollToTop: () => void) => ReactNode;
+  /**
+   * **A shelf's contents as a drop target** (issue #1377) — drawn once per shelf in a box laid
+   * *behind* all of that shelf's tile rows, from the top of its first row to the foot of its last
+   * (gaps included, with half a gap of margin around the tiles), so a card let go anywhere among
+   * the shelf's tiles lands in it. The box takes no pointer events and the tiles paint over it.
+   * Absent, or `null` for a shelf, draws nothing — the app's own shelves take no card.
+   */
+  renderContents?: (shelf: Shelf) => ReactNode;
   /**
    * **A shelf to bring into view** — its heading row, or its first row if it is headless — the
    * moment this *changes* to its id. Pages set it when **Add folder** opens a placeholder heading,
@@ -1182,7 +1191,16 @@ export function CardGrid<T extends GridCard>({
     if (!shelfTiles) return null;
     const { layout, slots, frontier } = fillShelves(shelfTiles, columns);
     const keys = layout.rows.map((_, index) => shelfRowKey(layout, index));
-    return { layout, slots, frontier, keys };
+    // Each shelf's tile rows, first to last — always one run, since a shelf's tiles are laid out
+    // together under its heading. What `renderContents`' box spans.
+    const tileRuns = new Map<number, { first: number; last: number }>();
+    for (const [index, row] of layout.rows.entries()) {
+      if (row.kind !== "tiles") continue;
+      const run = tileRuns.get(row.shelf.id);
+      if (run) run.last = index;
+      else tileRuns.set(row.shelf.id, { first: index, last: index });
+    }
+    return { layout, slots, frontier, keys, tileRuns };
   }, [shelfTiles, columns]);
 
   const rowCount = shelved ? shelved.layout.rows.length : Math.ceil(rows.length / columns);
@@ -2389,6 +2407,16 @@ export function CardGrid<T extends GridCard>({
           position: "relative",
         }}
       >
+        {shelved && sections?.renderContents && (
+          <ShelfContentsBoxes
+            shelved={shelved}
+            virtualRows={virtualRows}
+            pitch={tileHeight + GAP}
+            scrollMargin={scrollMargin}
+            gutter={gutter}
+            renderContents={sections.renderContents}
+          />
+        )}
         {shelved && sections
           ? virtualRows.map((v) => {
               const row = shelved.layout.rows[v.index];
@@ -2492,6 +2520,66 @@ export function CardGrid<T extends GridCard>({
       </div>
     </div>
   );
+}
+
+/**
+ * The boxes {@link GridSections.renderContents} is drawn in — one per shelf with a tile row drawn,
+ * from its first tile row's top to its last's foot, whether or not those rows are drawn
+ * themselves. Every tile row of a shelf is one pitch tall and the run is unbroken, so the run's
+ * ends are counted from any row of it the virtualiser has placed. First in the sizer, so every row
+ * paints over it; keyed by the shelf, so a box that has taken the pointer survives a scroll.
+ *
+ * Half a gap of margin on every side of the tiles (`GAP / 2`), which puts the box's edge in the
+ * gutter between the art and its neighbours rather than under the art, and leaves the next
+ * heading's own strip to the heading.
+ */
+function ShelfContentsBoxes({
+  shelved,
+  virtualRows,
+  pitch,
+  scrollMargin,
+  gutter,
+  renderContents,
+}: {
+  shelved: {
+    layout: { rows: readonly LayoutRow[] };
+    tileRuns: ReadonlyMap<number, { first: number; last: number }>;
+  };
+  virtualRows: readonly { index: number; start: number }[];
+  pitch: number;
+  scrollMargin: number;
+  gutter: number;
+  renderContents: (shelf: Shelf) => ReactNode;
+}) {
+  const boxes = new Map<number, ReactNode>();
+  for (const v of virtualRows) {
+    const row = shelved.layout.rows[v.index];
+    if (row?.kind !== "tiles" || boxes.has(row.shelf.id)) continue;
+    const run = shelved.tileRuns.get(row.shelf.id);
+    if (!run) continue;
+    const content = renderContents(row.shelf);
+    if (content === null || content === undefined) continue;
+    const top = v.start - scrollMargin - (v.index - run.first) * pitch;
+    const height = (run.last - run.first + 1) * pitch - GAP;
+    const margin = GAP / 2;
+    boxes.set(
+      row.shelf.id,
+      <div
+        key={row.shelf.id}
+        aria-hidden="true"
+        className="pointer-events-none absolute"
+        style={{
+          top: top - margin,
+          height: height + 2 * margin,
+          left: gutter + row.shelf.indent * SHELF_INDENT_PX - margin,
+          right: gutter - margin,
+        }}
+      >
+        {content}
+      </div>,
+    );
+  }
+  return <>{[...boxes.values()]}</>;
 }
 
 /**
