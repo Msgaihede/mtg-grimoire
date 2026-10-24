@@ -289,8 +289,9 @@ break (§4) or a reset forgets the previous decision, so the same card presented
 and adds; a filter change keeps it, which is the whole point of it. Asked once per decision.
 
 **No text is read, so the finish is the corpus's**: a printing that exists in one finish takes it
-on the tray row; one sold in several lands `unknown` under the Defaults' *Detect* policy
-(`scanner::DETECT_FINISH`) for the reader to settle.
+on the tray row; one sold in several lands `unknown` under the *Detect* finish choice — the
+desktop dock's Finish menu, the phone's options sheet (`scanner::DETECT_FINISH`) — for the reader
+to settle.
 
 **Two rules on the page's side** (`useScanLoop`):
 
@@ -792,7 +793,8 @@ camera say *Printing updated*, never *Added*.
 **The commit is one `scanner_tray_commit(items, folderId, remaining)`**: the collection import in
 `add` mode **and** the tray that is left, in one transaction (`collection::commit_import_with`), so an
 app closed before a debounced tray write cannot leave committed rows in the stored tray. One condition
-for the whole commit, from the Defaults popover; finish is per row. **All or nothing**: a refusal keeps
+for the whole commit, the reader's *Condition* (the tray's footer on the desktop, the options sheet
+on the phone); finish is per row. **All or nothing**: a refusal keeps
 every row and puts the backend's sentence above them; a success removes **only the rows it
 committed**. `remaining` and the lines are worked out when the commit actually goes out and again when
 it answers, because the camera keeps running — a second press over rows a first press took finds them
@@ -817,9 +819,14 @@ marketplace does not quote that printing in that finish.
 
 **The Scan HUD over the camera is the reader's whole view of the session** (`readerText.ts`'s
 `matchStrip` says it; `reader/ScanHud.tsx` draws it, redesigned 2026-10-24): a 4px bar along the
-picture's top edge, *Reset evidence* and *Send scan…* in its top-right corner (continuous scanning
-only, a labelled press on the desktop and an icon on the phone) and a chip under the bar for the one
-error it has to say, and none of the developer vocabulary. The pill, name and sentence the old Match
+picture's top edge, *Reset evidence* and *Send scan…* in its top-right corner (a labelled press on
+the desktop and an icon on the phone, over a live picture with a session only — never over the
+camera's refusal or a host's sentence; the phone draws them while continuous scanning runs, the
+desktop's Reset stopped and between shots too) and a chip under the bar for the one error it has to
+say, and none of the developer vocabulary. **The bar is drawn only over a live picture**, and its
+fill is a `scaleX` from the left edge, not a width. **The chip drops to a row of its own under the
+presses** where the room beside them is under 12rem (both labelled presses leave it 47px in the
+desktop column's 22rem) — the corner row is reversed and wraps, so the presses keep the corner. The pill, name and sentence the old Match
 strip drew above the camera are gone from view: the Added popup names the card that landed. **The
 accessible arrangement came across unchanged: a visually hidden live region** (`role="status"`,
 *Scanner status*, always mounted), with the name left out of what it announces while the tone is
@@ -832,7 +839,10 @@ ambiguous decision names the card only when every choice shares one name.
 
 **The rest of what is drawn on the picture** (`reader/PictureNotes.tsx`): the stopped veil (a title
 and the note under it) and, under point and shoot, the *Point at a card, then press Scan card* pill
-on the desktop and the hold prompt on the phone. **`ScanDock`** is under the picture:
+on the desktop and the hold prompt on the phone. **The desktop's pill is the HUD's `notice`**, laid
+in the HUD's own top flow under the corner row, so it never runs under *Reset evidence* (centred on
+its own, the 274px pill met the 143px press in any column under 584px) and wraps rather than
+overflows at the column's 22rem floor. **`ScanDock`** is under the picture:
 *Filters*, *Finish* and *Camera* as anchored popovers, the *Point & shoot* switch, and the gold
 *Start*/*Stop* press (*Scan card* under point and shoot). History and the Developer switch are the
 page header's.
@@ -871,7 +881,7 @@ that asks the reader something, or sits below the first floor, throws nothing.
 **The desktop tray** (`TrayPanel`): a header with the count, *Worth* (the tray's total at the
 reader's marketplace, drawn only once a copy has a price), the layout toggle and the `⋯` *Tray
 actions* menu (*Create deck…*, *Archive*, *Clear all…*); tiles of continuous cards, each with a chin
-for the printing and finish, a waiting tile spanning its printings; and a footer with *File into*,
+for the finish and the quantity, a waiting tile spanning its printings; and a footer with *File into*,
 *Condition* and the gold *Add*.
 
 ### Scan history
@@ -902,7 +912,7 @@ On the phone face both are rows of the tray actions sheet (`TrayActionsSheet`, o
 **A past scan can go back into the tray**, so a pile filed by mistake and taken out of the
 collection again (or archived when it was meant to be filed) is not lost: the batch's lines land
 in the tray and the reader files or archives them again with the tray's own presses — into the
-folder, and at the condition, the Defaults say now. The press is _Put back in tray_: a button
+folder, and at the condition, the tray's *File into* and *Condition* say now. The press is _Put back in tray_: a button
 beside _Delete…_ in `ScanHistoryDialog`'s batch header, and a sheet row above _Rename_ in the
 phone's `HistorySheet`. Each face hands the batch to its page (`onPutBack`), which closes the
 history, hands the caret back to the press that opened it, and toasts _Put N cards from “Scan 4”
@@ -1276,7 +1286,7 @@ The arrangement, because each of the desktop's is built for a pointer and a wide
 
 | Desktop | Phone | Why |
 | --- | --- | --- |
-| `ScanDock`: anchored popovers, a *Point & shoot* switch and *Start*/*Stop*; the Developer switch is the page header's | `ScanControls` (*How scanning runs*, *Filters*, *Scanner options*) over the picture, *Start*/*Stop* under it (under point and shoot, the picture itself is held: `HoldSurface`), and the options press opening `OptionsSheet` — Scanning, Filters, Finish, Condition, Camera as pages of one bottom sheet | An anchored panel has nowhere to be anchored at 360px. The Camera row is drawn only with more than one camera. No Developer switch |
+| `ScanDock`: anchored popovers, a *Point & shoot* switch and *Start*/*Stop*; the Developer switch is the page header's | `ScanControls` (*How scanning runs*, *Filters*, *Scanner options*) over the picture, *Start*/*Stop* under it (under point and shoot, the picture itself is held: `HoldSurface`), and the options press opening `OptionsSheet` — Filters, Finish, Condition, Camera as pages of one bottom sheet, opened straight on Filters by the *Filters* press (`startPage`); how scanning runs is `ScanControls`' segmented switch on the page, not a sheet page | An anchored panel has nowhere to be anchored at 360px. The Camera row is drawn only with more than one camera. No Developer switch |
 | The video is a `flex-1` box in a column that is the view's height | `CameraBox`: a `flex-1 min-h-0` box **filling what the controls, Start/Stop and the tray's peek leave**, cropped (`object-cover`) rather than letterboxed | The page no longer scrolls, so a zero-basis grow is safe; it collapsed to nothing in the old scrolling column (§9, *The view*), which is why the box was once shaped by the stream's aspect |
 | `ScanHud` over the picture, with the Added popup | The same parts, the popup on one line when the phone is on its side. No match line | The page fits the screen and nothing scrolls, so the picture takes what is left |
 | `TrayPanel`: a grid or a list; 28px controls; tooltips | `Tray`: rows; the printing and the finish are 44px presses opening sheets; a 44px stepper; a waiting row is its candidates as whole cards three to a line | A 44px finish and stepper do not fit under a 156px tile, so `trayLayout` is left unread |
@@ -1286,7 +1296,12 @@ The arrangement, because each of the desktop's is built for a pointer and a wide
 | A host with no session draws its sentence where the picture would be | The same, in `CameraBox`; the status line is not drawn and the Filters row is refused with the sentence | No camera is asked for and no frame sent; the tray still reads, edits and files |
 
 **On its side** (the `landscape:` variant, at any width) the camera's column and the tray's stand side by
-side, each scrolling by itself: a 22rem tray, the camera the rest. This replaced a 720px-wide rule
+side, and only the tray's column scrolls (the list under its own header). The tray is 22rem and gives
+way first, down to 14.5rem, so the camera's column keeps the 22rem *Continuous | Point & shoot* needs
+whole beside the two 44px glyphs (*Point & shoot* is 87px in its pressed weight, Geist at 14px,
+measured 2026-10-24): whole from a 667 × 375 phone beside the 80px rail up; beside the rail on a
+narrower page the two glyphs wrap under the pair. The list's column is mounted only on its side —
+upright the list is the tray sheet's. This replaced a 720px-wide rule
 (2026-10-24): the phone's shape decides, not its width. It asks the viewport, not a container, because
 the page's sheets are mounted inside it. Measured at 600px, the rail's breakpoint, the old rule's tray
 was a 288px column beside a camera 200×113.
