@@ -38,6 +38,12 @@
 //! agreement decides it ([`card_neural::Decision::another_look`]), and, as a change the watch
 //! sees in the other modes, it is a second copy and adds — unless its printing is the one the
 //! last decision named, which is that card's own look wavering, a second opinion.
+//!
+//! **Another copy of the decided card laid on it is a second copy too** (#1375): the agreement
+//! decides it again when the card was hidden for a couple of frames and comes to rest somewhere
+//! else ([`card_neural::Decision::relaid`]). Its decision is the standing one again — the same
+//! look, so the same printing, and no frame of it is kept for the evidence to choose on — with
+//! `replaces_previous` false, so the tray bumps the row it filed.
 
 use super::{FrameOptions, FrameSize, ScanMode, Session, Verdict};
 
@@ -403,6 +409,7 @@ impl Session {
         let decisions = l.agreement.decisions();
         let new = decisions != l.decisions;
         let laid_on = new && l.agreement.decision().is_some_and(|d| d.another_look);
+        let relaid = new && l.agreement.decision().is_some_and(|d| d.relaid);
         l.decisions = decisions;
         let standing = l.agreement.decision().map(|d| (d.entry, d.score));
         let gallery = l.recognizer.gallery();
@@ -411,6 +418,9 @@ impl Session {
                 l.decided = None;
                 None
             }
+            // The same look laid again: what was decided of it holds, as the first copy's frames
+            // are the only ones the printing evidence kept.
+            Some(_) if relaid && l.decided.is_some() => l.decided.clone(),
             Some((entry, score)) if new => {
                 let chosen = l.index.as_ref().and_then(|evidence| {
                     evidence_decision(gallery, r, mask, entry, &l.frames_seen, evidence)
@@ -508,9 +518,11 @@ impl Session {
         }
         if let Some(mut d) = fresh {
             self.decision_seq += 1;
-            if laid_on && self.previous_printing.as_deref() != Some(d.printing.as_str()) {
-                // Another printing of the card laid on it: what the last decision named is no
-                // longer in front of the lens, so the same card now is a second copy.
+            if relaid
+                || (laid_on && self.previous_printing.as_deref() != Some(d.printing.as_str()))
+            {
+                // Another printing of the card laid on it, or another copy of the same one: what
+                // the last decision named is under it now, so the same card is a second copy.
                 self.previous_card = None;
             }
             d.replaces_previous = self.replaces_previous(&d);
@@ -1506,6 +1518,69 @@ mod tests {
             let v = vote(&mut s, A, 800.0);
             assert_eq!(v.decision_seq, 3);
             assert!(!v.decision.expect("decided").replaces_previous);
+        }
+
+        /// A frame with a card in front of the lens that votes for none: a hand over the pile.
+        fn covered() -> Read {
+            Read { present: true, ..Default::default() }
+        }
+
+        /// An accepted frame of `entry`, lying `dx` pixels right of [`naming`]'s.
+        fn laid(s: &Session, entry: u32, dx: f32) -> Read {
+            let mut read = naming(s, entry, true);
+            let found = &mut read.cards[0];
+            for p in found.quad.iter_mut().chain(found.detection.quad.iter_mut()) {
+                p.x += dx;
+            }
+            read
+        }
+
+        /// #1375: another copy of the decided printing laid on it is a second copy of it.
+        #[test]
+        fn another_copy_of_the_decided_printing_laid_on_it_adds() {
+            let mut s = one_oracle(0.75);
+            let first = decide(&mut s, A, 0.0).decision.expect("decided");
+            for at in [200.0, 300.0] {
+                assert_eq!(feed(&mut s, &covered(), at).decision_seq, 1);
+            }
+            let copy = laid(&s, A, 60.0);
+            assert_eq!(feed(&mut s, &copy, 400.0).decision_seq, 1);
+            let v = feed(&mut s, &copy, 500.0);
+            assert_eq!(v.decision_seq, 2, "another copy laid on the decided card never decided");
+            let d = v.decision.expect("decided");
+            assert_eq!((&d.printing, d.outcome), (&first.printing, first.outcome));
+            assert!(!d.replaces_previous, "a second copy replaced the first one's row");
+            let held = feed(&mut s, &copy, 600.0);
+            assert_eq!(held.decision_seq, 2);
+            assert!(!held.decision.expect("held").replaces_previous);
+
+            // A hand passing over it leaves it where it lay: nothing more.
+            for at in [700.0, 800.0] {
+                feed(&mut s, &covered(), at);
+            }
+            feed(&mut s, &copy, 900.0);
+            assert_eq!(feed(&mut s, &copy, 1000.0).decision_seq, 2);
+        }
+
+        #[test]
+        fn another_copy_keeps_the_printing_the_evidence_chose() {
+            // The copy's frames are the decided card's, so none is kept: the printing the first
+            // copy's frames chose is the second's.
+            let mut s = one_oracle(0.75);
+            s.neural.loaded.as_mut().expect("loaded").index = Some((index(), thresholds()));
+            let first = decide_seen(&mut s, &along(Some(glance(&[(1, 1.0)])))).decision;
+            let first = first.expect("decided");
+            assert_eq!((first.outcome, &first.printing), (Outcome::Resolved, &format_uuid(&Q)));
+            for at in [200.0, 300.0] {
+                feed(&mut s, &covered(), at);
+            }
+            let copy = laid(&s, A, -60.0);
+            feed(&mut s, &copy, 400.0);
+            let v = feed(&mut s, &copy, 500.0);
+            assert_eq!(v.decision_seq, 2);
+            let d = v.decision.expect("decided");
+            assert_eq!((d.outcome, d.printing), (Outcome::Resolved, format_uuid(&Q)));
+            assert!(!d.replaces_previous);
         }
 
         #[test]
