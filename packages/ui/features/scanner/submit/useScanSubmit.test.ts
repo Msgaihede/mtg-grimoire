@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VERDICTS } from "../fixtures";
 import type { ScanFilters, ScannerVerdict } from "../types";
 import { RUN_MAX_AGE_MS, RUN_MIN_FRAMES, runClock, runFrameOf, type RunFrame } from "./run";
-import { SCAN_TOO_SHORT } from "./submitText";
+import { SCAN_TOO_SHORT, SHOT_TOO_SHORT } from "./submitText";
 import { useScanSubmit } from "./useScanSubmit";
 
 interface Page {
@@ -11,6 +11,7 @@ interface Page {
   verdict: ScannerVerdict | null;
   filters: ScanFilters;
   ready: boolean;
+  held?: boolean;
 }
 
 const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: null };
@@ -331,6 +332,75 @@ describe("useScanSubmit", () => {
     expect(result.current.run).toBeNull();
     expect(result.current.error).toBeNull();
     expect(recent).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Between two shots of point and shoot the run is the last shot's** (`held`): the pump has
+   * stopped on it, and nothing newer was shown — so it is aged from its own last frame, and a
+   * reader who looks at the card that landed for a while still has the scan to send.
+   */
+  it("ages a held run from its own last frame, however long after it the press lands", () => {
+    // The shot's last frame at 1000, and the press a minute later.
+    vi.spyOn(runClock, "now").mockReturnValue(61_000);
+    const { result } = renderHook(() => useScanSubmit(page({ recent: () => ring(6), held: true })));
+    act(() => result.current.open(opener()));
+    expect(result.current.error).toBeNull();
+    const frames = result.current.run?.frames ?? [];
+    expect(frames).toHaveLength(6);
+    // Still counted back from the press, as every run's frames are.
+    expect(frames[frames.length - 1].ms).toBe(-60_000);
+  });
+
+  /** A shot too short to be a scan, or no shot at all: the press says to scan, not to hold. */
+  it.each([0, RUN_MIN_FRAMES - 1])("opens nothing on a held run of %i frames", (count) => {
+    const { result } = renderHook(() =>
+      useScanSubmit(page({ recent: () => ring(count), held: true })),
+    );
+    act(() => result.current.open(opener()));
+    expect(result.current.run).toBeNull();
+    expect(result.current.error).toBe(SHOT_TOO_SHORT);
+    expect(SHOT_TOO_SHORT).toBe("Not enough of a scan to send. Scan a card, then press again.");
+  });
+
+  /**
+   * **A held run is sent once.** Over a running scanner a dialog closing starts a fresh run; a
+   * held one stays in the ring until the next shot, so the press must not open on it again.
+   */
+  it.each(["onDismiss", "onClose"] as const)(
+    "spends a held run once a dialog has been open on it, until %s brings a new shot",
+    (way) => {
+      let frames = ring(6);
+      const { result } = renderHook(() =>
+        useScanSubmit(page({ recent: () => frames, held: true })),
+      );
+      act(() => result.current.open(opener()));
+      act(() => result.current[way]());
+
+      act(() => result.current.open(opener()));
+      expect(result.current.run).toBeNull();
+      expect(result.current.error).toBe(SHOT_TOO_SHORT);
+
+      // The next shot: new frames, a new scan.
+      frames = ring(7, 5000);
+      act(() => result.current.open(opener()));
+      expect(result.current.error).toBeNull();
+      expect(result.current.run?.frames).toHaveLength(7);
+    },
+  );
+
+  it("drops its sentence when a shot starts, and when one ends", () => {
+    const { result, rerender } = renderHook((props: Page) => useScanSubmit(props), {
+      initialProps: page({ recent: () => [], held: true }),
+    });
+    act(() => result.current.open(opener()));
+    expect(result.current.error).toBe(SHOT_TOO_SHORT);
+    rerender(page({ recent: () => ring(1), held: false }));
+    expect(result.current.error).toBeNull();
+
+    act(() => result.current.open(opener()));
+    expect(result.current.error).toBe(SCAN_TOO_SHORT);
+    rerender(page({ recent: () => ring(1), held: true }));
+    expect(result.current.error).toBeNull();
   });
 
   it("keeps its two ways out stable, so the dialog's body is not redrawn with the page", () => {

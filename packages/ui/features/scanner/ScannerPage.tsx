@@ -208,6 +208,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       !sending &&
       !picking,
     keepFullFrames: maySend,
+    // A shot's run outlives the shot, for *Send scan…* between two of them (below).
+    holdRun: pointAndShoot,
     onDecision: (decision) => {
       onDecision(decision);
       shot.landed();
@@ -294,7 +296,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * **While there can be a run** — a camera live *and* recognition running. Stopped, the pump
    * has let its frames go (a run never spans a Stop) and is sending none, so there is nothing to
    * send and no press is drawn: the stopped veil over the picture already says what would bring
-   * one back.
+   * one back. **Under point and shoot, between two shots too**: a shot ends the moment its card
+   * lands, which is the moment a reader sees whether the scanner got it right, so the loop keeps
+   * the shot's run (`holdRun`) and the press stays on it until the next shot — drawn only while
+   * the shot ran, it was gone before anyone could reach it.
    *
    * **Only in the Scanner view itself — never over a trade** (the owner's decision,
    * 2026-10-11). Mounted with a `destination` this page is already inside a dialog, and its
@@ -311,13 +316,15 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * `prefs.filters` moves the moment the reader changes it, before the session has taken the
    * change, and is put back if the session refuses it.
    */
-  // Under point and shoot a run lives only as long as its shot, so the press is drawn during one.
-  const sendable = destination === undefined && maySend && camera.kind === "live" && reading;
+  const sendable =
+    destination === undefined && maySend && camera.kind === "live" && (reading || pointAndShoot);
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
     filters: inForce,
     ready: sendable,
+    // Between two shots the run on offer is the last shot's, held by the loop.
+    held: pointAndShoot && !reading,
   });
   // **Recognition pauses while the dialog is open** (issue #977): a card left under the lens
   // while the reader picks a printing would otherwise land in the tray behind their back. React's
@@ -468,13 +475,15 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     });
   };
 
-  // What the HUD's note chip says. The loop's failures and a *Send scan…* pressed too soon are
-  // said only while recognition runs; **a refused reset is said stopped too**, because Reset is a
-  // press the reader can make over a stopped picture and a press that opened nothing is never
-  // silent. The scanner's own refusal of a frame (no card found in it) is the detector's sentence,
-  // not the reader's: the Developer panels carry it, and in the chip it would blink frame by
-  // frame in an assertive alert.
-  const hudNote = (reading ? (loop.error ?? resetError ?? submit.error) : resetError) || null;
+  // What the HUD's note chip says. The loop's failures are said only while recognition runs;
+  // **a refused reset is said stopped too**, because Reset is a press the reader can make over a
+  // stopped picture and a press that opened nothing is never silent — and so is a *Send scan…*
+  // pressed too soon between two shots, where that press is drawn too (the hook drops its
+  // sentence wherever the press goes). The scanner's own refusal of a frame (no card found in it)
+  // is the detector's sentence, not the reader's: the Developer panels carry it, and in the chip
+  // it would blink frame by frame in an assertive alert.
+  const hudNote =
+    (reading ? (loop.error ?? resetError ?? submit.error) : (resetError ?? submit.error)) || null;
   // **The HUD's presses stand over a live picture alone** — the phone page's rule: not over the
   // camera's own refusal, nor over a host with no session, each of which is a sentence where the
   // picture would be, and a Reset there would ask a session that has no picture to weigh. Unlike
@@ -591,9 +600,10 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                   live={reading && camera.kind === "live"}
                   variant="labelled"
                   onReset={pictureLive ? onReset : undefined}
-                  // Offered only where `sendable` says: a run to send, the Scanner view itself,
-                  // and a supporter's device. Without a live camera, or stopped, the picture is
-                  // already saying why not; of the membership nothing is said at all.
+                  // Offered only where `sendable` says: a run to send (a running scanner's, or
+                  // the last shot's), the Scanner view itself, and a supporter's device. Without
+                  // a live camera, or stopped, the picture is already saying why not; of the
+                  // membership nothing is said at all.
                   onSend={sendable ? submit.open : undefined}
                   note={hudNote}
                   // Point and shoot between two shots: what the next one is taken with — in the

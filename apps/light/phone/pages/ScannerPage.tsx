@@ -142,9 +142,9 @@ function useLandscape(): boolean {
  * controls (`ScanControls`), **the picture, filling what is left** (`CameraBox`), the gold
  * Start/Stop (continuous only), and the tray's peek (`TrayPeek`), which opens the whole tray as a
  * sheet (`TraySheet`). Everything over the picture is the camera box's children: the HUD — the
- * progress bar, *Reset evidence* and *Send scan…* while continuous scanning runs, the chip for an
- * error — the stopped veil, point and shoot's prompt or held chip and its hold (`HoldSurface`),
- * the confetti and the Added popup.
+ * progress bar, *Reset evidence* and *Send scan…* while continuous scanning runs (*Send scan…*
+ * between two holds of point and shoot too), the chip for an error — the stopped veil, point and
+ * shoot's prompt or held chip and its hold (`HoldSurface`), the confetti and the Added popup.
  *
  * **On its side** (the `landscape:` variant, at any phone width) the same elements are laid out
  * by a grid: the controls, the picture and Start/Stop on the left; on the right, 22rem wide —
@@ -159,8 +159,9 @@ function useLandscape(): boolean {
  * were.
  *
  * **Point and shoot is a hold of the picture itself** (`usePointAndShoot`, `HoldSurface`): it
- * reads while a finger is on it and pauses the moment it lifts. Under it there is no Start/Stop,
- * and no *Reset evidence* or *Send scan…* either — lifting the finger already ends the read.
+ * reads while a finger is on it and pauses the moment it lifts. Under it there is no Start/Stop
+ * and no *Reset evidence* — lifting the finger already ends the read — and *Send scan…* stands
+ * only between two holds, on the scan just let go.
  *
  * **The rules the desktop page holds, held here**:
  *
@@ -293,6 +294,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
       !sending &&
       !picking,
     keepFullFrames: maySend,
+    // A hold's run outlives the hold, for *Send scan…* between two of them (below).
+    holdRun: pointAndShoot,
     onDecision: (decision) => {
       onDecision(decision);
       shot.landed();
@@ -406,6 +409,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // **A run, never one picture**: the frames are the pump's own (`loop.recent`), so the press
   // grabs nothing. **Offered only while there can be one** — a camera live and recognition
   // running: stopped, the pump has let its frames go and is sending none, and no press is drawn.
+  // **Under point and shoot, between two holds**: the loop keeps the last hold's run
+  // (`holdRun`), and the press stands on it until the next hold — the desktop page's rule.
   // **And only on the Scanner tab itself — never over a trade** (the owner's decision,
   // 2026-10-11): with a `destination` this page is already a sheet, and its reader is in the
   // middle of something else.
@@ -416,12 +421,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // so nothing here hints at one. A lapse while the dialog is open is the engine's to refuse.
   // **The filters it says are the ones in force** (`inForce`), not the ones the sheet is drawing:
   // `prefs.filters` moves before the session has taken a change, and goes back if it is refused.
-  const sendable = destination === undefined && maySend && camera.kind === "live" && reading;
+  const sendable =
+    destination === undefined && maySend && camera.kind === "live" && (reading || pointAndShoot);
   const submit = useScanSubmit({
     recent: loop.recent,
     verdict: loop.verdict,
     filters: inForce,
     ready: sendable,
+    held: pointAndShoot && !reading,
   });
   // **Recognition pauses while the dialog is open** (issue #977), as on the desktop: a card left
   // under the lens must not land in the tray while the reader picks a printing.
@@ -435,18 +442,21 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     breakRun();
   }, [inForce, breakRun]);
 
-  // **The HUD's two presses are continuous scanning's alone** — while it runs over a live
-  // picture, never under point and shoot, where lifting the finger already ends the read, and
-  // never over the camera's own refusal. *Send scan…* by `sendable` besides.
+  // **The HUD's two presses are continuous scanning's** — while it runs over a live picture, and
+  // never over the camera's own refusal. *Send scan…* by `sendable` besides, **and between two
+  // holds of point and shoot too**, on the scan just let go: during a hold the finger is on the
+  // picture and lifting it already ends the read, so neither press is drawn under one.
   const hudPresses = !pointAndShoot && scanning && camera.kind === "live";
+  const sendPress = sendable && (hudPresses || (pointAndShoot && !shot.shooting));
   // What the chip over the picture has to say while recognition runs: the loop's failures, a
   // refused reset and a Send scan pressed too soon — a busy database, a frame the host turned
   // away, a camera that has only just started. The detector's own refusal (no card in this
   // frame) is a developer's sentence and is not said here. **Not running, the picture's own note
   // is the whole of what is said** (`StoppedVeil`, `HoldPrompt`): the press is not drawn there,
   // and the hook drops its sentence with the press. **A Send scan that opened nothing is never
-  // silent** — one that said nothing is a button that looks broken.
-  const hudNote = reading ? (loop.error ?? resetError ?? submit.error) : null;
+  // silent** — one that said nothing is a button that looks broken — so between two holds, where
+  // that press stands, its sentence is said too.
+  const hudNote = reading ? (loop.error ?? resetError ?? submit.error) : submit.error;
   // What the HUD draws and announces — the match strip's state.
   const strip = matchStrip(reading ? loop.verdict : null, lastAdded);
   // The HUD has a chip to show: the strip's own error, or the note. **The held chip gives way to
@@ -583,10 +593,11 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 live={reading && camera.kind === "live"}
                 variant="icon"
                 onReset={hudPresses ? onReset : undefined}
-                // Offered only where `sendable` says, as on the desktop: a run to send, the
-                // Scanner tab itself, and a supporter's device. With no camera live the box is
-                // saying why not; of the membership nothing is said at all.
-                onSend={hudPresses && sendable ? submit.open : undefined}
+                // Offered only where `sendable` says, as on the desktop: a run to send (a
+                // running scanner's, or the last hold's), the Scanner tab itself, and a
+                // supporter's device. With no camera live the box is saying why not; of the
+                // membership nothing is said at all.
+                onSend={sendPress ? submit.open : undefined}
                 note={hudNote}
               />
             )}
