@@ -3765,13 +3765,15 @@ describe("ipc argument names match the Rust command signatures", () => {
       );
 
     invoke.mockResolvedValue([]);
-    await ipc.deckCompletion("cardkingdom", "theory");
+    await ipc.deckCompletion("cardkingdom", "theory", "missing");
     expect(invoke).toHaveBeenCalledWith("deck_completion", {
       marketplace: "cardkingdom",
       compare: "theory",
+      theoryMatch: "missing",
     });
     declares(deckCompletionRs, "deck_completion", "marketplace");
     declares(deckCompletionRs, "deck_completion", "compare");
+    declares(deckCompletionRs, "deck_completion", "theory_match");
 
     invoke.mockResolvedValue(2);
     await ipc.deckReviewCount();
@@ -7116,6 +7118,8 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
         "`price_history::Direction::parse` reads `up` and `down` and takes anything else as `both`",
       DeckCompletionCompare:
         "`deck_completion::Compare::from_opt` reads `theory` and takes anything else as `collection`",
+      DeckCompletionMatch:
+        "`deck_completion::TheoryMatch::from_opt` reads `missing` and takes anything else as `exact`",
       ArtWeightFloor:
         "`filters.rs` names `ART_WEIGHT_FLOOR_STRONG` alone; `any` is anything else, absent included",
       TagNamespace:

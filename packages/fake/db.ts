@@ -13095,13 +13095,22 @@ export function readHandlers(db: FakeDb) {
      * missing **copies** with no price. The unit is {@link heldPriceAt} at the row's finish, which
      * is what this fake's deck rows quote — so a story's widget and the editor it opens can never
      * disagree.
+     *
+     * **`theoryMatch: "missing"`** (issue #1400) is the Compare dialog's `Missing` reading under
+     * `theory`, and anything else is the exact one above: a planned copy the live list plays as
+     * another printing of the same card counts as sleeved. It is not walked a second time here —
+     * the exact answer is {@link theoryDiff}'s card lines summed, so each line's
+     * `heldAsOtherPrinting` is moved from missing to owned, and out of the money at the line's own
+     * price. Not read under `collection`.
      */
     deck_completion: (args: {
       marketplace?: MarketplaceId | null;
       compare?: string | null;
+      theoryMatch?: string | null;
     }): DeckCompletion[] => {
       const mp = marketplaceOf(args.marketplace);
       const theory = args.compare === "theory";
+      const substitutes = theory && args.theoryMatch === "missing";
       const active = (dc: FakeDeckCard) => categoryById(db, dc.categoryId)?.isActive === true;
       return [...db.decks]
         .filter((d) => (theory ? d.theoryEnabled : !d.virtualOnly))
@@ -13146,6 +13155,16 @@ export function readHandlers(db: FakeDb) {
             const unit = heldPriceAt(db, cardById(db, dc.cardId), dc.finish, mp);
             if (unit === null) row.unpricedMissing += short;
             else row.missingCost = (row.missingCost ?? 0) + unit * short;
+          }
+          if (substitutes) {
+            for (const { row: line } of theoryDiff(db, d.id, mp)) {
+              if (line.isToken || line.heldAsOtherPrinting === 0) continue;
+              const take = line.heldAsOtherPrinting;
+              row.owned += take;
+              row.missing -= take;
+              if (line.unitPrice === null) row.unpricedMissing -= take;
+              else row.missingCost = (row.missingCost ?? 0) - line.unitPrice * take;
+            }
           }
           return row;
         });

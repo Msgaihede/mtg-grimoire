@@ -4,9 +4,10 @@
  * special case.
  *
  * The order is the design's (`widget-home.dc.html`'s settings panel): the footprint, then one group
- * per pick, then the density, then the switches, then whatever the kind draws beyond its rows (the
- * deck picker behind `Pinned`, the Summary's figure checklist). The title is not here — it is
- * renamed on the card's own heading line, where the name is.
+ * per pick — less any whose `when` the widget's other picks do not meet — then the density, then
+ * the switches, then whatever the kind draws beyond its rows (the deck picker behind `Pinned`, the
+ * Summary's figure checklist). The title is not here — it is renamed on the card's own heading
+ * line, where the name is.
  *
  * **Every write is a patch, never a whole config** (`ConfigPatch`): the page merges the fields and
  * keeps every key it was not handed, a newer build's included. Two keys are written as *absence*
@@ -34,7 +35,14 @@ import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 import type { ConfigPatch } from "./widgetProps";
-import { pickValue, toggleOn, widgetDensity, widgetTitle, type Density } from "./widgetSettings";
+import {
+  pickShown,
+  pickValue,
+  toggleOn,
+  widgetDensity,
+  widgetTitle,
+  type Density,
+} from "./widgetSettings";
 import { boundsOf, isWidgetKind, widgetMeta } from "./widgets";
 
 export interface WidgetSettingsPanelProps {
@@ -126,6 +134,9 @@ export function WidgetSettingsPanel({
       </Group>
 
       {meta?.picks.map((pick) => {
+        // A row that refines another's answer is drawn only under that answer — the registry's
+        // `when`, so the panel learns no kind's special case.
+        if (!pickShown(widget, pick)) return null;
         const current = pickValue(widget, pick);
         return (
           <Group key={pick.key} label={pick.label}>

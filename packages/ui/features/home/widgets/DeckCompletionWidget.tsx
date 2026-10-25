@@ -21,6 +21,12 @@
  *   dialog's shopping list would cost. A virtual deck keeps a plan like any other and is answered;
  *   a deck with no plan has nothing to compare and is not.
  *
+ * **Under Theory, `Theory match` says which of the dialog's readings** (issue #1400,
+ * {@link completionMatch}): `Exact match`, the default, is the sentence above; `Missing` lets a
+ * planned copy the actual list plays as another printing of the same card count as sleeved, so the
+ * figure is the dialog's `Missing` view — the copies no printing in the deck covers. Rust answers
+ * both (`deck_completion.rs`'s `TheoryMatch`); the row's hint says which one a figure is.
+ *
  * Either way every active pile counts and **nothing here re-derives a count.** A card saying "4 missing" about a deck that opens saying "6 missing"
  * is a bug report, so this file draws the numbers it is handed and decides only which decks, in
  * what order, and how many fit.
@@ -88,7 +94,7 @@
  *
  * `missingCost` is priced at the marketplace in the key, so a switch re-issues the read and the
  * card says it is measuring rather than drawing the last marketplace's figure beside the new
- * one's symbol. The comparison is in the key for the same reason.
+ * one's symbol. The comparison and the theory match are in the key for the same reason.
  *
  * **No `@container` here or on the page that draws this**, and no z-index that is not from
  * `LAYER` — `fit.ts`'s module doc has the argument.
@@ -104,6 +110,7 @@ import {
   ipcError,
   type DeckCompletion,
   type DeckCompletionCompare,
+  type DeckCompletionMatch,
   type DeckRow,
   type HomeWidget,
 } from "@/lib/ipc";
@@ -201,6 +208,18 @@ function orderOf(value: string | number | undefined): CompletionOrder {
  *  Rust answers for a word it does not know. */
 export function completionCompare(widget: HomeWidget): DeckCompletionCompare {
   return pickOf(widget, "compare") === "theory" ? "theory" : "collection";
+}
+
+/**
+ * How this card matches a plan's copies — the registry's `match` pick, **read only under
+ * `Theory`**: the collection has no second reading, so a `Missing` kept in the config from an
+ * earlier Theory card asks nothing of Rust and keys nothing apart under `Collection`. Anything but
+ * `missing` is `exact`, which is also what Rust answers for a word it does not know.
+ */
+export function completionMatch(widget: HomeWidget): DeckCompletionMatch {
+  return completionCompare(widget) === "theory" && pickOf(widget, "match") === "missing"
+    ? "missing"
+    : "exact";
 }
 
 /**
@@ -396,13 +415,22 @@ function tileCaption(row: DeckCompletion, price: string): string {
 
 /**
  * What a row's figure does not say. A theory deck is measured against its plan rather than its
- * sleeved list, and a figure that leaves copies out says how many — `null` being *nothing on the
+ * sleeved list — under `Missing`, with another printing of a card standing in for it, which the
+ * hint says too — and a figure that leaves copies out says how many — `null` being *nothing on the
  * list is priced*, and any other figure beside unpriced copies being a partial sum.
  */
-export function rowHint(row: DeckCompletion, marketplace: Marketplace): string | undefined {
+export function rowHint(
+  row: DeckCompletion,
+  marketplace: Marketplace,
+  match: DeckCompletionMatch = "exact",
+): string | undefined {
   const parts: string[] = [];
   if (row.list === "theory") {
-    parts.push("This deck's actual list, compared to its theory list.");
+    parts.push(
+      match === "missing"
+        ? "This deck's actual list, compared to its theory list. A card in any printing counts."
+        : "This deck's actual list, compared to its theory list.",
+    );
   }
   if (row.missing > 0 && row.missingCost === null) {
     parts.push(`Nothing on this deck's list has a price at ${marketplace.label}.`);
@@ -446,8 +474,8 @@ function useCollectionBridge(enabled: boolean): void {
 
   useEffect(() => {
     if (!enabled) return;
-    // Every marketplace's and both comparisons' entries, from the one definition in `keys.ts` so
-    // this line cannot come to spell it differently.
+    // Every marketplace's, comparison's and match's entries, from the one definition in
+    // `keys.ts` so this line cannot come to spell it differently.
     const root = [...deckCompletionRoot];
     let queued = false;
     return client.getQueryCache().subscribe((event) => {
@@ -465,6 +493,7 @@ function useCollectionBridge(enabled: boolean): void {
 
 export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
   const compare = completionCompare(widget);
+  const match = completionMatch(widget);
   const scope = completionScope(widget);
   const deckIds = pinnedDeckIds(widget);
   const order = orderOf(pickOf(widget, "order"));
@@ -478,8 +507,8 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
 
   const decksQuery = useQuery({ queryKey: deckListKey, queryFn: () => ipc.deckList() });
   const completionQuery = useQuery({
-    queryKey: deckCompletionKey(marketplace.id, compare),
-    queryFn: () => ipc.deckCompletion(marketplace.id, compare),
+    queryKey: deckCompletionKey(marketplace.id, compare, match),
+    queryFn: () => ipc.deckCompletion(marketplace.id, compare, match),
   });
 
   // The refusal is read before the emptiness: a failed read has no rows either, and calling it
@@ -555,7 +584,7 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
           const price = row.missing === 0 ? "" : formatPrice(row.missingCost, currency);
           // Floored, so a track never reaches the end of its rail beside a deck still short a card.
           const track = Math.floor(share(row) * 100) / 100;
-          const hint = rowHint(row, marketplace);
+          const hint = rowHint(row, marketplace, match);
           const onPress = still ? undefined : () => openDeck(row.deckId);
           // The whole row in one string: three flex children with a `gap` and no whitespace text
           // node compute to "Burn56 of 60 · 4 missing$12.50" (`DecksWidget.tsx:314-321`). It

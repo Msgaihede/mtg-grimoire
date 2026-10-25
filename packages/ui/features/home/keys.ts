@@ -95,6 +95,7 @@ import { wholeWishlistQuery, type SweepScope } from "@/features/wishlist/wholeWi
 import type { Finish } from "@/lib/finish";
 import type {
   DeckCompletionCompare,
+  DeckCompletionMatch,
   PriceMoverDirection,
   PriceMoverScope,
   PriceMoverWindow,
@@ -357,12 +358,13 @@ export const deckCompletionRoot = ["decks", "completion"] as const;
  * exists, and a cache subscription that turns an invalidation there into one of
  * {@link deckCompletionRoot}. **Both halves are load-bearing** — `invalidateQueries` dispatches
  * nothing when it matches no cached query. The marketplace is in the key because `missingCost` is
- * priced at it, and the comparison because it is the question.
+ * priced at it, and the comparison and the theory match because they are the question.
  */
 export const deckCompletionKey = (
   marketplace: MarketplaceId,
   compare: DeckCompletionCompare,
-): QueryKey => [...deckCompletionRoot, marketplace, compare];
+  theoryMatch: DeckCompletionMatch,
+): QueryKey => [...deckCompletionRoot, marketplace, compare, theoryMatch];
 
 /**
  * Every non-empty to-do list in every deck — `ipc.everyDeckTodoList`, the To-dos widget's read

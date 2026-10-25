@@ -401,6 +401,19 @@ export interface NewPrintings {
 export type DeckCompletionCompare = "collection" | "theory";
 
 /**
+ * How a planned copy is matched under `theory` — `deck_completion.rs`'s `TheoryMatch` (issue
+ * #1400), sent as the word beside {@link DeckCompletionCompare} and read only under `theory`.
+ * **Anything Rust does not recognise reads as `exact`**, the same forgiving shape.
+ *
+ * * `exact` — the Compare dialog's `All`: a planned copy counts only where the actual list plays
+ *   that exact printing in that exact finish.
+ * * `missing` — the Compare dialog's `Missing`: a planned copy the actual list plays as another
+ *   printing or finish of the same card counts as sleeved, so the missing copies are the ones no
+ *   printing in the deck covers — `quantity − heldAsOtherPrinting` over the dialog's card lines.
+ */
+export type DeckCompletionMatch = "exact" | "missing";
+
+/**
  * How far one deck is along — `deck_completion.rs`'s `DeckCompletion`, one row per deck the
  * {@link DeckCompletionCompare} asked about (archived ones included; which decks to draw is the
  * widget's decision).
@@ -645,11 +658,15 @@ export const homeCommands = {
   /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's.** */
   markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
   /**
-   * How far every deck is along under `compare`, priced at `marketplace` — see
-   * {@link DeckCompletion} and {@link DeckCompletionCompare}. Both belong in the caller's query key.
+   * How far every deck is along under `compare`, priced at `marketplace`, a plan's copies matched
+   * as `theoryMatch` says — see {@link DeckCompletion}, {@link DeckCompletionCompare} and
+   * {@link DeckCompletionMatch}. All three belong in the caller's query key.
    */
-  deckCompletion: (marketplace: MarketplaceId, compare: DeckCompletionCompare) =>
-    invoke<DeckCompletion[]>("deck_completion", { marketplace, compare }),
+  deckCompletion: (
+    marketplace: MarketplaceId,
+    compare: DeckCompletionCompare,
+    theoryMatch: DeckCompletionMatch,
+  ) => invoke<DeckCompletion[]>("deck_completion", { marketplace, compare, theoryMatch }),
   /**
    * How many `deck_cards` rows carry a `needs_review` sentence — rows, not copies, and only that
    * one table. Its own read rather than `sync_relay_status`' `reviewCount`, which sums six tables,

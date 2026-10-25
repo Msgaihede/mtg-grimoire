@@ -31,6 +31,18 @@
 //!   switch answers no row**, theory rows or not — rows kept from before the switch went off are
 //!   a plan the editor no longer draws.
 //!
+//!   **Theory asks one of the Compare dialog's two card readings, a [`TheoryMatch`]**
+//!   ([issue #1400](https://github.com/Msgaihede/mtg-grimoire/issues/1400)). The paragraph above
+//!   is [`TheoryMatch::Exact`], the default and the dialog's `All`. [`TheoryMatch::Missing`] is
+//!   the dialog's `Missing`: a planned copy the live list already plays **as another printing or
+//!   finish of the same oracle card** counts as sleeved, so `missing` is `quantity −
+//!   held_as_other_printing` summed over the card lines. The substitution is
+//!   [`crate::deck_theory::theory_diff`]'s own walk, restated in [`measure`] and fenced against
+//!   it: an exact match spends a live copy first, one live copy excuses at most one planned copy,
+//!   and the copies left over per oracle card go to the plan's lines **in the plan's reading
+//!   order** — which is why [`lists_by_deck`] answers its keys in that order, since which line is
+//!   excused decides what the rest costs.
+//!
 //! What holds in both modes:
 //!
 //! * **Every active pile counts, on both sides**, sideboard and companion included: this is
@@ -41,10 +53,10 @@
 //!   spelling — [`crate::deck::entry_finish`], so a NULL deck finish is
 //!   [`crate::schema::FINISHES`]`[0]` on a printing sold in it and the sole finish on one that is
 //!   not. Every pool is keyed the same way. `attribute_owned` hands a scarce pool down the read
-//!   order, so summed over one key it owns `min(Σ wanted, pool)` — and this read walks the same
-//!   scarce pool, because an unsaid row and a `foil` row of one foil-only printing are two SQL
-//!   groups and one key. Over one key that is also `theory_diff`'s `max(0, wanted − held)`, which
-//!   is why one walk serves both modes.
+//!   order, so summed over one key it owns `min(Σ wanted, pool)` — and this read folds an unsaid
+//!   row and a `foil` row of one foil-only printing, two SQL groups and one key, into one want
+//!   before it measures, so it takes that `min` once per key. Over one key that is also
+//!   `theory_diff`'s `max(0, wanted − held)`, which is why one walk serves both modes.
 //! * A missing copy costs its row's own price, [`crate::sorting::deck_card_price_expr`], which
 //!   depends on the key alone. `missing_cost` is `None` exactly when nothing on the measured list
 //!   is priced — `DeckStats`' `missingPrice`, `priced === 0 ? null : …`. In Theory the price is
@@ -84,15 +96,42 @@ pub enum Compare {
     /// Every non-virtual deck's live list against the copies in its own group.
     #[default]
     Collection,
-    /// Every deck with a plan switched on, its theory list against its live list.
-    Theory,
+    /// Every deck with a plan switched on, its theory list against its live list, a planned copy
+    /// matched as the [`TheoryMatch`] says.
+    Theory(TheoryMatch),
+}
+
+/// How a planned copy is matched under [`Compare::Theory`] — the Compare dialog's two card
+/// readings that ask *what is left to find* (issue #1400). Its own word on the wire, read only
+/// beside `"theory"`, and forgiving the same way: `"missing"` is [`Self::Missing`] and anything
+/// else is [`Self::Exact`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TheoryMatch {
+    /// The dialog's `All`: a planned copy counts only where the live list plays that exact
+    /// printing in that exact finish.
+    #[default]
+    Exact,
+    /// The dialog's `Missing`: a planned copy the live list plays as another printing or finish
+    /// of the same oracle card counts as sleeved — `theory_diff`'s `held_as_other_printing`.
+    Missing,
+}
+
+impl TheoryMatch {
+    /// The command argument, which may simply not be there.
+    pub fn from_opt(word: Option<&str>) -> TheoryMatch {
+        match word {
+            Some("missing") => TheoryMatch::Missing,
+            _ => TheoryMatch::Exact,
+        }
+    }
 }
 
 impl Compare {
-    /// The command argument, which may simply not be there.
-    pub fn from_opt(word: Option<&str>) -> Compare {
+    /// The two command arguments, either of which may simply not be there. `matching` is read
+    /// only under `"theory"`: the collection has no second reading.
+    pub fn from_opt(word: Option<&str>, matching: Option<&str>) -> Compare {
         match word {
-            Some("theory") => Compare::Theory,
+            Some("theory") => Compare::Theory(TheoryMatch::from_opt(matching)),
             _ => Compare::Collection,
         }
     }
@@ -105,7 +144,7 @@ impl Compare {
     fn decks(self) -> &'static str {
         match self {
             Compare::Collection => "d.virtual_only = 0",
-            Compare::Theory => "d.theory_enabled = 1",
+            Compare::Theory(_) => "d.theory_enabled = 1",
         }
     }
 
@@ -113,7 +152,7 @@ impl Compare {
     fn measured(self) -> &'static str {
         match self {
             Compare::Collection => LIVE,
-            Compare::Theory => THEORY,
+            Compare::Theory(_) => THEORY,
         }
     }
 }
@@ -131,7 +170,8 @@ pub struct DeckCompletion {
     /// Copies the measured list asks for, active piles only.
     pub wanted: i64,
     /// Of those, copies the pool covers — the deck's group under [`Compare::Collection`], the
-    /// live list's copies of the exact printing and finish under [`Compare::Theory`].
+    /// live list's copies of the exact printing and finish under [`Compare::Theory`] — and, under
+    /// [`TheoryMatch::Missing`], of another printing of the same card too.
     pub owned: i64,
     /// `wanted − owned`.
     pub missing: i64,
@@ -150,8 +190,23 @@ pub struct DeckCompletion {
 struct Want {
     card_id: String,
     finish: String,
+    /// The oracle card the printing is of — what [`TheoryMatch::Missing`] substitutes within.
+    /// `None` for an orphan, whose printing has left `cards`: it is not another printing of
+    /// anything, `theory_diff`'s rule.
+    oracle_id: Option<String>,
     wanted: i64,
     unit_price: Option<f64>,
+}
+
+/// What one deck's measured list is measured against.
+#[derive(Default)]
+struct Pool {
+    /// Copies per `(card_id, finish)` — the exact match, in every mode.
+    by_key: HashMap<(String, String), i64>,
+    /// Live copies per oracle card, under [`TheoryMatch::Missing`] alone: the copies a planned
+    /// line may be excused by once every exact match has spent its own. `None` in every other
+    /// mode, which substitutes nothing.
+    by_oracle: Option<HashMap<String, i64>>,
 }
 
 /// Every answering deck's completion at `marketplace`, ascending by id.
@@ -168,18 +223,23 @@ pub fn deck_completion_for(
     // Theory's pool is the live list, read once for every deck. The price is not asked for: a
     // copy the deck already plays costs nothing to find.
     let mut sleeved = match compare {
-        Compare::Theory => lists_by_deck(&tx, None, compare, LIVE)?,
+        Compare::Theory(_) => lists_by_deck(&tx, None, compare, LIVE)?,
         Compare::Collection => HashMap::new(),
     };
     let mut out = Vec::with_capacity(decks.len());
     for deck_id in decks {
         let wants = wants.remove(&deck_id).unwrap_or_default();
         let pool = if wants.is_empty() {
-            HashMap::new()
+            Pool::default()
         } else {
             match compare {
-                Compare::Collection => crate::deck::owned_by_printing(&tx, deck_id)?,
-                Compare::Theory => pool_of(sleeved.remove(&deck_id).unwrap_or_default()),
+                Compare::Collection => Pool {
+                    by_key: crate::deck::owned_by_printing(&tx, deck_id)?,
+                    by_oracle: None,
+                },
+                Compare::Theory(matching) => {
+                    pool_of(sleeved.remove(&deck_id).unwrap_or_default(), matching)
+                }
             }
         };
         out.push(measure(deck_id, compare.measured(), &wants, &pool));
@@ -202,16 +262,22 @@ fn measured_decks(conn: &Connection, compare: Compare) -> Result<Vec<i64>, Strin
 }
 
 /// The copies one list of every deck `compare` answers for holds, per `(card_id, finish)`, with
-/// the key's price at `marketplace` — or no price at all when `marketplace` is `None`, which is
-/// what Theory's pool asks for.
+/// the key's oracle card and its price at `marketplace` — or no price at all when `marketplace`
+/// is `None`, which is what Theory's pool asks for.
 ///
 /// **The pile filter sits in the join**, `deck_values_for`'s arrangement: only active piles, and
-/// only rows of `variant`. The price is a bare column beside the `sum()` — every row of a group
-/// shares `dc.card_id` and `dc.finish`, and so the `cards` row and the price. `GROUP BY dc.finish`
-/// groups the NULLs together; the key each group is measured under is [`crate::deck::entry_finish`]
-/// of that finish and the printing's `finishes`, folded in Rust, so a group's price stays the one
-/// its own rows are quoted at — and, on the pool side, [`pool_of`] sums two groups that fold to
-/// one key.
+/// only rows of `variant`. The price and the oracle id are bare columns beside the `sum()` — every
+/// row of a group shares `card_id` and `finish`, and so the `cards` row and the price.
+/// `GROUP BY finish` groups the NULLs together; the key each group is measured under is
+/// [`crate::deck::entry_finish`] of that finish and the printing's `finishes`, and **two groups
+/// that fold to one key are folded into one want here**, their copies summed — a group's price is
+/// the key's, which depends on the key alone.
+///
+/// **Each deck's keys come in the list's reading order** — `theory_diff`'s `diff_select`, the
+/// editor's pile order then name then row, a key standing where its first row does. Nothing in
+/// an exact match depends on it; [`TheoryMatch::Missing`]'s substitution does, because the first
+/// line down the plan takes a spare copy of its card before the next one and the two can be
+/// priced differently.
 fn lists_by_deck(
     conn: &Connection,
     marketplace: Option<Marketplace>,
@@ -220,19 +286,23 @@ fn lists_by_deck(
 ) -> Result<HashMap<i64, Vec<Want>>, String> {
     let price = marketplace.map_or_else(|| "NULL".to_owned(), crate::sorting::deck_card_price_expr);
     let sql = format!(
-        "SELECT dc.deck_id, dc.card_id, dc.finish, c.finishes, sum(dc.quantity),
-                {price}
-           FROM decks d
-           JOIN deck_categories cat
-             ON cat.deck_id = d.id
-            AND cat.is_active = 1
-           JOIN deck_cards dc
-             ON dc.category_id = cat.id
-            AND dc.deck_id = d.id
-            AND dc.variant = ?1
-           LEFT JOIN cards c ON c.id = dc.card_id
-          WHERE {decks}
-          GROUP BY dc.deck_id, dc.card_id, dc.finish",
+        "SELECT deck_id, card_id, finish, finishes, sum(quantity), price, oracle_id
+           FROM (SELECT dc.deck_id, dc.card_id, dc.finish, c.finishes, dc.quantity,
+                        {price} AS price, c.oracle_id,
+                        row_number() OVER (PARTITION BY dc.deck_id
+                                           ORDER BY cat.sort_order, cat.id, dc.name, dc.id) AS pos
+                   FROM decks d
+                   JOIN deck_categories cat
+                     ON cat.deck_id = d.id
+                    AND cat.is_active = 1
+                   JOIN deck_cards dc
+                     ON dc.category_id = cat.id
+                    AND dc.deck_id = d.id
+                    AND dc.variant = ?1
+                   LEFT JOIN cards c ON c.id = dc.card_id
+                  WHERE {decks})
+          GROUP BY deck_id, card_id, finish
+          ORDER BY deck_id, min(pos)",
         decks = compare.decks()
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -245,6 +315,7 @@ fn lists_by_deck(
                 Want {
                     card_id: r.get(1)?,
                     finish: crate::deck::entry_finish(finish.as_deref(), finishes.as_deref()),
+                    oracle_id: r.get(6)?,
                     wanted: r.get(4)?,
                     unit_price: r.get(5)?,
                 },
@@ -254,31 +325,40 @@ fn lists_by_deck(
     let mut out: HashMap<i64, Vec<Want>> = HashMap::new();
     for row in rows {
         let (deck_id, want) = row.map_err(|e| e.to_string())?;
-        out.entry(deck_id).or_default().push(want);
+        let list = out.entry(deck_id).or_default();
+        // A deck's list is tens of keys, so a scan is cheaper than an index beside it.
+        match list
+            .iter_mut()
+            .find(|w| w.card_id == want.card_id && w.finish == want.finish)
+        {
+            Some(same) => same.wanted += want.wanted,
+            None => list.push(want),
+        }
     }
     Ok(out)
 }
 
-/// One deck's live list as a pool, keyed as [`crate::deck::owned_by_printing`]'s map is.
-///
-/// **Summed rather than inserted**, `fold_by_played_finish`'s reason one table over: an unsaid
-/// row and a `foil` row of one foil-only printing are two SQL groups and one key, and a pool that
-/// kept only the second would let the plan's foil ask for a copy the live list already plays.
-fn pool_of(list: Vec<Want>) -> HashMap<(String, String), i64> {
-    let mut pool = HashMap::new();
+/// One deck's live list as a pool, keyed as [`crate::deck::owned_by_printing`]'s map is — and,
+/// under [`TheoryMatch::Missing`], summed per oracle card as well, the grain a substitution is
+/// asked at. An orphan feeds no oracle card: it is not another printing of anything.
+fn pool_of(list: Vec<Want>, matching: TheoryMatch) -> Pool {
+    let mut by_key = HashMap::new();
+    let mut by_oracle = HashMap::new();
     for held in list {
-        *pool.entry((held.card_id, held.finish)).or_insert(0) += held.wanted;
+        if let Some(oracle) = held.oracle_id {
+            *by_oracle.entry(oracle).or_insert(0) += held.wanted;
+        }
+        *by_key.entry((held.card_id, held.finish)).or_insert(0) += held.wanted;
     }
-    pool
+    Pool {
+        by_key,
+        by_oracle: (matching == TheoryMatch::Missing).then_some(by_oracle),
+    }
 }
 
-/// One deck's numbers from its wanted keys and its pool — `deckStats`' loop at the key's grain.
-fn measure(
-    deck_id: i64,
-    list: &str,
-    wants: &[Want],
-    pool: &HashMap<(String, String), i64>,
-) -> DeckCompletion {
+/// One deck's numbers from its wanted keys and its pool — `deckStats`' loop at the key's grain,
+/// then, under [`TheoryMatch::Missing`], `theory_diff`'s substitution walk.
+fn measure(deck_id: i64, list: &str, wants: &[Want], pool: &Pool) -> DeckCompletion {
     let mut row = DeckCompletion {
         deck_id,
         list: list.to_owned(),
@@ -288,21 +368,51 @@ fn measure(
         missing_cost: None,
         unpriced_missing: 0,
     };
+    // The exact match first, over every key — `attribute_owned`'s `min(remaining, quantity)`,
+    // once per key because [`lists_by_deck`] already folded the groups that share one.
+    let mut short: Vec<i64> = Vec::with_capacity(wants.len());
+    // What the exact matches spent, per oracle card — `theory_diff`'s `matched_by_oracle`. Every
+    // key counts, the complete ones included: a live copy that answers its own line card for
+    // card is not also a spare.
+    let mut matched_by_oracle: HashMap<&str, i64> = HashMap::new();
+    for want in wants {
+        let held = pool
+            .by_key
+            .get(&(want.card_id.clone(), want.finish.clone()))
+            .copied()
+            .unwrap_or(0);
+        let have = held.min(want.wanted).max(0);
+        if let Some(oracle) = want.oracle_id.as_deref() {
+            *matched_by_oracle.entry(oracle).or_insert(0) += have;
+        }
+        short.push(want.wanted - have);
+    }
+    if let Some(by_oracle) = &pool.by_oracle {
+        // The live copies of each card no exact match spent, floored at zero for `theory_diff`'s
+        // reason — a negative would be a number with no reading.
+        let mut spare: HashMap<&str, i64> = by_oracle
+            .iter()
+            .map(|(oracle, held)| {
+                let matched = matched_by_oracle.get(oracle.as_str()).copied().unwrap_or(0);
+                (oracle.as_str(), (held - matched).max(0))
+            })
+            .collect();
+        // Down the plan in its reading order, so the first line of a card takes its spare copies
+        // and the next reads what is left: one live copy excuses one planned copy, never two.
+        for (want, short) in wants.iter().zip(short.iter_mut()) {
+            let Some(left) = want.oracle_id.as_deref().and_then(|o| spare.get_mut(o)) else {
+                continue;
+            };
+            let take = (*short).min(*left);
+            *short -= take;
+            *left -= take;
+        }
+    }
     let mut priced = false;
     let mut cost = 0.0;
-    // Scarce, as `attribute_owned`'s is: two groups can share a key — an unsaid row and a `foil`
-    // row of one foil-only printing — and one copy must not own a copy in each.
-    let mut left = pool.clone();
-    for want in wants {
-        let remaining = left
-            .entry((want.card_id.clone(), want.finish.clone()))
-            .or_insert(0);
-        // `attribute_owned`'s `min(remaining, quantity).max(0)`.
-        let have = (*remaining).min(want.wanted).max(0);
-        *remaining -= have;
-        let short = want.wanted - have;
+    for (want, short) in wants.iter().zip(short) {
         row.wanted += want.wanted;
-        row.owned += have;
+        row.owned += want.wanted - short;
         row.missing += short;
         match want.unit_price {
             Some(price) => {
@@ -801,7 +911,12 @@ mod tests {
         let u_plan = pile(&conn, u, THEORY, "Main deck");
         put(&conn, u, u_plan, THEORY, "angel", None, 1);
 
-        let rows = deck_completion_for(&conn, Marketplace::Tcgplayer, Compare::Theory).unwrap();
+        let rows = deck_completion_for(
+            &conn,
+            Marketplace::Tcgplayer,
+            Compare::Theory(TheoryMatch::Exact),
+        )
+        .unwrap();
         assert_eq!(
             rows.iter().map(|r| r.deck_id).collect::<Vec<_>>(),
             [t, w, u],
@@ -840,21 +955,53 @@ mod tests {
             "the planned Treasures are a token line: {diff:?}"
         );
 
+        theory_fence(&conn, TheoryMatch::Exact);
+
+        // **And under `Missing`** (issue #1400): T's fifth regular Bolt, which no exact line
+        // spent, stands in for one of the two foil Bolts — the dialog's `held_as_other_printing`.
+        // Nothing else moves: the Angel's one live copy is already its exact match, and the
+        // switched-off Sol Ring sleeves nothing in any printing.
+        let rows = deck_completion_for(
+            &conn,
+            Marketplace::Tcgplayer,
+            Compare::Theory(TheoryMatch::Missing),
+        )
+        .unwrap();
+        let row = |id: i64| rows.iter().find(|r| r.deck_id == id).unwrap();
+        assert_eq!(numbers(row(t)), (THEORY.to_owned(), 10, 7, 3, 1));
+        assert_money(row(t).missing_cost, Some(13.0), "T: 1×10.00 + 1×3.00");
+        assert_eq!(numbers(row(w)), (THEORY.to_owned(), 3, 1, 2, 1));
+        assert_money(row(w).missing_cost, Some(3.0), "W: 1×3.00");
+        assert_eq!(numbers(row(u)), (THEORY.to_owned(), 1, 0, 1, 1));
+        theory_fence(&conn, TheoryMatch::Missing);
+    }
+
+    /// Every row [`Compare::Theory`] answers under `matching`, against
+    /// [`crate::deck_theory::theory_diff`]'s card lines at two marketplaces: a line's missing
+    /// copies are its whole `quantity` under [`TheoryMatch::Exact`] — the dialog's `All` — and
+    /// `quantity − held_as_other_printing` under [`TheoryMatch::Missing`] — its `Missing`.
+    /// `missing_cost` is those copies at their line's price, `None` only where the diff has no
+    /// priced line either.
+    fn theory_fence(conn: &Connection, matching: TheoryMatch) {
         for market in [Marketplace::Tcgplayer, Marketplace::Cardmarket] {
-            for got in deck_completion_for(&conn, market, Compare::Theory).unwrap() {
-                let what = format!("deck {} at {market:?}", got.deck_id);
+            for got in deck_completion_for(conn, market, Compare::Theory(matching)).unwrap() {
+                let what = format!("deck {} at {market:?}, {matching:?}", got.deck_id);
                 assert_eq!(got.list, THEORY, "{what}");
                 assert_eq!(got.owned + got.missing, got.wanted, "{what}");
-                let diff = crate::deck_theory::theory_diff(&conn, got.deck_id, market).unwrap();
+                let diff = crate::deck_theory::theory_diff(conn, got.deck_id, market).unwrap();
+                let short = |r: &crate::deck_theory::TheoryDiffRow| match matching {
+                    TheoryMatch::Exact => r.quantity,
+                    TheoryMatch::Missing => r.quantity - r.held_as_other_printing,
+                };
                 let cards = diff.iter().filter(|r| !r.is_token);
-                let missing: i64 = cards.clone().map(|r| r.quantity).sum();
+                let missing: i64 = cards.clone().map(short).sum();
                 let unpriced: i64 = cards
                     .clone()
                     .filter(|r| r.unit_price.is_none())
-                    .map(|r| r.quantity)
+                    .map(short)
                     .sum();
                 let priced: Vec<f64> = cards
-                    .filter_map(|r| r.unit_price.map(|p| p * r.quantity as f64))
+                    .filter_map(|r| r.unit_price.map(|p| p * short(r) as f64))
                     .collect();
                 assert_eq!(
                     (got.missing, got.unpriced_missing),
@@ -869,14 +1016,95 @@ mod tests {
         }
     }
 
-    /// The widget's word, forgiving: only `theory` is Theory, and anything else — nothing at all,
-    /// the default's own name, a word from a newer build — compares against the collection.
+    /// **Under `Missing`, which planned line a spare copy excuses is the plan's reading order**,
+    /// `theory_diff`'s walk — and the money says which. Two decks plan the same foil Bolt ($10)
+    /// and regular Bolt ($2), in opposite orders down one pile, and each sleeves one copy of a
+    /// third Bolt printing: the first line down the plan takes it, so one deck is $2 short and
+    /// the other $10. Both against the dialog.
+    #[test]
+    fn a_substitute_goes_to_the_first_planned_line_of_its_card() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,power,toughness,prices,finishes,raw)
+               VALUES ('bolt2','o-bolt','Lightning Bolt','2xm','129','en','normal','uncommon',
+                       'Instant',NULL,NULL,'{"usd":"1.00"}','["nonfoil"]','{}');"#,
+        )
+        .unwrap();
+        let foil_first = make_deck(&conn, "Foil first", true, false);
+        let plain_first = make_deck(&conn, "Plain first", true, false);
+        for (deck, order) in [
+            (foil_first, [Some("foil"), None]),
+            (plain_first, [None, Some("foil")]),
+        ] {
+            let plan = pile(&conn, deck, THEORY, "Main deck");
+            for finish in order {
+                put(&conn, deck, plan, THEORY, "bolt", finish, 1);
+            }
+            let live = pile(&conn, deck, LIVE, "Main deck");
+            put(&conn, deck, live, LIVE, "bolt2", None, 1);
+        }
+
+        let rows = deck_completion_for(
+            &conn,
+            Marketplace::Tcgplayer,
+            Compare::Theory(TheoryMatch::Missing),
+        )
+        .unwrap();
+        let row = |id: i64| rows.iter().find(|r| r.deck_id == id).unwrap();
+        assert_eq!((row(foil_first).owned, row(foil_first).missing), (1, 1));
+        assert_money(
+            row(foil_first).missing_cost,
+            Some(2.0),
+            "the regular Bolt is left",
+        );
+        assert_eq!((row(plain_first).owned, row(plain_first).missing), (1, 1));
+        assert_money(
+            row(plain_first).missing_cost,
+            Some(10.0),
+            "the foil Bolt is left",
+        );
+
+        // Under `Exact` the third printing answers neither line.
+        let exact = deck_completion_for(
+            &conn,
+            Marketplace::Tcgplayer,
+            Compare::Theory(TheoryMatch::Exact),
+        )
+        .unwrap();
+        assert!(
+            exact.iter().all(|r| (r.owned, r.missing) == (0, 2)),
+            "{exact:?}"
+        );
+
+        theory_fence(&conn, TheoryMatch::Missing);
+        theory_fence(&conn, TheoryMatch::Exact);
+    }
+
+    /// The widget's words, forgiving: only `theory` is Theory, and anything else — nothing at
+    /// all, the default's own name, a word from a newer build — compares against the collection.
+    /// Under Theory only `missing` is Missing, and the match is not read under Collection at all.
     #[test]
     fn compare_reads_theory_and_nothing_else_as_theory() {
-        assert_eq!(Compare::from_opt(None), Compare::Collection);
-        assert_eq!(Compare::from_opt(Some("collection")), Compare::Collection);
-        assert_eq!(Compare::from_opt(Some("theory")), Compare::Theory);
-        assert_eq!(Compare::from_opt(Some("bogus")), Compare::Collection);
+        let exact = Compare::Theory(TheoryMatch::Exact);
+        let missing = Compare::Theory(TheoryMatch::Missing);
+        assert_eq!(Compare::from_opt(None, None), Compare::Collection);
+        assert_eq!(
+            Compare::from_opt(Some("collection"), None),
+            Compare::Collection
+        );
+        assert_eq!(
+            Compare::from_opt(Some("collection"), Some("missing")),
+            Compare::Collection
+        );
+        assert_eq!(Compare::from_opt(Some("theory"), None), exact);
+        assert_eq!(Compare::from_opt(Some("theory"), Some("exact")), exact);
+        assert_eq!(Compare::from_opt(Some("theory"), Some("missing")), missing);
+        assert_eq!(Compare::from_opt(Some("theory"), Some("bogus")), exact);
+        assert_eq!(
+            Compare::from_opt(Some("bogus"), Some("missing")),
+            Compare::Collection
+        );
     }
 
     /// The wire names the page reads — `ipc.test.ts`' struct table cannot see whether serde

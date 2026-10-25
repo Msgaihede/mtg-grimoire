@@ -8,6 +8,7 @@ import {
   defaultTitle,
   pickDefault,
   pickOf,
+  pickShown,
   pickValue,
   toggleOn,
   toggleOnOf,
@@ -92,6 +93,30 @@ describe("pickOf", () => {
   it("answers undefined for a kind this build cannot draw, whatever it stored", () => {
     expect(pickOf(widget("fromTheFuture", { limit: 25 }), "limit")).toBeUndefined();
     expect(pickOf(widget("toString", { limit: 25 }), "limit")).toBeUndefined();
+  });
+});
+
+/** Issue #1400: a pick that refines one answer of another is drawn only under that answer. */
+describe("pickShown", () => {
+  it("shows a pick that names no condition", () => {
+    expect(pickShown(widget("deckCompletion"), pickFor("deckCompletion", "compare"))).toBe(true);
+  });
+
+  it("shows a conditional pick only while the pick it names reads its value", () => {
+    const match = pickFor("deckCompletion", "match");
+    expect(pickShown(widget("deckCompletion"), match)).toBe(false);
+    expect(pickShown(widget("deckCompletion", { compare: "collection" }), match)).toBe(false);
+    expect(pickShown(widget("deckCompletion", { compare: "theory" }), match)).toBe(true);
+    // A word no option carries reads as the default, which is not Theory.
+    expect(pickShown(widget("deckCompletion", { compare: "Theory" }), match)).toBe(false);
+  });
+
+  it("never shows a pick whose condition names a key the kind has no pick for", () => {
+    const orphan: WidgetPick = {
+      ...pickFor("deckCompletion", "match"),
+      when: { key: "nope", is: 1 },
+    };
+    expect(pickShown(widget("deckCompletion", { nope: 1 }), orphan)).toBe(false);
   });
 });
 
