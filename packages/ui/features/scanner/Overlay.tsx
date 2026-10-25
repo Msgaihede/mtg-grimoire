@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, type JSX, type RefObject } from "react";
-import type { ScannerCorner, ScannerVerdict } from "./types";
+import { cornerMarks } from "./scanCorners";
+import type { ScannerVerdict } from "./types";
 
-/** The card the frame votes for. */
-const QUAD = "#5ed69a";
-/** The corner the scanner treats as top-left, so a 180° flip is visible live. */
-const CORNER = "#e05ad0";
+/** The marks' colour: the app's gold, read off the document — the popup's and the bar's. */
+const MARK_TOKEN = "--color-accent";
+/** The corner the scanner treats as top-left, so a 180° flip is visible live — the Developer
+ *  switch's alone, a debugging aid and no part of the reader's picture. */
+const ORIENTATION = "#e05ad0";
 
 /**
  * The box over the video — the one part of the scanner that has to keep up with the camera.
@@ -19,26 +21,37 @@ const CORNER = "#e05ad0";
  * smaller by the pump's downscale — hence `sx`/`sy` off `verdict.frame`. Scaling here rather
  * than in the crate keeps the wire payload independent of how big the preview happens to be.
  *
- * No unit test: jsdom's canvas has no 2D context, so every line below is a no-op there and a
- * test could only assert that the calls were made. The live pass is what proves this one.
+ * **What it draws is four gold corners** (the scanner redesign, 2026-10-25), an L standing just
+ * outside each corner of the card — never the whole quad, which was a green debug trace over the
+ * picture. Their shape is `scanCorners.ts`'s, and tested there: jsdom's canvas has no 2D context,
+ * so every line below is a no-op in a test, and the live pass is what proves the stroke.
  */
 export function Overlay({
   videoRef,
   verdict,
+  orientation = false,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
   verdict: ScannerVerdict | null;
+  /** Mark the corner the scanner reads as top-left — the Developer switch's debugging aid. */
+  orientation?: boolean;
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const verdictRef = useRef(verdict);
+  const orientationRef = useRef(orientation);
   // A layout effect, not an assignment during render: the ref has to be current before the next
   // animation frame reads it, and `useEffect` alone is not guaranteed to run before that.
   useLayoutEffect(() => {
     verdictRef.current = verdict;
+    orientationRef.current = orientation;
   });
 
   useEffect(() => {
     let raf = 0;
+    // Read once: the token does not change while the picture is up, and `getComputedStyle` sixty
+    // times a second would be a style recalculation a frame. Empty under jsdom, which loads no
+    // stylesheet — and which has no context to draw with either.
+    const gold = getComputedStyle(document.documentElement).getPropertyValue(MARK_TOKEN).trim();
 
     function draw() {
       raf = requestAnimationFrame(draw);
@@ -69,23 +82,31 @@ export function Overlay({
       const sx = canvas.width / v.frame.w;
       const sy = canvas.height / v.frame.h;
 
-      // The widths are a fraction of the canvas rather than literal pixels, because the canvas
-      // is sized to the *video* and stretched down to the element: a 3px stroke on a 1920-wide
-      // canvas in a 640px box draws at one CSS pixel. The old debug page's `draw()` verbatim,
-      // the `Math.max` floor included — it is what keeps the box visible on a low-resolution
+      // The width is a fraction of the canvas rather than literal pixels, because the canvas is
+      // sized to the *video* and stretched down to the element: the design's 3px in a 640px box is
+      // a 1920-wide canvas's 9. The `Math.max` floor keeps the marks visible on a low-resolution
       // camera.
-      const stroke = Math.max(2, canvas.width / 300);
+      const stroke = Math.max(3, canvas.width / 220);
 
       if (v.quad !== null) {
-        ctx.lineWidth = stroke;
-        ctx.strokeStyle = QUAD;
-        trace(ctx, v.quad, sx, sy);
-        ctx.stroke();
-        const first = v.quad[0];
-        if (first !== undefined) {
-          ctx.fillStyle = CORNER;
+        const quad = v.quad.map(([x, y]) => [x * sx, y * sy] as const);
+        if (gold !== "") {
+          ctx.lineWidth = stroke;
+          ctx.strokeStyle = gold;
+          ctx.lineJoin = "round";
+          for (const mark of cornerMarks(quad)) {
+            ctx.beginPath();
+            ctx.moveTo(mark.start[0], mark.start[1]);
+            ctx.arcTo(mark.corner[0], mark.corner[1], mark.end[0], mark.end[1], mark.radius);
+            ctx.lineTo(mark.end[0], mark.end[1]);
+            ctx.stroke();
+          }
+        }
+        const first = quad[0];
+        if (orientationRef.current && first !== undefined) {
+          ctx.fillStyle = ORIENTATION;
           ctx.beginPath();
-          ctx.arc(first[0] * sx, first[1] * sy, stroke * 2.2, 0, Math.PI * 2);
+          ctx.arc(first[0], first[1], stroke * 1.6, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -97,26 +118,20 @@ export function Overlay({
 
   return (
     // Decorative: the headline and the panels beside the video say everything a screen reader
-    // needs, and a box drawn around a card has no description an `alt` could usefully carry.
+    // needs, and corners drawn around a card have no description an `alt` could usefully carry.
     //
-    // **`object-cover` matches the `<video>` under it, and the box is wrong without it.** A
+    // **`object-cover` matches the `<video>` under it, and the corners are wrong without it.** A
     // `<canvas>` is a replaced element whose intrinsic size is its `width`/`height` *attributes*
     // — the video's own pixels, assigned in `draw()` — so `object-fit` crops it exactly as the
     // video is cropped, both about the centre. Left at the default `fill`, the 1920×1080 bitmap is
-    // stretched to the element's box while the picture inside that box is not, and the quad lands
+    // stretched to the element's box while the picture inside that box is not, and the corners land
     // off the card by however far the box's shape is from 16:9. **The two classes are one
-    // decision**: change the video's fit or position and this one moves with it, or the box
-    // drifts off the card with no error anywhere.
+    // decision**: change the video's fit or position and this one moves with it, or the marks
+    // drift off the card with no error anywhere.
     <canvas
       ref={canvasRef}
       aria-hidden="true"
       className="absolute inset-0 h-full w-full object-cover"
     />
   );
-}
-
-function trace(ctx: CanvasRenderingContext2D, quad: ScannerCorner[], sx: number, sy: number): void {
-  ctx.beginPath();
-  quad.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x * sx, y * sy) : ctx.lineTo(x * sx, y * sy)));
-  ctx.closePath();
 }

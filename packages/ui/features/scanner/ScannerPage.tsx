@@ -546,7 +546,11 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                 letterboxed feed there is a strip with black above and below. */}
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
               <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
-              <Overlay videoRef={videoRef} verdict={reading ? loop.verdict : null} />
+              <Overlay
+                videoRef={videoRef}
+                verdict={reading ? loop.verdict : null}
+                orientation={developer}
+              />
               {/* **Stopped, the picture dims behind the press that begins it** — continuous only,
                   and only over a picture: a refused camera or a host with no session puts its own
                   sentence where the picture would be, and a veil laid over that would be two

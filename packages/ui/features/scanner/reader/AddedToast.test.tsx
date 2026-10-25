@@ -213,13 +213,17 @@ describe("AddedToast", () => {
     expect(container.querySelector("[data-landed-flash]")).toBeNull();
   });
 
-  /** Keyed on the stamp: a second copy of the same row must flash again, so it is a new element. */
-  it("flashes the camera's edge once per landing, in the colour the kind means", () => {
+  /**
+   * Keyed on the stamp: a second copy of the same row must flash again, so it is a new element.
+   * **Gold for every kind**, the corners' gold — never the green edge it used to be.
+   */
+  it("flashes the camera's edge once per landing, in gold whatever the kind", () => {
     const { container, rerender } = render(
       <AddedToast card={landedFrom(row, false, false)} onDone={vi.fn()} />,
     );
     const first = container.querySelector("[data-landed-flash]");
-    expect(first?.classList.contains("ring-ok")).toBe(true);
+    expect(first?.classList.contains("ring-accent")).toBe(true);
+    expect(first?.classList.contains("ring-ok")).toBe(false);
 
     rerender(
       <AddedToast card={landedFrom({ ...row, quantity: 2, addedAt: 2_000 }, true, false)} onDone={vi.fn()} />,

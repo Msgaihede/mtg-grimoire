@@ -657,10 +657,17 @@ that does not exist trains a reader to disbelieve the table.
 | `useScannerStatus.ts` | `scanner_status` once a session, and what a surface draws from it |
 | `useTray.ts`, `useTrayLanding.ts`, `useTrayCommit.ts`, `useTrayNewFolder.ts`, `reader/` | The tray (§10) |
 | `usePointAndShoot.ts` | A press's read (§10, *The tray*) |
-| `Overlay.tsx` | The canvas over the video — the card the frame votes for |
+| `Overlay.tsx`, `scanCorners.ts` | The canvas over the video — four gold corners round the card the frame votes for |
 | `ScannerPanels.tsx`, `panels/` | The Developer column (§10) |
 | `verdictText.ts`, `reader/readerText.ts` | The pure sentence functions the panels, the HUD, the tests and the stories share |
 | `fixtures.ts` | The canned verdicts the tests and the stories are both driven from |
+
+**The overlay draws four gold corners, not the quad** (2026-10-25): an L standing just outside each
+corner of the card, its arms along the card's own edges so they turn with a tilted card, sized from
+the card's shorter side (`scanCorners.ts`, the design canvas's 30px arms 9px out on a 290px card) and
+stroked in `--color-accent`. It was a green trace of the whole quad with a magenta dot on the corner
+read as top-left; the dot stays, behind the Developer switch (`orientation`), the one place a 180°
+flip is worth seeing.
 
 **The overlay scales its strokes with the canvas**: the canvas is sized to the video's own pixels
 and the quad arrives in the *sent* frame's coordinates, so both a scale factor and a stroke derived

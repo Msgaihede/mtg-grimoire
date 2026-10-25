@@ -77,7 +77,10 @@ export function landedFrom(row: ScannerTrayRow, bumped: boolean, replaced: boole
 
 /**
  * The flash round the camera's edge: held for one tier and faded over the next — the tray row's
- * own wash (`TrayPanel`), so the two marks one landing makes go out together.
+ * own wash (`TrayPanel`), so the two marks one landing makes go out together. **Gold for every
+ * landing** (2026-10-25), the gold of the corners over the card (`Overlay`): it was green for a
+ * card filed and gold only for a printing to pick, and the green edge read as a debug border over
+ * the picture. The popup's tick and label still say which kind it was.
  */
 const EDGE_FADE: Transition = { ...TRANSITION.slow, delay: seconds(DURATION.slow) };
 
@@ -160,10 +163,7 @@ export function AddedToast({ card, onDone, price, tier = null, compact = false }
         <motion.div
           key={card.stamp}
           data-landed-flash=""
-          className={cn(
-            "absolute inset-0 rounded-lg ring-3 ring-inset",
-            card.kind === "pick" ? "ring-accent" : "ring-ok",
-          )}
+          className="absolute inset-0 rounded-lg ring-3 ring-accent ring-inset"
           initial={{ opacity: 1 }}
           animate={{ opacity: 0, transition: EDGE_FADE }}
         />
