@@ -20,7 +20,7 @@
 //!
 //! Measured on the readers' scans and on camera motion made from them, in the replay
 //! (`docs/reference/card-scanner.md` §4): the stillness does nearly all of it, and a fourth or
-//! fifth frame took cards from the readers' scans and no false add from the motion.
+//! fifth frame cost the readers' scans more cards than it took false adds from the motion.
 //!
 //! The decision is the card — the look within it is the deciding frame's best. It stands until
 //! another card is decided, **or until the card has been gone [`Rules::forget_after`] frames
@@ -64,8 +64,8 @@ pub struct Rules {
     pub same_place: f32,
     /// Bounds IoU a vote must keep with the vote before it, or the card moved — the camera
     /// swept or the card is still falling — and the count starts again from this frame; 0 for
-    /// no such check. 0.8 is a shift of about a ninth of the card's width; two frames running on the
-    /// readers' scans overlap by 0.94 or more nine times in ten.
+    /// no such check. 0.8 is a shift of about a ninth of the card's width; two frames running on
+    /// the readers' scans overlap by 0.94 or more nine times in ten.
     pub still: f32,
     /// Frames running with no card in front of the lens ([`Read::present`]) that forget the
     /// standing decision.

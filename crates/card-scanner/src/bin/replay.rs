@@ -128,15 +128,14 @@ fn agreement_rules(spec: &str) -> Result<card_scanner::neural::session::Rules, S
     for pair in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         let (key, value) =
             pair.split_once('=').ok_or_else(|| format!("agreement: `{pair}` is not key=value"))?;
-        let bad =
-            |_: &dyn std::error::Error| format!("agreement: `{value}` is not a value for {key}");
+        let bad = || format!("agreement: `{value}` is not a value for {key}");
         match key.trim() {
-            "required" => rules.required = value.parse().map_err(|e| bad(&e))?,
-            "support" => rules.support_required = value.parse().map_err(|e| bad(&e))?,
-            "instant" => rules.instant = value.parse().map_err(|e| bad(&e))?,
-            "still" => rules.still = value.parse().map_err(|e| bad(&e))?,
-            "gap" => rules.max_gap_ms = value.parse().map_err(|e| bad(&e))?,
-            "age" => rules.max_age_ms = value.parse().map_err(|e| bad(&e))?,
+            "required" => rules.required = value.parse().map_err(|_| bad())?,
+            "support" => rules.support_required = value.parse().map_err(|_| bad())?,
+            "instant" => rules.instant = value.parse().map_err(|_| bad())?,
+            "still" => rules.still = value.parse().map_err(|_| bad())?,
+            "gap" => rules.max_gap_ms = value.parse().map_err(|_| bad())?,
+            "age" => rules.max_age_ms = value.parse().map_err(|_| bad())?,
             other => return Err(format!("agreement: no rule `{other}`")),
         }
     }
@@ -1029,6 +1028,24 @@ mod tests {
         );
         assert_eq!(keys(&pass["got"]), set(&["id", "name", "set", "number"]));
         assert_eq!(keys(&pass["frames"][0]), set(&["ok", "confidence", "distance", "decided", "error", "full", "seq", "quad"]));
+    }
+
+    #[test]
+    fn agreement_pairs_set_the_rules_they_name_over_the_defaults() {
+        let rules = agreement_rules(" required=2, still=0.5 ,instant=1,gap=400").unwrap();
+        let default = card_scanner::neural::session::Rules::default();
+        assert_eq!((rules.required, rules.instant, rules.max_gap_ms), (2, 1, 400.0));
+        assert_eq!(rules.still, 0.5);
+        assert_eq!(rules.support_required, default.support_required, "untouched");
+        assert_eq!(agreement_rules("").unwrap().required, default.required);
+        for (spec, said) in [
+            ("required", "not key=value"),
+            ("required=two", "`two` is not a value for required"),
+            ("still=0.5,frames=3", "no rule `frames`"),
+        ] {
+            let e = agreement_rules(spec).unwrap_err();
+            assert!(e.contains(said), "{spec}: {e}");
+        }
     }
 
     /// `--only` text that no scan carries is said so, with the text.
