@@ -555,6 +555,41 @@ describe("HomePage", () => {
     expect(ghost()).toBeNull();
   });
 
+  /**
+   * **A scroll mid-drag is travel** (issue #1399). The wheel moves the grid under a pointer that
+   * has not moved, so no `pointermove` fires — the card has to follow the scroll itself, and the
+   * drop has to land on the cell the pointer is now over.
+   */
+  it("keeps a dragged widget under the pointer while the page scrolls", async () => {
+    const user = userEvent.setup();
+    const { container } = mount(layoutOf(A, B));
+    await customize(user);
+
+    // jsdom lays nothing out: the canvas's rect is the scroll, and nothing else moves it.
+    let scrolled = 0;
+    const canvas = container.querySelector<HTMLElement>(`[${HOME_CANVAS_ATTR}]`);
+    vi.spyOn(canvas!, "getBoundingClientRect").mockImplementation(
+      () => new DOMRect(0, -scrolled, canvasWidth, 1000),
+    );
+
+    const card = screen.getByRole("region", { name: titleOf("future-a") });
+    fireEvent(card, new MouseEvent("pointerdown", { bubbles: true, button: 0, clientX: 50, clientY: 50 }));
+    fireEvent(window, new MouseEvent("pointermove", { clientX: 50, clientY: 50 + 116 }));
+    expect(boxFor(container, "a").style.transform).toBe("translate(0px, 116px)");
+
+    // Two cells of scroll, the pointer still: the card is carried down with it, not left behind.
+    scrolled = 2 * 116;
+    fireEvent(document, new Event("scroll"));
+    expect(boxFor(container, "a").style.transform).toBe("translate(0px, 348px)");
+
+    fireEvent(window, new MouseEvent("pointerup"));
+    await waitFor(() => expect(storedWidget("a")).toEqual(expect.objectContaining({ x: 0, y: 3 })));
+
+    // The scroll listener went with the release.
+    fireEvent(document, new Event("scroll"));
+    expect(boxFor(container, "a").style.transform).toBe("");
+  });
+
   it("resizes from the corner onto free cells", async () => {
     const user = userEvent.setup();
     mount(layoutOf(A, B));
