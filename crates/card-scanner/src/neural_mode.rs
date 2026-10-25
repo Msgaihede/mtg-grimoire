@@ -5,9 +5,10 @@
 //!
 //! **A frame is a read and a vote.** The JPEG is decoded, [`card_neural::Recognizer::read`]
 //! finds, fingerprints and ranks every card in it under the filters' looks, and
-//! [`card_neural::Agreement`] counts the frame — two accepted frames of one card decide it, or
-//! three when some are only supported, or one instant frame. Its ages are read off the session's
-//! clock ([`crate::host::Stopwatch`], started at load), never off `Instant`.
+//! [`card_neural::Agreement`] counts the frame — three accepted frames of one card lying still
+//! decide it, or four when some are only supported, and a card that moved between two of them
+//! starts the count again. Its ages are read off the session's clock
+//! ([`crate::host::Stopwatch`], started at load), never off `Instant`.
 //!
 //! **What it answers:**
 //!
@@ -16,7 +17,7 @@
 //!   (1 − cosine) / 2 and `distance` that times 256**, so a panel or the scan inbox reading 0–256
 //!   bits still holds; `margin` is the lead over the best other card × 128.
 //! - `tracked`: the vote rule's shape — `committed` while a decision stands, `confidence` the
-//!   votes held over what deciding takes, `decide_at` 2.
+//!   votes held over what deciding takes, `decide_at` the accepted frames it takes (3).
 //! - `wants_full`: a full-resolution copy of the next frame is asked for while a card is in
 //!   front of the lens and undecided, and for [`MARK_WAIT`] frames after each decision — its
 //!   collector band, cut through the corners found here, is where the finish mark is measured
@@ -92,6 +93,9 @@ pub(crate) struct NeuralMode {
     /// [`Session::set_neural_finish`]: a decision carries the measured finish mark, and waits
     /// for it. Off until the mark is measured on readers' scans.
     finish: bool,
+    /// [`Session::set_agreement_rules`]: the agreement's rules in place of `card-neural`'s, kept
+    /// across a later load. `None` for its own.
+    rules: Option<card_neural::session::Rules>,
 }
 
 /// The recogniser, its agreement across frames, the clock its frames are timed by, and what the
@@ -231,7 +235,9 @@ impl Session {
         let recognizer = card_neural::Recognizer::load(files).map_err(|e| e.to_string())?;
         self.neural.loaded = Some(Loaded {
             recognizer,
-            agreement: card_neural::Agreement::default(),
+            agreement: card_neural::Agreement::new(
+                self.neural.rules.clone().unwrap_or_default(),
+            ),
             clock: Stopwatch::start(),
             admit: None,
             decisions: 0,
@@ -257,6 +263,18 @@ impl Session {
     /// measured either way.
     pub fn set_neural_finish(&mut self, on: bool) {
         self.neural.finish = on;
+    }
+
+    /// Count frames toward a decision by these rules in place of `card-neural`'s own — for the
+    /// replay, which measures other rules on readers' scans; no host calls it. Takes effect at
+    /// once, forgetting the votes counted so far, and holds across a later
+    /// [`Session::load_neural`].
+    pub fn set_agreement_rules(&mut self, rules: card_neural::session::Rules) {
+        if let Some(l) = &mut self.neural.loaded {
+            l.agreement.rules = rules.clone();
+            l.agreement.reset();
+        }
+        self.neural.rules = Some(rules);
     }
 
     /// The finish marks measured for the standing decision, and what they agree on — for the
@@ -453,7 +471,8 @@ impl Session {
         l.frames_seen.drain(..dropped);
         let rules = &l.agreement.rules;
         let decide_at = rules.required as f32;
-        // How far the votes held are toward a decision: two accepted frames, or three in all.
+        // How far the votes held are toward a decision: the accepted frames it takes, or the
+        // supported ones.
         let progress = (strong as f32 / rules.required.max(1) as f32)
             .max(votes as f32 / rules.support_required.max(1) as f32)
             .min(1.0);
@@ -975,10 +994,26 @@ mod tests {
         }
         use card_neural::Files;
 
-        /// A session over `r`, its models loaded.
+        /// The rules these tests count by: two accepted frames decide, three with supported
+        /// ones, one instant frame alone, and a card may move between votes — what the session's
+        /// own bookkeeping (its numbers, replacements, evidence and mark) was written against.
+        /// The shipped counts are `card-neural`'s to test, and
+        /// `the_shipped_rules_decide_on_three_frames_of_a_card_at_rest` holds the session to them.
+        fn two_frame_rules() -> card_neural::session::Rules {
+            card_neural::session::Rules {
+                required: 2,
+                support_required: 3,
+                instant: 1,
+                still: 0.0,
+                ..Default::default()
+            }
+        }
+
+        /// A session over `r`, its models loaded, counting by [`two_frame_rules`].
         fn session(r: Option<Reference>) -> Session {
             let mut s = Session::new(r, 5);
             s.load_neural(shipped()).expect("the models in git load");
+            s.set_agreement_rules(two_frame_rules());
             s
         }
 
@@ -1138,6 +1173,33 @@ mod tests {
             let again = decide(&mut s, a, 900.0);
             assert_eq!(again.decision_seq, 2);
             assert!(!again.decision.expect("decided").replaces_previous);
+        }
+
+        #[test]
+        fn the_shipped_rules_decide_on_three_frames_of_a_card_at_rest() {
+            let mut s = Session::new(None, 5);
+            s.load_neural(shipped()).expect("the models in git load");
+            let a = single_looks(&s, 1)[0];
+            let at_rest = naming(&s, a, true);
+            // A fifth of the card's width over: the card moved since the vote before.
+            let mut moved = at_rest.clone();
+            moved.cards[0].quad = quad().map(|p| Point { x: p.x + 48.0, ..p });
+            moved.cards[0].detection.quad = moved.cards[0].quad;
+            let third = |v: &Verdict| {
+                let t = v.tracked.as_ref().expect("tracked");
+                (t.decide_at, (t.confidence * 3.0).round())
+            };
+
+            let v = feed(&mut s, &at_rest, 0.0);
+            assert_eq!(third(&v), (3.0, 1.0));
+            assert!(feed(&mut s, &at_rest, 100.0).decision.is_none());
+            let v = feed(&mut s, &moved, 200.0);
+            assert!(v.decision.is_none());
+            assert_eq!(third(&v), (3.0, 1.0), "a card that moved starts the count again");
+            assert!(feed(&mut s, &moved, 300.0).decision.is_none());
+            let v = feed(&mut s, &moved, 400.0);
+            assert_eq!(v.decision_seq, 1);
+            assert_eq!(v.decision.expect("decided").printing, pictured(&s, a));
         }
 
         #[test]
@@ -1353,6 +1415,7 @@ mod tests {
             let files = Files { gallery: Cow::Owned(g.as_bytes().to_vec()), meta, ..shipped() };
             let mut s = Session::new(None, 5);
             s.load_neural(files).expect("the shipped networks over a gallery made by hand");
+            s.set_agreement_rules(two_frame_rules());
             s
         }
 
@@ -1749,7 +1812,7 @@ mod tests {
             let s = with_looks(0.75);
             let g = gallery(&s);
             let pixels = card_neural::Frame::new(32, 32, vec![0; 32 * 32 * 3]).expect("a frame");
-            let mut agreement = card_neural::Agreement::default();
+            let mut agreement = card_neural::Agreement::new(two_frame_rules());
             let mut read = naming(&s, A, true);
             read.cards[0].embedding = vector(DIM, &[(0, 1.0)]);
             let kept = keep(&read, g, &agreement, None, &pixels).expect("a voting frame is kept");
