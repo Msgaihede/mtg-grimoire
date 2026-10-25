@@ -448,7 +448,7 @@ export function HomePage(): ReactElement {
   const held = useRef<{ release: (() => void) | null }>({ release: null });
   useEffect(() => {
     const hand = held.current;
-    // A page that unmounts mid-drag — a view switch from the keyboard — must not leave three
+    // A page that unmounts mid-drag — a view switch from the keyboard — must not leave four
     // listeners on `window` writing into a component that no longer exists.
     return () => hand.release?.();
   }, []);
@@ -475,6 +475,16 @@ export function HomePage(): ReactElement {
    *
    * The listeners are on `window` rather than on the card, so a pointer that leaves the card — which
    * a drag across the page does at once — is still followed.
+   *
+   * **The travel is measured against the canvas, not the viewport** (issue #1399). A wheel rolled
+   * mid-drag scrolls the page under a pointer that has not moved: no `pointermove` fires, the
+   * card's box scrolls away with the grid, and a travel read from `clientX`/`clientY` alone left
+   * the card behind and judged the drop against cells the pointer was no longer over. So the
+   * travel is the pointer's minus the canvas's — the canvas is outside the zoom, so its rect is in
+   * the pointer's viewport pixels — and a `scroll` caught in the capture phase on `window` (a
+   * scroll does not bubble, and the scroller is the shell's, not this page's) re-runs the same
+   * reading at the last pointer position. Whichever ancestor scrolled, the card stays under the
+   * hand and the ghost under the cell it is over.
    */
   const startGesture = useCallback(
     (widget: HomeWidget, mode: Gesture["mode"], event: ReactPointerEvent<HTMLElement>) => {
@@ -486,13 +496,25 @@ export function HomePage(): ReactElement {
       const step = live.current.cell + GAP;
       const originX = event.clientX;
       const originY = event.clientY;
+      // Where the pointer last was, for a scroll to re-read the travel at.
+      let pointerX = originX;
+      let pointerY = originY;
+      const canvasEl = event.currentTarget.closest<HTMLElement>(`[${HOME_CANVAS_ATTR}]`);
+      const canvasAt = () => {
+        const rect = canvasEl?.getBoundingClientRect();
+        return { left: rect?.left ?? 0, top: rect?.top ?? 0 };
+      };
+      const anchor = canvasAt();
       const start: CellRect = { x: widget.x, y: widget.y, w: widget.w, h: widget.h };
       let ghost: Gesture["ghost"] = { ...start, ok: true };
 
-      const follow = (e: PointerEvent) => {
+      const track = () => {
         const { arranged: now, cols: across, zoom: scale } = live.current;
-        const dx = e.clientX - originX;
-        const dy = e.clientY - originY;
+        // The pointer's travel less the canvas's: what a scroll moved the grid by is travel the
+        // pointer made *across the grid* without the hand moving at all.
+        const at = canvasAt();
+        const dx = pointerX - originX - (at.left - anchor.left);
+        const dy = pointerY - originY - (at.top - anchor.top);
         // **The one place the two coordinate spaces meet.** `dx` is viewport pixels, `step` is the
         // grid's own — and the CSS `zoom` on the grid box is exactly the ratio between them, so a
         // cell is `step * scale` pixels wide *on screen*, which is what the pointer travelled
@@ -520,6 +542,11 @@ export function HomePage(): ReactElement {
         ghost = { ...rect, ok: isFree(now.widgets, rect, across, widget.id) };
         setGesture({ id: widget.id, mode, dx, dy, ghost });
       };
+      const follow = (e: PointerEvent) => {
+        pointerX = e.clientX;
+        pointerY = e.clientY;
+        track();
+      };
 
       const finish = (commit: boolean) => {
         held.current.release?.();
@@ -538,10 +565,12 @@ export function HomePage(): ReactElement {
       window.addEventListener("pointermove", follow);
       window.addEventListener("pointerup", drop);
       window.addEventListener("pointercancel", cancel);
+      window.addEventListener("scroll", track, { capture: true, passive: true });
       held.current.release = () => {
         window.removeEventListener("pointermove", follow);
         window.removeEventListener("pointerup", drop);
         window.removeEventListener("pointercancel", cancel);
+        window.removeEventListener("scroll", track, { capture: true });
         held.current.release = null;
       };
 
