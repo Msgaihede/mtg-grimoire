@@ -51,7 +51,9 @@ export interface EntryTagsEditorProps {
  * write goes out on every chip added or removed and the host's row comes back a beat later, so a
  * second chip added inside that beat would otherwise be built on the stale list and quietly drop
  * the first. The local list is put back to the host's whenever the host's changes — a write
- * landing (Rust may tidy a spelling), or another window tagging the same stack — which is the
+ * landing (Rust may tidy a spelling), or another window tagging the same stack — **but never while
+ * a write is still out**: a re-read the first write asked for can land while the second is in
+ * flight, and adopting it would put the stale list back under the reader's caret. It is the
  * "adjust state when a prop changes" pattern rather than an effect, so it never draws a frame of
  * the old list.
  */
@@ -64,12 +66,12 @@ export function EntryTagsEditor({
   disabledHint,
 }: EntryTagsEditorProps): JSX.Element {
   const inUse = useEntryTagsInUse(!disabled);
-  const { setTags, error } = useSetEntryTags();
+  const { setTags, error, pending } = useSetEntryTags();
 
   const seenKey = `${target.kind}:${target.id}:${JSON.stringify(tags)}`;
   const [seen, setSeen] = useState(seenKey);
   const [local, setLocal] = useState<readonly string[]>(tags);
-  if (seen !== seenKey) {
+  if (seen !== seenKey && !pending) {
     setSeen(seenKey);
     setLocal(tags);
   }
