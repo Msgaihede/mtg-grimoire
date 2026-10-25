@@ -81,3 +81,42 @@ export function ruleBreak(issues: readonly ValidationIssue[] | undefined): strin
   const sentences = [...new Set(errors.map((issue) => issue.message))];
   return sentences.length === 0 ? null : sentences.join(" ");
 }
+
+/**
+ * Whether two {@link violationsBySlot} maps would mark every card the same way — the same slots,
+ * and under each the same findings in the same order, compared by what a mark is drawn from
+ * (severity, code, sentence) and the rows and printings each names.
+ *
+ * **Why the editor asks** (issue #1402): the marks are recomputed whenever `deck.cards` changes,
+ * and a stepper press changes it, so every press answered a new map — a prop of every pile, which
+ * redrew every card on the desk for a press that broke no rule and mended none. The editor keeps
+ * the map it has while this says the new one is the same.
+ */
+export function sameViolations(
+  a: ReadonlyMap<string, readonly ValidationIssue[]> | undefined,
+  b: ReadonlyMap<string, readonly ValidationIssue[]> | undefined,
+): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined || a.size !== b.size) return false;
+  for (const [slot, left] of a) {
+    const right = b.get(slot);
+    if (right === undefined || right.length !== left.length) return false;
+    if (!left.every((issue, index) => sameIssue(issue, right[index]))) return false;
+  }
+  return true;
+}
+
+function sameIssue(a: ValidationIssue, b: ValidationIssue): boolean {
+  return (
+    a.severity === b.severity &&
+    a.code === b.code &&
+    a.message === b.message &&
+    sameList(a.cardIds, b.cardIds) &&
+    sameList(a.rowIds, b.rowIds)
+  );
+}
+
+function sameList<T>(a: readonly T[] | undefined, b: readonly T[] | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.length === b.length && a.every((item, index) => item === b[index]);
+}

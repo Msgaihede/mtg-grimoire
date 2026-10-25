@@ -52,12 +52,20 @@ export function useOptimisticEntries<Row extends { id: number }>(listKey: QueryK
    * and left the other would show two different numbers for one card one filter click apart.
    *
    * A cache that does not hold the row is handed back **as itself**, not as a copy — so a patch
-   * leaves every list the row is not in exactly as it was.
+   * leaves every list the row is not in exactly as it was. **So is one where `next` hands the row
+   * back as itself** (issue #1402): an answer that confirms the guess changes nothing, and a fresh
+   * copy of every page would re-render the whole list to draw the number already on screen.
    */
   const patchEntry = useCallback(
     (id: number, next: ((row: Row) => Row) | null) => {
       queryClient.setQueriesData<InfiniteData<EntryPage<Row>>>({ queryKey: listKey }, (data) => {
         if (!data || !data.pages.some((p) => p.items.some((r) => r.id === id))) return data;
+        if (
+          next !== null &&
+          data.pages.every((p) => p.items.every((r) => r.id !== id || next(r) === r))
+        ) {
+          return data;
+        }
         return {
           ...data,
           pages: data.pages.map((page) =>

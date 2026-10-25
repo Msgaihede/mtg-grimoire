@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Redo2, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -126,7 +126,7 @@ import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateForMarks } from "./validation/engine";
-import { violationsBySlot } from "./violations";
+import { sameViolations, violationsBySlot } from "./violations";
 
 /**
  * Narrowest the deck itself may be squeezed to, in px, before the docked search panel gives
@@ -260,6 +260,11 @@ function searchCardTarget(card: CardSummary): CardMenuTarget {
  * filed — both re-read by the add's own `["decks"]` invalidation.
  */
 const NO_DECK_CARD = 0;
+
+/** No card picked, as one array rather than a fresh `[]` per recompute — `pickedCards` is read
+ *  by the card menu's builder, so a new empty set per stepper press was a new menu for every pile
+ *  (issue #1402). */
+const NOTHING_PICKED: DeckCard[] = [];
 
 /**
  * What the Tokens & Emblems printing picker is open for, or `null` while it is shut — an
@@ -1183,6 +1188,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const rememberView = deck.rememberView.mutate;
   /** `deck.update.mutate` — stable, unlike `deck.update`, so every callback built on it is too. */
   const updateDeck = deck.update.mutate;
+  // The stats band's two switches, held still so its memoised readouts are (issue #1402).
+  const toggleStats = useCallback((next: boolean) => updateDeck({ statsOpen: next }), [updateDeck]);
+  const splitCurve = useCallback(
+    (next: boolean) => updateDeck({ curveCreatures: next }),
+    [updateDeck],
+  );
   const pickVariant = useCallback(
     (next: DeckVariant) => {
       setVariant(next);
@@ -1899,7 +1910,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     s.cardSelection?.scope === `deck:${deckId}` ? s.cardSelection : null,
   );
   const pickedCards = useMemo(() => {
-    if (cardSelection === null) return [];
+    if (cardSelection === null) return NOTHING_PICKED;
     const bySlot = new Map(
       cards.map((card) => [deckCardSlot(card.categoryId, card.cardId, card.finish), card]),
     );
@@ -2218,6 +2229,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [openAllPrintings, deckSlotOf],
   );
 
+  // The deck's rows as the two menu builders read them — **at the right-click, through a ref**
+  // (issue #1402). Both put `deck.cards` into the menu they build on the press, and with it in
+  // their dependencies every stepper press handed every pile a new menu, and so a new `actions`
+  // bag, and so redrew every card on the desk. A layout effect, so the ref has caught up before
+  // any event the new rows were drawn for.
+  const deckCardsRef = useRef(deck.cards);
+  useLayoutEffect(() => {
+    deckCardsRef.current = deck.cards;
+  }, [deck.cards]);
+
   /**
    * One deck card's right-click, **built here and handed to the four views as one function**.
    *
@@ -2260,7 +2281,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           // Text draw none, so the row would turn a card nobody can see.
           flips,
           categories,
-          cards: deck.cards,
+          cards: deckCardsRef.current,
           spec,
           moveTo: moveCardTo,
           setLabel: setCardLabel,
@@ -2349,7 +2370,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       deckSlotOf,
       openSplit,
       categories,
-      deck.cards,
       deck.labels,
       spec,
       moveCardTo,
@@ -2407,7 +2427,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         buildCategoryMenu(category, {
           // The deck's own rows, never `shown`: exporting "Removal" means the pile rather than
           // the four of it the toolbar's filter happens to be showing.
-          cards: deck.cards,
+          cards: deckCardsRef.current,
           startRename: (pile) => setRenamingCategoryId(pile.id),
           // Each hands the caret back to the **pile**, not to nothing: these three are opened
           // from a menu row, which has unmounted by the time the dialog closes.
@@ -2459,7 +2479,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       menu,
       menuKey,
       categories,
-      deck.cards,
       openLayer,
       setCategoryActive,
       resetCategoryClear,
@@ -2894,11 +2913,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * functions rather than one with a flag precisely so the chip cannot pick up the answer
    * meant for the frames.
    */
-  const violations = useMemo(
+  const freshViolations = useMemo(
     () =>
       spec ? violationsBySlot(validateForMarks([...deck.cards], spec), deck.cards) : undefined,
     [deck.cards, spec],
   );
+  // **The map the piles already hold, while it marks the same cards the same way** (issue #1402)
+  // — `violations` is a prop of every pile, and a press that broke no rule and mended none must
+  // not redraw them all. Kept in state rather than a ref, so it is the render's own value; a map
+  // that differs replaces it in this same render.
+  const [violations, setViolations] = useState(freshViolations);
+  if (violations !== freshViolations && !sameViolations(violations, freshViolations)) {
+    setViolations(freshViolations);
+  }
 
   /** Copies of the cards the format calls game changers, over the piles that count — the second
    *  half of the header's rules readout, beside the check chip's own count. */
@@ -4114,9 +4141,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             marketplace={marketplace}
             theory={theoryDone}
             open={row.statsOpen}
-            onToggle={(next) => deck.update.mutate({ statsOpen: next })}
+            onToggle={toggleStats}
             creatureSplit={row.curveCreatures}
-            onCreatureSplitChange={(next) => deck.update.mutate({ curveCreatures: next })}
+            onCreatureSplitChange={splitCurve}
             separateXGroup={separateX}
           />
         </>

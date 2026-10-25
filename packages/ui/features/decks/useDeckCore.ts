@@ -15,6 +15,7 @@
  * The two `import type`s below are not edges. `useDeck.ts` re-exports everything here, so every
  * desktop caller imports from where it always did.
  */
+import { useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ipc,
@@ -31,6 +32,7 @@ import {
   type MoveOutcome,
 } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { useStepSettle } from "@/lib/useStepSettle";
 // The condition every menu add in this app records a copy at, imported rather than respelled: the
 // card menu's collection add and this hook's quick add have to agree, and two spellings of a
 // default drift the first time either changes.
@@ -308,9 +310,10 @@ export function useDeckCore(
    * stepper on the foil row patches the regular row too, so the reader watches both change and
    * one of them snap back when the read lands.
    *
-   * A slot the cache does not hold is left alone rather than added: this patches what is on
-   * screen, and inventing a row the read never answered is how an optimistic update starts
-   * telling the reader about cards that are not in the deck.
+   * A slot the cache does not hold — or one `next` hands back unchanged — is left alone, and a
+   * slot is never added: this patches what is on screen, and inventing a row the read never
+   * answered is how an optimistic update starts telling the reader about cards that are not in
+   * the deck.
    */
   const patchSlot = (slot: Slot, next: ((card: DeckCard) => DeckCard) | null) => {
     queryClient.setQueryData<DeckDetail | null>(detailKey, (data) => {
@@ -321,6 +324,9 @@ export function useDeckCore(
         c.variant === variant &&
         c.finish === slot.finish;
       if (!data.cards.some(at)) return data;
+      // A `next` that hands the row back as itself changes nothing, and the deck goes back as
+      // itself too — a fresh `cards` array re-renders the whole editor (issue #1402).
+      if (next !== null && data.cards.every((c) => !at(c) || next(c) === c)) return data;
       return {
         ...data,
         cards:
@@ -788,8 +794,30 @@ export function useDeckCore(
    * **The answer is a {@link QuantityResult} and its `outcome` is load-bearing**, not a
    * courtesy: a cut of a card the reader never owned moves nothing at all, and only the outcome
    * can tell that from a cut that emptied a folder — see {@link invalidateCollection}.
+   *
+   * ## The re-read waits for the presses to stop (issue #1402)
+   *
+   * {@link invalidate} is the whole `["decks"]` root — the detail, its tokens, notes, labels,
+   * to-dos, undo state and owned-elsewhere — and the wishlist: a dozen reads, each answer a
+   * re-render of the editor. Fired per press, a reader stepping a 1-of up to 4 queued three rounds
+   * of them in front of each next press's own paint. The row's number is already the answer, so
+   * the settle is {@link useStepSettle}'s: once, a beat after the last press of a run. A cut that
+   * moved copies marks {@link cutMoved}, and the run's one settle takes the collection with it.
    */
+  const setQuantityKey = useMemo(
+    () => ["decks", "setQuantity", id, variant] as const,
+    [id, variant],
+  );
+  const steps = useStepSettle(setQuantityKey);
+  /** A cut in the current run filed copies into `Recently removed` — see {@link invalidateCollection}. */
+  const cutMoved = useRef(false);
+  const settleSteps = () => {
+    invalidate();
+    if (cutMoved.current) invalidateCollection();
+    cutMoved.current = false;
+  };
   const setQuantity = useMutation({
+    mutationKey: setQuantityKey,
     mutationFn: async ({
       cardId,
       categoryId,
@@ -824,6 +852,7 @@ export function useDeckCore(
       return { quantity: change.quantity, removed: change.removed, outcome: null };
     },
     onMutate: async ({ cardId, categoryId, finish, quantity }) => {
+      steps.hold();
       await queryClient.cancelQueries({ queryKey: detailKey });
       const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
       // **Before the patch below, and that order is the whole reason this is planned here rather
@@ -846,14 +875,19 @@ export function useDeckCore(
       // The rollback puts the row back in the cache and the editor republishes a walk with it on,
       // so a refused removal needs nothing done about `departure`: nobody was moved.
       if (context?.saved !== undefined) queryClient.setQueryData(detailKey, context.saved);
-      invalidate();
+      steps.now(settleSteps);
     },
     onSuccess: (result, { cardId, categoryId, finish }, context) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
-      // number it actually stored.
+      // number it actually stored. **An answer that confirms the guess leaves the row as it is**
+      // (issue #1402) — the same object, so `patchSlot` hands the deck back untouched rather than
+      // re-rendering the editor to draw the number the press already drew.
       patchSlot(
         { cardId, categoryId, finish },
-        result.removed ? null : (card) => ({ ...card, quantity: result.quantity }),
+        result.removed
+          ? null
+          : (card) =>
+              card.quantity === result.quantity ? card : { ...card, quantity: result.quantity },
       );
       // **The one write here that leaves no address to re-anchor to.** Zero deletes the row, so
       // an open card that came out of it is left addressing nothing — see {@link DeckAnchor.removed},
@@ -869,12 +903,12 @@ export function useDeckCore(
           context?.departure ?? null,
         );
       }
-      invalidate();
       // **The outcome, not the argument.** A cut of a card nobody owned moves nothing, and
       // refetching the collection for it would answer exactly what is already on screen — see
       // {@link invalidateCollection}, which is where the ghost row this guards against is
       // written down.
-      if (result.outcome !== null && result.outcome.quantity > 0) invalidateCollection();
+      if (result.outcome !== null && result.outcome.quantity > 0) cutMoved.current = true;
+      steps.schedule(settleSteps);
     },
   });
 

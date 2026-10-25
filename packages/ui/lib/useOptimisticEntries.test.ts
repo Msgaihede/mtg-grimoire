@@ -83,6 +83,19 @@ describe("useOptimisticEntries", () => {
     expect(read(client, [...LIST, "foils"])?.pages[0].items).toEqual([{ id: 1, quantity: 2 }]);
   });
 
+  /**
+   * An answer that confirms the guess changes nothing, so the list stays the same object and
+   * nothing that draws it re-renders (issue #1402) — the stepper's answer, almost every time.
+   */
+  it("hands a list back as itself when the patch leaves its row unchanged", () => {
+    const { client, result } = seeded();
+    const all = read(client, [...LIST, "all"]);
+
+    act(() => result.current.patchEntry(1, (row) => row));
+
+    expect(read(client, [...LIST, "all"])).toBe(all);
+  });
+
   /** Held still across renders, which is what lets a caller's own callbacks hold still. */
   it("hands back the same three functions on every render", () => {
     const { result, rerender } = seeded();

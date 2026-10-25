@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import type { DeckFinish } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { batchWrite, handled, NO_BATCH, type Write } from "@/lib/writes";
@@ -168,6 +168,21 @@ export function useDeckDrops({
    * spoken-for copy would come out of.
    */
 
+  /**
+   * The rows on screen, **read through a ref by the writes that look a slot up** (issue #1402).
+   *
+   * {@link setQuantityAt} and {@link refile} find the row a press names in `cards`, and with
+   * `cards` in their dependencies every stepper press minted both afresh — the optimistic patch is
+   * a new `cards` — and with them `applyDrop`, the editor's `setQuantity` and the desk's `actions`
+   * bag. `actions` is a prop of every pile, so one `+` redrew every card on the desk to change one
+   * number. The lookup happens at the press, so the newest rows are what it needs and all it needs;
+   * a layout effect, so the ref has caught up before any event the new rows were drawn for.
+   */
+  const cardsRef = useRef(cards);
+  useLayoutEffect(() => {
+    cardsRef.current = cards;
+  }, [cards]);
+
   const owedFocus = useRef<number | null>(null);
   const handOffTo = useCallback(
     (categoryId: number) => {
@@ -208,7 +223,7 @@ export function useDeckDrops({
       // press — and the control the caret was on goes with it. Before the write, because the
       // card is gone by the time an answer arrives.
       if (quantity === 0) handOffTo(categoryId);
-      const row = cards.find(
+      const row = cardsRef.current.find(
         (c) => c.cardId === cardId && c.categoryId === categoryId && c.finish === finish,
       );
       return handled(
@@ -221,7 +236,7 @@ export function useDeckDrops({
         }),
       );
     },
-    [cards, writeQuantity, handOffTo],
+    [writeQuantity, handOffTo],
   );
 
   const moveTo = useCallback(
@@ -253,7 +268,7 @@ export function useDeckDrops({
     (cardId: string, from: number, finish: DeckFinish) => {
       // The finish is part of the `find` for the reason it is part of the write: a pile can
       // hold this printing twice, and the two rows share a type line but not a slot.
-      const card = cards.find(
+      const card = cardsRef.current.find(
         (c) => c.cardId === cardId && c.categoryId === from && c.finish === finish,
       );
       if (!card) return Promise.resolve();
@@ -282,7 +297,7 @@ export function useDeckDrops({
         ),
       );
     },
-    [cards, refileWrite, handOffTo],
+    [refileWrite, handOffTo],
   );
 
   /**
