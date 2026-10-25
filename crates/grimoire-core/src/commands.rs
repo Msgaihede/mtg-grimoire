@@ -799,6 +799,17 @@ commands! {
     read deck_sort in decksort() = |conn| Ok(stored(conn));
     write set_deck_sort in decksort(sort: String) = |conn| store(conn, &sort);
 
+    // entry_tags (user schema v67) — a stack's own tags, the whole list each time. Plain `write`,
+    // not `owned`: a tag is no grain term, so nothing folds and what the reader owns stays put —
+    // the facet index's `owned` dimension has nothing to rebuild.
+    read entry_tags_in_use in entry_tags() = |conn| entry_tags_in_use(conn);
+    write collection_set_tags in entry_tags(id: i64, tags: Vec<String>) = |conn| {
+        set_collection_tags(conn, id, &tags)
+    };
+    write wishlist_set_tags in entry_tags(id: i64, tags: Vec<String>) = |conn| {
+        set_wish_tags(conn, id, &tags)
+    };
+
     // errors
     read error_log_list in errors(limit: i64) = |conn| {
         list(conn, limit).map_err(|e| format!("could not read the error log: {e}"))

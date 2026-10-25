@@ -96,6 +96,9 @@ pub mod deckpane;
 pub mod decksort;
 /// **What a launch would download now, and about how much** — the light app's mobile-data prompt.
 pub mod downloads;
+/// **Entry tags**: the reader's free-text tags on one collection row or one wish (user schema
+/// v67) — written whole, counted across both tables. Not deck tags.
+pub mod entry_tags;
 /// **The error log**: what failed, when, how often — and `kind_of`, which says what kind of
 /// failure a [`scryfall::ScryfallError`] was.
 pub mod errors;

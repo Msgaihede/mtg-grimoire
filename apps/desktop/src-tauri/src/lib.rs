@@ -102,6 +102,9 @@ pub mod deckpane;
 /// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
 /// will look.
 pub mod decksort;
+/// **Entry tags** (user schema v67): a stack's own tags, on a collection row or a wish —
+/// `grimoire-core`'s, with the three desktop wrappers.
+pub mod entry_tags;
 /// **The error log**: what failed, when, how often. `grimoire-core`'s, re-exported — whole
 /// since the I/O step, when `kind_of` followed `scryfall` there.
 pub use grimoire_core::errors;

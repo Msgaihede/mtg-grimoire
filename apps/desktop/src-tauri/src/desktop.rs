@@ -16,13 +16,13 @@ use crate::sync::AppState;
 use crate::{
     activity, archive, camera, card, collection, collection_alloc, collection_folders, combos, db,
     deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
-    deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
-    export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
-    mirror, nav, new_printings, panelwidth, paths, playtest, price_history, recent_cards, reset,
-    scan_history, scanner, scansounds, schema, scryfall, search, searchopen, searchwidth,
-    set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes, sync,
-    sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history, window, wishlist,
-    wishlist_folders, wishlist_optimize, zoom,
+    deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort,
+    entry_tags, errors, export, home, images, import, index, listview, markcolors, marketplace,
+    marketplace_feed, mirror, nav, new_printings, panelwidth, paths, playtest, price_history,
+    recent_cards, reset, scan_history, scanner, scansounds, schema, scryfall, search, searchopen,
+    searchwidth, set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes,
+    sync, sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history, window,
+    wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -476,6 +476,9 @@ pub fn run() {
             wishlist::wishlist_breakdown,
             wishlist::wishlist_import_commit,
             wishlist::wishlist_set_printing,
+            entry_tags::entry_tags_in_use,
+            entry_tags::collection_set_tags,
+            entry_tags::wishlist_set_tags,
             wishlist_optimize::wishlist_optimize_plan,
             wishlist_optimize::wishlist_optimize_apply,
             wishlist_folders::wishlist_folder_list,

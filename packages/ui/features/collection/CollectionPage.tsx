@@ -127,6 +127,9 @@ import {
   treeParents,
 } from "./collectionShelfModel";
 import { EditCopy, type EditCopyTarget } from "./EditCopy";
+import { EntryTagsDialog, type EntryTagsTarget } from "@/features/entryTags/EntryTagsDialog";
+import { parseEntryTags } from "@/features/entryTags/entryTags";
+import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { collectionTileDragData, type CollectionCopy } from "./collectionDrag";
 import { CollectionFolderPanel, LockedMoveConfirm, ROOT_LABEL } from "./CollectionFolderPanel";
 import { PickCopies, type CopyChoice } from "./PickCopies";
@@ -186,6 +189,7 @@ type Panel =
   | { kind: "clearRemoved" }
   | { kind: "removeCopies"; entryIds: readonly number[] }
   | { kind: "editCopy"; entryId: number }
+  | { kind: "editTags"; entryId: number }
   | null;
 
 /**
@@ -1227,6 +1231,25 @@ export function CollectionPage() {
     };
   }, [panel, rows]);
 
+  /** **Tags…** on a table row (issue #1398) — {@link editCopy}'s shape, for a collection row. */
+  const editTags = useCallback((ref: EntryTagsRef) => {
+    if (ref.kind === "collection") setPanel({ kind: "editTags", entryId: ref.id });
+  }, []);
+  /** The stack the tag dialog is about — looked up in the rows on screen, {@link editing}'s rule. */
+  const tagging = useMemo<EntryTagsTarget | null>(() => {
+    if (panel?.kind !== "editTags") return null;
+    const row = rows.find((r) => r.id === panel.entryId);
+    if (row === undefined) return null;
+    return {
+      ref: { kind: "collection", id: row.id },
+      cardName: row.name ?? `${row.setCode.toUpperCase()} ${row.collectorNumber}`,
+      detail: `${row.setCode.toUpperCase()} ${row.collectorNumber}${
+        row.folderName === null ? "" : ` in ${row.folderName}`
+      }`,
+      tags: parseEntryTags(row.tags),
+    };
+  }, [panel, rows]);
+
   const { menu, menuKey, menuClick } = useContextMenu();
   const { deps: baseMenuDeps } = useCardMenuDeps();
   /**
@@ -1242,8 +1265,8 @@ export function CollectionPage() {
    * and nothing else — so the hook would be publishing a dep for a surface that cannot use it.
    */
   const menuDeps = useMemo<CardMenuDeps>(
-    () => ({ ...baseMenuDeps, pickCopies, editCopy }),
-    [baseMenuDeps, pickCopies, editCopy],
+    () => ({ ...baseMenuDeps, pickCopies, editCopy, editTags }),
+    [baseMenuDeps, pickCopies, editCopy, editTags],
   );
 
   /**
@@ -1403,7 +1426,8 @@ export function CollectionPage() {
    * where `editCopy` is a `Dialog` that brings both of its own. No wall rule below closes it — the
    * rows it is about are named by id, not by the level on screen.
    */
-  const folderPanel = panel === null || panel.kind === "editCopy" ? null : panel;
+  const folderPanel =
+    panel === null || panel.kind === "editCopy" || panel.kind === "editTags" ? null : panel;
   /** Standing in the holding area — the one level whose path row carries `Clear…`. */
   const inRemoved = pinned.removed !== null && folderId === pinned.removed.id;
   /**
@@ -1688,15 +1712,7 @@ export function CollectionPage() {
         );
       }
     },
-    [
-      panel,
-      createMutate,
-      renameMutate,
-      storedFolds,
-      setFold,
-      dismiss,
-      folderNameOf,
-    ],
+    [panel, createMutate, renameMutate, storedFolds, setFold, dismiss, folderNameOf],
   );
 
   /**
@@ -3571,6 +3587,7 @@ export function CollectionPage() {
         onDismiss={close}
         onClose={close}
       />
+      <EntryTagsDialog target={tagging} onDismiss={close} onClose={close} />
 
       {/* Mounted unconditionally, the same shape every other dialog in this app is — `Dialog`
           itself renders nothing while closed, and staying in the tree is what lets its scrim

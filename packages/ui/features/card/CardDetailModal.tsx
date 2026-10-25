@@ -50,6 +50,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -76,6 +77,10 @@ import { departureFrom, useReturnToRemovedCard, type PaneDeparture } from "./car
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { useCopyFinish, useCopyPrinting } from "@/features/collection/useCopyWrites";
+import { withTag } from "@/features/decks/deckTags";
+import { EntryTagsEditor } from "@/features/entryTags/EntryTagsField";
+import { parseEntryTags } from "@/features/entryTags/entryTags";
+import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { sweep } from "@/features/transfer/export/scope";
 import { MENU_CONDITION } from "@/lib/conditions";
 import { parseFinishes, soleFinish, type Finish } from "@/lib/finish";
@@ -90,6 +95,7 @@ import {
   type EntryChange,
   type LabelColor,
   type MeldRelation,
+  type WishRow,
 } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { notify } from "@/lib/notifications";
@@ -403,6 +409,73 @@ const stepperRowsLanded = (queryClient: QueryClient, list: StepperList, oracleId
 const manyRowsRefusal = (rows: number, list: StepperList) =>
   `You have this printing in ${rows} rows. Open your ${list} to change one.`;
 
+/** The stack-tag field the modal draws — see {@link stackTags}. */
+interface StackTags {
+  target: EntryTagsRef;
+  tags: readonly string[];
+  /** Set when the field is drawn but takes no edit, and says why. */
+  disabledHint?: string;
+}
+
+/**
+ * Which stack's tags the modal shows, and whether it may change them (issue #1398) — or `null`
+ * on a surface, or for a printing, with no stack to tag.
+ *
+ * **The collection's tags follow `Edit`.** A collection card opens read-only, and its tags do
+ * too: drawn, so a reader can see what the copy wears, but disabled until `Edit` names the one
+ * row a write would land on. With several stacks of the printing on the wall's tile the field
+ * shows every tag any of them wears, still disabled — the modal will not choose a row for the
+ * reader, `Edit`'s own rule.
+ *
+ * **The wishlist has no `Edit`**, and its controls write where they stand — the stepper is a
+ * write the moment it is pressed. So a printing wished once has a field that writes; one wished
+ * in several folders has no one stack to write to, and says where to tag one instead.
+ *
+ * Every other surface is a card rather than a stack, and draws nothing.
+ */
+function stackTags(
+  scope: CardModalScope,
+  copyRow: CollectionRow | null,
+  editableRows: readonly CollectionRow[],
+  wishedRows: readonly WishRow[],
+): StackTags | null {
+  const union = (rows: readonly { tags: string }[]) =>
+    rows.reduce<string[]>(
+      (all, row) => parseEntryTags(row.tags).reduce((acc, tag) => withTag(acc, tag) ?? acc, all),
+      [],
+    );
+  if (scope.surface === "collection") {
+    if (scope.copy !== null) {
+      return copyRow === null
+        ? null
+        : { target: { kind: "collection", id: copyRow.id }, tags: parseEntryTags(copyRow.tags) };
+    }
+    const [first] = editableRows;
+    if (first === undefined) return null;
+    return {
+      target: { kind: "collection", id: first.id },
+      tags: union(editableRows),
+      disabledHint:
+        editableRows.length === 1
+          ? "Press Edit to change this stack's tags."
+          : `Tags on your ${editableRows.length} stacks of this printing. Press Edit and pick one to change its tags.`,
+    };
+  }
+  if (scope.surface === "wishlist") {
+    const [first] = wishedRows;
+    if (first === undefined) return null;
+    if (wishedRows.length === 1) {
+      return { target: { kind: "wishlist", id: first.id }, tags: parseEntryTags(first.tags) };
+    }
+    return {
+      target: { kind: "wishlist", id: first.id },
+      tags: union(wishedRows),
+      disabledHint: `This printing is on your wishlist ${wishedRows.length} times. Right-click one in the wishlist to change its tags.`,
+    };
+  }
+  return null;
+}
+
 /**
  * Remember each card the modal opens, for the home page's **Recently viewed** strip.
  *
@@ -592,9 +665,7 @@ export function CardDetailModal() {
               onStep={step}
             />
           ),
-          right: (
-            <StepChevron direction="next" listLabel={walk.label} stop={next} onStep={step} />
-          ),
+          right: <StepChevron direction="next" listLabel={walk.label} stop={next} onStep={step} />,
         };
 
   // Flanks where a flanked panel is still three columns, and the action row's corner below
@@ -1152,6 +1223,12 @@ function Body({
    * finish there on every press and every follow, so the control is right on the frame the write
    * lands rather than on the frame the list re-reads.
    */
+  const entryTags = useMemo(
+    () => stackTags(scope, copyRow, editableRows, wishedRows),
+    [scope, copyRow, editableRows, wishedRows],
+  );
+  const entryTagsId = useId();
+
   const copyAsRow: { finish: DeckFinish } | null =
     scope.copy === null
       ? null
@@ -1979,29 +2056,39 @@ function Body({
                   other way round for one commit; putting the list on the left made the source
                   and the reading order disagree at exactly one rung, for nothing. */}
               {hasControls && (
-              <div
-                className={cn(
-                  "relative min-w-0",
-                  "@min-[1200px]/card:col-start-1 @min-[1200px]/card:row-start-1",
-                  "@min-[1200px]/card:flex @min-[1200px]/card:min-h-0 @min-[1200px]/card:flex-col",
-                  "scrollbar-slim @min-[1200px]/card:gap-5 @min-[1200px]/card:overflow-y-auto",
-                )}
-              >
-              <CardModalControls
-                card={card}
-                scope={scope}
-                quantity={quantity}
-                onQuantityChange={changeQuantity}
-                categories={categoryOptions}
-                onPickCategory={pickCategory}
-                onCreateCategory={makeCategory}
-                labels={labelOptions}
-                labelId={deckCard?.labelId ?? null}
-                onPickLabel={pickLabel}
-                onCreateLabel={makeLabel}
-              />
-
-              </div>
+                <div
+                  className={cn(
+                    "relative min-w-0",
+                    "@min-[1200px]/card:col-start-1 @min-[1200px]/card:row-start-1",
+                    "@min-[1200px]/card:flex @min-[1200px]/card:min-h-0 @min-[1200px]/card:flex-col",
+                    "scrollbar-slim @min-[1200px]/card:gap-5 @min-[1200px]/card:overflow-y-auto",
+                  )}
+                >
+                  <CardModalControls
+                    card={card}
+                    scope={scope}
+                    quantity={quantity}
+                    onQuantityChange={changeQuantity}
+                    categories={categoryOptions}
+                    onPickCategory={pickCategory}
+                    onCreateCategory={makeCategory}
+                    labels={labelOptions}
+                    labelId={deckCard?.labelId ?? null}
+                    onPickLabel={pickLabel}
+                    onCreateLabel={makeLabel}
+                  />
+                  {entryTags !== null && (
+                    <div className="mt-4 @min-[1200px]/card:mt-0">
+                      <EntryTagsEditor
+                        target={entryTags.target}
+                        tags={entryTags.tags}
+                        id={entryTagsId}
+                        disabled={entryTags.disabledHint !== undefined}
+                        disabledHint={entryTags.disabledHint}
+                      />
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* **Outside the controls wrapper, because it is not a control.** It is the
@@ -2030,48 +2117,48 @@ function Body({
                   "@min-[1200px]/card:flex @min-[1200px]/card:min-h-0 @min-[1200px]/card:flex-col",
                 )}
               >
-              <CardModalPrintings
-                card={card}
-                scope={scope}
-                items={printings.data?.items ?? []}
-                total={printings.data?.total ?? 0}
-                // **`card.oracleId !== null` is load-bearing.** The printings query is
-                // `skipToken` for a card with no oracle id, and a skipped query reports
-                // `isPending` forever — so without this the list would say "Loading printings…"
-                // for the rest of the session on exactly the cards that have none.
-                loading={printings.isPending && card.oracleId !== null}
-                error={printings.isError ? ipcError(printings.error) : null}
-                marketplace={marketplace}
-                // One write at a time: every row sends the same `from` printing, and the write
-                // in flight is in the middle of moving it.
-                busy={deck.swapPrinting.isPending || moveCopy.isPending}
-                // **The same callback the combobox had, unchanged** — and its meaning is the
-                // load-bearing part: with a deck row behind the modal this *swaps the deck's
-                // printing* (`useDeck.swapPrinting`), with no deck row it browses
-                // (`viewPrinting`). Moving the control must not move that.
-                onPick={pickPrinting}
-                onViewAll={() => {
-                  if (card.oracleId === null) return;
-                  openAllPrintings({
-                    cardId: card.id,
-                    oracleId: card.oracleId,
-                    name: card.name,
-                    deck: scope.deck,
-                    // The reader is asking about *this card*, not repointing a wish — see
-                    // `PrintingsRequest.wish`, where the field is required so that every caller
-                    // has to say which it means.
-                    wish: null,
-                    // …unless `Edit` is on, when a press on the wall moves this copy instead.
-                    copy:
-                      scope.copy === null
-                        ? undefined
-                        : {
-                            id: scope.copy.entryId,
-                            finish: copyRow === null ? paneFinish : copyFinish(copyRow),
-                          },
-                  });
-                }}
-              />
+                <CardModalPrintings
+                  card={card}
+                  scope={scope}
+                  items={printings.data?.items ?? []}
+                  total={printings.data?.total ?? 0}
+                  // **`card.oracleId !== null` is load-bearing.** The printings query is
+                  // `skipToken` for a card with no oracle id, and a skipped query reports
+                  // `isPending` forever — so without this the list would say "Loading printings…"
+                  // for the rest of the session on exactly the cards that have none.
+                  loading={printings.isPending && card.oracleId !== null}
+                  error={printings.isError ? ipcError(printings.error) : null}
+                  marketplace={marketplace}
+                  // One write at a time: every row sends the same `from` printing, and the write
+                  // in flight is in the middle of moving it.
+                  busy={deck.swapPrinting.isPending || moveCopy.isPending}
+                  // **The same callback the combobox had, unchanged** — and its meaning is the
+                  // load-bearing part: with a deck row behind the modal this *swaps the deck's
+                  // printing* (`useDeck.swapPrinting`), with no deck row it browses
+                  // (`viewPrinting`). Moving the control must not move that.
+                  onPick={pickPrinting}
+                  onViewAll={() => {
+                    if (card.oracleId === null) return;
+                    openAllPrintings({
+                      cardId: card.id,
+                      oracleId: card.oracleId,
+                      name: card.name,
+                      deck: scope.deck,
+                      // The reader is asking about *this card*, not repointing a wish — see
+                      // `PrintingsRequest.wish`, where the field is required so that every caller
+                      // has to say which it means.
+                      wish: null,
+                      // …unless `Edit` is on, when a press on the wall moves this copy instead.
+                      copy:
+                        scope.copy === null
+                          ? undefined
+                          : {
+                              id: scope.copy.entryId,
+                              finish: copyRow === null ? paneFinish : copyFinish(copyRow),
+                            },
+                    });
+                  }}
+                />
               </div>
             </div>
 

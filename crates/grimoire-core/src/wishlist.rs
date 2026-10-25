@@ -216,6 +216,10 @@ pub struct WishRow {
     /// [`crate::sorting::row_price_expr`]'s rule over [`WISH_PREFERRED_FINISH`].
     pub unit_price: Option<f64>,
     pub notes: Option<String>,
+    /// The wish's entry tags (user schema v67, issue #1398): a JSON array of strings, never
+    /// null — the column defaults to `[]`. Verbatim, as [`crate::collection::CollectionRow::tags`]
+    /// is; [`crate::entry_tags::set_wish_tags`] is what writes it.
+    pub tags: String,
     pub needs_review: Option<String>,
     pub updated_at: i64,
     /// JSON, verbatim: the joined printing's `legalities` object — the fact the Arena export
@@ -1570,7 +1574,9 @@ fn list_statements(q: &WishlistQuery) -> crate::collection::ListStatements {
                        FROM cards k JOIN collection_entries e ON e.card_id = k.id
                       WHERE w.oracle_id IS NOT NULL AND k.oracle_id = w.oracle_id
                         AND k.id <> w.card_id)
-                END AS owned_other
+                END AS owned_other,
+                -- The wish's entry tags (user schema v67), appended for `c.type_line`'s reason.
+                w.tags
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     params.push(Box::new(limit));
@@ -1615,6 +1621,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     preferred_finish: r.get(10)?,
                     unit_price: r.get(11)?,
                     notes: r.get(12)?,
+                    tags: r.get(23)?,
                     needs_review: r.get(13)?,
                     updated_at: r.get(14)?,
                     legalities: r.get(17)?,
@@ -2859,6 +2866,7 @@ mod tests {
             preferred_finish: Some("foil".into()),
             unit_price: Some(40.0),
             notes: None,
+            tags: r#"["trade bait"]"#.into(),
             needs_review: None,
             updated_at: 1_800_000_000,
             legalities: Some(r#"{"timeless":"legal"}"#.into()),
@@ -2881,7 +2889,7 @@ mod tests {
                 "setCode": null, "collectorNumber": null, "lang": null, "rarity": "common",
                 "manaCost": "{R}", "typeLine": "Instant", "artCardId": "bolt-2ed",
                 "layout": "normal", "quantity": 4, "preferredFinish": "foil",
-                "unitPrice": 40.0, "notes": null,
+                "unitPrice": 40.0, "notes": null, "tags": "[\"trade bait\"]",
                 "needsReview": null, "updatedAt": 1800000000,
                 "legalities": "{\"timeless\":\"legal\"}",
                 "folderId": 7, "elsewhere": 1,
