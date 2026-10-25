@@ -39,6 +39,7 @@ const BOLT: WishRow = {
   ownedOther: 0,
   ownedPlaces: [],
   notes: null,
+  tags: "[]",
   needsReview: null,
   updatedAt: 1_800_000_000,
 };

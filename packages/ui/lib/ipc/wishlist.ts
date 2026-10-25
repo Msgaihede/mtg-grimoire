@@ -199,6 +199,13 @@ export interface WishRow {
    */
   ownedPlaces: WishOwnedPlace[];
   notes: string | null;
+  /**
+   * The wish's entry tags (user schema v67, issue #1398) — a JSON array of strings, never null,
+   * the column defaulting to `[]` exactly as {@link CollectionRow.tags} does one table over.
+   * Raw rather than parsed for the same reason: read it with `parseEntryTags`
+   * (`@/features/entryTags/entryTags`), and write it whole through `ipc.wishlistSetTags`.
+   */
+  tags: string;
   needsReview: string | null;
   /** Unix seconds. */
   updatedAt: number;

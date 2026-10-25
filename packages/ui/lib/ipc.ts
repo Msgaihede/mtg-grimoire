@@ -20,6 +20,7 @@
  * `FolderRule`/`FolderConflicts`/`RuleConflicts`  — `crates/grimoire-core/src/folder_rules.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage`/
  * `WishlistSummary`                              — `crates/grimoire-core/src/wishlist.rs`
+ * `EntryTagUse`                                  — `crates/grimoire-core/src/entry_tags.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
  * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/
  * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `crates/grimoire-core/src/deck.rs`
@@ -176,9 +177,10 @@
  * ## The domains
  *
  * **This file is the barrel since 2026-10-11 (issue #557); the mirror itself is in `./ipc/`, one
- * file per domain** — cards, collection, wishlist, decks, transfer, home, tags, combos, scanner,
- * share, trade, scan history, sync, prefs and the app, with the transport in `./ipc/invoke.ts`. It was one 11,000-line
- * file, three quarters of it comment, and every feature branch edited it.
+ * file per domain** — cards, collection, wishlist, entry tags, decks, transfer, home, tags,
+ * combos, scanner, share, trade, scan history, sync, prefs and the app, with the transport in
+ * `./ipc/invoke.ts`. It was one 11,000-line file, three quarters of it comment, and every feature
+ * branch edited it.
  *
  * **Everything outside `packages/ui/lib/ipc*` imports `@/lib/ipc`, never a domain file** — that
  * import is the seam every suite mocks (`vi.mock("@/lib/ipc", …)`), and a component reaching
@@ -195,6 +197,7 @@ export { ipcError, type Unlisten } from "./ipc/invoke";
 export type * from "./ipc/cards";
 export type * from "./ipc/collection";
 export type * from "./ipc/wishlist";
+export type * from "./ipc/entryTags";
 export type * from "./ipc/decks";
 export type * from "./ipc/transfer";
 export type * from "./ipc/home";
@@ -214,6 +217,7 @@ export { AUTO_BRACKET } from "./ipc/decks";
 import { cardCommands } from "./ipc/cards";
 import { collectionCommands } from "./ipc/collection";
 import { wishlistCommands } from "./ipc/wishlist";
+import { entryTagCommands } from "./ipc/entryTags";
 import { deckCommands } from "./ipc/decks";
 import { transferCommands } from "./ipc/transfer";
 import { homeCommands } from "./ipc/home";
@@ -237,6 +241,7 @@ export const ipc = {
   ...cardCommands,
   ...collectionCommands,
   ...wishlistCommands,
+  ...entryTagCommands,
   ...deckCommands,
   ...transferCommands,
   ...homeCommands,

@@ -653,6 +653,12 @@ pub const TABLES: [Spec; 18] = [
             "lang",
             "name",
             "preferred_finish",
+            // The wish's entry tags (user schema v67, issue #1398) — `collection_entries.tags`'
+            // place on the spec at the top of this list, and `decks.tags`' price: one field, so
+            // two devices tagging one wish while apart keep the later list whole. `DEFAULT '[]'`
+            // keeps the old-peer direction safe, and no grain term names it, so an apply that
+            // lands one folds nothing.
+            "tags",
             "notes",
             "needs_review",
         ],

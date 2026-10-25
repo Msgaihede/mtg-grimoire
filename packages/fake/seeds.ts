@@ -221,6 +221,7 @@ function pinnedWish(
     preferredFinish: null,
     folderId: null,
     notes: null,
+    tags: "[]",
     needsReview: null,
     updatedAt: CLOCK_BASE,
     ...over,
@@ -252,6 +253,7 @@ function anyPrintingWish(
     preferredFinish: null,
     folderId: null,
     notes: null,
+    tags: "[]",
     needsReview: null,
     updatedAt: CLOCK_BASE,
     ...over,
@@ -806,8 +808,12 @@ function starterWishes(): FakeWish[] {
     pinnedWish(next(), printing("pcy", "45"), 1),
     // Partly filled: two foils owned against a wish for four.
     pinnedWish(next(), printing("mh2", "267"), 4),
+    // The one wish wearing entry tags (user schema v67, issue #1398) — and `Modern` capitalised
+    // where the 2X2 Bolts in the binder say `modern`, so the stack tag field's suggestions have a
+    // spelling to fold across the two tables.
     pinnedWish(next(), printing("wwk", "31"), 1, {
       notes: "Under $25 or not at all. The Worldwake art is the one.",
+      tags: '["Cube","Modern"]',
     }),
     // Filed in `Ordered`, and a second row for the Rhystic Study already at the root: this is
     // the pair `elsewhere` exists to report. Unowned, so the folder card has a real `missing`

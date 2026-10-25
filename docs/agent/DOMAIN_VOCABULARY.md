@@ -17,8 +17,17 @@ that says so and still answers from the oracle side. (How and when they are fetc
 
 - The deckbuilder's own coloured per-card mark is a **label** — `deck_labels`,
   `deck_cards.label_id`, the `Labels` dialog.
-- The collection's free-text `tags` column is a third thing again.
-- **A _deck tag_ is that third thing one level up, and the only "tag" a reader types about a
+- An **entry tag** is a third thing again: the reader's free text on one **stack** — one
+  `collection_entries` row or one `wishlist_entries` row — in that row's `tags` column, a JSON
+  array of plain text (`collection_entries.tags` since v1; `wishlist_entries.tags` at user schema
+  v67, issue #1398). Every copy in the stack wears the same tags, because there is one row to write
+  them on; tagging one copy of ten means splitting it into a stack of its own first. Edited from the
+  right-click menu's **Tags…** and the card modal (writable there under the collection's **Edit**,
+  shown disabled otherwise), written by `collection_set_tags` / `wishlist_set_tags`
+  (`entry_tags.rs`), and suggested from `entry_tags_in_use` — the collection and the wishlist
+  together, **never** the deck tag list below. Say **entry tag** in prose and code; the field's own
+  label is just "Tags".
+- **A _deck tag_ is the entry tag's shape one level up, and the only "tag" a reader types about a
   deck**: `decks.tags` at user schema v62 (issue #834) — `No Gamechangers`, `Budget`, `Meme` —
   a JSON array of plain text on the deck's own row, edited in Deck settings and drawn in a row
   on the gallery tile. It has no table, no colour and no card: the suggestions the field offers
@@ -77,7 +86,7 @@ perfectly as the other. Say which.
   conflict** — never "invalid card". Folder rules combine with AND/OR through a **rule group**
   (`kind: "group"`, issue #1053) — never a deck view's group-by heading or a sync group.
 - A **deck validation rule** is a format's constraint checked by
-  `packages/ui/features/decks/validation/` (singleton, deck size, banned cards) — a *rule break*
+  `packages/ui/features/decks/validation/` (singleton, deck size, banned cards) — a _rule break_
   in the deck editor. It wears the same red outline, which is the only thing the two share.
 - **The game's rules** are phase.rs's rules engine (`crates/grimoire-play`), what the game board
   plays by — against the goldfish or the AI, one game since 2026-10-17. The board's **sandbox** is

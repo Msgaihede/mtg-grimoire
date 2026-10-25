@@ -28,6 +28,9 @@ import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/feature
 import { ShareFolderMenu } from "@/features/collection/ShareFolderMenu";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { EntryTagsDialog, type EntryTagsTarget } from "@/features/entryTags/EntryTagsDialog";
+import { parseEntryTags } from "@/features/entryTags/entryTags";
+import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { FolderRulesBadge } from "@/features/folders/FolderRulesBadge";
 import { FolderRulesDialog } from "@/features/folders/FolderRulesDialog";
@@ -253,6 +256,8 @@ function wishTarget(row: WishRow, cardId: string): CardMenuTarget {
     // The one thing `WishRow` carries that this list never draws, carried for exactly this and
     // for the drag beside it: a menu add is filed by what the card does.
     typeLine: row.typeLine,
+    // The wish itself, for **Tags…** (issue #1398): one row is one tile and one table line here.
+    wishId: row.id,
   };
 }
 
@@ -760,7 +765,31 @@ export function WishlistPage() {
    * card this row cannot name.
    */
   const { menu, menuKey, menuClick } = useContextMenu();
-  const { deps: menuDeps } = useCardMenuDeps();
+  const { deps: baseMenuDeps } = useCardMenuDeps();
+  /** The wish **Tags…** was pressed on, or `null` — the tag dialog's whole state. */
+  const [taggingId, setTaggingId] = useState<number | null>(null);
+  const editTags = useCallback((ref: EntryTagsRef) => {
+    if (ref.kind === "wishlist") setTaggingId(ref.id);
+  }, []);
+  const menuDeps = useMemo<CardMenuDeps>(
+    () => ({ ...baseMenuDeps, editTags }),
+    [baseMenuDeps, editTags],
+  );
+  /** The wish the tag dialog is about, looked up in the rows on screen; a miss closes it. */
+  const tagging = useMemo<EntryTagsTarget | null>(() => {
+    if (taggingId === null) return null;
+    const row = rows.find((r) => r.id === taggingId);
+    if (row === undefined) return null;
+    return {
+      ref: { kind: "wishlist", id: row.id },
+      cardName: row.name,
+      detail:
+        row.setCode === null
+          ? "Any printing"
+          : `${row.setCode.toUpperCase()} ${row.collectorNumber ?? ""}`.trim(),
+      tags: parseEntryTags(row.tags),
+    };
+  }, [taggingId, rows]);
   // What the owned chips' tooltips name the reader's copies' places by (issue #1055). The card
   // menu above already reads this list for `Add to → Collection`, so it is one cache entry.
   const { folders: collectionFolders } = useCollectionFolderList();
@@ -2590,6 +2619,12 @@ export function WishlistPage() {
           );
         }}
         onClose={closeRules}
+      />
+
+      <EntryTagsDialog
+        target={tagging}
+        onDismiss={() => setTaggingId(null)}
+        onClose={() => setTaggingId(null)}
       />
 
       <OptimizeWishlistDialog

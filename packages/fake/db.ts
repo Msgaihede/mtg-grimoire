@@ -206,6 +206,7 @@ import type {
   EntryChange,
   EntryInput,
   EntryPatch,
+  EntryTagUse,
   FacetResponse,
   FinishPrices,
   FolderConflicts,
@@ -472,6 +473,13 @@ export interface FakeWish {
    */
   folderId: number | null;
   notes: string | null;
+  /**
+   * User schema v67's `tags` (issue #1398) — the wish's entry tags, a JSON array of strings,
+   * never null, the column defaulting to `[]` exactly as {@link FakeEntry.tags} does. Written
+   * whole by `wishlist_set_tags`; a fold onto another wish keeps the survivor's, as
+   * {@link foldEntry} keeps a collection row's.
+   */
+  tags: string;
   needsReview: string | null;
   updatedAt: number;
 }
@@ -8098,6 +8106,7 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     ownedOther: owned.other,
     ownedPlaces: owned.places,
     notes: w.notes,
+    tags: w.tags,
     needsReview: w.needsReview,
     updatedAt: w.updatedAt,
     // The joined card's, like `typeLine` and `artCardId` above — an any-printing wish carries
@@ -10976,6 +10985,34 @@ export function readHandlers(db: FakeDb) {
         rows.push({ key, name, copies: e.quantity, unit: heldPriceAt(db, card, e.finish, mp) });
       }
       return foldBuckets(rows).sort((a, b) => cmp(a.key, b.key));
+    },
+
+    /**
+     * `entry_tags::in_use` (issue #1398) — every entry tag spelling across the collection and the
+     * wishlist, with how many rows wear it, sorted by tag. **Exact spelling, never folded**: `Cube`
+     * and `cube` are two rows here, and `@/features/entryTags/entryTags`' `entryTagsInUse` is what
+     * makes them one suggestion. A row is counted once per spelling however its JSON repeats it.
+     */
+    entry_tags_in_use: (): EntryTagUse[] => {
+      const counts = new Map<string, number>();
+      // **`Recently removed` is left out**, the crate's rule: it is the app's holding area for
+      // copies that left a deck, not a place the reader filed anything, so a tag living only there
+      // is not one they are using.
+      const held = db.collectionEntries.filter(
+        (e) =>
+          e.folderId === null ||
+          collectionFolderById(db, e.folderId)?.kind !== COLLECTION_REMOVED_KIND,
+      );
+      for (const json of [...held.map((e) => e.tags), ...db.wishlistEntries.map((w) => w.tags)]) {
+        for (const tag of new Set(readEntryTags(json))) {
+          counts.set(tag, (counts.get(tag) ?? 0) + 1);
+        }
+      }
+      // Byte order, `ORDER BY tag`'s — not `compareLabels`: the fold and the reader's order are
+      // this side's conclusion, not the crate's fact.
+      return [...counts]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([tag, count]) => ({ tag, count }));
     },
 
     /** `wishlist::list_wishes`. */
@@ -14182,6 +14219,15 @@ const ENTRY_GONE = "That collection entry is not there any more.";
 const NO_PRINTING = "Changing a printing needs the printing to change it to.";
 /** `wishlist::set_wish_quantity`'s twin of {@link ENTRY_GONE}. */
 const WISH_GONE = "That wishlist entry is not there any more.";
+/**
+ * `entry_tags::COPY_GONE` (issue #1398) — the entry-tag write's own sentence for a row that is
+ * gone, **not** {@link ENTRY_GONE}: the crate's module spells it in the reader's words, a copy
+ * and a collection, and the fake says what the crate says.
+ */
+const TAGGED_COPY_GONE = "That copy is no longer in your collection.";
+/** `entry_tags::WISH_GONE` — {@link TAGGED_COPY_GONE} for a wish. Prefixed here because
+ *  {@link WISH_GONE} is already the wishlist module's sentence. */
+const TAGGED_WISH_GONE = "That wish is no longer on your wishlist.";
 /** `deck::GONE`. */
 const DECK_GONE = "That deck is not there any more.";
 /** `collection::ZERO_ADD` — one sentence for two tables, because it is one rule. */
@@ -15039,6 +15085,22 @@ function cleanTags(tags: readonly string[]): string[] {
     kept.push(tag);
   }
   return kept;
+}
+
+/**
+ * `deck::read_tags` over an entry's `tags` column — the stored JSON as a list of strings, and
+ * **lenient**: text that is not JSON, or JSON that is not an array, reads as no tags, and an item
+ * that is not a string is skipped. A row a peer or a hand-edit left odd still draws and still
+ * takes a write; only the write tidies it.
+ */
+function readEntryTags(json: string | null | undefined): string[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(json ?? "[]");
+  } catch {
+    return [];
+  }
+  return Array.isArray(value) ? value.filter((t): t is string => typeof t === "string") : [];
 }
 
 /**
@@ -17923,6 +17985,9 @@ function fileWish(db: FakeDb, input: WishInput): EntryChange {
     // loud.
     folderId: input.folderId ?? null,
     notes: input.notes ?? null,
+    // `wishlist_entries.tags`' default: an add names no tags, and onto an existing wish it
+    // leaves that wish's alone — only `wishlist_set_tags` writes them.
+    tags: "[]",
     needsReview: null,
     updatedAt: stamp(db),
   };
@@ -18700,6 +18765,23 @@ export function writeHandlers(db: FakeDb) {
       }
       Object.assign(row, next);
       return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /**
+     * `entry_tags::set_collection_tags` (issue #1398) — one row's entry tags replaced whole and
+     * answered as stored, {@link cleanTags}' tidy over the list: the same rule a deck's tags are
+     * written by, so a field shared by both kinds draws what it sent back the same way. A row
+     * that is gone is refused in {@link TAGGED_COPY_GONE}'s words. **No grain moves** — tags are
+     * not a term of {@link collectionGrain}, so this never folds a row onto another.
+     */
+    collection_set_tags: (args: { id: number; tags: string[] }): string[] => {
+      refuseIfBusy(db);
+      const row = db.collectionEntries.find((e) => e.id === args.id);
+      if (!row) throw refuse(TAGGED_COPY_GONE);
+      const tags = cleanTags(args.tags);
+      row.tags = JSON.stringify(tags);
+      row.updatedAt = stamp(db);
+      return tags;
     },
 
     /**
@@ -19910,6 +19992,22 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       refuseIfManagedWish(db, args.id);
       return removeWish(db, args.id);
+    },
+
+    /**
+     * `entry_tags::set_wish_tags` (issue #1398) — {@link collection_set_tags} one table over,
+     * and {@link TAGGED_WISH_GONE}'s words for a wish that is gone. **A managed wish takes tags
+     * too**, as the crate's statement does: they are the reader's words about the row, not a
+     * change to what the deck asks for, so nothing here is the deck's to refuse.
+     */
+    wishlist_set_tags: (args: { id: number; tags: string[] }): string[] => {
+      refuseIfBusy(db);
+      const row = db.wishlistEntries.find((w) => w.id === args.id);
+      if (!row) throw refuse(TAGGED_WISH_GONE);
+      const tags = cleanTags(args.tags);
+      row.tags = JSON.stringify(tags);
+      row.updatedAt = stamp(db);
+      return tags;
     },
 
     /**

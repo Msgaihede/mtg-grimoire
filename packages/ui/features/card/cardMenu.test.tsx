@@ -215,12 +215,7 @@ const binder = (
  * the half of the schema's `CHECK` that makes a `deck` folder without a deck impossible. A helper
  * that took a fifth optional argument would let a test write that impossible row by accident.
  */
-const deckGroup = (
-  id: number,
-  name: string,
-  deckId: number,
-  sortOrder = 0,
-): CollectionFolder => ({
+const deckGroup = (id: number, name: string, deckId: number, sortOrder = 0): CollectionFolder => ({
   rules: [],
   id,
   parentId: null,
@@ -898,7 +893,9 @@ describe("buildCardMenu", () => {
           collectionFolders: [binder(1, "Binder")],
         }),
       );
-      (find((find(items, "Move 2 cards to") as MenuSubmenu).items, "Binder") as MenuAction).onSelect();
+      (
+        find((find(items, "Move 2 cards to") as MenuSubmenu).items, "Binder") as MenuAction
+      ).onSelect();
       expect(pickCopies).toHaveBeenCalledWith([4, 9], 1);
       expect(moveCopies).not.toHaveBeenCalled();
     });
@@ -945,6 +942,51 @@ describe("buildCardMenu", () => {
   });
 
   /**
+   * `Tags…` — one stack's entry tags (issue #1398), fenced like `Edit copy…` on the one row the
+   * reader pointed at: a collection row's `entryId`, or a wish's `wishId`.
+   */
+  describe("Tags…", () => {
+    const TAGS = "Tags…";
+
+    it("names the collection row for a target with an entry id", () => {
+      const editTags = vi.fn();
+      const items = buildCardMenu({ ...BOLT, entryId: 42 }, deps({ editTags }));
+      (find(items, TAGS) as MenuAction).onSelect();
+      expect(editTags).toHaveBeenCalledWith({ kind: "collection", id: 42 });
+    });
+
+    it("names the wish for a wishlist target, and is the group's only row there", () => {
+      const editTags = vi.fn();
+      const items = buildCardMenu({ ...BOLT, wishId: 7 }, deps({ editTags }));
+      expect(items.slice(-2).map((i) => i.id)).toEqual(["sep-edit", "edit-tags"]);
+      (find(items, TAGS) as MenuAction).onSelect();
+      expect(editTags).toHaveBeenCalledWith({ kind: "wishlist", id: 7 });
+    });
+
+    it("sits between Edit copy… and Remove from collection", () => {
+      const items = buildCardMenu(
+        { ...BOLT, entryId: 42 },
+        deps({ editCopy: vi.fn(), editTags: vi.fn(), removeCopies: vi.fn() }),
+      );
+      expect(items.slice(-4).map((i) => i.id)).toEqual([
+        "sep-edit",
+        "edit-copy",
+        "edit-tags",
+        "remove-copies",
+      ]);
+    });
+
+    it("is absent for a wall tile, a plain card, and a surface that wired no editor", () => {
+      const editTags = vi.fn();
+      expect(
+        labels(buildCardMenu({ ...BOLT, entryIds: [4, 9] }, deps({ editTags }))),
+      ).not.toContain(TAGS);
+      expect(labels(buildCardMenu(BOLT, deps({ editTags })))).not.toContain(TAGS);
+      expect(labels(buildCardMenu({ ...BOLT, entryId: 42 }, deps()))).not.toContain(TAGS);
+    });
+  });
+
+  /**
    * `Edit copy…` — the one row here fenced on `entryId` **and never on `entryIds`**, which is the
    * whole of what tells it from `Move to` directly above it. That row can express the several
    * (one id is a move, more than one is `pickCopies`' question); this one cannot, because there is
@@ -967,10 +1009,12 @@ describe("buildCardMenu", () => {
       const separators = (items: MenuItem[]) =>
         items.filter((i) => i.kind === "separator").map((i) => i.id);
 
-      expect(separators(buildCardMenu({ ...BOLT, entryId: 42 }, deps({ editCopy: vi.fn() })))).toContain(
+      expect(
+        separators(buildCardMenu({ ...BOLT, entryId: 42 }, deps({ editCopy: vi.fn() }))),
+      ).toContain("sep-edit");
+      expect(separators(buildCardMenu(BOLT, deps({ editCopy: vi.fn() })))).not.toContain(
         "sep-edit",
       );
-      expect(separators(buildCardMenu(BOLT, deps({ editCopy: vi.fn() })))).not.toContain("sep-edit");
     });
 
     it("leaves it out where the surface can name no row", () => {
@@ -1715,7 +1759,11 @@ describe("DeckTargetSubmenu", () => {
   beforeEach(() => {
     deckList.mockResolvedValue([deck({ id: 7, name: "Burn" })]);
     deckFolderList.mockResolvedValue([]);
-    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn", defaultCategoryId: 0 }, cards: [], categories: [] });
+    deckGet.mockResolvedValue({
+      deck: { id: 7, name: "Burn", defaultCategoryId: 0 },
+      cards: [],
+      categories: [],
+    });
     deckAddCard.mockResolvedValue(undefined);
     oracleTagsForPrintings.mockResolvedValue([]);
   });
@@ -1779,7 +1827,11 @@ describe("useCardToDeck", () => {
   }
 
   beforeEach(() => {
-    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn", defaultCategoryId: 0 }, cards: [], categories: [] });
+    deckGet.mockResolvedValue({
+      deck: { id: 7, name: "Burn", defaultCategoryId: 0 },
+      cards: [],
+      categories: [],
+    });
     deckAddCard.mockResolvedValue(undefined);
     oracleTagsForPrintings.mockResolvedValue([]);
   });
@@ -2011,7 +2063,11 @@ describe("the deck picker inside the real cascade", () => {
     vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(800);
     deckList.mockResolvedValue([KRENKO]);
     deckFolderList.mockResolvedValue([COMMANDER]);
-    deckGet.mockResolvedValue({ deck: { id: 7, name: "Krenko", defaultCategoryId: 0 }, cards: [], categories: [] });
+    deckGet.mockResolvedValue({
+      deck: { id: 7, name: "Krenko", defaultCategoryId: 0 },
+      cards: [],
+      categories: [],
+    });
     deckAddCard.mockResolvedValue(undefined);
     oracleTagsForPrintings.mockResolvedValue([]);
   });
@@ -2252,10 +2308,7 @@ describe("buildCardMenu with a picked set", () => {
   it("records a foil-only printing as foil inside a group", () => {
     const addToCollection = vi.fn();
     const foilOnly: CardMenuTarget = { ...HELIX, finishes: '["foil"]' };
-    const items = buildCardMenu(
-      BOLT,
-      deps({ picked: [BOLT, foilOnly], addToCollection }),
-    );
+    const items = buildCardMenu(BOLT, deps({ picked: [BOLT, foilOnly], addToCollection }));
     (find(rowsOf(find(items, "Add 2 cards to")), "Collection") as MenuAction).onSelect();
 
     expect(addToCollection.mock.calls.map((call) => call[1] as string)).toEqual([
@@ -2315,7 +2368,12 @@ describe("buildCardMenu with a picked set", () => {
     const items = buildCardMenu(
       { ...BOLT, entryIds: [3, 7] },
       deps({
-        picked: [{ ...BOLT, entryIds: [3, 7] }, { ...HELIX, entryId: 3 }, { ...PONDER, entryId: 11 }, BOLT],
+        picked: [
+          { ...BOLT, entryIds: [3, 7] },
+          { ...HELIX, entryId: 3 },
+          { ...PONDER, entryId: 11 },
+          BOLT,
+        ],
         removeCopies,
       }),
     );

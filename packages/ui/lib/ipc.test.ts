@@ -3885,6 +3885,91 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **The entry tags' three** (user schema v67, issue #1398) — a stack's free-text tags on the
+   * collection and the wishlist, and the one read across both tables.
+   *
+   * Found by search rather than imported by path: the engine's module is
+   * `crates/grimoire-core/src/entry_tags.rs`, and the desktop's `#[tauri::command]` wrappers are
+   * wherever the desktop crate keeps them — the assertion is that **some** source declares each
+   * command, exactly once, with every parameter the wrapper sends. A command found nowhere is a
+   * red row naming it, never a green test over an empty list.
+   *
+   * `entry_tags_in_use` takes **no arguments at all**, `sticky_notes`' trap. The two setters send
+   * `id` and `tags` — and `tags` is the one worth the case: a wrapper that sent `tagList`, or the
+   * JSON string the row carries, type-checks and is refused (or worse, dropped) at run time.
+   */
+  it("sends every entry-tag command under the names its command declares", async () => {
+    const sources = import.meta.glob<string>(
+      [
+        "/crates/grimoire-core/src/**/*.rs",
+        "/apps/desktop/src-tauri/src/**/*.rs",
+        "!/{crates/grimoire-core/src,apps/desktop/src-tauri/src}/**/tests/**",
+        "!/{crates/grimoire-core/src,apps/desktop/src-tauri/src}/**/*tests.rs",
+      ],
+      { query: "?raw", import: "default", eager: true },
+    );
+    /** The parameter names of the one `#[tauri::command]` called `command`, wherever it is. */
+    const declared = (command: string): string[] => {
+      const commandAt = new RegExp(
+        `#\\[tauri::command[^\\]]*\\]\\s*pub (?:async )?fn ${command}\\(`,
+      );
+      const homes = Object.entries(sources).flatMap(([path, src]) => {
+        const m = commandAt.exec(src);
+        return m === null ? [] : [[path, src.slice(m.index + m[0].length)] as const];
+      });
+      expect(
+        homes.map(([path]) => path),
+        `\`${command}\` should be one \`#[tauri::command]\``,
+      ).toHaveLength(1);
+      // From just inside the `(` to its match — a parameter's type may carry parentheses of its
+      // own only in a tuple, which none of these takes, so depth is counted anyway for safety.
+      const rest = homes[0][1];
+      let depth = 1;
+      let end = 0;
+      while (end < rest.length && depth > 0) {
+        if (rest[end] === "(") depth += 1;
+        else if (rest[end] === ")") depth -= 1;
+        end += 1;
+      }
+      // A parameter is a name after the `(` or a `,`, then one colon — `tauri::State`'s `::` is
+      // a path, not a parameter.
+      return [...`,${rest.slice(0, end - 1)}`.matchAll(/,\s*(?:mut\s+)?(\w+)\s*:(?!:)/g)].map(
+        (m) => m[1] ?? "",
+      );
+    };
+
+    invoke.mockResolvedValue(["Cube", "Trade"]);
+    expect(await ipc.collectionSetTags(7, ["Cube", " Trade "])).toEqual(["Cube", "Trade"]);
+    expect(invoke).toHaveBeenLastCalledWith("collection_set_tags", {
+      id: 7,
+      tags: ["Cube", " Trade "],
+    });
+    await ipc.wishlistSetTags(9, []);
+    expect(invoke).toHaveBeenLastCalledWith("wishlist_set_tags", { id: 9, tags: [] });
+
+    invoke.mockResolvedValue([{ tag: "Cube", count: 2 }]);
+    expect(await ipc.entryTagsInUse()).toEqual([{ tag: "Cube", count: 2 }]);
+    expect(invoke).toHaveBeenLastCalledWith("entry_tags_in_use");
+
+    for (const command of ["collection_set_tags", "wishlist_set_tags"]) {
+      const sent = payloadKeys(ipcSource, command).map(snake);
+      expect(sent, `nothing parsed out of ipc.ts for \`${command}\``).toEqual(["id", "tags"]);
+      const params = declared(command);
+      for (const key of sent) {
+        expect(params, `\`${command}\` is sent \`${key}\` and does not declare it`).toContain(key);
+      }
+    }
+    // Nothing but the managed state — an argument here would be a key the command never names.
+    expect(declared("entry_tags_in_use").filter((p) => p !== "state")).toEqual([]);
+
+    for (const command of ["collection_set_tags", "wishlist_set_tags", "entry_tags_in_use"]) {
+      expect(desktopRs, `\`${command}\` is not registered in desktop.rs`).toMatch(
+        new RegExp(`::${command},`),
+      );
+    }
+  });
+
+  /**
    * **The trade builder's fourteen** (user schema v63, issue #363; `trade_swap_sides`, issue
    * #936), pinned on the day they were written — one case, because they are one page's worth of
    * commands.
