@@ -85,8 +85,9 @@ describe("the editions' Settings entries", () => {
       "danger",
     ]);
     // Backup (the mirror) by the spec's name; the folder's path and the stored start view because
-    // a light install has neither to offer. Updates is drawn, without the updater (below).
-    for (const gone of ["backup", "data-folder", "start-view"] as const) {
+    // a light install has neither to offer; the integrations switch because it is the desktop's
+    // (issue #1396). Updates is drawn, without the updater (below).
+    for (const gone of ["backup", "data-folder", "start-view", "integrations"] as const) {
       expect(panelsOf(LIGHT_EDITION.settings)).not.toContain(gone);
     }
   });
@@ -113,6 +114,8 @@ describe("the editions' Settings entries", () => {
     expect(visiblePanels("carddata", "dropbox", light)).toEqual([]);
     expect(visiblePanels("carddata", "dropbox")).toEqual(["backup"]);
     expect(visiblePanels("carddata", "patreon", light)).toEqual(["sync"]);
+    expect(visiblePanels("carddata", "discord", light)).toEqual([]);
+    expect(visiblePanels("carddata", "discord")).toEqual(["integrations"]);
   });
 
   it("gives only the full edition an updater", () => {

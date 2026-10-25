@@ -33,8 +33,8 @@
 //! facet index, the image upkeep, the card sync and, behind it on a first run, the optional
 //! feeds — and **live sync's connection manager**, the core's loop
 //! ([`grimoire_core::sync_engine::live::run`]), which opens no socket until this device is in a
-//! sync group. No mirror, no updater, no second window, and no push on the way out
-//! ([`spawn_live_sync`] says why).
+//! sync group, with **the publish round** beside it ([`spawn_publisher`]). No mirror, no
+//! updater, no second window, and no push on the way out ([`spawn_live_sync`] says why).
 //!
 //! **It also builds and runs on a desktop**, as a debugging aid: `cargo run -p grimoire-light`
 //! after `pnpm mobile:build` opens the light app in a phone-sized window over its own data
@@ -310,6 +310,19 @@ fn start(app: &tauri::AppHandle) {
     // The relay doorbell — after `settle`, like everything else that runs in the background,
     // and whatever the link: it asks the relay nothing until this device is in a sync group.
     spawn_live_sync(&state, writes);
+    // And the publish round beside it, which acts only after a trip the doorbell's loop ran.
+    spawn_publisher(&state);
+}
+
+/// The publish round (issue #1396): the core's loop, as a detached task of its own beside
+/// [`spawn_live_sync`] — after each successful sync trip, debounced, it republishes every live
+/// share of the group that moved and, when the group's integrations store exists, the projection
+/// tables that did. **So a change made on the phone reaches a share without the desktop on.** No
+/// page here draws the Integrations panel (the desktop's alone); the store is filled in the
+/// background whenever the group switched it on. On an install that has connected nothing it is
+/// one local read every fifteen seconds and nothing else.
+fn spawn_publisher(state: &Arc<State>) {
+    tauri::async_runtime::spawn(grimoire_core::integration::publish::run(Arc::clone(state)));
 }
 
 /// Live sync: the core's connection manager, as a detached task of its own — a schedule of its

@@ -177,8 +177,9 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   // whether a binder's copies count as ones a finish may take.
   collection_folders: [["collection"], ["cards", "search"], ["decks"], ["trade"], ...REVIEWED],
   // **Nothing, and it cannot be `["share"]`.** `share_list` is a read that *writes*: it reconciles
-  // against the relay and upserts every row it hears of on each call (`share/cache.rs`), so an
-  // entry reaching the list turns a mounted collection page into a refetch loop across windows —
+  // against the relay and upserts every row it hears of on each call
+  // (`grimoire_core::share::cache`), so an entry reaching the list turns a mounted collection
+  // page into a refetch loop across windows —
   // one relay round trip a lap, each holding the write lock. It was latent while `SHARE_BASE`
   // was a placeholder and is real since 2026-10-01, when the share Worker got an address. The
   // cost of `[]` is a second window's share list going stale until it remounts.

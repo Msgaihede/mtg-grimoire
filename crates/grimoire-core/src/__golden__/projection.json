@@ -1,0 +1,295 @@
+{
+  "collection_folders": {
+    "v": 1,
+    "table": "collection_folders",
+    "fields": [
+      "condition",
+      "lang",
+      "value",
+      "tags",
+      "notes"
+    ],
+    "marketplace": "tcgplayer",
+    "currency": "USD",
+    "rows": [
+      {
+        "uid": "fold-binder",
+        "name": "Trade binder",
+        "parentUid": null,
+        "kind": "user",
+        "locked": false
+      },
+      {
+        "uid": "fold-duals",
+        "name": "Duals",
+        "parentUid": "fold-binder",
+        "kind": "user",
+        "locked": false
+      },
+      {
+        "uid": "fold-removed",
+        "name": "Recently removed",
+        "parentUid": null,
+        "kind": "removed",
+        "locked": false
+      },
+      {
+        "uid": "fold-shelf",
+        "name": "Top shelf",
+        "parentUid": "fold-vault",
+        "kind": "user",
+        "locked": true
+      },
+      {
+        "uid": "fold-vault",
+        "name": "Vault",
+        "parentUid": null,
+        "kind": "user",
+        "locked": true
+      }
+    ]
+  },
+  "collection_entries": {
+    "v": 1,
+    "table": "collection_entries",
+    "fields": [
+      "condition",
+      "lang",
+      "value",
+      "tags",
+      "notes"
+    ],
+    "marketplace": "tcgplayer",
+    "currency": "USD",
+    "rows": [
+      {
+        "uid": "entry-1",
+        "scryfallId": "0000579f-7b35-4ed3-b44c-db2a538066fe",
+        "name": "Fury Sliver",
+        "set": "tsp",
+        "cn": "157",
+        "finish": "nonfoil",
+        "quantity": 2,
+        "folderUid": "fold-binder",
+        "image": "https://cards.scryfall.io/display/front/0/0/0000579f-7b35-4ed3-b44c-db2a538066fe.webp?1757308800",
+        "condition": "NM",
+        "lang": "en",
+        "value": 0.34,
+        "tags": [
+          "cube",
+          "trade"
+        ],
+        "notes": "from a booster"
+      },
+      {
+        "uid": "entry-2",
+        "scryfallId": "56ebc372-aabd-4174-a943-c7bf59e5028d",
+        "name": "Tundra",
+        "set": "lea",
+        "cn": "283",
+        "finish": "foil",
+        "quantity": 1,
+        "folderUid": "fold-duals",
+        "image": "https://cards.scryfall.io/display/front/5/6/56ebc372-aabd-4174-a943-c7bf59e5028d.webp?1757308800",
+        "condition": "LP",
+        "lang": "de",
+        "value": 1.25
+      },
+      {
+        "uid": "entry-3",
+        "scryfallId": "e3285e6b-3e79-4d7c-bf96-d920f973b80d",
+        "name": "Lightning Bolt",
+        "set": "lea",
+        "cn": "161",
+        "finish": "etched",
+        "quantity": 1,
+        "folderUid": "fold-shelf",
+        "image": "https://cards.scryfall.io/display/front/e/3/e3285e6b-3e79-4d7c-bf96-d920f973b80d.webp?1757308800",
+        "condition": "MP",
+        "lang": "en",
+        "value": 2.5
+      },
+      {
+        "uid": "entry-4",
+        "scryfallId": "0000dead-0000-4000-8000-000000000000",
+        "name": "0000dead-0000-4000-8000-000000000000",
+        "set": "xxx",
+        "cn": "0",
+        "finish": "nonfoil",
+        "quantity": 3,
+        "folderUid": null,
+        "lang": "en"
+      }
+    ]
+  },
+  "wishlist_folders": {
+    "v": 1,
+    "table": "wishlist_folders",
+    "fields": [
+      "condition",
+      "lang",
+      "value",
+      "tags",
+      "notes"
+    ],
+    "marketplace": "tcgplayer",
+    "currency": "USD",
+    "rows": [
+      {
+        "uid": "wfold-buy",
+        "name": "Buy list",
+        "parentUid": null
+      },
+      {
+        "uid": "wfold-soon",
+        "name": "Soon",
+        "parentUid": "wfold-buy"
+      }
+    ]
+  },
+  "wishlist_entries": {
+    "v": 1,
+    "table": "wishlist_entries",
+    "fields": [
+      "condition",
+      "lang",
+      "value",
+      "tags",
+      "notes"
+    ],
+    "marketplace": "tcgplayer",
+    "currency": "USD",
+    "rows": [
+      {
+        "uid": "wish-1",
+        "scryfallId": "56ebc372-aabd-4174-a943-c7bf59e5028d",
+        "oracleId": null,
+        "name": "Tundra",
+        "set": "lea",
+        "cn": "283",
+        "finish": "foil",
+        "quantity": 1,
+        "folderUid": "wfold-soon",
+        "image": "https://cards.scryfall.io/display/front/5/6/56ebc372-aabd-4174-a943-c7bf59e5028d.webp?1757308800",
+        "lang": "en",
+        "value": 1.25,
+        "tags": [
+          "cube",
+          "next payday"
+        ],
+        "notes": "for the cube"
+      },
+      {
+        "uid": "wish-2",
+        "scryfallId": null,
+        "oracleId": "oracle-bolt",
+        "name": "Lightning Bolt",
+        "set": "lea",
+        "cn": "161",
+        "finish": "nonfoil",
+        "quantity": 4,
+        "folderUid": null,
+        "image": "https://cards.scryfall.io/display/front/e/3/e3285e6b-3e79-4d7c-bf96-d920f973b80d.webp?1757308800",
+        "lang": "en",
+        "value": 0.34
+      }
+    ]
+  },
+  "decks": {
+    "v": 1,
+    "table": "decks",
+    "fields": [
+      "condition",
+      "lang",
+      "value",
+      "tags",
+      "notes"
+    ],
+    "marketplace": "tcgplayer",
+    "currency": "USD",
+    "rows": [
+      {
+        "uid": "deck-krenko",
+        "name": "Krenko's Goblins",
+        "format": "Commander",
+        "folderUid": "dfold-tribal",
+        "cover": {
+          "img": "https://cards.scryfall.io/art_crop/front/e/3/e3285e6b-3e79-4d7c-bf96-d920f973b80d.jpg?1757308800",
+          "artist": "Christopher Rush"
+        }
+      }
+    ]
+  },
+  "deck_cards": {
+    "v": 1,
+    "table": "deck_cards",
+    "fields": [
+      "condition",
+      "lang",
+      "value",
+      "tags",
+      "notes"
+    ],
+    "marketplace": "tcgplayer",
+    "currency": "USD",
+    "rows": [
+      {
+        "uid": "dc-0000579f",
+        "deckUid": "deck-krenko",
+        "pile": "Maybeboard",
+        "kind": "maybe",
+        "active": false,
+        "scryfallId": "0000579f-7b35-4ed3-b44c-db2a538066fe",
+        "name": "Fury Sliver",
+        "set": "tsp",
+        "cn": "157",
+        "finish": "nonfoil",
+        "quantity": 1,
+        "image": "https://cards.scryfall.io/display/front/0/0/0000579f-7b35-4ed3-b44c-db2a538066fe.webp?1757308800",
+        "typeLine": "Creature — Sliver",
+        "manaCost": "{3}{R}",
+        "manaValue": 4.0,
+        "lang": "en",
+        "value": 0.34
+      },
+      {
+        "uid": "dc-5d8a1ab2",
+        "deckUid": "deck-krenko",
+        "pile": "Commander",
+        "kind": "commander",
+        "active": true,
+        "scryfallId": "5d8a1ab2-4c53-4b2b-a9e4-1e3c0e7d2f01",
+        "name": "Krenko, Mob Boss",
+        "set": "m13",
+        "cn": "139",
+        "finish": "nonfoil",
+        "quantity": 1,
+        "image": "https://cards.scryfall.io/display/front/5/d/5d8a1ab2-4c53-4b2b-a9e4-1e3c0e7d2f01.webp?1757308800",
+        "typeLine": "Legendary Creature — Goblin Warrior",
+        "manaCost": "{2}{R}{R}",
+        "manaValue": 4.0,
+        "lang": "en",
+        "value": 0.34
+      },
+      {
+        "uid": "dc-e3285e6b",
+        "deckUid": "deck-krenko",
+        "pile": "Burn",
+        "kind": "main",
+        "active": true,
+        "scryfallId": "e3285e6b-3e79-4d7c-bf96-d920f973b80d",
+        "name": "Lightning Bolt",
+        "set": "lea",
+        "cn": "161",
+        "finish": "nonfoil",
+        "quantity": 4,
+        "image": "https://cards.scryfall.io/display/front/e/3/e3285e6b-3e79-4d7c-bf96-d920f973b80d.webp?1757308800",
+        "typeLine": "Instant",
+        "manaCost": "{R}",
+        "manaValue": 1.0,
+        "lang": "en",
+        "value": 0.34
+      }
+    ]
+  }
+}

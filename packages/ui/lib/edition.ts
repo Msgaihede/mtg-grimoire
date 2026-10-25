@@ -63,6 +63,12 @@ export type LightView = (typeof LIGHT_VIEWS)[number];
  *   name nothing the reader can act on.
  * - **`start-view`** — a light install opens where its URL says, and on Search when it says
  *   nothing (`LIGHT_START`). A stored start view is a question it does not ask.
+ * - **`integrations`** — the group's switch for a server-held copy of the collection (issue
+ *   #1396) is the desktop's, as the Share control is ({@link Edition.publishes}): plan
+ *   `2026-10-25-integrations-projection-store.md` §2 decided it. A light host still sends its
+ *   copy in the background whenever the group's store exists, so nothing is lost by the switch
+ *   living on one device of the group. Its rail entry, `Integrations`, holds nothing else, so it
+ *   goes too — `groupsOf` drops an entry with nothing left in it by itself.
  */
 export const LIGHT_SETTINGS = [
   "updates",

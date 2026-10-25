@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import deckRs from "../../../../apps/desktop/src-tauri/src/share/deck.rs?raw";
+// The deck share's reader moved into the engine with issue #1396 (`grimoire_core::share`).
+import deckRs from "../../../../crates/grimoire-core/src/share/deck.rs?raw";
 import { DECK_SHARE_PREFIX, deckShareTarget } from "./deckShare";
 
 describe("deckShareTarget", () => {

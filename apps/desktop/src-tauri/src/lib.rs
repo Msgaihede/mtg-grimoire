@@ -135,6 +135,10 @@ pub mod index;
 /// **`grimoire-core`'s bulk-file ingest**, and the one test of it that builds its database with
 /// [`split`].
 pub mod ingest;
+/// **The integrations store** (issue #1396) — `grimoire-core`'s module, re-exported, and the four
+/// `#[tauri::command]` wrappers behind Settings → Integrations. The publish round the module also
+/// holds is spawned by `desktop::start`, beside live sync.
+pub mod integration;
 pub use grimoire_core::legalities;
 /// **The four view-state modules.** `listview`, `nav`, `searchopen` and `zoom` each keep one
 /// setting in `app_meta` and answer it back - two commands apiece. [`searchopen`] arrived on

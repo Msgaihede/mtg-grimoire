@@ -95,6 +95,7 @@ const RAIL: GroupId[] = [
   "updates",
   "carddata",
   "sync",
+  "integrations",
   "tags",
   "appearance",
   "scanner",
@@ -107,6 +108,7 @@ const UNDER: Record<GroupId, PanelId[]> = {
   updates: ["updates"],
   carddata: ["prices"],
   sync: ["sync", "review"],
+  integrations: ["integrations"],
   tags: ["hidden-tags"],
   appearance: ["start-view", "theory-marks", "labels"],
   scanner: ["scan-sounds"],
@@ -137,9 +139,9 @@ describe("the settings rail", () => {
     expect([...ids].sort()).toEqual(declared.sort());
   });
 
-  it("has eight entries, in declaration order", () => {
+  it("has nine entries, in declaration order", () => {
     expect(GROUP_ORDER).toEqual(RAIL);
-    expect(GROUP_ORDER).toHaveLength(8);
+    expect(GROUP_ORDER).toHaveLength(9);
     // `GROUP_ORDER` is derived from `GROUPS`, so this is what would catch the two coming apart —
     // an entry with a label and no place in the rail, or the reverse.
     expect(Object.keys(GROUPS)).toEqual(RAIL);
@@ -165,6 +167,7 @@ describe("PANEL_ORDER", () => {
       "prices",
       "sync",
       "review",
+      "integrations",
       "hidden-tags",
       "start-view",
       "theory-marks",
@@ -327,5 +330,29 @@ describe("visiblePanels", () => {
    */
   it("finds the labels without finding the tag panels", () => {
     expect(visiblePanels("updates", "label")).toEqual(["labels"]);
+  });
+
+  /**
+   * **`Integrations` is found by the names of what will read the copy** (issue #1396) — nobody
+   * types this app's word for it. Equalities rather than `toContain`: each of these words is the
+   * panel's alone, so a keyword that leaked into another panel's line fails here. The entry's
+   * label is in the haystack too, so "integration" lands with no keyword saying so.
+   */
+  it("finds the integrations switch by the words a reader would type", () => {
+    for (const query of ["discord", "mcp", "claude", "bot", "integration", "cloud server"]) {
+      expect(visiblePanels("updates", query)).toEqual(["integrations"]);
+    }
+  });
+
+  /**
+   * **`sync`, `patreon` and `tags` are other entries' words**, though the switch needs a
+   * membership and carries an *Entry tags* column: a reader who types them is looking for their
+   * devices or for Scryfall's tags, and the switch among the answers would be the trip `Local
+   * cache`'s comment in `nav.ts` warns about — and, for `tags`, the two vocabularies on one answer.
+   */
+  it("keeps the integrations switch out of a search for sync, patreon or tags", () => {
+    for (const query of ["sync", "patreon", "membership", "tags"]) {
+      expect(visiblePanels("updates", query)).not.toContain("integrations");
+    }
   });
 });

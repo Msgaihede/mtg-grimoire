@@ -114,6 +114,13 @@ export default mergeConfig(
         // bindings, a bucket and a limiter. `label.test.ts` and `wrangler.test.ts` read the
         // engine's Rust and this Worker's configuration as text and fail when they part.
         project("scan-worker", ["infrastructure/scan-worker/src/**/*.test.ts"]),
+        // The fifth Worker — `infrastructure/integrations-worker/`, the integrations store — on
+        // the same terms, with one difference of place and one of means. Its suite is `test/`
+        // beside `src/`, so `src/` is exactly what a deploy bundles and a grep of it for the
+        // relay's signing key finds the gate alone. And the group's Durable Object, which no
+        // other Worker here has, is a plain class over `node:sqlite` (`test/fake.ts`) — the
+        // runtime's `cloudflare:workers` binding of it is the one module no test imports.
+        project("integrations-worker", ["infrastructure/integrations-worker/test/**/*.test.ts"]),
         // The root package's own two folders, which belong to no other.
         //
         // The workbench's own folder. Nothing in it is a test since the fake moved out, and the

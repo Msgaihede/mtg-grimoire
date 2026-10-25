@@ -1,28 +1,22 @@
-//! Publishing a collection folder as a read-only snapshot.
+//! **The desktop's half of `share`.**
 //!
-//! **This module does not read through [`crate::collection::list_entries`], and that is the
-//! whole of its safety.** That query scopes a named folder with `e.folder_id = ?` — direct
-//! members only — and skips `exclude_locked` entirely whenever `folder_id` is set, because "a
-//! named folder is served whole" is the right answer for a reader standing in their own drawer.
-//! Both defaults publish more than the reader asked for. So the read here is its own, and where
-//! `CollectionQuery`'s unasked question keeps every row, this one's keeps none.
-/// The `collection_shares` reads and writes.
-pub mod cache;
-/// The five `#[tauri::command]`s and [`commands::ShareRow`].
+//! The module itself is `grimoire-core`'s and is re-exported here whole — the snapshot and its
+//! readers, the `collection_shares` cache, the publish requests and the publish round's half —
+//! so a path through this one reaches that crate's item, except for what is defined below: an
+//! item a module defines shadows a glob import of the same name. What is below names a window or
+//! the desktop's `AppState` — the `#[tauri::command]`s — or is the viewer, which opens a
+//! stranger's link and stayed the desktop's (`publish`, beside a glob of the core's module of
+//! that name).
+//!
+//! **The share goldens stay here**, `__golden__/snapshot.json` and `deck.json`, with the tests that
+//! hold the writer to them: the two TypeScript viewers read these very files, and they are what
+//! said the snapshot did not move a byte when its reads went to the core's projector.
+
+pub use grimoire_core::share::*;
+
+/// The `#[tauri::command]`s, and [`commands::ShareRow`] re-exported from the core.
 pub mod commands;
-/// A deck's share — its live list, drawn as a deck (issue #1032).
-mod deck;
-/// The upload.
+/// The viewer, beside the core's upload.
 pub mod publish;
-mod snapshot;
 #[cfg(test)]
 mod tests;
-/// A wishlist's share — the whole list, one folder, or a deck's managed wishlist (issue #941).
-mod wishlist;
-
-pub use deck::{ShareCover, ShareDeck, SharePile, DECK_NOT_FOUND};
-pub use snapshot::{
-    gzip, snapshot, ShareCard, ShareFields, ShareFolder, ShareSnapshot, FOLDER_IS_LOCKED,
-    FOLDER_NOT_FOUND, SNAPSHOT_VERSION, WHOLE_COLLECTION_TITLE,
-};
-pub use wishlist::{WHOLE_WISHLIST_TITLE, WISHLIST_FOLDER_NOT_FOUND};

@@ -34,7 +34,13 @@
  *    {@link installWorld}.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { allHandlers, applySupporterFault, errorLogSeed, mirrorFailedPass } from "./db";
+import {
+  allHandlers,
+  applyIntegrationsFault,
+  applySupporterFault,
+  errorLogSeed,
+  mirrorFailedPass,
+} from "./db";
 import type { FakeDb, Fault } from "./db";
 import { installCorpus } from "./images";
 import {
@@ -245,6 +251,9 @@ export function installWorld(
   // has ended. Both write the world rather than branching in a handler, for the reason above:
   // neither is a refusal, and the panel has to draw the state with nothing having been pressed.
   applySupporterFault(db);
+  // The integrations switch on with a failed round behind it — an On state, because the crate
+  // clears a round's failure whenever it hears the store is off (`db.ts`, at `integrationsError`).
+  applyIntegrationsFault(db);
 
   const scope = createScope(allHandlers(db));
   // The one fault that is about the *host*: a browser, which answers a name the desktop refuses —

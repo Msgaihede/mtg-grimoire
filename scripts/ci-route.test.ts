@@ -28,6 +28,7 @@ const TS_TESTS = import.meta.glob<string>(
     "/infrastructure/share-worker/src/**/*.test.ts",
     "/infrastructure/app-worker/src/**/*.test.ts",
     "/infrastructure/scan-worker/src/**/*.test.ts",
+    "/infrastructure/integrations-worker/test/**/*.test.ts",
     "/apps/share/**/*.test.{ts,tsx}",
     "/apps/light/**/*.test.{ts,tsx}",
     "/scripts/**/*.test.ts",
@@ -191,6 +192,7 @@ describe("the census", () => {
     const globPaths = globbed.map((r) => r.path);
     expect(globPaths).toContain("infrastructure/app-worker/README.md");
     expect(globPaths).toContain("infrastructure/scan-worker/README.md");
+    expect(globPaths).toContain("infrastructure/integrations-worker/README.md");
     expect(globPaths.some((path) => /^changelog\/\d+\.\d+\.\d+\.md$/.test(path))).toBe(true);
     expect(globPaths).toContain("packages/ui/lib/ipc/decks.ts");
     // And a negation honoured: `hosting.test.ts` leaves out the Worker's own `node_modules/`.
@@ -425,6 +427,17 @@ describe("the arms", () => {
     // Swept the same way by `wrangler.test.ts`.
     ["infrastructure/scan-worker/README.md", T, F, F, F, F, F, F],
     ["infrastructure/scan-worker/tsconfig.json", T, F, F, F, T, F, T],
+    // The integrations store: `frontend` checks, lints and tests it, its suite under `test/`, and
+    // no build uses it.
+    ["infrastructure/integrations-worker/wrangler.jsonc", T, F, F, F, F, F, F],
+    // Its `src/` is read by the engine's tests too (`integration::store`, `include_str!`).
+    ["infrastructure/integrations-worker/src/store.ts", T, T, F, F, F, F, F],
+    ["infrastructure/integrations-worker/src/cors.ts", T, T, F, F, F, F, F],
+    ["infrastructure/integrations-worker/test/store.test.ts", T, F, F, F, F, F, F],
+    ["infrastructure/integrations-worker/migrations/0002_add-a.sql", T, F, F, F, F, F, F],
+    ["infrastructure/integrations-worker/package.json", T, F, F, F, F, F, F],
+    ["infrastructure/integrations-worker/README.md", T, F, F, F, F, F, F],
+    ["infrastructure/integrations-worker/tsconfig.json", T, F, F, F, T, F, T],
     ["some/new/thing.txt", T, T, T, F, T, F, T],
     // The light app: its host, built into an APK, and its pages, which no Rust job reads — and
     // which are the web build's own page, where the phone's host is nothing to a browser.

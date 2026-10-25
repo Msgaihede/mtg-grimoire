@@ -11,6 +11,8 @@ import scryfallRs from "../../../crates/grimoire-core/src/scryfall.rs?raw";
 import oracleTagsRs from "../../../crates/grimoire-core/src/tags/oracle.rs?raw";
 import entitlementRs from "../../../crates/grimoire-core/src/sync_engine/entitlement.rs?raw";
 import scannerSubmitRs from "../../../crates/grimoire-core/src/scanner_submit.rs?raw";
+import sharePublishRs from "../../../crates/grimoire-core/src/share/publish.rs?raw";
+import integrationStoreRs from "../../../crates/grimoire-core/src/integration/store.rs?raw";
 import socketRs from "../../../crates/grimoire-core/src/platform/socket.rs?raw";
 import webCoreTs from "../../../packages/ui/lib/core/web/index.ts?raw";
 import { headersFor, parseHeaders } from "./headers";
@@ -32,9 +34,11 @@ const OWN: Record<string, string> = import.meta.glob("./**/*.ts", {
  * **What it holds, exactly, in two halves:**
  *
  * - *A host that moved.* The engine's addresses are read by name — `SCRYFALL_API`, `IMAGE_HOST`,
- *   `FEED_URL`, Card Kingdom's `url()`, the sync relay's `RELAY_BASE` and the scan inbox's
- *   `SCAN_BASE` — and `connect-src` is held set-equal to their hosts and the bulk files'. Change
- *   one in the Rust and this is red.
+ *   `FEED_URL`, Card Kingdom's `url()`, the sync relay's `RELAY_BASE`, the scan inbox's
+ *   `SCAN_BASE` and the share Worker's `SHARE_BASE` — and `connect-src` is held set-equal to their
+ *   hosts and the bulk files'. Change one in the Rust and this is red. The integrations store's
+ *   `INTEGRATIONS_BASE` is read too, and held to be a placeholder: the day it becomes an address,
+ *   this file is red until its host is in `_headers` and named here beside the others.
  * - *A host that is new.* A census of every `https://` literal in the code the three crates
  *   **ship** — above each file's test modules, comments out — each of which has to be a host in
  *   `connect-src` or on a short list of hosts no browser's engine asks, with the reason. A sixth
@@ -148,6 +152,28 @@ const SCAN_BASE = constant(
   scannerSubmitRs,
   /pub const SCAN_BASE: &str = "([^"]+)"/,
   "scanner_submit.rs's SCAN_BASE",
+);
+/**
+ * The share Worker (`infrastructure/share-worker/`), which the engine asks from every host since
+ * issue #1396: the publish round after a sync trip republishes the group's live shares, a page's
+ * included. It answers this origin by name — its own `src/cors.ts`.
+ */
+const SHARE_BASE = constant(
+  sharePublishRs,
+  /pub const SHARE_BASE: &str = "([^"]+)"/,
+  "share/publish.rs's SHARE_BASE",
+);
+/**
+ * The integrations store — **a placeholder until its Worker's first deploy**, which the engine
+ * refuses every request to before it is made, so it is owed no place in `connect-src` yet and the
+ * census does not see it (it is no `https://` literal). Read so the day it becomes an address is
+ * a red test here rather than a store the web app cannot reach: then it joins `SHARE_BASE` in the
+ * rows below, and `_headers`.
+ */
+const INTEGRATIONS_BASE = constant(
+  integrationStoreRs,
+  /pub const INTEGRATIONS_BASE: &str = "([^"]+)"/,
+  "integration/store.rs's INTEGRATIONS_BASE",
 );
 const CARD_KINGDOM = feedUrl("CardKingdom");
 const MANA_POOL = feedUrl("ManaPool");
@@ -316,6 +342,9 @@ describe("connect-src, against the hosts the engine asks", () => {
     // Asked only when a reader presses the card scanner's Send; the Worker's own CORS answers
     // this origin, and its pre-flight (`infrastructure/scan-worker/src/cors.ts`).
     ["the scan inbox", SCAN_BASE],
+    // Asked by the publish round on every host (issue #1396); its own CORS answers this origin
+    // (`infrastructure/share-worker/src/cors.ts`).
+    ["the share Worker", SHARE_BASE],
     ...BULK_FILES.map((url): [string, string] => ["a bulk file", url]),
   ])("allows %s — %s", (_what, url) => {
     expect(csp["connect-src"]).toContain(origin(url));
@@ -334,9 +363,18 @@ describe("connect-src, against the hosts the engine asks", () => {
       RELAY_BASE,
       RELAY_SOCKET,
       SCAN_BASE,
+      SHARE_BASE,
       ...BULK_FILES,
     ].map(origin);
     expect([...csp["connect-src"]].sort()).toEqual(["'self'", ...new Set(asked)].sort());
+  });
+
+  it("owes the integrations store nothing while its address is a placeholder", () => {
+    // `integration::store::INTEGRATIONS_BASE` is refused by the engine before any request while
+    // it names no scheme. **When this fails, the store has an address**: put its host in
+    // `_headers`' `connect-src` (and the privacy page's table), and add `INTEGRATIONS_BASE` to the
+    // two lists above beside `SHARE_BASE`.
+    expect(INTEGRATIONS_BASE).not.toMatch(/^https?:\/\//);
   });
 
   it("derives the socket's source as the engine derives the socket's address", () => {

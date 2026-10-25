@@ -37,7 +37,6 @@ import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { QuickSearch } from "@/features/quickSearch/QuickSearch";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
-import { useShareAutoUpdate } from "@/features/collection/useShareAutoUpdate";
 import { usePrefetchPanelWidth } from "@/features/search/usePanelWidth";
 import { usePrefetchShelfFolds } from "@/features/shelves/useShelfFolds";
 import { usePrefetchFolderPane } from "@/features/decks/useFolderPane";
@@ -370,10 +369,9 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // gone, so without this the 27.5 MB and the 639 MB parse behind it would run with nothing on
   // screen saying why the disk and the network are busy.
   const combos = useComboProgress();
-  // The shares this device published, republished when their folder changes (issue #1025).
-  // Here because the shell is the one mount that lives as long as the window — a share is kept
-  // current whichever page the reader is on — and `edition.publishes` keeps it off the light app.
-  useShareAutoUpdate(edition.publishes);
+  // **No share timer here any more** (issue #1396). The shell asked `share_auto_update` every five
+  // minutes from 2026-10-14 (issue #1025); the engine's publish round now refreshes every live
+  // share of the group after a sync trip, on every host, with nothing for a page to ask.
 
   // Either this window started the sync or something else did (the run spawned at
   // startup, most often). A second `sync_run` would only be refused.

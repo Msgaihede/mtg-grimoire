@@ -401,6 +401,18 @@ fn written<T>(
 pub trait Store {
     /// Run `f` with the connection, to its end.
     fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String>;
+
+    /// Run `f` with **the connection reads go through** ([`State::lock_db_read`]), to its end —
+    /// for a long read that writes nothing, which on a host with a read connection then holds
+    /// neither the writer nor a reader's edit up for its length. The integrations publish round's
+    /// projection is the one today: some 0.7 s for 50 000 cards in release.
+    ///
+    /// **A stretch like any other in every other way**: nothing held across an `.await`, and on a
+    /// host with one connection — and for a bare connection, the default — it is that connection.
+    /// What it reads is the last committed snapshot, which is all a read wants.
+    fn reading<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        self.with(f)
+    }
 }
 
 /// A bare connection is a store whose stretches run back to back — what a test hands over, and
@@ -439,6 +451,12 @@ impl<'a> Lane<'a> {
 impl Store for Lane<'_> {
     fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
         with_write_waiting(self.state, f)
+    }
+
+    /// The read connection, where the host has one ([`State::reader`]) — not a user-facing write,
+    /// so none of [`with_write_waiting`]'s settle, and no wait for the writer.
+    fn reading<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        f(&self.state.lock_db_read())
     }
 }
 
@@ -771,6 +789,23 @@ mod tests {
             lane.with(|_| Err::<(), _>("no".to_owned())).unwrap_err(),
             "no"
         );
+    }
+
+    /// **A lane's long read leaves the writer free** where the host has a second connection —
+    /// asked from inside the read, so a read that took the writer would find it held — and is the
+    /// one connection where the host has only that.
+    #[tokio::test]
+    async fn a_lanes_read_goes_through_the_read_connection() {
+        let (two, _dir) = fixtures::on_files("state-lane-reading", "http://127.0.0.1:1");
+        let lane = two.lane().await;
+        let writer_free = lane.reading(|_| Ok(two.db.try_lock().is_ok())).unwrap();
+        assert!(writer_free, "a read on the lane took the write connection");
+        drop(lane);
+
+        let (one, _heard, _dir) = fixtures::single("state-lane-reading-one", "http://127.0.0.1:1");
+        let lane = one.lane().await;
+        let writer_free = lane.reading(|_| Ok(one.db.try_lock().is_ok())).unwrap();
+        assert!(!writer_free, "one connection: the read is on it");
     }
 
     /// A bare connection is a store too, in a test.

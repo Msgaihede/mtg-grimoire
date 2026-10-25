@@ -34,12 +34,18 @@
 //! is that an optional field is a field a future switch can turn on by accident. A card carries no
 //! `c` either — a deck row has no condition — so `condition` is dropped from `fields`, as a
 //! wishlist share drops it.
+//!
+//! **The deck and its cards are read by [`crate::integration::projection`]** (spec §7.5), with the
+//! SQL the projection reads every deck and every live row with; what stays here is the key, the
+//! piles as folders, and the short keys of the wire.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use super::snapshot::{currency, marketplace_id};
 use super::{ShareCard, ShareFields, ShareFolder, ShareSnapshot, SNAPSHOT_VERSION};
+use crate::integration::projection::{self, DeckCardScope, DeckScope};
+use crate::integration::readable::Unknown;
 
 /// What every deck key begins with — `deckShare.ts`' `DECK_SHARE_PREFIX` and the share Worker's
 /// `DECK_PREFIX`, the third spelling of one string.
@@ -66,8 +72,8 @@ pub struct ShareDeck {
     pub cover: Option<ShareCover>,
 }
 
-/// A deck's cover, as it travels.
-#[derive(Debug, Serialize)]
+/// A deck's cover, as it travels — in a deck share's `deck` and in the projection's `decks` rows.
+#[derive(Debug, Clone, Serialize)]
 pub struct ShareCover {
     /// The cover printing's `art` crop — the same picture the gallery tile draws.
     pub img: String,
@@ -95,8 +101,8 @@ pub fn parse(raw: &str) -> Option<&str> {
     raw.strip_prefix(PREFIX)
 }
 
-/// The pile's folder uid. **Its position, never its row id** — `snapshot::SubtreeFolder`'s rule:
-/// a local id names a row in a database no other device has seen. Positions are stable within one
+/// The pile's folder uid. **Its position, never its row id** — the rule every share keeps: a
+/// local id names a row in a database no other device has seen. Positions are stable within one
 /// snapshot, which is the only scope a folder uid has.
 fn pile_uid(position: usize) -> String {
     format!("pile-{position}")
@@ -112,18 +118,12 @@ pub fn snapshot(
     fields: ShareFields,
     marketplace: crate::sorting::Marketplace,
     now: i64,
-) -> Result<ShareSnapshot, String> {
-    let (deck_id, title, format): (i64, String, String) = conn
-        .query_row(
-            "SELECT d.id, d.name, coalesce(fs.display_name, d.format_key)
-               FROM decks d LEFT JOIN format_specs fs ON fs.key = d.format_key
-              WHERE d.sync_uid = ?1 AND ?1 <> ''",
-            params![uid],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| DECK_NOT_FOUND.to_owned())?;
+) -> Result<(ShareSnapshot, Unknown), String> {
+    let found = projection::decks(conn, DeckScope::Uid(uid))?
+        .into_iter()
+        .next();
+    let found = found.ok_or_else(|| DECK_NOT_FOUND.to_owned())?;
+    let deck_id = found.id;
 
     // A deck row carries no condition; see the module doc.
     let fields = ShareFields {
@@ -132,7 +132,9 @@ pub fn snapshot(
     };
 
     // Every pile of the live list that holds a card, in the reader's order — `deck_card_select`'s
-    // `ORDER BY`, so the snapshot reads as the editor's Categories view does.
+    // `ORDER BY`, so the snapshot reads as the editor's Categories view does. **This read is the
+    // share's own and not the projector's**: a pile as a folder is this format's shape, and the
+    // projection carries a pile's name, role and switch on each card instead.
     let mut stmt = conn
         .prepare(
             "SELECT cat.id, cat.name, cat.kind, cat.is_active
@@ -170,7 +172,7 @@ pub fn snapshot(
         })
         .collect();
     let deck = ShareDeck {
-        format,
+        format: found.format,
         piles: piles
             .iter()
             .map(|(row, _, kind, active)| SharePile {
@@ -179,14 +181,42 @@ pub fn snapshot(
                 active: *active,
             })
             .collect(),
-        cover: read_cover(conn, deck_id)?,
+        cover: found.cover,
     };
-    let cards = read_cards(conn, deck_id, &uids, fields, marketplace)?;
+    // A cover this device's `cards` lacks is a deck drawn without one: unknown like a card.
+    let mut unknown = Unknown::default();
+    unknown.add(found.printing);
+    let cards = projection::deck_cards(
+        conn,
+        DeckCardScope::Deck(deck_id),
+        fields.carried(),
+        marketplace,
+    )?
+    .into_iter()
+    .inspect(|card| unknown.add(card.printing))
+    .map(|card| ShareCard {
+        id: card.scryfall_id,
+        n: card.name,
+        s: card.set,
+        cn: card.cn,
+        f: card.finish,
+        q: card.quantity,
+        fo: uids.get(&card.category_id).cloned(),
+        img: card.image,
+        c: None,
+        l: card.lang,
+        // `Option<f64>`: an unquoted printing is an absent `p`, never a zero.
+        p: card.value,
+        t: card.type_line,
+        mc: card.mana_cost,
+        mv: card.mana_value,
+    })
+    .collect();
 
-    Ok(ShareSnapshot {
+    let snap = ShareSnapshot {
         v: SNAPSHOT_VERSION,
         id: id.to_owned(),
-        title,
+        title: found.name,
         owner: owner.to_owned(),
         updated_at: now,
         marketplace: marketplace_id(marketplace).to_owned(),
@@ -195,96 +225,8 @@ pub fn snapshot(
         folders,
         cards,
         deck: Some(deck),
-    })
-}
-
-/// The deck's cover, if it has one this app may draw: the cover printing's front-face `art`
-/// crop through [`crate::image_uri::for_face`] and [`crate::image_uri::is_fetchable`] — the rules
-/// every published picture is held to — and its illustrator, without whom it is not drawn.
-fn read_cover(conn: &Connection, deck_id: i64) -> Result<Option<ShareCover>, String> {
-    use crate::image_uri::{for_face, is_fetchable, FACE_COLUMN, TOP_LEVEL_COLUMN};
-    let row: Option<(Option<String>, Option<String>, Option<String>)> = conn
-        .query_row(
-            &format!(
-                "SELECT json_extract(c.{TOP_LEVEL_COLUMN}, '$.art'),
-                        json_extract(c.{FACE_COLUMN}, '$[0].art'),
-                        c.artist
-                   FROM decks d JOIN cards c ON c.id = d.cover_card_id
-                  WHERE d.id = ?1"
-            ),
-            params![deck_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    Ok(row.and_then(|(top, face, artist)| {
-        let img = for_face(top, face, 0).filter(|u| is_fetchable(u))?;
-        let artist = artist.filter(|a| !a.trim().is_empty())?;
-        Some(ShareCover { img, artist })
-    }))
-}
-
-/// The live list's rows, each filed under its pile's folder.
-fn read_cards(
-    conn: &Connection,
-    deck_id: i64,
-    uids: &std::collections::HashMap<i64, String>,
-    fields: ShareFields,
-    marketplace: crate::sorting::Marketplace,
-) -> Result<Vec<ShareCard>, String> {
-    // `dc` and `c` are not free choices: `deck_card_price_expr` writes `dc.finish`, `c.prices`
-    // and `c.finishes` into its own expression.
-    let price = crate::sorting::deck_card_price_expr(marketplace);
-    let image = crate::image_uri::front_face_selects("c").join(", ");
-    // Where the image pair begins. Written down for `snapshot::read_cards`' reason: a number left
-    // behind when a column is added above it reads a mana cost as a URL, and nothing errors.
-    const IMAGE_COL: usize = 12;
-    let sql = format!(
-        "SELECT dc.card_id, dc.name, dc.set_code, dc.collector_number, dc.lang,
-                -- The finish the row plays: the reader's own word, then the printing's when it is
-                -- made in one finish alone (`soleFinish`'s rule), then the regular copy.
-                coalesce(dc.finish,
-                         CASE WHEN json_valid(c.finishes) AND json_array_length(c.finishes) = 1
-                              THEN json_extract(c.finishes, '$[0]') END,
-                         'nonfoil'),
-                dc.quantity, dc.category_id,
-                {price},
-                c.type_line, c.mana_cost, c.cmc,
-                {image}
-           FROM deck_cards dc
-           JOIN deck_categories cat ON cat.id = dc.category_id
-           LEFT JOIN cards c ON c.id = dc.card_id
-          WHERE dc.deck_id = ?1 AND dc.variant = 'live'
-          ORDER BY cat.sort_order, cat.id, dc.name, dc.id"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![deck_id], |r| {
-            let pile: i64 = r.get(7)?;
-            Ok(ShareCard {
-                id: r.get(0)?,
-                // `deck_cards.name` — denormalised at write time, and the one name an orphaned
-                // row still has.
-                n: r.get(1)?,
-                s: r.get(2)?,
-                cn: r.get(3)?,
-                f: r.get(5)?,
-                q: r.get(6)?,
-                fo: uids.get(&pile).cloned(),
-                img: crate::image_uri::front_face_uri(|i| r.get(IMAGE_COL + i))?,
-                c: None,
-                l: if fields.lang { r.get(4)? } else { None },
-                // `Option<f64>` for `snapshot::read_cards`' reason: an unquoted printing is an
-                // absent `p`, never a zero.
-                p: if fields.value { r.get(8)? } else { None },
-                t: r.get(9)?,
-                mc: r.get::<_, Option<String>>(10)?.filter(|m| !m.is_empty()),
-                mv: r.get(11)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| e.to_string())
+    };
+    Ok((snap, unknown))
 }
 
 /// The picture a deck share's link preview shows (issue #1032), and the illustrator to credit

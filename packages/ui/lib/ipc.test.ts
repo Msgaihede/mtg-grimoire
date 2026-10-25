@@ -74,7 +74,15 @@ import searchRsCore from "../../../crates/grimoire-core/src/search.rs?raw";
 import searchRsDesktop from "../../../apps/desktop/src-tauri/src/search/mod.rs?raw";
 import setCompletionRsCore from "../../../crates/grimoire-core/src/set_completion.rs?raw";
 import setCompletionRsDesktop from "../../../apps/desktop/src-tauri/src/set_completion/mod.rs?raw";
-import shareRs from "../../../apps/desktop/src-tauri/src/share/commands.rs?raw";
+// The share cache moved into the engine with issue #1396 (`grimoire_core::share`, so the light
+// hosts refresh shares too): `ShareRow` is the core's `cache.rs` now, and the desktop's
+// `commands.rs` keeps the publish commands and `ShareFieldsArg`. Joined below as `shareRs`.
+import shareRsCore from "../../../crates/grimoire-core/src/share/cache.rs?raw";
+import shareRsDesktop from "../../../apps/desktop/src-tauri/src/share/commands.rs?raw";
+// The integrations store's two shapes (issue #1396, plan §3.3): the field policy in the projector
+// that obeys it, and the panel's status beside the switch's commands.
+import integrationProjectionRs from "../../../crates/grimoire-core/src/integration/projection.rs?raw";
+import integrationSettingsRs from "../../../crates/grimoire-core/src/integration/settings.rs?raw";
 import panelwidthRsCore from "../../../crates/grimoire-core/src/panelwidth.rs?raw";
 import panelwidthRsDesktop from "../../../apps/desktop/src-tauri/src/panelwidth/mod.rs?raw";
 import shelffoldsRsCore from "../../../crates/grimoire-core/src/shelffolds.rs?raw";
@@ -210,6 +218,7 @@ const resetRs = resetRsCore + "\n" + resetRsDesktop;
 const scannerRs = scannerRsCore + "\n" + scannerRsDesktop;
 const searchRs = searchRsCore + "\n" + searchRsDesktop;
 const setCompletionRs = setCompletionRsCore + "\n" + setCompletionRsDesktop;
+const shareRs = shareRsCore + "\n" + shareRsDesktop;
 const panelwidthRs = panelwidthRsCore + "\n" + panelwidthRsDesktop;
 const shelffoldsRs = shelffoldsRsCore + "\n" + shelffoldsRsDesktop;
 const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
@@ -5522,14 +5531,6 @@ describe("the share wrappers name the commands `share/commands.rs` registers", (
     expect(invoke).toHaveBeenCalledWith(command, { id: "kQ2p7fMx9Lb0RtVw" });
   });
 
-  it("shareAutoUpdate takes no arguments", async () => {
-    invoke.mockResolvedValue([]);
-
-    await ipc.shareAutoUpdate();
-
-    expect(invoke).toHaveBeenCalledWith("share_auto_update");
-  });
-
   it("shareList takes no arguments", async () => {
     invoke.mockResolvedValue([]);
 
@@ -5557,6 +5558,58 @@ describe("the share wrappers name the commands `share/commands.rs` registers", (
       url: "https://share.example/s/kQ2p7fMx9Lb0RtVw",
     });
     expect(out).toEqual(body);
+  });
+});
+
+/**
+ * The integrations switch's four commands (issue #1396, plan §3.3).
+ *
+ * `invoke` matches arguments by name, so a wrapper that spelt `fields` differently would have the
+ * key **dropped** rather than refused, and the store would be created carrying none of the
+ * columns the reader ticked. The five switches are sent **mixed** — `ShareFields`' lesson above:
+ * all on or all off cannot tell two booleans passed through each other's names apart.
+ */
+describe("the integrations wrappers name the commands plan §3.3 declares", () => {
+  const status = {
+    available: true,
+    entitled: true,
+    enabled: true,
+    fields: { condition: true, lang: false, value: true, tags: false, notes: true },
+    checkedAt: 1_786_266_000,
+    publishedAt: 1_786_266_000,
+    error: null,
+  };
+
+  it.each([
+    ["integrationsStatus", "integrations_status"],
+    ["integrationsDisable", "integrations_disable"],
+  ] as const)("%s takes no arguments", async (method, command) => {
+    invoke.mockResolvedValue(status);
+
+    await ipc[method]();
+
+    expect(invoke).toHaveBeenCalledWith(command);
+  });
+
+  it.each([
+    ["integrationsEnable", "integrations_enable"],
+    ["integrationsSetFields", "integrations_set_fields"],
+  ] as const)("%s sends the five switches under `fields`", async (method, command) => {
+    invoke.mockResolvedValue(status);
+
+    const out = await ipc[method]({
+      condition: true,
+      lang: false,
+      value: true,
+      tags: false,
+      notes: true,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(command, {
+      fields: { condition: true, lang: false, value: true, tags: false, notes: true },
+    });
+    // The answer is handed back whole: the panel writes it straight into its cache.
+    expect(out).toEqual(status);
   });
 });
 
@@ -6323,6 +6376,18 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // — `DeckCard`/`DeckCardRow`'s row above is the precedent.
     ["ShareRow", shareRs, "ShareRow"],
     ["ShareFields", shareRs, "ShareFieldsArg"],
+    // **The integrations switch's two** (issue #1396, plan §3.3), each pinned to the file the plan
+    // names rather than left to the walk below, which would find a struct of the name anywhere.
+    //
+    // `IntegrationFields` is `ShareFieldsArg`'s case one feature over and with more at stake: it
+    // is **sent**, and a key renamed on one side arrives `false`. The store is then created — or
+    // every table dropped and re-sent — carrying none of what the reader ticked, and the panel
+    // reads its own answer back as the reader's choice with nothing red anywhere. A renamed
+    // `enabled` on `IntegrationsStatus` is the mirror image: `undefined` is falsy, so a group whose
+    // store exists draws its switch Off, and the press that follows asks to create a store that is
+    // already there. A renamed `available` or `entitled` disables the switch for every reader.
+    ["IntegrationFields", integrationProjectionRs, "IntegrationFields"],
+    ["IntegrationsStatus", integrationSettingsRs, "IntegrationsStatus"],
     // Added 2026-09-08 by a rename that this table would have caught and nothing else could.
     // `missing` became `copies` on both sides by hand when the wishlist stopped subtracting the
     // collection, and a rename reaching only one of them is the quiet kind: every folder card

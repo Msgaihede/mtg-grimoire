@@ -42,11 +42,17 @@
 //!
 //! `notes` and `needs_review` are free text on a wish exactly as they are on a copy, and are read
 //! by nothing here.
+//!
+//! **The folders and the wishes are read by [`crate::integration::projection`]** (spec §7.5), with
+//! the SQL the projection reads the whole wishlist with; what stays here is the key and the folder
+//! it names.
 
 use rusqlite::{params, Connection, OptionalExtension};
 
 use super::snapshot::{currency, marketplace_id};
 use super::{ShareCard, ShareFields, ShareFolder, ShareSnapshot, SNAPSHOT_VERSION};
+use crate::integration::projection::{self, EntryScope, WishFolderScope};
+use crate::integration::readable::Unknown;
 
 /// What every wishlist key begins with.
 pub const PREFIX: &str = "wishlist:";
@@ -126,26 +132,6 @@ fn resolve(conn: &Connection, key: WishlistKey<'_>) -> Result<Option<(i64, Strin
     }
 }
 
-/// The folders in the share. **`UNION`, never `UNION ALL`**, `snapshot::SUBTREE`'s reason: a
-/// `parent_id` cycle converges instead of running forever.
-///
-/// The root arm keeps only folders the reader made (`managed_deck_id IS NULL`); a managed folder's
-/// Tokens child hangs under its deck's folder, so leaving that out leaves the child out with it.
-///
-/// A folder with no `sync_uid` — a managed one, which is derived and never captured — is given a
-/// random one for this snapshot alone. **Never its row id**: that names a row in a database no
-/// other device has seen, and `snapshot::SubtreeFolder`'s rule is that it never reaches the wire.
-const SUBTREE: &str = "WITH RECURSIVE subtree(id) AS (
-        SELECT id FROM wishlist_folders
-         WHERE (?1 IS NULL AND parent_id IS NULL AND managed_deck_id IS NULL) OR id = ?1
-        UNION
-        SELECT f.id FROM wishlist_folders f JOIN subtree s ON f.parent_id = s.id
-    )
-    SELECT f.id, coalesce(nullif(f.sync_uid, ''), lower(hex(randomblob(16)))), f.name, f.parent_id
-      FROM wishlist_folders f
-     WHERE f.id IN (SELECT id FROM subtree)
-     ORDER BY f.sort_order, f.id";
-
 /// Render the wishlist share `key` names as a snapshot — `super::snapshot`'s twin for the other
 /// cabinet, with the same arguments and the same purity.
 pub fn snapshot(
@@ -156,49 +142,65 @@ pub fn snapshot(
     fields: ShareFields,
     marketplace: crate::sorting::Marketplace,
     now: i64,
-) -> Result<ShareSnapshot, String> {
+) -> Result<(ShareSnapshot, Unknown), String> {
     let key = key.map_err(|()| WISHLIST_FOLDER_NOT_FOUND.to_owned())?;
     let named = resolve(conn, key)?;
     let root = named.as_ref().map(|(row, _)| *row);
     let title = named.map_or_else(|| WHOLE_WISHLIST_TITLE.to_owned(), |(_, name)| name);
 
-    // `(id, uid, name, parent id)`. The parent stays a local id until it is mapped below, against
-    // the published set, so a parent outside the share is no parent here.
-    let mut stmt = conn.prepare(SUBTREE).map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![root], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, Option<i64>>(3)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| e.to_string())?;
-    let uids: std::collections::HashMap<i64, &str> = rows
-        .iter()
-        .map(|(row, uid, _, _)| (*row, uid.as_str()))
-        .collect();
+    // The folders, each parent already narrowed to the published set — a managed folder given a
+    // uid for this snapshot alone, never its row id.
+    let rows = projection::wishlist_folders(conn, WishFolderScope::Shared(root))?;
+    let uids: std::collections::HashMap<i64, &str> =
+        rows.iter().map(|f| (f.id, f.uid.as_str())).collect();
     let folders = rows
         .iter()
-        .map(|(_, uid, name, parent)| ShareFolder {
-            uid: uid.clone(),
-            name: name.clone(),
-            parent: parent.and_then(|p| uids.get(&p)).map(|p| (*p).to_owned()),
+        .map(|f| ShareFolder {
+            uid: f.uid.clone(),
+            name: f.name.clone(),
+            parent: f.parent_uid.clone(),
         })
         .collect();
 
-    let ids: Vec<i64> = rows.iter().map(|(row, ..)| *row).collect();
+    let ids: Vec<i64> = rows.iter().map(|f| f.id).collect();
     // A wish carries no condition; see the module doc.
     let fields = ShareFields {
         condition: false,
         ..fields
     };
-    let cards = read_wishes(conn, root.is_none(), &ids, &uids, fields, marketplace)?;
+    // The root's wishes for a whole-wishlist share alone.
+    let scope = EntryScope::Folders {
+        ids: &ids,
+        root: root.is_none(),
+    };
+    let mut unknown = Unknown::default();
+    let cards = projection::wishlist_entries(conn, scope, fields.carried(), marketplace)?
+        .into_iter()
+        .inspect(|w| unknown.add(w.printing))
+        .map(|w| ShareCard {
+            // An any-printing wish travels as the printing it is drawn as.
+            id: w.drawn_id,
+            n: w.name,
+            s: w.set,
+            cn: w.cn,
+            f: w.finish,
+            q: w.quantity,
+            fo: w
+                .folder_id
+                .and_then(|f| uids.get(&f))
+                .map(|u| (*u).to_owned()),
+            img: w.image,
+            c: None,
+            l: w.lang,
+            // `Option<f64>`: an unquoted printing is an absent `p`, never a zero.
+            p: w.value,
+            t: None,
+            mc: None,
+            mv: None,
+        })
+        .collect();
 
-    Ok(ShareSnapshot {
+    let snap = ShareSnapshot {
         v: SNAPSHOT_VERSION,
         id: id.to_owned(),
         title,
@@ -210,70 +212,6 @@ pub fn snapshot(
         folders,
         cards,
         deck: None,
-    })
-}
-
-/// The wishes filed in `ids` — plus the root's, for a whole-wishlist share alone.
-fn read_wishes(
-    conn: &Connection,
-    whole: bool,
-    ids: &[i64],
-    uids: &std::collections::HashMap<i64, &str>,
-    fields: ShareFields,
-    marketplace: crate::sorting::Marketplace,
-) -> Result<Vec<ShareCard>, String> {
-    // `w` and `c` are not free choices: `row_price_expr` writes `c.prices` for the printing and
-    // the caller's finish column, and `crate::wishlist::WISH_PREFERRED_FINISH` is `w.`-qualified.
-    let finish = crate::wishlist::WISH_PREFERRED_FINISH;
-    let price = crate::sorting::row_price_expr(marketplace, finish);
-    let image = crate::image_uri::front_face_selects("c").join(", ");
-    let root_arm = if whole { "w.folder_id IS NULL OR " } else { "" };
-    let holes = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    // Where the image pair begins. Written down for `snapshot::read_cards`' reason.
-    const IMAGE_COL: usize = 9;
-    // The printing an any-printing wish is drawn as is `crate::wishlist`'s own choice — cheapest
-    // at this marketplace, then newest — so the share and the reader's list show one card.
-    let sql = format!(
-        "SELECT coalesce(w.card_id, c.id, w.oracle_id), coalesce(c.name, w.name),
-                coalesce(w.set_code, c.set_code, ''), coalesce(w.collector_number, c.collector_number, ''),
-                coalesce(w.lang, c.lang), coalesce({finish}, 'nonfoil'), w.quantity, w.folder_id,
-                {price},
-                {image}
-           FROM wishlist_entries w
-           LEFT JOIN cards c
-             ON c.id = coalesce(w.card_id,
-                    (SELECT c.id FROM cards c
-                      WHERE c.oracle_id = w.oracle_id
-                      ORDER BY ({price}) ASC NULLS LAST, c.released_at DESC, c.id ASC
-                      LIMIT 1))
-          WHERE ({root_arm}w.folder_id IN ({holes}))
-          ORDER BY coalesce(c.name, w.name) ASC, coalesce(w.set_code, c.set_code, '') ASC,
-                   CAST(coalesce(w.collector_number, c.collector_number) AS INTEGER) ASC, w.id ASC"
-    );
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
-            let folder: Option<i64> = r.get(7)?;
-            Ok(ShareCard {
-                id: r.get(0)?,
-                n: r.get(1)?,
-                s: r.get(2)?,
-                cn: r.get(3)?,
-                f: r.get(5)?,
-                q: r.get(6)?,
-                fo: folder.and_then(|f| uids.get(&f)).map(|u| (*u).to_owned()),
-                img: crate::image_uri::front_face_uri(|i| r.get(IMAGE_COL + i))?,
-                c: None,
-                l: if fields.lang { r.get(4)? } else { None },
-                // `Option<f64>` for `snapshot::read_cards`' reason: an unquoted printing is an
-                // absent `p`, never a zero.
-                p: if fields.value { r.get(8)? } else { None },
-                t: None,
-                mc: None,
-                mv: None,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|e| e.to_string())
+    };
+    Ok((snap, unknown))
 }

@@ -469,7 +469,9 @@ fn a_whole_wishlist_share_carries_the_root_and_the_readers_folders() {
 }
 
 /// A deck's managed wishlist, by the deck's uid: its folder and its Tokens child, and the child
-/// alone under its own key. The folders have no uid of their own and still travel.
+/// alone under its own key. The folders have no uid of their own and still travel — **under uids
+/// derived from the deck's** (issue #1396's review): until then each read minted them a random
+/// one, so such a share digested differently on every read and was republished on every round.
 #[test]
 fn a_managed_wishlist_is_shared_by_its_decks_uid() {
     let conn = test_db();
@@ -488,11 +490,18 @@ fn a_managed_wishlist_is_shared_by_its_decks_uid() {
     let child = s.folders.iter().find(|f| f.name == "Tokens").unwrap();
     assert_eq!(root.parent, None);
     assert_eq!(child.parent.as_deref(), Some(root.uid.as_str()));
+    // The deck's uid behind a prefix no real uid (32 hex digits) can carry — never a row id,
+    // and the same on every read and every device that holds the deck.
+    assert_eq!(root.uid, "managed:deckuid-Krenko");
+    assert_eq!(child.uid, "managed-tokens:deckuid-Krenko");
+    let again = snap(&conn, Some("wishlist:deck:deckuid-Krenko"));
     assert_eq!(
-        root.uid.len(),
-        32,
-        "a minted uid, never a row id: {}",
-        root.uid
+        again
+            .folders
+            .iter()
+            .map(|f| f.uid.as_str())
+            .collect::<Vec<_>>(),
+        s.folders.iter().map(|f| f.uid.as_str()).collect::<Vec<_>>(),
     );
 
     let s = snap(&conn, Some("wishlist:deck-tokens:deckuid-Krenko"));

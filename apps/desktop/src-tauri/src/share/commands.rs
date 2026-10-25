@@ -1,50 +1,22 @@
-//! The six commands, and the row they answer.
+//! The five commands, and the row they answer.
 //!
 //! ⚠️ **`generate_handler!` names a command after the last path segment**, so
 //! `share::commands::share_create` is invoked as `"share_create"` — the rule the comment beside
 //! `collection_alloc::commands::collection_to_deck` in `desktop.rs` states, and the reason these
 //! functions carry the `share_` prefix inside a module already called `share`.
-
-use serde::Serialize;
+//!
+//! **No timer command any more** (issue #1396): the window's shell asked `share_auto_update` every
+//! five minutes until the core's publish round (`integration::publish`, spawned by `desktop.rs`)
+//! took the job over — after every sync trip, on every host, for any live share of the group.
 
 use crate::sync::{self, AppState};
 use grimoire_core::state::Lane;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-/// One published share, as the page draws it.
-///
-/// **`owner_name` is on this row because spec §4.3 needs it there**: the relay holds the name,
-/// and the second device in a group inherits it from `GET /g/{group}/shares` rather than asking
-/// the reader to type it again. A row without it would make `share_create`'s `ownerName`
-/// argument unanswerable on any device but the first.
-///
-/// **`url` is on it for the same kind of reason and one degree harder**: a share list with no
-/// links is not a share list, and this one has to be drawable with no network — so the link is a
-/// column of `collection_shares` rather than something rebuilt from
-/// [`super::publish::SHARE_BASE`] — the Worker builds it from its own binding, and one string
-/// built on both sides is two chances to disagree.
-///
-/// `published` is **this device's** stamp and the relay knows nothing about it: `None` means
-/// this device has never uploaded, which is what a second device in the group reads before it
-/// offers *Update* rather than *Share*.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ShareRow {
-    pub id: String,
-    /// `collection_folders.sync_uid`, and `None` for a whole-collection share.
-    pub folder_uid: Option<String>,
-    pub title: String,
-    pub owner_name: String,
-    pub url: String,
-    /// The wire form of [`super::ShareFields`] — a subset of `condition`, `lang` and `value`.
-    pub fields: Vec<String>,
-    /// `live`, `lapsed` or `revoked`. The middle one is the relay's daily pass talking, and is
-    /// the one a reader must be told about before their friends tell them.
-    pub state: String,
-    pub published: Option<i64>,
-    pub updated_at: i64,
-}
+/// One published share, as the page draws it — the core's since PR 2 of issue #1396, because
+/// the core's publish answers it on every host. Re-exported at the path the page's mirror and
+/// this file's commands have always named.
+pub use grimoire_core::share::ShareRow;
 
 /// The three switches the publish dialog offers, as they arrive over IPC.
 ///
@@ -159,65 +131,6 @@ pub async fn share_refresh(
     let state = state.inner().clone();
     on_the_lane(state, move |lane, runtime| {
         runtime.block_on(super::publish::refresh(lane, &id))
-    })
-    .await
-}
-
-/// Whether a [`share_auto_update`] pass is already running in this process.
-///
-/// Every window's shell asks on its own timer, and two passes over the same changed folder would
-/// upload it twice. The second caller is answered "nothing updated" at once rather than queued:
-/// the pass already running will see the same changes.
-static AUTO_UPDATING: AtomicBool = AtomicBool::new(false);
-
-/// Clears [`AUTO_UPDATING`] however the pass ends — a `?`, a panic in the worker, a cancel.
-struct AutoUpdating;
-
-impl Drop for AutoUpdating {
-    fn drop(&mut self) {
-        AUTO_UPDATING.store(false, Ordering::Release);
-    }
-}
-
-/// Republish every share this device published whose folder has changed since its last upload
-/// (issue #1025), and answer the rows that were updated — `[]` for the ordinary pass where
-/// nothing moved.
-///
-/// **Two halves on two connections, and the split is the point.** Which shares are due is
-/// [`super::publish::changed`]: a read and a hash per share, on the **read** connection, with no
-/// token and no request — so the pass the shell makes on a timer holds neither the writer nor the
-/// sync lane while it decides that nothing needs doing, which is nearly every time. Only when a
-/// folder has moved does it take [`on_the_lane`] and run the same [`super::publish::refresh`]
-/// the *Update now* press runs, share by share — **holding the writer only for each one's read
-/// and commit** (issue #1145), so the reader editing the folder that is going up is not told
-/// the app is busy.
-///
-/// **One share's failure does not stop the others**, and it is not this command's error: the
-/// publish has already written its `error_log` row, the previous snapshot is still serving, and
-/// the digest it would have stored is still the old one — so the next pass tries it again.
-#[tauri::command]
-pub async fn share_auto_update(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<Vec<ShareRow>, String> {
-    if AUTO_UPDATING.swap(true, Ordering::AcqRel) {
-        return Ok(Vec::new());
-    }
-    let _running = AutoUpdating;
-    let state = state.inner().clone();
-    let reader = state.clone();
-    let due = tauri::async_runtime::spawn_blocking(move || {
-        super::publish::changed(&reader.lock_db_read())
-    })
-    .await
-    .map_err(unfinished)??;
-    if due.is_empty() {
-        return Ok(Vec::new());
-    }
-    on_the_lane(state, move |lane, runtime| {
-        Ok(due
-            .iter()
-            .filter_map(|id| runtime.block_on(super::publish::refresh(lane, id)).ok())
-            .collect())
     })
     .await
 }

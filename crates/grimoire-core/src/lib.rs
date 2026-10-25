@@ -131,6 +131,10 @@ pub mod index;
 /// **A Scryfall bulk file, streamed into `cards`** a batch at a time, the write connection
 /// given back between batches.
 pub mod ingest;
+/// **What a server-side reader of the collection is given** (issue #1396): `Projection v1`, six
+/// table documents under the group's field policy, each with a digest — and the readers the share
+/// snapshot is a filtered output of.
+pub mod integration;
 /// **Opening the databases for a host that is not the desktop** — the steps `desktop::init_state`
 /// takes, less the two only the desktop has (the pre-27 conversion and the mirror's name): over a
 /// folder (`open`, Android), or on one connection with no folder (`open_single`, a browser).
@@ -186,6 +190,10 @@ pub mod searchopen;
 /// shape with [`deckpane`]'s band: one `app_meta` row, deck id → width.
 pub mod searchwidth;
 pub mod set_completion;
+/// **A collection folder, a wishlist or a deck, published read-only**: the snapshot, the
+/// `collection_shares` cache and the publish requests to the share Worker, on every host. The
+/// viewer that opens a stranger's link is the desktop's.
+pub mod share;
 pub mod shelffolds;
 pub mod slug;
 /// **The sort vocabulary and every price expression.**

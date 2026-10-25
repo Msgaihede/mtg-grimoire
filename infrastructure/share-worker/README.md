@@ -87,6 +87,16 @@ that wins after the initial check can consume the code before the claim is refus
 `117827d2`** (PR #827; `docs/reference/hosted-relay-deploy.md`, step 6). Nothing without a
 credential shows the gate, and nobody has presented a stale claim to the hosted relay.
 
+**The gated four answer the web app's origin** (issue #1396's PR 2, 2026-10-25): the publish round
+that refreshes a group's shares runs in the engine on every host, the web build's in a browser at
+`https://mtg-grimoire.app`. `src/cors.ts` is the scan inbox's three functions: a pre-flight from an
+origin on `APP_ORIGINS` (`wrangler.jsonc`'s vars) is a 204 allowing `authorization` and
+`content-type`, answered before the gate, and every `/g/…` answer to that origin — the refusals
+included — carries its `access-control-allow-origin`. **A request with no `Origin`, which is every
+desktop and Android build, is answered byte for byte as before**, and the public `/s/…` pair is
+unchanged: a page and a file a browser opens by navigating ask nothing of CORS. The list is not an
+access control — the bearer is — and `src/cors.test.ts` holds both halves.
+
 **The two public routes are the whole of the entitlement asymmetry.** Publishing needs a token,
 which needs a membership; viewing needs the link and nothing else, which is what issue #360 asked
 for. The link _is_ the capability — there is no viewer account and no per-viewer access control.
