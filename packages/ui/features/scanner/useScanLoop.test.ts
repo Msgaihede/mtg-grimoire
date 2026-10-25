@@ -1018,6 +1018,54 @@ describe("the run useScanLoop keeps", () => {
   });
 
   /**
+   * **A shot's run outlives the shot** (`holdRun`): point and shoot's shot ends on the card it
+   * read, and that run is what *Send scan…* offers between shots. The next start lets it go, and
+   * so does `clearReads`, which every shot begins with.
+   */
+  it("keeps the run of a stream started under holdRun when it stops, until the next start", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    const videoRef = { current: readyVideo() };
+    const grabFrame = numbered();
+    const { result, rerender } = renderHook(
+      ({ live }: { live: boolean }) => useScanLoop({ videoRef, live, grabFrame, holdRun: true }),
+      { initialProps: { live: true } },
+    );
+    await tick(35);
+    rerender({ live: false });
+    const held = numbers(result.current.recent());
+    expect(held.length).toBeGreaterThan(1);
+    // Stopped, and nothing joins it: an answer still on its way belongs to no run.
+    await tick(60);
+    expect(numbers(result.current.recent())).toEqual(held);
+
+    rerender({ live: true });
+    await tick(35);
+    const after = numbers(result.current.recent());
+    expect(Math.min(...after)).toBeGreaterThan(Math.max(...held));
+
+    rerender({ live: false });
+    expect(result.current.recent().length).toBeGreaterThan(0);
+    act(() => result.current.clearReads());
+    expect(result.current.recent()).toEqual([]);
+  });
+
+  /** What decides is how the stream began: one started without `holdRun` lets its run go. */
+  it("lets a stream's run go at its stop when holdRun came on only after it started", async () => {
+    scannerFrame.mockImplementation(() => answersIn(10));
+    const videoRef = { current: readyVideo() };
+    const grabFrame = numbered();
+    const { result, rerender } = renderHook(
+      ({ live, holdRun }: { live: boolean; holdRun: boolean }) =>
+        useScanLoop({ videoRef, live, grabFrame, holdRun }),
+      { initialProps: { live: true, holdRun: false } },
+    );
+    await tick(35);
+    expect(result.current.recent().length).toBeGreaterThan(1);
+    rerender({ live: false, holdRun: true });
+    expect(result.current.recent()).toEqual([]);
+  });
+
+  /**
    * ⚠️ **The web host empties the array it is sent.** A frame goes to its scanner's Worker by
    * transfer, so the `Uint8Array` the pump made is detached — zero-length — from the moment the
    * call is made. A run that kept those arrays would be twenty empty frames in a browser and

@@ -1,8 +1,8 @@
 import { useCallback, useRef, useState } from "react";
 import type { ScanFilters, ScannerVerdict } from "../types";
 import type { ScanLoop } from "../useScanLoop";
-import { RUN_MIN_FRAMES, runAtPress, runClock, scanRun, type ScanRun } from "./run";
-import { SCAN_TOO_SHORT } from "./submitText";
+import { RUN_MIN_FRAMES, runAtPress, runClock, scanRun, type RunFrame, type ScanRun } from "./run";
+import { SCAN_TOO_SHORT, SHOT_TOO_SHORT } from "./submitText";
 
 /** What a Scanner page gets back: the press, the dialog's one prop, and its two ways out. */
 export interface ScanSubmit {
@@ -55,6 +55,13 @@ export interface ScanSubmit {
  * it — one is refused while a dialog is open, so the pictures the reader is looking through are
  * the ones Send sends.
  *
+ * **Between two shots of point and shoot the run is the last shot's** (`held`): the pump has
+ * stopped on it and kept it (`useScanLoop`'s `holdRun`), so the reader can send the card they
+ * have just seen land. Nothing newer was shown, so it is aged from its own last frame rather than
+ * from the press — a reader who looks at the card for a while still has the scan. **And it is
+ * sent once**: a dialog that has been open on it spends it, as a dialog closing over a running
+ * scanner starts a fresh run, and the next shot is the next scan.
+ *
  * Takes the loop's `recent` and `verdict` rather than the whole loop, with the page's own word
  * for whether the press is offered at all (`ready`): the press is drawn only then, and a sentence
  * about a press is dropped when the press goes away — *press again* over a stopped scanner, with
@@ -65,6 +72,7 @@ export function useScanSubmit({
   verdict,
   filters,
   ready,
+  held = false,
 }: {
   /** `useScanLoop`'s run: the last frames the pump sent and had answered, oldest first. */
   recent: ScanLoop["recent"];
@@ -80,26 +88,44 @@ export function useScanSubmit({
    */
   filters: ScanFilters;
   /**
-   * The press is offered — the page's `sendable`: a camera is live and recognition is running,
-   * the page is not mounted over a trade, and the device may send scans (`useMaySendScans`).
+   * The press is offered — the page's `sendable`: a camera is live and recognition is running
+   * (or, under point and shoot, between two shots), the page is not mounted over a trade, and the
+   * device may send scans (`useMaySendScans`).
    * `false` refuses a press, and drops the sentence of one that came too soon; it does not close
    * a dialog that is already open.
    */
   ready: boolean;
+  /**
+   * The pump is stopped on the run it holds — point and shoot between two shots. Its age is then
+   * counted from its own last frame, and once a dialog has been open on it the press opens
+   * nothing more until a shot brings a new one. `false` (the default) is a running pump, whose
+   * run is the last few seconds before the press.
+   */
+  held?: boolean;
 }): ScanSubmit {
   const [run, setRun] = useState<ScanRun | null>(null);
   const [error, setError] = useState<string | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   /** A dialog is open. A ref beside the state: two presses can land inside one render. */
   const opened = useRef(false);
+  /**
+   * The newest frame of the run the last dialog opened on. A held run that still has it is that
+   * run again, and is not offered twice. Ring entries are never changed once made, so the entry
+   * itself is the run's name.
+   */
+  const spent = useRef<RunFrame | null>(null);
 
   // **The sentence goes when the press does.** React's "adjusting state when a prop changes",
   // as `useScanLoop` empties its latches: applied in this render, where an effect writing state
-  // would cost a second one and is what the linter refuses anyway.
+  // would cost a second one and is what the linter refuses anyway. **And when the run it was
+  // about does** — a shot starting or ending is another run, and a sentence about the last one
+  // would be about a press the reader made before it.
   const [wasReady, setWasReady] = useState(ready);
-  if (wasReady !== ready) {
+  const [wasHeld, setWasHeld] = useState(held);
+  if (wasReady !== ready || wasHeld !== held) {
     setWasReady(ready);
-    if (!ready) setError(null);
+    setWasHeld(held);
+    if (!ready || wasHeld !== held) setError(null);
   }
 
   const open = (from: HTMLElement) => {
@@ -108,14 +134,18 @@ export function useScanSubmit({
     // The clock is read after the ring: every frame in it was grabbed before this line. The
     // run's own clock (`runClock`) — the one the pump stamped those frames by.
     const pressedAt = runClock.now();
-    // Only what is still the last few seconds, and then whether that is enough of a scan.
-    const frames = runAtPress(ring, pressedAt);
+    const newest = ring.length > 0 ? ring[ring.length - 1] : null;
+    const again = held && spent.current !== null && ring.includes(spent.current);
+    // Only what is still the last few seconds — of a running pump, before the press; of a held
+    // run, before its own end — and then whether that is enough of a scan.
+    const frames = again ? [] : runAtPress(ring, held && newest !== null ? newest.at : pressedAt);
     if (frames.length < RUN_MIN_FRAMES) {
-      setError(SCAN_TOO_SHORT);
+      setError(held ? SHOT_TOO_SHORT : SCAN_TOO_SHORT);
       return;
     }
     opened.current = true;
     opener.current = from;
+    spent.current = frames[frames.length - 1];
     setError(null);
     setRun(scanRun(frames, pressedAt, verdict, filters));
   };

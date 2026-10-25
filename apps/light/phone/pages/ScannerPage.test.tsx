@@ -73,6 +73,7 @@ import type {
   TierConfettiProps,
 } from "@grimoire/ui/features/scanner/reader/TierConfetti";
 import { runClock } from "@grimoire/ui/features/scanner/submit/run";
+import { SHOT_TOO_SHORT } from "@grimoire/ui/features/scanner/submit/submitText";
 import {
   DB_BUSY,
   SCANNER_NOT_IN_A_BROWSER_YET,
@@ -1785,6 +1786,53 @@ describe("sending a scan from the Scanner page", () => {
     await userEvent.click(screen.getByRole("button", { name: START }));
     expect(await screen.findByRole("button", { name: "Send scan…" }, SETTLE)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reset evidence" })).toBeInTheDocument();
+  });
+
+  /**
+   * **Under point and shoot the scan on offer is the hold just let go**: the loop keeps its run,
+   * and the press stands between two holds — never under one, where the finger is on the
+   * picture. Before any hold there is none to send, and a dialog that has been open on a hold's
+   * run spends it: the next hold is the next scan.
+   */
+  it("offers Send scan… between two holds of point and shoot, on the hold just let go", async () => {
+    camera();
+    restoreVideo = shimVideo();
+    const cards = pile(0, "looking");
+    const { view } = mount({
+      fake: SUPPORTER,
+      prefs: { pointAndShoot: true },
+      over: () => ({ scanner_frame: cards.frame }),
+    });
+    const box = () =>
+      within(view.container.querySelector<HTMLElement>("[data-camera-box]") as HTMLElement);
+    const hold = await screen.findByRole("button", { name: "Hold to scan" }, SETTLE);
+
+    // Before any hold: the press, and nothing yet for it to send.
+    await userEvent.click(await screen.findByRole("button", { name: "Send scan…" }, SETTLE));
+    expect(box().getByRole("alert")).toHaveTextContent(SHOT_TOO_SHORT);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // Held: no corner presses under the finger, and the sentence about no scan is gone.
+    fireEvent.pointerDown(hold, { pointerId: 1 });
+    expect(screen.queryByRole("button", { name: "Send scan…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).toBeNull();
+    expect(box().getByRole("alert")).toBeEmptyDOMElement();
+    await waitFor(() => expect(cards.sent.length).toBeGreaterThan(10), SETTLE);
+    fireEvent.pointerUp(hold, { pointerId: 1 });
+
+    // Let go: the hold's run is on offer, and it is the frames the hold sent.
+    const send = await screen.findByRole("button", { name: "Send scan…" }, SETTLE);
+    expect(send.closest("[data-camera-box]")).toBe(cameraBox());
+    await userEvent.click(send);
+    const dialog = await screen.findByRole("dialog", { name: "Send this scan" }, SETTLE);
+    expect(within(dialog).getByRole("slider", { name: "Picture" })).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), SETTLE);
+
+    // Opened once, it is spent: the press says to scan again.
+    await userEvent.click(screen.getByRole("button", { name: "Send scan…" }));
+    expect(box().getByRole("alert")).toHaveTextContent(SHOT_TOO_SHORT);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   /**

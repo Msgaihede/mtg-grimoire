@@ -153,7 +153,7 @@ import { SHOT_READY_CLICK, STOPPED_NOTE, STOPPED_TITLE } from "./reader/readerTe
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
 import { runClock } from "./submit/run";
-import { SCAN_TOO_SHORT } from "./submit/submitText";
+import { SCAN_TOO_SHORT, SHOT_TOO_SHORT } from "./submit/submitText";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import type { TrayDestination } from "./useTrayDestination";
 
@@ -2123,6 +2123,69 @@ describe("ScannerPage sending a scan", () => {
 
       await user.click(screen.getByRole("button", { name: "Start" }));
       expect(await screen.findByRole("button", { name: "Send scan…" })).toBeInTheDocument();
+      expect(ipc.scannerSubmit).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **Under point and shoot the scan on offer between shots is the last shot's.** A shot ends the
+   * moment its card lands — the moment a reader sees whether the scanner got it right — so the
+   * loop keeps its run and the press stays on it until the next shot. Before any shot there is
+   * none to send, and a dialog that has been open on a shot's run spends it.
+   */
+  it("offers the last shot's run between shots of point and shoot, once", async () => {
+    const restore = shimVideo();
+    opens();
+    // Nonfoil by hand, so the second shot's copy can bump the first: an Unknown row never does.
+    storedPrefs({ pointAndShoot: true, finish: "nonfoil" });
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    // Each shot: seven frames still weighing, then the card decided — the shot ends on it.
+    let n = 0;
+    vi.mocked(ipc.scannerFrame).mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve(++n % 8 === 0 ? VERDICTS.decided : VERDICTS.voting), 10),
+        ),
+    );
+    const user = userEvent.setup();
+    try {
+      const { container } = mount();
+      await screen.findByRole("button", { name: "Scan card" });
+      // Before any shot: the press, and nothing yet for it to send.
+      await user.click(await screen.findByRole("button", { name: "Send scan…" }));
+      expect(hudNote(container)).toHaveTextContent(SHOT_TOO_SHORT);
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "Scan card" }));
+      // The shot is running: the sentence about no scan has gone.
+      expect(await screen.findByRole("button", { name: "Cancel scan" })).toBeInTheDocument();
+      expect(hudNote(container)).toBeEmptyDOMElement();
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+      // Over, on its card — and the press is still there, on the shot just taken.
+      expect(await screen.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Send this scan" });
+      expect(within(dialog).getByRole("slider", { name: "Picture" })).toHaveAttribute("max", "8");
+      await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+      // Opened once, it is spent: the press says to scan again, and opens nothing.
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      expect(hudNote(container)).toHaveTextContent(SHOT_TOO_SHORT);
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      // The next shot is the next scan.
+      await user.click(screen.getByRole("button", { name: "Scan card" }));
+      await waitFor(() =>
+        expect(
+          within(tray()).getByRole("button", { name: "Add 2 to collection" }),
+        ).toBeInTheDocument(),
+      );
+      expect(await screen.findByRole("button", { name: "Scan card" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Send scan…" }));
+      expect(await screen.findByRole("dialog", { name: "Send this scan" })).toBeInTheDocument();
       expect(ipc.scannerSubmit).not.toHaveBeenCalled();
     } finally {
       restore();
