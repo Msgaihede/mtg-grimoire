@@ -6,6 +6,7 @@ import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
+import { IntegrationsPanel } from "@/features/settings/IntegrationsPanel";
 import { LabelsPanel } from "@/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
 import { PrivacyLink } from "@/features/settings/PrivacyLink";
@@ -84,7 +85,7 @@ function asPanelId(word: string, panels: readonly PanelId[]): PanelId | null {
 /**
  * Settings.
  *
- * **A rail of seven entries and a pane, since 2026-09-03.** This page was one scroll of twelve
+ * **A rail of entries and a pane, since 2026-09-03.** This page was one scroll of twelve
  * panels until then, and the scroll's own rule — *ordered by what a press costs* — is still the
  * rule, but it survives **inside a group** rather than down the length of the page. An ordering
  * only helps a reader who already knows what they are scrolling towards; a rail is what tells
@@ -393,6 +394,14 @@ export function SettingsPage({ update }: { update: Update }) {
               that is the rail's job now and no longer an ordering constraint here. It reaches the
               backend itself — `BackupPanel`'s rule, and `SyncPanel`'s reason directly above it. */}
           {shown("review") && <ReviewPanel />}
+
+          {/* **The only panel under `Integrations`** (issue #1396), the rail entry directly below
+              `Sync`: a copy of the collection for services that answer while the reader's devices
+              are off, which is neither one of their devices nor anything about the folder on
+              disk. It reaches the backend itself — `BackupPanel`'s rule — so nothing here is
+              threaded down. The light edition leaves it out (`LIGHT_SETTINGS`): the switch is the
+              desktop's, as the Share control is. */}
+          {shown("integrations") && <IntegrationsPanel />}
 
           {/* The page's one *undo*, and the only panel in `Tags`. The argument that used to sit here
               was about distance — the rail's live line tells a reader who has just hidden a tag that

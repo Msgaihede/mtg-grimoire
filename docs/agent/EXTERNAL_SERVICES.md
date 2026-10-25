@@ -42,6 +42,7 @@ construction).
 - [The share Worker (read-only shared collection)](#the-share-worker-read-only-shared-collection)
 - [The app Worker (the light app's web host)](#the-app-worker-the-light-apps-web-host)
 - [The scan Worker (the scanner's inbox)](#the-scan-worker-the-scanners-inbox)
+- [The integrations Worker (the store integrations read)](#the-integrations-worker-the-store-integrations-read)
 
 ## Scryfall and the price feeds
 
@@ -347,3 +348,44 @@ deploys by hand — a Send is answered *the server answered 404* on a desktop or
 *could not be reached* in a browser. Ask the host before you believe this or its opposite.
 [`infrastructure/scan-worker/README.md`](../../infrastructure/scan-worker/README.md) is the
 runbook, with the probes a deployed one answers, and how the inbox is read and emptied.
+
+## The integrations Worker (the store integrations read)
+
+**A _fifth_ Worker holds a server-readable copy of the parts of a collection the reader chose, so
+integrations can answer while every device is off** (issue #1396, PR 2, 2026-10-25; the design
+is [2026-10-24-integration-data-access-design.md](../superpowers/specs/2026-10-24-integration-data-access-design.md),
+option B). The reader's own devices publish it at the end of a successful sync trip, per table,
+when its digest changed; it is one Durable Object per group (`GroupStore`, SQLite storage) in
+`infrastructure/integrations-worker/`. **It never holds a group key, a relay token or a device
+identity**, so it cannot write into sync, forge an op, evict a device or publish a share; its
+gate is the share Worker's (a relay token verified with `RELAY_HMAC_KEY`, so the key is on four
+Workers now, set by the owner with one value), and its own secret is `INTEGRATIONS_KEK`, which
+wraps each group's data key. Payloads are sealed; only the columns a lookup needs are clear.
+**Off unless the reader switches it on** in Settings → Integrations (desktop), and the switch is
+the group's: it creates or deletes the group's object, and every device learns which from the
+store. No integration reads it yet — intents are PR 3, Discord PR 4.
+
+**`integration::store::INTEGRATIONS_BASE` is the placeholder `<set on first deploy>`**, the share
+Worker's own history: the owner picks the Custom Domain (provisional
+`integrations.mtg-grimoire.app`, in its `wrangler.jsonc`), and until a release carries the real
+address every build refuses each store request before making it and the panel says the service is
+not available. When it becomes an address, it joins the hosting policy's `connect-src` and the
+privacy page's host table — both held by tests — and Google Play's Data safety form is the owner's
+to revisit before the Android release that can publish to it.
+
+**A release does not deploy it until the owner says so**: `release.yml`'s `integrations-deploy`
+is gated on the repository variable `INTEGRATIONS_DEPLOY == 'true'` and ends green saying it
+skipped. `CLOUDFLARE_INFRA_API_TOKEN` is scoped per Worker and must be extended to
+`mtg-grimoire-integrations` before the variable is set. The Worker needs the **Workers Paid plan**
+for any real collection: ingesting a large table is seconds of CPU, past Workers Free's 10 ms a
+request ([integrations-store.md](../reference/integrations-store.md) §5–§6 has the figures).
+[`infrastructure/integrations-worker/README.md`](../../infrastructure/integrations-worker/README.md)
+is the runbook.
+
+**The share Worker changed with it, in one way**: shares are republished by that same publish
+round, by any syncing device — Android and the web app included — so the share Worker's `/g/…`
+routes now answer the web app's origin (`APP_ORIGINS`, its `src/cors.ts`) and the hosting
+policy's `connect-src` names `share.mtg-grimoire.app`. Same routes, same R2 blobs, same
+`ShareSnapshot v1`. Android republishing a share a desktop created is a collection leaving a
+phone for the first time; Google Play's Data safety form is the owner's to check before the
+Android release that carries it.

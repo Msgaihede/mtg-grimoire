@@ -47,7 +47,10 @@
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `crates/grimoire-core/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
  * `DeckFolderPane`                                — `crates/grimoire-core/src/deckpane.rs`
- * `ShareRow`/`ShareFields`                        — `apps/desktop/src-tauri/src/share/commands.rs`
+ * `ShareRow`                                      — `crates/grimoire-core/src/share/cache.rs`
+ * `ShareFields`                                   — `apps/desktop/src-tauri/src/share/commands.rs`
+ * `IntegrationFields`                             — `crates/grimoire-core/src/integration/projection.rs`
+ * `IntegrationsStatus`                            — `crates/grimoire-core/src/integration/settings.rs`
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
  * `ScannerCaptured`/`ScannerPrefs`/
  * `ScannerTrayRow`/`ScannerTrayChoice`             — `crates/grimoire-core/src/scanner.rs`
@@ -178,9 +181,9 @@
  *
  * **This file is the barrel since 2026-10-11 (issue #557); the mirror itself is in `./ipc/`, one
  * file per domain** — cards, collection, wishlist, entry tags, decks, transfer, home, tags,
- * combos, scanner, share, trade, scan history, sync, prefs and the app, with the transport in
- * `./ipc/invoke.ts`. It was one 11,000-line file, three quarters of it comment, and every feature
- * branch edited it.
+ * combos, scanner, share, integrations, trade, scan history, sync, prefs and the app, with the
+ * transport in `./ipc/invoke.ts`. It was one 11,000-line file, three quarters of it comment, and
+ * every feature branch edited it.
  *
  * **Everything outside `packages/ui/lib/ipc*` imports `@/lib/ipc`, never a domain file** — that
  * import is the seam every suite mocks (`vi.mock("@/lib/ipc", …)`), and a component reaching
@@ -205,6 +208,7 @@ export type * from "./ipc/tags";
 export type * from "./ipc/combos";
 export type * from "./ipc/scanner";
 export type * from "./ipc/share";
+export type * from "./ipc/integrations";
 export type * from "./ipc/trade";
 export type * from "./ipc/scanHistory";
 export type * from "./ipc/sync";
@@ -225,6 +229,7 @@ import { tagCommands } from "./ipc/tags";
 import { comboCommands } from "./ipc/combos";
 import { scannerCommands } from "./ipc/scanner";
 import { shareCommands } from "./ipc/share";
+import { integrationCommands } from "./ipc/integrations";
 import { tradeCommands } from "./ipc/trade";
 import { scanHistoryCommands } from "./ipc/scanHistory";
 import { syncCommands } from "./ipc/sync";
@@ -249,6 +254,7 @@ export const ipc = {
   ...comboCommands,
   ...scannerCommands,
   ...shareCommands,
+  ...integrationCommands,
   ...tradeCommands,
   ...scanHistoryCommands,
   ...syncCommands,

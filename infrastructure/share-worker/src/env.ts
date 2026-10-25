@@ -60,6 +60,14 @@ export interface Env {
    * `infrastructure/relay/wrangler.jsonc` already documents for `RELAY_BASE` and the OAuth redirect URI.
    */
   SHARE_BASE: string;
+
+  /**
+   * The pages a browser may publish from — `cors.ts`, for the gated `/g/…` routes alone —
+   * comma-separated and compared exactly: the web app's origin. **Optional, and not an access
+   * control**: unset, the web app cannot refresh a share and every native build, which sends no
+   * `Origin`, is answered exactly as before.
+   */
+  APP_ORIGINS?: string;
 }
 
 /**

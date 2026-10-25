@@ -13637,7 +13637,10 @@ describe("the busy fault", () => {
     // 149 → 151 on 2026-10-25 with the entry tags' two writes (issue #1398),
     // `collection_set_tags` and `wishlist_set_tags`, each reaching `refuseIfBusy` first; the
     // read, `entry_tags_in_use`, sits in `readHandlers`. Count again after a merge.
-    expect(names).toHaveLength(151);
+    // 151 → 150 the same day with `share_auto_update` retired (issue #1396): the engine's
+    // publish round after each sync trip refreshes shares now, and the page has no timer to ask.
+    // The integrations switch's three writes are `integrationHandlers`', not this table's.
+    expect(names).toHaveLength(150);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

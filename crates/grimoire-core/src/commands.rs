@@ -90,6 +90,8 @@ use crate::filters::CardFilters;
 #[allow(unused_imports)]
 use crate::folder_rules::FolderRule;
 #[allow(unused_imports)]
+use crate::integration::projection::IntegrationFields;
+#[allow(unused_imports)]
 use crate::sorting::Marketplace;
 #[allow(unused_imports)]
 use crate::wishlist::WishlistQuery;
@@ -844,6 +846,25 @@ commands! {
     // index::facets
     blocking facet_cards in index::facets(req: crate::search::SearchRequest) = |state| {
         run_facets(&state, &req)
+    };
+
+    // integration::settings — the integrations switch (issue #1396, plan §3.3). The store is asked
+    // with a relay token, so a press takes the lane as `sync_now`'s does; **the status answers the
+    // cache when the lane is busy** — a publish round or a trip in flight — rather than "busy".
+    task integrations_status in integration::settings() = |state| async move {
+        status_or_cached(&state).await
+    };
+    task integrations_enable in integration::settings(fields: IntegrationFields) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        enable(&lane, fields).await
+    };
+    task integrations_set_fields in integration::settings(fields: IntegrationFields) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        set_fields(&lane, fields).await
+    };
+    task integrations_disable in integration::settings() = |state| async move {
+        let lane = state.lane_for_press().await?;
+        disable(&lane).await
     };
 
     // listview
@@ -2483,6 +2504,14 @@ mod tests {
             "sync_pairing_accept" => json!({ "code": "not-an-invite" }),
             "sync_device_revoke" => json!({ "deviceId": "nobody" }),
             "sync_now" | "sync_group_leave" | "sync_live_state" => Value::Null,
+            // The integrations switch: this table's device has an address for the store (the
+            // override below) and no membership, so each stops at the one read that asks.
+            "integrations_status" | "integrations_disable" => Value::Null,
+            "integrations_enable" | "integrations_set_fields" => json!({
+                "fields": {
+                    "condition": false, "lang": false, "value": false, "tags": false, "notes": false,
+                },
+            }),
             "sync_pairing_begin"
             | "sync_pairing_confirm"
             | "sync_pairing_poll"
@@ -2600,6 +2629,14 @@ mod tests {
                 &nowhere.base_url(),
             )
             .expect("the scan inbox's override");
+            // And the integrations store's: a placeholder base would stop its four commands at
+            // the first line, where this one lets them reach the read that asks for a membership.
+            crate::sync_engine::client::set_state(
+                &conn,
+                crate::integration::store::INTEGRATIONS_URL,
+                &nowhere.base_url(),
+            )
+            .expect("the integrations store's override");
             // Just checked, so an unforced refresh asks Commander Spellbook nothing.
             conn.execute(
                 "INSERT INTO combo_meta (id, checked_at) VALUES (1, unixepoch())",

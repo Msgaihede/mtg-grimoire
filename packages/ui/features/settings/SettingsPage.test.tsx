@@ -33,6 +33,9 @@ vi.mock("@/features/settings/HiddenTagsPanel", () => ({
 vi.mock("@/features/settings/MarketplacePanel", () => ({
   MarketplacePanel: stub("panel:prices"),
 }));
+vi.mock("@/features/settings/IntegrationsPanel", () => ({
+  IntegrationsPanel: stub("panel:integrations"),
+}));
 /**
  * **The one stub that reads a prop**, because the one prop this page computes for a panel is
  * the window count and nothing else on the page draws it. `data-windows` rather than text, so
@@ -177,6 +180,24 @@ describe("the Backup panel", () => {
     await pickGroup("Storage and data");
 
     expect(screen.getByText("panel:backup")).toBeInTheDocument();
+  });
+});
+
+describe("the Integrations panel", () => {
+  /** Issue #1396: the switch is its own rail entry, directly under Sync, and draws there alone. */
+  it("is on the page under Integrations, and nowhere else", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    expect(screen.queryByText("panel:integrations")).toBeNull();
+
+    await pickGroup("Integrations");
+    expect(screen.getByText("panel:integrations")).toBeInTheDocument();
+  });
+
+  it("is found by the name of what will read the copy", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await userEvent.type(searchBox(), "discord");
+
+    expect(screen.getByText("panel:integrations")).toBeInTheDocument();
   });
 });
 

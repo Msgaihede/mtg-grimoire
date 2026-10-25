@@ -22,6 +22,9 @@ vi.mock("@/features/settings/CachePanel", () => ({ CachePanel: stub("panel:cache
 vi.mock("@/features/settings/DangerZonePanel", () => ({ DangerZonePanel: stub("panel:danger") }));
 vi.mock("@/features/settings/ErrorLogPanel", () => ({ ErrorLogPanel: stub("panel:errors") }));
 vi.mock("@/features/settings/HiddenTagsPanel", () => ({ HiddenTagsPanel: stub("panel:hidden") }));
+vi.mock("@/features/settings/IntegrationsPanel", () => ({
+  IntegrationsPanel: stub("panel:integrations"),
+}));
 vi.mock("@/features/settings/LabelsPanel", () => ({ LabelsPanel: stub("panel:labels") }));
 vi.mock("@/features/settings/MarketplacePanel", () => ({
   MarketplacePanel: stub("panel:prices"),
@@ -126,6 +129,20 @@ describe("Settings in the light edition", () => {
     await userEvent.type(screen.getByRole("searchbox", { name: "Search settings" }), "dropbox");
     expect(screen.getByText("No matching settings.")).toBeInTheDocument();
     expect(screen.queryByText("panel:backup")).toBeNull();
+  });
+
+  /**
+   * **The integrations switch is the desktop's** (issue #1396, plan §2 — the Share control's
+   * reason): it is off `LIGHT_SETTINGS`, and its entry, which holds nothing else, goes with it —
+   * off the rail above, and out of reach of the search box here.
+   */
+  it("draws no Integrations entry and finds no integrations switch", async () => {
+    render(light(<SettingsPage update={NO_UPDATE} />));
+    expect(within(rail()).queryByRole("button", { name: "Integrations" })).toBeNull();
+
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search settings" }), "discord");
+    expect(screen.getByText("No matching settings.")).toBeInTheDocument();
+    expect(screen.queryByText("panel:integrations")).toBeNull();
   });
 
   it("drops a hand-off naming a panel it does not draw", async () => {

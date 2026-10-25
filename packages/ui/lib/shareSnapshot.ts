@@ -1,8 +1,9 @@
 /**
  * The share snapshot format, read.
  *
- * One format, **three** implementations — `apps/desktop/src-tauri/src/share/snapshot.rs` writes it, and both
- * readers (the web viewer and the in-app one) come through here. That is one implementation more
+ * One format, **three** implementations — `crates/grimoire-core/src/share/snapshot.rs` writes it
+ * (on every host, since issue #1396), and both readers (the web viewer and the in-app one) come
+ * through here. That is one implementation more
  * than the plain-text mirror has, which is why `apps/desktop/src-tauri/src/share/__golden__/snapshot.json` is
  * committed and both suites assert against it: drift is a red build rather than a viewer that
  * quietly disagrees with the publisher.

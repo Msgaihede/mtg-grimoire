@@ -1,0 +1,80 @@
+{
+  "$schema": "../wrangler/node_modules/wrangler/config-schema.json",
+  "name": "mtg-grimoire-integrations",
+  "main": "src/index.ts",
+  // The script's one import of another package's module, as a path wrangler follows with
+  // nothing installed — the share Worker's line, for the share Worker's reason: `release.yml`'s
+  // `integrations-deploy` runs no pnpm, so nothing links `@grimoire/relay` into this folder
+  // there. An exact module, not the package. `test/wrangler.test.ts` holds the pair.
+  "alias": { "@grimoire/relay/src/token": "../relay/src/token.ts" },
+  // The relay's date, for the share Worker's reason: it runs beside them on the same account and
+  // nothing here wants a newer runtime.
+  "compatibility_date": "2026-08-27",
+
+  // ⚠️ **Provisional: the owner confirms the address before the first deploy.** A Custom Domain
+  // on the zone the web app's origin is the apex of, as the relay's, the share Worker's and the
+  // scan inbox's are, so the deploy states the DNS record and the certificate itself. Until the
+  // owner picks it, the app's `integration::store::INTEGRATIONS_BASE` is the placeholder
+  // `<set on first deploy>` and asks nothing (plan §2) — so this line can move freely until a
+  // build is cut with the address compiled in, and not after.
+  "routes": [{ "pattern": "integrations.mtg-grimoire.app", "custom_domain": true }],
+  // **One address, written out rather than left to a default**, as the scan inbox's: no build
+  // was ever cut with a `workers.dev` address for this Worker, and a preview URL would be one
+  // more address for every version ever uploaded, each bound to the same objects.
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // The entitlement store — **the relay's D1 database, and the same `database_id` the relay and
+  // the share Worker bind**: the gate reads the group's newest key manifest from it
+  // (`src/gate.ts`), and the lapse pass reads `entitlements` rather than re-deciding what the
+  // relay wrote. This Worker owns one table in it, `integration_groups` (`migrations/`), in a
+  // migrations list of its own so no two Workers' lists can shadow each other.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mtg-grimoire-relay",
+      "database_id": "5e0381b0-d2aa-4861-a725-26ca18ae00ef",
+      "migrations_dir": "migrations",
+      "migrations_table": "d1_migrations_integrations",
+    },
+  ],
+
+  // **The stores**: one `GroupStore` per group (`src/object.ts`), SQLite-backed because a store
+  // is a table of rows and replacing a table is one transaction. **This Worker's own class, and
+  // no other**: no binding names the relay's namespace — a Worker that could reach a group's
+  // sync log would be one deploy away from the group key's ciphertext — and no script but this
+  // one binds `GroupStore`.
+  "durable_objects": {
+    "bindings": [{ "name": "STORE", "class_name": "GroupStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GroupStore"] }],
+
+  // The daily lapse pass (`src/lapse.ts`), which empties a lapsed group's store.
+  //
+  // ⚠️ **Minute `15`**: the relay owns minute `0` (hourly), the share Worker `30 3`, and the
+  // Discord branch's front claims `45 3`. The four Workers write one D1 database, and nothing is
+  // gained by two passes starting on the same minute. The free plan allows five cron triggers
+  // per account; this is the third on `main`.
+  "triggers": { "crons": ["15 3 * * *"] },
+
+  "vars": {
+    // **The pages a browser may publish from**, comma-separated and compared exactly —
+    // `src/cors.ts`. One entry, the light app's web build, as the scan inbox's. No trailing
+    // slash, the way a browser spells `Origin`. Not an access control: unset, the web app's
+    // publisher fails and every native client, which sends no `Origin`, goes on working.
+    //
+    // ⚠️ A development origin does not belong here: a local build that needs this Worker asks a
+    // local one (`wrangler dev --local --var APP_ORIGINS:…`).
+    "APP_ORIGINS": "https://mtg-grimoire.app",
+  },
+
+  // **Two secrets, never committed and never in `.dev.vars` in git**: the relay's signing key,
+  // and the KEK every store's data key is wrapped under (32 random bytes, base64url) — and,
+  // during a rotation only, the KEK before it. `README.md`, *Deploying* and *Rotating the KEK*,
+  // has the runbook; `wrangler secret put` after the first deploy, from the owner's terminal.
+
+  // **No log.** A request's headers carry a relay token, and an exception's text can name a
+  // card; with observability on Cloudflare would keep both for days. A fault is read live, with
+  // `wrangler tail`, by whoever is looking for one.
+  "observability": { "enabled": false },
+}

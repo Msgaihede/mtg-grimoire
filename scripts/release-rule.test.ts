@@ -9,8 +9,9 @@
 //      commit, and only the files `release-please-config.json` names;
 //   2. **an Android `versionCode` that rises with it** — or an update will not install;
 //   3. **`release.yml`'s shape** — what `publish` waits for, which jobs hold a secret and what
-//      those jobs may run, and that four jobs in one workflow deploy four Workers, each from
-//      its own folder (`relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy`).
+//      those jobs may run, and that five jobs in one workflow deploy five Workers, each from
+//      its own folder (`relay-deploy`, `share-deploy`, `scan-deploy`, `integrations-deploy`,
+//      `web-deploy`).
 //
 // Text, like the two fences beside it (`actions-pinned.test.ts`, `toolchain.test.ts`): nothing
 // here runs a workflow. What a real release proves is docs/reference/ci-and-releases.md's to say.
@@ -357,13 +358,17 @@ const ANDROID_SECRETS = [
   "ANDROID_KEY_PASSWORD",
 ];
 const CLOUDFLARE_SECRETS = ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"];
-/** What the three jobs that deploy the relay, the share Worker and the scan inbox read: a token of their own. */
+/**
+ * What the four jobs that deploy the relay, the share Worker, the scan inbox and the integrations
+ * store read: a token of their own.
+ */
 const INFRA_SECRETS = ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_INFRA_API_TOKEN"];
-/** The four jobs that start wrangler, with the Worker's folder each one deploys from. */
+/** The five jobs that start wrangler, with the Worker's folder each one deploys from. */
 const DEPLOYS: Record<string, string> = {
   "relay-deploy": "infrastructure/relay",
   "share-deploy": "infrastructure/share-worker",
   "scan-deploy": "infrastructure/scan-worker",
+  "integrations-deploy": "infrastructure/integrations-worker",
   "web-deploy": "infrastructure/app-worker",
 };
 /**
@@ -374,6 +379,7 @@ const WRANGLER_RUNS: Record<string, number> = {
   "relay-deploy": 2,
   "share-deploy": 2,
   "scan-deploy": 1,
+  "integrations-deploy": 2,
   "web-deploy": 1,
 };
 const WRANGLER = "node ../wrangler/node_modules/wrangler/bin/wrangler.js";
@@ -392,6 +398,7 @@ const MAY_READ: Record<string, string[]> = {
   "relay-deploy": [...INFRA_SECRETS, "GITHUB_TOKEN"],
   "share-deploy": [...INFRA_SECRETS, "GITHUB_TOKEN"],
   "scan-deploy": [...INFRA_SECRETS, "GITHUB_TOKEN"],
+  "integrations-deploy": [...INFRA_SECRETS, "GITHUB_TOKEN"],
   "web-deploy": [...CLOUDFLARE_SECRETS, "GITHUB_TOKEN"],
   "play-upload": ["PLAY_SERVICE_ACCOUNT_JSON"],
   publish: ["GITHUB_TOKEN"],
@@ -443,8 +450,9 @@ const refuseOlder = (what: string) => [
   "fi",
 ];
 /**
- * **Every line the nine jobs that hold a secret run** (`attach`, `android-sign`, `relay-deploy`,
- * `share-deploy`, `scan-deploy`, `web-deploy`, `play-upload` and `announce` on a release; `changelog-write` between releases), step by
+ * **Every line the ten jobs that hold a secret run** (`attach`, `android-sign`, `relay-deploy`,
+ * `share-deploy`, `scan-deploy`, `integrations-deploy`, `web-deploy`, `play-upload` and
+ * `announce` on a release; `changelog-write` between releases), step by
  * step, as `runsOf` reads them: the whole of each `run:`, its summary's wording too. A line
  * changed in one of those steps is changed here in the same commit, and a line added to any of
  * them, whatever it starts, is a line this list does not have.
@@ -615,6 +623,40 @@ const RUNS: Record<string, string[][]> = {
     // Ask the host
     ["node scripts/scan-deploy-probe.ts"],
   ],
+  "integrations-deploy": [
+    // Is it switched on, and is there a token to deploy with: the switch first, then the
+    // token's ask, line for line the other three's.
+    [
+      "set -euo pipefail",
+      'if [ "$SWITCHED_ON" != true ]; then',
+      'echo "present=false" >> "$GITHUB_OUTPUT"',
+      "{",
+      'echo "### Integrations store — not deployed"',
+      "echo",
+      `echo "**The integrations Worker was not deployed:** the repository variable \\\`INTEGRATIONS_DEPLOY\\\` is not \\\`true\\\`."`,
+      `echo "To turn it on, confirm the Worker's address, extend \\\`CLOUDFLARE_INFRA_API_TOKEN\\\` to it, deploy it once by hand and set its two keys,"`,
+      `echo "then set \\\`INTEGRATIONS_DEPLOY\\\` to \\\`true\\\` — \\\`infrastructure/integrations-worker/README.md\\\`, *Deploying*."`,
+      '} >> "$GITHUB_STEP_SUMMARY"',
+      "exit 0",
+      "fi",
+      ...infraAsk(
+        "Integrations store",
+        "The integrations store still runs the previous deploy, if it has had one.",
+        "applied no migration and deployed nothing to it.",
+        "infrastructure/integrations-worker/README.md",
+      ).slice(1),
+    ],
+    // Refuse to deploy an older release over a newer one
+    refuseOlder("integrations store"),
+    // Install the lockfile's packages, running no script
+    ["npm ci --ignore-scripts"],
+    // Apply the database's pending migrations
+    [`${WRANGLER} d1 migrations apply mtg-grimoire-relay --remote`],
+    // Deploy the Worker
+    [`${WRANGLER} deploy`],
+    // Ask the host
+    ["node scripts/integrations-deploy-probe.ts"],
+  ],
   "web-deploy": [
     // Is there a token to deploy with
     [
@@ -762,7 +804,7 @@ const RUNS: Record<string, string[][]> = {
 describe("release.yml", () => {
   const jobs = jobsOf(releaseYml);
 
-  it("has the sixteen jobs, chained as the rule needs", () => {
+  it("has the seventeen jobs, chained as the rule needs", () => {
     expect(Object.keys(jobs)).toEqual([
       "release-please",
       "build",
@@ -774,6 +816,7 @@ describe("release.yml", () => {
       "relay-deploy",
       "share-deploy",
       "scan-deploy",
+      "integrations-deploy",
       "web-deploy",
       "play-upload",
       "publish",
@@ -802,6 +845,9 @@ describe("release.yml", () => {
     // host the page's policy names and whose CORS answer its Send waits on; then the page.
     expect(needsOf(jobs["share-deploy"])).toEqual(["release-please", "share", "relay-deploy"]);
     expect(needsOf(jobs["scan-deploy"])).toEqual(["release-please", "share-deploy"]);
+    // The integrations store behind the inbox, and the page behind it: a job that deploys
+    // nothing until the owner switches it on, and ends green either way, so it holds nothing up.
+    expect(needsOf(jobs["integrations-deploy"])).toEqual(["release-please", "scan-deploy"]);
     expect(needsOf(jobs["web-deploy"])).toEqual([
       "release-please",
       "attach",
@@ -810,6 +856,7 @@ describe("release.yml", () => {
       "relay-deploy",
       "share-deploy",
       "scan-deploy",
+      "integrations-deploy",
     ]);
     // The one step of a release that cannot be taken back — Play takes a versionCode once —
     // so it goes after every deploy, when only the flip of the draft is left.
@@ -821,6 +868,7 @@ describe("release.yml", () => {
       "relay-deploy",
       "share-deploy",
       "scan-deploy",
+      "integrations-deploy",
       "web-deploy",
       "play-upload",
     ]);
@@ -903,7 +951,7 @@ describe("release.yml", () => {
     expect(secretRefs(top)).toEqual([]);
   });
 
-  it("gives each secret to the jobs that hold it (`android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `web-deploy`, `play-upload`), alone", () => {
+  it("gives each secret to the jobs that hold it (`android-sign`, `relay-deploy`, `share-deploy`, `scan-deploy`, `integrations-deploy`, `web-deploy`, `play-upload`), alone", () => {
     for (const [name, job] of Object.entries(jobs)) {
       const refs = secretRefs(job);
       // Every appearance of the word is the one honest spelling…
@@ -931,7 +979,7 @@ describe("release.yml", () => {
   // **An environment's values, not the repository's.** A repository secret is handed to any
   // workflow on any branch of this repository; an environment's only to a job that names it,
   // from a branch the environment allows.
-  it("takes what it holds from an environment, in those nine jobs and no other", () => {
+  it("takes what it holds from an environment, in those ten jobs and no other", () => {
     const environments = Object.entries(jobs)
       .map(([name, job]) => [name, job.split("\n").filter((line) => /^\s*environment:/.test(line))])
       .filter(([, lines]) => lines.length > 0);
@@ -941,6 +989,7 @@ describe("release.yml", () => {
       ["relay-deploy", ["    environment: release"]],
       ["share-deploy", ["    environment: release"]],
       ["scan-deploy", ["    environment: release"]],
+      ["integrations-deploy", ["    environment: release"]],
       ["web-deploy", ["    environment: release"]],
       ["play-upload", ["    environment: release"]],
       // The webhook, apart from the release's keys and tokens: a credential to post in a channel.
@@ -962,6 +1011,7 @@ describe("release.yml", () => {
     "relay-deploy",
     "share-deploy",
     "scan-deploy",
+    "integrations-deploy",
     "web-deploy",
     "play-upload",
     "announce",
@@ -984,6 +1034,7 @@ describe("release.yml", () => {
     ["relay-deploy", ["actions/checkout", "actions/setup-node"]],
     ["share-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["scan-deploy", ["actions/checkout", "actions/setup-node"]],
+    ["integrations-deploy", ["actions/checkout", "actions/setup-node"]],
     ["web-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["play-upload", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
     ["announce", ["actions/checkout", "actions/setup-node"]],
@@ -1032,7 +1083,7 @@ describe("release.yml", () => {
     expect(jobs["android-sign"]).not.toMatch(/setup-node/);
   });
 
-  // The workspace is pnpm's; the six jobs that hold a secret on a release are not part of it. None sets
+  // The workspace is pnpm's; the jobs that hold a secret on a release are not part of it. None sets
   // pnpm up, installs with it or runs it: what they run is the list above, to the letter.
   // `jobsOf` has already dropped comment lines, so this reads what the job runs.
   it.each([
@@ -1041,6 +1092,7 @@ describe("release.yml", () => {
     "relay-deploy",
     "share-deploy",
     "scan-deploy",
+    "integrations-deploy",
     "web-deploy",
     "play-upload",
     "changelog-write",
@@ -1123,11 +1175,54 @@ describe("release.yml", () => {
     },
   );
 
+  // **The integrations store's job is the owner's to switch on** (issue #1396's PR 2): the
+  // repository variable decides before the token is asked, so with it unset the job deploys
+  // nothing, says how to turn it on and ends green — `CLOUDFLARE_INFRA_API_TOKEN` does not reach a
+  // Worker that does not exist yet, and an ungated job would fail the first release after it
+  // merged. Switched on, the token decides as it does for the other three.
+  it("integrations-deploy asks the switch first, then the token, and does nothing without either", () => {
+    // **The ask is the first step, ahead of the checkout**: while the job is switched off, no
+    // step that could fail runs at all — the checkout included — so the feature being off can
+    // never hold a release up.
+    const [ask, ...rest] = stepsOf(jobs["integrations-deploy"]);
+    expect(ask).toMatch(/^name: Is it switched on, and is there a token to deploy with$/m);
+    expect(rest[0]).toMatch(/^uses: actions\/checkout@/);
+    expect(ask).toMatch(/^ {8}id: token$/m);
+    expect(ask).toContain("SWITCHED_ON: ${{ vars.INTEGRATIONS_DEPLOY == 'true' }}");
+    expect(secretsOf(ask)).toEqual(INFRA_SECRETS);
+    expect(ask.match(/secrets\.[A-Z0-9_]+/g)).toHaveLength(2);
+    expect(ask.match(/\$\{\{ secrets\.[A-Z0-9_]+ != '' \}\}/g)).toHaveLength(2);
+    // The one repository variable a release job reads, and only here.
+    for (const [name, job] of Object.entries(jobs)) {
+      const vars = [...job.matchAll(/\bvars\.([A-Za-z0-9_]+)/g)].map((m) => m[1]);
+      expect(vars, name).toEqual(name === "integrations-deploy" ? ["INTEGRATIONS_DEPLOY"] : []);
+    }
+    const lines = runsOf(ask)[0];
+    const at = (line: string) => lines.indexOf(line);
+    expect(at('if [ "$SWITCHED_ON" != true ]; then')).toBe(1);
+    // Switched off: `present=false`, the summary, a green end — before the token is looked at.
+    expect(at('} >> "$GITHUB_STEP_SUMMARY"')).toBeLessThan(at("exit 0"));
+    expect(at("exit 0")).toBeLessThan(at('if [ "$HAS_TOKEN" != true ]; then'));
+    expect(lines.at(-1)).toBe('echo "present=true" >> "$GITHUB_OUTPUT"');
+    expect(lines.filter((line) => line.includes("present=true"))).toHaveLength(1);
+    for (const step of rest) {
+      expect(step).toMatch(/^ {8}if: steps\.token\.outputs\.present == 'true'$/m);
+    }
+    // The token reaches wrangler's two steps and no other: the migrations and the deploy.
+    const holding = rest.filter((step) => secretsOf(step).length > 0);
+    expect(holding).toHaveLength(WRANGLER_RUNS["integrations-deploy"]);
+    for (const step of holding) {
+      expect(secretsOf(step)).toEqual(INFRA_SECRETS);
+      expect(step).toContain("CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_INFRA_API_TOKEN }}");
+      expect(step).toMatch(/^ {8}working-directory: infrastructure\/integrations-worker$/m);
+    }
+  });
+
   // **The web app goes live only behind the other three** (issue #1198). With no infra token
   // they end green having deployed nothing, so each says whether it deployed, and `web-deploy`
   // holding its own token fails on any of them that did not — before anything is downloaded or
   // deployed, so the release stays a draft rather than a page ahead of its relay.
-  it.each(["relay-deploy", "share-deploy", "scan-deploy"])(
+  it.each(["relay-deploy", "share-deploy", "scan-deploy", "integrations-deploy"])(
     "%s says whether it deployed, from its token step",
     (name) => {
       expect(jobs[name]).toMatch(
@@ -1204,6 +1299,15 @@ describe("release.yml", () => {
       "run: node scripts/scan-deploy-probe.ts",
     ]);
     expect(jobs["scan-deploy"]).not.toMatch(/d1 migrations|download-artifact/);
+    // The integrations store has a database and no bundle: its migrations, then the deploy.
+    orderOf("integrations-deploy", [
+      'gh api "repos/$REPO/releases/latest"',
+      "run: npm ci --ignore-scripts",
+      `run: ${WRANGLER} d1 migrations apply mtg-grimoire-relay --remote`,
+      `run: ${WRANGLER} deploy`,
+      "run: node scripts/integrations-deploy-probe.ts",
+    ]);
+    expect(jobs["integrations-deploy"]).not.toMatch(/download-artifact/);
     // What `share-deploy` uploads is what `share` built: one artifact name, one folder.
     expect(stepsOf(jobs["share-deploy"]).find((s) => s.includes("name: share-bundle"))).toContain(
       "path: apps/share/dist-share",
@@ -1614,11 +1718,12 @@ describe("deploys, across every workflow", () => {
     );
   });
 
-  // **Four jobs start wrangler, each from its own Worker's folder** (the owner's decisions,
-  // 2026-10-11: a release deploys everything, the scan inbox with the rest). Six commands, and
-  // these are all of them: two `d1 migrations apply --remote` and four `deploy`. A seventh
+  // **Five jobs start wrangler, each from its own Worker's folder** (the owner's decisions,
+  // 2026-10-11: a release deploys everything, the scan inbox with the rest; and since issue
+  // #1396's PR 2 the integrations store, once the owner switches its job on). Eight commands,
+  // and these are all of them: three `d1 migrations apply --remote` and five `deploy`. A ninth
   // line, a `secret`, a `rollback`, a `d1 execute --remote`, is a line that is not here.
-  it("runs wrangler six times, in the four deploy jobs, from each Worker's own folder", () => {
+  it("runs wrangler eight times, in the five deploy jobs, from each Worker's own folder", () => {
     const wrangler = lines.filter(({ line }) => /\bwrangler\b/.test(line));
     const release = "/.github/workflows/release.yml";
     const install = { path: release, line: "        working-directory: infrastructure/wrangler" };
@@ -1648,6 +1753,10 @@ describe("deploys, across every workflow", () => {
       deploy,
       // scan-deploy: no database, so no migration.
       install,
+      deploy,
+      // integrations-deploy: its own list on the relay's database, then the deploy.
+      install,
+      migrate,
       deploy,
       // web-deploy: none there either.
       install,
@@ -1702,7 +1811,7 @@ describe("deploys, across every workflow", () => {
     // The runner's platform is in it: `npm ci` on Linux installs these two without a script.
     expect(lock.packages["node_modules/@esbuild/linux-x64"]).toBeDefined();
     expect(lock.packages["node_modules/@cloudflare/workerd-linux-64"]).toBeDefined();
-    // The tool's folder is npm's. pnpm's workspace is these six entries and no glob that could
+    // The tool's folder is npm's. pnpm's workspace is these entries and no glob that could
     // take `infrastructure/wrangler` in — a member's dependencies are resolved by pnpm-lock.yaml,
     // and this lockfile would stop being what installs.
     const packageList = workspaceYaml.split(/^packages:\r?\n/m)[1].split(/^\S/m)[0];
@@ -1715,6 +1824,7 @@ describe("deploys, across every workflow", () => {
       "infrastructure/share-worker",
       "infrastructure/app-worker",
       "infrastructure/scan-worker",
+      "infrastructure/integrations-worker",
     ]);
     // And the Worker's own manifest, in the folder the tool left, is not a second home for it.
     const worker = JSON.parse(appWorkerPackage);
@@ -1841,11 +1951,13 @@ describe("deploys, across every workflow", () => {
   });
 
   it("deploys each Worker from its own job, and holds no Cloudflare secret anywhere else", () => {
-    // The scan inbox (`infrastructure/scan-worker/`) is named by the release alone, and there
-    // by its own job: no other workflow runs or deploys it.
+    // The scan inbox (`infrastructure/scan-worker/`) and the integrations store
+    // (`infrastructure/integrations-worker/`) are named by the release alone, and there by
+    // their own jobs: no other workflow runs or deploys either.
     expect(
       lines.filter(
-        ({ path, line }) => !path.endsWith("/release.yml") && /\bscan-worker\b/.test(line),
+        ({ path, line }) =>
+          !path.endsWith("/release.yml") && /\b(?:scan|integrations)-worker\b/.test(line),
       ),
     ).toEqual([]);
     // A Worker's folder is a working directory in exactly one job: its own.

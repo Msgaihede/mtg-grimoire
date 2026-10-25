@@ -2697,6 +2697,7 @@ back only those that cannot run yet on a host with no window. Of the **153** on 
   session's five are refused in one sentence until the web step.)*
 - **`share/`'s five** — the module is still `src-tauri`'s (§6.11). The light edition draws no shared
   view, and the Share control shows only to a connected reader.
+  *(Since issue #1396 the snapshot and its publish requests are the core's — `crates/grimoire-core/src/share/` — and every host runs the publish round that refreshes a group's live shares after a sync trip; the commands, and the viewer of a stranger's link, are still the desktop's.)*
 
 **A sixth kind, `blocking`** — the blocking pool, the `Arc<State>`, no connection — which §6.11
 said was owed. It is what a body takes when it reads the `State` itself, and when the wrapper
