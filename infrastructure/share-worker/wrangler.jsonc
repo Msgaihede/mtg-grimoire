@@ -125,6 +125,16 @@
     // sees. `share::publish`'s tests read this file and compare. No trailing slash: every link
     // the app shows is `{SHARE_BASE}/s/{id}`, built by `env.ts`'s `shareUrl`.
     "SHARE_BASE": "https://share.mtg-grimoire.app",
+
+    // **The pages a browser may publish from** (issue #1396's PR 2: the web host refreshes shares
+    // too), comma-separated and compared exactly — `src/cors.ts`, for the gated `/g/…` routes
+    // only; the public `/s/…` pair is opened by navigating and asks nothing of CORS. One entry,
+    // the light app's web build, as the scan inbox's. No trailing slash, the way a browser
+    // spells `Origin`. Not an access control: unset, the web app cannot refresh a share and
+    // every native client, which sends no `Origin`, goes on working. A development origin does
+    // not belong here — a local build asks a local Worker (`wrangler dev --local --var
+    // APP_ORIGINS:…`).
+    "APP_ORIGINS": "https://mtg-grimoire.app",
   },
 
   // The three secrets stay in `wrangler secret put` and are never committed (spec §9). This

@@ -98,8 +98,10 @@ const meta = {
           "against the copies filed in its own group — the deck editor's `Actual` tab, owned for " +
           "owned; `Theory` measures every deck that keeps a plan, virtual ones included, its " +
           "actual list against its theory list. Either way every active pile counts, on exact " +
-          "printing and exact finish. A row measured on the theory list says **`Theory`** before its " +
-          "count.\n\n" +
+          "printing and exact finish — unless `Theory match` (drawn only under `Theory`) is " +
+          "`Missing`, which lets another printing of a card stand in for a planned copy, the " +
+          "Compare dialog's `Missing` view. A row measured on the theory list says **`Theory`** " +
+          "before its count.\n\n" +
           "**Complete is `missing === 0`**, never a price. A deck missing nothing leaves the list " +
           "unless `Complete decks` is on, and the footer counts it either way — over every deck " +
           "in scope, not over the rows that fit. `missingCost` is an em dash only when nothing on " +
@@ -144,6 +146,24 @@ export const Theory: Story = {
       await card.findByRole("button", {
         name: /^Rhystic Testbed · Theory · \d+ of \d+ · \d+ missing/,
       }),
+    ).toBeInTheDocument();
+    await expect(card.queryByRole("button", { name: /^Modern Goodstuff/ })).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * `Compare against → Theory`, `Theory match → Missing` (issue #1400): the same decks, a planned
+ * copy the actual list plays as another printing of the card counted as sleeved — the Compare
+ * dialog's `Missing` view rather than its `All`. The settings popover draws `Theory match` only
+ * under `Theory`.
+ */
+export const TheoryMissing: Story = {
+  args: { widget: completion(3, 3, { compare: "theory", match: "missing" }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "Deck completion" }));
+    await expect(
+      await card.findByRole("button", { name: /^Rhystic Testbed · Theory · \d+ of \d+ · / }),
     ).toBeInTheDocument();
     await expect(card.queryByRole("button", { name: /^Modern Goodstuff/ })).not.toBeInTheDocument();
   },

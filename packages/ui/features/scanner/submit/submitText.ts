@@ -26,6 +26,13 @@ export const SEND_TITLE = "Send this scan";
 export const SCAN_TOO_SHORT =
   "Not enough of the scan yet. Hold the card under the camera a moment and press again.";
 
+/**
+ * {@link SCAN_TOO_SHORT}'s other half, for point and shoot between two shots: the scan on offer
+ * is the last shot's, and holding the card there would add nothing to it — there is none yet,
+ * it was too short to be one, or it has already been opened. What to do is scan again.
+ */
+export const SHOT_TOO_SHORT = "Not enough of a scan to send. Scan a card, then press again.";
+
 /** `Picture 7 of 18` — which of the scan's pictures, as the slider says its value. */
 export function pictureOf(n: number, total: number): string {
   return `Picture ${n} of ${total}`;

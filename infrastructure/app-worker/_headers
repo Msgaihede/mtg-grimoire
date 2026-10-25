@@ -59,6 +59,17 @@
 #                                               this origin by name too (its `src/cors.ts`), and
 #                                               its pre-flight, because the body's type and the
 #                                               label's header are neither on a browser's safelist.
+#                  share.mtg-grimoire.app
+#                                               share/publish.rs  SHARE_BASE — the share Worker
+#                                               (`infrastructure/share-worker/`), asked by the
+#                                               publish round after a sync trip to keep the group's
+#                                               live shares current (issue #1396). It answers this
+#                                               origin by name (its `src/cors.ts`) and its
+#                                               pre-flight: a PUT, and `authorization`.
+#                The integrations store is NOT here yet: its address in the engine
+#                (`integration/store.rs`, INTEGRATIONS_BASE) is a placeholder until the Worker's
+#                first deploy, and the engine refuses every request to it before one is made. When
+#                it becomes an `https://` address the census in `hosting.test.ts` demands it here.
 #                NOT manapool.com: it sends no Access-Control-Allow-Origin, so a page cannot read
 #                it whatever this says.
 #   img-src      This origin and `data:`, and NOT cards.scryfall.io although every card picture
@@ -85,7 +96,7 @@
 # preload list. No `Cross-Origin-Opener-Policy` or `-Embedder-Policy`: the OPFS pool needs neither
 # (the August spike ran it both ways), and `require-corp` would refuse every card picture.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com https://relay.mtg-grimoire.app wss://relay.mtg-grimoire.app https://scans.mtg-grimoire.app; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com https://relay.mtg-grimoire.app wss://relay.mtg-grimoire.app https://scans.mtg-grimoire.app https://share.mtg-grimoire.app; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Cache-Control: no-cache

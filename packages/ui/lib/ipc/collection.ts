@@ -505,7 +505,12 @@ export interface CollectionRow {
   proxy: boolean;
   misprint: boolean;
   grading: string | null;
-  /** A JSON array of strings, never null — the column defaults to `[]`. */
+  /**
+   * A JSON array of strings, never null — the column defaults to `[]`. The row's **entry tags**
+   * (issue #1398): read them with `parseEntryTags` (`@/features/entryTags/entryTags`) and write
+   * them whole through `ipc.collectionSetTags`, which tidies the list as `deck::clean_tags` does —
+   * {@link EntryPatch.tags} stores whatever JSON it is handed.
+   */
   tags: string;
   notes: string | null;
   /** A sentence when this row needs the user's attention, `null` otherwise. */

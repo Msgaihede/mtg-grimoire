@@ -74,6 +74,10 @@ The desktop manages two SQLite databases in the application data folder:
 - The persistent WebSocket to the relay is `grimoire-core`'s: `sync_engine::live::run` (the connection manager) over `platform::socket`. `desktop.rs` spawns it after `startup::settle` with the write wake it registered as an observer; `src-tauri`'s `sync_engine::live` re-exports the core's module and keeps only the bounded push on exit (`anything_pending`, `push_now`).
 - Database changes are captured via SQLite triggers (`sync_ops`) and applied atomically during sync pulls.
 
+### Shares and the integrations store
+- `src/share/` re-exports `grimoire_core::share` (the snapshot, the `collection_shares` cache and the publish requests, the core's since issue #1396) and keeps the `share_*` Tauri commands and the viewer of a stranger's link (`share/publish.rs`: same-origin redirects, counted body caps, one wall clock — issue #545's bounds). The goldens in `share/__golden__/` stay byte-identical; they fence the core's readers.
+- `desktop.rs` spawns the core's publish round (`integration::publish::run`) beside `live::run`: after each successful sync trip it refreshes the group's live shares and, when the group's integrations store exists, its `Projection v1` tables. There is no share timer and no `share_auto_update` any more. Reference: [integrations-store.md](../../../docs/reference/integrations-store.md).
+
 ### Multi-Window Coordination & In-App Updates
 - Secondary windows receive change notifications via `changes.rs`.
 - Commit hooks publish change masks (`MirrorMask`, `WindowChanges`) without blocking the main database transaction.

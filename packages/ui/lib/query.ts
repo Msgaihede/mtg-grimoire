@@ -300,3 +300,16 @@ export function supporterState(status: SupporterStatus | null): SupporterState {
 
 /** Every row carrying a sentence for the reader — `ipc.syncReviewList`. */
 export const REVIEW_KEY: QueryKey = ["sync", "review"];
+
+/**
+ * The integrations switch's status — `ipc.integrationsStatus` (issue #1396, plan §3.3).
+ *
+ * **Every command of the switch answers a fresh status**, and the panel writes that answer back
+ * under this key rather than invalidating it, so a press draws its outcome without a second read.
+ *
+ * **Not under {@link SYNC_KEY}**, though what it needs is a membership: that root is invalidated
+ * by every finished round trip, and this read asks the integrations Worker when it can — a
+ * request per trip for a panel almost nobody has open. A root of its own, `["integrations"]`, so
+ * a later integration's own keys can sit beside it.
+ */
+export const INTEGRATIONS_KEY: QueryKey = ["integrations", "status"];

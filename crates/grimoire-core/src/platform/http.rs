@@ -83,6 +83,20 @@ impl Client {
     pub fn post(&self, url: &str) -> Request {
         Request(imp::deadline(self.0.post(url), self.1))
     }
+
+    /// The share Worker's upload — a snapshot's gzip as [`Request::bytes`] — and the integrations
+    /// store's settings and table uploads, `content-type` set by the caller. In a browser it is
+    /// not a verb a form sends, so it costs a pre-flight the host asked has to answer — both
+    /// Workers' do.
+    pub fn put(&self, url: &str) -> Request {
+        Request(imp::deadline(self.0.put(url), self.1))
+    }
+
+    /// The share Worker's withdrawal, and the integrations store's switch-off. A pre-flight in a
+    /// browser, as [`Client::put`] is.
+    pub fn delete(&self, url: &str) -> Request {
+        Request(imp::deadline(self.0.delete(url), self.1))
+    }
 }
 
 /// A request being built.

@@ -9,8 +9,9 @@ every figure.
 **The one sentence: a share is a snapshot the owner publishes, not a window onto their
 database.** Everything a viewer sees was true when the owner's app last published, the owner
 chooses what crosses, and nothing a viewer does can reach back. Every decision below is a
-consequence of that. **Since issue #1025 the owner's app republishes a changed folder on its own**
-while it is open — still a snapshot, just one that does not wait for a press; see
+consequence of that. **Since issue #1025 a changed folder is republished on its own** — still a
+snapshot, just one that does not wait for a press — and **since issue #1396 by any device in the
+group that syncs**, Android and the web included, at the end of its sync trip; see
 [keeping a share current](#keeping-a-share-current--issue-1025).
 
 It is **user schema v41**, **one new Cloudflare Worker** beside `infrastructure/relay/`, **one new D1 table** on
@@ -112,7 +113,8 @@ in so many words that day, and a secret's value is his to type whoever runs the 
 
 ## The format
 
-One JSON document, gzipped, versioned by `v` — `apps/desktop/src-tauri/src/share/snapshot.rs` writes it and
+One JSON document, gzipped, versioned by `v` — `crates/grimoire-core/src/share/snapshot.rs` writes it (in the
+desktop host until issue #1396 moved it into the core, through the projector's readers) and
 `packages/ui/lib/shareSnapshot.ts` is the reader both viewers come through. Spec §3 has the annotated
 example; what follows is what the shipped writer actually does with it.
 
@@ -274,8 +276,11 @@ and the 41.3 B/card figure would have been measured over a document missing its 
 
 ## The publisher, and the two `collection.rs` traps
 
-`apps/desktop/src-tauri/src/share/` reads SQLite and formats JSON; `publish.rs` is the one file of it that
-reaches the network.
+`crates/grimoire-core/src/share/` reads SQLite and formats JSON; `publish.rs` is the one file of it that
+reaches the network. **Since issue #1396 its readers are the integrations projector's**
+(`integration::projection`, scoped to the shared subtree or deck): the share snapshot is a filtered
+output of the same code that writes `Projection v1`, and `share/__golden__/` was byte-identical
+across the change ([integrations-store.md](integrations-store.md) §2.1).
 
 **A share does not ride on `collection::list_entries`, and that is the whole of its safety.** The
 two reasons are both defaults that are right for the app and wrong here:
@@ -426,7 +431,7 @@ their choosing. A binder and a wishlist send `null` for all three and their card
 a deck published before the columns existed previews as a plain _Deck_ with no picture until it
 is next republished.
 
-**Automatic updates (issue #1025) cover decks too**: `share::publish::changed` reads every share
+**Automatic updates (issue #1025) cover decks too**: `share::publish::refresh_live` reads every share
 through `snapshot()`, which dispatches the `deck:` key. Its digest appends the `deck` half (piles'
 switches, the cover) **only when present**, so a binder's digest is unchanged and no share made
 before decks republishes itself on the first pass after an upgrade.
@@ -488,10 +493,11 @@ it is.
 
 ### The five commands
 
-`share_list`, `share_create`, `share_refresh`, `share_revoke`, `share_open` — and a sixth since
-issue #1025, `share_auto_update`, which is `share_refresh` run by a timer over the shares that
-changed (see [keeping a share current](#keeping-a-share-current--issue-1025)) —
-`apps/desktop/src-tauri/src/share/commands.rs`, mirrored in `packages/ui/lib/ipc.ts`, and the mirror is fenced by
+`share_list`, `share_create`, `share_refresh`, `share_revoke`, `share_open` — and from issue #1025
+to issue #1396 a sixth, `share_auto_update`, which was `share_refresh` run by a page timer over the
+shares that changed; the publish round replaced it (see
+[keeping a share current](#keeping-a-share-current--issue-1025)) —
+`apps/desktop/src-tauri/src/share/commands.rs` over `crates/grimoire-core/src/share/`, mirrored in `packages/ui/lib/ipc.ts`, and the mirror is fenced by
 `ipc.test.ts`'s parsers over the Rust source rather than by two hand-typed lists.
 
 Three of the five are worth a sentence each:
@@ -560,10 +566,20 @@ older ones carry a rule:
 Discord on 2026-10-14: shared folders should keep themselves up to date. They now do, from both
 ends, and the request budget below is what shaped each half.
 
-**The owner's app republishes a changed folder on its own.** `useShareAutoUpdate`
-(`packages/ui/features/collection/`, mounted once in `AppShell`, off in the light app and for a
-reader who has connected nothing) calls `share_auto_update` 30 s after launch and every 5 minutes
-after. The command splits on two connections:
+**Since issue #1396 any device that syncs republishes a changed share, at the end of its sync
+trip.** The publish round (`integration::publish`, [integrations-store.md](integrations-store.md)
+§3) runs `share::publish::refresh_live` once no newer trip has landed for 20 s: it reconciles the
+cache against the share Worker's list — so a phone that has never opened a share list knows the
+group's shares — and republishes every `live` share whose snapshot digest differs from this
+device's `share_digest:{id}`, under the owner name and fields the list carries. It runs on the
+desktop, on Android and in the web app (the share Worker answers the web app's origin since then),
+so **a change made on the phone reaches the link after the phone's next sync, with the desktop
+off** — the gap the timer below left open. What it retired:
+
+**From issue #1025 to #1396 the owner's desktop republished a changed folder on its own.**
+`useShareAutoUpdate` (`packages/ui/features/collection/`, mounted once in `AppShell`, off in the
+light app and for a reader who had connected nothing) called `share_auto_update` 30 s after launch
+and every 5 minutes after. The command split on two connections:
 
 - **Deciding is free.** `share::publish::changed` builds each candidate share's snapshot on the
   **read** connection and hashes it (`digest`: SHA-256 over everything but `id` and `updatedAt`,
@@ -578,10 +594,12 @@ after. The command splits on two connections:
   `error_log` row, the old snapshot is still serving, and the stored digest is still the old one,
   so the next pass tries again.
 
-Three kinds of share are never due: one not `live` (withdrawn, or lapsed and refused by the gate
+Three kinds of share were never due: one not `live` (withdrawn, or lapsed and refused by the gate
 anyway); one **this device never published** (`published` is `None` — another device in the group
 made it, and two devices racing one link would flicker it between two pictures of a database that
-has not finished syncing; _Update now_ here makes this device the keeper); and one whose read is
+has not finished syncing; _Update now_ here made this device the keeper — **dropped by issue
+#1396**, whose round runs only after a trip that pulled everything, so two devices refreshing one
+link read the same rows); and one whose read is
 refused (a locked or deleted folder — the menu already says _Stale_). A share published before
 #1025 has no digest, so its first pass is one republish. A revoke deletes the digest. The digest
 is `app_meta` rather than a `collection_shares` column because it is this device's private
@@ -592,9 +610,10 @@ instead of uploading the same change twice. The answer patches the `["share", "l
 place rather than invalidating it, because re-reading the list is `share_list`, which reconciles
 against the relay on the sync lane.
 
-**What it cannot do: publish while the app is closed.** An edit made just before closing is
-published by the next launch's first pass. Nothing else in this design could do better without a
-server holding the reader's data, which is the one thing a share is built not to need.
+**What it could not do: publish while the desktop was closed.** An edit made on the phone waited
+for the desktop's next launch. The publish round closes that without a server holding the reader's
+data: whichever device syncs the change publishes it. A device that is off still publishes nothing,
+and an edit made just before every device closes goes up with the next launch's first trip.
 
 **The in-app viewer re-checks the binder on screen.** `sharedSnapshotQuery` went from
 `staleTime: Infinity` to 5 minutes, and `useSharedSnapshot` adds a 15-minute `refetchInterval` for
@@ -1457,14 +1476,15 @@ branch acquires an unrelated red.
 
 | Path                                                  | Holds                                                                                                                         |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `apps/desktop/src-tauri/src/share/snapshot.rs`        | `ShareSnapshot`, the subtree read, the gzip, the three refusals                                                               |
-| `apps/desktop/src-tauri/src/share/deck.rs`            | A deck's share — the `deck:` key, its piles and its three card facts (issue #1032)                                            |
+| `crates/grimoire-core/src/share/snapshot.rs`          | `ShareSnapshot`, the subtree filter over the projector's readers, the gzip, the three refusals                                |
+| `crates/grimoire-core/src/share/deck.rs`              | A deck's share — the `deck:` key, its piles and its three card facts (issue #1032)                                            |
 | `apps/share/ShareDeck.tsx`                            | The public page's deck — Stacks, Grid, Table, Text                                                                            |
 | `packages/ui/features/share/SharedDeck.tsx`           | The in-app deck — the editor's own views, handed no writes                                                                    |
 | `packages/ui/features/decks/deckShare.ts`             | The deck's share key, and its Share control's target                                                                          |
-| `apps/desktop/src-tauri/src/share/cache.rs`           | `collection_shares` reads, writes and `reconcile`                                                                             |
-| `apps/desktop/src-tauri/src/share/publish.rs`         | The two-step upload, the sentences, and the viewer's bounded open                                                             |
-| `apps/desktop/src-tauri/src/share/commands.rs`        | The five commands and `ShareRow`                                                                                              |
+| `crates/grimoire-core/src/share/cache.rs`             | `collection_shares` reads, writes, `reconcile` and `ShareRow`                                                                 |
+| `crates/grimoire-core/src/share/publish.rs`           | The two-step upload, the sentences, `refresh_live` for the publish round                                                      |
+| `apps/desktop/src-tauri/src/share/publish.rs`         | The viewer's bounded open of a stranger's link — the desktop's alone                                                          |
+| `apps/desktop/src-tauri/src/share/commands.rs`        | The five commands                                                                                                             |
 | `apps/desktop/src-tauri/src/share/__golden__/`        | The committed snapshot both TypeScript suites read                                                                            |
 | `infrastructure/share-worker/`                        | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |
 | `apps/share/`                                         | The public viewer bundle; `apps/share/vite.config.ts` builds it into `apps/share/dist-share/`                                 |

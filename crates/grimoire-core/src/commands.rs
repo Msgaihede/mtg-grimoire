@@ -90,6 +90,8 @@ use crate::filters::CardFilters;
 #[allow(unused_imports)]
 use crate::folder_rules::FolderRule;
 #[allow(unused_imports)]
+use crate::integration::projection::IntegrationFields;
+#[allow(unused_imports)]
 use crate::sorting::Marketplace;
 #[allow(unused_imports)]
 use crate::wishlist::WishlistQuery;
@@ -601,9 +603,9 @@ commands! {
     };
 
     // deck_completion
-    read deck_completion in deck_completion(marketplace: Option<String>, compare: Option<String>) = |conn| {
+    read deck_completion in deck_completion(marketplace: Option<String>, compare: Option<String>, theory_match: Option<String>) = |conn| {
         let marketplace = Marketplace::from_opt(marketplace.as_deref());
-        let compare = Compare::from_opt(compare.as_deref());
+        let compare = Compare::from_opt(compare.as_deref(), theory_match.as_deref());
         deck_completion_for(conn, marketplace, compare)
     };
     read deck_review_count in deck_completion() = |conn| review_count(conn);
@@ -799,6 +801,17 @@ commands! {
     read deck_sort in decksort() = |conn| Ok(stored(conn));
     write set_deck_sort in decksort(sort: String) = |conn| store(conn, &sort);
 
+    // entry_tags (user schema v67) — a stack's own tags, the whole list each time. Plain `write`,
+    // not `owned`: a tag is no grain term, so nothing folds and what the reader owns stays put —
+    // the facet index's `owned` dimension has nothing to rebuild.
+    read entry_tags_in_use in entry_tags() = |conn| entry_tags_in_use(conn);
+    write collection_set_tags in entry_tags(id: i64, tags: Vec<String>) = |conn| {
+        set_collection_tags(conn, id, &tags)
+    };
+    write wishlist_set_tags in entry_tags(id: i64, tags: Vec<String>) = |conn| {
+        set_wish_tags(conn, id, &tags)
+    };
+
     // errors
     read error_log_list in errors(limit: i64) = |conn| {
         list(conn, limit).map_err(|e| format!("could not read the error log: {e}"))
@@ -833,6 +846,25 @@ commands! {
     // index::facets
     blocking facet_cards in index::facets(req: crate::search::SearchRequest) = |state| {
         run_facets(&state, &req)
+    };
+
+    // integration::settings — the integrations switch (issue #1396, plan §3.3). The store is asked
+    // with a relay token, so a press takes the lane as `sync_now`'s does; **the status answers the
+    // cache when the lane is busy** — a publish round or a trip in flight — rather than "busy".
+    task integrations_status in integration::settings() = |state| async move {
+        status_or_cached(&state).await
+    };
+    task integrations_enable in integration::settings(fields: IntegrationFields) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        enable(&lane, fields).await
+    };
+    task integrations_set_fields in integration::settings(fields: IntegrationFields) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        set_fields(&lane, fields).await
+    };
+    task integrations_disable in integration::settings() = |state| async move {
+        let lane = state.lane_for_press().await?;
+        disable(&lane).await
     };
 
     // listview
@@ -2472,6 +2504,14 @@ mod tests {
             "sync_pairing_accept" => json!({ "code": "not-an-invite" }),
             "sync_device_revoke" => json!({ "deviceId": "nobody" }),
             "sync_now" | "sync_group_leave" | "sync_live_state" => Value::Null,
+            // The integrations switch: this table's device has an address for the store (the
+            // override below) and no membership, so each stops at the one read that asks.
+            "integrations_status" | "integrations_disable" => Value::Null,
+            "integrations_enable" | "integrations_set_fields" => json!({
+                "fields": {
+                    "condition": false, "lang": false, "value": false, "tags": false, "notes": false,
+                },
+            }),
             "sync_pairing_begin"
             | "sync_pairing_confirm"
             | "sync_pairing_poll"
@@ -2589,6 +2629,14 @@ mod tests {
                 &nowhere.base_url(),
             )
             .expect("the scan inbox's override");
+            // And the integrations store's: a placeholder base would stop its four commands at
+            // the first line, where this one lets them reach the read that asks for a membership.
+            crate::sync_engine::client::set_state(
+                &conn,
+                crate::integration::store::INTEGRATIONS_URL,
+                &nowhere.base_url(),
+            )
+            .expect("the integrations store's override");
             // Just checked, so an unforced refresh asks Commander Spellbook nothing.
             conn.execute(
                 "INSERT INTO combo_meta (id, checked_at) VALUES (1, unixepoch())",

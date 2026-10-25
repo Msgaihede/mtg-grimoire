@@ -18,6 +18,33 @@ import {
 import { CAPTION } from "./formFields";
 import { useDeckTagReorder } from "./tagDrag";
 
+/**
+ * The words a tag field says about what it tags — the one thing a deck's field and a stack's
+ * (`features/entryTags`) do not share. Everything else, from the keyboard to the reorder, is one
+ * implementation, so the two fields cannot drift into two answers to "how is a tag typed".
+ */
+export interface TagsFieldCopy {
+  /** The chip list's accessible name — `Tags on this deck`. */
+  chipsLabel: string;
+  /** The suggestion list's accessible name — `Tags on other decks`. */
+  suggestionsLabel: string;
+  /** What a suggestion's count counts, singular and plural — `deck` / `decks`. */
+  unit: readonly [string, string];
+  /** The line under the box, for this many tags. */
+  hint: (count: number) => string;
+}
+
+/** The deck's own words — Deck settings, issue #834. */
+const DECK_COPY: TagsFieldCopy = {
+  chipsLabel: "Tags on this deck",
+  suggestionsLabel: "Tags on other decks",
+  unit: ["deck", "decks"],
+  hint: (count) =>
+    count < 2
+      ? "Shown on the deck tile. Press Enter to add one."
+      : "Shown on the deck tile in this order. Drag a tag to move it.",
+};
+
 export interface DeckTagsFieldProps {
   /** The deck's tags, in the reader's order — what the chips draw. */
   tags: readonly string[];
@@ -40,6 +67,23 @@ export interface DeckTagsFieldProps {
    * otherwise: dropping the caret into a box makes the first keystroke an edit.
    */
   autoFocus?: boolean;
+}
+
+export interface TagsFieldProps extends DeckTagsFieldProps {
+  copy: TagsFieldCopy;
+  /**
+   * Draw the tags and take no edit: no box to type in, no ✕, no reorder, no suggestions. For a
+   * host that shows what a row wears but is not, right now, the place to change it — the card
+   * modal outside **Edit** (issue #1398). `disabledHint` replaces the line under the box, and is
+   * where the host says how to get to a place that edits.
+   */
+  disabled?: boolean;
+  disabledHint?: string;
+}
+
+/** A deck's tags — {@link TagsField} in the deck's words. */
+export function DeckTagsField(props: DeckTagsFieldProps): JSX.Element {
+  return <TagsField {...props} copy={DECK_COPY} />;
 }
 
 /**
@@ -90,13 +134,16 @@ export interface DeckTagsFieldProps {
  * and a panel placed from numbers taken when it opened would then sit over the line being typed
  * on; one that hangs off the box's own bottom edge cannot.
  */
-export function DeckTagsField({
+export function TagsField({
   tags,
   inUse,
   onChange,
   id,
   autoFocus = false,
-}: DeckTagsFieldProps): JSX.Element {
+  copy,
+  disabled = false,
+  disabledHint,
+}: TagsFieldProps): JSX.Element {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
   /** The highlighted row, or `-1` for none. Read through `active` below, never directly: the
@@ -129,12 +176,12 @@ export function DeckTagsField({
     return next !== null;
   };
   const reorder =
-    tags.length < 2
+    disabled || tags.length < 2
       ? undefined
       : (dragged: string, target: string) => move(dragged, tags.indexOf(target));
 
   const matches = suggestTags(inUse, tags, draft);
-  const shown = open && matches.length > 0;
+  const shown = !disabled && open && matches.length > 0;
   const active = shown && cursor >= 0 && cursor < matches.length ? cursor : -1;
 
   /** One tag onto the end. The box empties whether or not anything was added: a repeat is
@@ -167,7 +214,7 @@ export function DeckTagsField({
       onBlur={(e) => {
         if (rootRef.current?.contains(e.relatedTarget)) return;
         setOpen(false);
-        if (draft.trim() !== "") add(draft);
+        if (!disabled && draft.trim() !== "") add(draft);
       }}
     >
       <label htmlFor={`${id}-tags`} className={cn(CAPTION, "mb-1.5")}>
@@ -178,17 +225,18 @@ export function DeckTagsField({
           // The bordered box is the chips and the input together, so it reads as one field and a
           // press on its padding lands in the input like a press on any text box's would.
           onMouseDown={(e) => {
-            if (e.target !== e.currentTarget) return;
+            if (disabled || e.target !== e.currentTarget) return;
             e.preventDefault();
             inputRef.current?.focus();
           }}
           className={cn(
             "flex min-h-9 w-full flex-wrap items-center gap-1.5 rounded-md border border-border bg-bg",
             "px-1.5 py-1 text-sm text-text focus-within:border-accent",
+            disabled && "border-dashed",
           )}
         >
           {tags.length > 0 && (
-            <ul aria-label="Tags on this deck" className="contents">
+            <ul aria-label={copy.chipsLabel} className="contents">
               {tags.map((tag, index) => (
                 <TagChip
                   key={tag}
@@ -196,14 +244,18 @@ export function DeckTagsField({
                   index={index}
                   total={tags.length}
                   onMove={reorder}
+                  onRemove={
+                    disabled
+                      ? undefined
+                      : () => {
+                          onChange(withoutTag(tags, tag));
+                          // The chip is about to unmount with the caret on its button; the box
+                          // is the one control here that survives every removal.
+                          inputRef.current?.focus();
+                        }
+                  }
                   onStep={(delta) => {
                     if (move(tag, index + delta)) owedFocus.current = tag;
-                  }}
-                  onRemove={() => {
-                    onChange(withoutTag(tags, tag));
-                    // The chip is about to unmount with the caret on its button; the box is
-                    // the one control here that survives every removal.
-                    inputRef.current?.focus();
                   }}
                 />
               ))}
@@ -222,10 +274,11 @@ export function DeckTagsField({
             // In Deck settings the form mounts once the deck row is read: with the panel when the
             // row is cached — `Dialog`'s mount effect then leaves the caret where a body put it —
             // or a beat later, taking it from the panel. Either way it lands here.
-            autoFocus={autoFocus}
+            autoFocus={autoFocus && !disabled}
+            disabled={disabled}
             maxLength={MAX_TAG_LENGTH}
             value={draft}
-            placeholder={tags.length === 0 ? "Add a tag…" : undefined}
+            placeholder={tags.length === 0 ? (disabled ? "No tags" : "Add a tag…") : undefined}
             onFocus={() => setOpen(true)}
             onChange={(e) => {
               setDraft(e.target.value);
@@ -272,7 +325,10 @@ export function DeckTagsField({
             // No box of its own: the wrapper above draws the border, and this is the part of it
             // that takes the caret. `min-w-24` is what sends it to a new line once the chips
             // have used the row up, rather than leaving a sliver too narrow to read a word in.
-            className="h-6 min-w-24 flex-1 bg-transparent px-1 text-sm placeholder:text-dim focus:outline-none"
+            className={cn(
+              "h-6 min-w-24 flex-1 bg-transparent px-1 text-sm placeholder:text-dim focus:outline-none",
+              "disabled:cursor-not-allowed",
+            )}
           />
         </div>
 
@@ -289,7 +345,7 @@ export function DeckTagsField({
               <ul
                 id={listId}
                 role="listbox"
-                aria-label="Tags on other decks"
+                aria-label={copy.suggestionsLabel}
                 className="max-h-48 overflow-auto"
               >
                 {matches.map((row, index) => (
@@ -310,7 +366,7 @@ export function DeckTagsField({
                   >
                     <span className="min-w-0 flex-1 truncate">{row.tag}</span>
                     <span className="shrink-0 font-mono text-xs tabular-nums text-dim">
-                      {row.count} {row.count === 1 ? "deck" : "decks"}
+                      {row.count} {row.count === 1 ? copy.unit[0] : copy.unit[1]}
                     </span>
                   </li>
                 ))}
@@ -320,9 +376,7 @@ export function DeckTagsField({
         </AnimatePresence>
       </div>
       <p className="mt-1 text-[0.6875rem] text-dim">
-        {tags.length < 2
-          ? "Shown on the deck tile. Press Enter to add one."
-          : "Shown on the deck tile in this order. Drag a tag to move it."}
+        {disabled && disabledHint !== undefined ? disabledHint : copy.hint(tags.length)}
       </p>
     </div>
   );
@@ -348,7 +402,8 @@ function TagChip({
   onMove: ((dragged: string, target: string) => void) | undefined;
   /** An arrow key on the word: one place back (`-1`) or forward (`1`). */
   onStep: (delta: -1 | 1) => void;
-  onRemove: () => void;
+  /** The ✕ — `undefined` in a disabled field, which draws none. */
+  onRemove: (() => void) | undefined;
 }): JSX.Element {
   const tip = useTooltip();
   const { attachChip, attachHandle, over } = useDeckTagReorder(tag, onMove);
@@ -360,6 +415,7 @@ function TagChip({
         "flex min-w-0 max-w-full items-center gap-0.5 rounded-sm border bg-surface pl-1.5",
         "text-xs leading-5 transition-colors duration-150 motion-reduce:transition-none",
         over ? "border-accent" : "border-border",
+        onRemove === undefined && "pr-1.5",
       )}
     >
       {onMove === undefined ? (
@@ -385,18 +441,20 @@ function TagChip({
           {tag}
         </button>
       )}
-      <button
-        type="button"
-        aria-label={`Remove the ${tag} tag`}
-        onClick={onRemove}
-        className={cn(
-          "grid size-5 shrink-0 place-items-center rounded-sm text-dim",
-          "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-          FOCUS,
-        )}
-      >
-        <X className="size-3" aria-hidden="true" />
-      </button>
+      {onRemove !== undefined && (
+        <button
+          type="button"
+          aria-label={`Remove the ${tag} tag`}
+          onClick={onRemove}
+          className={cn(
+            "grid size-5 shrink-0 place-items-center rounded-sm text-dim",
+            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          <X className="size-3" aria-hidden="true" />
+        </button>
+      )}
     </li>
   );
 }

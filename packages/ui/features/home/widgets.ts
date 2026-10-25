@@ -92,6 +92,13 @@ export interface WidgetPick {
   label: string;
   options: readonly PickOption[];
   dflt?: string | number;
+  /**
+   * **Drawn only while another pick of the same kind reads `is`** — a setting that refines one
+   * answer of another and means nothing beside the rest (issue #1400: `deckCompletion`'s `match`,
+   * under `Compare against → Theory`). The stored value is kept while it is hidden, so switching
+   * back finds the reader's choice; a body reads it only where `when` holds.
+   */
+  when?: { key: string; is: string | number };
 }
 
 /**
@@ -609,6 +616,13 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    * default — which is why a third word needs a `Compare` arm in `deck_completion.rs` first. It is
    * the chip: which comparison a card draws is the one thing a glance at it cannot otherwise tell.
    *
+   * **`match` refines `Theory` and is drawn only under it** (issue #1400, {@link WidgetPick.when}):
+   * the Compare dialog's two readings of what is left to find. `Exact match` is `options[0]` and the
+   * shipped behaviour — a planned copy counts only in the exact printing and finish the actual list
+   * plays; `Missing` counts a copy the actual list plays as another printing of the same card, so
+   * what is left is what no printing in the deck covers. Sent to Rust beside `compare`
+   * (`TheoryMatch` in `deck_completion.rs`). Kept in the config under `Collection`, and unread there.
+   *
    * `scope` is `newPrintings`' two words — `All decks` and a `Chosen…` checklist — rather than the
    * `decks` row's, because the checklist here offers **only the decks the comparison can measure**
    * (`DeckCompletionWidgetSettings`), which the Decks widget's own checklist cannot do. `All decks`
@@ -633,6 +647,15 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
         options: [
           { id: "collection", label: "Collection" },
           { id: "theory", label: "Theory" },
+        ],
+      },
+      {
+        key: "match",
+        label: "Theory match",
+        when: { key: "compare", is: "theory" },
+        options: [
+          { id: "exact", label: "Exact match" },
+          { id: "missing", label: "Missing" },
         ],
       },
       {

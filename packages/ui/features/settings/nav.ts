@@ -3,8 +3,8 @@
  *
  * The page was one scroll of twelve panels until 2026-09-03 — ordered by what a press costs,
  * which is a real rule and still the rule *inside* a group, but an ordering only helps somebody
- * who already knows what they are scrolling towards. This module is the other half: seven groups
- * a reader picks from, and a keyword per panel so that typing the word they actually have in
+ * who already knows what they are scrolling towards. This module is the other half: groups a
+ * reader picks from, and a keyword per panel so that typing the word they actually have in
  * mind ("dropbox", "tcgplayer", "patreon") lands on the panel that answers it.
  *
  * **Pure, and separate from both components that draw it**, because the two things worth
@@ -31,6 +31,7 @@ export type PanelId =
   | "prices"
   | "sync"
   | "review"
+  | "integrations"
   | "hidden-tags"
   | "start-view"
   | "theory-marks"
@@ -42,11 +43,12 @@ export type PanelId =
   | "errors"
   | "danger";
 
-/** The seven entries in the rail. */
+/** The entries in the rail. */
 export type GroupId =
   | "updates"
   | "carddata"
   | "sync"
+  | "integrations"
   | "tags"
   | "appearance"
   | "scanner"
@@ -105,6 +107,30 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     title: "Needs review",
     group: "sync",
     keywords: "conflict conflicts resolved kept folder loop looks fine queue",
+  },
+  /**
+   * **The one panel under `Integrations`, and the reason the entry exists** (issue #1396): the
+   * group's switch for a copy of the collection held on a server, so an integration can answer
+   * while the reader's devices are off.
+   *
+   * Not under `Sync`, though it needs a membership and a sync group: that entry is the reader's
+   * own devices, and this is a copy for something that is not one of them. A Discord bot and a
+   * remote MCP server come later and read this copy; their panels belong beside this one, which is
+   * what the entry's name is for.
+   *
+   * **The keyword line is the names of what will read the copy, and what the copy is** — `discord`,
+   * `mcp`, `claude`, `bot`, `server`, `cloud` — since nobody types this app's word for it.
+   * `sync`, `patreon` and `membership` are deliberately absent: they are the `Sync` entry's words,
+   * and a reader who types them is looking for their devices. So is `tags`, which is the `Tags`
+   * entry's and Scryfall's — the copy's *Entry tags* column is the collection's free text, and a
+   * search for the word must not put the two on one answer.
+   */
+  integrations: {
+    title: "Integrations",
+    group: "integrations",
+    keywords:
+      "discord mcp claude ai assistant chatbot bot api cloud server copy online remote " +
+      "publish private privacy offline",
   },
   "hidden-tags": {
     title: "Hidden tags",
@@ -239,7 +265,7 @@ type GroupMeta = {
 /**
  * The rail, top to bottom.
  *
- * **Seven entries, fewer than the panels they index**, which is the whole point: a list as long
+ * **Fewer entries than the panels they index**, which is the whole point: a list as long
  * as the page it indexes is a second scroll rather than a way through the first. Where two
  * panels answer one question they share an entry — `Needs review` is what sync asks of a reader,
  * and `Appearance`'s panels are what this app looks like when the reader is in front of it (the
@@ -260,6 +286,14 @@ type GroupMeta = {
  * else to change. Folding `Prices` into another entry is the alternative and it is a bigger
  * change than this one: every entry it could join answers a different question.
  *
+ * **`Integrations` sits directly under `Sync`** (issue #1396): the two are the rail's only entries
+ * about something outside this install — the reader's other devices, and a copy for services that
+ * answer when those devices are off — so they are read together. It holds one panel, and is a
+ * group of one for `Card data`'s reason: the entry names the question, and the Discord and MCP
+ * panels slot in under it later with nothing else to change. **The light edition draws neither
+ * the panel nor the entry** (`LIGHT_SETTINGS`, the Share control's `edition.publishes` reason),
+ * which `groupsOf` does by itself.
+ *
  * **`Appearance` sits after `Tags` and before `Storage and data`**, which is the last entry
  * about the app itself before the three about the folder on disk. It is emphatically not a
  * section *of* `Tags`: see the comment on `theory-marks` in {@link PANELS} for the vocabulary
@@ -275,6 +309,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
   updates: { label: "Updates" },
   carddata: { label: "Card data" },
   sync: { label: "Sync", badge: "review" },
+  integrations: { label: "Integrations" },
   tags: { label: "Tags" },
   appearance: { label: "Appearance" },
   scanner: { label: "Scanner" },

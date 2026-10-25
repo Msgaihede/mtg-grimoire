@@ -14,16 +14,18 @@ use std::sync::Arc;
 /// Every answering deck's completion, for the home page. **Read-only** connection, blocking
 /// pool, as every read in this app is — [`crate::deck::deck_values`]' shape exactly, marketplace
 /// and fallback included: anything this build does not recognise quotes TCGplayer rather than
-/// failing, and anything that is not `"theory"` compares against the collection.
+/// failing, anything that is not `"theory"` compares against the collection, and under Theory
+/// anything that is not `"missing"` matches the exact printing and finish.
 #[tauri::command]
 pub async fn deck_completion(
     state: tauri::State<'_, Arc<AppState>>,
     marketplace: Option<String>,
     compare: Option<String>,
+    theory_match: Option<String>,
 ) -> Result<Vec<DeckCompletion>, String> {
     let state = state.inner().clone();
     let marketplace = Marketplace::from_opt(marketplace.as_deref());
-    let compare = Compare::from_opt(compare.as_deref());
+    let compare = Compare::from_opt(compare.as_deref(), theory_match.as_deref());
     tauri::async_runtime::spawn_blocking(move || {
         deck_completion_for(&crate::sync::lock_db_read(&state), marketplace, compare)
     })

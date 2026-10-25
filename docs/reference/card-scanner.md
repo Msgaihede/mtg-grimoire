@@ -911,7 +911,8 @@ marketplace does not quote that printing in that finish.
 picture's top edge, *Reset evidence* and *Send scan…* in its top-right corner (a labelled press on
 the desktop and an icon on the phone, over a live picture with a session only — never over the
 camera's refusal or a host's sentence; the phone draws them while continuous scanning runs, the
-desktop's Reset stopped and between shots too) and a chip under the bar for the one error it has to
+desktop's Reset stopped and between shots too, and *Send scan…* between two point and shoot shots on
+both faces, on the shot just taken) and a chip under the bar for the one error it has to
 say, and none of the developer vocabulary. **The bar is drawn only over a live picture**, and its
 fill is a `scaleX` from the left edge, not a width. **The chip drops to a row of its own under the
 presses** where the room beside them is under 12rem (both labelled presses leave it 47px in the
@@ -922,9 +923,10 @@ accessible arrangement came across unchanged: a visually hidden live region** (`
 *progress*, because the leader can change frame to frame. **The chip is `role="alert"`** and says
 only the reader's failures (the loop's, a refused reset, a *Send scan…* pressed too soon), never the
 detector's own per-frame sentence, which is the Developer panels'; a refused reset is said stopped
-too. **The Matched name is the tray's row**, and that rung asks for `verdict.decision`, so a
-committed frame with no decision cannot call the last card matched over the one in the camera. An
-ambiguous decision names the card only when every choice shares one name.
+too, and a *Send scan…* refused between two shots. **The Matched name is the tray's row**, and
+that rung asks for `verdict.decision`, so a committed frame with no decision cannot call the last
+card matched over the one in the camera. An ambiguous decision names the card only when every
+choice shares one name.
 
 **The rest of what is drawn on the picture** (`reader/PictureNotes.tsx`): the stopped veil (a title
 and the note under it) and, under point and shoot, the *Point at a card, then press Scan card* pill
@@ -961,7 +963,9 @@ card lands, and **a hold of the picture on the phone face** (`HoldSurface`, name
 finger is on it (Space holds it from a keyboard; an Enter or an assistive tech's activation is one card's shot). What a press does is
 `usePointAndShoot.ts`, shared by both pages: every shot is news (it starts with `clearReads`, so a
 second copy laid where the first lay is filed); a shot never outlives what pauses the pump; and *Send
-scan…* is offered during a shot only.
+scan…* is offered during a shot and **between shots, on the one just taken** (2026-10-25; the loop
+keeps a shot's run — `holdRun`, *Sending a scan to the inbox*). Offered during a shot only, it went
+the moment the card landed, which is when a reader could see it was worth sending.
 
 **_Reset evidence_ sits in the HUD's corner, for every reader** (issue #740), outside the live region.
 **Reset is a boundary for outstanding frames too** (issue #781): the pump clears its verdict,
@@ -1332,7 +1336,13 @@ would be the scanner grading itself.
   yet…*. `ipc.test.ts` holds the frame counts to the engine's and the byte budget under its 10 MB.
 - **Never across a break**: the ring is emptied by `clearReads`, `reset`, a pump starting or stopping,
   and a filter set the session accepts (`breakRun`), so every frame of a run was judged under the
-  filters the label names. A press that lands in the round trip between the session taking a new filter
+  filters the label names. **A point and shoot shot's run outlives the shot** (`holdRun`): the shot
+  ends the moment its card lands, which is when a reader sees whether the scanner got it right, so its
+  ring is kept and *Send scan…* stays offered on it between shots, on both faces (2026-10-25 — drawn
+  only while the shot ran, the press was gone before anyone could reach it). The next shot starts with
+  `clearReads`, which lets it go. A held run is aged from its own last frame, not from the press, and
+  is sent once: a dialog that has been open on it spends it, and the press then says *Not enough of a
+  scan to send…* until the next shot. A press that lands in the round trip between the session taking a new filter
   and the page hearing it can send the last frame or two under the old filter's name.
 - **Never older than four seconds** (`RUN_MAX_AGE_MS`), at the ring and again at the press.
 - **A copy of each frame's bytes, taken before the call**: the web host *transfers* a frame's buffer to
@@ -1341,7 +1351,8 @@ would be the scanner grading itself.
   frames, the pump sends a copy of the kept one, so the send never empties the ring. Where it does
   not, the full copy drawn for that one frame goes to the scanner and the run keeps the pump's frame,
   because a run is one size of picture.
-- **In memory only**, and gone when the pump stops. The privacy policy says so (*The camera*).
+- **In memory only**, and gone when the pump stops — a shot's when the next shot starts, or the page
+  goes. The privacy policy says so (*The camera*).
 
 A press reads the ring and the page's state in one synchronous step (`useScanSubmit`). **Recognition
 pauses while the dialog is open** (issue #977); the camera stays open, and closing it starts a fresh run.

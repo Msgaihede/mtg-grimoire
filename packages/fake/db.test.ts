@@ -195,6 +195,7 @@ function wish(over: Partial<FakeWish> = {}): FakeWish {
     // rather than an absence: it is where an unfiled wish is, and the grain's fourth term.
     folderId: null,
     notes: null,
+    tags: "[]",
     needsReview: null,
     updatedAt: WHEN,
     ...over,
@@ -13633,7 +13634,13 @@ describe("the busy fault", () => {
     // 147 → 148 on 2026-10-14 with `share_auto_update` (issue #1025), which republishes changed
     // shares on the write connection and reaches `refuseIfBusy` first. Count again after a merge.
     // 148 → 149 on 2026-10-24 with `set_scan_sounds`, the scanner's sounds, through `with_write`.
-    expect(names).toHaveLength(149);
+    // 149 → 151 on 2026-10-25 with the entry tags' two writes (issue #1398),
+    // `collection_set_tags` and `wishlist_set_tags`, each reaching `refuseIfBusy` first; the
+    // read, `entry_tags_in_use`, sits in `readHandlers`. Count again after a merge.
+    // 151 → 150 the same day with `share_auto_update` retired (issue #1396): the engine's
+    // publish round after each sync trip refreshes shares now, and the page has no timer to ask.
+    // The integrations switch's three writes are `integrationHandlers`', not this table's.
+    expect(names).toHaveLength(150);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -21428,6 +21435,40 @@ describe("deck completion", () => {
   });
 
   /**
+   * **`theoryMatch: "missing"` is the Compare dialog's `Missing` reading** (issue #1400): the two
+   * regular Bolts the plan's four did not spend stand in for two planned copies of other Bolts —
+   * the 2X2 printing first, being first down the plan, then one of the two foils. Held to the
+   * dialog's `quantity − heldAsOtherPrinting`, and `exact` (or nothing) is the reading above.
+   */
+  it("lets another printing of the card fill a planned copy under theoryMatch missing", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [
+        deckCard({ id: 1, variant: "theory", quantity: 4 }),
+        deckCard({ id: 2, variant: "theory", categoryKind: "side", finish: "foil", quantity: 2 }),
+        deckCard({ id: 3, variant: "theory", cardId: BOLT_2X2.id, quantity: 1 }),
+        deckCard({ id: 10, quantity: 6 }),
+      ],
+    });
+    const reads = readHandlers(db);
+
+    const [row] = reads.deck_completion({
+      compare: "theory",
+      theoryMatch: "missing",
+      marketplace: "tcgplayer",
+    });
+
+    expect(row).toMatchObject({ list: "theory", wanted: 7, owned: 6, missing: 1 });
+    expect(row.unpricedMissing).toBe(1);
+    const diff = reads.deck_theory_diff({ deckId: 1, marketplace: "tcgplayer" });
+    expect(row.missing).toBe(diff.reduce((n, r) => n + r.quantity - r.heldAsOtherPrinting, 0));
+    expect(reads.deck_completion({ compare: "theory", theoryMatch: "exact" })).toEqual(
+      reads.deck_completion({ compare: "theory" }),
+    );
+    expect(reads.deck_completion({ compare: "theory" })[0]).toMatchObject({ owned: 4, missing: 3 });
+  });
+
+  /**
    * Under `theory` the question is only asked of a deck that has a plan — and **a virtual deck is
    * not filtered out**, because the collection is never consulted: its live list is a list
    * whatever the cardboard is. `deck_create` is what writes the pair; no patch can.
@@ -25635,5 +25676,78 @@ describe("folder rules", () => {
     expect(reads.wishlist_rule_conflicts({ marketplace: "tcgplayer" }).ids.length).toBeGreaterThan(
       0,
     );
+  });
+});
+
+/**
+ * Entry tags (user schema v67, issue #1398) — `entry_tags.rs`' three commands: the two setters
+ * write a stack's tags whole through `deck::clean_tags`' tidy, and the read counts rows per exact
+ * spelling across both tables, leaving `Recently removed` out.
+ */
+describe("entry tags", () => {
+  const COUNTERSPELL = CARDS.find((c) => c.name === "Counterspell")!;
+  const REMOVED: FakeCollectionFolder = {
+    id: 9,
+    parentId: null,
+    name: "Recently removed",
+    kind: "removed",
+    deckId: null,
+    sortOrder: 0,
+    locked: false,
+  };
+
+  it("writes a copy's tags whole, tidied, and answers them as stored", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, tags: '["old"]' })] });
+    const stored = writeHandlers(db).collection_set_tags({
+      id: 1,
+      tags: ["  Cube ", "trade   bait", "", "cube", "Trade bait"],
+    });
+    expect(stored).toEqual(["Cube", "trade bait"]);
+    expect(db.collectionEntries[0].tags).toBe('["Cube","trade bait"]');
+    expect(db.collectionEntries[0].updatedAt).toBeGreaterThan(WHEN);
+    expect(
+      readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } }).items[0].tags,
+    ).toBe('["Cube","trade bait"]');
+  });
+
+  it("writes a wish's tags, and draws them on the wish's row", () => {
+    const db = makeDb({ wishlistEntries: [wish({ id: 4 })] });
+    expect(writeHandlers(db).wishlist_set_tags({ id: 4, tags: ["Upgrade"] })).toEqual(["Upgrade"]);
+    const page = readHandlers(db).wishlist_list({ query: { limit: 10, offset: 0 } });
+    expect(page.items[0].tags).toBe('["Upgrade"]');
+    // And an empty list clears them.
+    expect(writeHandlers(db).wishlist_set_tags({ id: 4, tags: [] })).toEqual([]);
+    expect(db.wishlistEntries[0].tags).toBe("[]");
+  });
+
+  it("refuses a stack that is gone in the crate's sentences", () => {
+    const db = makeDb();
+    expect(() => writeHandlers(db).collection_set_tags({ id: 99, tags: ["x"] })).toThrow(
+      "That copy is no longer in your collection.",
+    );
+    expect(() => writeHandlers(db).wishlist_set_tags({ id: 99, tags: ["x"] })).toThrow(
+      "That wish is no longer on your wishlist.",
+    );
+  });
+
+  it("counts rows per exact spelling across both tables, sorted, without Recently removed", () => {
+    const db = makeDb({
+      collectionFolders: [REMOVED],
+      collectionEntries: [
+        entry({ id: 1, tags: '["Cube","modern"]' }),
+        entry({ id: 2, finish: "foil", tags: '["cube", "cube"]' }),
+        // Lenient, `deck::read_tags`' rule: a junk row adds nothing and fails nothing.
+        entry({ id: 3, finish: "etched", tags: '"Cube"' }),
+        entry({ id: 4, cardId: COUNTERSPELL.id, tags: '["Cube", 3]' }),
+        entry({ id: 5, cardId: COUNTERSPELL.id, folderId: 9, tags: '["Only removed"]' }),
+      ],
+      wishlistEntries: [wish({ id: 1, tags: '["Cube","Upgrade"]' })],
+    });
+    expect(readHandlers(db).entry_tags_in_use()).toEqual([
+      { tag: "Cube", count: 3 },
+      { tag: "Upgrade", count: 1 },
+      { tag: "cube", count: 1 },
+      { tag: "modern", count: 1 },
+    ]);
   });
 });

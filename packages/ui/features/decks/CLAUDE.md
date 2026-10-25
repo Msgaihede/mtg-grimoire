@@ -3,6 +3,7 @@
 TypeScript owns deck validation, category management, view presentation, and editing interactions. Rust supplies facts via `DeckCardRow` (legalities, color identity, P/T, game changers) and executes database transactions.
 
 Detailed storage architectures, live measurements, and visual findings are in reference docs:
+
 - Architecture, validation, notes TDZ, and to-do autosave: [deck-builder.md](../../../../docs/reference/deck-builder.md)
 - Storage, tables, and undo: [decks-storage.md](../../../../docs/reference/decks-storage.md)
 - Live WebView verification and interaction findings: [decks-live-findings.md](../../../../docs/reference/decks-live-findings.md)
@@ -10,6 +11,7 @@ Detailed storage architectures, live measurements, and visual findings are in re
 - Deck builder layout and visual design: [frontend-design.md](../../../../docs/reference/frontend-design.md)
 
 For global repo workflow, style, and testing conventions, refer to:
+
 - [Workflow & Commits](../../../../docs/agent/WORKFLOW.md)
 - [Code Style](../../../../docs/agent/CODE_STYLE.md)
 - [Verification Guide](../../../../docs/agent/RUNNING_AND_VERIFYING.md)
@@ -19,6 +21,7 @@ For global repo workflow, style, and testing conventions, refer to:
 ## 1. The Validation Layer (`validation/`)
 
 Pure TypeScript engine analyzing deck rules:
+
 - **Core modules**:
   - `engine.ts`: Evaluates deck size, copy limits, format legality, and restricted semantics (`max_one`, `banned_as_commander`).
   - Two validation entry points:
@@ -45,6 +48,7 @@ Pure TypeScript engine analyzing deck rules:
 ## 3. The Three Deck Kinds
 
 Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
+
 - **Regular decks (`false, false`)**: Single live list tracking owned physical cardboard.
 - **Theory decks (`true, false`)**: Dual-list structure pairing an Actual cardboard list with a Theory planning list.
 - **Virtual decks (`false, true`)**: Decks tracked without physical cardboard allocation (proxies, MTGO/Arena lists).
@@ -93,6 +97,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - The gallery tile's right-click menu (`deckMenu.tsx`, issue #914) has **Add tag ▸** (the tags other decks wear, then **New tag…**, which opens Deck settings with the caret in the Tags field — `DeckSettingsDialog`'s `focus="tags"`) and **Remove tag ▸** (greyed on a deck with none). Plain `submenu`s: `DecksPage` hands over `tagsInUse(decks.decks)`, so a right-click reads nothing.
   - A tag write sends the whole list (`deckUpdate({ tags })`, `[]` clears). `DeckSettingsDialog` holds the list it last sent until the row catches up, so a second tag is built on the first.
   - The order is the reader's (issue #913): a chip is dragged by its word onto another (`tagDrag.ts`, its own drag mark) or moved with ←/→ on the word, and the write is the whole list from `movedTag` — no reorder command.
+  - The field is `TagsField` in the deck's words (`DeckTagsField`); the collection's and the wishlist's **entry tags** (issue #1398, `features/entryTags/`) draw the same `TagsField` with their own words and their own suggestions. Change the field's behaviour once, here, and both follow; never make the entry field suggest deck tags or the reverse.
   - Suggestions are `tagsInUse(deck_list)` — there is no table of tags. Compare two tags with `tagKey`/`hasTag`, which fold capitals exactly as Rust's `clean_tags` does.
   - `DeckTile` draws them in one row on the art: above the badge and bracket marks, or on the art's bottom edge when the deck has neither. Outside the tile's `<button>`, like the marks.
   - A row that cannot draw every tag (too many, or one too long) ends in an `…` pill and shows the whole list as pills on hover (issue #901). `useTagOverflow` (`tagRow.ts`) measures natural widths rather than what wrapped, because the pill's reserved room is itself what wraps tags off. The hover is an empty box **inside** the button: the row is `pointer-events-none`, and a press on the strip must still open, menu and drag the deck.
@@ -103,17 +108,18 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
 
 `DeckEditor.tsx` is still the one entry (`<DeckEditor key={openDeckId} deckId={openDeckId} />`, plus the re-exports its tests import), split along the seams it already had:
 
-| File | Owns |
-| --- | --- |
-| `DeckEditor.tsx` | Which deck and which list (variant + its restore), every read and write, the `Layer` slot, the menus, the banners, the bands below the desk. |
-| `DeckDesk.tsx` | How the deck is *looked at*: view, group-by, sort, the filter box and label chips — and what derives from them (`shown`, `groups`, selection order, card walk, `actions`, `viewProps`). Draws the toolbar, the undocked bar and the desk row; the editor's parts arrive as slots (`header`, `tools`, `notices`, `dock`). |
-| `DeckEditorHeader.tsx` | The header's first line (back, name, Theory/Actual, Compare, transfer pair, actions) and its width constants. |
-| `DeckEditorLayers.tsx` | The `Layer` union, `layerMatches`, and every overlay, mounted as a fragment at the editor's top level. |
-| `useDeckDrops.ts` / `useDeckKeyboard.ts` | Every write a drop makes (plus the caret hand-off); the undo/redo and Delete bindings on `window`. |
+| File                                     | Owns                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DeckEditor.tsx`                         | Which deck and which list (variant + its restore), every read and write, the `Layer` slot, the menus, the banners, the bands below the desk.                                                                                                                                                                             |
+| `DeckDesk.tsx`                           | How the deck is _looked at_: view, group-by, sort, the filter box and label chips — and what derives from them (`shown`, `groups`, selection order, card walk, `actions`, `viewProps`). Draws the toolbar, the undocked bar and the desk row; the editor's parts arrive as slots (`header`, `tools`, `notices`, `dock`). |
+| `DeckEditorHeader.tsx`                   | The header's first line (back, name, Theory/Actual, Compare, transfer pair, actions) and its width constants.                                                                                                                                                                                                            |
+| `DeckEditorLayers.tsx`                   | The `Layer` union, `layerMatches`, and every overlay, mounted as a fragment at the editor's top level.                                                                                                                                                                                                                   |
+| `useDeckDrops.ts` / `useDeckKeyboard.ts` | Every write a drop makes (plus the caret hand-off); the undo/redo and Delete bindings on `window`.                                                                                                                                                                                                                       |
 
 - **State lives where it is drawn.** The filter is `DeckDesk`'s, so a keystroke never re-renders the editor, the header, the ledger, the docked search wall, or the stats/tokens/notes/to-do bands. Do not lift desk state back into the editor; hand the desk a stable callback instead. `DeckDesk.test.tsx` measures this with render-counting probes.
 - **Memo only holds on stable props.** The four views, `CardStack`, each view's per-pile component, `DeckLedger`, `DeckNotesPanel`, `DeckTodosPanel` and `DeckEditorHeader` are `React.memo`. Callbacks handed down are `useCallback` over `mutate`/`mutateAsync` (stable) — never over a whole mutation object (fresh every render) — or read through a ref.
 - **Per-pile memo compares rows, not arrays** (`views/sameDrawn.ts`): a filter rebuilds every `CardGroup`, but a pile whose row objects are the same in the same order is not redrawn. Never make that comparator deep — a re-read replaces rows precisely when a price or count may have moved.
+- **A stepper press redraws one pile** (issue #1402): every press is a new `deck.cards`, so nothing in the desk's `actions` bag (or the card and pile menus) may depend on it — read the rows through a ref at the press. `violations` keeps its map while `sameViolations` holds. The press's re-read of `["decks"]` is `useStepSettle`'s (`lib/useStepSettle.ts`): once, after a run of presses goes quiet. `DeckDesk.test.tsx` counts it.
 
 ---
 
@@ -121,9 +127,9 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
 
 Execute verification tests only at the end of feature work:
 
-| Command | Action |
-| --- | --- |
+| Command                                                     | Action                                     |
+| ----------------------------------------------------------- | ------------------------------------------ |
 | `pnpm test` / `pnpm exec vitest packages/ui/features/decks` | Run deck builder unit and validation tests |
-| `pnpm exec vitest packages/ui/features/decks/validation` | Run isolated deck validation rules tests |
-| `cargo test -p grimoire-core deck::` | Run Rust core deck storage tests |
-| `cargo test -p mtg-grimoire deck::` | Run desktop host wrapper tests |
+| `pnpm exec vitest packages/ui/features/decks/validation`    | Run isolated deck validation rules tests   |
+| `cargo test -p grimoire-core deck::`                        | Run Rust core deck storage tests           |
+| `cargo test -p mtg-grimoire deck::`                         | Run desktop host wrapper tests             |

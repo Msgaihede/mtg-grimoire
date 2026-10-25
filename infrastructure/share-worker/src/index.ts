@@ -1,4 +1,5 @@
 import { handleSnapshot, handleUpload } from "./blob";
+import { allowedOrigin, preflight, withCors } from "./cors";
 import { authorised, json, type Env } from "./env";
 import { sweepLapsed } from "./lapse";
 import { handleShell, notFound } from "./page";
@@ -91,6 +92,53 @@ function methodNotAllowed(expected: string): Response {
   });
 }
 
+/** A gated path, read: its group, its action, its id if it carries one, and the methods it takes. */
+interface Gated {
+  group: string;
+  action: string;
+  id: string | undefined;
+  expected: readonly string[] | undefined;
+}
+
+function gatedRoute(pathname: string): Gated | null {
+  const write = WRITE.exec(pathname);
+  if (write === null) return null;
+  // The optional group is `undefined` when the path carries no id, which `RegExpExecArray`'s
+  // `string` element type does not say — so it is annotated rather than inferred.
+  const id: string | undefined = write[3];
+  return {
+    group: write[1],
+    action: write[2],
+    id,
+    expected: METHOD.get(id === undefined ? write[2] : `${write[2]}/id`),
+  };
+}
+
+/**
+ * Everything under `/g/`: the route, the method, the gate, the handler. Its answers are the
+ * router's to make readable to a page (`cors.ts`); nothing in here knows a browser exists.
+ */
+async function gated(request: Request, env: Env, route: Gated | null): Promise<Response> {
+  // **`/g/…` answers JSON**: the caller is the app, which parses JSON and would meet an HTML body
+  // as a decode error naming nothing.
+  if (route === null || route.expected === undefined) return json({ error: "not found" }, 404);
+  const { group, action, id, expected } = route;
+  // Ahead of the gate, as the relay answers 405 before 401: the method is a fact about the
+  // request that costs nothing to check, and an HMAC verify is not free.
+  if (!expected.includes(request.method)) return methodNotAllowed(expected.join(", "));
+
+  if (!(await authorised(request, env, group))) return json({ error: "unauthorized" }, 401);
+
+  // One clock read for the whole request, passed down rather than taken again in each handler:
+  // a row whose `created_at` and `updated_at` disagree by a millisecond is a row that looks
+  // like it was edited.
+  const now = Date.now();
+  if (action === "shares") return handleList(env, group);
+  if (id === undefined) return handleCreate(request, env, group, now);
+  if (request.method === "PUT") return handleUpload(request, env, group, id, now);
+  return handleRevoke(env, group, id, now);
+}
+
 export default {
   /**
    * `ctx` is optional because the suite calls `worker.fetch(request, env)` — there is no workerd
@@ -126,38 +174,25 @@ export default {
       return new Response(null, { status: answer.status, headers: answer.headers });
     }
 
-    const write = WRITE.exec(url.pathname);
     // **`/g/…` answers JSON and everything else answers the page.** A path that is neither route
     // is overwhelmingly a mistyped or truncated share link — a well-formed id is sixteen
     // base64url characters and one wrong keystroke misses `PUBLIC` entirely — and that reader is
-    // exactly who the page is for. Under `/g/` the caller is the app, which parses JSON and would
-    // meet an HTML body as a decode error naming nothing.
-    if (write === null) {
-      return url.pathname.startsWith("/g/") ? json({ error: "not found" }, 404) : notFound();
+    // exactly who the page is for.
+    if (!url.pathname.startsWith("/g/")) return notFound();
+
+    // **The web app publishes from a browser** (issue #1396's PR 2: the publish round runs on
+    // every host), so a page at an origin on `APP_ORIGINS` is answered a pre-flight for a gated
+    // route ahead of the gate, and every `/g/…` answer to it — the refusals above all — is made
+    // readable to it (`cors.ts`). **A request with no `Origin`, which is every native build, gets
+    // `gated`'s own `Response`, untouched.**
+    const route = gatedRoute(url.pathname);
+    const origin = allowedOrigin(request, env);
+    if (origin === null) return gated(request, env, route);
+    if (route?.expected !== undefined) {
+      const answer = preflight(request, origin, route.expected.join(", "));
+      if (answer !== null) return answer;
     }
-
-    const group = write[1];
-    const action = write[2];
-    // The optional group is `undefined` when the path carries no id, which `RegExpExecArray`'s
-    // `string` element type does not say — so it is annotated rather than inferred.
-    const id: string | undefined = write[3];
-
-    const expected = METHOD.get(id === undefined ? action : `${action}/id`);
-    if (expected === undefined) return json({ error: "not found" }, 404);
-    // Ahead of the gate, as the relay answers 405 before 401: the method is a fact about the
-    // request that costs nothing to check, and an HMAC verify is not free.
-    if (!expected.includes(request.method)) return methodNotAllowed(expected.join(", "));
-
-    if (!(await authorised(request, env, group))) return json({ error: "unauthorized" }, 401);
-
-    // One clock read for the whole request, passed down rather than taken again in each handler:
-    // a row whose `created_at` and `updated_at` disagree by a millisecond is a row that looks
-    // like it was edited.
-    const now = Date.now();
-    if (action === "shares") return handleList(env, group);
-    if (id === undefined) return handleCreate(request, env, group, now);
-    if (request.method === "PUT") return handleUpload(request, env, group, id, now);
-    return handleRevoke(env, group, id, now);
+    return withCors(await gated(request, env, route), origin);
   },
 
   /**

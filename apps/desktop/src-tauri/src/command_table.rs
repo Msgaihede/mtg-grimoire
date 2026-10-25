@@ -115,13 +115,13 @@ const NOT_YET: &[&str] = &[
     // swallow a refusal (`.catch(() => {})`), so nothing a reader sees is refused.
     "prefetch_images",
     "prewarm_collection",
-    // share — `share/` is still this crate's: the spec listed its snapshot and cache, and no step
-    // of the extraction moved them. The light edition draws no shared view, and the collection's
-    // Share control shows only to a connected reader.
+    // share — the snapshot, its cache and its upload are the core's since issue #1396, and every
+    // host's publish round keeps a live share current; what is left here is the reader's presses
+    // and the viewer of a stranger's link (`share/publish.rs`, which stayed this crate's). The
+    // light edition draws no Share control and no shared view, so no light page asks for these.
     "share_list",
     "share_create",
     "share_refresh",
-    "share_auto_update",
     "share_revoke",
     "share_open",
 ];

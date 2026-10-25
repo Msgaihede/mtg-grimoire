@@ -231,14 +231,15 @@ describe("shape", () => {
   // window because the window is the question — and the two review counts under the table each
   // counts, which is also the root Needs review's clear now fires.
   it("files round two's reads under the roots their writes already invalidate", () => {
-    expect(deckCompletionKey("cardkingdom", "theory")).toEqual([
+    expect(deckCompletionKey("cardkingdom", "theory", "missing")).toEqual([
       "decks",
       "completion",
       "cardkingdom",
       "theory",
+      "missing",
     ]);
-    // The bridge's one invalidation reaches every marketplace and both comparisons.
-    expect(deckCompletionKey("tcgplayer", "collection").slice(0, 2)).toEqual([
+    // The bridge's one invalidation reaches every marketplace, both comparisons and both matches.
+    expect(deckCompletionKey("tcgplayer", "collection", "exact").slice(0, 2)).toEqual([
       ...deckCompletionRoot,
     ]);
     expect(upcomingSetsKey(90)).toEqual(["decks", "upcoming", 90]);
@@ -246,7 +247,9 @@ describe("shape", () => {
     expect(wishlistReviewCountKey).toEqual(["wishlist", "reviewCount"]);
     expect(scannerTrayCountKey).toEqual(["scanner", "trayCount"]);
     // Not the gallery's value key: that one is the narrower main + commander + maybe pile.
-    expect(deckCompletionKey("tcgplayer", "collection")).not.toEqual(deckValuesKey("tcgplayer"));
+    expect(deckCompletionKey("tcgplayer", "collection", "exact")).not.toEqual(
+      deckValuesKey("tcgplayer"),
+    );
   });
 
   // Issue #672. The lists live on the `decks` row, so the key sits under `["decks"]` and every deck

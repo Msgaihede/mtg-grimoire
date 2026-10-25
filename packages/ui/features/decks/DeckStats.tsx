@@ -1,4 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronRight, CircleCheck } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -896,7 +904,17 @@ export function DeckStats({
    */
   separateXGroup?: boolean;
 }) {
-  const stats = useMemo(() => deckStats(cards, separateXGroup), [cards, separateXGroup]);
+  /**
+   * The rows the band is drawn from, **a beat behind the desk's** (issue #1402).
+   *
+   * A stepper press changes `cards`, and every readout below is counted from them — so the band
+   * used to be redrawn in the press's own render, seven charts' worth of it in front of the one
+   * number the reader is watching. Deferred, the press paints the desk with the band as it was,
+   * and the band catches up in a render React can interrupt for the next press. The readouts are
+   * held as elements over `stats` below, so the press's render skips them outright.
+   */
+  const shownCards = useDeferredValue(cards);
+  const stats = useMemo(() => deckStats(shownCards, separateXGroup), [shownCards, separateXGroup]);
   const bodyId = useId();
   /**
    * The band body's width, and the arrangement it picks — see {@link statsColumns}.
@@ -1016,43 +1034,59 @@ export function DeckStats({
   // re-derived**: the two arrangements are the same seven elements in different boxes, so a prop
   // added to one card here reaches it in both, and the lifted state above is what lets a card
   // survive the remount a change of box costs it.
-  const pips = (
-    <ManaPips
-      key="pips"
-      stats={stats}
-      hideColorless={hideColorless}
-      onHideColorlessChange={setHideColorless}
-    />
+  //
+  // **Each one memoised** (issue #1402): an element that is the same object as last render is one
+  // React does not redraw, so a render of this band that moved none of a readout's inputs — the
+  // press's own, while `shownCards` is still the old rows — costs that readout nothing.
+  const pips = useMemo(
+    () => (
+      <ManaPips
+        key="pips"
+        stats={stats}
+        hideColorless={hideColorless}
+        onHideColorlessChange={setHideColorless}
+      />
+    ),
+    [stats, hideColorless],
   );
-  const spread = (
-    <CardDistribution
-      key="spread"
-      cards={cards}
-      separateXGroup={separateXGroup}
-      stats={stats}
-      by={by}
-      onByChange={setBy}
-      odds={odds}
-      onOddsChange={setOdds}
-    />
+  const spread = useMemo(
+    () => (
+      <CardDistribution
+        key="spread"
+        cards={shownCards}
+        separateXGroup={separateXGroup}
+        stats={stats}
+        by={by}
+        onByChange={setBy}
+        odds={odds}
+        onOddsChange={setOdds}
+      />
+    ),
+    [shownCards, separateXGroup, stats, by, odds],
   );
-  const curve = (
-    <ManaCurveChart
-      key="curve"
-      stats={stats}
-      split={creatureSplit}
-      onSplitChange={onCreatureSplitChange}
-    />
+  const curve = useMemo(
+    () => (
+      <ManaCurveChart
+        key="curve"
+        stats={stats}
+        split={creatureSplit}
+        onSplitChange={onCreatureSplitChange}
+      />
+    ),
+    [stats, creatureSplit, onCreatureSplitChange],
   );
-  const byColor = <CurveByColor key="byColor" stats={stats} />;
-  const figures = (
-    <DeckFigures
-      key="figures"
-      stats={stats}
-      marketplace={marketplace}
-      tracksCollection={tracksCollection}
-      theory={theory}
-    />
+  const byColor = useMemo(() => <CurveByColor key="byColor" stats={stats} />, [stats]);
+  const figures = useMemo(
+    () => (
+      <DeckFigures
+        key="figures"
+        stats={stats}
+        marketplace={marketplace}
+        tracksCollection={tracksCollection}
+        theory={theory}
+      />
+    ),
+    [stats, marketplace, tracksCollection, theory],
   );
   // **The whole shortfall half, or none of it** — the three presses, the destination picker and
   // the two answer lines are one component precisely so that a deck with no binder behind it can

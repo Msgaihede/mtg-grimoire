@@ -11,7 +11,7 @@ reasons: [the spec](../superpowers/specs/2026-10-08-repository-layout-and-worksp
 | `packages/ui/` | The shared frontend: `components/`, `features/`, `lib/`. `@/` means this folder. All three apps are built from it. |
 | `packages/fake/` | The engine faked in TypeScript, for Storybook, the tests and the light app's `--mode fake`. |
 | `crates/` | The shared Rust: `grimoire-core` (the engine), `card-scanner`, `card-neural` (the Scanner's recogniser, with its model files), the web host's two modules, `grimoire-web` and `grimoire-scan`, and `grimoire-play` (the goldfish board's rules engine, desktop-only). |
-| `infrastructure/` | The four Cloudflare Workers: `relay/`, `share-worker/`, `app-worker/`, `scan-worker/`. |
+| `infrastructure/` | The five Cloudflare Workers: `relay/`, `share-worker/`, `app-worker/`, `scan-worker/`, `integrations-worker/`. |
 
 **Build outputs** sit in the app that makes them — `apps/desktop/dist/`, `apps/light/dist-web/`,
 `apps/light/dist-mobile/`, `apps/share/dist-share/` — except two that cargo makes or feeds:

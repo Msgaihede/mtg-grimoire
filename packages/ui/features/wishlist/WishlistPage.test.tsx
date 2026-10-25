@@ -200,6 +200,7 @@ const BOLT: WishRow = {
   preferredFinish: "foil",
   unitPrice: 400.5,
   notes: null,
+  tags: "[]",
   needsReview: null,
   updatedAt: 1_800_000_000,
 };

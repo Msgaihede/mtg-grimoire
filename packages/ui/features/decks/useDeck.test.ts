@@ -1121,7 +1121,8 @@ describe("useDeck", () => {
       finish: null,
       quantity: 3,
     });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+    // The stepper's settle waits for the run of presses to stop (issue #1402) — `useStepSettle`.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] }));
     // Every deck write marks the wishlist since user schema v48: a theory deck's managed
     // wishlist is rewritten after it (issue #512).
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
@@ -1146,6 +1147,48 @@ describe("useDeck", () => {
     // printing of every card the deck was short of, and a search behind this is visibly wrong
     // rather than stale in a field nothing draws.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  /**
+   * **A run of stepper presses re-reads the deck once, after the last of them** (issue #1402).
+   *
+   * Each press used to invalidate the whole `["decks"]` root and the wishlist on its own answer —
+   * a dozen reads per press, each answer a re-render of the editor queued in front of the next
+   * press's paint. The presses here land one after another, as a reader's clicks do, and the
+   * deck's own number is the answer each time; only the run's end asks for everything counted
+   * from it.
+   */
+  it("settles a run of stepper presses once, after the last of them", async () => {
+    deckSetCardQuantity.mockImplementation(
+      (
+        _deck: number,
+        _card: string,
+        _pile: number,
+        _variant: string,
+        _finish: null,
+        quantity: number,
+      ) => Promise.resolve({ id: 9, quantity, removed: false }),
+    );
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const decksRead = () =>
+      invalidate.mock.calls.filter(([filters]) => filters?.queryKey?.[0] === "decks").length;
+
+    for (const quantity of [3, 4, 5]) {
+      await result.current.setQuantity.mutateAsync({
+        cardId: "p1",
+        categoryId: MAIN.id,
+        finish: null,
+        quantity,
+      });
+    }
+    expect(decksRead()).toBe(0);
+    // The guess and the answer agree, so the deck's own row already says it.
+    await waitFor(() => expect(result.current.cards[0].quantity).toBe(5));
+
+    await waitFor(() => expect(decksRead()).toBe(1));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
   });
 
   /**

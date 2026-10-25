@@ -185,6 +185,25 @@ pub async fn live_sync(state: Arc<State>, writes: Arc<Bell>) {
     live::run(state, writes).await
 }
 
+/// **The publish round, for the life of this Worker** (issue #1396) — the loop every host runs
+/// beside live sync (`grimoire_core::integration::publish::run`). The caller spawns it beside
+/// [`live_sync`] and never awaits it; it does not end.
+///
+/// After each successful sync trip, debounced, it republishes every live share of the group that
+/// moved — so a change made in a browser reaches a share with no desktop on — and, when the
+/// group's integrations store exists, the projection tables that did. Its requests go to the
+/// share Worker (`share::publish::SHARE_BASE`, which answers this origin and is in the policy's
+/// `connect-src`) and to the integrations store, whose address is a placeholder until its first
+/// deploy, so this host asks it nothing yet. **An install that has connected nothing asks
+/// nobody**: one read of two rows every fifteen seconds is the whole of its cost there.
+///
+/// **One thread, as for [`live_sync`]**: its reads and its round run where they stand on the one
+/// connection, each SQLite stretch let go across every request — the projection's read included,
+/// which on this host is the one connection's (`State::reader`).
+pub async fn publisher(state: Arc<State>) {
+    grimoire_core::integration::publish::run(state).await
+}
+
 /// **Which of a pool's files are the corpus's, in the order to delete them** — whatever
 /// SQLite keeps beside the database under its name first (a rollback journal on this host; a
 /// `-wal` and `-shm` are matched too, for a storage that ever grants them), and **the
@@ -586,6 +605,37 @@ mod tests {
             [("sync:live".to_owned(), json!({ "state": "off" }))],
             "one `off`, and nothing that would mean a dial"
         );
+    }
+
+    /// **The publish round runs on this host's one connection and one thread**, and is reached:
+    /// a publish asked for is answered and cleared — by a round that, on an install that has
+    /// connected nothing, asks nobody — and the loop goes on. A lock taken twice would be a panic
+    /// here, as it is a trap in a Worker.
+    #[tokio::test]
+    async fn the_publisher_answers_a_request_on_one_connection_and_never_ends() {
+        use grimoire_core::integration::settings;
+        let dir = scratch("web-publisher");
+        let heard = Arc::new(Recording::default());
+        let started = start(&dir, "x", heard.clone()).unwrap();
+        // A card, because a device with no card data yet publishes nothing and answers no
+        // request until it has some.
+        grimoire_core::schema::fixtures::seed_card(&started.state.lock_db(), "c-seed", "lea", "1");
+        settings::request_publish(&started.state.lock_db()).unwrap();
+        let _alone = grimoire_core::platform::alone::emulate();
+        let running = tokio::spawn(publisher(Arc::clone(&started.state)));
+
+        let mut cleared = false;
+        for _ in 0..500 {
+            if !settings::publish_requested(&started.state.lock_db_read()) {
+                cleared = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(!running.is_finished(), "the loop never ends");
+        running.abort();
+        assert!(cleared, "the request was never answered");
+        assert!(heard.taken().is_empty(), "the round says nothing to a page");
     }
 
     /// A start that cannot open says so in a sentence that names what a reader can see, and

@@ -102,6 +102,9 @@ pub mod deckpane;
 /// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
 /// will look.
 pub mod decksort;
+/// **Entry tags** (user schema v67): a stack's own tags, on a collection row or a wish —
+/// `grimoire-core`'s, with the three desktop wrappers.
+pub mod entry_tags;
 /// **The error log**: what failed, when, how often. `grimoire-core`'s, re-exported — whole
 /// since the I/O step, when `kind_of` followed `scryfall` there.
 pub use grimoire_core::errors;
@@ -132,6 +135,10 @@ pub mod index;
 /// **`grimoire-core`'s bulk-file ingest**, and the one test of it that builds its database with
 /// [`split`].
 pub mod ingest;
+/// **The integrations store** (issue #1396) — `grimoire-core`'s module, re-exported, and the four
+/// `#[tauri::command]` wrappers behind Settings → Integrations. The publish round the module also
+/// holds is spawned by `desktop::start`, beside live sync.
+pub mod integration;
 pub use grimoire_core::legalities;
 /// **The four view-state modules.** `listview`, `nav`, `searchopen` and `zoom` each keep one
 /// setting in `app_meta` and answer it back - two commands apiece. [`searchopen`] arrived on

@@ -186,7 +186,11 @@ export const ARMS = [
   // `frontend` before it lands on `main`, not on the next unrelated pull request. `frontend` only:
   // no build reads a Markdown file. **Above the prose arm**, whose `*.md` would take them.
   {
-    match: ["infrastructure/app-worker/*.md", "infrastructure/scan-worker/*.md"],
+    match: [
+      "infrastructure/app-worker/*.md",
+      "infrastructure/scan-worker/*.md",
+      "infrastructure/integrations-worker/*.md",
+    ],
     jobs: ["frontend"],
   },
 
@@ -412,6 +416,24 @@ export const ARMS = [
   // `frontend`'s alone, by the arm above the prose arm. `release.yml`'s `scan-deploy` deploys it,
   // at a release tag.
   { match: ["infrastructure/scan-worker/*"], jobs: ["frontend"] },
+
+  // **The integrations store** (issue #1396's PR 2): `infrastructure/integrations-worker/`, the
+  // fifth Worker. `frontend` type-checks it (`tsc -p infrastructure/integrations-worker/tsconfig.json`
+  // in `pnpm build`), lints it and runs its suite, `test/` beside `src/` — the only Worker whose
+  // suite is not under `src/`, so a grep of the script finds what a deploy bundles and nothing a
+  // test needed.
+  //   - **`src/` is `rust`'s too**: the engine's `integration::store` tests read `src/cors.ts` and
+  //     `src/store.ts` with `include_str!` and hold the three projection headers and the refusal
+  //     codes to them, so a word changed here alone is red there alone. The whole folder rather
+  //     than the two files, so the next read of one is routed the day it lands; the census holds
+  //     this arm to those reads. **Above the folder's own arm**, which would take them.
+  //   - **The rest is `frontend`'s alone** — its suite, configuration and migration; its
+  //     `golden.test.ts` reads the engine's golden, which is the engine's arm. **Not `web`**: no
+  //     build copies or runs it. Its README is `frontend`'s, by the arm above the prose arm
+  //     (`wrangler.test.ts` sweeps it for an account id). `release.yml`'s `integrations-deploy`
+  //     deploys it, at a release tag, once the owner turns that job on.
+  { match: ["infrastructure/integrations-worker/src/*"], jobs: ["frontend", "rust"] },
+  { match: ["infrastructure/integrations-worker/*"], jobs: ["frontend"] },
 
   // The one tool that deploys the hosting Worker, pinned with everything under it, in a folder
   // of its own that the workspace does not list. `release-rule.test.ts` reads its manifest and

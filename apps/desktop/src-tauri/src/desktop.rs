@@ -16,13 +16,13 @@ use crate::sync::AppState;
 use crate::{
     activity, archive, camera, card, collection, collection_alloc, collection_folders, combos, db,
     deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
-    deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
-    export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
-    mirror, nav, new_printings, panelwidth, paths, playtest, price_history, recent_cards, reset,
-    scan_history, scanner, scansounds, schema, scryfall, search, searchopen, searchwidth,
-    set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes, sync,
-    sync_engine, sync_pair, tags, trade, upcoming_sets, update, value_history, window, wishlist,
-    wishlist_folders, wishlist_optimize, zoom,
+    deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort,
+    entry_tags, errors, export, home, images, import, index, integration, listview, markcolors,
+    marketplace, marketplace_feed, mirror, nav, new_printings, panelwidth, paths, playtest,
+    price_history, recent_cards, reset, scan_history, scanner, scansounds, schema, scryfall,
+    search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide, startup,
+    startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets, update,
+    value_history, window, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -429,18 +429,25 @@ pub fn run() {
             // Publishing a binder as a read-only page, and reading somebody else's. Registered
             // from `share::commands` for the pairs above's reason: `generate_handler!` names a
             // command after the **last path segment**, so these are `share_list`,
-            // `share_create`, `share_refresh`, `share_auto_update`, `share_revoke` and
-            // `share_open`.
+            // `share_create`, `share_refresh`, `share_revoke` and `share_open`. Keeping a share
+            // current is no command at all since issue #1396: the publish round spawned at the
+            // foot of `start` does it after every sync trip.
             //
-            // **Five of the six reach the network and `share_open` reaches it with no token at
+            // **Four of the five reach the network and `share_open` reaches it with no token at
             // all** — viewing a share needs the link and nothing else (spec §9), which is the
             // whole of the entitlement asymmetry this feature is built around.
             share::commands::share_list,
             share::commands::share_create,
             share::commands::share_refresh,
-            share::commands::share_auto_update,
             share::commands::share_revoke,
             share::commands::share_open,
+            // The integrations switch (issue #1396, plan §3.3): the group's store, its columns,
+            // and what this device last heard of it. Each is the core's command of the same name
+            // on a worker, the press's three through the sync lane.
+            integration::integrations_status,
+            integration::integrations_enable,
+            integration::integrations_set_fields,
+            integration::integrations_disable,
             // The two writes that move copies across the deck boundary. Registered from
             // `collection_alloc::commands` so the wire names match the crate's own — see that
             // module. `generate_handler!` names a command after the last path segment.
@@ -476,6 +483,9 @@ pub fn run() {
             wishlist::wishlist_breakdown,
             wishlist::wishlist_import_commit,
             wishlist::wishlist_set_printing,
+            entry_tags::entry_tags_in_use,
+            entry_tags::collection_set_tags,
+            entry_tags::wishlist_set_tags,
             wishlist_optimize::wishlist_optimize_plan,
             wishlist_optimize::wishlist_optimize_apply,
             wishlist_folders::wishlist_folder_list,
@@ -1071,6 +1081,13 @@ fn start(app: &tauri::AppHandle) {
     // every other launch task is on. What it says — `sync:live`, `sync:applied` — goes through
     // the state's event sink, which is `WindowEvents` below, to every window.
     tauri::async_runtime::spawn(crate::sync_engine::live::run(state.core.clone(), writes));
+
+    // The publish round (issue #1396), beside the doorbell and for the same reason — a schedule
+    // of its own. After each successful sync trip, debounced, it republishes every live share of
+    // the group that moved and, when the group's integrations store exists, the projection
+    // tables that did; it replaced the shell's five-minute share timer. On an installation that
+    // has connected nothing it is one local read every fifteen seconds.
+    tauri::async_runtime::spawn(crate::integration::publish::run(state.core.clone()));
 }
 
 /// Start the launch's optional feeds, each on a task of its own: the selected marketplace's

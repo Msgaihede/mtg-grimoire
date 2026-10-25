@@ -12,8 +12,45 @@
 //! Everything in this file is a pure function of the database plus its arguments — no clock, no
 //! network — which is what lets [`super::publish`]'s two-step be tested without an HTTP mock.
 
-use super::commands::ShareRow;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
+
+/// One published share, as the page draws it — and the row this table holds.
+///
+/// **Here and not beside the desktop's commands since PR 2 of issue #1396**, because the core's
+/// publish answers it on every host; the desktop re-exports it as `share::commands::ShareRow`.
+///
+/// **`owner_name` is on this row because spec §4.3 needs it there**: the relay holds the name,
+/// and the second device in a group inherits it from `GET /g/{group}/shares` rather than asking
+/// the reader to type it again. A row without it would make `share_create`'s `ownerName`
+/// argument unanswerable on any device but the first.
+///
+/// **`url` is on it for the same kind of reason and one degree harder**: a share list with no
+/// links is not a share list, and this one has to be drawable with no network — so the link is a
+/// column of `collection_shares` rather than something rebuilt from
+/// [`super::publish::SHARE_BASE`] — the Worker builds it from its own binding, and one string
+/// built on both sides is two chances to disagree.
+///
+/// `published` is **this device's** stamp and the relay knows nothing about it: `None` means
+/// this device has never uploaded, which is what a second device in the group reads before it
+/// offers *Update* rather than *Share*.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareRow {
+    pub id: String,
+    /// `collection_folders.sync_uid`, and `None` for a whole-collection share.
+    pub folder_uid: Option<String>,
+    pub title: String,
+    pub owner_name: String,
+    pub url: String,
+    /// The wire form of [`super::ShareFields`] — a subset of `condition`, `lang` and `value`.
+    pub fields: Vec<String>,
+    /// `live`, `lapsed` or `revoked`. The middle one is the relay's daily pass talking, and is
+    /// the one a reader must be told about before their friends tell them.
+    pub state: String,
+    pub published: Option<i64>,
+    pub updated_at: i64,
+}
 
 /// Every column, in the order [`hydrate`] reads them. One spelling, so a `SELECT` and the
 /// closure that walks it cannot drift into disagreeing about which string is the title.

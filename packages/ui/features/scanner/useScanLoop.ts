@@ -26,9 +26,11 @@ export interface ScanLoop {
    * is not in it, so the run is exactly what the scanner's answers on screen were made from.
    * **And never across a break in the evidence**: emptied by {@link ScanLoop.clearReads} and
    * {@link ScanLoop.reset}, and whenever the pump starts or stops, so a run cannot span a reset,
-   * a Stop or two camera streams. **Nor across the break the session makes by itself**, which
-   * nothing above sees: it forgets the card when it takes a changed set of *filters* — the
-   * page's to say, with {@link ScanLoop.breakRun}. And never further back than a few seconds
+   * a Stop or two camera streams — but for a stream started under `holdRun` (point and shoot's
+   * shot), whose run is kept when it stops, until the next start or clear lets it go. **Nor
+   * across the break the session makes by itself**, which nothing above sees: it forgets the
+   * card when it takes a changed set of *filters* — the page's to say, with
+   * {@link ScanLoop.breakRun}. And never further back than a few seconds
    * before its newest frame (`RUN_MAX_AGE_MS`).
    *
    * A function and not a value, because the ring is a ref: it turns over nine times a second and
@@ -208,6 +210,7 @@ export function useScanLoop({
   grabFrame = defaultGrabFrame,
   grabKept = defaultGrabKept,
   keepFullFrames = false,
+  holdRun = false,
   onDecision,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -224,6 +227,14 @@ export function useScanLoop({
    * through a ref; a change starts the run over, because a run is one size.
    */
   keepFullFrames?: boolean;
+  /**
+   * **A stream started while this is on keeps its run when it stops** — point and shoot, whose
+   * shot ends on the card it read: that shot is the scan a reader looks at, and *Send scan…* is
+   * offered on it between two shots. The next start, {@link ScanLoop.clearReads} (every shot
+   * begins with one) and {@link ScanLoop.breakRun} still let it go. Read through a ref as the
+   * pump starts, so what decides is how the stream began, not how the page is set when it stops.
+   */
+  holdRun?: boolean;
   /**
    * The session decided on a card — called once per new `decision_seq`, with the decision and
    * the number, and never for a repeat.
@@ -250,10 +261,12 @@ export function useScanLoop({
   const grabRef = useRef(grabFrame);
   const grabKeptRef = useRef(grabKept);
   const keepFullRef = useRef(keepFullFrames);
+  const holdRunRef = useRef(holdRun);
   const onDecisionRef = useRef(onDecision);
   useLayoutEffect(() => {
     grabRef.current = grabFrame;
     grabKeptRef.current = grabKept;
+    holdRunRef.current = holdRun;
     onDecisionRef.current = onDecision;
   });
 
@@ -293,9 +306,9 @@ export function useScanLoop({
    * its bounds). A ref for `lastSeqRef`'s reason, more so — it changes with every frame, nothing
    * draws it, and the one reader wants it as it stands at a press rather than at the last render.
    *
-   * **Emptied wherever the evidence is** — `clearReads`, and the pump's start and its stop — and
-   * a frame in flight across any of those never reaches it: it is added on the line that takes
-   * the verdict, behind the same two checks. **And at the session's own break**, which leaves
+   * **Emptied wherever the evidence is** — `clearReads`, and the pump's start and its stop (but a
+   * shot's, under `holdRun`) — and a frame in flight across any of those never reaches it: it is
+   * added on the line that takes the verdict, behind the same two checks. **And at the session's own break**, which leaves
    * this side's evidence standing: `breakRun` empties it when the session takes changed filters —
    * with `runEpochRef` keeping out the frame in flight across that one.
    */
@@ -395,6 +408,8 @@ export function useScanLoop({
     wantsFullRef.current = false;
     // Nor has it sent a frame: a run is one stream's, start to press.
     runRef.current = [];
+    // Whether this stream's run outlives it — asked now, as it begins (see `holdRun`).
+    const hold = holdRunRef.current;
     // The card the last stream stopped on, which this one must not file again.
     heldRef.current = standingCard.recall() ?? null;
 
@@ -571,8 +586,9 @@ export function useScanLoop({
     return () => {
       stopped = true;
       // A stopped pump's frames are not a run anyone can send: the next press belongs to a
-      // stream that has not started yet.
-      runRef.current = [];
+      // stream that has not started yet. **Unless the stream was a shot** (`holdRun`): its run
+      // is the scan the reader has just seen land, and stays theirs to send until the next one.
+      if (!hold) runRef.current = [];
     };
     // `videoRef` and `resetSession` are stable by construction; everything else the loop reads
     // is behind a ref.

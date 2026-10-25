@@ -206,6 +206,7 @@ import type {
   EntryChange,
   EntryInput,
   EntryPatch,
+  EntryTagUse,
   FacetResponse,
   FinishPrices,
   FolderConflicts,
@@ -213,6 +214,8 @@ import type {
   RuleConflicts,
   HomeLayout,
   HomeWidget,
+  IntegrationFields,
+  IntegrationsStatus,
   ImportCommitOutcome,
   ImportFile,
   ImportItem,
@@ -472,6 +475,13 @@ export interface FakeWish {
    */
   folderId: number | null;
   notes: string | null;
+  /**
+   * User schema v67's `tags` (issue #1398) — the wish's entry tags, a JSON array of strings,
+   * never null, the column defaulting to `[]` exactly as {@link FakeEntry.tags} does. Written
+   * whole by `wishlist_set_tags`; a fold onto another wish keeps the survivor's, as
+   * {@link foldEntry} keeps a collection row's.
+   */
+  tags: string;
   needsReview: string | null;
   updatedAt: number;
 }
@@ -1623,6 +1633,22 @@ export interface FakeUpdate {
  * (`packages/ui/lib/core/hostMembership.ts`) with one sentence saying how sync turns on there, where
  * every other host refuses the name; and the Sync panel draws that sentence in place of its
  * membership half. `world.ts` puts the handler over the one world's table.
+ *
+ * **`integrationsNotDeployed`** is a build whose integrations store has no address yet — plan
+ * `2026-10-25-integrations-projection-store.md` §2, and **the state every real build is in until
+ * the owner deploys the Worker**: `integration::store::INTEGRATIONS_BASE` is a placeholder, so
+ * every store request is refused before it is made. `integrations_status` answers
+ * `available: false` and the three writes refuse in {@link INTEGRATIONS_NOT_DEPLOYED}'s words.
+ * A fault and not the default because the workbench is where the panel's *working* half has to
+ * be drawable; nobody can press their way into a build with no address.
+ *
+ * **`integrationsError`** is the last publish round having failed — a Worker that timed out, a
+ * table it refused — which happens on a timer after a sync trip, on no press of the reader's.
+ * **It is an On state**, written into the world by {@link applyIntegrationsFault}: the crate
+ * clears the error whenever it hears the store is off, so a failed round is only ever drawn over a
+ * switch that is on. Every round in this world fails, so a press clears the sentence (the crate's
+ * `settle_on`) and the round after it puts it back. The writes still go through: a round that
+ * failed is not a switch that cannot be pressed.
  */
 export type Fault =
   | "busy"
@@ -1655,7 +1681,9 @@ export type Fault =
   | "scanInboxFull"
   | "shareLapsed"
   | "lentStorage"
-  | "pairOnly";
+  | "pairOnly"
+  | "integrationsNotDeployed"
+  | "integrationsError";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -2509,6 +2537,12 @@ export interface FakeDb {
    */
   relayShares: FakeRelayShare[];
   /**
+   * The integrations store, as this device last heard of it — **off in every world** but the
+   * `integrationsError` fault's: the store is created by a press on the Integrations panel and by
+   * nothing a seed could stand for. See {@link FakeIntegrations}.
+   */
+  integrations: FakeIntegrations;
+  /**
    * `trades` — every trade the reader has open or has put away, and **empty in every world but
    * the `trades` seed**: a trade is something a reader started, so no collection implies one.
    */
@@ -2691,6 +2725,38 @@ export interface FakeSupporter {
   since: number | null;
   /** `entitled || membership_ended` — see the table above. */
   groupBound: boolean;
+}
+
+/**
+ * The integrations store as this device last heard of it — `sync_state`'s integrations rows, plan
+ * `2026-10-25-integrations-projection-store.md` §2 and §3.3.
+ *
+ * **The store is the group's and lives on a server, so what a device holds is a cache of it**: the
+ * store's existence (the group's switch), the group's choice of columns, and two stamps. This fake
+ * has no server and no second device, so the cache and the store are one object here — the one
+ * concession, and it costs only the state where another device switched the store since this one
+ * last asked, which no story can reach anyway.
+ *
+ * `available` and `entitled` are not stored: the first is the build ({@link Fault}'s
+ * `integrationsNotDeployed`), the second is `sync_engine::commands::entitled` over
+ * {@link FakeDb.supporter}, and both are read fresh on every answer, as the crate reads them.
+ */
+export interface FakeIntegrations {
+  /** The group's store exists. */
+  enabled: boolean;
+  /** The group's columns. All off while the store does not exist — a disable clears them. */
+  fields: IntegrationFields;
+  /** Unix seconds the store was last asked, or `null` for never. */
+  checkedAt: number | null;
+  /** Unix seconds this device last sent a table, or `null` for never. **The round stamps it,
+   *  never the press** — `settings.rs`' own test: "the round publishes, not the press". */
+  publishedAt: number | null;
+  /** The last round's failure, {@link INTEGRATIONS_ROUND_FAILED}, or `null`. A press that sets
+   *  the store clears it, as a store heard off does — the crate's `settle_on` and `heard_off`. */
+  error: string | null;
+  /** `settings::PUBLISH_DUE` — a publish asked for by a switch-on or a change of columns and not
+   *  yet run. Cleared by the round that answers it, and withdrawn by a switch-off. */
+  pending: boolean;
 }
 
 /**
@@ -3833,6 +3899,16 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // publishing needs a membership and a press, and the `starter` reader has made neither.
     shares: [],
     relayShares: [],
+    // **Off, with every column off and nothing ever asked or sent** — what every install is in
+    // until somebody switches the group's copy on (plan §1, item 5: the opt-ins default off).
+    integrations: {
+      enabled: false,
+      fields: noIntegrationFields(),
+      checkedAt: null,
+      publishedAt: null,
+      error: null,
+      pending: false,
+    },
     // No trades, which is the Trade page's first-run state and what `starter` stands in too: the
     // `trades` seed is the one world that has some.
     trades: [],
@@ -8098,6 +8174,7 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     ownedOther: owned.other,
     ownedPlaces: owned.places,
     notes: w.notes,
+    tags: w.tags,
     needsReview: w.needsReview,
     updatedAt: w.updatedAt,
     // The joined card's, like `typeLine` and `artCardId` above — an any-printing wish carries
@@ -10978,6 +11055,34 @@ export function readHandlers(db: FakeDb) {
       return foldBuckets(rows).sort((a, b) => cmp(a.key, b.key));
     },
 
+    /**
+     * `entry_tags::in_use` (issue #1398) — every entry tag spelling across the collection and the
+     * wishlist, with how many rows wear it, sorted by tag. **Exact spelling, never folded**: `Cube`
+     * and `cube` are two rows here, and `@/features/entryTags/entryTags`' `entryTagsInUse` is what
+     * makes them one suggestion. A row is counted once per spelling however its JSON repeats it.
+     */
+    entry_tags_in_use: (): EntryTagUse[] => {
+      const counts = new Map<string, number>();
+      // **`Recently removed` is left out**, the crate's rule: it is the app's holding area for
+      // copies that left a deck, not a place the reader filed anything, so a tag living only there
+      // is not one they are using.
+      const held = db.collectionEntries.filter(
+        (e) =>
+          e.folderId === null ||
+          collectionFolderById(db, e.folderId)?.kind !== COLLECTION_REMOVED_KIND,
+      );
+      for (const json of [...held.map((e) => e.tags), ...db.wishlistEntries.map((w) => w.tags)]) {
+        for (const tag of new Set(readEntryTags(json))) {
+          counts.set(tag, (counts.get(tag) ?? 0) + 1);
+        }
+      }
+      // Byte order, `ORDER BY tag`'s — not `compareLabels`: the fold and the reader's order are
+      // this side's conclusion, not the crate's fact.
+      return [...counts]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([tag, count]) => ({ tag, count }));
+    },
+
     /** `wishlist::list_wishes`. */
     wishlist_list: (args: { query: WishlistQuery }) => {
       const q = args.query;
@@ -13095,13 +13200,22 @@ export function readHandlers(db: FakeDb) {
      * missing **copies** with no price. The unit is {@link heldPriceAt} at the row's finish, which
      * is what this fake's deck rows quote — so a story's widget and the editor it opens can never
      * disagree.
+     *
+     * **`theoryMatch: "missing"`** (issue #1400) is the Compare dialog's `Missing` reading under
+     * `theory`, and anything else is the exact one above: a planned copy the live list plays as
+     * another printing of the same card counts as sleeved. It is not walked a second time here —
+     * the exact answer is {@link theoryDiff}'s card lines summed, so each line's
+     * `heldAsOtherPrinting` is moved from missing to owned, and out of the money at the line's own
+     * price. Not read under `collection`.
      */
     deck_completion: (args: {
       marketplace?: MarketplaceId | null;
       compare?: string | null;
+      theoryMatch?: string | null;
     }): DeckCompletion[] => {
       const mp = marketplaceOf(args.marketplace);
       const theory = args.compare === "theory";
+      const substitutes = theory && args.theoryMatch === "missing";
       const active = (dc: FakeDeckCard) => categoryById(db, dc.categoryId)?.isActive === true;
       return [...db.decks]
         .filter((d) => (theory ? d.theoryEnabled : !d.virtualOnly))
@@ -13146,6 +13260,16 @@ export function readHandlers(db: FakeDb) {
             const unit = heldPriceAt(db, cardById(db, dc.cardId), dc.finish, mp);
             if (unit === null) row.unpricedMissing += short;
             else row.missingCost = (row.missingCost ?? 0) + unit * short;
+          }
+          if (substitutes) {
+            for (const { row: line } of theoryDiff(db, d.id, mp)) {
+              if (line.isToken || line.heldAsOtherPrinting === 0) continue;
+              const take = line.heldAsOtherPrinting;
+              row.owned += take;
+              row.missing -= take;
+              if (line.unitPrice === null) row.unpricedMissing -= take;
+              else row.missingCost = (row.missingCost ?? 0) - line.unitPrice * take;
+            }
           }
           return row;
         });
@@ -14163,6 +14287,15 @@ const ENTRY_GONE = "That collection entry is not there any more.";
 const NO_PRINTING = "Changing a printing needs the printing to change it to.";
 /** `wishlist::set_wish_quantity`'s twin of {@link ENTRY_GONE}. */
 const WISH_GONE = "That wishlist entry is not there any more.";
+/**
+ * `entry_tags::COPY_GONE` (issue #1398) — the entry-tag write's own sentence for a row that is
+ * gone, **not** {@link ENTRY_GONE}: the crate's module spells it in the reader's words, a copy
+ * and a collection, and the fake says what the crate says.
+ */
+const TAGGED_COPY_GONE = "That copy is no longer in your collection.";
+/** `entry_tags::WISH_GONE` — {@link TAGGED_COPY_GONE} for a wish. Prefixed here because
+ *  {@link WISH_GONE} is already the wishlist module's sentence. */
+const TAGGED_WISH_GONE = "That wish is no longer on your wishlist.";
 /** `deck::GONE`. */
 const DECK_GONE = "That deck is not there any more.";
 /** `collection::ZERO_ADD` — one sentence for two tables, because it is one rule. */
@@ -15020,6 +15153,22 @@ function cleanTags(tags: readonly string[]): string[] {
     kept.push(tag);
   }
   return kept;
+}
+
+/**
+ * `deck::read_tags` over an entry's `tags` column — the stored JSON as a list of strings, and
+ * **lenient**: text that is not JSON, or JSON that is not an array, reads as no tags, and an item
+ * that is not a string is skipped. A row a peer or a hand-edit left odd still draws and still
+ * takes a write; only the write tidies it.
+ */
+function readEntryTags(json: string | null | undefined): string[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(json ?? "[]");
+  } catch {
+    return [];
+  }
+  return Array.isArray(value) ? value.filter((t): t is string => typeof t === "string") : [];
 }
 
 /**
@@ -17904,6 +18053,9 @@ function fileWish(db: FakeDb, input: WishInput): EntryChange {
     // loud.
     folderId: input.folderId ?? null,
     notes: input.notes ?? null,
+    // `wishlist_entries.tags`' default: an add names no tags, and onto an existing wish it
+    // leaves that wish's alone — only `wishlist_set_tags` writes them.
+    tags: "[]",
     needsReview: null,
     updatedAt: stamp(db),
   };
@@ -18681,6 +18833,23 @@ export function writeHandlers(db: FakeDb) {
       }
       Object.assign(row, next);
       return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /**
+     * `entry_tags::set_collection_tags` (issue #1398) — one row's entry tags replaced whole and
+     * answered as stored, {@link cleanTags}' tidy over the list: the same rule a deck's tags are
+     * written by, so a field shared by both kinds draws what it sent back the same way. A row
+     * that is gone is refused in {@link TAGGED_COPY_GONE}'s words. **No grain moves** — tags are
+     * not a term of {@link collectionGrain}, so this never folds a row onto another.
+     */
+    collection_set_tags: (args: { id: number; tags: string[] }): string[] => {
+      refuseIfBusy(db);
+      const row = db.collectionEntries.find((e) => e.id === args.id);
+      if (!row) throw refuse(TAGGED_COPY_GONE);
+      const tags = cleanTags(args.tags);
+      row.tags = JSON.stringify(tags);
+      row.updatedAt = stamp(db);
+      return tags;
     },
 
     /**
@@ -19891,6 +20060,22 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       refuseIfManagedWish(db, args.id);
       return removeWish(db, args.id);
+    },
+
+    /**
+     * `entry_tags::set_wish_tags` (issue #1398) — {@link collection_set_tags} one table over,
+     * and {@link TAGGED_WISH_GONE}'s words for a wish that is gone. **A managed wish takes tags
+     * too**, as the crate's statement does: they are the reader's words about the row, not a
+     * change to what the deck asks for, so nothing here is the deck's to refuse.
+     */
+    wishlist_set_tags: (args: { id: number; tags: string[] }): string[] => {
+      refuseIfBusy(db);
+      const row = db.wishlistEntries.find((w) => w.id === args.id);
+      if (!row) throw refuse(TAGGED_WISH_GONE);
+      const tags = cleanTags(args.tags);
+      row.tags = JSON.stringify(tags);
+      row.updatedAt = stamp(db);
+      return tags;
     },
 
     /**
@@ -25410,20 +25595,6 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `share::commands::share_auto_update` — republish every share this device published whose
-     * folder has changed since its last upload.
-     *
-     * **Always `[]` here**: the crate's answer turns on a digest of the last upload it keeps in
-     * `app_meta`, and the fake keeps no record of what it last uploaded — so the honest answer
-     * is the one the crate gives on almost every pass, *nothing moved*. A story that wants a
-     * share updated presses *Update now*, which is `share_refresh`.
-     */
-    share_auto_update: (): ShareRow[] => {
-      refuseIfBusy(db);
-      return [];
-    },
-
-    /**
      * `share::commands::share_revoke` — withdraw a share. Terminal, and the reader's own press.
      *
      * **The row survives its own revocation** and goes `revoked` rather than away, so the page can
@@ -27574,6 +27745,182 @@ function throughJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+/* ------------------------------------------------------------------ integrations ------- */
+
+/**
+ * The store refusing a request before it is made, because this build has no address for it —
+ * `integration::store::NOT_DEPLOYED` (plan §2), verbatim, as every other refusal in this file
+ * copies the crate's. `integrations.test.ts` reads the Rust and holds the two to each other.
+ */
+export const INTEGRATIONS_NOT_DEPLOYED =
+  "This build cannot reach the integrations service yet - it has no address for it.";
+
+/**
+ * A store request from a device the relay will mint no token for — in no sync group, or one no
+ * membership covers — `integration::store::NOT_CONNECTED`, verbatim. **It names no membership**,
+ * unlike {@link SHARE_NOT_CONNECTED}: it is the core's sentence on every host, the light app's
+ * Play build included, which rewords only a `sync_` command's refusals.
+ */
+export const INTEGRATIONS_NOT_CONNECTED = "Integrations are not available on this device.";
+
+/** `integrations_set_fields` with no store to set them on: a settings `PUT` would create one,
+ *  and only the switch may do that (plan §2 — nothing may resurrect a store that was deleted).
+ *  `integration::settings::OFF`, verbatim. */
+export const INTEGRATIONS_OFF = "Integrations are off. Switch them on first.";
+
+/** What the `integrationsError` fault says of the last publish round — the panel's sentence,
+ *  `integration::settings::ROUND_FAILED`, verbatim; the particulars are the Errors panel's. */
+export const INTEGRATIONS_ROUND_FAILED =
+  "Your collection could not be sent to the integrations service. The Errors panel in Settings says why.";
+
+/** Every column off — the opt-ins' default, and what a disable leaves. A fresh object per call,
+ *  so no write can reach another world's columns. */
+function noIntegrationFields(): IntegrationFields {
+  return { condition: false, lang: false, value: false, tags: false, notes: false };
+}
+
+/** Unix seconds, the clock every integrations stamp is read against — the panel's `ago` reads
+ *  `Date.now()`, so a stamp from {@link CLOCK_BASE} would draw as months old. */
+const integrationsNow = (): number => Math.floor(Date.now() / 1000);
+
+/** The status every integrations command answers, built in one place — `relayStatus`' reason. */
+function integrationsStatus(db: FakeDb): IntegrationsStatus {
+  return {
+    available: db.fault !== "integrationsNotDeployed",
+    entitled: isEntitled(db),
+    enabled: db.integrations.enabled,
+    fields: { ...db.integrations.fields },
+    checkedAt: db.integrations.checkedAt,
+    publishedAt: db.integrations.publishedAt,
+    error: db.integrations.error,
+    pending: db.integrations.pending,
+  };
+}
+
+/** The two refusals every write shares, in the crate's order: the build before the reader —
+ *  a request with nowhere to go is refused before a token is minted for it. */
+function refuseIfNoStore(db: FakeDb): void {
+  if (db.fault === "integrationsNotDeployed") throw refuse(INTEGRATIONS_NOT_DEPLOYED);
+  if (!isEntitled(db)) throw refuse(INTEGRATIONS_NOT_CONNECTED);
+}
+
+/**
+ * The publish round, as far as the switch can see it: **the projection half of
+ * `integration::publish::round`** for a request this device made.
+ *
+ * The crate's loop runs it within one poll of the press, on a timer of its own. This fake has no
+ * loop, so the round has run **by the time the panel next asks** — which it does, every few
+ * seconds, for as long as the status says a publish is pending. A store that is on gets this
+ * device's copy (`publishedAt` stamped), or, in the `integrationsError` world where every round
+ * fails, the round's sentence and no stamp. Either way the request is answered.
+ */
+function runIntegrationsRound(db: FakeDb, at: number): void {
+  const held = db.integrations;
+  if (held.enabled) {
+    if (db.fault === "integrationsError") {
+      held.error = INTEGRATIONS_ROUND_FAILED;
+    } else {
+      held.publishedAt = at;
+      held.error = null;
+    }
+  }
+  held.pending = false;
+}
+
+/**
+ * The `integrationsError` world: a store that is on, a copy this device sent an hour ago, and the
+ * round since then failed — see {@link Fault}. Exported for `world.ts`, where a fault that writes
+ * rows is applied, and for the suite, which stands the state up the way `installWorld` does.
+ */
+export function applyIntegrationsFault(db: FakeDb): void {
+  if (db.fault !== "integrationsError") return;
+  const at = integrationsNow();
+  db.integrations = {
+    enabled: true,
+    fields: { ...noIntegrationFields(), condition: true, value: true },
+    checkedAt: at - 60,
+    publishedAt: at - 3_600,
+    error: INTEGRATIONS_ROUND_FAILED,
+    pending: false,
+  };
+}
+
+/**
+ * The integrations switch's four commands (issue #1396, plan §3.3) — the store, the group's
+ * columns, and the stamps the panel draws.
+ *
+ * **A group of their own rather than {@link writeHandlers}' members**, `scannerHandlers`' shape,
+ * so `db.test.ts`' busy sweep does not walk them — but **the three writes still answer `busy`**,
+ * because the crate's take the sync lane as a press does (`lane_for_press`) before anything else,
+ * and refuse with `db::BUSY` when a trip or a round holds it. The status does not: the crate's
+ * `status_or_cached` answers the cache rather than "busy", so here it answers what it holds and
+ * asks nobody.
+ *
+ * Every write answers the status re-read, so the panel draws its outcome without a second read.
+ * **A press publishes nothing**: the switch-on and a change of columns ask for a round
+ * (`pending`), and {@link runIntegrationsRound} answers it on the next read. **There is no server
+ * and no second device**, so `checkedAt` moves on a read only where a real device could have
+ * asked the store — a build with an address, a reader with a token, and a lane to ask it through.
+ */
+export function integrationHandlers(db: FakeDb) {
+  return {
+    integrations_status: (): IntegrationsStatus => {
+      const askable =
+        db.fault !== "integrationsNotDeployed" && isEntitled(db) && db.fault !== "busy";
+      if (askable) {
+        const at = integrationsNow();
+        db.integrations.checkedAt = at;
+        if (db.integrations.pending) runIntegrationsRound(db, at);
+      }
+      return integrationsStatus(db);
+    },
+    /** Create the store under the reader's columns, forget the last failure, and ask for a
+     *  round. **`publishedAt` is left alone** — the round stamps it. */
+    integrations_enable: (args: { fields: IntegrationFields }): IntegrationsStatus => {
+      refuseIfBusy(db);
+      refuseIfNoStore(db);
+      db.integrations = {
+        ...db.integrations,
+        enabled: true,
+        fields: { ...args.fields },
+        checkedAt: integrationsNow(),
+        error: null,
+        pending: true,
+      };
+      return integrationsStatus(db);
+    },
+    /** New columns: the store drops every table, and a round is asked for to fill it again. */
+    integrations_set_fields: (args: { fields: IntegrationFields }): IntegrationsStatus => {
+      refuseIfBusy(db);
+      refuseIfNoStore(db);
+      if (!db.integrations.enabled) throw refuse(INTEGRATIONS_OFF);
+      db.integrations = {
+        ...db.integrations,
+        fields: { ...args.fields },
+        checkedAt: integrationsNow(),
+        error: null,
+        pending: true,
+      };
+      return integrationsStatus(db);
+    },
+    /** Delete the store, for every device in the group: off, the columns cleared, nothing sent,
+     *  no failure to report, and the round still owed withdrawn — the crate's `heard_off`. */
+    integrations_disable: (): IntegrationsStatus => {
+      refuseIfBusy(db);
+      refuseIfNoStore(db);
+      db.integrations = {
+        enabled: false,
+        fields: noIntegrationFields(),
+        checkedAt: integrationsNow(),
+        publishedAt: null,
+        error: null,
+        pending: false,
+      };
+      return integrationsStatus(db);
+    },
+  };
+}
+
 /**
  * The scanner's commands. The panel stories are driven from fixtures directly; **a camera that
  * does open is answered by a script** — `scannerScript.ts`' pile of five cards, a frame at a time
@@ -27853,6 +28200,7 @@ export function allHandlers(db: FakeDb) {
     ...journalled(db, writeHandlers(db)),
     ...undoHandlers(db),
     ...scannerHandlers(db),
+    ...integrationHandlers(db),
     ...windowHandlers(),
     ...pluginHandlers(),
   };

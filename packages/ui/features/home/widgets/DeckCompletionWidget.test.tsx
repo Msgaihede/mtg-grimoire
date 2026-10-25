@@ -4,7 +4,13 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DeckCompletion, DeckCompletionCompare, DeckRow, HomeWidget } from "@/lib/ipc";
+import type {
+  DeckCompletion,
+  DeckCompletionCompare,
+  DeckCompletionMatch,
+  DeckRow,
+  HomeWidget,
+} from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 
 /**
@@ -21,7 +27,11 @@ import type { MarketplaceId } from "@/lib/marketplace";
 const deckList = vi.hoisted(() => vi.fn<() => Promise<DeckRow[]>>());
 const deckCompletion = vi.hoisted(() =>
   vi.fn<
-    (marketplace: MarketplaceId, compare: DeckCompletionCompare) => Promise<DeckCompletion[]>
+    (
+      marketplace: MarketplaceId,
+      compare: DeckCompletionCompare,
+      theoryMatch: DeckCompletionMatch,
+    ) => Promise<DeckCompletion[]>
   >(),
 );
 vi.mock("@/lib/ipc", async (importOriginal) => {
@@ -40,6 +50,7 @@ import {
   CHOSEN_UNMEASURABLE,
   completionCompare,
   completionFooter,
+  completionMatch,
   completionRows,
   completionScope,
   countCaption,
@@ -121,7 +132,13 @@ const SHELF = deck({ id: 4, name: "Old Shelf", archived: true });
 const PROXIES = deck({ id: 5, name: "Proxy Pile", virtualOnly: true });
 
 const BURN_AT = completion({ deckId: 1, owned: 56, missing: 4, missingCost: 12.5 });
-const ATRAXA_AT = completion({ deckId: 2, wanted: 100, owned: 40, missing: 60, missingCost: 209.2 });
+const ATRAXA_AT = completion({
+  deckId: 2,
+  wanted: 100,
+  owned: 40,
+  missing: 60,
+  missingCost: 209.2,
+});
 const MONO_AT = completion({ deckId: 3 });
 const SHELF_AT = completion({ deckId: 4, owned: 10, missing: 50, missingCost: 5 });
 // No answer for the virtual deck: `deck_completion` answers none (spec §3.1).
@@ -174,9 +191,10 @@ function seed(
   decks: readonly DeckRow[],
   answers: readonly DeckCompletion[],
   compare: DeckCompletionCompare = "collection",
+  match: DeckCompletionMatch = "exact",
 ) {
   qc.setQueryData(deckListKey, decks);
-  qc.setQueryData(deckCompletionKey(DEFAULT_MARKETPLACE, compare), answers);
+  qc.setQueryData(deckCompletionKey(DEFAULT_MARKETPLACE, compare, match), answers);
 }
 
 /** `Compare against → Theory`, with whatever else the case sets. */
@@ -418,6 +436,15 @@ describe("rowHint", () => {
     expect(rowHint(completion({ deckId: 1, list: "theory" }), tcg)).toBe(
       "This deck's actual list, compared to its theory list.",
     );
+    expect(rowHint(completion({ deckId: 1, list: "theory" }), tcg, "exact")).toBe(
+      "This deck's actual list, compared to its theory list.",
+    );
+  });
+
+  it("says when another printing of a card counts, under Missing", () => {
+    expect(rowHint(completion({ deckId: 1, list: "theory" }), tcg, "missing")).toBe(
+      "This deck's actual list, compared to its theory list. A card in any printing counts.",
+    );
   });
 });
 
@@ -426,6 +453,16 @@ describe("completionCompare and completionScope", () => {
     expect(completionCompare(widget())).toBe("collection");
     expect(completionCompare(widget({ compare: "theory" }))).toBe("theory");
     expect(completionCompare(widget({ compare: "bogus" }))).toBe("collection");
+  });
+
+  /** Issue #1400: the match refines Theory alone, so a `missing` kept from a Theory card reads as
+   *  the default under Collection rather than keying a second, identical read. */
+  it("reads Missing only under Theory, and Exact match everywhere else", () => {
+    expect(completionMatch(widget({ compare: "theory" }))).toBe("exact");
+    expect(completionMatch(widget({ compare: "theory", match: "missing" }))).toBe("missing");
+    expect(completionMatch(widget({ compare: "theory", match: "bogus" }))).toBe("exact");
+    expect(completionMatch(widget({ match: "missing" }))).toBe("exact");
+    expect(completionMatch(widget({ compare: "collection", match: "missing" }))).toBe("exact");
   });
 
   /** The pick was `Most recent` / `Pinned` until issue #600, and a card stored then keeps its
@@ -441,9 +478,10 @@ describe("completionCompare and completionScope", () => {
 describe("completionRows", () => {
   it("keeps deck_list's order, leaves archived and virtual decks out, and drops an unanswered deck", () => {
     const answers = [SHELF_AT, MONO_AT, BURN_AT];
-    expect(
-      completionRows(DECKS, answers, "all", [], "collection").map((r) => r.name),
-    ).toEqual(["Burn", "Mono Red"]);
+    expect(completionRows(DECKS, answers, "all", [], "collection").map((r) => r.name)).toEqual([
+      "Burn",
+      "Mono Red",
+    ]);
   });
 
   it("keeps a chosen archived deck, and drops a choice of a virtual deck", () => {
@@ -458,7 +496,12 @@ describe("completionRows", () => {
    * in the config and simply not drawn where it cannot be measured.
    */
   it("keeps only the decks that keep a plan under Theory, a virtual one included", () => {
-    const virtualPlan = deck({ id: 10, name: "Arena Plan", theoryEnabled: true, virtualOnly: true });
+    const virtualPlan = deck({
+      id: 10,
+      name: "Arena Plan",
+      theoryEnabled: true,
+      virtualOnly: true,
+    });
     const decks = [BURN, PLAN, virtualPlan, PROXIES];
     const answers = [PLAN_AT, completion({ deckId: 10, list: "theory", owned: 30, missing: 30 })];
 
@@ -644,7 +687,10 @@ describe("DeckCompletionWidget", () => {
       const proxies = deck({ id: 7, name: "Proxy Night" });
       seed(
         [proxies, MONO],
-        [completion({ deckId: 7, owned: 57, missing: 3, missingCost: 0, unpricedMissing: 3 }), MONO_AT],
+        [
+          completion({ deckId: 7, owned: 57, missing: 3, missingCost: 0, unpricedMissing: 3 }),
+          MONO_AT,
+        ],
       );
 
       draw();
@@ -788,7 +834,11 @@ describe("DeckCompletionWidget", () => {
 
       // The same decks, each keeping a plan, under Theory — where every row is a plan's.
       const plans = many.map((d) => ({ ...d, theoryEnabled: true }));
-      seed(plans, answers.map((a) => ({ ...a, list: "theory" as const })), "theory");
+      seed(
+        plans,
+        answers.map((a) => ({ ...a, list: "theory" as const })),
+        "theory",
+      );
       draw(THEORY, { fit });
 
       expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 21));
@@ -963,7 +1013,24 @@ describe("DeckCompletionWidget", () => {
     expect(
       await screen.findByRole("button", { name: "Burn · 56 of 60 · 4 missing · €9.50" }),
     ).toBeInTheDocument();
-    expect(deckCompletion).toHaveBeenCalledWith("cardmarket", "collection");
+    expect(deckCompletion).toHaveBeenCalledWith("cardmarket", "collection", "exact");
+  });
+
+  /** `Theory match → Missing` (issue #1400) is a question of its own: sent to Rust beside
+   *  `theory`, and keyed apart from the exact reading so the two never draw each other's figure. */
+  it("asks Rust for the Missing reading under Theory, and says so on the row", async () => {
+    seed([PLAN], [PLAN_AT], "theory");
+    deckCompletion.mockResolvedValue([{ ...PLAN_AT, owned: 95, missing: 5, missingCost: 12 }]);
+
+    draw({ compare: "theory", match: "missing" });
+
+    expect(screen.getByText("Loading decks…")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", {
+        name: "Esper Control · Theory · 95 of 100 · 5 missing · $12.00",
+      }),
+    ).toBeInTheDocument();
+    expect(deckCompletion).toHaveBeenCalledWith(DEFAULT_MARKETPLACE, "theory", "missing");
   });
 
   /**

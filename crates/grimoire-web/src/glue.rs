@@ -89,7 +89,8 @@ pub fn instantiated() {
 ///
 /// **And it starts live sync** ([`host::live_sync`]), a second task beside the first and for
 /// the Worker's life: the relay's doorbell, which opens no socket until this device is in a
-/// sync group.
+/// sync group — and **the publish round** ([`host::publisher`]) beside that, which keeps the
+/// group's live shares and its integrations store current after each trip.
 ///
 /// **A corpus that will not open is thrown away and built again**, through the pool's own
 /// delete ([`host::start_replacing`]); `user.db` is never touched, and the console is told.
@@ -139,7 +140,13 @@ async fn open_once(directory: String) -> String {
             // The relay's doorbell, behind the downloads and for the Worker's life. On an
             // install in no sync group — every one that has paired nothing — its first poll
             // is one read of `sync_group` and a five-second timer.
-            wasm_bindgen_futures::spawn_local(host::live_sync(started.state, started.writes));
+            wasm_bindgen_futures::spawn_local(host::live_sync(
+                Arc::clone(&started.state),
+                started.writes,
+            ));
+            // And the publish round beside it, which acts only after a trip the doorbell ran:
+            // one read of two rows every fifteen seconds until then.
+            wasm_bindgen_futures::spawn_local(host::publisher(started.state));
             started.opened.to_json()
         }
         Err(message) => Opened::Failed { message }.to_json(),

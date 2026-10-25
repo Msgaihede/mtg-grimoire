@@ -46,6 +46,7 @@ import {
   LibraryBig,
   Pencil,
   Plus,
+  Tag,
   Trash2,
 } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
@@ -63,6 +64,7 @@ import { useDeckFolders } from "@/features/decks/useDeckFolders";
 // `MenuLazy.Content` and fires on an expand rather than on a right-click.
 import { playKey, useDecksPlaying } from "@/features/decks/useDeckPlays";
 import { useDecks } from "@/features/decks/useDecks";
+import type { EntryTagsRef } from "@/features/entryTags/useEntryTags";
 import { userWishFolders } from "@/features/wishlist/managed";
 import { copyText } from "@/lib/clipboard";
 import { edhrecCardUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
@@ -136,6 +138,12 @@ export interface CardMenuTarget {
    * Folding both into one array would lose the fact that a single-row surface has nothing to ask.
    */
   entryIds?: readonly number[];
+  /**
+   * The `wishlist_entries` row this target **is**, where the surface is the wishlist — one wish,
+   * drawn as one tile or one table row. The wishlist's half of {@link entryId}, read by **Tags…**
+   * alone (issue #1398): the wishlist's other writes are its own controls, not this menu's.
+   */
+  wishId?: number;
   /**
    * The card's own `type_line` — the **fallback** half of `autoCategoryFor`, exactly as the four
    * drag sources carry it.
@@ -277,6 +285,16 @@ export interface CardMenuDeps {
    * the four rows above.
    */
   editCopy?: (entryId: number) => void;
+  /**
+   * Open the tag editor for one stack — a collection row or a wish (issue #1398).
+   *
+   * {@link editCopy}'s shape for its reasons: an id and no answer, because the dialog is the
+   * page's layer, and **no plural** — a stack's tags are one list, and three stacks' would have
+   * to decide whose list the field starts from. Fenced on the target's own
+   * {@link CardMenuTarget.entryId} or {@link CardMenuTarget.wishId}, so a wall tile summing
+   * several collection rows offers no row here either; the card modal's `Edit` is its way in.
+   */
+  editTags?: (ref: EntryTagsRef) => void;
   /**
    * Take the copies behind the target out of the collection — every entry id the press reaches, in
    * one call.
@@ -891,8 +909,8 @@ function movableEntryIds(rows: readonly CardMenuTarget[]): number[] {
 }
 
 /**
- * The last group of a collection card's menu — `Edit copy…` then `Remove from collection` — with
- * the rule above it, **or nothing at all**.
+ * The last group of a stack's menu — `Edit copy…`, `Tags…`, then `Remove from collection` — with
+ * the rule above it, **or nothing at all**. On the wishlist `Tags…` is the group's only member.
  *
  * One separator for the group rather than one per row, because the two are fenced differently
  * ({@link editItem} on the target's own `entryId`, {@link removeItem} on every id the press
@@ -905,7 +923,11 @@ function copyItems(
   rows: readonly CardMenuTarget[],
   deps: CardMenuDeps,
 ): MenuItem[] {
-  const group = [...toItems(editItem(target, deps)), ...toItems(removeItem(rows, deps))];
+  const group = [
+    ...toItems(editItem(target, deps)),
+    ...toItems(tagsItem(target, deps)),
+    ...toItems(removeItem(rows, deps)),
+  ];
   if (group.length === 0) return [];
   return [{ kind: "separator", id: "sep-edit" }, ...group];
 }
@@ -950,6 +972,33 @@ function editItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem | null {
     label: "Edit copy…",
     Icon: Pencil,
     onSelect: () => edit(entryId),
+  };
+}
+
+/**
+ * "Tags…" — one stack's entry tags, in a dialog the page raises (issue #1398).
+ *
+ * Beside `Edit copy…` because it answers the same question about the same row — what this stack
+ * *is* — and fenced the same way, on the one row the reader pointed at: a collection table row's
+ * {@link CardMenuTarget.entryId}, or a wish's {@link CardMenuTarget.wishId}. Absent rather than
+ * greyed, {@link editItem}'s judgement for its reason.
+ */
+function tagsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem | null {
+  const edit = deps.editTags;
+  if (edit === undefined) return null;
+  const ref: EntryTagsRef | null =
+    target.entryId !== undefined
+      ? { kind: "collection", id: target.entryId }
+      : target.wishId !== undefined
+        ? { kind: "wishlist", id: target.wishId }
+        : null;
+  if (ref === null) return null;
+  return {
+    kind: "action",
+    id: "edit-tags",
+    label: "Tags…",
+    Icon: Tag,
+    onSelect: () => edit(ref),
   };
 }
 
@@ -1584,7 +1633,9 @@ const DECK_FOLDER_KIND = "deck";
 
 /** The reader's own drawers, out of a list that also carries the app's. Absent is empty: a page
  *  that has not answered yet and a collection that files nothing are the same array here. */
-function userFolders(folders: readonly CollectionFolder[] | undefined): readonly CollectionFolder[] {
+function userFolders(
+  folders: readonly CollectionFolder[] | undefined,
+): readonly CollectionFolder[] {
   return (folders ?? []).filter((folder) => folder.kind === USER_FOLDER_KIND);
 }
 
@@ -1777,15 +1828,14 @@ function appSection(
   // narrows away the nullable `deckId` where a `filter` would have needed a cast to say the same
   // thing. `CollectionFolder.deckId` is nullable because the other two kinds carry none, and the
   // schema `CHECK` is what makes it non-null on this one.
-  const decks = folders
-    .flatMap((folder) =>
-      folder.kind === DECK_FOLDER_KIND && folder.deckId !== null
-        ? // The group's own name rather than one fetched from `decks`: the backend keeps the two
-          // in step, and a deck query here would be exactly the fetch-on-open this file's opening
-          // paragraph forbids.
-          [{ deckId: folder.deckId, name: folder.name }]
-        : [],
-    );
+  const decks = folders.flatMap((folder) =>
+    folder.kind === DECK_FOLDER_KIND && folder.deckId !== null
+      ? // The group's own name rather than one fetched from `decks`: the backend keeps the two
+        // in step, and a deck query here would be exactly the fetch-on-open this file's opening
+        // paragraph forbids.
+        [{ deckId: folder.deckId, name: folder.name }]
+      : [],
+  );
   // **`sortOptions` and never a bare `localeCompare`** — `packages/ui/CLAUDE.md`'s option-list rule, for
   // its reason: that method sorts by whatever locale the runtime happens to be in, and this app
   // pins one `Intl.Collator` to `"en"` so a picker cannot read one way on the developer's machine

@@ -49,9 +49,9 @@ export function useSharedSnapshot(url: string | null) {
  *  nothing. */
 export const SNAPSHOT_STALE_MS = 5 * 60_000;
 
-/** How often the binder on screen asks its link for a newer snapshot. The owner's app publishes
- *  a change within five minutes of it (`useShareAutoUpdate`), so a reader sees it within about
- *  twenty. */
+/** How often the binder on screen asks its link for a newer snapshot. The owner's devices publish
+ *  a change in the publish round after their next sync trip (issue #1396, at most five minutes
+ *  behind a run of edits), so a reader sees it within about twenty. */
 export const SNAPSHOT_RECHECK_MS = 15 * 60_000;
 
 /**
