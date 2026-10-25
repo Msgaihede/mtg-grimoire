@@ -30,6 +30,30 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.62.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.61.0...v0.62.0) (2026-10-25)
+
+
+### Features
+
+* **home:** pick exact or missing theory match in the deck completion widget ([e948b47](https://github.com/Msgaihede/mtg-grimoire/commit/e948b474be6000d18c37920f5e3b3343aefa453a))
+* **home:** pick exact or missing theory match in the deck completion widget ([a35e513](https://github.com/Msgaihede/mtg-grimoire/commit/a35e5131dcba5da21b4a516a2607f534e1a9819d)), closes [#1400](https://github.com/Msgaihede/mtg-grimoire/issues/1400)
+* **integrations:** Projection v1, one publisher off the sync trip, and the integrations store ([#1409](https://github.com/Msgaihede/mtg-grimoire/issues/1409)) ([1ef52e3](https://github.com/Msgaihede/mtg-grimoire/commit/1ef52e3ba6c287d078b595b467433639f01de394))
+* per-stack entry tags on collection and wishlist cards ([546b76c](https://github.com/Msgaihede/mtg-grimoire/commit/546b76c2c0b20ff28a6e63c5593ee638a004339c))
+* per-stack entry tags on collection and wishlist cards ([#1398](https://github.com/Msgaihede/mtg-grimoire/issues/1398)) ([477f52d](https://github.com/Msgaihede/mtg-grimoire/commit/477f52d76249e4c427efe1795653d652b15bad4c))
+* **scanner:** decide on three frames of a card lying still ([#1410](https://github.com/Msgaihede/mtg-grimoire/issues/1410)) ([995106c](https://github.com/Msgaihede/mtg-grimoire/commit/995106ce1f06c5f24c2d14d76904d8789051e5b8))
+* **scanner:** gold corners round a found card, not a green outline ([#1411](https://github.com/Msgaihede/mtg-grimoire/issues/1411)) ([9946772](https://github.com/Msgaihede/mtg-grimoire/commit/9946772c2b8180839f121c2eb5c32554713ccbef))
+
+
+### Bug Fixes
+
+* **home:** keep a dragged widget under the pointer while the page scrolls ([8a20f84](https://github.com/Msgaihede/mtg-grimoire/commit/8a20f844f8209a04fd1c28f33252fd7691d30b65))
+* **home:** keep a dragged widget under the pointer while the page scrolls ([14a72b7](https://github.com/Msgaihede/mtg-grimoire/commit/14a72b703a37039ab7c2ad5e37385ea788c3aaf2)), closes [#1399](https://github.com/Msgaihede/mtg-grimoire/issues/1399)
+* keep a stack's tag edits while a tag write is in flight ([b1205cc](https://github.com/Msgaihede/mtg-grimoire/commit/b1205ccf8330263569ee66a648b203cf9d2697ae))
+* **scanner:** keep Send scan… between point and shoot shots ([0362759](https://github.com/Msgaihede/mtg-grimoire/commit/0362759a6f345532b483dc7eb7a5231b41beccda))
+* **scanner:** keep Send scan… between point and shoot shots ([4f5058d](https://github.com/Msgaihede/mtg-grimoire/commit/4f5058db0ece9ffc2def64ed43613ec5738c2409))
+* **ui:** make stepping a card's quantity respond at once in the deck editor and collection ([55b99e3](https://github.com/Msgaihede/mtg-grimoire/commit/55b99e37ed7fea77a6cf85b03fd2e39104f50ffb))
+* **ui:** make stepping a card's quantity respond at once in the deck editor and collection ([c765150](https://github.com/Msgaihede/mtg-grimoire/commit/c765150b7a88d3be339db810e12d95e4525374ff)), closes [#1402](https://github.com/Msgaihede/mtg-grimoire/issues/1402)
+
 ## [0.61.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.60.0...v0.61.0) (2026-10-24)
 
 
