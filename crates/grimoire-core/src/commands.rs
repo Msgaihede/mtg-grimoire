@@ -601,9 +601,9 @@ commands! {
     };
 
     // deck_completion
-    read deck_completion in deck_completion(marketplace: Option<String>, compare: Option<String>) = |conn| {
+    read deck_completion in deck_completion(marketplace: Option<String>, compare: Option<String>, theory_match: Option<String>) = |conn| {
         let marketplace = Marketplace::from_opt(marketplace.as_deref());
-        let compare = Compare::from_opt(compare.as_deref());
+        let compare = Compare::from_opt(compare.as_deref(), theory_match.as_deref());
         deck_completion_for(conn, marketplace, compare)
     };
     read deck_review_count in deck_completion() = |conn| review_count(conn);

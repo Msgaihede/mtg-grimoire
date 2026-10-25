@@ -79,7 +79,9 @@ describe("WidgetSettingsPanel", () => {
   /** The kind's own bounds hold even where the page's answer would allow more: a Collection value
    *  is two cells wide at the least. */
   it("greys a step past the kind's own bounds", () => {
-    render(<WidgetSettingsPanel {...props({ widget: widget({ w: 2, h: 2 }), canGrow: () => true })} />);
+    render(
+      <WidgetSettingsPanel {...props({ widget: widget({ w: 2, h: 2 }), canGrow: () => true })} />,
+    );
 
     expect(screen.getByRole("button", { name: "Narrower, Collection value" })).toHaveAttribute(
       "aria-disabled",
@@ -110,6 +112,41 @@ describe("WidgetSettingsPanel", () => {
     // The second pick reads its default where nothing is stored.
     const chart = within(screen.getByRole("group", { name: "Chart" }));
     expect(chart.getByRole("button", { name: "Bars" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  /**
+   * **A pick with a `when` is drawn only under the answer it refines** (issue #1400): Deck
+   * completion's `Theory match` under `Compare against → Theory`, and nowhere else — a row whose
+   * every press changes nothing on the card would be a control that lies.
+   */
+  it("draws a conditional pick only while the pick it refines reads its value", async () => {
+    const user = userEvent.setup();
+    const onConfig = vi.fn();
+    const completion = (config: unknown) =>
+      widget({ id: "deckCompletion", kind: "deckCompletion", w: 3, h: 3, config });
+    const view = render(<WidgetSettingsPanel {...props({ widget: completion(null), onConfig })} />);
+
+    expect(screen.getByRole("group", { name: "Compare against" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Theory match" })).toBeNull();
+
+    view.rerender(
+      <WidgetSettingsPanel {...props({ widget: completion({ compare: "theory" }), onConfig })} />,
+    );
+    const match = within(screen.getByRole("group", { name: "Theory match" }));
+    expect(match.getByRole("button", { name: "Exact match" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.click(match.getByRole("button", { name: "Missing" }));
+    expect(onConfig).toHaveBeenCalledWith({ match: "missing" });
+
+    // Kept in the config under Collection, and not drawn there.
+    view.rerender(
+      <WidgetSettingsPanel
+        {...props({ widget: completion({ compare: "collection", match: "missing" }), onConfig })}
+      />,
+    );
+    expect(screen.queryByRole("group", { name: "Theory match" })).toBeNull();
   });
 
   /** A numeric option is written as the number, never as its label's string — `pickValue` compares
@@ -149,7 +186,10 @@ describe("WidgetSettingsPanel", () => {
       />,
     );
     density = within(screen.getByRole("group", { name: "Density" }));
-    expect(density.getByRole("button", { name: "Compact" })).toHaveAttribute("aria-pressed", "true");
+    expect(density.getByRole("button", { name: "Compact" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await user.click(density.getByRole("button", { name: "Comfortable" }));
     expect(onConfig).toHaveBeenLastCalledWith({ density: undefined });
   });
@@ -172,7 +212,9 @@ describe("WidgetSettingsPanel", () => {
     expect(onConfig).toHaveBeenLastCalledWith({ figures: false });
 
     view.rerender(
-      <WidgetSettingsPanel {...props({ widget: widget({ config: { figures: false } }), onConfig })} />,
+      <WidgetSettingsPanel
+        {...props({ widget: widget({ config: { figures: false } }), onConfig })}
+      />,
     );
     const off = screen.getByRole("checkbox", { name: "Show totals" });
     expect(off).not.toBeChecked();
@@ -198,9 +240,7 @@ describe("WidgetSettingsPanel", () => {
     await user.click(art);
     expect(onConfig).toHaveBeenLastCalledWith({ art: false });
 
-    view.rerender(
-      <WidgetSettingsPanel {...props({ widget: deck({ art: false }), onConfig })} />,
-    );
+    view.rerender(<WidgetSettingsPanel {...props({ widget: deck({ art: false }), onConfig })} />);
     const off = screen.getByRole("checkbox", { name: "Cover art" });
     expect(off).not.toBeChecked();
     await user.click(off);

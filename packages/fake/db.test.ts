@@ -21428,6 +21428,40 @@ describe("deck completion", () => {
   });
 
   /**
+   * **`theoryMatch: "missing"` is the Compare dialog's `Missing` reading** (issue #1400): the two
+   * regular Bolts the plan's four did not spend stand in for two planned copies of other Bolts —
+   * the 2X2 printing first, being first down the plan, then one of the two foils. Held to the
+   * dialog's `quantity − heldAsOtherPrinting`, and `exact` (or nothing) is the reading above.
+   */
+  it("lets another printing of the card fill a planned copy under theoryMatch missing", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [
+        deckCard({ id: 1, variant: "theory", quantity: 4 }),
+        deckCard({ id: 2, variant: "theory", categoryKind: "side", finish: "foil", quantity: 2 }),
+        deckCard({ id: 3, variant: "theory", cardId: BOLT_2X2.id, quantity: 1 }),
+        deckCard({ id: 10, quantity: 6 }),
+      ],
+    });
+    const reads = readHandlers(db);
+
+    const [row] = reads.deck_completion({
+      compare: "theory",
+      theoryMatch: "missing",
+      marketplace: "tcgplayer",
+    });
+
+    expect(row).toMatchObject({ list: "theory", wanted: 7, owned: 6, missing: 1 });
+    expect(row.unpricedMissing).toBe(1);
+    const diff = reads.deck_theory_diff({ deckId: 1, marketplace: "tcgplayer" });
+    expect(row.missing).toBe(diff.reduce((n, r) => n + r.quantity - r.heldAsOtherPrinting, 0));
+    expect(reads.deck_completion({ compare: "theory", theoryMatch: "exact" })).toEqual(
+      reads.deck_completion({ compare: "theory" }),
+    );
+    expect(reads.deck_completion({ compare: "theory" })[0]).toMatchObject({ owned: 4, missing: 3 });
+  });
+
+  /**
    * Under `theory` the question is only asked of a deck that has a plan — and **a virtual deck is
    * not filtered out**, because the collection is never consulted: its live list is a list
    * whatever the cardboard is. `deck_create` is what writes the pair; no patch can.

@@ -562,7 +562,7 @@ Each goes **in the module its data lives in** — `search.rs` is the pattern.
 | `collection_value_history` | `value_history.rs` | `{ buckets, points, today }` — the collection's value per kept period plus a live point for today, split one way, each point carrying its price-only part (§14) |
 | `wishlist_value_history` | `value_history.rs` | the same shape over user schema v66's `wish_snapshots` — the wishlist's value per kept period plus a live point at `wishlist_summary`'s `cost` (§14) |
 | `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
-| `deck_completion` | `deck_completion.rs` | `[{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }]` — under `compare: collection` every deck that is not virtual, its live list against its own group; under `theory` every deck that keeps a plan, its live list against that plan (§15) |
+| `deck_completion` | `deck_completion.rs` | `[{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }]` — under `compare: collection` every deck that is not virtual, its live list against its own group; under `theory` every deck that keeps a plan, its live list against that plan, by exact printing or — `theoryMatch: missing` — any printing (§15) |
 | `deck_review_count` | `deck_completion.rs` | how many `deck_cards` rows carry a `needs_review` sentence (§15) |
 | `upcoming_sets` | `upcoming_sets.rs` | `{ today, sets: [{ code, name, releasedAt, previewed, inDecks }] }` — sets not yet out, soonest first (§15) |
 | `every_deck_todo_list` | `deck_todos.rs` | `[{ id, deckId, deckName, archived, todosOpen, title, body, updatedAt }]` — every to-do list whose body is not empty, archived decks' included, most recently edited first (§16) |
@@ -1692,7 +1692,7 @@ that draw footers; To review and Coming soon draw none. The older kinds' footers
 
 ### Deck completion — `deck_completion.rs`, `DeckCompletionWidget.tsx`
 
-`deck_completion(marketplace, compare)` answers one row per deck the comparison can measure —
+`deck_completion(marketplace, compare, theoryMatch)` answers one row per deck the comparison can measure —
 `{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }` — and the body decides
 only which decks, in what order, and how many fit. **Nothing in the body re-derives a count.**
 
@@ -1712,6 +1712,22 @@ the mode can measure it:
   keyed and walked exactly as below. So `missing` is `theory_diff`'s card rows summed — the Compare
   dialog's shopping list — and the Rust fence asserts that. `list` is always `theory`.
 
+**Under `Theory`, `Theory match` picks one of the Compare dialog's two readings of what is left to
+find** ([issue #1400](https://github.com/Msgaihede/mtg-grimoire/issues/1400)) — the registry's
+`match` pick, the first with a `when` (`WidgetPick.when`, drawn by `WidgetSettingsPanel` only while
+`compare` reads `theory`, and kept in the config while hidden). It is sent as `theoryMatch` and is
+`deck_completion.rs`'s `TheoryMatch`; anything but `missing` is `exact`, and it is not read under
+`Collection`:
+* **`Exact match`** (the default) — the paragraph above, the dialog's `All`.
+* **`Missing`** — the dialog's `Missing`: a planned copy the live list plays as another printing or
+  finish of the same oracle card counts as sleeved, so `missing` is `quantity −
+  held_as_other_printing` over `theory_diff`'s card lines. `measure` restates `theory_diff`'s walk
+  — exact matches spend live copies first, one live copy excuses one planned copy, and the leftovers
+  per oracle card go down the plan **in its reading order** — so `lists_by_deck` answers each
+  deck's keys in that order (a `row_number()` over the editor's pile, name, row order), because
+  which line is excused decides what the rest costs.
+  `a_substitute_goes_to_the_first_planned_line_of_its_card` pins the order by its money.
+
 **Each mode measures what the deck editor measures, rule for rule**, because a card reading
 *4 missing* over a deck that opens reading *6 missing* is a bug report, and the reader chose that
 over any simpler count (spec §1):
@@ -1730,8 +1746,8 @@ over any simpler count (spec §1):
 * **Virtual decks answer no row** — they hold nothing by definition, and 0% of every one of them
   is not a finding — and tokens never count, being `deck_tokens`, which nothing here reads.
 
-**Each mode has its fence.** `every_plan_answers_what_its_compare_dialog_lists` holds `Theory` to
-`theory_diff`'s non-token rows — a plan partly sleeved, a foil the regular copies do not cover, a
+**Each mode has its fence.** `every_plan_answers_what_its_compare_dialog_lists` holds `Theory`, in
+both matches, to `theory_diff`'s non-token rows — a plan partly sleeved, a foil the regular copies do not cover, a
 switched-off pile on either side, a virtual deck with a plan, a deck with no plan answering no
 row, and a token on the plan the diff lists and the widget never counts. The collection one asks
 both questions of one fixture:

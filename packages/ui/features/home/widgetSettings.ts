@@ -43,6 +43,16 @@ export function pickValue(widget: HomeWidget, pick: WidgetPick): string | number
     : pickDefault(pick);
 }
 
+/**
+ * Is this pick drawn for this widget? Always, unless it names a {@link WidgetPick.when} — then only
+ * while the pick it names reads the value it names. A `when` naming a key the kind has no pick for
+ * is never met: a row that depends on nothing this build knows is not one to draw.
+ */
+export function pickShown(widget: HomeWidget, pick: WidgetPick): boolean {
+  if (pick.when === undefined) return true;
+  return pickOf(widget, pick.when.key) === pick.when.is;
+}
+
 /** A pick's current value by key, for a kind this build knows. `undefined` for a key the kind
  *  declares no pick for — a programming error the type of the call site cannot catch. */
 export function pickOf(widget: HomeWidget, key: string): string | number | undefined {

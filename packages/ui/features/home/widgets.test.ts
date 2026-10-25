@@ -285,10 +285,12 @@ describe("WIDGETS", () => {
       // Round two (2026-09-26), and issue #600. `compare` is sent to Rust and each word is a
       // `Compare` arm there; `scope` is `newPrintings`' two words, a checklist of the decks the
       // comparison can measure; and `complete` is the second switch in the registry that starts
-      // off: finished decks are counted in the footer and listed only when asked for.
+      // off: finished decks are counted in the footer and listed only when asked for. `match`
+      // (issue #1400) is `TheoryMatch`'s two words, drawn only under `theory` — see below.
       deckCompletion: {
         picks: {
           compare: { ids: ["collection", "theory"], dflt: undefined },
+          match: { ids: ["exact", "missing"], dflt: undefined },
           scope: { ids: ["all", "chosen"], dflt: undefined },
           order: { ids: ["done", "cheapest", "name"], dflt: undefined },
         },
@@ -401,6 +403,26 @@ describe("WIDGETS", () => {
       max: [6, 8],
     });
     expect(pickDefault(meta.picks.find((pick) => pick.key === "releases")!)).toBe(1);
+  });
+
+  /**
+   * **A pick's `when` names a pick of its own kind and a word that pick offers** (issue #1400), so
+   * no row can hang on a key or a value nothing writes — such a row would never be drawn. Deck
+   * completion's `match` is the one there is, and it refines `Theory`.
+   */
+  it("conditions a pick only on another pick of its kind, at a value it offers", () => {
+    const conditional = WIDGETS.flatMap(({ kind, picks }) =>
+      picks.flatMap((pick) => (pick.when === undefined ? [] : [{ kind, pick, picks }])),
+    );
+    for (const { kind, pick, picks } of conditional) {
+      const named = picks.find((other) => other.key === pick.when!.key);
+      expect(named, `${kind}.${pick.key}`).toBeDefined();
+      expect(named).not.toBe(pick);
+      expect(named!.options.map((option) => option.id)).toContain(pick.when!.is);
+    }
+    expect(conditional.map(({ kind, pick }) => [kind, pick.key, pick.when])).toEqual([
+      ["deckCompletion", "match", { key: "compare", is: "theory" }],
+    ]);
   });
 
   /**
