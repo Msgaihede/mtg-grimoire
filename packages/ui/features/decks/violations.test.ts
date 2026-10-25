@@ -3,7 +3,7 @@ import { deckCardSlot } from "./dnd";
 import { validateForMarks } from "./validation/engine";
 import { card, commander, islands, spec } from "./validation/fixtures";
 import type { CardFacts, ValidationIssue } from "./validation/types";
-import { ruleBreak, violationsBySlot, violationsFor } from "./violations";
+import { ruleBreak, sameViolations, violationsBySlot, violationsFor } from "./violations";
 
 const issue = (over: Partial<ValidationIssue> = {}): ValidationIssue => ({
   severity: "error",
@@ -140,5 +140,26 @@ describe("ruleBreak", () => {
   it("answers null for a card with nothing wrong with it", () => {
     expect(ruleBreak(undefined)).toBeNull();
     expect(ruleBreak([])).toBeNull();
+  });
+});
+
+describe("sameViolations (issue #1402)", () => {
+  const main = card({ name: "Mana Crypt" });
+  const marks = (over: Partial<ValidationIssue> = {}) =>
+    violationsBySlot([issue({ rowIds: [main.id], ...over })], [main]);
+
+  /** A fresh validation pass answers fresh objects; the marks they draw are the same. */
+  it("holds two passes that mark the same rows the same way to be the same", () => {
+    expect(sameViolations(marks(), marks())).toBe(true);
+    expect(sameViolations(undefined, undefined)).toBe(true);
+  });
+
+  it("tells a changed sentence, severity or row apart", () => {
+    expect(sameViolations(marks(), marks({ message: "Mana Crypt is banned; you have 2." }))).toBe(
+      false,
+    );
+    expect(sameViolations(marks(), marks({ severity: "warning" }))).toBe(false);
+    expect(sameViolations(marks(), violationsBySlot([], [main]))).toBe(false);
+    expect(sameViolations(marks(), undefined)).toBe(false);
   });
 });

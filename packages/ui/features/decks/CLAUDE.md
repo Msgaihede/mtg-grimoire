@@ -114,6 +114,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
 - **State lives where it is drawn.** The filter is `DeckDesk`'s, so a keystroke never re-renders the editor, the header, the ledger, the docked search wall, or the stats/tokens/notes/to-do bands. Do not lift desk state back into the editor; hand the desk a stable callback instead. `DeckDesk.test.tsx` measures this with render-counting probes.
 - **Memo only holds on stable props.** The four views, `CardStack`, each view's per-pile component, `DeckLedger`, `DeckNotesPanel`, `DeckTodosPanel` and `DeckEditorHeader` are `React.memo`. Callbacks handed down are `useCallback` over `mutate`/`mutateAsync` (stable) — never over a whole mutation object (fresh every render) — or read through a ref.
 - **Per-pile memo compares rows, not arrays** (`views/sameDrawn.ts`): a filter rebuilds every `CardGroup`, but a pile whose row objects are the same in the same order is not redrawn. Never make that comparator deep — a re-read replaces rows precisely when a price or count may have moved.
+- **A stepper press redraws one pile** (issue #1402): every press is a new `deck.cards`, so nothing in the desk's `actions` bag (or the card and pile menus) may depend on it — read the rows through a ref at the press. `violations` keeps its map while `sameViolations` holds. The press's re-read of `["decks"]` is `useStepSettle`'s (`lib/useStepSettle.ts`): once, after a run of presses goes quiet. `DeckDesk.test.tsx` counts it.
 
 ---
 

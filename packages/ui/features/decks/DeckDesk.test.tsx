@@ -198,4 +198,29 @@ describe("DeckDesk — what a filter keystroke re-renders (issue #557)", () => {
     expect(count("face:Island")).toBe(0);
     expect(count("face:Ancient Tomb")).toBe(0);
   });
+
+  /**
+   * **A stepper press redraws the pile it stepped and no other** (issue #1402). The press rewrites
+   * one row, which is a new `deck.cards` — and every callback the desk's `actions` bag was built
+   * from used to depend on it, as did the card menu's, the picked set's empty `[]` and the marks'
+   * map. `actions` and `violations` are props of every pile, so each press drew the whole desk
+   * again to change one number.
+   */
+  it("redraws only the stepped pile for a stepper press", async () => {
+    const world = await openSettled();
+    const user = userEvent.setup();
+    const island = screen.getAllByRole("spinbutton", { name: /^Copies of Island in / })[0];
+    const before = Number((island as HTMLInputElement).value);
+
+    await user.click(
+      screen.getByRole("button", { name: `Increase ${island.getAttribute("aria-label")}` }),
+    );
+    await waitFor(() => expect(Number((island as HTMLInputElement).value)).toBe(before + 1));
+
+    // The control: Island's own stack was drawn again, with its new count.
+    expect(count("face:Island")).toBeGreaterThan(0);
+    // The Maybeboard's pile holds nothing the press touched.
+    expect(count("face:Ancient Tomb")).toBe(0);
+    await settle(world.client);
+  });
 });

@@ -20,10 +20,14 @@ import { plural } from "@/lib/counts";
 import { ipc, type CollectionRow } from "@/lib/ipc";
 import { refreshCardSearches } from "@/lib/searchMarks";
 import { useOptimisticEntries } from "@/lib/useOptimisticEntries";
+import { useStepSettle } from "@/lib/useStepSettle";
 
 /** Every cached copy of the list sits under this — a module constant, because
  *  `useOptimisticEntries` keys its callbacks on it. */
 const COLLECTION_LIST_KEY = ["collection", "list"] as const;
+
+/** The stepper's write, named so {@link useStepSettle} can ask whether a press is still in flight. */
+const SET_QUANTITY_KEY = ["collection", "setQuantity"] as const;
 
 export function useCollectionEntryWrites() {
   const queryClient = useQueryClient();
@@ -101,7 +105,16 @@ export function useCollectionEntryWrites() {
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   }, [queryClient]);
 
+  /**
+   * The stepper's {@link settle}, **once per run of presses rather than once per press** (issue
+   * #1402) — see {@link useStepSettle}. Every figure it re-reads is counted from the row's own
+   * number, which the press has already rewritten, so holding the re-read until the presses stop
+   * costs the header a third of a second and saves it, and the page, a round of reads per press.
+   */
+  const steps = useStepSettle(SET_QUANTITY_KEY);
+
   const setQuantity = useMutation({
+    mutationKey: SET_QUANTITY_KEY,
     // The row by its id alone (`Pick`), so a caller holding only an `EntryChange` — the phone's
     // undo of an add — can step it back through this same write.
     mutationFn: ({ row, quantity }: { row: Pick<CollectionRow, "id">; quantity: number }) =>
@@ -110,13 +123,14 @@ export function useCollectionEntryWrites() {
     // the same number three times — the box is controlled by the cache, so a second press
     // before the first answer would be computed from a stale value.
     onMutate: ({ row, quantity }) => {
+      steps.hold();
       const saved = snapshot();
       patchEntry(row.id, (r) => ({ ...r, quantity }));
       return saved;
     },
     onError: (_error, _variables, saved) => {
       if (saved) restore(saved);
-      settleFailure();
+      steps.now(settleFailure);
     },
     onSuccess: (change) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
@@ -129,8 +143,18 @@ export function useCollectionEntryWrites() {
       // header off to count a collection the row is no longer in, so the two disagreed on
       // screen instantly, and the next `+` on the ghost answered GONE. `remove.onSuccess`
       // below is these same two lines, and this is the same write with a different gesture.
-      patchEntry(change.id, change.removed ? null : (r) => ({ ...r, quantity: change.quantity }));
-      settle();
+      //
+      // **A row the guess already got right is left alone** (issue #1402): it is the same object,
+      // so `patchEntry` hands every cached list back as itself and nothing re-renders. Rewriting
+      // it with an equal copy redrew the whole page a second time per press, to show the number
+      // the press had already drawn.
+      patchEntry(
+        change.id,
+        change.removed
+          ? null
+          : (r) => (r.quantity === change.quantity ? r : { ...r, quantity: change.quantity }),
+      );
+      steps.schedule(settle);
     },
   });
 
