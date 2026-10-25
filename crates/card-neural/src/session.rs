@@ -1,15 +1,26 @@
-//! Frames into a decision: quickdraw.cards' agreement rule, and when a decision is forgotten.
+//! Frames into a decision: quickdraw.cards' agreement rule, made stricter, and when a decision
+//! is forgotten.
 //!
 //! From their `scanner-state.js` (`FrameConsensus`) as their `app.js` configures it for the
-//! picture (`required: 2, supportRequired: 3`, `maxAge` 1 800 ms, `maxGap` 850 ms):
+//! picture (`maxAge` 1 800 ms, `maxGap` 850 ms), with more frames asked of a card and the card
+//! asked to lie still (2026-10-25):
 //!
-//! - **Two accepted frames naming one card** decide it, or **three agreeing frames** when some
-//!   are only *supported* (just under the accept bar on a confident detection).
-//! - **An instant frame decides alone**: accepted with a high score, a wide margin and a sure
-//!   detection.
+//! - **Three accepted frames naming one card** decide it, or **four agreeing frames** when some
+//!   are only *supported* (just under the accept bar on a confident detection). Quickdraw's are
+//!   two and three.
+//! - **A card that moved since the last vote starts the count again** ([`Rules::still`]): the
+//!   frames counted are of a card lying where it was, not of a camera sweeping over it or a card
+//!   still falling. Ours.
+//! - **No frame decides alone** ([`Rules::instant`] 0). Quickdraw's *instant* frame — accepted
+//!   with a high score, a wide margin and a sure detection — decided on its own, and a card
+//!   passing under the lens is sharp on one frame often enough to be added by it.
 //! - **Any other frame resets the count** — except a *weak* frame of the same card in the same
 //!   place within the gap, which keeps the count without adding to it.
 //! - A different card, or a gap longer than `max_gap`, starts the count again.
+//!
+//! Measured on the readers' scans and on camera motion made from them, in the replay
+//! (`docs/reference/card-scanner.md` §4): the stillness does nearly all of it, and a fourth or
+//! fifth frame took cards from the readers' scans and no false add from the motion.
 //!
 //! The decision is the card — the look within it is the deciding frame's best. It stands until
 //! another card is decided, **or until the card has been gone [`Rules::forget_after`] frames
@@ -22,9 +33,10 @@
 //! had to Reset or scan something else first. While a card is decided its votes are counted by
 //! look: [`Rules::another_look`] accepted frames running that each tell their look apart from
 //! the deciding frame's (neither is among the other's twins, [`crate::scanner::TWIN_GAP`])
-//! decide that look, [`Decision::another_look`]. More frames than a card takes, because a held
-//! card's best look can waver where its twins do not reach, and a change made in error adds a
-//! row.
+//! decide that look, [`Decision::another_look`]. Accepted frames only, and one more than a card
+//! took when it was two, because a held card's best look can waver where its twins do not reach
+//! and a change made in error adds a row; since a card takes three (2026-10-25) it is as many,
+//! not re-measured.
 //!
 //! **Or until another copy of it is laid on it** (#1375), ours too. Two copies of one look look
 //! alike, so nothing about the second card tells it from the first — but laying it does. While
@@ -43,10 +55,18 @@ use crate::scanner::{Read, Scored};
 pub struct Rules {
     pub required: usize,
     pub support_required: usize,
+    /// Instant frames running — accepted, and sure enough on their own — that decide before
+    /// [`Rules::required`] accepted frames have; 0 for never, the default. Quickdraw's is one.
+    pub instant: usize,
     pub max_age_ms: f64,
     pub max_gap_ms: f64,
     /// Bounds IoU for "the same place" when a weak frame defers.
     pub same_place: f32,
+    /// Bounds IoU a vote must keep with the vote before it, or the card moved — the camera
+    /// swept or the card is still falling — and the count starts again from this frame; 0 for
+    /// no such check. 0.8 is a shift of about a ninth of the card's width; two frames running on the
+    /// readers' scans overlap by 0.94 or more nine times in ten.
+    pub still: f32,
     /// Frames running with no card in front of the lens ([`Read::present`]) that forget the
     /// standing decision.
     pub forget_after: u32,
@@ -67,11 +87,13 @@ pub struct Rules {
 impl Default for Rules {
     fn default() -> Self {
         Self {
-            required: 2,
-            support_required: 3,
+            required: 3,
+            support_required: 4,
+            instant: 0,
             max_age_ms: 1800.0,
             max_gap_ms: 850.0,
             same_place: 0.35,
+            still: 0.8,
             forget_after: 5,
             another_look: 3,
             relaid_after: 2,
@@ -87,6 +109,7 @@ struct Vote {
     twins: Vec<u32>,
     at: f64,
     strong: bool,
+    sure: bool,
 }
 
 /// What an agreement holds after a frame.
@@ -254,9 +277,14 @@ impl Agreement {
             self.decision.as_ref().is_some_and(|d| d.card == card)
                 && !alike((last.entry, &last.twins), (entry, twins))
         };
+        // The card moved since the last vote: what was counted was of a picture in motion.
+        let moved = self
+            .last_quad
+            .is_some_and(|q| bounds_iou(&b.quad, &q) < self.rules.still);
         if let Some(last) = &last {
             if last.card != card
                 || relooked(last)
+                || moved
                 || now_ms - last.at > self.rules.max_gap_ms
                 || now_ms < last.at
             {
@@ -271,12 +299,14 @@ impl Agreement {
             twins: twins.clone(),
             at: now_ms,
             strong: r.accepted,
+            sure: r.accepted && r.instant,
         });
         let window = self
             .rules
             .required
             .max(self.rules.support_required)
-            .max(self.rules.another_look);
+            .max(self.rules.another_look)
+            .max(self.rules.instant);
         if self.votes.len() > window {
             self.votes.remove(0);
         }
@@ -310,7 +340,8 @@ impl Agreement {
         let strong = self.votes.iter().filter(|v| v.strong).count();
         let agreed =
             strong >= self.rules.required || self.votes.len() >= self.rules.support_required;
-        let instant = r.accepted && r.instant;
+        let sure = self.votes.iter().rev().take_while(|v| v.sure).count();
+        let instant = self.rules.instant > 0 && sure >= self.rules.instant;
         if !(agreed || instant) {
             return false;
         }
@@ -414,48 +445,109 @@ mod tests {
     }
 
     #[test]
-    fn two_accepted_frames_of_one_card_decide_it() {
+    fn three_accepted_frames_of_one_card_decide_it() {
         let mut s = Agreement::default();
         assert!(!s.observe(&accepted(1), 0.0));
-        assert_eq!(s.votes(), (1, 1));
-        assert!(s.observe(&accepted(1), 100.0));
+        assert!(!s.observe(&accepted(1), 100.0));
+        assert_eq!(s.votes(), (2, 2));
+        assert!(s.observe(&accepted(1), 200.0));
         assert_eq!(s.decision().map(|d| (d.card, d.how)), Some((1, "agreed")));
         assert_eq!(s.decisions(), 1);
     }
 
     #[test]
-    fn three_frames_decide_when_some_are_only_supported() {
+    fn four_frames_decide_when_some_are_only_supported() {
         let mut s = Agreement::default();
         let supported = frame(1, 0.0, false, true, false, true);
         assert!(!s.observe(&supported, 0.0));
         assert!(!s.observe(&accepted(1), 100.0));
-        assert!(s.observe(&supported, 200.0));
+        assert!(!s.observe(&supported, 200.0));
+        assert!(s.observe(&supported, 300.0));
     }
 
     #[test]
-    fn an_instant_frame_decides_alone() {
+    fn a_card_that_moved_since_the_last_vote_starts_the_count_again() {
         let mut s = Agreement::default();
-        assert!(s.observe(&frame(4, 0.0, true, false, true, false), 0.0));
+        // A card 60 wide: 4 across overlaps the last place by 0.88, 12 across by 0.67.
+        let at = |x: f32| frame(1, x, true, false, false, false);
+        assert!(!s.observe(&at(0.0), 0.0));
+        assert!(
+            !s.observe(&at(12.0), 100.0),
+            "moved: this frame starts the count"
+        );
+        assert_eq!(s.votes(), (1, 1));
+        assert!(!s.observe(&at(16.0), 200.0));
+        assert!(
+            s.observe(&at(20.0), 300.0),
+            "three frames in place, a jitter apart"
+        );
+        assert_eq!(s.decision().map(|d| d.how), Some("agreed"));
+
+        // With no stillness asked for, the same frames decide on the third.
+        let mut s = Agreement::new(Rules {
+            still: 0.0,
+            ..Rules::default()
+        });
+        for (i, x) in [0.0, 12.0].into_iter().enumerate() {
+            assert!(!s.observe(&at(x), 100.0 * i as f64));
+        }
+        assert!(s.observe(&at(24.0), 200.0));
+    }
+
+    #[test]
+    fn instant_frames_decide_only_as_many_as_the_rule_asks() {
+        let sure = || frame(4, 0.0, true, false, true, false);
+        let mut s = Agreement::new(Rules {
+            instant: 2,
+            ..Rules::default()
+        });
+        assert!(!s.observe(&sure(), 0.0));
+        assert!(s.observe(&sure(), 100.0));
         assert_eq!(s.decision().map(|d| d.how), Some("instant"));
+
+        // Accepted but not sure in between: the instant frames are not running.
+        let mut s = Agreement::new(Rules {
+            required: 5,
+            support_required: 6,
+            instant: 2,
+            ..Rules::default()
+        });
+        s.observe(&sure(), 0.0);
+        s.observe(&frame(4, 0.0, true, false, false, false), 100.0);
+        assert!(!s.observe(&sure(), 200.0));
+        assert!(s.observe(&sure(), 300.0));
+
+        // None, by default: a sure frame counts as any accepted one, so a card passing under the
+        // lens is not decided on the one frame it was sharp in.
+        let mut s = Agreement::default();
+        assert!(!s.observe(&sure(), 0.0));
+        assert!(!s.observe(&sure(), 100.0));
+        assert!(s.observe(&sure(), 200.0));
+        assert_eq!(s.decision().map(|d| d.how), Some("agreed"));
     }
 
     #[test]
     fn another_card_or_a_long_gap_starts_again() {
         let mut s = Agreement::default();
         s.observe(&accepted(1), 0.0);
+        s.observe(&accepted(1), 100.0);
         assert!(
-            !s.observe(&accepted(2), 100.0),
+            !s.observe(&accepted(2), 200.0),
             "a different card resets the count"
         );
-        assert!(!s.observe(&accepted(2), 1100.0), "past the gap");
-        assert!(s.observe(&accepted(2), 1200.0));
+        s.observe(&accepted(2), 300.0);
+        assert!(!s.observe(&accepted(2), 1200.0), "past the gap");
+        assert!(!s.observe(&accepted(2), 1300.0));
+        assert!(s.observe(&accepted(2), 1400.0));
     }
 
     #[test]
     fn a_frame_with_nothing_resets_but_a_weak_frame_in_place_holds() {
         let mut s = Agreement::default();
         s.observe(&accepted(1), 0.0);
+        s.observe(&accepted(1), 25.0);
         s.observe(&nothing(), 50.0);
+        s.observe(&accepted(1), 75.0);
         assert!(
             !s.observe(&accepted(1), 100.0),
             "the empty frame reset the count"
@@ -463,6 +555,7 @@ mod tests {
 
         let mut s = Agreement::default();
         s.observe(&accepted(1), 0.0);
+        s.observe(&accepted(1), 25.0);
         s.observe(&frame(1, 5.0, false, false, false, true), 50.0);
         assert!(
             s.observe(&accepted(1), 100.0),
@@ -471,6 +564,7 @@ mod tests {
 
         let mut s = Agreement::default();
         s.observe(&accepted(1), 0.0);
+        s.observe(&accepted(1), 25.0);
         s.observe(&frame(1, 400.0, false, false, false, true), 50.0);
         assert!(
             !s.observe(&accepted(1), 100.0),
@@ -481,27 +575,37 @@ mod tests {
     #[test]
     fn a_decision_stands_until_another_card_is_decided() {
         let mut s = Agreement::default();
-        s.observe(&accepted(1), 0.0);
-        s.observe(&accepted(1), 100.0);
-        s.observe(&accepted(2), 200.0);
-        assert_eq!(s.decision().map(|d| d.card), Some(1));
+        for at in [0.0, 100.0, 200.0] {
+            s.observe(&accepted(1), at);
+        }
         s.observe(&accepted(2), 300.0);
+        s.observe(&accepted(2), 400.0);
+        assert_eq!(s.decision().map(|d| d.card), Some(1));
+        s.observe(&accepted(2), 500.0);
         assert_eq!(s.decision().map(|d| d.card), Some(2));
         assert_eq!(s.decisions(), 2);
+    }
+
+    /// `read` on as many frames as the rules decide on, 100 ms apart from `at`: whether the
+    /// last of them decided.
+    fn decide(s: &mut Agreement, read: &Read, at: f64) -> bool {
+        (0..s.rules.required)
+            .map(|i| s.observe(read, at + 100.0 * i as f64))
+            .last()
+            .unwrap_or(false)
     }
 
     #[test]
     fn another_look_of_the_decided_card_at_rest_is_a_new_decision() {
         // Card 1 decided on look 10; a second printing of it, look 11, laid on top (#1359).
         let mut s = Agreement::default();
-        s.observe(&look(1, 10, &[]), 0.0);
-        assert!(s.observe(&look(1, 10, &[]), 100.0));
+        assert!(decide(&mut s, &look(1, 10, &[]), 0.0));
         assert!(!s.decision().expect("decided").another_look);
         assert!(s.is_decided(&look(1, 10, &[]).cards[0].scored));
         assert!(!s.is_decided(&look(1, 11, &[]).cards[0].scored));
-        assert!(!s.observe(&look(1, 11, &[]), 200.0));
+        assert!(!s.observe(&look(1, 11, &[]), 300.0));
         assert!(
-            !s.observe(&look(1, 11, &[]), 300.0),
+            !s.observe(&look(1, 11, &[]), 400.0),
             "two frames of a look are not at rest"
         );
         assert_eq!(
@@ -509,19 +613,19 @@ mod tests {
             Some(10),
             "the first look still stands"
         );
-        assert!(s.observe(&look(1, 11, &[]), 400.0));
+        assert!(s.observe(&look(1, 11, &[]), 500.0));
         let d = s.decision().expect("decided");
         assert_eq!((d.card, d.entry, d.another_look), (1, 11, true));
         assert_eq!(s.decisions(), 2);
         // Now the second look is the one decided: more of it changes nothing, and the first
         // look laid back on it is another decision in turn.
-        assert!(s.observe(&look(1, 11, &[]), 500.0));
+        assert!(s.observe(&look(1, 11, &[]), 600.0));
         assert_eq!(s.decisions(), 2);
         assert!(s.is_decided(&look(1, 11, &[]).cards[0].scored));
-        for at in [600.0, 700.0] {
+        for at in [700.0, 800.0] {
             assert!(!s.observe(&look(1, 10, &[]), at));
         }
-        assert!(s.observe(&look(1, 10, &[]), 800.0));
+        assert!(s.observe(&look(1, 10, &[]), 900.0));
         assert_eq!(
             (s.decisions(), s.decision().map(|d| d.entry)),
             (3, Some(10))
@@ -531,39 +635,36 @@ mod tests {
     #[test]
     fn a_wavering_look_or_a_twin_of_it_is_the_decided_card() {
         let mut s = Agreement::default();
-        s.observe(&look(1, 10, &[]), 0.0);
-        s.observe(&look(1, 10, &[]), 100.0);
+        decide(&mut s, &look(1, 10, &[]), 0.0);
         // Another look on two frames, then the decided one: a held card's best look wavering.
-        s.observe(&look(1, 11, &[]), 200.0);
         s.observe(&look(1, 11, &[]), 300.0);
-        s.observe(&look(1, 10, &[]), 400.0);
+        s.observe(&look(1, 11, &[]), 400.0);
+        s.observe(&look(1, 10, &[]), 500.0);
         assert!(
-            !s.observe(&look(1, 11, &[]), 500.0),
+            !s.observe(&look(1, 11, &[]), 600.0),
             "the waver counted across the look"
         );
         assert_eq!(s.decisions(), 1);
         // A look the picture could not tell from the deciding one, either way round, is it.
         let mut s = Agreement::default();
-        s.observe(&look(1, 10, &[12]), 0.0);
-        s.observe(&look(1, 10, &[12]), 100.0);
+        decide(&mut s, &look(1, 10, &[12]), 0.0);
         for (i, frame) in [look(1, 12, &[]), look(1, 13, &[10])]
             .iter()
             .cycle()
             .take(6)
             .enumerate()
         {
-            s.observe(frame, 200.0 + 100.0 * i as f64);
+            s.observe(frame, 300.0 + 100.0 * i as f64);
             assert!(!s.decision().expect("decided").another_look, "frame {i}");
         }
         assert_eq!(s.decisions(), 1);
         // And only accepted frames lay a second printing: supported ones never do.
         let mut s = Agreement::default();
-        s.observe(&look(1, 10, &[]), 0.0);
-        s.observe(&look(1, 10, &[]), 100.0);
+        decide(&mut s, &look(1, 10, &[]), 0.0);
         let mut supported = look(1, 11, &[]);
         (supported.accepted, supported.supported, supported.weak) = (false, true, true);
-        for i in 0..4 {
-            assert!(!s.observe(&supported, 200.0 + 100.0 * i as f64));
+        for i in 0..5 {
+            assert!(!s.observe(&supported, 300.0 + 100.0 * i as f64));
         }
         assert_eq!(s.decisions(), 1);
     }
@@ -580,26 +681,25 @@ mod tests {
     fn another_copy_laid_on_the_decided_card_is_a_new_decision() {
         // Card 1 decided at x 0, hidden two frames, then at rest a fifth of a card over (#1375).
         let mut s = Agreement::default();
-        s.observe(&accepted(1), 0.0);
-        assert!(s.observe(&accepted(1), 100.0));
-        s.observe(&covered(), 200.0);
+        assert!(decide(&mut s, &accepted(1), 0.0));
         s.observe(&covered(), 300.0);
+        s.observe(&covered(), 400.0);
         let laid = || frame(1, 12.0, true, false, false, false);
-        assert!(!s.observe(&laid(), 400.0), "one frame of it is not agreed");
+        assert!(!s.observe(&laid(), 500.0), "one frame of it is not agreed");
+        assert!(!s.observe(&laid(), 600.0), "nor two");
         assert_eq!(s.decisions(), 1);
-        assert!(s.observe(&laid(), 500.0));
+        assert!(s.observe(&laid(), 700.0));
         let d = s.decision().expect("decided");
         assert_eq!((d.card, d.relaid, d.another_look), (1, true, false));
         assert_eq!(s.decisions(), 2);
         // More of it is the same decision, and it says the same.
-        assert!(s.observe(&laid(), 600.0));
+        assert!(s.observe(&laid(), 800.0));
         assert_eq!(s.decisions(), 2);
         assert!(s.decision().expect("held").relaid);
         // And a third copy laid on the second, back at x 0, is another.
-        s.observe(&covered(), 700.0);
-        s.observe(&covered(), 800.0);
-        s.observe(&accepted(1), 900.0);
-        s.observe(&accepted(1), 1000.0);
+        s.observe(&covered(), 900.0);
+        s.observe(&covered(), 1000.0);
+        decide(&mut s, &accepted(1), 1100.0);
         assert_eq!(s.decisions(), 3);
     }
 
@@ -607,58 +707,54 @@ mod tests {
     fn a_card_hidden_where_it_lay_or_moved_in_sight_is_the_card_decided() {
         // A hand passing over it: hidden, and back where it lay.
         let mut s = Agreement::default();
-        s.observe(&accepted(1), 0.0);
-        s.observe(&accepted(1), 100.0);
-        for at in [200.0, 300.0, 400.0] {
+        decide(&mut s, &accepted(1), 0.0);
+        for at in [300.0, 400.0, 500.0] {
             s.observe(&covered(), at);
         }
-        s.observe(&frame(1, 1.0, true, false, false, false), 500.0);
-        assert!(s.observe(&frame(1, 1.0, true, false, false, false), 600.0));
+        let back = || frame(1, 1.0, true, false, false, false);
+        s.observe(&back(), 600.0);
+        s.observe(&back(), 700.0);
+        assert!(s.observe(&back(), 800.0));
         assert_eq!(s.decisions(), 1);
         assert!(!s.decision().expect("held").relaid);
 
-        // A held card moved in sight of the lens, one frame hidden on the way.
+        // A held card moved in sight of the lens, one frame hidden on the way, and at rest.
         let mut s = Agreement::default();
-        s.observe(&accepted(1), 0.0);
-        s.observe(&accepted(1), 100.0);
-        s.observe(&frame(1, 10.0, true, false, false, false), 200.0);
-        s.observe(&covered(), 300.0);
-        for (i, x) in [20.0, 30.0, 30.0].into_iter().enumerate() {
+        decide(&mut s, &accepted(1), 0.0);
+        s.observe(&frame(1, 10.0, true, false, false, false), 300.0);
+        s.observe(&covered(), 400.0);
+        for (i, x) in [20.0, 30.0, 30.0, 30.0].into_iter().enumerate() {
             s.observe(
                 &frame(1, x, true, false, false, false),
-                400.0 + 100.0 * i as f64,
+                500.0 + 100.0 * i as f64,
             );
         }
         assert_eq!(s.decisions(), 1);
 
         // Fumbled out of sight, the stretch break's to judge: empty frames say nothing.
         let mut s = Agreement::default();
-        s.observe(&accepted(1), 0.0);
-        s.observe(&accepted(1), 100.0);
-        for at in [200.0, 300.0, 400.0, 500.0] {
+        decide(&mut s, &accepted(1), 0.0);
+        for at in [300.0, 400.0, 500.0, 600.0] {
             s.observe(&nothing(), at);
         }
-        s.observe(&frame(1, 20.0, true, false, false, false), 600.0);
-        s.observe(&frame(1, 20.0, true, false, false, false), 700.0);
+        decide(&mut s, &frame(1, 20.0, true, false, false, false), 700.0);
         assert_eq!(s.decisions(), 1);
     }
 
     #[test]
     fn a_card_gone_long_enough_is_forgotten_and_counts_again() {
         let mut s = Agreement::default();
-        s.observe(&accepted(1), 0.0);
-        s.observe(&accepted(1), 100.0);
+        decide(&mut s, &accepted(1), 0.0);
         // Four empty frames: a card fumbled in the hand, not taken away.
         for i in 0..4 {
-            s.observe(&nothing(), 200.0 + 50.0 * i as f64);
+            s.observe(&nothing(), 300.0 + 50.0 * i as f64);
         }
         assert_eq!(s.decision().map(|d| d.card), Some(1));
         assert_eq!(s.absent(), 4);
         // The fifth forgets it, and the same card shown again is a second decision.
-        s.observe(&nothing(), 400.0);
+        s.observe(&nothing(), 500.0);
         assert!(s.decision().is_none());
-        s.observe(&accepted(1), 500.0);
-        assert!(s.observe(&accepted(1), 600.0));
+        assert!(decide(&mut s, &accepted(1), 600.0));
         assert_eq!(s.decisions(), 2);
         assert_eq!(s.absent(), 0);
     }

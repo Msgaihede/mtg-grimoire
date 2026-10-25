@@ -210,16 +210,54 @@ recogniser deciding without it.
 
 ## 4. The agreement
 
-`card_neural::Agreement`, its `Rules` defaults: **two accepted frames of one card decide it**
-(`required`), **or three when some are only supported** (`support_required`), **or one instant
-frame** whose read is sure on its own. Two frames agree only within `max_gap_ms` (850 ms) of each
-other, and a vote older than `max_age_ms` (1.8 s) is dropped. The ages are read off the session's
+`card_neural::Agreement`, its `Rules` defaults: **three accepted frames of one card decide it**
+(`required`), **or four when some are only supported** (`support_required`), **and only while the
+card lies still**: a vote whose bounds overlap the last vote's by less than **0.8** (`still`, a
+shift of about a ninth of the card's width) is a card that moved — a camera sweeping over it, a card
+still falling — and starts the count again. **No frame decides alone** (`instant` 0). Two frames
+agree only within `max_gap_ms` (850 ms) of each other, and a vote older than `max_age_ms` (1.8 s) is
+dropped. The ages are read off the session's
 clock (`host::Stopwatch`, started at `load_neural`), never off `Instant`; a host with no clock
 reads every frame at zero, so no vote ages (§11), and the replay installs the label's own frame
 times.
 
+**Until 2026-10-25 two accepted frames decided, or three with supported ones, or one *instant*
+frame** — accepted, scored high, a wide margin, a sure detection — on its own, with no regard to
+where the card was: the median decision was on a run's first frame, and a card the camera passed
+over was added from the one frame it was sharp in. What the rule changed, in the replay (§10) on the
+same build, the Neural pass:
+
+| Rule (`--agreement`) | Readers' scans: printing ✓ · card ✓ · wrong · undecided | Frames later than before, median · p90 | Motion runs: false adds | of which pans |
+| --- | ---: | ---: | ---: | ---: |
+| before: `required=2,support=3,instant=1,still=0` | 110 · 9 · 0 · 5 | — | 64 | 57 |
+| `required=3,support=4,instant=0`, no stillness | 111 · 7 · 0 · 6 | 2 · 2 | 54 | 47 |
+| `required=2,support=3,instant=0,still=0.8` | 112 · 7 · 0 · 5 | 1 · 1 | 12 | 5 |
+| **`required=3,support=4,instant=0,still=0.8`** (shipped) | 110 · 7 · 0 · 7 | 2 · 2 | 10 | 3 |
+| `required=4,support=5,instant=0,still=0.8` | 109 · 6 · 0 · 9 | 3 · 3 | 10 | 3 |
+| `required=5,support=6,instant=0,still=0.8` | 107 · 7 · 0 · 10 | 4 · 4 | 8 | 3 |
+
+**The readers' scans** are the 124 of §10. They hold no false add to remove: each is a card coming
+to rest and lying there, and the two decisions of another card in them are the reader's previous card,
+lying still before the swap. A still bar of 0.85 changed nothing; 0.9 took one more pan's false add and put the p90 two frames later.
+The two more undecided at three frames are cards read just at the accept bar, which today's rule
+decided on frames where the card was still moving. **The motion runs** are made from 40 of those
+scans' last frames (220 runs, 60 ms apart): a hand's jitter at rest; the camera nudged 15% and 35% of
+a card's width over three blurred frames; brought 15% closer; and panned across three scans
+laid side by side at 40, 80 and 160 px a frame, motion-blurred, to the last one. A false add is a
+decision of a card the run did not end on, or a second of the one it did. **What no count of frames
+removes**: the six nudges of 35% are the decided card going unrecognised for two
+blurred frames and coming to rest a third of its width away, which is what *another copy laid on it*
+(below, #1375) looks for, so it is added again. The jitter runs decided on frame 3 (1 before) with no
+false add under any rule. **Not measured on a camera.**
+
+**What it costs in time is frames, not milliseconds**: two more after the card comes to rest. The
+replay read a frame in about 42 ms on the owner's desktop, start-up included, which puts the desktop's
+round trip near 50 ms and a decision about a tenth of a second later than before — an estimate: no
+Neural frame has been timed in the window (§9, *Measured in the app*). A Worker's frame is about 44 ms
+(§11, *Measured*); a phone's has not been timed.
+
 `tracked`, on every read frame: `committed` while a decision stands; `confidence`, the votes held
-over what deciding takes, 1 once decided; `decide_at` (2); `streak`, the votes held; `frames`
+over what deciding takes, 1 once decided; `decide_at` (3); `streak`, the votes held; `frames`
 since the card was last forgotten; `misses`, frames running with no card; and `standings` — the
 decided look first, then the look the votes are counting when it is another card, each
 `{ id, evidence, share, seen, label, best_distance }`.
@@ -233,7 +271,8 @@ so another look of the decided card stacked on it was the same card, and never d
 card is decided its votes are counted by **look**, and **three accepted frames running**
 (`another_look`) whose look the picture tells apart from the deciding frame's (neither among the
 other's twins, `TWIN_GAP`) decide that look (`Decision::another_look`) — one frame more than a card
-takes, because a held card's best look can waver and a change made in error adds a row. The session
+took when it was two, because a held card's best look can waver and a change made in error adds a
+row; since 2026-10-25 a card takes three as well, and the look's three were not measured again. The session
 takes it as a second copy, `replaces_previous` false — **unless its printing is the one the last
 decision named**, which is the card's own look wavering, and replaces its row. The frames of the
 other look are kept for the printing evidence, so it chooses the second printing on them. Not
@@ -1021,7 +1060,7 @@ whatever the accuracy, 1 when nothing could be replayed.
 replay --corpus-dir <dir> --corpus <corpus.db> --out <dir>
        [--commit <sha>] [--only <text>]... [--jobs N]
        [--neural-models <dir>] [--neural-evidence <dir>] [--neural-evidence-meta <json>]
-       [--neural-finish]
+       [--neural-finish] [--agreement <key=value,...>]
 ```
 
 **Two passes a run, a fresh `Session` each**: **As scanned**, under the label's filters, and
@@ -1043,7 +1082,15 @@ since the label names the card in the last frame:
 A pass also records `settled` (`right_printing`, `wrong_printing`, `ambiguous` or `other` — a decision
 that offered a choice is `ambiguous` whatever its first choice scored), `choices`, whether the truth
 was among them, `first_decision_frame` and `decision_frame` (1-based) with `decisions`, and per frame
-`ok`, confidence, best distance, the printing decided by then and any error. **With the evidence
+`ok`, confidence, best distance, the printing decided by then, any error, `seq` (the verdict's
+`decision_seq`, so every decision a pass made — what a tray would have been given — can be read back,
+not only the one held at the end) and `quad` (the card the frame voted for, so how far it moved
+between frames can be).
+
+**`--agreement` replays other rules for counting frames** (`Session::set_agreement_rules`, which no
+host calls): `key=value` pairs over `card-neural`'s defaults — `required`, `support`, `instant`,
+`still`, and `gap` and `age` in milliseconds. `--agreement required=2,support=3,instant=1,still=0`
+is the rule before 2026-10-25 (§4). **With the evidence
 loaded, each pass records `evidence`**: every candidate printing of the last decision, its look, its
 whole-card, symbol and band scores (`null` where the galleries hold no row, or no crop was read), and
 the printing the evidence decided.

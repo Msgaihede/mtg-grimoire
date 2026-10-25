@@ -29,7 +29,13 @@
 //! frame the last decision was made on, 1-based; the score is the decision held on the last
 //! frame, so a card lost before it leaves `undecided` beside the earlier decision these name)
 //! with `decisions` (how many were made). A frame the scanner failed on (a panic, an undecodable
-//! JPEG) carries `error`, and its pass scores `error` rather than `undecided`.
+//! JPEG) carries `error`, and its pass scores `error` rather than `undecided`. Each frame carries
+//! its `seq` and `quad`, so every decision a pass made — what the tray would have been given —
+//! and how far the card moved between frames can be read back.
+//!
+//! **`--agreement` replays other rules** for counting frames toward a decision
+//! ([`Session::set_agreement_rules`]): `required`, `support`, `instant` and `still` over
+//! `card-neural`'s defaults, so a rule is measured here before it ships.
 //!
 //! **A replay is not the scan**, two ways the inbox documents: nothing from before the first
 //! frame, and — for a run kept at full resolution — each frame brought down to the pump's size
@@ -109,6 +115,32 @@ struct Args {
     /// Off, as every host has it, the marks are only reported, in `finish`.
     #[arg(long)]
     neural_finish: bool,
+    /// Count frames toward a decision by other rules than `card-neural`'s own
+    /// (`Session::set_agreement_rules`), as `key=value` pairs over its defaults:
+    /// `required=3,support=4,instant=0,still=0.8` — `gap` and `age` in milliseconds besides.
+    #[arg(long)]
+    agreement: Option<String>,
+}
+
+/// `--agreement`'s pairs over the agreement's default rules.
+fn agreement_rules(spec: &str) -> Result<card_scanner::neural::session::Rules, String> {
+    let mut rules = card_scanner::neural::session::Rules::default();
+    for pair in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (key, value) =
+            pair.split_once('=').ok_or_else(|| format!("agreement: `{pair}` is not key=value"))?;
+        let bad =
+            |_: &dyn std::error::Error| format!("agreement: `{value}` is not a value for {key}");
+        match key.trim() {
+            "required" => rules.required = value.parse().map_err(|e| bad(&e))?,
+            "support" => rules.support_required = value.parse().map_err(|e| bad(&e))?,
+            "instant" => rules.instant = value.parse().map_err(|e| bad(&e))?,
+            "still" => rules.still = value.parse().map_err(|e| bad(&e))?,
+            "gap" => rules.max_gap_ms = value.parse().map_err(|e| bad(&e))?,
+            "age" => rules.max_age_ms = value.parse().map_err(|e| bad(&e))?,
+            other => return Err(format!("agreement: no rule `{other}`")),
+        }
+    }
+    Ok(rules)
 }
 
 /// `crates/card-neural/models/` beside this crate — where the recogniser's files are in git.
@@ -214,6 +246,8 @@ struct Ingredients {
     neural_evidence: Option<card_scanner::neural::evidence::EvidenceFiles<'static>>,
     /// `--neural-finish`.
     neural_finish: bool,
+    /// `--agreement`, or `card-neural`'s own rules.
+    agreement: Option<card_scanner::neural::session::Rules>,
 }
 
 impl Ingredients {
@@ -227,6 +261,9 @@ impl Ingredients {
             session.load_neural_evidence(e.clone()).map_err(|e| format!("neural evidence: {e}"))?;
         }
         session.set_neural_finish(self.neural_finish);
+        if let Some(rules) = &self.agreement {
+            session.set_agreement_rules(rules.clone());
+        }
         Ok(session)
     }
 
@@ -308,6 +345,10 @@ struct FrameOut {
     error: Option<String>,
     /// The frame went with its full-resolution copy, as the verdict before it asked.
     full: bool,
+    /// The verdict's `decision_seq`: a frame that moves it made a new decision.
+    seq: u64,
+    /// The card the frame voted for, its corners in the frame's pixels.
+    quad: Option<[(f32, f32); 4]>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -379,6 +420,8 @@ fn frame_out(v: &Verdict) -> FrameOut {
         decided: v.decision.as_ref().map(|d| d.printing.clone()),
         error: v.failure().map(str::to_string),
         full: false,
+        seq: v.decision_seq,
+        quad: v.quad,
     }
 }
 
@@ -697,6 +740,7 @@ fn run(args: Args) -> Result<(), String> {
         Ingredients {
             labels, oracles, known, neural: pinned(neural), neural_evidence,
             neural_finish: args.neural_finish,
+            agreement: args.agreement.as_deref().map(agreement_rules).transpose()?,
         };
     drop(ingredients.session()?);
 
@@ -807,7 +851,8 @@ mod tests {
                 pinned(card_scanner::neural::read_dir(&neural_models_in_tree()).expect("in git"))
             })
             .clone();
-        Ingredients { labels: encoder.finish(), oracles, known, neural, neural_evidence: None, neural_finish: false }
+        Ingredients { labels: encoder.finish(), oracles, known, neural, neural_evidence: None, neural_finish: false,
+            agreement: None }
     }
 
     fn label_for(printing: Id, frames: &[Vec<u8>]) -> ScanLabel {
@@ -983,7 +1028,7 @@ mod tests {
                 "frames", "error", "evidence", "finish_mark", "finish"])
         );
         assert_eq!(keys(&pass["got"]), set(&["id", "name", "set", "number"]));
-        assert_eq!(keys(&pass["frames"][0]), set(&["ok", "confidence", "distance", "decided", "error", "full"]));
+        assert_eq!(keys(&pass["frames"][0]), set(&["ok", "confidence", "distance", "decided", "error", "full", "seq", "quad"]));
     }
 
     /// `--only` text that no scan carries is said so, with the text.
