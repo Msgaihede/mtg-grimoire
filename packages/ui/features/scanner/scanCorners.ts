@@ -4,9 +4,10 @@
  * tested here and `Overlay` only strokes it.
  *
  * **Each mark is an L at one corner of the card, standing a little outside it**, its two arms laid
- * along the card's two edges from that corner: the design canvas's brackets — 30px arms 9px out on a
- * 290px card, 22px 6px out on a 150px one — as fractions of the card's shorter side, so they hold on
- * any camera and any distance. **Along the edges, not the screen's axes**: the quad is the card as
+ * along the card's two edges from that corner and meeting square — no rounded bend (the owner's
+ * call, 2026-10-26): the design canvas's brackets — 30px arms 9px out on a 290px card, 22px 6px out
+ * on a 150px one — as fractions of the card's shorter side, so they hold on any camera and any
+ * distance. **Along the edges, not the screen's axes**: the quad is the card as
  * the camera sees it, tilted and in perspective, and an L squared to the screen would sit off a
  * card turned a few degrees.
  */
@@ -18,15 +19,12 @@ export type Point = readonly [number, number];
 export const CORNER_ARM = 0.12;
 /** How far outside the card a mark stands, along each edge's outward normal. */
 export const CORNER_GAP = 0.035;
-/** The bend's radius — the canvas's 6px on 290. */
-export const CORNER_RADIUS = 0.022;
 
-/** One L: from the end of one arm, round the bend at `corner`, to the end of the other. */
+/** One L: from the end of one arm, to the square bend at `corner`, to the end of the other. */
 export interface CornerMark {
   start: Point;
   corner: Point;
   end: Point;
-  radius: number;
 }
 
 /**
@@ -46,7 +44,6 @@ export function cornerMarks(quad: readonly Point[]): CornerMark[] {
   if (!(side > 0)) return [];
   const arm = side * CORNER_ARM;
   const gap = side * CORNER_GAP;
-  const radius = side * CORNER_RADIUS;
 
   const marks: CornerMark[] = [];
   for (let i = 0; i < 4; i++) {
@@ -59,7 +56,6 @@ export function cornerMarks(quad: readonly Point[]): CornerMark[] {
       start: [corner[0] + arm * b[0], corner[1] + arm * b[1]],
       corner,
       end: [corner[0] + arm * a[0], corner[1] + arm * a[1]],
-      radius,
     });
   }
   return marks;
