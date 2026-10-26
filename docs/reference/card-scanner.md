@@ -664,8 +664,10 @@ that does not exist trains a reader to disbelieve the table.
 
 **The overlay draws four gold corners, not the quad** (2026-10-25): an L standing just outside each
 corner of the card, its arms along the card's own edges so they turn with a tilted card, sized from
-the card's shorter side (`scanCorners.ts`, the design canvas's 30px arms 9px out on a 290px card) and
-stroked in `--color-accent`. It was a green trace of the whole quad with a magenta dot on the corner
+the card's shorter side (`scanCorners.ts`, the design canvas's 30px arms 9px out on a 290px card),
+square at the bend, and stroked 2 CSS pixels wide in `--color-accent` — the width divided by the
+canvas's `object-cover` scale, since a width fixed in the video's pixels drew nearly 4px on an upright
+phone, where the crop is deepest, and 1.5px on its side (2026-10-26). It was a green trace of the whole quad with a magenta dot on the corner
 read as top-left; the dot stays, behind the Developer switch (`orientation`), the one place a 180°
 flip is worth seeing.
 

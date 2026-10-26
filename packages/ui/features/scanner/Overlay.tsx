@@ -4,6 +4,8 @@ import type { ScannerVerdict } from "./types";
 
 /** The marks' colour: the app's gold, read off the document — the popup's and the bar's. */
 const MARK_TOKEN = "--color-accent";
+/** The marks' width on screen, in CSS pixels, whatever the camera's resolution or the crop. */
+const MARK_WIDTH = 2;
 /** The corner the scanner treats as top-left, so a 180° flip is visible live — the Developer
  *  switch's alone, a debugging aid and no part of the reader's picture. */
 const ORIENTATION = "#e05ad0";
@@ -82,22 +84,29 @@ export function Overlay({
       const sx = canvas.width / v.frame.w;
       const sy = canvas.height / v.frame.h;
 
-      // The width is a fraction of the canvas rather than literal pixels, because the canvas is
-      // sized to the *video* and stretched down to the element: the design's 3px in a 640px box is
-      // a 1920-wide canvas's 9. The `Math.max` floor keeps the marks visible on a low-resolution
-      // camera.
-      const stroke = Math.max(3, canvas.width / 220);
+      // **The stroke is set in CSS pixels, then turned into the canvas's.** The canvas is sized to
+      // the video and drawn into its box by `object-cover` — scaled by the larger of the two
+      // ratios, the picture's overflow cropped — so a width fixed in canvas pixels came out 1.5px
+      // on a phone on its side and nearly 4px upright, where the crop is deepest. Dividing by that
+      // scale draws `MARK_WIDTH` on screen at every shape (2px, the owner's call, 2026-10-26).
+      const scale = Math.max(
+        canvas.clientWidth / canvas.width,
+        canvas.clientHeight / canvas.height,
+      );
+      const stroke = MARK_WIDTH / (scale > 0 ? scale : 1);
 
       if (v.quad !== null) {
         const quad = v.quad.map(([x, y]) => [x * sx, y * sy] as const);
         if (gold !== "") {
           ctx.lineWidth = stroke;
           ctx.strokeStyle = gold;
-          ctx.lineJoin = "round";
+          // Square at the bend and at the arms' ends — no rounding anywhere.
+          ctx.lineJoin = "miter";
+          ctx.lineCap = "butt";
           for (const mark of cornerMarks(quad)) {
             ctx.beginPath();
             ctx.moveTo(mark.start[0], mark.start[1]);
-            ctx.arcTo(mark.corner[0], mark.corner[1], mark.end[0], mark.end[1], mark.radius);
+            ctx.lineTo(mark.corner[0], mark.corner[1]);
             ctx.lineTo(mark.end[0], mark.end[1]);
             ctx.stroke();
           }
@@ -106,7 +115,7 @@ export function Overlay({
         if (orientationRef.current && first !== undefined) {
           ctx.fillStyle = ORIENTATION;
           ctx.beginPath();
-          ctx.arc(first[0], first[1], stroke * 1.6, 0, Math.PI * 2);
+          ctx.arc(first[0], first[1], stroke * 2.5, 0, Math.PI * 2);
           ctx.fill();
         }
       }

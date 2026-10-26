@@ -40,7 +40,10 @@ describe("cornerMarks", () => {
     const half = CARD.map(([x, y]) => [x / 2, y / 2] as Point);
     const [near] = cornerMarks(CARD);
     const [far] = cornerMarks(half);
-    expect(far.radius).toBeCloseTo(near.radius / 2, 6);
+    expect(Math.hypot(near.end[0] - near.corner[0], near.end[1] - near.corner[1])).toBeCloseTo(
+      290 * CORNER_ARM,
+      6,
+    );
     expect(Math.hypot(far.end[0] - far.corner[0], far.end[1] - far.corner[1])).toBeCloseTo(
       290 * CORNER_ARM * 0.5,
       6,
