@@ -1,0 +1,1617 @@
+//! **A pod's lobby, this app's end of it**: the socket to the relay's `Lobby` object
+//! (`infrastructure/relay/src/lobby.ts`), as the host of a lobby or a guest in one (spec §6).
+//!
+//! **The host's app runs the draft** — the `Draft` in [`super::DraftSlot`], phase.rs's reducer
+//! the authority — and every guest's app is sent its own seat's view and sends its picks. The
+//! relay carries JSON frames and knows nothing of a draft; what rides inside them is the app's
+//! own body (`v: 1`): `room`, `view` and `end` from the host, `pick` and `sync` from a guest.
+//!
+//! **Creating a lobby is a supporter's**: `lobby_create` asks `sync_engine::commands::entitled`
+//! first and then sends the relay's access token (`entitlement::access_token` over the lane, as
+//! `scanner_submit` does), which the relay mints only for an entitled membership. **Joining
+//! needs nothing but the code.** None of the sentences here names a membership.
+//!
+//! **One lobby at a time, one task per lobby** on Tauri's async runtime: it reads frames, keeps
+//! [`LobbyState`] and emits `lobby:state` on every change; for a host it applies a guest's pick
+//! to the draft (on the engine's stack, waiting its turn) and sends every guest its view, and
+//! emits `draft:view` with the host's own when it moved; for a guest it emits `draft:view` with
+//! each view the host sends. A protocol ping goes out every [`PING_EVERY`], and a peer that has
+//! answered one and then stops is a dropped socket; a dropped socket is opened again a few
+//! times with backoff (a guest with its `rejoin` secret). The frames, the reactions and the
+//! close codes are pure functions below, tested without a network.
+
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use grimoire_play::{DraftMode, DraftSetup, DraftView};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use tauri::Emitter;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio_tungstenite::tungstenite::{self, Message};
+
+use super::{Outcome, Shared};
+use crate::sync::AppState;
+
+// ---------------------------------------------------------------------------------------
+// The wire (mirrored in `packages/ui/lib/ipc/draft.ts`)
+// ---------------------------------------------------------------------------------------
+
+/// Hosting a lobby, or a guest in one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LobbyRole {
+    Host,
+    Guest,
+}
+
+/// Where a lobby is. `Connecting` while a dropped socket is opened again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LobbyPhase {
+    Connecting,
+    Open,
+    Drafting,
+    Closed,
+}
+
+/// A guest in a lobby.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LobbyPeer {
+    pub peer: String,
+    pub name: String,
+    pub online: bool,
+}
+
+/// This app's lobby.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LobbyState {
+    pub role: LobbyRole,
+    pub code: String,
+    pub phase: LobbyPhase,
+    /// This reader's name in the lobby.
+    pub name: String,
+    pub host_name: String,
+    pub host_online: bool,
+    pub peers: Vec<LobbyPeer>,
+    /// The host's draft, as the room describes it.
+    pub label: String,
+    pub closed_reason: Option<String>,
+}
+
+/// What a host tells its guests about the room.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LobbyRoom {
+    pub host_name: String,
+    pub label: String,
+    pub peers: Vec<LobbyPeer>,
+    pub started: bool,
+}
+
+// ---------------------------------------------------------------------------------------
+// Sentences
+// ---------------------------------------------------------------------------------------
+
+pub const NOT_ON: &str = "Creating a lobby is not turned on for this device.";
+const UNCONFIRMED: &str =
+    "The lobby could not be made: the server could not confirm this device. Try again in a moment.";
+const NOT_ACCEPTED: &str = "The lobby could not be made: the server did not accept this device.";
+const SLOW_DOWN: &str = "Too many tries at once. Wait a minute and try again.";
+const UNREACHABLE: &str = "The lobby server could not be reached.";
+const NOT_A_CODE: &str = "That is not a lobby code.";
+const NOT_A_NAME: &str = "A name is 1 to 24 characters.";
+const NOT_OPEN: &str = "That lobby code is not open.";
+const WRONG_KEY: &str = "That lobby would not take this app as its host.";
+const CLOSED_BY_HOST: &str = "The host closed the lobby.";
+const LOBBY_ENDED: &str = "The lobby has closed.";
+const KICKED: &str = "You were removed from the lobby.";
+const STARTED: &str = "That draft has already started.";
+const FULL: &str = "That lobby is full.";
+const REPLACED: &str = "This lobby was opened again in another window or on another computer.";
+const TOO_BIG: &str = "The lobby closed the connection: a message was too large.";
+const LOST: &str = "The connection to the lobby was lost.";
+const NO_LOBBY: &str = "There is no lobby open.";
+const HOST_ONLY: &str = "Only the lobby's host can do that.";
+const GUEST_ONLY: &str = "Only a guest picks through the lobby.";
+const NOT_OPEN_NOW: &str = "The lobby is not open for a new draft.";
+const NOT_A_POD: &str = "A lobby's draft is a pod draft.";
+const NOT_IN_LOBBY: &str = "A seat names someone who is not in the lobby.";
+const NOT_SEATED: &str = "That guest has no seat at the table.";
+
+// ---------------------------------------------------------------------------------------
+// Pure pieces: codes, names, addresses, frames, reactions
+// ---------------------------------------------------------------------------------------
+
+/// The relay's code alphabet (`lobby.ts`' `LOBBY_ALPHABET`) and length.
+pub const LOBBY_ALPHABET: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+pub const CODE_LENGTH: usize = 6;
+/// A name, trimmed, in characters (`lobby.ts`' `MAX_NAME_CHARS`).
+pub const MAX_NAME_CHARS: usize = 24;
+
+/// How often a protocol ping goes out.
+pub const PING_EVERY: Duration = Duration::from_secs(30);
+/// How many times a dropped socket is opened again before the lobby is given up on.
+const MAX_RECONNECTS: u32 = 6;
+/// How long the first frame may take after a socket opens.
+const FIRST_FRAME_WAIT: Duration = Duration::from_secs(15);
+
+/// A code as the relay names a lobby: trimmed and upper-cased, six of [`LOBBY_ALPHABET`].
+pub fn lobby_code(raw: &str) -> Result<String, String> {
+    let code = raw.trim().to_ascii_uppercase();
+    if code.chars().count() == CODE_LENGTH && code.chars().all(|c| LOBBY_ALPHABET.contains(c)) {
+        Ok(code)
+    } else {
+        Err(NOT_A_CODE.to_owned())
+    }
+}
+
+/// A name as the relay takes one: trimmed, 1 to [`MAX_NAME_CHARS`] characters, no control
+/// character.
+pub fn lobby_name(raw: &str) -> Result<String, String> {
+    let name = raw.trim();
+    let chars = name.chars().count();
+    if (1..=MAX_NAME_CHARS).contains(&chars) && !name.chars().any(char::is_control) {
+        Ok(name.to_owned())
+    } else {
+        Err(NOT_A_NAME.to_owned())
+    }
+}
+
+/// Who a socket is opened as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Join {
+    Host { key: String },
+    Guest { name: String, rejoin: Option<(String, String)> },
+}
+
+/// `text` for a query string: RFC 3986's unreserved characters as they are, every other byte
+/// `%XX`.
+fn query_escape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// The socket's address under the relay's `base`.
+pub fn socket_url(base: &str, code: &str, join: &Join) -> String {
+    let origin = grimoire_core::platform::socket::ws_origin(base);
+    let query = match join {
+        Join::Host { key } => format!("role=host&key={}", query_escape(key)),
+        Join::Guest { name, rejoin } => {
+            let mut q = format!("role=guest&name={}", query_escape(name));
+            if let Some((peer, secret)) = rejoin {
+                q.push_str(&format!(
+                    "&rejoin={}.{}",
+                    query_escape(peer),
+                    query_escape(secret)
+                ));
+            }
+            q
+        }
+    };
+    format!("{origin}/lobby/{code}/ws?{query}")
+}
+
+/// The relay's frames, as this app writes them.
+pub fn send_frame(to: &str, body: &Value) -> String {
+    json!({ "t": "send", "to": to, "body": body }).to_string()
+}
+pub fn lock_frame() -> String {
+    json!({ "t": "lock" }).to_string()
+}
+pub fn kick_frame(peer: &str) -> String {
+    json!({ "t": "kick", "peer": peer }).to_string()
+}
+pub fn close_frame() -> String {
+    json!({ "t": "close" }).to_string()
+}
+pub fn guest_frame(body: &Value) -> String {
+    json!({ "t": "msg", "body": body }).to_string()
+}
+
+/// The app's bodies (`v: 1`).
+pub fn room_body(room: &LobbyRoom) -> Value {
+    json!({ "v": 1, "kind": "room", "room": room })
+}
+pub fn view_body(view: &DraftView) -> Value {
+    json!({ "v": 1, "kind": "view", "view": view })
+}
+pub fn end_body(reason: &str) -> Value {
+    json!({ "v": 1, "kind": "end", "reason": reason })
+}
+pub fn pick_body(ids: &[String]) -> Value {
+    json!({ "v": 1, "kind": "pick", "ids": ids })
+}
+pub fn sync_body() -> Value {
+    json!({ "v": 1, "kind": "sync" })
+}
+
+/// A frame the relay sent, read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Heard {
+    /// To the host: who is in the room.
+    Peers(Vec<LobbyPeer>),
+    /// The app's body — to the host `from` a guest, to a guest from the host.
+    Msg { from: Option<String>, body: Body },
+    /// To a guest, once a socket: its seat and its rejoin secret.
+    Welcome {
+        peer: String,
+        secret: String,
+        host_online: bool,
+    },
+    /// To a guest: the host came or went.
+    Host(bool),
+    /// Anything else, ignored.
+    Other,
+}
+
+/// The app's body, read.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Body {
+    Room(LobbyRoom),
+    View(Box<DraftView>),
+    End(String),
+    Pick(Vec<String>),
+    Sync,
+    Other,
+}
+
+fn body_of(value: &Value) -> Body {
+    if value.get("v").and_then(Value::as_u64) != Some(1) {
+        return Body::Other;
+    }
+    let read = || -> Option<Body> {
+        Some(match value.get("kind")?.as_str()? {
+            "room" => Body::Room(serde_json::from_value(value.get("room")?.clone()).ok()?),
+            "view" => Body::View(Box::new(
+                serde_json::from_value(value.get("view")?.clone()).ok()?,
+            )),
+            "end" => Body::End(value.get("reason")?.as_str()?.to_owned()),
+            "pick" => Body::Pick(serde_json::from_value(value.get("ids")?.clone()).ok()?),
+            "sync" => Body::Sync,
+            _ => Body::Other,
+        })
+    };
+    read().unwrap_or(Body::Other)
+}
+
+/// A text frame, read. What is not JSON, or not a frame this app knows, is [`Heard::Other`].
+pub fn decode(text: &str) -> Heard {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return Heard::Other;
+    };
+    let read = || -> Option<Heard> {
+        Some(match value.get("t")?.as_str()? {
+            "peers" => Heard::Peers(serde_json::from_value(value.get("peers")?.clone()).ok()?),
+            "msg" => Heard::Msg {
+                from: value.get("from").and_then(Value::as_str).map(str::to_owned),
+                body: body_of(value.get("body")?),
+            },
+            "welcome" => Heard::Welcome {
+                peer: value.get("peer")?.as_str()?.to_owned(),
+                secret: value.get("secret")?.as_str()?.to_owned(),
+                host_online: value.get("hostOnline")?.as_bool()?,
+            },
+            "host" => Heard::Host(value.get("online")?.as_bool()?),
+            _ => Heard::Other,
+        })
+    };
+    read().unwrap_or(Heard::Other)
+}
+
+/// What a frame asks the lobby's task to do, beyond the state it changed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Act {
+    /// Host: tell every guest about the room.
+    BroadcastRoom,
+    /// Host: who is on the line, for the draft's seats.
+    SeatsOnline(Vec<LobbyPeer>),
+    /// Host: a guest's pick, for the draft.
+    Pick { from: String, ids: Vec<String> },
+    /// Host: a guest asked for the room and its view again.
+    Resend(String),
+    /// Guest: show the host's view of this seat.
+    ShowView(Box<DraftView>),
+    /// Guest: ask the host for the room and this seat's view.
+    AskSync,
+    /// Guest: the seat and its rejoin secret, for a socket opened again.
+    Remember { peer: String, secret: String },
+    /// Guest: the host ended the lobby, saying why.
+    End(String),
+}
+
+/// The room as a host describes it to its guests.
+pub fn room_of(state: &LobbyState) -> LobbyRoom {
+    LobbyRoom {
+        host_name: state.host_name.clone(),
+        label: state.label.clone(),
+        peers: state.peers.clone(),
+        started: state.phase == LobbyPhase::Drafting,
+    }
+}
+
+/// One frame heard: `state` changed as it says, and what is left to do.
+pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
+    match (state.role, heard) {
+        (LobbyRole::Host, Heard::Peers(peers)) => {
+            state.peers = peers.clone();
+            let mut acts = vec![Act::BroadcastRoom];
+            if state.phase == LobbyPhase::Drafting {
+                acts.push(Act::SeatsOnline(peers));
+            }
+            acts
+        }
+        (
+            LobbyRole::Host,
+            Heard::Msg {
+                from: Some(from),
+                body: Body::Pick(ids),
+            },
+        ) if state.phase == LobbyPhase::Drafting => vec![Act::Pick { from, ids }],
+        (
+            LobbyRole::Host,
+            Heard::Msg {
+                from: Some(from),
+                body: Body::Sync,
+            },
+        ) => vec![Act::Resend(from)],
+        (
+            LobbyRole::Guest,
+            Heard::Welcome {
+                peer,
+                secret,
+                host_online,
+            },
+        ) => {
+            state.host_online = host_online;
+            vec![Act::Remember { peer, secret }, Act::AskSync]
+        }
+        (LobbyRole::Guest, Heard::Host(online)) => {
+            state.host_online = online;
+            Vec::new()
+        }
+        (LobbyRole::Guest, Heard::Msg { body, .. }) => match body {
+            Body::Room(room) => {
+                state.host_name = room.host_name;
+                state.label = room.label;
+                state.peers = room.peers;
+                if room.started && state.phase == LobbyPhase::Open {
+                    state.phase = LobbyPhase::Drafting;
+                }
+                Vec::new()
+            }
+            Body::View(view) => {
+                if state.phase == LobbyPhase::Open {
+                    state.phase = LobbyPhase::Drafting;
+                }
+                vec![Act::ShowView(view)]
+            }
+            Body::End(reason) => vec![Act::End(reason)],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// What a close code says to `role`, or `None` for a socket that only dropped — opened again.
+pub fn closed_reason(role: LobbyRole, code: Option<u16>) -> Option<&'static str> {
+    Some(match code? {
+        4000 if role == LobbyRole::Host => LOBBY_ENDED,
+        4000 => CLOSED_BY_HOST,
+        4001 => KICKED,
+        4003 => STARTED,
+        4004 => FULL,
+        4005 => REPLACED,
+        1009 => TOO_BIG,
+        _ => return None,
+    })
+}
+
+/// What an upgrade the relay answered with `status` says, or `None` for one worth trying again.
+pub fn refused(role: LobbyRole, status: u16) -> Option<&'static str> {
+    Some(match status {
+        404 => NOT_OPEN,
+        403 if role == LobbyRole::Host => WRONG_KEY,
+        403 => NOT_OPEN,
+        400 => NOT_A_NAME,
+        429 => SLOW_DOWN,
+        _ => return None,
+    })
+}
+
+/// The wait before the `attempt`th (0-based) reopening: 1, 2, 4, 8, 16, 16 seconds.
+pub fn backoff(attempt: u32) -> Duration {
+    Duration::from_secs(1 << attempt.min(4))
+}
+
+// ---------------------------------------------------------------------------------------
+// The lobby held, and its task
+// ---------------------------------------------------------------------------------------
+
+type Ws = tokio_tungstenite::WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+>;
+
+/// The one lobby, or none. Shared with its task.
+#[derive(Default)]
+pub struct LobbySlot(pub(crate) Arc<Mutex<Option<Live>>>);
+
+/// What the task's writer sends.
+enum Out {
+    Text(String),
+    Close,
+}
+
+pub(crate) struct Live {
+    /// Which lobby this is: a task whose lobby has been left or replaced stops.
+    generation: u64,
+    state: LobbyState,
+    out: UnboundedSender<Out>,
+    base: String,
+    /// The host's key.
+    key: Option<String>,
+    /// A guest's seat and secret, once welcomed.
+    rejoin: Option<(String, String)>,
+    /// The host's pod draft, once started.
+    draft: Option<u64>,
+    /// The phase a dropped socket was in, put back when it is open again.
+    resume: Option<LobbyPhase>,
+}
+
+impl Live {
+    fn url(&self) -> String {
+        let join = match (&self.state.role, &self.key) {
+            (LobbyRole::Host, Some(key)) => Join::Host { key: key.clone() },
+            _ => Join::Guest {
+                name: self.state.name.clone(),
+                rejoin: self.rejoin.clone(),
+            },
+        };
+        socket_url(&self.base, &self.state.code, &join)
+    }
+
+    fn send(&self, text: String) {
+        let _ = self.out.send(Out::Text(text));
+    }
+}
+
+fn lock(lobby: &Mutex<Option<Live>>) -> MutexGuard<'_, Option<Live>> {
+    crate::sync::lock_plain(lobby)
+}
+
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Send each `(peer, view)` to its guest, if this app hosts a lobby — after a pick of the host's.
+pub(crate) fn send_views(lobby: &LobbySlot, views: &[(String, DraftView)]) {
+    if views.is_empty() {
+        return;
+    }
+    if let Some(live) = lock(&lobby.0).as_ref() {
+        if live.state.role == LobbyRole::Host {
+            for (peer, view) in views {
+                live.send(send_frame(peer, &view_body(view)));
+            }
+        }
+    }
+}
+
+/// Everything the task and the commands that act on a lobby need.
+#[derive(Clone)]
+struct Ctx {
+    app: tauri::AppHandle,
+    lobby: Arc<Mutex<Option<Live>>>,
+    draft: Arc<Shared>,
+    state: Arc<AppState>,
+    generation: u64,
+    role: LobbyRole,
+}
+
+/// How a connection ended.
+enum Ended {
+    /// This app left, or the lobby was replaced.
+    Left,
+    /// The socket dropped: open it again.
+    Dropped,
+    /// The lobby is over for this app, and this is why.
+    Final(String),
+}
+
+impl Ctx {
+    /// `work` on this lobby, while it is still the one held.
+    fn with<T>(&self, work: impl FnOnce(&mut Live) -> T) -> Option<T> {
+        let mut held = lock(&self.lobby);
+        held.as_mut()
+            .filter(|live| live.generation == self.generation)
+            .map(work)
+    }
+
+    fn emit_state(&self) {
+        if let Some(state) = self.with(|live| live.state.clone()) {
+            let _ = self.app.emit("lobby:state", state);
+        }
+    }
+
+    fn emit_view(&self, view: &DraftView) {
+        let _ = self.app.emit("draft:view", view);
+    }
+
+    fn close(&self, reason: String) {
+        self.with(|live| {
+            live.state.phase = LobbyPhase::Closed;
+            live.state.closed_reason = Some(reason);
+            if live.state.role == LobbyRole::Guest {
+                live.state.host_online = false;
+            }
+        });
+        self.emit_state();
+    }
+
+    fn dropped(&self) {
+        self.with(|live| {
+            if live.state.phase != LobbyPhase::Connecting {
+                live.resume = Some(live.state.phase);
+            }
+            live.state.phase = LobbyPhase::Connecting;
+        });
+        self.emit_state();
+    }
+
+    fn reconnected(&self) {
+        self.with(|live| {
+            if let Some(phase) = live.resume.take() {
+                live.state.phase = phase;
+            }
+        });
+        self.emit_state();
+    }
+
+    fn pod(&self) -> Option<u64> {
+        self.with(|live| live.draft).flatten()
+    }
+
+    /// A change to the pod draft passed on: each guest its view, the host's own when it moved.
+    fn pass_on(&self, outcome: &Outcome) {
+        self.with(|live| {
+            for (peer, view) in &outcome.guests {
+                live.send(send_frame(peer, &view_body(view)));
+            }
+        });
+        if outcome.moved() {
+            self.emit_view(&outcome.view);
+        }
+    }
+
+    /// Change the pod draft by `change`, waiting its turn, and pass it on.
+    async fn change_pod(
+        &self,
+        change: impl FnOnce(&mut grimoire_play::Draft) -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
+        let draft = self.pod().ok_or(NOT_SEATED)?;
+        let outcome = super::change(&self.state, &self.draft, draft, true, change).await?;
+        self.pass_on(&outcome);
+        Ok(())
+    }
+
+    /// Send `peer` the room and, in a draft, its seat's view.
+    async fn resend(&self, peer: String) {
+        self.with(|live| live.send(send_frame(&peer, &room_body(&room_of(&live.state)))));
+        let Some(draft) = self.pod() else {
+            return;
+        };
+        let to = peer.clone();
+        let view = super::on_draft_waiting(&self.draft, draft, move |d| {
+            seat_of(d, &to).map(|seat| d.view(seat))
+        })
+        .await;
+        if let Ok(Some(view)) = view {
+            self.with(|live| live.send(send_frame(&peer, &view_body(&view))));
+        }
+    }
+
+    /// Do what a frame asked; `Some` ends the connection.
+    async fn act(&self, act: Act) -> Option<Ended> {
+        match act {
+            Act::BroadcastRoom => {
+                self.with(|live| live.send(send_frame("*", &room_body(&room_of(&live.state)))));
+            }
+            Act::SeatsOnline(peers) => {
+                let _ = self
+                    .change_pod(move |d| {
+                        let seats: Vec<(u8, bool)> = d
+                            .seats()
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(seat, setup)| {
+                                let peer = setup.peer.as_deref()?;
+                                let online = peers.iter().any(|p| p.peer == peer && p.online);
+                                Some((u8::try_from(seat).ok()?, online))
+                            })
+                            .collect();
+                        for (seat, online) in seats {
+                            d.set_connected(seat, online);
+                        }
+                        Ok(())
+                    })
+                    .await;
+            }
+            Act::Pick { from, ids } => {
+                let peer = from.clone();
+                let picked = self
+                    .change_pod(move |d| {
+                        let seat = seat_of(d, &peer).ok_or(NOT_SEATED)?;
+                        d.pick(seat, ids)
+                    })
+                    .await;
+                // A refused pick: the guest is shown its seat as it still stands.
+                if picked.is_err() {
+                    self.resend(from).await;
+                }
+            }
+            Act::Resend(peer) => self.resend(peer).await,
+            Act::ShowView(view) => self.emit_view(&view),
+            Act::AskSync => {
+                self.with(|live| live.send(guest_frame(&sync_body())));
+            }
+            Act::Remember { peer, secret } => {
+                self.with(|live| live.rejoin = Some((peer, secret)));
+            }
+            Act::End(reason) => return Some(Ended::Final(reason)),
+        }
+        None
+    }
+
+    /// One text frame: the state changed, `lobby:state` emitted if it moved, the acts done.
+    async fn hear(&self, text: &str) -> Option<Ended> {
+        let heard = decode(text);
+        let Some((acts, moved)) = self.with(|live| {
+            let before = live.state.clone();
+            let acts = react(&mut live.state, heard);
+            (acts, before != live.state)
+        }) else {
+            return Some(Ended::Left);
+        };
+        if moved {
+            self.emit_state();
+        }
+        for act in acts {
+            if let Some(ended) = self.act(act).await {
+                return Some(ended);
+            }
+        }
+        None
+    }
+}
+
+/// The seat a lobby peer sits in.
+fn seat_of(draft: &grimoire_play::Draft, peer: &str) -> Option<u8> {
+    draft
+        .seats()
+        .iter()
+        .position(|s| !s.bot && s.peer.as_deref() == Some(peer))
+        .and_then(|seat| u8::try_from(seat).ok())
+}
+
+/// Why a socket did not open.
+enum Unopened {
+    /// The relay said no, and this is why.
+    Refused(&'static str),
+    /// It may open on another try.
+    Failed,
+}
+
+async fn open(url: &str, role: LobbyRole) -> Result<Ws, Unopened> {
+    match tokio_tungstenite::connect_async(url).await {
+        Ok((ws, _)) => Ok(ws),
+        Err(tungstenite::Error::Http(response)) => match refused(role, response.status().as_u16())
+        {
+            Some(reason) => Err(Unopened::Refused(reason)),
+            None => Err(Unopened::Failed),
+        },
+        Err(_) => Err(Unopened::Failed),
+    }
+}
+
+/// Open a socket and read its first frame — `peers` for a host, `welcome` for a guest — so a
+/// lobby that refuses this app says so to the command, in its sentence.
+async fn open_first(url: &str, role: LobbyRole) -> Result<(Ws, Heard), String> {
+    let mut ws = open(url, role).await.map_err(|e| match e {
+        Unopened::Refused(reason) => reason.to_owned(),
+        Unopened::Failed => UNREACHABLE.to_owned(),
+    })?;
+    let first = tokio::time::timeout(FIRST_FRAME_WAIT, async {
+        loop {
+            match ws.next().await {
+                Some(Ok(Message::Text(text))) => return Ok(decode(text.as_str())),
+                Some(Ok(Message::Close(frame))) => {
+                    let code = frame.map(|f| u16::from(f.code));
+                    return Err(closed_reason(role, code).unwrap_or(LOST).to_owned());
+                }
+                Some(Ok(_)) => continue,
+                None | Some(Err(_)) => return Err(LOST.to_owned()),
+            }
+        }
+    })
+    .await
+    .map_err(|_| UNREACHABLE.to_owned())??;
+    Ok((ws, first))
+}
+
+/// The lobby's task: one connection after another until the lobby is over for this app.
+async fn run(ctx: Ctx, first: Ws, mut rx: UnboundedReceiver<Out>) {
+    let mut socket = Some(first);
+    loop {
+        let ws = match socket.take() {
+            Some(ws) => ws,
+            None => match reopen(&ctx).await {
+                Ok(ws) => ws,
+                Err(Ended::Final(reason)) => return ctx.close(reason),
+                Err(_) => return,
+            },
+        };
+        match connection(&ctx, ws, &mut rx).await {
+            Ended::Left => return,
+            Ended::Final(reason) => return ctx.close(reason),
+            Ended::Dropped => ctx.dropped(),
+        }
+    }
+}
+
+/// Open a dropped socket again, a few times with backoff.
+async fn reopen(ctx: &Ctx) -> Result<Ws, Ended> {
+    for attempt in 0..MAX_RECONNECTS {
+        tokio::time::sleep(backoff(attempt)).await;
+        let Some(url) = ctx.with(|live| live.url()) else {
+            return Err(Ended::Left);
+        };
+        match open(&url, ctx.role).await {
+            Ok(ws) => {
+                ctx.reconnected();
+                return Ok(ws);
+            }
+            Err(Unopened::Refused(reason)) => return Err(Ended::Final(reason.to_owned())),
+            Err(Unopened::Failed) => continue,
+        }
+    }
+    Err(Ended::Final(LOST.to_owned()))
+}
+
+/// One open socket: frames read and acted on, the writer's queue sent, a ping every
+/// [`PING_EVERY`] — and a peer that has answered a ping and then misses one is a dropped socket.
+async fn connection(ctx: &Ctx, ws: Ws, rx: &mut UnboundedReceiver<Out>) -> Ended {
+    let (mut sink, mut stream) = ws.split();
+    let unanswered = AtomicBool::new(false);
+    let answers = AtomicBool::new(false);
+    let reader = async {
+        loop {
+            match stream.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    if let Some(ended) = ctx.hear(text.as_str()).await {
+                        return ended;
+                    }
+                }
+                Some(Ok(Message::Pong(_))) => {
+                    if unanswered.swap(false, Ordering::Relaxed) {
+                        answers.store(true, Ordering::Relaxed);
+                    }
+                }
+                Some(Ok(Message::Close(frame))) => {
+                    let code = frame.map(|f| u16::from(f.code));
+                    return match closed_reason(ctx.role, code) {
+                        Some(reason) => Ended::Final(reason.to_owned()),
+                        None => Ended::Dropped,
+                    };
+                }
+                Some(Ok(_)) => {}
+                None | Some(Err(_)) => return Ended::Dropped,
+            }
+        }
+    };
+    let writer = async {
+        let mut next_ping = tokio::time::Instant::now() + PING_EVERY;
+        loop {
+            match tokio::time::timeout_at(next_ping, rx.recv()).await {
+                Ok(Some(Out::Text(text))) => {
+                    if sink.send(Message::Text(text.into())).await.is_err() {
+                        return Ended::Dropped;
+                    }
+                }
+                Ok(Some(Out::Close)) | Ok(None) => {
+                    let _ = sink.send(Message::Close(None)).await;
+                    return Ended::Left;
+                }
+                Err(_) => {
+                    if unanswered.load(Ordering::Relaxed) && answers.load(Ordering::Relaxed) {
+                        return Ended::Dropped;
+                    }
+                    if sink
+                        .send(Message::Ping(Vec::<u8>::new().into()))
+                        .await
+                        .is_err()
+                    {
+                        return Ended::Dropped;
+                    }
+                    unanswered.store(true, Ordering::Relaxed);
+                    next_ping = tokio::time::Instant::now() + PING_EVERY;
+                }
+            }
+        }
+    };
+    let reader = std::pin::pin!(reader);
+    let writer = std::pin::pin!(writer);
+    match futures_util::future::select(reader, writer).await {
+        futures_util::future::Either::Left((ended, _))
+        | futures_util::future::Either::Right((ended, _)) => ended,
+    }
+}
+
+/// Put `live` in the slot — closing whatever lobby was there — do what its first frame asked,
+/// and start its task. Answers the state.
+async fn install(
+    app: tauri::AppHandle,
+    state: Arc<AppState>,
+    draft: Arc<Shared>,
+    lobby: Arc<Mutex<Option<Live>>>,
+    mut live: Live,
+    rx: UnboundedReceiver<Out>,
+    ws: Ws,
+    first: Heard,
+) -> LobbyState {
+    let acts = react(&mut live.state, first);
+    let ctx = Ctx {
+        app,
+        lobby: lobby.clone(),
+        draft: draft.clone(),
+        state,
+        generation: live.generation,
+        role: live.state.role,
+    };
+    let old = lock(&lobby).replace(live);
+    if let Some(old) = old {
+        leave_live(&draft, old);
+    }
+    for act in acts {
+        if let Some(Ended::Final(reason)) = ctx.act(act).await {
+            ctx.close(reason);
+        }
+    }
+    let answer = ctx.with(|live| live.state.clone());
+    ctx.emit_state();
+    tauri::async_runtime::spawn(run(ctx, ws, rx));
+    answer.unwrap_or_else(|| unreachable_state())
+}
+
+/// A state for a lobby replaced before its command could answer: closed, with no reason.
+fn unreachable_state() -> LobbyState {
+    LobbyState {
+        role: LobbyRole::Guest,
+        code: String::new(),
+        phase: LobbyPhase::Closed,
+        name: String::new(),
+        host_name: String::new(),
+        host_online: false,
+        peers: Vec::new(),
+        label: String::new(),
+        closed_reason: None,
+    }
+}
+
+/// Leave a lobby taken out of the slot: a host closes it for everyone and ends its pod draft;
+/// a guest closes its socket.
+fn leave_live(draft: &Shared, live: Live) {
+    if live.state.role == LobbyRole::Host {
+        live.send(close_frame());
+        if let Some(pod) = live.draft {
+            super::end_pod(draft, pod);
+        }
+    }
+    let _ = live.out.send(Out::Close);
+}
+
+fn new_live(state: LobbyState, base: String, key: Option<String>) -> (Live, UnboundedReceiver<Out>) {
+    let (out, rx) = unbounded_channel();
+    let live = Live {
+        generation: GENERATION.fetch_add(1, Ordering::Relaxed) + 1,
+        state,
+        out,
+        base,
+        key,
+        rejoin: None,
+        draft: None,
+        resume: None,
+    };
+    (live, rx)
+}
+
+/// The relay's answer to `POST /lobby`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Made {
+    code: String,
+    host_key: String,
+}
+
+fn client() -> &'static grimoire_core::platform::http::Client {
+    static CLIENT: OnceLock<grimoire_core::platform::http::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        grimoire_core::platform::http::Client::new(&grimoire_core::platform::http::Config {
+            user_agent: grimoire_core::scryfall::USER_AGENT,
+            connect_timeout: Some(Duration::from_secs(10)),
+            read_timeout: Some(Duration::from_secs(20)),
+        })
+    })
+}
+
+/// `POST /lobby` with the relay's token: a code and the host's key.
+async fn make(base: &str, token: &str) -> Result<Made, String> {
+    let response = client()
+        .post(&format!("{base}/lobby"))
+        .header("authorization", &format!("Bearer {token}"))
+        .send()
+        .await
+        .map_err(|_| UNREACHABLE.to_owned())?;
+    match response.status() {
+        201 | 200 => {}
+        401 | 403 => return Err(NOT_ACCEPTED.to_owned()),
+        429 => return Err(SLOW_DOWN.to_owned()),
+        _ => return Err(UNREACHABLE.to_owned()),
+    }
+    let text = response.text().await.map_err(|_| UNREACHABLE.to_owned())?;
+    let made: Made = serde_json::from_str(&text).map_err(|_| UNREACHABLE.to_owned())?;
+    let key_ok = made.host_key.len() == 32 && made.host_key.bytes().all(|b| b.is_ascii_hexdigit());
+    if lobby_code(&made.code).is_err() || !key_ok {
+        return Err(UNREACHABLE.to_owned());
+    }
+    Ok(made)
+}
+
+/// The relay's address and whether this device may host, off the read connection.
+async fn relay(state: &Arc<AppState>) -> Result<(String, bool), String> {
+    let app = state.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = crate::sync::lock_db_read(&app);
+        (
+            grimoire_core::sync_engine::entitlement::base(&conn),
+            grimoire_core::sync_engine::commands::entitled(&conn),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------------------
+
+/// Open a lobby and host it, as `name` — a supporter's. Answers once the relay has the host's
+/// socket.
+#[tauri::command]
+pub async fn lobby_create(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, super::DraftSlot>,
+    lobby: tauri::State<'_, LobbySlot>,
+    name: String,
+) -> Result<LobbyState, String> {
+    let name = lobby_name(&name)?;
+    let (base, allowed) = relay(state.inner()).await?;
+    if !allowed {
+        return Err(NOT_ON.to_owned());
+    }
+    let token = {
+        let lane = state.lane_for_press().await?;
+        match grimoire_core::sync_engine::entitlement::access_token(&lane).await {
+            Ok(Some(token)) => token,
+            Ok(None) => return Err(NOT_ON.to_owned()),
+            Err(_) => return Err(UNCONFIRMED.to_owned()),
+        }
+    };
+    let made = make(&base, &token).await?;
+    let code = lobby_code(&made.code)?;
+    let url = socket_url(
+        &base,
+        &code,
+        &Join::Host {
+            key: made.host_key.clone(),
+        },
+    );
+    let (ws, first) = open_first(&url, LobbyRole::Host).await?;
+    let (live, rx) = new_live(
+        LobbyState {
+            role: LobbyRole::Host,
+            code,
+            phase: LobbyPhase::Open,
+            name: name.clone(),
+            host_name: name,
+            host_online: true,
+            peers: Vec::new(),
+            label: String::new(),
+            closed_reason: None,
+        },
+        base,
+        Some(made.host_key),
+    );
+    Ok(install(
+        app,
+        state.inner().clone(),
+        slot.0.clone(),
+        lobby.0.clone(),
+        live,
+        rx,
+        ws,
+        first,
+    )
+    .await)
+}
+
+/// Join the lobby `code` as `name`. Answers once the relay has welcomed this app.
+#[tauri::command]
+pub async fn lobby_join(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, super::DraftSlot>,
+    lobby: tauri::State<'_, LobbySlot>,
+    code: String,
+    name: String,
+) -> Result<LobbyState, String> {
+    let code = lobby_code(&code)?;
+    let name = lobby_name(&name)?;
+    let (base, _) = relay(state.inner()).await?;
+    let url = socket_url(
+        &base,
+        &code,
+        &Join::Guest {
+            name: name.clone(),
+            rejoin: None,
+        },
+    );
+    let (ws, first) = open_first(&url, LobbyRole::Guest).await?;
+    let (live, rx) = new_live(
+        LobbyState {
+            role: LobbyRole::Guest,
+            code,
+            phase: LobbyPhase::Open,
+            name,
+            host_name: String::new(),
+            host_online: false,
+            peers: Vec::new(),
+            label: String::new(),
+            closed_reason: None,
+        },
+        base,
+        None,
+    );
+    Ok(install(
+        app,
+        state.inner().clone(),
+        slot.0.clone(),
+        lobby.0.clone(),
+        live,
+        rx,
+        ws,
+        first,
+    )
+    .await)
+}
+
+/// This app's lobby, if any — a closed one with its reason until it is left.
+#[tauri::command]
+pub fn lobby_state(lobby: tauri::State<'_, LobbySlot>) -> Option<LobbyState> {
+    lock(&lobby.0).as_ref().map(|live| live.state.clone())
+}
+
+/// Leave the lobby: a host closes it for everyone and ends its pod draft.
+#[tauri::command]
+pub fn lobby_leave(
+    app: tauri::AppHandle,
+    slot: tauri::State<'_, super::DraftSlot>,
+    lobby: tauri::State<'_, LobbySlot>,
+) -> Result<(), String> {
+    let Some(live) = lock(&lobby.0).take() else {
+        return Ok(());
+    };
+    let mut gone = live.state.clone();
+    leave_live(&slot.0, live);
+    gone.phase = LobbyPhase::Closed;
+    gone.closed_reason = None;
+    let _ = app.emit("lobby:state", gone);
+    Ok(())
+}
+
+/// The host deals the pod's draft as `draft`: `setup.seats[*].peer` names each guest's seat, and
+/// every empty seat is a bot. The lobby is locked, every guest sent its view, and seat 0's
+/// answered.
+#[tauri::command]
+pub async fn lobby_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, super::DraftSlot>,
+    lobby: tauri::State<'_, LobbySlot>,
+    setup: DraftSetup,
+    draft: u64,
+) -> Result<DraftView, String> {
+    let (generation, peers) = {
+        let held = lock(&lobby.0);
+        let live = held.as_ref().ok_or(NO_LOBBY)?;
+        if live.state.role != LobbyRole::Host {
+            return Err(HOST_ONLY.to_owned());
+        }
+        if live.state.phase != LobbyPhase::Open {
+            return Err(NOT_OPEN_NOW.to_owned());
+        }
+        (live.generation, live.state.peers.clone())
+    };
+    if setup.mode != DraftMode::Pod {
+        return Err(NOT_A_POD.to_owned());
+    }
+    let unknown = setup
+        .seats
+        .iter()
+        .filter(|seat| !seat.bot)
+        .filter_map(|seat| seat.peer.as_deref())
+        .any(|peer| !peers.iter().any(|p| p.peer == peer));
+    if unknown {
+        return Err(NOT_IN_LOBBY.to_owned());
+    }
+    let label = setup.label.clone();
+    let outcome = super::deal(state.inner(), &slot.0, setup, draft).await?;
+    let ctx = Ctx {
+        app,
+        lobby: lobby.0.clone(),
+        draft: slot.0.clone(),
+        state: state.inner().clone(),
+        generation,
+        role: LobbyRole::Host,
+    };
+    let started = ctx.with(|live| {
+        live.draft = Some(draft);
+        live.state.phase = LobbyPhase::Drafting;
+        live.state.label = label;
+        live.send(lock_frame());
+        live.send(send_frame("*", &room_body(&room_of(&live.state))));
+    });
+    if started.is_none() {
+        super::end_pod(&slot.0, draft);
+        return Err(NO_LOBBY.to_owned());
+    }
+    ctx.pass_on(&Outcome {
+        before: Some(outcome.view.clone()),
+        ..outcome
+    });
+    ctx.emit_state();
+    let view = super::on_draft(&slot.0, draft, |d| d.view(0)).await?;
+    Ok(view)
+}
+
+/// A guest's pick of `card_instance_ids`, sent to the host; the view arrives as `draft:view`.
+#[tauri::command]
+pub fn lobby_pick(
+    lobby: tauri::State<'_, LobbySlot>,
+    card_instance_ids: Vec<String>,
+) -> Result<(), String> {
+    let held = lock(&lobby.0);
+    let live = held.as_ref().ok_or(NO_LOBBY)?;
+    if live.state.role != LobbyRole::Guest {
+        return Err(GUEST_ONLY.to_owned());
+    }
+    if live.state.phase == LobbyPhase::Closed {
+        return Err(NO_LOBBY.to_owned());
+    }
+    live.send(guest_frame(&pick_body(&card_instance_ids)));
+    Ok(())
+}
+
+/// The host removes `peer` from the lobby. Once the draft has started, a bot takes the seat.
+#[tauri::command]
+pub async fn lobby_kick(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, super::DraftSlot>,
+    lobby: tauri::State<'_, LobbySlot>,
+    peer: String,
+) -> Result<(), String> {
+    let generation = {
+        let held = lock(&lobby.0);
+        let live = held.as_ref().ok_or(NO_LOBBY)?;
+        if live.state.role != LobbyRole::Host {
+            return Err(HOST_ONLY.to_owned());
+        }
+        live.send(kick_frame(&peer));
+        live.generation
+    };
+    let ctx = Ctx {
+        app,
+        lobby: lobby.0.clone(),
+        draft: slot.0.clone(),
+        state: state.inner().clone(),
+        generation,
+        role: LobbyRole::Host,
+    };
+    if ctx.pod().is_some() {
+        ctx.change_pod(move |d| match seat_of(d, &peer) {
+            Some(seat) => d.replace_with_bot(seat),
+            None => Ok(()),
+        })
+        .await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grimoire_play::DraftStatus;
+
+    fn state(role: LobbyRole, phase: LobbyPhase) -> LobbyState {
+        LobbyState {
+            role,
+            code: "K7QX2M".into(),
+            phase,
+            name: "Ada".into(),
+            host_name: if role == LobbyRole::Host {
+                "Ada".into()
+            } else {
+                String::new()
+            },
+            host_online: role == LobbyRole::Host,
+            peers: Vec::new(),
+            label: String::new(),
+            closed_reason: None,
+        }
+    }
+
+    fn peer(id: &str, name: &str, online: bool) -> LobbyPeer {
+        LobbyPeer {
+            peer: id.into(),
+            name: name.into(),
+            online,
+        }
+    }
+
+    fn view() -> DraftView {
+        DraftView {
+            mode: DraftMode::Pod,
+            status: DraftStatus::Drafting,
+            label: "Bloomburrow".into(),
+            seat: 1,
+            pack_number: 0,
+            pack_count: 3,
+            pick_number: 0,
+            pack_size: 14,
+            pass_left: true,
+            pack: Vec::new(),
+            waiting: false,
+            pool: Vec::new(),
+            seats: Vec::new(),
+            pack_sets: vec!["blb".into()],
+            min_deck_size: 40,
+        }
+    }
+
+    #[test]
+    fn a_code_is_six_of_the_relays_alphabet_upper_cased() {
+        assert_eq!(lobby_code(" k7qx2m ").unwrap(), "K7QX2M");
+        for bad in ["", "K7QX2", "K7QX2MM", "K7QX0M", "K7QXIM", "K7QX1M", "K7-X2M", "K7QX2Ö"] {
+            assert_eq!(lobby_code(bad).unwrap_err(), NOT_A_CODE, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_is_one_to_twenty_four_characters_with_no_control_character() {
+        assert_eq!(lobby_name("  Ada ").unwrap(), "Ada");
+        assert_eq!(lobby_name(&"é".repeat(24)).unwrap(), "é".repeat(24));
+        for bad in ["", "   ", "a\u{7}b", &"x".repeat(25)] {
+            assert_eq!(lobby_name(bad).unwrap_err(), NOT_A_NAME, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_socket_is_addressed_by_role_with_its_query_escaped() {
+        let host = socket_url(
+            "https://relay.example",
+            "K7QX2M",
+            &Join::Host {
+                key: "0123456789abcdef0123456789abcdef".into(),
+            },
+        );
+        assert_eq!(
+            host,
+            "wss://relay.example/lobby/K7QX2M/ws?role=host&key=0123456789abcdef0123456789abcdef"
+        );
+        let guest = socket_url(
+            "http://127.0.0.1:8787",
+            "K7QX2M",
+            &Join::Guest {
+                name: "Ada & Bø".into(),
+                rejoin: None,
+            },
+        );
+        assert_eq!(
+            guest,
+            "ws://127.0.0.1:8787/lobby/K7QX2M/ws?role=guest&name=Ada%20%26%20B%C3%B8"
+        );
+        let rejoin = socket_url(
+            "https://relay.example",
+            "K7QX2M",
+            &Join::Guest {
+                name: "Ada".into(),
+                rejoin: Some(("p2".into(), "ff".repeat(16))),
+            },
+        );
+        assert!(rejoin.ends_with(&format!("name=Ada&rejoin=p2.{}", "ff".repeat(16))));
+    }
+
+    #[test]
+    fn frames_are_written_as_the_relay_reads_them() {
+        let v = |s: String| serde_json::from_str::<Value>(&s).unwrap();
+        assert_eq!(v(lock_frame()), json!({"t": "lock"}));
+        assert_eq!(v(close_frame()), json!({"t": "close"}));
+        assert_eq!(v(kick_frame("p3")), json!({"t": "kick", "peer": "p3"}));
+        assert_eq!(
+            v(send_frame("*", &end_body("over"))),
+            json!({"t": "send", "to": "*", "body": {"v": 1, "kind": "end", "reason": "over"}})
+        );
+        assert_eq!(
+            v(guest_frame(&pick_body(&["a#1.0.0".into()]))),
+            json!({"t": "msg", "body": {"v": 1, "kind": "pick", "ids": ["a#1.0.0"]}})
+        );
+        assert_eq!(
+            v(guest_frame(&sync_body())),
+            json!({"t": "msg", "body": {"v": 1, "kind": "sync"}})
+        );
+        let room = LobbyRoom {
+            host_name: "Ada".into(),
+            label: "".into(),
+            peers: vec![peer("p1", "Bo", true)],
+            started: false,
+        };
+        assert_eq!(
+            room_body(&room),
+            json!({"v": 1, "kind": "room", "room": {
+                "hostName": "Ada", "label": "", "started": false,
+                "peers": [{"peer": "p1", "name": "Bo", "online": true}]}})
+        );
+    }
+
+    #[test]
+    fn the_relays_frames_are_read_and_anything_else_is_ignored() {
+        assert_eq!(
+            decode(r#"{"t":"peers","peers":[{"peer":"p1","name":"Bo","online":false}]}"#),
+            Heard::Peers(vec![peer("p1", "Bo", false)])
+        );
+        assert_eq!(
+            decode(r#"{"t":"welcome","peer":"p2","secret":"ab","hostOnline":true}"#),
+            Heard::Welcome {
+                peer: "p2".into(),
+                secret: "ab".into(),
+                host_online: true
+            }
+        );
+        assert_eq!(decode(r#"{"t":"host","online":false}"#), Heard::Host(false));
+        assert_eq!(
+            decode(r#"{"t":"msg","from":"p1","body":{"v":1,"kind":"pick","ids":["x"]}}"#),
+            Heard::Msg {
+                from: Some("p1".into()),
+                body: Body::Pick(vec!["x".into()])
+            }
+        );
+        let sent = send_frame("p1", &view_body(&view()));
+        let body: Value = serde_json::from_str::<Value>(&sent).unwrap()["body"].clone();
+        let heard = decode(&json!({"t": "msg", "body": body}).to_string());
+        assert_eq!(
+            heard,
+            Heard::Msg {
+                from: None,
+                body: Body::View(Box::new(view()))
+            }
+        );
+        for other in [
+            "not json",
+            "[]",
+            r#"{"t":"nope"}"#,
+            r#"{"t":"host"}"#,
+            r#"{"t":"peers","peers":7}"#,
+        ] {
+            assert_eq!(decode(other), Heard::Other, "{other}");
+        }
+        assert_eq!(
+            decode(r#"{"t":"msg","body":{"v":2,"kind":"sync"}}"#),
+            Heard::Msg {
+                from: None,
+                body: Body::Other
+            }
+        );
+    }
+
+    #[test]
+    fn a_host_tells_the_room_of_every_roster_change_and_seats_it_once_drafting() {
+        let mut open = state(LobbyRole::Host, LobbyPhase::Open);
+        let peers = vec![peer("p1", "Bo", true)];
+        assert_eq!(
+            react(&mut open, Heard::Peers(peers.clone())),
+            vec![Act::BroadcastRoom]
+        );
+        assert_eq!(open.peers, peers);
+
+        let mut drafting = state(LobbyRole::Host, LobbyPhase::Drafting);
+        assert_eq!(
+            react(&mut drafting, Heard::Peers(peers.clone())),
+            vec![Act::BroadcastRoom, Act::SeatsOnline(peers)]
+        );
+        assert!(room_of(&drafting).started);
+    }
+
+    #[test]
+    fn a_host_applies_a_guests_pick_only_while_drafting_and_answers_a_sync() {
+        let pick = || Heard::Msg {
+            from: Some("p1".into()),
+            body: Body::Pick(vec!["x".into()]),
+        };
+        let mut open = state(LobbyRole::Host, LobbyPhase::Open);
+        assert!(react(&mut open, pick()).is_empty());
+        let mut drafting = state(LobbyRole::Host, LobbyPhase::Drafting);
+        assert_eq!(
+            react(&mut drafting, pick()),
+            vec![Act::Pick {
+                from: "p1".into(),
+                ids: vec!["x".into()]
+            }]
+        );
+        let sync = Heard::Msg {
+            from: Some("p1".into()),
+            body: Body::Sync,
+        };
+        assert_eq!(react(&mut open, sync), vec![Act::Resend("p1".into())]);
+        // A host never acts on what only a guest is sent.
+        assert!(react(&mut open, Heard::Host(false)).is_empty());
+        assert!(open.host_online);
+    }
+
+    #[test]
+    fn a_guest_is_welcomed_shown_the_room_then_its_views_and_told_when_it_ends() {
+        let mut guest = state(LobbyRole::Guest, LobbyPhase::Open);
+        assert_eq!(
+            react(
+                &mut guest,
+                Heard::Welcome {
+                    peer: "p2".into(),
+                    secret: "s".into(),
+                    host_online: true
+                }
+            ),
+            vec![
+                Act::Remember {
+                    peer: "p2".into(),
+                    secret: "s".into()
+                },
+                Act::AskSync
+            ]
+        );
+        assert!(guest.host_online);
+
+        let room = LobbyRoom {
+            host_name: "Cy".into(),
+            label: "Bloomburrow".into(),
+            peers: vec![peer("p2", "Ada", true)],
+            started: false,
+        };
+        let msg = |body| Heard::Msg { from: None, body };
+        assert!(react(&mut guest, msg(Body::Room(room.clone()))).is_empty());
+        assert_eq!(
+            (guest.host_name.as_str(), guest.label.as_str()),
+            ("Cy", "Bloomburrow")
+        );
+        assert_eq!(guest.phase, LobbyPhase::Open);
+        react(
+            &mut guest,
+            msg(Body::Room(LobbyRoom {
+                started: true,
+                ..room
+            })),
+        );
+        assert_eq!(guest.phase, LobbyPhase::Drafting);
+
+        assert_eq!(
+            react(&mut guest, msg(Body::View(Box::new(view())))),
+            vec![Act::ShowView(Box::new(view()))]
+        );
+        assert!(react(&mut guest, Heard::Host(false)).is_empty());
+        assert!(!guest.host_online);
+        assert_eq!(
+            react(&mut guest, msg(Body::End("done".into()))),
+            vec![Act::End("done".into())]
+        );
+        // A guest never answers what only a host is sent.
+        assert!(react(&mut guest, Heard::Peers(Vec::new())).is_empty());
+    }
+
+    #[test]
+    fn a_close_code_is_a_sentence_and_anything_else_is_a_drop() {
+        use LobbyRole::{Guest, Host};
+        assert_eq!(closed_reason(Guest, Some(4000)), Some(CLOSED_BY_HOST));
+        assert_eq!(closed_reason(Host, Some(4000)), Some(LOBBY_ENDED));
+        assert_eq!(closed_reason(Guest, Some(4001)), Some(KICKED));
+        assert_eq!(closed_reason(Guest, Some(4003)), Some(STARTED));
+        assert_eq!(closed_reason(Guest, Some(4004)), Some(FULL));
+        assert_eq!(closed_reason(Host, Some(4005)), Some(REPLACED));
+        assert_eq!(closed_reason(Host, Some(1009)), Some(TOO_BIG));
+        assert_eq!(closed_reason(Guest, Some(1006)), None);
+        assert_eq!(closed_reason(Guest, Some(1000)), None);
+        assert_eq!(closed_reason(Guest, None), None);
+    }
+
+    #[test]
+    fn an_upgrade_refused_for_good_is_a_sentence_and_the_rest_are_tried_again() {
+        use LobbyRole::{Guest, Host};
+        assert_eq!(refused(Guest, 404), Some(NOT_OPEN));
+        assert_eq!(refused(Host, 403), Some(WRONG_KEY));
+        assert_eq!(refused(Guest, 400), Some(NOT_A_NAME));
+        assert_eq!(refused(Guest, 429), Some(SLOW_DOWN));
+        assert_eq!(refused(Guest, 502), None);
+        assert_eq!(refused(Host, 500), None);
+    }
+
+    #[test]
+    fn a_dropped_socket_is_opened_again_with_a_growing_wait() {
+        let waits: Vec<u64> = (0..MAX_RECONNECTS).map(|a| backoff(a).as_secs()).collect();
+        assert_eq!(waits, [1, 2, 4, 8, 16, 16]);
+    }
+
+    #[test]
+    fn the_state_crosses_as_the_page_reads_it() {
+        let mut s = state(LobbyRole::Guest, LobbyPhase::Drafting);
+        s.closed_reason = Some("x".into());
+        assert_eq!(
+            serde_json::to_value(&s).unwrap(),
+            json!({"role": "guest", "code": "K7QX2M", "phase": "drafting", "name": "Ada",
+                   "hostName": "", "hostOnline": false, "peers": [], "label": "",
+                   "closedReason": "x"})
+        );
+    }
+
+    /// No sentence a reader is shown here names a membership, a supporter or a way to be one.
+    #[test]
+    fn no_sentence_names_a_membership() {
+        for sentence in [
+            NOT_ON,
+            UNCONFIRMED,
+            NOT_ACCEPTED,
+            SLOW_DOWN,
+            UNREACHABLE,
+            NOT_A_CODE,
+            NOT_A_NAME,
+            NOT_OPEN,
+            WRONG_KEY,
+            CLOSED_BY_HOST,
+            LOBBY_ENDED,
+            KICKED,
+            STARTED,
+            FULL,
+            REPLACED,
+            TOO_BIG,
+            LOST,
+            NO_LOBBY,
+            HOST_ONLY,
+            GUEST_ONLY,
+            NOT_OPEN_NOW,
+            NOT_A_POD,
+            NOT_IN_LOBBY,
+            NOT_SEATED,
+        ] {
+            let lower = sentence.to_lowercase();
+            for word in ["member", "supporter", "patreon", "patron", "subscri"] {
+                assert!(!lower.contains(word), "{sentence}");
+            }
+        }
+    }
+}

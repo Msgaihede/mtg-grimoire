@@ -10075,6 +10075,9 @@ describe("a draft deck", () => {
     expect(screen.queryByLabelText(/^Quick add a card/)).not.toBeInTheDocument();
     // Nothing the dock would have read was asked for.
     expect(searchCards).not.toHaveBeenCalled();
+    // A pasted list would bring in any card of the corpus: no Import, and Export stays.
+    expect(screen.queryByRole("button", { name: "Import cards" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export deck" })).toBeInTheDocument();
   });
 
   it("adds a basic to the deck's default pile, five on a Shift-press, and toasts nothing", async () => {

@@ -2,6 +2,7 @@ import { useId, useMemo, useState, type JSX } from "react";
 import { Hammer } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { openDraftDeck } from "@/features/draft/navigation";
+import { rememberDraftDeck } from "@/features/draft/useDraftDecks";
 import { plural } from "@/lib/counts";
 import { ipc, ipcError, type DraftView } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
@@ -60,7 +61,8 @@ export function BuildPanel({
       } catch {
         // See the component's doc: the deck is made, and nothing the reader did is lost.
       }
-      void queryClient.invalidateQueries({ queryKey: ["draftDecks"] });
+      // On the cached list before the editor opens, so its first frame is already in draft mode.
+      rememberDraftDeck(queryClient, row.id);
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
       onBuilt?.();
       notify.success(`Built “${row.name}” from a ${view.pool.length}-card pool`);

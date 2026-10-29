@@ -168,6 +168,12 @@ export interface DeckEditorHeaderProps {
    * by the editor so this memoised header is not redrawn for it. `null` draws no Share half.
    */
   share?: ShareTarget | null;
+  /**
+   * Whether the transfer pair offers **Import cards**. `false` for a draft deck (Draft & Packs),
+   * which is built from its drafted pool alone: a pasted list would bring in any card of the
+   * corpus. Export stays. Absent is `true`.
+   */
+  importable?: boolean;
 }
 
 /** Stable identity for a deck at the top level, so the memoised header is not redrawn for it. */
@@ -187,6 +193,7 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
   wideHeader,
   settingsIcon,
   openGoldfish,
+  importable = true,
   share = null,
   folders = NO_FOLDERS,
 }: DeckEditorHeaderProps) {
@@ -441,31 +448,33 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
                 aria-label="Import and export"
                 className="flex shrink-0 overflow-hidden rounded-md border border-border bg-surface"
               >
-                {TRANSFER.map(({ layer: target, label, Icon }, at) => (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={(e) => {
-                      const trigger = e.currentTarget;
-                      openLayer(target, () => trigger.focus());
-                    }}
-                    aria-expanded={layerMatches(layer, target)}
-                    aria-haspopup="dialog"
-                    aria-label={label}
-                    {...(wideHeader ? {} : tip(label, { describes: false }))}
-                    className={cn(
-                      "inline-flex h-9 shrink-0 items-center justify-center whitespace-nowrap",
-                      "text-xs text-dim",
-                      at === 1 && "border-l border-border",
-                      wideHeader ? "gap-1.5 px-2.5" : "w-9 px-0",
-                      "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                      FOCUS,
-                    )}
-                  >
-                    <Icon className="size-4 shrink-0" aria-hidden="true" />
-                    {wideHeader && label.split(" ")[0]}
-                  </button>
-                ))}
+                {(importable ? TRANSFER : TRANSFER.slice(1)).map(
+                  ({ layer: target, label, Icon }, at) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={(e) => {
+                        const trigger = e.currentTarget;
+                        openLayer(target, () => trigger.focus());
+                      }}
+                      aria-expanded={layerMatches(layer, target)}
+                      aria-haspopup="dialog"
+                      aria-label={label}
+                      {...(wideHeader ? {} : tip(label, { describes: false }))}
+                      className={cn(
+                        "inline-flex h-9 shrink-0 items-center justify-center whitespace-nowrap",
+                        "text-xs text-dim",
+                        at === 1 && "border-l border-border",
+                        wideHeader ? "gap-1.5 px-2.5" : "w-9 px-0",
+                        "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+                        FOCUS,
+                      )}
+                    >
+                      <Icon className="size-4 shrink-0" aria-hidden="true" />
+                      {wideHeader && label.split(" ")[0]}
+                    </button>
+                  ),
+                )}
               </div>
 
               {/* **Share** (issue #1032) — publish this deck as a read-only link, update it, copy

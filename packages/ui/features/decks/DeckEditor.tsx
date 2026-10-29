@@ -2446,8 +2446,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (categoryId: number, stacks: boolean) => {
       const category = categories.find((c) => c.id === categoryId);
       if (category === undefined) return undefined;
-      const build = () =>
-        buildCategoryMenu(category, {
+      const build = () => {
+        const items = buildCategoryMenu(category, {
           // The deck's own rows, never `shown`: exporting "Removal" means the pile rather than
           // the four of it the toolbar's filter happens to be showing.
           cards: deckCardsRef.current,
@@ -2496,9 +2496,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               }
             : undefined,
         });
+        // A draft deck is built from its pool alone (spec §5): a pasted list would bring in any
+        // card of the corpus, so its piles offer no import.
+        return draft ? items.filter((item) => item.id !== "import") : items;
+      };
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
     [
+      draft,
       menu,
       menuKey,
       categories,
@@ -3565,6 +3570,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         settingsIcon={settingsIcon}
         openGoldfish={playtests ? openGoldfish : undefined}
         share={share}
+        importable={!draft}
       />
 
       {/* **The ledger is a thin row, 6px off the rules either side of it** (the owner's note,
