@@ -76,7 +76,10 @@ export function WinstonTable({
 
       <ol aria-label="Stack and piles" className="m-0 flex list-none flex-wrap items-end gap-6 p-0">
         <li className="flex flex-col items-center gap-2">
-          <FaceDown count={stack.mainCount} label={`The stack, ${plural(stack.mainCount, "card")}`} />
+          <FaceDown
+            count={stack.mainCount}
+            label={`The stack, ${plural(stack.mainCount, "card")}`}
+          />
           <span className={LABEL}>Stack</span>
         </li>
         <li aria-hidden="true" className="h-24 w-px self-center bg-border" />

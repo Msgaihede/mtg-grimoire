@@ -24,6 +24,14 @@ const TEST_SET: SetSummary = {
   cardCount: 12,
 };
 
+const CMR: SetSummary = {
+  code: "cmr",
+  name: "Commander Legends",
+  setType: "draft_innovation",
+  releasedAt: "2020-11-20",
+  cardCount: 361,
+};
+
 const VIEW = { status: "drafting" } as DraftView;
 
 beforeEach(() => {
@@ -67,6 +75,7 @@ describe("SetupScreen", () => {
       label: "Test Set",
       packSets: ["TST", "TST", "TST"],
       minDeckSize: 40,
+      podFormat: "booster",
     });
     expect(setupArg.seats).toHaveLength(8);
     expect(setupArg.seats[0]).toEqual({ name: "You", bot: false, peer: null });
@@ -137,5 +146,63 @@ describe("SetupScreen", () => {
     expect(importResolve).toHaveBeenCalledOnce();
     expect(within(alert).getByRole("button", { name: "Draft without them" })).toBeInTheDocument();
     expect(draftStart).not.toHaveBeenCalled();
+  });
+
+  it("deals a Commander draft to you and three bots, for a 60-card deck", async () => {
+    listSets.mockResolvedValue([TEST_SET, CMR]);
+    setup("commander");
+    const wall = await screen.findByRole("list", { name: "Sets" });
+    // Commander Legends is what the format is made for: first on the wall, and marked.
+    const tiles = within(wall).getAllByRole("button");
+    expect(tiles[0]).toHaveTextContent("Commander Legends");
+    expect(tiles[0]).toHaveTextContent("Suggested");
+    expect(tiles[1]).not.toHaveTextContent("Suggested");
+    expect(
+      within(screen.getByRole("group", { name: "Seats" })).getByRole("button", { name: "4" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Test Set for the rest" }));
+    await userEvent.click(start());
+    await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
+    const setupArg = draftStart.mock.calls[0][0] as DraftSetup;
+    expect(setupArg).toMatchObject({ mode: "commander", minDeckSize: 60, podFormat: "booster" });
+    expect(setupArg.seats.map((s) => s.name)).toEqual(["You", "Bot 1", "Bot 2", "Bot 3"]);
+    expect(setupArg.packs).toHaveLength(4);
+    expect(setupArg.packs.every((seat) => seat.length === 3)).toBe(true);
+  });
+
+  it("seats a Commander draft at the count the reader picks", async () => {
+    setup("commander");
+    const wall = await screen.findByRole("list", { name: "Sets" });
+    const seats = screen.getByRole("group", { name: "Seats" });
+    expect(
+      within(seats)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["3", "4", "5", "6", "7", "8"]);
+    await userEvent.click(within(seats).getByRole("button", { name: "6" }));
+    await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Test Set for the rest" }));
+    await userEvent.click(start());
+    await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
+    expect((draftStart.mock.calls[0][0] as DraftSetup).seats).toHaveLength(6);
+  });
+
+  it("deals a Winston draft's three boosters each to you and one bot", async () => {
+    setup("winston");
+    const wall = await screen.findByRole("list", { name: "Sets" });
+    expect(screen.queryByRole("group", { name: "Seats" })).not.toBeInTheDocument();
+    await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Test Set for the rest" }));
+    await userEvent.click(start());
+    await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
+    const setupArg = draftStart.mock.calls[0][0] as DraftSetup;
+    expect(setupArg).toMatchObject({ mode: "winston", minDeckSize: 40, podFormat: "booster" });
+    expect(setupArg.seats).toEqual([
+      { name: "You", bot: false, peer: null },
+      { name: "Bot 1", bot: true, peer: null },
+    ]);
+    expect(setupArg.packs).toHaveLength(2);
+    expect(setupArg.packs.every((seat) => seat.length === 3)).toBe(true);
   });
 });

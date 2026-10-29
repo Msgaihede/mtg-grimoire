@@ -3084,8 +3084,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     }
   }
   const draftCommanderCheck = useMemo(
-    () =>
-      draftCommanderPile ? { cards: draftDeckCards, commanders: draftCommanders } : null,
+    () => (draftCommanderPile ? { cards: draftDeckCards, commanders: draftCommanders } : null),
     [draftCommanderPile, draftDeckCards, draftCommanders],
   );
   // A basics press is the editor's own add, into the pile adds land in — the deck's `Deck` pile

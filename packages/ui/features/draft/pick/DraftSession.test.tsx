@@ -254,7 +254,11 @@ describe("DraftSession", () => {
 
   describe("a pick of two", () => {
     const three = () =>
-      view({ mode: "commander", picksPerStep: 2, pack: [card("Shock"), card("Opt"), card("Duress")] });
+      view({
+        mode: "commander",
+        picksPerStep: 2,
+        pack: [card("Shock"), card("Opt"), card("Duress")],
+      });
 
     it("chooses two cards and sends both ids in one pick", async () => {
       ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
@@ -334,7 +338,15 @@ describe("DraftSession", () => {
     });
 
     it("says the bot is deciding on its turn", () => {
-      setup(winston({ stack: stack({ yourTurn: false, turnSeat: 1, piles: stack().piles.map((p) => ({ ...p, cards: [] })) }) }));
+      setup(
+        winston({
+          stack: stack({
+            yourTurn: false,
+            turnSeat: 1,
+            piles: stack().piles.map((p) => ({ ...p, cards: [] })),
+          }),
+        }),
+      );
       expect(screen.getByText("Bot 1 is deciding…")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Take pile" })).not.toBeInTheDocument();
     });

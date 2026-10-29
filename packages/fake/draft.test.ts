@@ -117,7 +117,10 @@ describe("the draft", () => {
     expect(() => h.draft_pick({ draft: 1, cardInstanceIds: [view.pack[0].instanceId] })).toThrow(
       WRONG_COUNT(2),
     );
-    view = h.draft_pick({ draft: 1, cardInstanceIds: view.pack.slice(0, 2).map((c) => c.instanceId) });
+    view = h.draft_pick({
+      draft: 1,
+      cardInstanceIds: view.pack.slice(0, 2).map((c) => c.instanceId),
+    });
     expect(view.pool).toHaveLength(2);
     expect(view.seats.map((s) => s.poolCount)).toEqual([2, 2]);
     // One card left in the pack: the pick takes what there is.

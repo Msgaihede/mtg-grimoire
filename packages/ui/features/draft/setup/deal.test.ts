@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { SET } from "@/features/draft/booster/fixture";
 import { mulberry32 } from "@/features/draft/booster/rng";
-import type { BoosterCard, ImportResolveRow } from "@/lib/ipc";
+import type { BoosterCard, ImportResolveRow, SetSummary } from "@/lib/ipc";
 import {
+  COMMANDER_SETS,
   cubeCards,
   dealCube,
   dealSetPacks,
+  minDeckSizeFor,
   playable,
+  POD_SEATS,
   podSeats,
   readCubeList,
   setsLabel,
   shuffled,
   soloSeats,
+  suggestedFirst,
+  WINSTON_SEATS,
 } from "./deal";
 
 describe("the table", () => {
@@ -42,6 +47,40 @@ describe("the table", () => {
     expect(seats[3].bot).toBe(true);
   });
 
+  it("seats a smaller pod within its format's bounds", () => {
+    expect(POD_SEATS.booster).toEqual({ min: 2, max: 8, start: 8 });
+    expect(POD_SEATS.commander).toEqual({ min: 3, max: 8, start: 4 });
+    expect(POD_SEATS.winston).toEqual({ min: 2, max: 4, start: 2 });
+    const seats = podSeats("Host", [{ peer: "p1", name: "Ada", online: true }], 3);
+    expect(seats.map((s) => s.name)).toEqual(["Host", "Ada", "Bot 1"]);
+  });
+
+  it("asks 60 cards of a Commander draft's deck, and 40 of every other", () => {
+    expect(minDeckSizeFor("commander")).toBe(60);
+    expect(minDeckSizeFor("pod", "commander")).toBe(60);
+    expect(minDeckSizeFor("pod", "winston")).toBe(40);
+    expect(minDeckSizeFor("winston")).toBe(40);
+    expect(minDeckSizeFor("quick")).toBe(40);
+  });
+
+  it("puts the sets a draft is made for first, when the corpus has them", () => {
+    const set = (code: string): SetSummary => ({
+      code,
+      name: code,
+      setType: "expansion",
+      releasedAt: "2026-01-01",
+      cardCount: 1,
+    });
+    const sets = [set("fdn"), set("clb"), set("dsk"), set("cmr")];
+    expect(suggestedFirst(sets, COMMANDER_SETS).map((s) => s.code)).toEqual([
+      "cmr",
+      "clb",
+      "fdn",
+      "dsk",
+    ]);
+    expect(suggestedFirst([set("fdn")], COMMANDER_SETS).map((s) => s.code)).toEqual(["fdn"]);
+  });
+
   it("names each set once, in the order first opened", () => {
     expect(setsLabel(["Foundations", "The Hobbit", "The Hobbit"])).toBe("Foundations · The Hobbit");
   });
@@ -57,6 +96,20 @@ describe("dealSetPacks", () => {
       for (const pack of seat) expect(pack).toHaveLength(7);
     }
     expect(dealSetPacks([SET, SET, SET], 8, mulberry32(7))).toEqual(packs);
+  });
+
+  it("deals a Commander table and a Winston table as [seat][round]", () => {
+    const commander = dealSetPacks([SET, SET, SET], soloSeats(4).length, mulberry32(5));
+    expect(commander).toHaveLength(4);
+    expect(commander.every((seat) => seat.length === 3)).toBe(true);
+    const winston = dealSetPacks([SET, SET, SET], soloSeats(WINSTON_SEATS).length, mulberry32(5));
+    expect(winston).toHaveLength(2);
+    expect(winston.every((seat) => seat.length === 3 && seat.every((p) => p.length === 7))).toBe(
+      true,
+    );
+    // The first two seats of a table are dealt the same boosters whatever its size: one seed, one
+    // deal, round by round.
+    expect(winston[0][0]).toEqual(commander[0][0]);
   });
 
   it("never deals a card this corpus lacks", () => {

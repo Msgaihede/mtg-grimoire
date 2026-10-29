@@ -409,7 +409,10 @@ function HostRoom({
   onDraft: (draft: number | null, view: DraftView | null, role: DraftRole) => void;
 }): JSX.Element {
   // Over `HOST_FRESH`, so a shape kept before the format was added still has every field.
-  const [held, setHeldState] = useState<HostHeld>(() => ({ ...HOST_FRESH, ...hostMemory.recall() }));
+  const [held, setHeldState] = useState<HostHeld>(() => ({
+    ...HOST_FRESH,
+    ...hostMemory.recall(),
+  }));
   const setHeld = (patch: Partial<HostHeld>) => {
     const next = { ...held, ...patch };
     hostMemory.keep(next);

@@ -211,9 +211,7 @@ function PackWall({
       return;
     }
     setChosen((cur) =>
-      cur.includes(index)
-        ? cur.filter((i) => i !== index)
-        : [...cur, index].slice(-need),
+      cur.includes(index) ? cur.filter((i) => i !== index) : [...cur, index].slice(-need),
     );
   };
 
@@ -296,11 +294,7 @@ function PackWall({
         })}
       </ul>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <PrimaryButton
-          ready={full}
-          busy={busy}
-          onPress={() => confirm(chosen)}
-        >
+        <PrimaryButton ready={full} busy={busy} onPress={() => confirm(chosen)}>
           {label}
         </PrimaryButton>
         {need > 1 && (

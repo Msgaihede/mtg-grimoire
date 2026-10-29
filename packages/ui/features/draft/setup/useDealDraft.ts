@@ -75,7 +75,8 @@ export function useDealDraft(): {
       const fetched = await Promise.all(codes.map(boosterSet));
       const byCode = new Map<string, BoosterSet>(codes.map((code, i) => [code, fetched[i]]));
       const seats = choice.seats ?? soloSeats();
-      const podFormat: PodFormat = choice.mode === "pod" ? (choice.podFormat ?? "booster") : "booster";
+      const podFormat: PodFormat =
+        choice.mode === "pod" ? (choice.podFormat ?? "booster") : "booster";
       const seed = randomSeed();
       const rng = mulberry32(seed);
       const packs = dealSetPacks(

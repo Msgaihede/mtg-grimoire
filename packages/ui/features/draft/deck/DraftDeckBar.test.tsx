@@ -85,6 +85,25 @@ describe("DraftDeckBar", () => {
     expect(useNotifications.getState().toasts).toEqual([]);
   });
 
+  it("checks a Commander draft's deck against 60 cards and a commander", () => {
+    draw({ commander: { cards: 41, commanders: 0 } });
+    const check = screen.getByRole("group", { name: "Commander deck" });
+    expect(check).toHaveTextContent("41/60 cards");
+    expect(check).toHaveTextContent("No commander yet — put one in the Commander pile");
+  });
+
+  it("ticks a Commander draft's deck once it has 60 cards and its commander", () => {
+    draw({ commander: { cards: 60, commanders: 1 } });
+    const check = screen.getByRole("group", { name: "Commander deck" });
+    expect(check).toHaveTextContent("60/60 cards");
+    expect(check).toHaveTextContent("Commander chosen");
+  });
+
+  it("draws no Commander check on a Limited draft deck", () => {
+    draw();
+    expect(screen.queryByRole("group", { name: "Commander deck" })).not.toBeInTheDocument();
+  });
+
   it("greys a colour the corpus has no basic for, and its press adds nothing", async () => {
     const user = userEvent.setup();
     const { onAddBasic } = draw();
