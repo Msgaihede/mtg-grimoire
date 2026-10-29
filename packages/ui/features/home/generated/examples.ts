@@ -249,6 +249,101 @@ export const FILTER_EXAMPLE: Spec = {
   },
 };
 
+/** The widgets' own settings controls, as a generated widget's settings face would draw them. */
+export const SETTINGS_EXAMPLE: Spec = {
+  root: "body",
+  elements: {
+    body: {
+      type: "Stack",
+      props: { direction: null, gap: "md", align: null, justify: null, wrap: null },
+      children: ["size", "sort", "show", "figures", "decks", "cards"],
+    },
+    size: { type: "FieldGroup", props: { label: "Size" }, children: ["sizes"] },
+    sizes: {
+      type: "Stack",
+      props: { direction: "horizontal", gap: "sm", align: null, justify: null, wrap: null },
+      children: ["wide", "tall"],
+    },
+    wide: {
+      type: "CompactStepper",
+      props: { label: "Wide", value: { $bindState: "/w" }, min: 2, max: 12 },
+      children: [],
+    },
+    tall: {
+      type: "CompactStepper",
+      props: { label: "Tall", value: { $bindState: "/h" }, min: 2, max: 8 },
+      children: [],
+    },
+    sort: {
+      type: "ChoiceChips",
+      props: {
+        label: "Sort",
+        value: { $bindState: "/sort" },
+        options: [
+          { value: "recent", label: "Most recent" },
+          { value: "value", label: "Value" },
+          { value: "name", label: "Name" },
+        ],
+      },
+      children: [],
+    },
+    show: { type: "FieldGroup", props: { label: "Show" }, children: ["art", "prices"] },
+    art: {
+      type: "Checkbox",
+      props: { label: "Card art", checked: { $bindState: "/art" } },
+      children: [],
+    },
+    prices: {
+      type: "Checkbox",
+      props: { label: "Prices", checked: { $bindState: "/prices" } },
+      children: [],
+    },
+    figures: {
+      type: "Checklist",
+      props: {
+        label: "Figures",
+        options: [
+          { value: "value", label: "Collection value" },
+          { value: "cards", label: "Cards" },
+          { value: "decks", label: "Decks" },
+        ],
+        selected: { $bindState: "/figures" },
+      },
+      children: [],
+    },
+    decks: {
+      type: "Picker",
+      props: {
+        label: "Decks to track",
+        options: [
+          { value: "7", label: "Atraxa Superfriends", hint: "Commander" },
+          { value: "9", label: "Mono-Red Burn", hint: "Modern" },
+          { value: "12", label: "Elves", hint: null },
+        ],
+        selected: { $bindState: "/deckIds" },
+        triggerLabel: { $template: "${/deckCount}" },
+      },
+      children: [],
+    },
+    cards: {
+      type: "CardSearch",
+      props: { label: "Cards to follow", cards: { $bindState: "/cards" }, max: 10 },
+      children: [],
+    },
+  },
+  state: {
+    w: 4,
+    h: 3,
+    sort: "recent",
+    art: true,
+    prices: false,
+    figures: ["value", "cards"],
+    deckIds: ["9"],
+    deckCount: "1 deck",
+    cards: [],
+  },
+};
+
 /** One of everything the catalogue has, for the gallery story — and a check that each draws. */
 export const GALLERY_EXAMPLE: Spec = {
   root: "body",
@@ -518,5 +613,6 @@ export const EXAMPLES = {
   rarity: RARITY_EXAMPLE,
   cards: CARDS_EXAMPLE,
   filter: FILTER_EXAMPLE,
+  settings: SETTINGS_EXAMPLE,
   gallery: GALLERY_EXAMPLE,
 } as const;

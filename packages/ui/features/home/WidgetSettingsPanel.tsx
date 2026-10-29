@@ -29,6 +29,8 @@
  */
 import { useId, type ReactElement, type ReactNode } from "react";
 
+import { MultiDropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import type { HomeWidget } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { PRESS } from "@/lib/motion";
@@ -108,9 +110,9 @@ export function WidgetSettingsPanel({
 
   return (
     <div className="flex flex-col gap-3">
-      <Group label="Size">
+      <SettingsGroup label="Size">
         <div className="flex gap-1.5">
-          <Stepper
+          <SettingsStepper
             axis="Wide"
             value={widget.w}
             lessLabel={`Narrower, ${title}`}
@@ -120,7 +122,7 @@ export function WidgetSettingsPanel({
             onLess={() => onGrow?.(-1, 0)}
             onMore={() => onGrow?.(1, 0)}
           />
-          <Stepper
+          <SettingsStepper
             axis="Tall"
             value={widget.h}
             lessLabel={`Shorter, ${title}`}
@@ -131,78 +133,49 @@ export function WidgetSettingsPanel({
             onMore={() => onGrow?.(0, 1)}
           />
         </div>
-      </Group>
+      </SettingsGroup>
 
       {meta?.picks.map((pick) => {
         // A row that refines another's answer is drawn only under that answer — the registry's
         // `when`, so the panel learns no kind's special case.
         if (!pickShown(widget, pick)) return null;
-        const current = pickValue(widget, pick);
         return (
-          <Group key={pick.key} label={pick.label}>
-            <div className="flex flex-wrap gap-1">
-              {pick.options.map((option) => {
-                const on = option.id === current;
-                return (
-                  <button
-                    key={String(option.id)}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => onConfig({ [pick.key]: option.id })}
-                    className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
-            </div>
-          </Group>
+          <SettingsChips
+            key={pick.key}
+            label={pick.label}
+            options={pick.options}
+            value={pickValue(widget, pick)}
+            onPick={(id) => onConfig({ [pick.key]: id })}
+          />
         );
       })}
 
-      <Group label="Density">
-        <div className="flex gap-1">
-          {DENSITIES.map(({ id, label }) => {
-            const on = density === id;
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={on}
-                // Comfortable is the absence of a density, so choosing it removes the key rather than
-                // writing a second spelling of the default.
-                onClick={() => onConfig({ density: id === "compact" ? "compact" : undefined })}
-                className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-      </Group>
+      <SettingsChips
+        label="Density"
+        options={DENSITIES}
+        value={density}
+        // Comfortable is the absence of a density, so choosing it removes the key rather than
+        // writing a second spelling of the default.
+        onPick={(id) => onConfig({ density: id === "compact" ? "compact" : undefined })}
+      />
 
       {meta !== null && meta.toggles.length > 0 && (
-        <Group label="Show">
+        <SettingsGroup label="Show">
           {meta.toggles.map((toggle) => {
             const dflt = toggle.dflt ?? true;
             const on = toggleOn(widget, toggle.key, dflt);
             return (
-              <label key={toggle.key} className="flex items-center justify-between gap-2 py-px">
-                <span className={cn("text-[0.8125rem]", on ? "text-text" : "text-dim")}>
-                  {toggle.label}
-                </span>
-                <input
-                  type="checkbox"
-                  checked={on}
-                  // **The default is stored as absence, whichever way round it runs** — see the
-                  // module doc.
-                  onChange={() => onConfig({ [toggle.key]: !on === dflt ? undefined : !on })}
-                  className={cn("size-3.5 accent-accent", FOCUS)}
-                />
-              </label>
+              <SettingsCheck
+                key={toggle.key}
+                label={toggle.label}
+                checked={on}
+                // **The default is stored as absence, whichever way round it runs** — see the
+                // module doc.
+                onChange={() => onConfig({ [toggle.key]: !on === dflt ? undefined : !on })}
+              />
             );
           })}
-        </Group>
+        </SettingsGroup>
       )}
 
       {extraSettings}
@@ -216,8 +189,15 @@ const DENSITIES: readonly { id: Density; label: string }[] = [
 ];
 
 /** A labelled run of controls. A `group` named by its visible caption, so a screen reader hears
- *  *Density* before *Compact, toggle button, pressed*. */
-function Group({ label, children }: { label: string; children: ReactNode }): ReactElement {
+ *  *Density* before *Compact, toggle button, pressed*. Exported, with the controls below, for the
+ *  kinds' own settings and the generated widgets' catalogue (`generated/registry.tsx`). */
+export function SettingsGroup({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}): ReactElement {
   const id = useId();
   return (
     <div role="group" aria-labelledby={id} className="flex flex-col gap-1">
@@ -229,8 +209,112 @@ function Group({ label, children }: { label: string; children: ReactNode }): Rea
   );
 }
 
+/** A row of chips, exactly one pressed — a pick's options, the density. */
+export function SettingsChips<T extends string | number>({
+  label,
+  options,
+  value,
+  onPick,
+}: {
+  label: string;
+  options: readonly { id: T; label: string }[];
+  value: T;
+  onPick: (id: T) => void;
+}): ReactElement {
+  return (
+    <SettingsGroup label={label}>
+      <div className="flex flex-wrap gap-1">
+        {options.map((option) => {
+          const on = option.id === value;
+          return (
+            <button
+              key={String(option.id)}
+              type="button"
+              aria-pressed={on}
+              onClick={() => onPick(option.id)}
+              className={cn(CHIP, on ? CHIP_ON : CHIP_OFF)}
+            >
+              {option.label}
+            </button>
+          );
+        })}
+      </div>
+    </SettingsGroup>
+  );
+}
+
+/** One switch of the `Show` group (and the Summary's figure checklist): its words, dim when off,
+ *  and a checkbox at the far end. */
+export function SettingsCheck({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: () => void;
+}): ReactElement {
+  return (
+    <label className="flex items-center justify-between gap-2 py-px">
+      <span className={cn("text-[0.8125rem]", checked ? "text-text" : "text-dim")}>{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        className={cn("size-3.5 accent-accent", FOCUS)}
+      />
+    </label>
+  );
+}
+
+/**
+ * A list to tick several of — decks, folders, wishlists: a visible label over a multi-select whose
+ * trigger says **how many** are ticked rather than which, because a count is what fits and a list
+ * is not. Searchable past eight options, where scrolling stops being the quicker way to one.
+ */
+export function SettingsPicker({
+  label,
+  options,
+  selected,
+  onToggle,
+  triggerLabel,
+  searchable,
+}: {
+  label: string;
+  options: readonly DropdownOption[];
+  selected: readonly string[];
+  onToggle: (value: string) => void;
+  triggerLabel: string;
+  /** @default more than eight options */
+  searchable?: boolean;
+}): ReactElement {
+  const id = useId();
+  return (
+    <div className="grid gap-1">
+      {/* Both `id` and `labelledBy`: the first keeps the pointer behaviour a `<label for>` has,
+          the second states the accessible name outright rather than leaving it to an
+          association a later edit could quietly break. */}
+      <label id={`${id}-label`} htmlFor={id} className="text-xs text-dim">
+        {label}
+      </label>
+      <MultiDropdown
+        id={id}
+        labelledBy={`${id}-label`}
+        fill
+        size="sm"
+        searchable={searchable ?? options.length > 8}
+        searchLabel={`Search ${label.toLowerCase()}`}
+        options={options}
+        selected={selected}
+        onToggle={onToggle}
+        triggerLabel={triggerLabel}
+      />
+    </div>
+  );
+}
+
 /** One axis of the footprint: its name, `−`, the count, `+`. */
-function Stepper({
+export function SettingsStepper({
   axis,
   value,
   lessLabel,

@@ -10,6 +10,7 @@ import {
   FILTER_EXAMPLE,
   GALLERY_EXAMPLE,
   RARITY_EXAMPLE,
+  SETTINGS_EXAMPLE,
 } from "./examples";
 import { CatalogFitContext } from "./registry";
 
@@ -102,6 +103,19 @@ export const Filter: Story = {
     await expect(canvas.getByText("Lightning Bolt")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "Foil" }));
     await waitFor(() => expect(canvas.queryByText("Lightning Bolt")).toBeNull());
+  },
+};
+
+/** The widgets' own settings controls — the footprint steppers, choice chips, the `Show`
+ *  checkboxes, a checklist, a deck picker and the card search — bound to the spec's state. */
+export const Settings: Story = {
+  args: { spec: SETTINGS_EXAMPLE, w: 3, h: 6 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "More, Wide" }));
+    await expect(canvas.getByText("5")).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Prices" }));
+    await expect(canvas.getByRole("checkbox", { name: "Prices" })).toBeChecked();
   },
 };
 

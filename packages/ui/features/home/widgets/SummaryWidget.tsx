@@ -62,7 +62,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { count } from "@/lib/counts";
-import { FOCUS } from "@/lib/focus";
 import {
   ipc,
   ipcError,
@@ -75,7 +74,6 @@ import type { Currency } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { cn } from "@/lib/utils";
 import type { WidgetFit } from "../fit";
 import {
   collectionTotalKey,
@@ -85,6 +83,7 @@ import {
 } from "../keys";
 import { widgetConfig } from "../layout";
 import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
+import { SettingsCheck } from "../WidgetSettingsPanel";
 import { figureGrid, WidgetFigures, WidgetMessage, type WidgetFigureItem } from "../WidgetParts";
 
 // The four keys this widget reads through live in `../keys`, and **two of them are shared**:
@@ -378,23 +377,17 @@ export function SummaryWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
       {SUMMARY_FIGURES.map((figure) => {
         const on = !hidden.includes(figure.key);
         return (
-          <label
+          <SettingsCheck
             key={figure.key}
-            className="flex items-center justify-between gap-2 py-px text-[0.8125rem]"
-          >
-            <span className={on ? "text-text" : "text-dim"}>{figure.label}</span>
-            <input
-              type="checkbox"
-              checked={on}
-              onChange={() => {
-                const next = on
-                  ? [...hidden, figure.key]
-                  : hidden.filter((key) => key !== figure.key);
-                onConfig({ hide: next.length === 0 ? undefined : next });
-              }}
-              className={cn("size-3.5 accent-accent", FOCUS)}
-            />
-          </label>
+            label={figure.label}
+            checked={on}
+            onChange={() => {
+              const next = on
+                ? [...hidden, figure.key]
+                : hidden.filter((key) => key !== figure.key);
+              onConfig({ hide: next.length === 0 ? undefined : next });
+            }}
+          />
         );
       })}
     </fieldset>

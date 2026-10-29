@@ -46,7 +46,9 @@ import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { makeFit, type WidgetFit } from "../fit";
+import type { ChosenCard } from "../priceMoversScope";
 import { PriceChart } from "../priceHistory/PriceChart";
+import { CardPicker } from "../widgets/PriceMoversWidget";
 import {
   DOWN_FILL,
   UP_FILL,
@@ -57,6 +59,13 @@ import {
   WidgetRow,
   WidgetRowList,
 } from "../WidgetParts";
+import {
+  SettingsCheck,
+  SettingsChips,
+  SettingsGroup,
+  SettingsPicker,
+  SettingsStepper,
+} from "../WidgetSettingsPanel";
 import { catalog, type Catalog } from "./catalog";
 
 /** A medium card's fit — what the parts measure against outside a widget card. */
@@ -436,6 +445,116 @@ function PriceRange({ props, bindings }: ComponentContext<Catalog, "PriceRange">
   );
 }
 
+function ChoiceChips({ props, bindings }: ComponentContext<Catalog, "ChoiceChips">): ReactElement {
+  const [value, setValue] = useBoundProp<string>(props.value ?? undefined, bindings?.value);
+  return (
+    <SettingsChips
+      label={props.label}
+      options={props.options.map((o) => ({ id: o.value, label: o.label }))}
+      value={value ?? ""}
+      onPick={setValue}
+    />
+  );
+}
+
+function Checkbox({ props, bindings }: ComponentContext<Catalog, "Checkbox">): ReactElement {
+  const [checked, setChecked] = useBoundProp<boolean>(
+    props.checked ?? undefined,
+    bindings?.checked,
+  );
+  const on = checked ?? false;
+  return <SettingsCheck label={props.label} checked={on} onChange={() => setChecked(!on)} />;
+}
+
+function Checklist({ props, bindings }: ComponentContext<Catalog, "Checklist">): ReactElement {
+  const [selected, setSelected] = useBoundProp<string[]>(
+    props.selected ?? undefined,
+    bindings?.selected,
+  );
+  const ticked = selected ?? [];
+  return (
+    <SettingsGroup label={props.label}>
+      {props.options.map((o) => {
+        const on = ticked.includes(o.value);
+        return (
+          <SettingsCheck
+            key={o.value}
+            label={o.label}
+            checked={on}
+            onChange={() =>
+              setSelected(on ? ticked.filter((v) => v !== o.value) : [...ticked, o.value])
+            }
+          />
+        );
+      })}
+    </SettingsGroup>
+  );
+}
+
+function CompactStepper({
+  props,
+  bindings,
+}: ComponentContext<Catalog, "CompactStepper">): ReactElement {
+  const [value, setValue] = useBoundProp<number>(props.value ?? undefined, bindings?.value);
+  const min = props.min ?? 0;
+  const max = props.max ?? Number.MAX_SAFE_INTEGER;
+  const n = value ?? min;
+  return (
+    <SettingsStepper
+      axis={props.label}
+      value={n}
+      lessLabel={`Fewer, ${props.label}`}
+      moreLabel={`More, ${props.label}`}
+      canLess={n > min}
+      canMore={n < max}
+      onLess={() => setValue(n - 1)}
+      onMore={() => setValue(n + 1)}
+    />
+  );
+}
+
+function Picker({ props, bindings }: ComponentContext<Catalog, "Picker">): ReactElement {
+  const [selected, setSelected] = useBoundProp<string[]>(
+    props.selected ?? undefined,
+    bindings?.selected,
+  );
+  const ticked = selected ?? [];
+  return (
+    <SettingsPicker
+      label={props.label}
+      options={props.options.map((o) => ({
+        value: o.value,
+        label: o.label,
+        hint: o.hint ?? undefined,
+      }))}
+      selected={ticked}
+      triggerLabel={props.triggerLabel}
+      onToggle={(v) =>
+        setSelected(ticked.includes(v) ? ticked.filter((t) => t !== v) : [...ticked, v])
+      }
+    />
+  );
+}
+
+function CardSearch({ props, bindings }: ComponentContext<Catalog, "CardSearch">): ReactElement {
+  const [cards, setCards] = useBoundProp<ChosenCard[]>(props.cards ?? undefined, bindings?.cards);
+  const chosen = cards ?? [];
+  const max = props.max ?? undefined;
+  return (
+    <CardPicker
+      label={props.label ?? undefined}
+      cards={chosen}
+      max={max}
+      onAdd={(card) => {
+        if (chosen.some((each) => each.id === card.id)) return;
+        if (max !== undefined && chosen.length >= max) return;
+        setCards([...chosen, card]);
+      }}
+      onRemove={(id) => setCards(chosen.filter((each) => each.id !== id))}
+    />
+  );
+}
+
 /**
  * An action param as its value. Inside a `repeat`, json-render resolves `{ "$item": "id" }` in an
  * action's params to the item's **state path** (`/decks/1/id`) — the shape its own `setState`
@@ -581,6 +700,15 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
     ToggleChip,
     NumberStepper,
     PriceRange,
+    FieldGroup: ({ props, children }) => (
+      <SettingsGroup label={props.label}>{children}</SettingsGroup>
+    ),
+    ChoiceChips,
+    Checkbox,
+    Checklist,
+    CompactStepper,
+    Picker,
+    CardSearch,
   },
   actions: {
     openCard: async (params, _, state) => {

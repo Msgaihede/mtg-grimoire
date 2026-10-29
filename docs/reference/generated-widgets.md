@@ -52,11 +52,20 @@ its peer): it is young and its minor versions move.
   | `NumberStepper` | `QuantityStepper`              | `value`               |
   | `PriceRange`    | the Search page's `PriceRange` | `min` and `max`       |
 
+- **The widgets' own settings controls** (`WidgetSettingsPanel.tsx`, exported from there and used
+  by the panel and the kinds' settings alike): `FieldGroup` (`SettingsGroup`), `ChoiceChips`
+  (`SettingsChips` — every pick and the density), `Checkbox` (`SettingsCheck` — the `Show`
+  switches), `Checklist` (Summary's figures), `CompactStepper` (`SettingsStepper` — `Wide`/`Tall`),
+  `Picker` (`SettingsPicker` — the deck, folder and wishlist pickers, searchable past eight) and
+  `CardSearch` (Price movers' `CardPicker`). `CardSearch` is the one input that reads data of its
+  own: it searches the card database as the price movers' picker does.
+
 Left out on purpose: dialogs, menus and the virtual table (a widget is a tile, not a page), and
 controls tied to one feature's data (`TagChips`, `FinishRadios`, `SyncProgress`, `ValueChart`'s
 history views).
 
-A component is a picture of facts it is handed: nothing in the catalogue fetches.
+A component is a picture of facts it is handed: nothing in the catalogue fetches, `CardSearch`'s
+card search aside.
 
 ## Rules
 
@@ -88,6 +97,6 @@ A component is a picture of facts it is handed: nothing in the catalogue fetches
 
 `Home/Generated/SpecView`: Decks (figures, a `repeat` of rows that open their deck, a `$template`
 footer), Rarity (bars, a switch hiding them), Filter (rows narrowed by a chip and a price range
-through `visible`), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
+through `visible`), Settings (the widgets' settings controls), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
 component). Each spec sits in a box a widget of its footprint covers, with
 that box's fit.

@@ -13,8 +13,9 @@
  * **What is in it, and why those.** The home widgets' own parts (`WidgetParts.tsx`: figures, bars,
  * rows, a message, a footer line), the card visuals (`CardArt`, `CardTile`, the rarity gem, the
  * finish mark, the set symbol, the count tag, mana symbols in text), the price chart, layout and
- * text, and the app's inputs. Nothing here fetches: data arrives through the spec's `$state`
- * expressions, so a component is a picture of facts it is handed.
+ * text, the app's inputs and the widgets' own settings controls. Nothing here fetches but the card
+ * search: data arrives through the spec's `$state` expressions, so a component is a picture of
+ * facts it is handed.
  *
  * **The inputs write only the widget's own state** (`$bindState`). The graph is read-only and so
  * is a widget: an input filters, sorts or switches what the widget draws, and never changes the
@@ -390,6 +391,79 @@ export const catalog = defineCatalog(schema, {
       }),
       description:
         "A whole number with minus and plus buttons — how many rows to show, a threshold. Bind `value` with `$bindState`.",
+    },
+    // --- the widgets' own settings controls (`WidgetSettingsPanel.tsx`) ------------------------
+    FieldGroup: {
+      props: z.object({ label: z.string() }),
+      slots: ["default"],
+      description:
+        "A small dim caption over a run of controls, named for a screen reader — how a widget's settings group theirs (`Size`, `Show`).",
+    },
+    ChoiceChips: {
+      props: z.object({
+        label: z.string(),
+        value: z.string().nullable(),
+        options: OPTIONS,
+      }),
+      description:
+        "A captioned row of small chips, exactly one pressed — how a widget's settings offer a pick (`Comfortable`/`Compact`). Wraps onto more lines; quieter than Segmented. Bind `value` with `$bindState`.",
+    },
+    Checkbox: {
+      props: z.object({
+        label: z.string(),
+        checked: z.boolean().nullable(),
+      }),
+      description:
+        "One line of words with a checkbox at its far end, the words dim while it is off — a widget's `Show` settings. Bind `checked` with `$bindState`.",
+    },
+    Checklist: {
+      props: z.object({
+        label: z.string(),
+        options: OPTIONS,
+        selected: z.array(z.string()).nullable(),
+      }),
+      description:
+        "A captioned list of Checkbox lines, one per option — which of several things to show. Bind `selected` (the ticked values) with `$bindState`.",
+    },
+    CompactStepper: {
+      props: z.object({
+        label: z.string(),
+        value: z.number().int().nullable(),
+        min: z.number().int().nullable(),
+        max: z.number().int().nullable(),
+      }),
+      description:
+        "A small bordered box: the label in capitals, `−`, the number, `+` — a widget's `Wide`/`Tall` settings. Smaller than NumberStepper and not typeable. Bind `value` with `$bindState`.",
+    },
+    Picker: {
+      props: z.object({
+        label: z.string(),
+        options: z.array(
+          z.object({ value: z.string(), label: z.string(), hint: z.string().nullable() }),
+        ),
+        selected: z.array(z.string()).nullable(),
+        triggerLabel: z.string(),
+      }),
+      description:
+        "A captioned, compact multi-select — how a widget's settings pick decks, folders or wishlists. Each option may carry a dim `hint` (a deck's format). `triggerLabel` says how many are ticked (`2 decks`, or `None chosen`); searchable past eight options. Bind `selected` with `$bindState`.",
+    },
+    CardSearch: {
+      props: z.object({
+        label: z.string().nullable(),
+        cards: z
+          .array(
+            z.object({
+              id: z.string(),
+              name: z.string(),
+              setCode: z.string(),
+              collectorNumber: z.string(),
+            }),
+          )
+          .nullable(),
+        max: z.number().int().min(1).nullable(),
+      }),
+      description:
+        "A search box over the reader's card database that adds printings to a list, each removable — the Price movers widget's card picker. The one input that reads data of its own (the card search). Bind `cards` with `$bindState`; `max` caps the list (default 100).",
     },
     PriceRange: {
       props: z.object({

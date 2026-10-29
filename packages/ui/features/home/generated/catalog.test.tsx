@@ -18,6 +18,7 @@ import {
   FILTER_EXAMPLE,
   GALLERY_EXAMPLE,
   RARITY_EXAMPLE,
+  SETTINGS_EXAMPLE,
 } from "./examples";
 import { executeAction, registry } from "./registry";
 
@@ -160,6 +161,36 @@ describe("drawing a spec", () => {
     expect(rows).toHaveValue(5);
     await userEvent.click(screen.getByRole("button", { name: "Increase Rows" }));
     expect(rows).toHaveValue(6);
+  });
+
+  it("draws the widgets' own settings controls, bound to state", async () => {
+    draw(SETTINGS_EXAMPLE);
+
+    // The footprint stepper: the axis, `−`, the count, `+`, and a bound it will not cross.
+    expect(screen.getByText("4")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "More, Wide" }));
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Fewer, Tall" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+
+    const value = screen.getByRole("button", { name: "Value" });
+    await userEvent.click(value);
+    expect(value).toHaveAttribute("aria-pressed", "true");
+
+    const prices = screen.getByRole("checkbox", { name: "Prices" });
+    expect(prices).not.toBeChecked();
+    await userEvent.click(prices);
+    expect(prices).toBeChecked();
+
+    // The checklist ticks what state holds, and writes the rest back as a list.
+    expect(screen.getByRole("checkbox", { name: "Collection value" })).toBeChecked();
+    const decks = screen.getByRole("checkbox", { name: "Decks" });
+    await userEvent.click(decks);
+    expect(decks).toBeChecked();
+
+    expect(screen.getByRole("group", { name: "Size" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Cards to follow")).toBeInTheDocument();
   });
 
   it("picks a radio", async () => {
