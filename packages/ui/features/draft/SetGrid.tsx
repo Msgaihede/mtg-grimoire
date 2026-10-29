@@ -29,6 +29,7 @@ export function SetGrid({
   filter,
   onFilterChange,
   picked = null,
+  suggested,
   label = "Sets",
   className,
 }: {
@@ -39,6 +40,8 @@ export function SetGrid({
   onFilterChange?: (text: string) => void;
   /** The code of the set to ring as chosen. */
   picked?: string | null;
+  /** Codes of the sets to mark *Suggested* — the ones the draft is made for. */
+  suggested?: readonly string[];
   /** The wall's accessible name. */
   label?: string;
   className?: string;
@@ -82,7 +85,12 @@ export function SetGrid({
         >
           {shown.map((set) => (
             <li key={set.code} className="flex">
-              <SetTile set={set} picked={set.code === picked} onPick={() => onPick(set)} />
+              <SetTile
+                set={set}
+                picked={set.code === picked}
+                suggested={suggested?.includes(set.code.toLowerCase()) === true}
+                onPick={() => onPick(set)}
+              />
             </li>
           ))}
         </ul>
@@ -91,14 +99,17 @@ export function SetGrid({
   );
 }
 
-/** One set: its symbol, its name, its code and year in dim mono. */
+/** One set: its symbol, its name, its code and year in dim mono — and *Suggested* when it is one
+ *  of the sets the draft is made for. */
 function SetTile({
   set,
   picked,
+  suggested,
   onPick,
 }: {
   set: SetSummary;
   picked: boolean;
+  suggested: boolean;
   onPick: () => void;
 }): JSX.Element {
   const year = set.releasedAt?.slice(0, 4);
@@ -108,7 +119,7 @@ function SetTile({
       aria-pressed={picked}
       onClick={onPick}
       className={cn(
-        "flex w-full flex-col items-center gap-2 rounded-lg border px-2 pb-3 pt-4 text-center",
+        "relative flex w-full flex-col items-center gap-2 rounded-lg border px-2 pb-3 pt-4 text-center",
         "transition-colors motion-reduce:transition-none",
         PRESS,
         FOCUS,
@@ -117,6 +128,11 @@ function SetTile({
           : "border-border bg-surface text-text hover:border-accent/60 hover:bg-surface/70",
       )}
     >
+      {suggested && (
+        <span className="absolute left-1.5 top-1.5 rounded-full border border-accent/50 bg-accent/10 px-1.5 text-[0.625rem] leading-4 text-accent">
+          Suggested
+        </span>
+      )}
       <i
         aria-hidden="true"
         className={cn(setGlyphClass(set.code), "text-[2rem] leading-none", picked && "text-accent")}

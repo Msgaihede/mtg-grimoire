@@ -8,6 +8,7 @@ import type { SetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { suggestedFirst } from "./deal";
 import { LABEL, QUIET_BUTTON } from "./parts";
 
 /**
@@ -87,17 +88,23 @@ export function PackOrder({
 /**
  * The wall a pack is picked from: every booster set, newest first, filterable. A press adds the
  * set as the next pack; once every pack is chosen the wall says so instead of adding.
+ *
+ * `suggested` names sets the draft is made for (a Commander draft's Commander Legends sets): those
+ * the corpus has go first and are marked, and every other set follows as it would.
  */
 export function AddPackWall({
   chosen,
   max,
   onChange,
+  suggested,
 }: {
   chosen: readonly SetSummary[];
   max: number;
   onChange: (next: SetSummary[]) => void;
+  suggested?: readonly string[];
 }): JSX.Element {
-  const { sets, loading, error } = useBoosterSets();
+  const { sets: all, loading, error } = useBoosterSets();
+  const sets = suggested === undefined ? all : suggestedFirst(all, suggested);
   const full = chosen.length >= max;
   return (
     <div className="flex min-h-0 flex-col gap-3">
@@ -116,6 +123,7 @@ export function AddPackWall({
       ) : (
         <SetGrid
           sets={sets}
+          suggested={suggested}
           label="Sets"
           onPick={(set) => {
             if (!full) onChange([...chosen, set]);
