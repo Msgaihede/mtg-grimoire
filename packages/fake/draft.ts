@@ -21,7 +21,8 @@
  * **Lobbies refuse** (`LOBBIES_OFF`), `lobby_winston` with them, — the fake has no relay and no second app to meet in one —
  * except the two reads a page makes on arrival, which answer *no lobby*. A game's lobby (the
  * Playtesting page's, issue #1419) is the same lobby, so its three commands — `lobby_deck`,
- * `lobby_game_start`, `lobby_act` — are here and refuse alike: the game itself is phase.rs's,
+ * `lobby_game_start`, `lobby_act` — are here and refuse alike, and so are a trade's two
+ * (`lobby_trade_offer`, `lobby_trade_accept`): the game itself is phase.rs's,
  * which the fake has none of either (`parity.test.ts`' `playtest_*`).
  */
 import type {
@@ -732,6 +733,12 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
       throw new Error(LOBBIES_OFF);
     },
     lobby_act: (): void => {
+      throw new Error(LOBBIES_OFF);
+    },
+    lobby_trade_offer: (): void => {
+      throw new Error(LOBBIES_OFF);
+    },
+    lobby_trade_accept: (): void => {
       throw new Error(LOBBIES_OFF);
     },
   };

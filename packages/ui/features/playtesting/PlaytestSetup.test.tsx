@@ -419,6 +419,7 @@ const hosting = (over: Partial<LobbyState> = {}): LobbyState => ({
   peers: [],
   label: "",
   closedReason: null,
+  trade: null,
   ...over,
 });
 

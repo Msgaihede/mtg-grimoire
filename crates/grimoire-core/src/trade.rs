@@ -1388,6 +1388,126 @@ pub fn swap_trade_sides(conn: &Connection, id: i64) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------------------
+// A side traded over a lobby
+// ---------------------------------------------------------------------------------------
+
+/// One printing and finish a reader offers across a trade lobby (the desktop's
+/// `draft::lobby`, a lobby of kind `trade`), and how many copies: what crosses to the other
+/// reader's app, which reads it in its own card data. Names, prices and where the copies are
+/// filed stay on the device that offers them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TradeOfferLine {
+    pub card_id: String,
+    pub finish: String,
+    pub quantity: i64,
+}
+
+/// `side` of trade `id` as an offer: one row per printing and finish, in the trade's order.
+///
+/// **A side's two lines of one printing fold into one** — the reader's side can hold a line
+/// drawn from the collection and one past it ([`drawn`]) — because the other reader is offered
+/// copies, not where they come from. A fold past [`MAX_QUANTITY`] is held at it.
+pub fn side_offer(conn: &Connection, id: i64, side: &str) -> Result<Vec<TradeOfferLine>, String> {
+    let side = valid_side(side)?;
+    header(conn, id)?.ok_or_else(|| GONE.to_owned())?;
+    let mut statement = conn
+        .prepare(
+            "SELECT card_id, finish, quantity FROM trade_lines
+              WHERE trade_id = ?1 AND side = ?2
+              ORDER BY position, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map(params![id, side], |r| {
+            Ok(TradeOfferLine {
+                card_id: r.get(0)?,
+                finish: r.get(1)?,
+                quantity: r.get(2)?,
+            })
+        })
+        .and_then(Iterator::collect::<Result<Vec<_>, _>>)
+        .map_err(|e| e.to_string())?;
+    let mut offer: Vec<TradeOfferLine> = Vec::with_capacity(rows.len());
+    for row in rows {
+        match offer
+            .iter_mut()
+            .find(|o| o.card_id == row.card_id && o.finish == row.finish)
+        {
+            Some(first) => {
+                first.quantity = first
+                    .quantity
+                    .saturating_add(row.quantity)
+                    .min(MAX_QUANTITY)
+            }
+            None => offer.push(row),
+        }
+    }
+    Ok(offer)
+}
+
+/// Replace `side` of the open trade `id` with `lines` — the other reader's offer, written as
+/// their side of this reader's copy of the trade. Answers how many lines named a printing this
+/// device's `cards` does not hold, which are left off rather than refusing the rest: the other
+/// app may have newer card data, and the page says how many it could not show.
+///
+/// Every line lands as `search`, never drawn from this collection, and a printing and finish
+/// asked twice is one line. A finish this app does not know, or a quantity outside
+/// `1..=`[`MAX_QUANTITY`], is refused for the whole write: that is not a newer corpus, it is a
+/// sender this app does not understand. One savepoint, so a refusal leaves the side as it was.
+pub fn replace_side(
+    conn: &Connection,
+    id: i64,
+    side: &str,
+    lines: &[TradeOfferLine],
+) -> Result<u32, String> {
+    crate::db::in_savepoint(conn, "trade_replace_side", || {
+        open_trade(conn, id)?;
+        let side = valid_side(side)?;
+        conn.execute(
+            "DELETE FROM trade_lines WHERE trade_id = ?1 AND side = ?2",
+            params![id, side],
+        )
+        .map_err(|e| e.to_string())?;
+        let mut unknown = 0u32;
+        for line in lines {
+            let finish = valid_finish(&line.finish)?;
+            let quantity = valid_copies(line.quantity)?;
+            let Some(card) = printing(conn, &line.card_id)? else {
+                unknown = unknown.saturating_add(1);
+                continue;
+            };
+            match twin(conn, id, side, &line.card_id, finish, false, None)? {
+                Some((standing, held)) => conn.execute(
+                    "UPDATE trade_lines SET quantity = ?2 WHERE id = ?1",
+                    params![standing, folded(held, quantity)?],
+                ),
+                None => conn.execute(
+                    "INSERT INTO trade_lines
+                        (trade_id, side, card_id, name, set_code, collector_number, finish,
+                         quantity, source, position)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![
+                        id,
+                        side,
+                        line.card_id,
+                        card.name,
+                        card.set_code,
+                        card.collector_number,
+                        finish,
+                        quantity,
+                        SOURCES[1],
+                        next_position(conn, id)?,
+                    ],
+                ),
+            }
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(unknown)
+    })
+}
+
+// ---------------------------------------------------------------------------------------
 // Closing, reopening, copying and deleting
 // ---------------------------------------------------------------------------------------
 
@@ -4180,5 +4300,107 @@ mod tests {
         assert_eq!(orphans, 0);
         assert_eq!(side(&conn, keep, MINE).len(), 1, "the other trade is whole");
         assert_eq!(rename_trade(&conn, id, "Gone").unwrap_err(), GONE);
+    }
+
+    fn offered(card_id: &str, finish: &str, quantity: i64) -> TradeOfferLine {
+        TradeOfferLine {
+            card_id: card_id.to_owned(),
+            finish: finish.to_owned(),
+            quantity,
+        }
+    }
+
+    #[test]
+    fn a_sides_offer_is_one_row_per_printing_and_finish_in_the_trades_order() {
+        let conn = seeded();
+        own(&conn, "bolt", "nonfoil", 1, None);
+        let id = new_trade(&conn);
+        put(&conn, id, MINE, "goyf", "foil", 1);
+        // One copy from the collection and two past it: two lines, one offer.
+        add_trade_lines(
+            &conn,
+            id,
+            MINE,
+            &[input("bolt", "nonfoil", 3, "collection")],
+        )
+        .unwrap();
+        put(&conn, id, THEIRS, "charm", "foil", 2);
+        assert_eq!(side(&conn, id, MINE).len(), 3);
+
+        assert_eq!(
+            side_offer(&conn, id, MINE).unwrap(),
+            [offered("goyf", "foil", 1), offered("bolt", "nonfoil", 3)]
+        );
+        assert_eq!(
+            side_offer(&conn, id, THEIRS).unwrap(),
+            [offered("charm", "foil", 2)]
+        );
+        assert_eq!(side_offer(&conn, 999, MINE).unwrap_err(), GONE);
+        assert!(side_offer(&conn, id, "both").is_err());
+    }
+
+    #[test]
+    fn replacing_a_side_writes_the_other_readers_offer_and_counts_what_this_corpus_lacks() {
+        let conn = seeded();
+        let id = new_trade(&conn);
+        put(&conn, id, MINE, "goyf", "nonfoil", 1);
+        put(&conn, id, THEIRS, "bolt-2", "nonfoil", 4);
+
+        let unknown = replace_side(
+            &conn,
+            id,
+            THEIRS,
+            &[
+                offered("bolt", "foil", 2),
+                offered("not-in-this-corpus", "nonfoil", 1),
+                offered("bolt", "foil", 1),
+            ],
+        )
+        .unwrap();
+        assert_eq!(unknown, 1);
+        assert_eq!(side(&conn, id, THEIRS), [("bolt".into(), "foil".into(), 3)]);
+        assert_eq!(
+            side(&conn, id, MINE).len(),
+            1,
+            "the other side is not touched"
+        );
+        let source: String = conn
+            .query_row(
+                "SELECT source FROM trade_lines WHERE trade_id = ?1 AND side = 'theirs'",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(source, "search");
+
+        // Nothing offered empties the side.
+        assert_eq!(replace_side(&conn, id, THEIRS, &[]).unwrap(), 0);
+        assert!(side(&conn, id, THEIRS).is_empty());
+    }
+
+    #[test]
+    fn a_side_it_cannot_read_is_refused_whole_and_a_closed_trade_is_not_written() {
+        let conn = seeded();
+        let id = new_trade(&conn);
+        put(&conn, id, THEIRS, "bolt", "nonfoil", 1);
+        let refused = |lines: &[TradeOfferLine]| replace_side(&conn, id, THEIRS, lines);
+        assert!(refused(&[offered("goyf", "foil", 1), offered("bolt", "shiny", 1)]).is_err());
+        assert_eq!(
+            refused(&[offered("goyf", "foil", 0)]).unwrap_err(),
+            NO_COPIES
+        );
+        assert_eq!(
+            refused(&[offered("goyf", "foil", MAX_QUANTITY + 1)]).unwrap_err(),
+            TOO_MANY
+        );
+        assert_eq!(
+            side(&conn, id, THEIRS),
+            [("bolt".into(), "nonfoil".into(), 1)],
+            "a refusal leaves the side as it was"
+        );
+
+        archive_trade(&conn, id).unwrap();
+        assert_eq!(refused(&[]).unwrap_err(), NOT_OPEN);
+        assert_eq!(replace_side(&conn, 999, THEIRS, &[]).unwrap_err(), GONE);
     }
 }

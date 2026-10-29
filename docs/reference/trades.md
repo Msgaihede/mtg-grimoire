@@ -136,7 +136,7 @@ A line whose printing has left `cards` is skipped by steps 2 and 4.
 
 **A deck's copies were out of reach until 2026-10-11, and the owner reversed it the day the page
 was first driven on real data.** The first rule took only unfiled and binder copies, so that a
-trade could not leave a deck reading *missing* without mentioning it. On his collection 226 of
+trade could not leave a deck reading _missing_ without mentioning it. On his collection 226 of
 340 copies sat in a deck's group — his count, not a measurement of this page's — and a trade
 offered almost nothing. So they are offered second and marked: never counted as `owned`, never
 taken while another copy would do, and named wherever they are shown.
@@ -151,8 +151,8 @@ one from before `removedFromDecks` existed parses, and reads as none.
 **The home feed.** A step about one card writes that card's ordinary `activity` row. A step about
 several writes one bulk row; the table's CHECK has no kind for a trade, so the three bulk rows
 borrow `remove`, `import` and `clear` and carry `trade: true`, which `activityText.ts` reads to
-say *Traded away 4 cards*, *Received 5 cards in a trade* and *Took 2 cards off your wishlist
-after a trade*. No bulk-undo ticket is filed for a finish.
+say _Traded away 4 cards_, _Received 5 cards in a trade_ and _Took 2 cards off your wishlist
+after a trade_. No bulk-undo ticket is filed for a finish.
 
 ## 5. The two faces
 
@@ -179,32 +179,32 @@ editing, the percentage, finishing and New trade are bottom sheets. Both faces w
   plain `INTEGER PRIMARY KEY`, so deleting the newest trade gives its number to the next one made.
   `useTrades.ts` drops a trade's own read when the trade is deleted and again when a create or a
   duplicate answers with that id, and neither face remembers an id as gone: a read that answers
-  `null` *and is not being asked again* is the whole of how a page knows.
+  `null` _and is not being asked again_ is the whole of how a page knows.
 - **Your side adds from the collection by default; their side adds from all cards only.**
 - **A copy that would come out of a deck is drawn in the destructive colour, names the deck, and
   is never mixed in with the others.** The add field's collection scope reads twice
   (`useTradeCandidates.ts`): the copies outside the reader's decks, and — by naming the deck
-  groups as `shelves` — the copies inside them, listed in a section of their own under *In your
-  decks*, one row a printing, finish and deck. A line's mark is derived, never recorded:
-  `givenMark` (`tradeWords.ts`) reads `fromDecks(line)`, so *from your collection* in gold turns
+  groups as `shelves` — the copies inside them, listed in a section of their own under _In your
+  decks_, one row a printing, finish and deck. A line's mark is derived, never recorded:
+  `givenMark` (`tradeWords.ts`) reads `fromDecks(line)`, so _from your collection_ in gold turns
   to `1 from your deck Serah` in red on the press that steps the quantity past `owned`, on the
   reader's side and an open trade only. While the trade is open the gold mark carries the
   collection's count, `from your collection · 3 owned` — every copy of that printing and finish,
   a deck's included, which is where `+` stops adding to that line (issue #935). A closed trade
-  says *from your collection* alone: its facts are today's, not the trade's. Finish trade draws `deckNote` under its first question
+  says _from your collection_ alone: its facts are today's, not the trade's. Finish trade draws `deckNote` under its first question
   in the same colour, as part of that checkbox's description.
 - **New trade always offers TCGplayer and Cardmarket, and a feed marketplace only while the app is
   set to it** (`tradeWords.ts`, `tradeMarketplaceOffers`). Card Kingdom's and Mana Pool's prices
   are downloads the app fetches and refreshes for the selected marketplace alone, so a trade in
-  one made while the app quotes another would have no prices — every line an em dash, *Even
-  trade* — or months-old ones. The one not on offer stays in the picker, greyed, with the way to
+  one made while the app quotes another would have no prices — every line an em dash, _Even
+  trade_ — or months-old ones. The one not on offer stays in the picker, greyed, with the way to
   reach it: a tooltip on the desktop row, a sentence under the picker on the phone.
 
 ## 6. Scanning onto a side
 
 Both Scanner pages take an optional `destination` (`features/scanner/useTrayDestination.ts`).
-With one, the tray's folder picker, *Create deck…* and the developer panels are not drawn, the
-commit button reads *Add 4 to their side*, and the commit is the destination's own write. The two
+With one, the tray's folder picker, _Create deck…_ and the developer panels are not drawn, the
+commit button reads _Add 4 to their side_, and the commit is the destination's own write. The two
 trade surfaces — `TradeScanDialog` on desktop, `TradeScan` on the phone — pass a destination that
 calls `trade_add_lines` with `source: "scan"`.
 
@@ -213,7 +213,7 @@ calls `trade_add_lines` with `source: "scan"`.
   already on the trade, never cards lost.
 - **The tray is the Scanner view's own tray.** There is one, persisted, shared by every scanner
   surface; cards already in it when the trade scanner opens are in its list and would go onto the
-  side. The surface says so in a note, and *Clear all…* is the way out.
+  side. The surface says so in a note, and _Clear all…_ is the way out.
 - Scanner preferences changed there — mode, filters, camera — are the Scanner view's too.
 
 ## 7. A side in and out of a file — issue #903
@@ -246,7 +246,58 @@ opened it.
   no file under the mirror's root is a trade.
 - **Desktop only.** The phone's trade page has no transfer sheet yet.
 
-## 8. Not built
+## 8. Trading online, over a lobby code
+
+Built 2026-10-29, for [#1059](https://github.com/Msgaihede/mtg-grimoire/issues/1059) and
+[#1396](https://github.com/Msgaihede/mtg-grimoire/issues/1396)'s sixth step. **The owner's
+direction changed that step's shape**: not a `TradeRoom` object on the integrations Worker reading
+each party's projection, but **the lobby a pod drafts in and a game is played over**, opened for
+a trade — the relay's `Lobby` object unchanged (it routes opaque bodies and knows nothing of what
+is in them), the desktop's `draft/lobby.rs` with a third `LobbyKind`, `trade`. Nothing reaches the
+integrations store, so it needs neither the store nor its switch, and no Worker or migration
+changed.
+
+- **Who.** Starting one is a supporter's, joining anybody's, by the same check `lobby_create`
+  makes for a pod (`entitled`, then the relay's token); the dialog reads it with `useMayHostPod`.
+  A trade's lobby holds two people: the host locks it once the first guest is in, and kicks a
+  second who raced the lock.
+- **Two copies of one trade.** _Trade online_ (the Trade page's pane, and its empty state) makes a
+  new open trade of the reader's own first and opens or joins the lobby with it
+  (`lobby_create(name, "trade", trade)`, `lobby_join(code, name, trade)`); a lobby that refuses
+  takes that trade back. The reader's side of their copy is what they offer, edited as any trade
+  is; the other side is the other reader's offer, which this app writes into it
+  (`trade::replace_side`, every line `search`, never drawn from the collection). Each app reads
+  the other's offer in its own card data and prices it in its own marketplace; a printing it lacks
+  is left off and counted (`LobbyTrade.unknown`, said on the band).
+- **The deal is the host's.** `TradeDeal` (`apps/desktop/src-tauri/src/trade/lobby.rs`): both
+  offers, a `rev` that moves with either, and each reader's acceptance. A change to either offer
+  takes back both acceptances; an offer sent again unchanged moves nothing, which is what lets the
+  page send its side whenever it may have moved (`useSendOffer`: on a change to the side, a
+  reopened socket, a guest's host back on the line). An acceptance names the `rev` it accepts, so
+  one made before the other side last moved accepts nothing (`DEAL_MOVED`). When both have
+  accepted one `rev` the lobby is `agreed`, which is final.
+- **The wire** (bodies inside the relay's frames, `v: 1`): a guest's `offer` (`lines`:
+  `TradeOfferLine`s — printing, finish, count; one per printing and finish, at most 300, so the
+  whole deal fits the relay's 64 KiB frame) and `accept` (`rev`, `yes`); the host's `deal`, sent
+  after every change and with the room on a guest's `sync`. The host's own offer and acceptance
+  are `lobby_trade_offer` and `lobby_trade_accept(rev, accept)`, which the guest's app also calls
+  to send its own.
+- **Finishing.** Agreed, the page shows the lobby's trade and opens Finish trade on it once; each
+  reader then chooses what it does to their own collection and wishlist (§4), as for a trade made
+  at a table. Nothing crosses at the finish: each device moves only its own cards.
+- **What a reader sees.** A band over whichever trade is shown (`lobby/TradeLobbyBand`): the code
+  and its copy button, who they are trading with and whether that reader is on the line, where the
+  deal stands (`tradeLobbyWords.ts`), _Accept trade_ / _Take back_, _Finish trade_ once agreed, and
+  _Close lobby_ (the host's, for both) or _Leave lobby_. A code joined here that turns out to be a
+  pod's or a game's says where it belongs; Playtesting's door says the same of a trade's.
+- **Desktop only.** The lobby is the desktop's (its commands are on `command_table::DESKTOP_ONLY`),
+  so the page offers it only where Draft & Packs is drawn (`useLobbiesHere`); the light app's
+  faces show no _Trade online_.
+- **Not built.** A guest who leaves cannot come back to a locked lobby on a fresh join; the two
+  start a new one. Private reader-to-reader folder sharing (#1059's first ask) is still the store's
+  later consumer.
+
+## 9. Not built
 
 - **Sync.** A trade made on one device is on no other.
 - **Import and export on the phone's trade page.**

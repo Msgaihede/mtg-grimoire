@@ -45,6 +45,7 @@ const HOSTING: LobbyState = {
   ],
   label: "",
   closedReason: null,
+  trade: null,
 };
 
 const VIEW = { status: "drafting" } as DraftView;

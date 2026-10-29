@@ -1,12 +1,12 @@
 import type { JSX, Ref } from "react";
-import { Archive, Plus } from "lucide-react";
+import { Archive, Globe, Plus } from "lucide-react";
 import type { TradeSummary } from "@/lib/ipc";
 import { FOCUS } from "@/lib/focus";
 import { PRESS_SOFT } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { balanceLine, fromCents, isOpen, isSettled, tradeMoney } from "./trade";
-import { FIGURE, TRADE_BUTTON_ACCENT } from "./tradeControls";
+import { FIGURE, TRADE_BUTTON, TRADE_BUTTON_ACCENT } from "./tradeControls";
 import { listLine, tradeCurrency, tradeUnpricedNote } from "./tradeWords";
 
 /**
@@ -33,6 +33,7 @@ export function TradesPane({
   onSelect,
   onNew,
   newRef,
+  onOnline,
 }: {
   /** Newest first, as the backend lists them. */
   trades: readonly TradeSummary[];
@@ -41,6 +42,9 @@ export function TradesPane({
   onNew: () => void;
   /** The New trade button, so a dialog it opened — or a deleted trade — can hand the caret back. */
   newRef: Ref<HTMLButtonElement>;
+  /** Trade online — start or join a trade with another reader over a lobby code. Absent where
+   *  this window has no lobbies, and then there is no such button. */
+  onOnline?: () => void;
 }): JSX.Element {
   const open = trades.filter((trade) => isOpen(trade.status));
   const closed = trades.filter((trade) => !isOpen(trade.status));
@@ -59,6 +63,12 @@ export function TradesPane({
         <Plus className="size-4" aria-hidden="true" />
         New trade
       </button>
+      {onOnline !== undefined && (
+        <button type="button" onClick={onOnline} className={cn(TRADE_BUTTON, "w-full")}>
+          <Globe className="size-4" aria-hidden="true" />
+          Trade online
+        </button>
+      )}
       <Group title="Open" trades={open} selectedId={selectedId} onSelect={onSelect} />
       <Group title="Archived" trades={closed} selectedId={selectedId} onSelect={onSelect} />
     </aside>
