@@ -21,7 +21,6 @@ import type {
   CategoryKind,
   CategoryOrigin,
   DeckAuditEntry,
-  DeckAuditKind,
   DeckCard,
   DeckCategory,
   DeckDetail,
@@ -157,24 +156,6 @@ const TokenModeEnum = builder.enumType("TokenMode", {
   description:
     "How a deck keeps the tokens and emblems its cards make: `managed` and `collection` draw a Tokens & Emblems pile in the deck editor, `hidden` leaves it out. The pile never counts toward the deck's size or legality.",
   values: TOKEN_MODES,
-});
-
-const DECK_AUDIT_KINDS = [
-  "add",
-  "remove",
-  "quantity",
-  "move",
-  "swap",
-  "label",
-  "category",
-  "folder",
-  "deck",
-] as const satisfies readonly DeckAuditKind[];
-
-const DeckHistoryKindEnum = builder.enumType("DeckHistoryKind", {
-  description:
-    "What a line of a deck's history is about: `add`, `remove` and `quantity` change how many copies a deck holds; `move` moves cards between categories; `swap` changes a card's printing; `label` puts a deck label on a card or creates, renames or deletes one; `category`, `folder` and `deck` change a category, the deck's folder, or a setting of the deck itself.",
-  values: DECK_AUDIT_KINDS,
 });
 
 type CommanderRule = NonNullable<FormatSpec["commanderRule"]>;
@@ -588,7 +569,13 @@ export const DeckAuditEntryRef = builder.objectRef<DeckAuditEntry>("DeckHistoryE
       description:
         "The list changed — meaningful only for card changes; deck-level lines always say `live`. Do not filter history by it.",
     }),
-    kind: t.expose("kind", { type: DeckHistoryKindEnum }),
+    // A string and never an enum: a row written by a newer build carries a kind this one has
+    // never heard of, and `DeckHistoryDialog` draws it rather than dropping it (the starter
+    // seed holds one) — an enum would turn that row into an error and null the whole list.
+    kind: t.exposeString("kind", {
+      description:
+        "What the line is about. Known kinds: `add`, `remove` and `quantity` change how many copies a deck holds; `move` moves cards between categories; `swap` changes a card's printing; `label` puts a deck label on a card or creates, renames or deletes one; `category`, `folder` and `deck` change a category, the deck's folder, or a setting of the deck itself. A history written by a newer version of the app can hold other kinds: show them, do not drop them.",
+    }),
     cardId: t.exposeString("cardId", {
       nullable: true,
       description: "The printing the change was about; absent for changes about no card.",

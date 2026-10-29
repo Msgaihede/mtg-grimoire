@@ -103,9 +103,19 @@ for a document to be asked again.
 `graphql.test.ts` reads the home feature's source (and the folder, marketplace and release-note
 hooks its widgets draw from) for every `ipc.<name>`, and holds each to either a root field that
 answers it or a named write. A widget that learns a new read fails there until the graph can
-answer it too. The same file runs one document reading everything the widgets draw against the
-fake backend's starter world and requires it to answer without an error — which is what catches a
-field declared non-null that the backend can answer `null`.
+answer it too.
+
+The same file then generates one document per root field, selecting every field it can reach
+(to a fixed depth, never re-entering a type it is already inside, required arguments answered
+from the starter world's own ids), and runs each against the fake backend. It requires no error
+and no null root. This is what holds the graph's nullability and enums to the data rather than to
+an interface's word for it — and its first run found one: a deck history row written by a newer
+build carries a `kind` this build has never heard of (the starter seed holds one on purpose,
+because `DeckHistoryDialog` draws such rows rather than dropping them). As an enum, that row was an
+error that nulled the whole deck list; `kind` is a `String` for that reason. **A word the app itself
+treats as open — a renderer that draws a value it does not know, as for history kinds, activity
+kinds and widget kinds — is a `String` with its known values described; an enum is only for a set
+Rust or a SQLite `CHECK` closes.**
 
 ## One graphql-js
 
