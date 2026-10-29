@@ -1,4 +1,5 @@
 import { bounded, MAX_GZIP_BYTES } from "./body";
+import { bearerOf, decodeClaims } from "./consumer";
 import {
   allowedOrigin,
   DIGEST_HEADER,
@@ -7,17 +8,29 @@ import {
   preflight,
   withCors,
 } from "./cors";
-import { json, refuse, storeOf, type Env } from "./env";
+import { GROUP_SEGMENT, json, refuse, storeOf, type Env } from "./env";
 import { authorised } from "./gate";
+import {
+  BAD_ACK,
+  BAD_CONSUMER,
+  INTEGRATIONS,
+  INTENT_TOO_LARGE,
+  isIntegration,
+  MAX_INTENT_BYTES,
+  parseAck,
+  parseConsumerRequest,
+  type Integration,
+} from "./intents";
 import { remember, sweepLapsed } from "./lapse";
 import { isTable, MARKETPLACES, parseSettings, TABLES, type Table } from "./projection";
 import { importKek } from "./seal";
-import { BAD_PROJECTION, NO_STORE, PROJECTION_LIMIT } from "./store";
+import { BAD_PROJECTION, NO_STORE, PROJECTION_LIMIT, type ConsumerCall } from "./store";
 
 /**
  * The integrations Worker's router — `index.ts` exports it beside the `GroupStore` class, and the
  * suite drives it as `worker.fetch(request, env)` with no workerd (`vitest.config.ts`'s choice,
- * the share Worker's reasons). Plan §3.2 is the table it answers:
+ * the share Worker's reasons). The PR 2 plan's §3.2 and the PR 3 plan's §3.2–3.3 are the table it
+ * answers:
  *
  * | Route | Answers |
  * | --- | --- |
@@ -25,48 +38,211 @@ import { BAD_PROJECTION, NO_STORE, PROJECTION_LIMIT } from "./store";
  * | `PUT /g/{group}/settings` | 200 `{ fields, marketplace, created }`; with `create`, makes the store if there is none, and without it 404 `no_store` |
  * | `PUT /g/{group}/projection/{table}` | 200; 404 `no_store`; 409 `stale_projection` or `settings_mismatch`; 413 `projection_limit`; 400 `bad_projection` |
  * | `DELETE /g/{group}` | 204, whether or not there was a store |
+ * | `GET /g/{group}/intents` | 200 the pending intents; 404 `no_store` |
+ * | `POST /g/{group}/intents/{id}/claim` | 200 a lease; 409 `claimed` or `already_acked`; 404 `no_intent` |
+ * | `POST /g/{group}/intents/{id}/ack` | 200; 409 `claimed` or `already_acked`; 400 `bad_ack`; 404 `no_intent` |
+ * | `GET /g/{group}/consumers` | 200 the tokens live, without the tokens |
+ * | `POST /g/{group}/consumers/{integration}` | 200 a token; 400 `bad_consumer`; 404 `no_store` |
+ * | `DELETE /g/{group}/consumers/{integration}` | 204 |
+ * | `GET /c/collection`, `/c/wishlist`, `/c/decks`, `/c/decks/{uid}`, `/c/folders`, `/c/autocomplete` | the projection, overlaid; 401; 403 `scope` |
+ * | `POST /c/intents`, `GET /c/intents/{id}` | an intent; 400 `bad_intent`; 403 `scope`; 413 `intent_too_large`; 429 `intent_quota` |
  *
- * **Every route is behind the door, and there is no other.** No public route, no route for an
- * integration yet (that is the issue's PR 3, with tokens this Worker mints and never a relay
- * token). The order of the checks is the share Worker's: the path, then the method (405 before
- * 401 — a fact about the request that costs nothing, where an HMAC verify does not), then the
- * KEK, then the gate, then whatever the route costs.
+ * **Two doors, and no route behind neither.** `/g/…` is a device's: a relay token, through the
+ * gate. `/c/…` is an integration's: a consumer token the group's object minted and verifies — the
+ * router reads its claims only to know which object to ask, and a token whose claims do not parse
+ * is a 401 that reaches none. A relay token opens no `/c/` route and a consumer token no `/g/`
+ * one (the spec's §6.3). The order of the checks is the share Worker's: the path, then the method
+ * (405 before 401 — a fact about the request that costs nothing, where an HMAC verify does not),
+ * then the KEK, then the door, then whatever the route costs.
  */
 
-/**
- * The group segment — the share Worker's `GROUP_SEGMENT`, spelled from the relay's character
- * class rather than imported from `claim.ts`, for that Worker's reason: an unconstrained segment
- * lets `%41` and `A` name two groups a reader would read as one.
- */
-const GROUP_SEGMENT = "[A-Za-z0-9_-]{1,128}";
-
-/** The four shapes, each with the one method it takes. A `table` outside the six is no route. */
+/** A store's routes. A `table` outside the six is no route. */
 const DIGESTS = new RegExp(`^/g/(${GROUP_SEGMENT})/projection/digests$`);
 const SETTINGS = new RegExp(`^/g/(${GROUP_SEGMENT})/settings$`);
 const PROJECTION = new RegExp(`^/g/(${GROUP_SEGMENT})/projection/(${TABLES.join("|")})$`);
 const GROUP = new RegExp(`^/g/(${GROUP_SEGMENT})$`);
 
-type Route =
-  | { kind: "digests"; group: string; method: "GET" }
-  | { kind: "settings"; group: string; method: "PUT" }
-  | { kind: "projection"; group: string; table: Table; method: "PUT" }
-  | { kind: "delete"; group: string; method: "DELETE" };
+/** An intent id: 16 random bytes, base64url (`intents.ts`'s `RANDOM_ID`). */
+const ID_SEGMENT = "[A-Za-z0-9_-]{22}";
+
+/** A projected row's uid, in a path or a `folder` parameter — a `sync_uid`'s alphabet, bounded. */
+const UID_SEGMENT = "[A-Za-z0-9_-]{1,128}";
+const UID = new RegExp(`^${UID_SEGMENT}$`);
+
+/** The inbox's and the consumer tokens' device routes. An integration outside the list is no route. */
+const INTENTS = new RegExp(`^/g/(${GROUP_SEGMENT})/intents$`);
+const CLAIM = new RegExp(`^/g/(${GROUP_SEGMENT})/intents/(${ID_SEGMENT})/claim$`);
+const ACK = new RegExp(`^/g/(${GROUP_SEGMENT})/intents/(${ID_SEGMENT})/ack$`);
+const CONSUMERS = new RegExp(`^/g/(${GROUP_SEGMENT})/consumers$`);
+const CONSUMER = new RegExp(`^/g/(${GROUP_SEGMENT})/consumers/(${INTEGRATIONS.join("|")})$`);
+
+/** The consumer routes. */
+const C_ENTRIES = /^\/c\/(collection|wishlist)$/;
+const C_DECKS = /^\/c\/decks$/;
+const C_DECK = new RegExp(`^/c/decks/(${UID_SEGMENT})$`);
+const C_FOLDERS = /^\/c\/folders$/;
+const C_AUTOCOMPLETE = /^\/c\/autocomplete$/;
+const C_INTENTS = /^\/c\/intents$/;
+const C_INTENT = new RegExp(`^/c/intents/(${ID_SEGMENT})$`);
+
+/** A device's route: the group its path names, behind the gate. */
+type DeviceRoute = { door: "device"; group: string; methods: readonly string[] } & (
+  | { kind: "digests" }
+  | { kind: "settings" }
+  | { kind: "projection"; table: Table }
+  | { kind: "delete" }
+  | { kind: "intents" }
+  | { kind: "claim"; id: string }
+  | { kind: "ack"; id: string }
+  | { kind: "consumers" }
+  | { kind: "consumer"; integration: Integration }
+);
+
+/** An integration's route: the call its object answers once the token holds. */
+type ConsumerRoute = {
+  door: "consumer";
+  methods: readonly string[];
+  call: (request: Request, url: URL) => Promise<ConsumerCall | Response>;
+};
+
+type Route = DeviceRoute | ConsumerRoute;
+
+const GET = ["GET"] as const;
+const POST = ["POST"] as const;
 
 function match(path: string): Route | null {
   let found: RegExpExecArray | null;
+  const device = (group: string, methods: readonly string[]) => ({
+    door: "device" as const,
+    group,
+    methods,
+  });
   if ((found = DIGESTS.exec(path)) !== null) {
-    return { kind: "digests", group: found[1], method: "GET" };
+    return { ...device(found[1], GET), kind: "digests" };
   }
   if ((found = SETTINGS.exec(path)) !== null) {
-    return { kind: "settings", group: found[1], method: "PUT" };
+    return { ...device(found[1], ["PUT"]), kind: "settings" };
   }
   if ((found = PROJECTION.exec(path)) !== null && isTable(found[2])) {
-    return { kind: "projection", group: found[1], table: found[2], method: "PUT" };
+    return { ...device(found[1], ["PUT"]), kind: "projection", table: found[2] };
   }
   if ((found = GROUP.exec(path)) !== null) {
-    return { kind: "delete", group: found[1], method: "DELETE" };
+    return { ...device(found[1], ["DELETE"]), kind: "delete" };
+  }
+  if ((found = INTENTS.exec(path)) !== null) {
+    return { ...device(found[1], GET), kind: "intents" };
+  }
+  if ((found = CLAIM.exec(path)) !== null) {
+    return { ...device(found[1], POST), kind: "claim", id: found[2] };
+  }
+  if ((found = ACK.exec(path)) !== null) {
+    return { ...device(found[1], POST), kind: "ack", id: found[2] };
+  }
+  if ((found = CONSUMERS.exec(path)) !== null) {
+    return { ...device(found[1], GET), kind: "consumers" };
+  }
+  if ((found = CONSUMER.exec(path)) !== null && isIntegration(found[2])) {
+    return { ...device(found[1], ["POST", "DELETE"]), kind: "consumer", integration: found[2] };
+  }
+  return matchConsumer(path);
+}
+
+function matchConsumer(path: string): ConsumerRoute | null {
+  let found: RegExpExecArray | null;
+  const consumer = (methods: readonly string[], call: ConsumerRoute["call"]): ConsumerRoute => ({
+    door: "consumer",
+    methods,
+    call,
+  });
+  if ((found = C_ENTRIES.exec(path)) !== null) {
+    const table = found[1] === "collection" ? "collection_entries" : "wishlist_entries";
+    return consumer(GET, async (_request, url) => {
+      const q = query(url, "q");
+      const folder = url.searchParams.get("folder");
+      if (typeof q !== "string" && q !== null) return q;
+      if (folder !== null && !UID.test(folder)) return badQuery("folder is a folder's uid");
+      return { op: "entries", table, q, folder };
+    });
+  }
+  if (C_DECKS.test(path)) {
+    return consumer(GET, async (_request, url) => {
+      const q = query(url, "q");
+      return typeof q === "string" || q === null ? { op: "decks", q } : q;
+    });
+  }
+  if ((found = C_DECK.exec(path)) !== null) {
+    const uid = found[1];
+    return consumer(GET, async () => ({ op: "deck", uid }));
+  }
+  if (C_FOLDERS.test(path)) return consumer(GET, async () => ({ op: "folders" }));
+  if (C_AUTOCOMPLETE.test(path)) {
+    return consumer(GET, async (_request, url) => {
+      const kind = url.searchParams.get("kind");
+      if (kind !== "collection" && kind !== "wishlist" && kind !== "decks" && kind !== "folders") {
+        return badQuery("kind is one of collection, wishlist, decks, folders");
+      }
+      const q = query(url, "q");
+      return typeof q === "string" || q === null ? { op: "autocomplete", kind, q } : q;
+    });
+  }
+  if (C_INTENTS.test(path)) {
+    return consumer(POST, async (request) => {
+      const read = await readJson(request, MAX_INTENT_BYTES);
+      if ("over" in read) {
+        return refuse(
+          413,
+          `an intent may be at most ${MAX_INTENT_BYTES} bytes, and that one is ${read.over}`,
+          INTENT_TOO_LARGE,
+        );
+      }
+      return { op: "post", body: read.value };
+    });
+  }
+  if ((found = C_INTENT.exec(path)) !== null) {
+    const id = found[1];
+    return consumer(GET, async () => ({ op: "intent", id }));
   }
   return null;
+}
+
+/**
+ * A consumer route's query that is not one it takes — a search longer than {@link MAX_QUERY_CHARS},
+ * a `folder` that is no uid, an autocomplete `kind` outside its four. Not a code the plan lists:
+ * nothing on a device reads it, and an integration shows its sentence.
+ */
+const BAD_QUERY = "bad_query";
+
+/** The longest search a consumer route takes (plan §3.3). */
+const MAX_QUERY_CHARS = 100;
+
+const badQuery = (error: string) => refuse(400, error, BAD_QUERY);
+
+/** A search parameter: its text, `null` when absent or blank, or the 400 for one too long. */
+function query(url: URL, name: string): string | null | Response {
+  const value = url.searchParams.get(name);
+  if (value === null || value.trim() === "") return null;
+  if (value.length > MAX_QUERY_CHARS) {
+    return badQuery(`${name} is at most ${MAX_QUERY_CHARS} characters`);
+  }
+  return value;
+}
+
+/**
+ * A JSON body under `cap`, counted as it arrives: its value — `undefined` for none or for one that
+ * is not JSON, which the parser it goes to refuses in its own words — or the size that put it over.
+ * A declared `content-length` over the cap is believed, and refused unread.
+ */
+async function readJson(request: Request, cap: number): Promise<{ value: unknown } | { over: number }> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > cap) return { over: declared };
+  if (request.body === null) return { value: undefined };
+  const { bytes, size } = await bounded(request.body, cap);
+  if (bytes === null) return { over: size };
+  try {
+    return { value: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { value: undefined };
+  }
 }
 
 /** A settings body is `{ fields, marketplace, create }`; anything past this size is not one. */
@@ -203,18 +379,91 @@ async function handleDelete(env: Env, group: string, now: number): Promise<Respo
   return new Response(null, { status: 204 });
 }
 
-async function route(request: Request, env: Env, found: Route): Promise<Response> {
-  if (request.method !== found.method) {
-    return new Response(
-      JSON.stringify({ error: "method not allowed", code: "method_not_allowed" }),
-      { status: 405, headers: { "content-type": "application/json", allow: found.method } },
+/**
+ * `GET /g/{group}/intents?since=` — the pending intents, oldest first. `since` is Unix ms, digits
+ * only (`counter`'s rule); absent is every pending intent.
+ */
+async function handleIntents(request: Request, env: Env, group: string): Promise<Response> {
+  const raw = new URL(request.url).searchParams.get("since");
+  const since = raw === null ? null : counter(raw);
+  if (raw !== null && since === null) return badQuery("since is Unix milliseconds");
+  const pending = await storeOf(env, group).pendingIntents(group, since);
+  return pending === null ? refuse(404, "integrations are off for this group", NO_STORE) : json(pending);
+}
+
+/** A device's small JSON body — an ack, a mint — under this many bytes. */
+const MAX_DEVICE_BODY_BYTES = 4096;
+
+/** `POST /g/{group}/intents/{id}/ack` — the body checked here, the outcome decided by the store. */
+async function handleAck(
+  request: Request,
+  env: Env,
+  group: string,
+  id: string,
+  now: number,
+): Promise<Response> {
+  const read = await readJson(request, MAX_DEVICE_BODY_BYTES);
+  const ack = "over" in read ? null : parseAck(read.value);
+  if (ack === null) {
+    return refuse(
+      400,
+      "an ack is { state: applied | refused, reason, lease, hlcMs, hlcCtr }: applied with its lease and watermark, refused with a reason",
+      BAD_ACK,
     );
   }
-  // **The KEK before the gate**, so a deploy without it is a 500 naming it to a request with no
+  const answer = await storeOf(env, group).ackIntent(group, id, ack, now);
+  return json(answer.body, answer.status);
+}
+
+/**
+ * `/g/{group}/consumers/{integration}` — `POST` mints the integration's token under
+ * `{ scopes, days }`, replacing any it held; `DELETE` revokes it, 204 whether or not there was one.
+ */
+async function handleConsumer(
+  request: Request,
+  env: Env,
+  group: string,
+  integration: Integration,
+  now: number,
+): Promise<Response> {
+  const store = storeOf(env, group);
+  if (request.method === "DELETE") {
+    await store.revokeConsumer(group, integration);
+    return new Response(null, { status: 204 });
+  }
+  const read = await readJson(request, MAX_DEVICE_BODY_BYTES);
+  const grant = "over" in read ? null : parseConsumerRequest(read.value);
+  if (grant === null) {
+    return refuse(
+      400,
+      "a token is asked for as { scopes: [collection:read | wishlist:read | decks:read | collection:add | wishlist:add], days: 1 to 365 }",
+      BAD_CONSUMER,
+    );
+  }
+  const answer = await store.mintConsumer(group, integration, grant, now);
+  return json(answer.body, answer.status);
+}
+
+/** The 405 for a method the route does not take, naming the ones it does. */
+function notAllowed(methods: readonly string[]): Response {
+  return new Response(JSON.stringify({ error: "method not allowed", code: "method_not_allowed" }), {
+    status: 405,
+    headers: { "content-type": "application/json", allow: methods.join(", ") },
+  });
+}
+
+async function route(request: Request, env: Env, found: Route): Promise<Response> {
+  if (!found.methods.includes(request.method)) return notAllowed(found.methods);
+  // **The KEK before the door**, so a deploy without it is a 500 naming it to a request with no
   // token at all — the tell the relay's signing key gives through the gate to a request with a
   // bad one, and what the README's check and the release's probe read. Imported and dropped: the object imports its
   // own, and this costs one key import on a request that is about to verify an HMAC anyway.
   await importKek(env.INTEGRATIONS_KEK, "INTEGRATIONS_KEK");
+  return found.door === "device" ? device(request, env, found) : consumer(request, env, found);
+}
+
+/** A device's route, behind the gate. */
+async function device(request: Request, env: Env, found: DeviceRoute): Promise<Response> {
   if (!(await authorised(request, env, found.group))) {
     return refuse(401, "unauthorized", "unauthorized");
   }
@@ -231,7 +480,37 @@ async function route(request: Request, env: Env, found: Route): Promise<Response
       return handleProjection(request, env, found.group, found.table, now);
     case "delete":
       return handleDelete(env, found.group, now);
+    case "intents":
+      return handleIntents(request, env, found.group);
+    case "claim": {
+      const answer = await storeOf(env, found.group).claimIntent(found.group, found.id, now);
+      return json(answer.body, answer.status);
+    }
+    case "ack":
+      return handleAck(request, env, found.group, found.id, now);
+    case "consumers": {
+      const answer = await storeOf(env, found.group).listConsumers(found.group);
+      return json(answer.body, answer.status);
+    }
+    case "consumer":
+      return handleConsumer(request, env, found.group, found.integration, now);
   }
+}
+
+/**
+ * An integration's route: **the token's claims, read and not trusted, name the object**; the
+ * object verifies the token and answers. A bearer that is not a consumer token at all — a relay
+ * token among them — is a 401 that reaches no object. The route's own refusals that need no store
+ * (a search too long, an intent too large) come after that and before the object.
+ */
+async function consumer(request: Request, env: Env, found: ConsumerRoute): Promise<Response> {
+  const bearer = bearerOf(request);
+  const claims = bearer === null ? null : decodeClaims(bearer);
+  if (bearer === null || claims === null) return refuse(401, "unauthorized", "unauthorized");
+  const call = await found.call(request, new URL(request.url));
+  if (call instanceof Response) return call;
+  const answer = await storeOf(env, claims.grp).consumer(claims.grp, bearer, call, Date.now());
+  return json(answer.body, answer.status);
 }
 
 export default {
@@ -248,7 +527,8 @@ export default {
     const origin = allowedOrigin(request, env);
     if (origin === null) return route(request, env, found);
     return (
-      preflight(request, origin, found.method) ?? withCors(await route(request, env, found), origin)
+      preflight(request, origin, found.methods.join(", ")) ??
+      withCors(await route(request, env, found), origin)
     );
   },
 

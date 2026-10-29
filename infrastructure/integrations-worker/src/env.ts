@@ -27,6 +27,18 @@ export interface Env extends GateEnv, KekEnv, CorsEnv {
 }
 
 /**
+ * The group segment of a path, and the group a consumer token names — the share Worker's
+ * `GROUP_SEGMENT`, spelled from the relay's character class rather than imported from `claim.ts`,
+ * for that Worker's reason: an unconstrained segment lets `%41` and `A` name two groups a reader
+ * would read as one. Here rather than in the router because a consumer token's group is held to
+ * it too (`consumer.ts`), before it is ever handed to `idFromName`.
+ */
+export const GROUP_SEGMENT = "[A-Za-z0-9_-]{1,128}";
+
+/** {@link GROUP_SEGMENT}, whole. */
+export const GROUP_PATTERN = new RegExp(`^${GROUP_SEGMENT}$`);
+
+/**
  * A JSON answer. `infrastructure/relay/src/rotate.ts`'s five lines, copied for the share Worker's
  * reason (`infrastructure/share-worker/src/env.ts`): a shared helper would couple two deploys.
  */
