@@ -1,56 +1,355 @@
+"""
+One way to slice the collection or the wishlist: by `rarity`, by `color` (a colour bucket —
+`multi` for two or more colours, `c` for colourless), by `set`, or by `finish`.
+"""
+enum BreakdownDimension {
+	color
+	finish
+	rarity
+	set
+}
+
+type BreakdownRow {
+	"""
+	Copies in the bucket, not entries.
+	"""
+	cards: Int!
+	"""
+	The bucket: a rarity, a colour bucket (`multi` and `c` included), a lowercase set code, or
+	a finish — and on the wishlist's finish slice, `any` for wishes that name no finish.
+	"""
+	key: String!
+	"""
+	A readable name where the key is a code — the set's name beside its set code. Null for the
+	other dimensions.
+	"""
+	name: String
+	"""
+	What the bucket's copies are worth at the marketplace, in its currency, as a decimal —
+	summed over the copies it prices. Null when it prices none of them, which is not zero.
+	"""
+	value: Float
+}
+
+"""
+Which cards to list. Every field narrows; absent fields do not. Tag slugs come from the
+`tagSearch` and `tagChildren` fields.
+"""
+input CardFilterInput {
+	"""
+	Art Tags (what the illustration shows), by slug.
+	"""
+	artTags: TagTermsInput
+	"""
+	With `artTags`: `strong` keeps only art the tag is central to.
+	"""
+	artWeightFloor: String
+	"""
+	Any of `regular`, `borderless`, `fullart`.
+	"""
+	borders: [String!]
+	"""
+	Colour identity letters from `WUBRGC`, e.g. `UR`: cards that fit in a deck of those
+	colours. `C` alone is the colourless cards.
+	"""
+	colors: String
+	"""
+	With `colors`: exactly that identity — `UR` answers the Izzet cards alone, not mono-blue,
+	mono-red or colourless.
+	"""
+	colorsStrict: Boolean
+	"""
+	Only cards legal in this format (its key, e.g. `commander`, `modern`).
+	"""
+	format: String
+	"""
+	Any of these mana values (0–255). X counts as 0, as Scryfall counts it.
+	"""
+	manaValues: [Int!]
+	"""
+	Also cards with `{X}` in their printed cost (joins the mana values as one more choice).
+	"""
+	manaX: Boolean
+	"""
+	One card, every printing (its oracle id).
+	"""
+	oracleId: String
+	"""
+	Oracle Tags (what the card does), by slug.
+	"""
+	oracleTags: TagTermsInput
+	"""
+	Only printings made on paper. Absent: true in a card search, false in the collection.
+	"""
+	paperOnly: Boolean
+	"""
+	Only printings legal in at least one format.
+	"""
+	playableOnly: Boolean
+	"""
+	Field-level conditions, every one of which must hold — the Search box's keywords.
+	"""
+	predicates: [PredicateInput!]
+	"""
+	Printings made in any of these finishes.
+	"""
+	printedFinishes: [Finish!]
+	"""
+	Any of these rarities.
+	"""
+	rarities: [String!]
+	"""
+	One rarity: `common`, `uncommon`, `rare`, `mythic`, `special`, `bonus`.
+	"""
+	rarity: String
+	"""
+	One set's code, e.g. `mh3`.
+	"""
+	setCode: String
+	"""
+	Any of these set codes.
+	"""
+	sets: [String!]
+	"""
+	Free text, prefix-matched against the card's name and rules text.
+	"""
+	text: String
+	"""
+	Any of these card types, capitalised: `Artifact`, `Battle`, `Creature`, `Enchantment`,
+	`Instant`, `Land`, `Planeswalker`, `Sorcery`.
+	"""
+	types: [String!]
+	"""
+	`beyond` (Universes Beyond) or `within` (Universes Within); absent, both.
+	"""
+	universe: String
+}
+
+type CollectionEntry {
+	"""
+	When the reader got these copies, as recorded — usually an ISO 8601 date.
+	"""
+	acquiredAt: String
+	"""
+	Where the reader got them, in their own words.
+	"""
+	acquisitionSource: String
+	altered: Boolean!
+	"""
+	The printing's Scryfall id.
+	"""
+	cardId: String!
+	collectorNumber: String!
+	condition: Condition!
+	"""
+	The reader's entry note on this stack — free text.
+	"""
+	entryNote: String
+	"""
+	The reader's entry tags on this stack — free text, shared by every copy in it. Not
+	Scryfall tags, deck labels or deck tags.
+	"""
+	entryTags: [String!]!
+	finish: Finish!
+	"""
+	The folder these copies are filed in, or null at the root. Batched: one read of the folder
+	list however many entries ask.
+	"""
+	folder: CollectionFolder
+	"""
+	The folder these copies are filed in, or null at the root of the collection.
+	"""
+	folderId: Int
+	folderName: String
+	"""
+	A graded slab's details as stored — `{ company, grade, cert }` — or null.
+	"""
+	grading: JSON
+	id: Int!
+	"""
+	The printing's language code, e.g. `en`.
+	"""
+	lang: String!
+	"""
+	Scryfall's layout word.
+	"""
+	layout: String
+	"""
+	In Scryfall's notation, e.g. `{2}{G}{G}`.
+	"""
+	manaCost: String
+	misprint: Boolean!
+	name: String
+	"""
+	A sentence saying why this entry needs the reader's attention (its printing vanished from
+	Scryfall, or a merge landed it), or null.
+	"""
+	needsReview: String
+	"""
+	The card's Scryfall oracle id. Null only when the printing has left the card database.
+	"""
+	oracleId: String
+	proxy: Boolean!
+	purchaseCurrency: String
+	"""
+	What the reader paid per copy, as recorded, in `purchaseCurrency`.
+	"""
+	purchasePrice: Float
+	"""
+	Copies in this stack.
+	"""
+	quantity: Int!
+	rarity: String
+	"""
+	A serialised printing's number, e.g. `042/500`.
+	"""
+	serialNumber: String
+	"""
+	As recorded on the entry, lowercase.
+	"""
+	setCode: String!
+	setName: String
+	signed: Boolean!
+	"""
+	How many of those copies the reader has marked for trade.
+	"""
+	tradelistQuantity: Int!
+	typeLine: String
+	"""
+	One copy's price at this finish, at the marketplace, in its currency, as a decimal. Null
+	when that marketplace has no price for it — never another marketplace's figure.
+	"""
+	unitPrice: Float
+	"""
+	When the entry was last written, in Unix seconds.
+	"""
+	updatedAt: Float!
+}
+
+type CollectionEntryPage {
+	items: [CollectionEntry!]!
+	"""
+	Entries matching, across every page.
+	"""
+	total: Int!
+}
+
 type CollectionFolder {
 	"""
-	The deck a deck group belongs to.
+	The deck a `deck` folder stands for. Null for every other kind.
 	"""
 	deckId: Int
 	id: Int!
 	"""
-	`user` for the reader's own folders; the app's own kinds otherwise (a deck's group).
+	Whose folder it is: `user` (one the reader made), `deck` (the app's folder holding the
+	copies a deck uses — see `deckId`) or `removed` (Recently removed: copies that left the
+	collection but not the database).
 	"""
 	kind: String!
 	"""
-	Whether the folder's copies are kept out of every deck's reach.
+	Whether the reader set this folder aside (cards held for a trade, a display case), so the
+	app stops offering its cards to decks. The folder's own flag: a folder inside a locked
+	folder is locked too, which this does not repeat.
 	"""
 	locked: Boolean!
 	name: String!
+	"""
+	The folder this one sits inside, or null at the root.
+	"""
 	parentId: Int
 	"""
-	The folder's folder rules — advisory criteria its cards are checked against — as stored:
-	a JSON array of objects, each with a `kind`.
+	The folder's own folder rules (inherited ones are not repeated) — criteria a card filed
+	here is expected to meet, as stored: a list of `{ kind, … }` objects (`price`/`manaValue`
+	with `min`/`max`, `colors`/`types`/`sets`/`rarities`/`finishes`/`conditions`/`borders`
+	with `values`, `released` with `from`/`to`, and `group` with `op` (`and`/`or`) and nested
+	`rules`). `[]` for none.
 	"""
 	rules: JSON!
+	"""
+	Its position among its siblings, ascending.
+	"""
 	sortOrder: Int!
+	"""
+	What this folder holds directly, not counting its sub-folders. Null when it holds nothing
+	directly. Batched: one read per marketplace, whatever the number of folders.
+	"""
+	summary(
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): CollectionFolderSummary
+}
+
+type CollectionFolderSummary {
+	"""
+	Copies filed directly in this folder.
+	"""
+	cards: Int!
+	folderId: Int!
+	"""
+	What those copies are worth at the marketplace, in its currency, as a decimal. Null when it
+	prices none of them.
+	"""
+	value: Float
+}
+
+"""
+What to order collection entries by. `price` is one copy's price, `value` is price × copies
+held, `added` is when the entry was last written.
+"""
+enum CollectionSortKey {
+	added
+	finish
+	name
+	price
+	quantity
+	set
+	value
 }
 
 type CollectionSummary {
 	"""
-	Stacks — rows of the collection, each one printing, finish and condition.
+	Entries (stacks).
 	"""
 	entries: Int!
 	"""
-	Copies flagged for the reader to review.
+	Entries that need the reader's attention.
 	"""
 	needsReview: Int!
 	"""
-	Every copy, counting quantities.
+	Copies, not entries.
 	"""
 	totalCards: Int!
 	"""
-	Copies offered for trade.
+	Copies marked for trade.
 	"""
 	tradelistCards: Int!
 	"""
-	Distinct cards (oracle cards), however many printings and copies.
+	Distinct printings recorded.
 	"""
 	uniqueCards: Int!
 	"""
-	Copies with no price at the marketplace, left out of `value`.
+	Copies the marketplace has no price for, and so left out of `value`.
 	"""
 	unpriced: Int!
 	"""
-	Copies × unit price over the priced copies, in the marketplace's currency as a decimal.
+	What the copies are worth at the marketplace, in its currency, as a decimal — over the
+	copies it prices. Read beside `unpriced`.
 	"""
 	value: Float!
+}
+
+"""
+A copy's condition. `NONE` is a copy nobody graded.
+"""
+enum Condition {
+	DMG
+	HP
+	LP
+	MP
+	NM
+	NONE
 }
 
 """
@@ -151,6 +450,35 @@ type DeckValue {
 	value: Float
 }
 
+type EntryTagUse {
+	"""
+	Collection entries and wishes, summed.
+	"""
+	count: Int!
+	tag: String!
+}
+
+"""
+A printing's finish.
+"""
+enum Finish {
+	etched
+	foil
+	nonfoil
+}
+
+type FolderConflicts {
+	"""
+	Copies, summed over those entries.
+	"""
+	copies: Int!
+	"""
+	Rule-breaking entries filed directly in this folder.
+	"""
+	entries: Int!
+	folderId: Int!
+}
+
 """
 A scalar that can represent any JSON value.
 """
@@ -168,16 +496,206 @@ enum Marketplace {
 	tcgplayer
 }
 
+type OptimizePrinting {
+	"""
+	The printing's Scryfall id.
+	"""
+	cardId: String!
+	collectorNumber: String!
+	lang: String!
+	"""
+	One copy at the wish's finish, at the marketplace, in its currency, as a decimal. Null when
+	unpriced — only ever on the printing a wish is moving from.
+	"""
+	price: Float
+	setCode: String!
+}
+
+"""
+The field a condition is about.
+"""
+enum PredicateField {
+	allOf
+	anyOf
+	artTag
+	artist
+	cmc
+	colorIdentity
+	colors
+	flavor
+	format
+	keyword
+	manaCost
+	name
+	oracleTag
+	oracleText
+	power
+	rarity
+	setCode
+	text
+	toughness
+	typeLine
+	watermark
+}
+
+"""
+One condition on one field — `type contains goblin`, `mana value ≥ 3` — or a group of them.
+"""
+input PredicateInput {
+	field: PredicateField!
+	"""
+	Rules the condition out instead of requiring it.
+	"""
+	negated: Boolean! = false
+	op: PredicateOp!
+	"""
+	With `field: anyOf` or `allOf`: the conditions grouped.
+	"""
+	terms: [PredicateInput!]! = []
+	"""
+	What the field is compared with, as text: `goblin`, `3`, `ur`.
+	"""
+	value: String! = ""
+}
+
+"""
+How a condition compares: `colon` is the field's own sense (contains, includes, legal in).
+"""
+enum PredicateOp {
+	colon
+	eq
+	gt
+	gte
+	lt
+	lte
+	ne
+}
+
 type Query {
 	"""
-	Every folder of the collection's cabinet, parents before children.
+	The whole collection sliced along one dimension — copies and value per bucket. Takes no
+	filters.
+	"""
+	collectionBreakdown(		dimension: BreakdownDimension!,
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): [BreakdownRow!] @invalidatedBy(roots: ["collection"])
+	"""
+	The collection's entries, one page at a time — every entry, or the ones the arguments
+	narrow to. Name order unless `sort` says otherwise.
+	"""
+	collectionEntries(
+		"""
+		Reverse `sort`.
+		"""
+		descending: Boolean,
+		"""
+		Leave out the copies in locked (set-aside) folders and the folders inside them. Ignored when `folderId` is given.
+		"""
+		excludeLocked: Boolean,
+		"""
+		Only the cards this search matches.
+		"""
+		filters: CardFilterInput,
+		"""
+		Only the copies filed directly in this folder — not in the folders inside it. Absent: every folder.
+		"""
+		folderId: Int,
+		"""
+		Entries per page, 100 by default and at most 500.
+		"""
+		limit: Int,
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace,
+		"""
+		`true`: only entries needing review; `false`: only the others.
+		"""
+		needsReview: Boolean,
+		"""
+		Entries to skip. Default 0.
+		"""
+		offset: Int,
+		"""
+		Only the copies filed in no folder. Ignored when `folderId` is given.
+		"""
+		rootOnly: Boolean,
+		"""
+		`true`: only entries that break a folder rule of their folder.
+		"""
+		ruleBreaks: Boolean,		sort: CollectionSortKey
+	): CollectionEntryPage @invalidatedBy(roots: ["collection"])
+	"""
+	What each collection folder holds directly (not counting its sub-folders), for every
+	folder that holds something.
+	"""
+	collectionFolderSummaries(
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): [CollectionFolderSummary!] @invalidatedBy(roots: ["collection"])
+	"""
+	Every folder of the collection, flat — including the app's own (each deck's folder,
+	Recently removed). Build the tree from `parentId`.
 	"""
 	collectionFolders: [CollectionFolder!] @invalidatedBy(roots: ["collection"])
 	"""
-	Totals over the collection, or over one folder (`folderId`) or the root alone
-	(`rootOnly`).
+	Which collection entries break a folder rule of the folder they are filed in, and how many
+	per folder. A price rule is checked at the marketplace.
 	"""
-	collectionSummary(excludeLocked: Boolean, folderId: Int, marketplace: Marketplace, needsReview: Boolean, rootOnly: Boolean, ruleBreaks: Boolean): CollectionSummary @invalidatedBy(roots: ["collection"])
+	collectionRuleConflicts(
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): RuleConflicts @invalidatedBy(roots: ["collection"])
+	"""
+	Per-folder counts of the collection's entries — one row per folder holding something the
+	arguments match.
+	"""
+	collectionShelfCounts(
+		"""
+		Leave out the copies in locked (set-aside) folders and the folders inside them. Ignored when `folderId` is given.
+		"""
+		excludeLocked: Boolean,
+		"""
+		Only the cards this search matches.
+		"""
+		filters: CardFilterInput,
+		"""
+		Only the copies filed directly in this folder — not in the folders inside it. Absent: every folder.
+		"""
+		folderId: Int,
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace,
+		"""
+		`true`: only entries needing review; `false`: only the others.
+		"""
+		needsReview: Boolean,
+		"""
+		Only the copies filed in no folder. Ignored when `folderId` is given.
+		"""
+		rootOnly: Boolean,
+		"""
+		`true`: only entries that break a folder rule of their folder.
+		"""
+		ruleBreaks: Boolean,
+		"""
+		Count only these folders (direct members of each), `0` for the root. Replaces `folderId`, `rootOnly` and `excludeLocked`.
+		"""
+		shelves: [Int!]
+	): [ShelfCount!] @invalidatedBy(roots: ["collection"])
+	"""
+	The collection's totals — copies, entries, value — over every entry, or over the ones the
+	arguments narrow to. The arguments are `collectionEntries`' and mean what they mean there.
+	"""
+	collectionSummary(excludeLocked: Boolean, filters: CardFilterInput, folderId: Int, marketplace: Marketplace, needsReview: Boolean, rootOnly: Boolean, ruleBreaks: Boolean): CollectionSummary @invalidatedBy(roots: ["collection"])
 	"""
 	One deck's deck notes, in the reader's order.
 	"""
@@ -191,6 +709,477 @@ type Query {
 	unarchived ones; absent, both.
 	"""
 	decks(archived: Boolean): [Deck!] @invalidatedBy(roots: ["decks"])
+	"""
+	Every entry tag the reader has put on a collection entry or a wish, with how many wear it —
+	alphabetical. Not Scryfall tags, deck labels or deck tags.
+	"""
+	entryTagsInUse(
+		"""
+		`true`: one row per exact spelling (`Cube` and `cube` apart), sorted by byte order. Default `false`: spellings differing only in capitals folded into one row, named by the spelling more stacks use — what the app's tag field suggests.
+		"""
+		exactSpelling: Boolean
+	): [EntryTagUse!] @invalidatedBy(roots: ["entryTags", "collection", "wishlist"])
+	"""
+	The whole wishlist sliced along one dimension — copies and cost per bucket (`value` is the
+	cost). Takes no filters.
+	"""
+	wishlistBreakdown(		dimension: BreakdownDimension!,
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): [BreakdownRow!] @invalidatedBy(roots: ["wishlist"])
+	"""
+	The wishlist's wishes, one page at a time — every wish, or the ones the arguments narrow
+	to. Name order unless `sort` says otherwise.
+	"""
+	wishlistEntries(
+		"""
+		Reverse `sort`.
+		"""
+		descending: Boolean,
+		"""
+		Only the cards this search matches.
+		"""
+		filters: CardFilterInput,
+		"""
+		Only the wishes filed directly in this folder — not in the folders inside it. Absent: every folder.
+		"""
+		folderId: Int,
+		"""
+		Wishes per page, 100 by default and at most 500.
+		"""
+		limit: Int,
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace,
+		"""
+		`true`: only wishes needing review; `false`: only the others.
+		"""
+		needsReview: Boolean,
+		"""
+		Wishes to skip. Default 0.
+		"""
+		offset: Int,
+		"""
+		Only the wishes filed in no folder. Ignored when `folderId` is given.
+		"""
+		rootOnly: Boolean,
+		"""
+		Only the wishes filed directly in these folders, `0` for the root. Replaces `folderId` and `rootOnly`.
+		"""
+		shelves: [Int!],		sort: WishlistSortKey
+	): WishlistEntryPage @invalidatedBy(roots: ["wishlist", "collection"])
+	"""
+	What each wishlist folder holds directly (not counting its sub-folders) — wishes, copies,
+	cost.
+	"""
+	wishlistFolderSummaries(
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): [WishlistFolderSummary!] @invalidatedBy(roots: ["wishlist"])
+	"""
+	Every folder of the wishlist, flat — including the decks' managed wishlists. Build the tree
+	from `parentId`.
+	"""
+	wishlistFolders: [WishlistFolder!] @invalidatedBy(roots: ["wishlist"])
+	"""
+	What re-pointing every pinned wish in scope to its cheapest priced printing would save, at
+	the marketplace. Nothing is written. Every wish by default.
+	"""
+	wishlistOptimizePlan(
+		"""
+		Only the cards this search matches.
+		"""
+		filters: CardFilterInput,
+		"""
+		Only the wishes filed directly in this folder — not in the folders inside it. Absent: every folder.
+		"""
+		folderId: Int,
+		"""
+		Include the decks' managed wishlists (their moves are marked `managed`). Default false.
+		"""
+		includeManaged: Boolean,
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace,
+		"""
+		`true`: only wishes needing review; `false`: only the others.
+		"""
+		needsReview: Boolean,
+		"""
+		Only the wishes filed in no folder. Ignored when `folderId` is given.
+		"""
+		rootOnly: Boolean,
+		"""
+		Only the wishes filed directly in these folders, `0` for the root. Replaces `folderId` and `rootOnly`.
+		"""
+		shelves: [Int!]
+	): WishlistOptimizePlan @invalidatedBy(roots: ["wishlist"])
+	"""
+	Which wishes break a folder rule of the folder they are filed in, and how many per folder.
+	A price rule is checked at the marketplace.
+	"""
+	wishlistRuleConflicts(
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): RuleConflicts @invalidatedBy(roots: ["wishlist"])
+	"""
+	Per-folder counts of the wishlist's wishes — one row per folder holding a wish the
+	arguments match.
+	"""
+	wishlistShelfCounts(
+		"""
+		Only the cards this search matches.
+		"""
+		filters: CardFilterInput,
+		"""
+		Only the wishes filed directly in this folder — not in the folders inside it. Absent: every folder.
+		"""
+		folderId: Int,
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace,
+		"""
+		`true`: only wishes needing review; `false`: only the others.
+		"""
+		needsReview: Boolean,
+		"""
+		Only the wishes filed in no folder. Ignored when `folderId` is given.
+		"""
+		rootOnly: Boolean,
+		"""
+		Only the wishes filed directly in these folders, `0` for the root. Replaces `folderId` and `rootOnly`.
+		"""
+		shelves: [Int!]
+	): [ShelfCount!] @invalidatedBy(roots: ["wishlist"])
+	"""
+	The whole wishlist's totals — wishes, copies, cost. Takes no filters.
+	"""
+	wishlistSummary(
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): WishlistSummary @invalidatedBy(roots: ["wishlist"])
+}
+
+type RuleConflicts {
+	folders: [FolderConflicts!]!
+	"""
+	Every conflicting entry's id.
+	"""
+	ids: [Int!]!
+}
+
+type ShelfCount {
+	"""
+	Copies, summed over the shelf.
+	"""
+	copies: Int!
+	"""
+	The folder, or `0` for the cards (or wishes) filed in no folder.
+	"""
+	folderId: Int!
+	"""
+	Up to four Scryfall card ids to draw as the shelf's thumbnails, by card name. Ignores the
+	filters.
+	"""
+	peek: [String!]!
+	"""
+	Tiles the shelf draws: on the collection one per printing and finish, on the wishlist one
+	per wish.
+	"""
+	tiles: Int!
+	"""
+	What the marketplace could not price: copies on the collection, wishes on the wishlist.
+	"""
+	unpriced: Int!
+	"""
+	What the shelf is worth (collection) or costs (wishlist) at the marketplace, in its
+	currency, as a decimal. Null when it prices nothing on the shelf.
+	"""
+	value: Float
+}
+
+"""
+Tag slugs to require and to rule out.
+"""
+input TagTermsInput {
+	exclude: [String!]! = []
+	include: [String!]! = []
+}
+
+type WishOptimizeMove {
+	folder: WishlistFolder
+	"""
+	The wishlist folder the wish is filed in, or null at the root.
+	"""
+	folderId: Int
+	"""
+	The printing now.
+	"""
+	from: OptimizePrinting!
+	"""
+	Whether the wish is in a deck's managed wishlist — informational only: its printing
+	follows the deck.
+	"""
+	managed: Boolean!
+	name: String!
+	preferredFinish: Finish
+	"""
+	Copies wanted.
+	"""
+	quantity: Int!
+	"""
+	`savedPerCopy` × `quantity`. Null with it.
+	"""
+	saved: Float
+	"""
+	`from.price - to.price`, in the marketplace's currency. Null when `from` is unpriced.
+	"""
+	savedPerCopy: Float
+	"""
+	The cheaper printing.
+	"""
+	to: OptimizePrinting!
+	wishId: Int!
+}
+
+type WishOwnedPlace {
+	"""
+	Copies here of the printing the wish asks for.
+	"""
+	exact: Int!
+	"""
+	The collection folder, or null at the root.
+	"""
+	folder: CollectionFolder
+	"""
+	The collection folder, or null for copies filed in no folder.
+	"""
+	folderId: Int
+	"""
+	Whether the copies here are spoken for: the folder is a deck's, or locked (set aside).
+	False at the root.
+	"""
+	held: Boolean!
+	"""
+	Copies here of other printings of the same card.
+	"""
+	other: Int!
+}
+
+type WishlistEntry {
+	"""
+	The printing to draw the wish as — its own if pinned, else the card's newest printing.
+	Never read as what the wish is for. Null when no printing is known.
+	"""
+	artCardId: String
+	"""
+	The pinned printing's Scryfall id, or null for any printing.
+	"""
+	cardId: String
+	collectorNumber: String
+	"""
+	How many other wishes ask for the same card — a chance to buy it twice.
+	"""
+	elsewhere: Int!
+	"""
+	The reader's entry note on this wish — free text.
+	"""
+	entryNote: String
+	"""
+	The reader's entry tags on this wish — free text. Not Scryfall tags, deck labels or deck
+	tags.
+	"""
+	entryTags: [String!]!
+	"""
+	The folder this wish is filed in, or null at the root.
+	"""
+	folder: WishlistFolder
+	"""
+	The folder this wish is filed in, or null at the root of the wishlist.
+	"""
+	folderId: Int
+	id: Int!
+	lang: String
+	"""
+	Scryfall's layout word.
+	"""
+	layout: String
+	"""
+	In Scryfall's notation, e.g. `{2}{G}{G}`.
+	"""
+	manaCost: String
+	name: String!
+	"""
+	A sentence saying why this wish needs the reader's attention, or null.
+	"""
+	needsReview: String
+	"""
+	The card's Scryfall oracle id.
+	"""
+	oracleId: String
+	"""
+	Copies the collection already holds of the printing this wish asks for (any printing, for
+	an unpinned wish). Reported only: nothing subtracts it.
+	"""
+	ownedExact: Int!
+	"""
+	Copies the collection holds of other printings of the same card.
+	"""
+	ownedOther: Int!
+	"""
+	Where those owned copies are filed, per collection folder.
+	"""
+	ownedPlaces: [WishOwnedPlace!]!
+	"""
+	The finish the reader wants, or null for any.
+	"""
+	preferredFinish: Finish
+	"""
+	Copies wanted.
+	"""
+	quantity: Int!
+	rarity: String
+	"""
+	Null for any printing.
+	"""
+	setCode: String
+	typeLine: String
+	"""
+	The cheapest way to buy one copy at the marketplace, in its currency, as a decimal — at the
+	preferred finish if one is named. Null when that marketplace has no price.
+	"""
+	unitPrice: Float
+	"""
+	When the wish was last written, in Unix seconds.
+	"""
+	updatedAt: Float!
+}
+
+type WishlistEntryPage {
+	items: [WishlistEntry!]!
+	"""
+	Wishes matching, across every page.
+	"""
+	total: Int!
+}
+
+type WishlistFolder {
+	id: Int!
+	"""
+	The deck this folder is the managed wishlist of — kept by the app as what that deck's
+	planned list still lacks, and not editable by hand. Null for a folder the reader made.
+	"""
+	managedDeckId: Int
+	"""
+	Whether this is a managed wishlist's `Tokens` sub-folder: the token printings that deck
+	still lacks.
+	"""
+	managedTokens: Boolean!
+	name: String!
+	"""
+	The folder this one sits inside, or null at the root.
+	"""
+	parentId: Int
+	"""
+	The folder's own folder rules (inherited ones are not repeated), as stored —
+	`CollectionFolder.rules`' shape. `conditions` rules are ignored on the wishlist. `[]` for
+	none.
+	"""
+	rules: JSON!
+	"""
+	Its position among its siblings, ascending.
+	"""
+	sortOrder: Int!
+	"""
+	What this folder holds directly, not counting its sub-folders. Null when the backend
+	answered no row for it. Batched: one read per marketplace, whatever the number of folders.
+	"""
+	summary(
+		"""
+		The marketplace prices are quoted at. Defaults to the reader's.
+		"""
+		marketplace: Marketplace
+	): WishlistFolderSummary
+}
+
+type WishlistFolderSummary {
+	"""
+	Copies those wishes want, summed.
+	"""
+	copies: Int!
+	"""
+	What those copies cost at the marketplace, in its currency, as a decimal — over the wishes
+	it prices. Read beside `unpriced`.
+	"""
+	cost: Float!
+	folderId: Int!
+	"""
+	Wishes here the marketplace has no price for, and so left out of `cost`.
+	"""
+	unpriced: Int!
+	"""
+	Wishes filed directly in this folder.
+	"""
+	wishes: Int!
+}
+
+type WishlistOptimizePlan {
+	"""
+	Already on the cheapest priced printing, plus every any-printing wish.
+	"""
+	alreadyCheapest: Int!
+	"""
+	Wishes looked at.
+	"""
+	considered: Int!
+	moves: [WishOptimizeMove!]!
+	"""
+	Passed over: no card to compare against, or no printing priced at the wish's finish.
+	"""
+	skipped: Int!
+}
+
+"""
+What to order wishes by. `price` is one copy's price, `cost` is price × copies wanted, `added`
+is when the wish was last written.
+"""
+enum WishlistSortKey {
+	added
+	cost
+	name
+	price
+	quantity
+}
+
+type WishlistSummary {
+	"""
+	Copies wanted, summed.
+	"""
+	copies: Int!
+	"""
+	What those copies cost at the marketplace, in its currency, as a decimal — an any-printing
+	wish at its cheapest printing, over the copies it prices. Read beside `unpriced`.
+	"""
+	cost: Float!
+	"""
+	Copies the marketplace has no price for, and so left out of `cost`.
+	"""
+	unpriced: Int!
+	"""
+	Wishes (rows), not copies.
+	"""
+	wishes: Int!
 }
 
 """
