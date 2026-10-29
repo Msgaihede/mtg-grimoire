@@ -271,7 +271,7 @@ jobs:
       # The cargo workspace is rooted at the repository since 2026-10-02 and still builds into
       # `target` — `.cargo/config.toml` pins it there — so the cache is told both
       # halves: where the lockfile is, and where the artifacts are.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
 
@@ -472,7 +472,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
           # A key per target: neither leg's artifacts are any use to the other or to the host
@@ -547,7 +547,7 @@ jobs:
         with:
           targets: aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
           key: android-aarch64
@@ -676,7 +676,7 @@ jobs:
       # web host and the module's profile, which `core`'s wasm leg never builds. **Ahead of the
       # install below on purpose** — this is what restores `~/.cargo/bin`, so a run whose
       # lockfile has not moved finds the CLI already there and `cargo install` has nothing to do.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
           key: web-wasm32

@@ -1,6 +1,6 @@
 /**
  * The multi-card picker's words and rules, with nothing drawn — a scry's, a surveil's, a discard's,
- * a search's, a cast's (`PlaytestPrompt.pick`, answered by `pickCards`).
+ * a search's, a sacrifice's, a cast's (`PlaytestPrompt.pick`, answered by `pickCards`).
  *
  * **The engine sends the bounds, the board keeps to them**: `min` and `max` say how many may be
  * picked, `eligible` which, and `ordered` whether the order is the answer (a scry's or surveil's
@@ -43,6 +43,8 @@ export function pickTitle(pick: PlaytestPick): string {
       return pick.powerCap === null
         ? `Keep ${bound(pick)}`
         : `Keep total power ${pick.powerCap} or less`;
+    case "sacrifice":
+      return `Sacrifice ${bound(pick)}`;
     case "cast":
       return `Choose ${bound(pick)} to cast`;
   }
@@ -133,6 +135,8 @@ export function confirmLabel(pick: PlaytestPick, n: number): string {
       return `Choose ${n}`;
     case "keep":
       return n === 0 ? "Sacrifice all" : `Keep ${n}`;
+    case "sacrifice":
+      return `Sacrifice ${n}`;
     case "cast":
       return n === 0 ? "Cast nothing" : n === 1 ? "Cast it" : `Cast ${n}`;
   }
