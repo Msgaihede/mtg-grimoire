@@ -2,9 +2,7 @@
 One line of the home page's activity feed: a recent change to the collection, the wishlist or a deck, as facts rather than a sentence. `id` is unique only within a `scope`.
 """
 type ActivityEntry {
-  """
-  Unix seconds.
-  """
+  """Unix seconds."""
   at: Float!
 
   """
@@ -13,14 +11,10 @@ type ActivityEntry {
   cardId: String
   cardName: String
 
-  """
-  The deck changed, when `scope` is `deck` and the deck still exists.
-  """
+  """The deck changed, when `scope` is `deck` and the deck still exists."""
   deck: Deck
 
-  """
-  The deck changed; present only when `scope` is `deck`.
-  """
+  """The deck changed; present only when `scope` is `deck`."""
   deckId: Int
 
   """
@@ -28,9 +22,7 @@ type ActivityEntry {
   """
   delta: Int!
 
-  """
-  Unique within its scope only; key by scope and id.
-  """
+  """Unique within its scope only; key by scope and id."""
   id: Int!
 
   """
@@ -63,9 +55,7 @@ enum BreakdownDimension {
 One bucket of the whole collection or the whole wishlist, sliced along one `BreakdownDimension`. The buckets partition the list: summed, they are its total.
 """
 type BreakdownRow {
-  """
-  Copies in the bucket, not entries.
-  """
+  """Copies in the bucket, not entries."""
   cards: Int!
 
   """
@@ -93,15 +83,11 @@ type CardDetail {
   """
   artist: String
 
-  """
-  Mana value. A Float because a few joke cards have half-mana costs.
-  """
+  """Mana value. A Float because a few joke cards have half-mana costs."""
   cmc: Float
   collectorNumber: String!
 
-  """
-  Each physical side, front first. Empty for a single-faced card.
-  """
+  """Each physical side, front first. Empty for a single-faced card."""
   faces: [CardFace!]!
 
   """
@@ -129,24 +115,16 @@ type CardDetail {
   """
   imageStatus: String
 
-  """
-  Scryfall's language code, e.g. `en`.
-  """
+  """Scryfall's language code, e.g. `en`."""
   lang: String!
 
-  """
-  Scryfall's layout word.
-  """
+  """Scryfall's layout word."""
   layout: String!
 
-  """
-  The card's standing in every format Scryfall tracks.
-  """
+  """The card's standing in every format Scryfall tracks."""
   legalities: [CardLegality!]!
 
-  """
-  In Scryfall's symbol notation, e.g. `{2}{R}{R}`.
-  """
+  """In Scryfall's symbol notation, e.g. `{2}{R}{R}`."""
   manaCost: String
   name: String!
 
@@ -162,14 +140,10 @@ type CardDetail {
   oracleText: String
   rarity: String
 
-  """
-  The printing's release date, `YYYY-MM-DD`.
-  """
+  """The printing's release date, `YYYY-MM-DD`."""
   releasedAt: String
 
-  """
-  Lowercase set code, e.g. `m21`.
-  """
+  """Lowercase set code, e.g. `m21`."""
   setCode: String!
   setName: String
 
@@ -186,14 +160,10 @@ One physical side of a multi-faced card (transform, modal double-faced, split…
 type CardFace {
   artist: String
 
-  """
-  In Scryfall's symbol notation. Null or empty means no cost.
-  """
+  """In Scryfall's symbol notation. Null or empty means no cost."""
   manaCost: String
 
-  """
-  Empty when the face carries no name.
-  """
+  """Empty when the face carries no name."""
   name: String!
   oracleText: String
   typeLine: String
@@ -203,14 +173,10 @@ type CardFace {
 What the reader holds of one card, counted across every printing of it (the oracle card, not one piece of cardboard).
 """
 type CardHoldings {
-  """
-  How many decks play the card (decks, not copies; built lists only).
-  """
+  """How many decks play the card (decks, not copies; built lists only)."""
   decks: Int!
 
-  """
-  Copies in the collection — every printing, finish and folder together.
-  """
+  """Copies in the collection — every printing, finish and folder together."""
   owned: Int!
 
   """
@@ -219,18 +185,12 @@ type CardHoldings {
   wished: Int!
 }
 
-"""
-Whether a card may be played in one format.
-"""
+"""Whether a card may be played in one format."""
 type CardLegality {
-  """
-  Scryfall's format key: `standard`, `modern`, `commander`, `vintage`, …
-  """
+  """Scryfall's format key: `standard`, `modern`, `commander`, `vintage`, …"""
   format: String!
 
-  """
-  `legal`, `not_legal`, `restricted` or `banned`.
-  """
+  """`legal`, `not_legal`, `restricted` or `banned`."""
   status: String!
 }
 
@@ -238,32 +198,22 @@ type CardLegality {
 A deck note seen from one card it names: the same note as `DeckNote`, carrying the deck it was written in instead of its cards.
 """
 type CardNote {
-  """
-  The note, as Markdown (CommonMark) source.
-  """
+  """The note, as Markdown (CommonMark) source."""
   body: String!
 
-  """
-  The deck the note is in.
-  """
+  """The deck the note is in."""
   deck: Deck
   deckId: Int!
   deckName: String!
 
-  """
-  The deck note's id.
-  """
+  """The deck note's id."""
   id: Int!
 
-  """
-  The heading as typed; may be empty.
-  """
+  """The heading as typed; may be empty."""
   title: String!
 }
 
-"""
-One card's Oracle Tags, keyed by its oracle id.
-"""
+"""One card's Oracle Tags, keyed by its oracle id."""
 type CardOracleTags {
   oracleId: String!
 
@@ -273,9 +223,7 @@ type CardOracleTags {
   slugs: [String!]!
 }
 
-"""
-One page of a card search, and how many cards matched in all.
-"""
+"""One page of a card search, and how many cards matched in all."""
 type CardSearchResult {
   items: [CardSummary!]!
 
@@ -284,24 +232,16 @@ type CardSearchResult {
   """
   total: Int!
 
-  """
-  The count stopped at its ceiling: there are `total` matches or more.
-  """
+  """The count stopped at its ceiling: there are `total` matches or more."""
   totalIsCapped: Boolean!
 }
 
-"""
-One ordering column of a card search.
-"""
+"""One ordering column of a card search."""
 input CardSearchSort {
-  """
-  Largest, latest or last-in-the-alphabet first.
-  """
+  """Largest, latest or last-in-the-alphabet first."""
   descending: Boolean = false
 
-  """
-  The column.
-  """
+  """The column."""
   key: CardSearchSortKey!
 }
 
@@ -319,29 +259,21 @@ enum CardSearchSortKey {
   type
 }
 
-"""
-One Magic set in the card corpus.
-"""
+"""One Magic set in the card corpus."""
 type CardSet {
   """
   Paper printings of this set in the local corpus. 0 for a digital-only set.
   """
   cardCount: Int!
 
-  """
-  Lowercase set code, e.g. `m21` — what `s:` takes in a search query.
-  """
+  """Lowercase set code, e.g. `m21` — what `s:` takes in a search query."""
   code: String!
   name: String!
 
-  """
-  The set's release date, `YYYY-MM-DD`.
-  """
+  """The set's release date, `YYYY-MM-DD`."""
   releasedAt: String
 
-  """
-  Scryfall's set type: `expansion`, `core`, `masters`, `commander`, …
-  """
+  """Scryfall's set type: `expansion`, `core`, `masters`, `commander`, …"""
   setType: String
 }
 
@@ -376,9 +308,7 @@ type CardSummary {
   """
   layout: String!
 
-  """
-  In Scryfall's symbol notation, e.g. `{2}{R}{R}`.
-  """
+  """In Scryfall's symbol notation, e.g. `{2}{R}{R}`."""
   manaCost: String
   name: String!
 
@@ -417,9 +347,7 @@ type CardSummary {
   """
   printings: Int!
 
-  """
-  `common`, `uncommon`, `rare`, `mythic`, `special` or `bonus`.
-  """
+  """`common`, `uncommon`, `rare`, `mythic`, `special` or `bonus`."""
   rarity: String
 
   """
@@ -427,9 +355,7 @@ type CardSummary {
   """
   releasedAt: String
 
-  """
-  Lowercase set code, e.g. `m21`.
-  """
+  """Lowercase set code, e.g. `m21`."""
   setCode: String!
   setName: String
 
@@ -473,22 +399,16 @@ type CollectionEntry {
   """
   acquiredAt: String
 
-  """
-  Where the reader got them, in their own words.
-  """
+  """Where the reader got them, in their own words."""
   acquisitionSource: String
   altered: Boolean!
 
-  """
-  The printing's Scryfall id.
-  """
+  """The printing's Scryfall id."""
   cardId: String!
   collectorNumber: String!
   condition: Condition!
 
-  """
-  The reader's entry note on this stack — free text.
-  """
+  """The reader's entry note on this stack — free text."""
   entryNote: String
 
   """
@@ -497,9 +417,7 @@ type CollectionEntry {
   entryTags: [String!]!
   finish: Finish!
 
-  """
-  The folder these copies are filed in, or null at the root.
-  """
+  """The folder these copies are filed in, or null at the root."""
   folder: CollectionFolder
 
   """
@@ -514,19 +432,13 @@ type CollectionEntry {
   grading: JSON
   id: Int!
 
-  """
-  The printing's language code, e.g. `en`.
-  """
+  """The printing's language code, e.g. `en`."""
   lang: String!
 
-  """
-  Scryfall's layout word.
-  """
+  """Scryfall's layout word."""
   layout: String
 
-  """
-  In Scryfall's notation, e.g. `{2}{G}{G}`.
-  """
+  """In Scryfall's notation, e.g. `{2}{G}{G}`."""
   manaCost: String
   misprint: Boolean!
   name: String
@@ -543,32 +455,22 @@ type CollectionEntry {
   proxy: Boolean!
   purchaseCurrency: String
 
-  """
-  What the reader paid per copy, as recorded, in `purchaseCurrency`.
-  """
+  """What the reader paid per copy, as recorded, in `purchaseCurrency`."""
   purchasePrice: Float
 
-  """
-  Copies in this stack.
-  """
+  """Copies in this stack."""
   quantity: Int!
   rarity: String
 
-  """
-  A serialised printing's number, e.g. `042/500`.
-  """
+  """A serialised printing's number, e.g. `042/500`."""
   serialNumber: String
 
-  """
-  As recorded on the entry, lowercase.
-  """
+  """As recorded on the entry, lowercase."""
   setCode: String!
   setName: String
   signed: Boolean!
 
-  """
-  How many of those copies the reader has marked for trade.
-  """
+  """How many of those copies the reader has marked for trade."""
   tradelistQuantity: Int!
   typeLine: String
 
@@ -577,21 +479,15 @@ type CollectionEntry {
   """
   unitPrice: Float
 
-  """
-  When the entry was last written, in Unix seconds.
-  """
+  """When the entry was last written, in Unix seconds."""
   updatedAt: Float!
 }
 
-"""
-One page of collection entries.
-"""
+"""One page of collection entries."""
 type CollectionEntryPage {
   items: [CollectionEntry!]!
 
-  """
-  Entries matching, across every page.
-  """
+  """Entries matching, across every page."""
   total: Int!
 }
 
@@ -599,9 +495,7 @@ type CollectionEntryPage {
 One folder of the collection's filing tree. Flat: build the tree from `parentId`. A card filed in no folder is at the root, which is not a folder.
 """
 type CollectionFolder {
-  """
-  The deck a `deck` folder stands for. Null for every other kind.
-  """
+  """The deck a `deck` folder stands for. Null for every other kind."""
   deckId: Int
   id: Int!
 
@@ -616,9 +510,7 @@ type CollectionFolder {
   locked: Boolean!
   name: String!
 
-  """
-  The folder this one sits inside, or null at the root.
-  """
+  """The folder this one sits inside, or null at the root."""
   parentId: Int
 
   """
@@ -626,18 +518,14 @@ type CollectionFolder {
   """
   rules: JSON!
 
-  """
-  Its position among its siblings, ascending.
-  """
+  """Its position among its siblings, ascending."""
   sortOrder: Int!
 
   """
   What this folder holds directly, not counting its sub-folders. Null when it holds nothing directly.
   """
   summary(
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): CollectionFolderSummary
 }
@@ -646,9 +534,7 @@ type CollectionFolder {
 What one collection folder holds **directly** — not counting the folders inside it. A folder holding nothing directly has none.
 """
 type CollectionFolderSummary {
-  """
-  Copies filed directly in this folder.
-  """
+  """Copies filed directly in this folder."""
   cards: Int!
   folderId: Int!
 
@@ -675,34 +561,22 @@ enum CollectionSortKey {
 The collection's totals, over the same filters as the entries they caption.
 """
 type CollectionSummary {
-  """
-  Entries (stacks).
-  """
+  """Entries (stacks)."""
   entries: Int!
 
-  """
-  Entries that need the reader's attention.
-  """
+  """Entries that need the reader's attention."""
   needsReview: Int!
 
-  """
-  Copies, not entries.
-  """
+  """Copies, not entries."""
   totalCards: Int!
 
-  """
-  Copies marked for trade.
-  """
+  """Copies marked for trade."""
   tradelistCards: Int!
 
-  """
-  Distinct printings recorded.
-  """
+  """Distinct printings recorded."""
   uniqueCards: Int!
 
-  """
-  Copies the marketplace has no price for, and so left out of `value`.
-  """
+  """Copies the marketplace has no price for, and so left out of `value`."""
   unpriced: Int!
 
   """
@@ -723,9 +597,7 @@ enum CommanderRule {
   tlr
 }
 
-"""
-A copy's condition. `NONE` is a copy nobody graded.
-"""
+"""A copy's condition. `NONE` is a copy nobody graded."""
 enum Condition {
   DMG
   HP
@@ -755,9 +627,7 @@ type Deck {
   The categories of one of the deck's lists, in order, empty ones included.
   """
   categories(
-    """
-    The marketplace to price at. Defaults to the reader's.
-    """
+    """The marketplace to price at. Defaults to the reader's."""
     marketplace: Marketplace
     variant: DeckVariant = live
   ): [DeckCategory!]!
@@ -767,20 +637,14 @@ type Deck {
   """
   coverArtist: String
 
-  """
-  The printing whose art crop is the deck's cover.
-  """
+  """The printing whose art crop is the deck's cover."""
   coverCardId: String
   description: String
 
-  """
-  The deck folder it is filed in; absent at the root.
-  """
+  """The deck folder it is filed in; absent at the root."""
   folder: DeckFolder
 
-  """
-  The deck folder it is filed in; absent at the root.
-  """
+  """The deck folder it is filed in; absent at the root."""
   folderId: Int
 
   """
@@ -788,9 +652,7 @@ type Deck {
   """
   format: Format
 
-  """
-  The format's id (`commander`, `modern`, `casual`, …).
-  """
+  """The format's id (`commander`, `modern`, `casual`, …)."""
   formatKey: String!
 
   """
@@ -799,37 +661,25 @@ type Deck {
   formatName: String
   gameKey: DeckGame!
 
-  """
-  The deck's history, newest first.
-  """
+  """The deck's history, newest first."""
   history(
-    """
-    At most this many lines (1–500).
-    """
+    """At most this many lines (1–500)."""
     limit: Int = 50
   ): [DeckHistoryEntry!]!
   id: Int!
 
-  """
-  The deck labels this deck's cards wear in one list, most-used first.
-  """
+  """The deck labels this deck's cards wear in one list, most-used first."""
   labels(variant: DeckVariant = live): [DeckLabelUsage!]!
 
-  """
-  The list the deck editor was last showing.
-  """
+  """The list the deck editor was last showing."""
   lastVariant: DeckVariant!
   managedWishlist: ManagedWishlistMode!
   name: String!
 
-  """
-  The deck's notes, in the reader's order.
-  """
+  """The deck's notes, in the reader's order."""
   notes: [DeckNote!]!
 
-  """
-  Whether the deck editor's Notes band is expanded.
-  """
+  """Whether the deck editor's Notes band is expanded."""
   notesOpen: Boolean!
 
   """
@@ -842,34 +692,22 @@ type Deck {
   """
   tags: [String!]!
 
-  """
-  Whether the deck keeps a theory list (a plan) beside its live one.
-  """
+  """Whether the deck keeps a theory list (a plan) beside its live one."""
   theoryEnabled: Boolean!
 
-  """
-  The deck's to-do lists, in the reader's order — empty ones included.
-  """
+  """The deck's to-do lists, in the reader's order — empty ones included."""
   todoLists: [DeckTodoList!]!
 
-  """
-  Whether the deck editor's To-do band is expanded.
-  """
+  """Whether the deck editor's To-do band is expanded."""
   todosOpen: Boolean!
   tokenMode: TokenMode!
 
-  """
-  Unix seconds of the last change to the deck or its cards.
-  """
+  """Unix seconds of the last change to the deck or its cards."""
   updatedAt: Float!
 
-  """
-  What the deck's live cards are worth at a marketplace.
-  """
+  """What the deck's live cards are worth at a marketplace."""
   value(
-    """
-    The marketplace to price at. Defaults to the reader's.
-    """
+    """The marketplace to price at. Defaults to the reader's."""
     marketplace: Marketplace
   ): DeckValue
 
@@ -883,9 +721,7 @@ type Deck {
 One card row in one category of one deck list: the printing, how many copies, the deck label it wears, the card's facts, its price, and how many of it the reader owns for this deck. Card facts are absent when the printing has left the card database.
 """
 type DeckCard {
-  """
-  The Scryfall id of the printing.
-  """
+  """The Scryfall id of the printing."""
   cardId: String!
 
   """
@@ -896,20 +732,14 @@ type DeckCard {
   categoryKind: CategoryKind!
   categoryName: String!
 
-  """
-  Mana value.
-  """
+  """Mana value."""
   cmc: Float
   collectorNumber: String!
 
-  """
-  Colour identity letters run together (`"WU"`).
-  """
+  """Colour identity letters run together (`"WU"`)."""
   colorIdentity: String
 
-  """
-  Colour letters run together (`"WU"`), not a list. `""` is colourless.
-  """
+  """Colour letters run together (`"WU"`), not a list. `""` is colourless."""
   colors: String
 
   """
@@ -927,9 +757,7 @@ type DeckCard {
   """
   finish: Finish
 
-  """
-  On the Commander Game Changers list.
-  """
+  """On the Commander Game Changers list."""
   gameChanger: Boolean
   id: Int!
   labelColor: String
@@ -947,20 +775,14 @@ type DeckCard {
   """
   legalities: JSON
 
-  """
-  In Scryfall's symbol form, e.g. `"{2}{G}{G}"`.
-  """
+  """In Scryfall's symbol form, e.g. `"{2}{G}{G}"`."""
   manaCost: String
   name: String!
 
-  """
-  A sentence when a sync could not keep this row's printing.
-  """
+  """A sentence when a sync could not keep this row's printing."""
   needsReview: String
 
-  """
-  The card across all its printings (Scryfall's oracle id).
-  """
+  """The card across all its printings (Scryfall's oracle id)."""
   oracleId: String
   oracleText: String
 
@@ -969,9 +791,7 @@ type DeckCard {
   """
   ownedQuantity: Int!
 
-  """
-  As printed — may be `"*"`.
-  """
+  """As printed — may be `"*"`."""
   power: String
 
   """
@@ -989,15 +809,11 @@ type DeckCard {
   """
   promoTypes: [String!]
 
-  """
-  Copies in this row.
-  """
+  """Copies in this row."""
   quantity: Int!
   rarity: String
 
-  """
-  Lowercase, as Scryfall stores it.
-  """
+  """Lowercase, as Scryfall stores it."""
   setCode: String!
   setName: String
   toughness: String
@@ -1014,9 +830,7 @@ type DeckCard {
 One category of one list (live or theory) of a deck: a named pile of cards, drawn as a column in the deck editor.
 """
 type DeckCategory {
-  """
-  Copies in the pile, not rows.
-  """
+  """Copies in the pile, not rows."""
   cardCount: Int!
   deckId: Int!
   id: Int!
@@ -1027,9 +841,7 @@ type DeckCategory {
   isActive: Boolean!
   kind: CategoryKind!
 
-  """
-  As the reader named it.
-  """
+  """As the reader named it."""
   name: String!
   origin: CategoryOrigin!
   sortOrder: Int!
@@ -1052,9 +864,7 @@ type DeckCompletion {
   """
   list: DeckVariant!
 
-  """
-  `wanted - owned`; never negative.
-  """
+  """`wanted - owned`; never negative."""
   missing: Int!
 
   """
@@ -1062,9 +872,7 @@ type DeckCompletion {
   """
   missingCost: Float
 
-  """
-  Of those, copies already covered. Never more than `wanted`.
-  """
+  """Of those, copies already covered. Never more than `wanted`."""
   owned: Int!
 
   """
@@ -1072,9 +880,7 @@ type DeckCompletion {
   """
   unpricedMissing: Int!
 
-  """
-  Copies the measured list asks for.
-  """
+  """Copies the measured list asks for."""
   wanted: Int!
 }
 
@@ -1094,13 +900,9 @@ enum DeckCompletionMatch {
   missing
 }
 
-"""
-One list (live or theory) of one deck, with everything in it.
-"""
+"""One list (live or theory) of one deck, with everything in it."""
 type DeckDetail {
-  """
-  Every card row of the list, by category order then name.
-  """
+  """Every card row of the list, by category order then name."""
   cards: [DeckCard!]!
 
   """
@@ -1109,9 +911,7 @@ type DeckDetail {
   categories: [DeckCategory!]!
   deck: Deck!
 
-  """
-  The deck labels the list's cards wear.
-  """
+  """The deck labels the list's cards wear."""
   labels: [DeckLabelUsage!]!
 }
 
@@ -1119,27 +919,19 @@ type DeckDetail {
 A folder of the deck gallery's tree. Folders nest through `parentId`; a folder files decks and belongs to none.
 """
 type DeckFolder {
-  """
-  The decks filed directly in this folder (not in its subfolders).
-  """
+  """The decks filed directly in this folder (not in its subfolders)."""
   decks: [Deck!]!
   id: Int!
   name: String!
   parent: DeckFolder
 
-  """
-  The folder this one is inside; absent at the root.
-  """
+  """The folder this one is inside; absent at the root."""
   parentId: Int
 
-  """
-  Its place among its siblings.
-  """
+  """Its place among its siblings."""
   sortOrder: Int!
 
-  """
-  The folders directly inside this one, in order.
-  """
+  """The folders directly inside this one, in order."""
   subfolders: [DeckFolder!]!
 }
 
@@ -1157,14 +949,10 @@ enum DeckGame {
 One line of a deck's history: what changed, as facts rather than a sentence. Newest first.
 """
 type DeckHistoryEntry {
-  """
-  Unix seconds.
-  """
+  """Unix seconds."""
   at: Float!
 
-  """
-  The printing the change was about; absent for changes about no card.
-  """
+  """The printing the change was about; absent for changes about no card."""
   cardId: String
   cardName: String
   deckId: Int!
@@ -1195,9 +983,7 @@ type DeckHistoryEntry {
 A deck label: the reader's coloured mark for a card inside a deck (`Cut candidate`, `Upgrade`). One label is shared by every deck — renaming or recolouring it changes it everywhere — and a card in a deck wears at most one. Not a deck tag and not a Scryfall tag.
 """
 type DeckLabel {
-  """
-  Copies wearing it across every deck and both lists. `0` when unused.
-  """
+  """Copies wearing it across every deck and both lists. `0` when unused."""
   cardCount: Int!
 
   """
@@ -1205,9 +991,7 @@ type DeckLabel {
   """
   color: String!
 
-  """
-  Decks with at least one card wearing it.
-  """
+  """Decks with at least one card wearing it."""
   deckCount: Int!
   id: Int!
   name: String!
@@ -1217,9 +1001,7 @@ type DeckLabel {
 A deck label as worn in one list (live or theory) of one deck, with how many copies there wear it. A deck label is the reader's coloured mark on one card inside a deck — not a deck tag and not a Scryfall tag.
 """
 type DeckLabelUsage {
-  """
-  Copies wearing it in this deck's list. Never zero.
-  """
+  """Copies wearing it in this deck's list. Never zero."""
   cardCount: Int!
 
   """
@@ -1227,9 +1009,7 @@ type DeckLabelUsage {
   """
   color: String!
 
-  """
-  The label's id — the same as `DeckLabel.id`.
-  """
+  """The label's id — the same as `DeckLabel.id`."""
   id: Int!
   name: String!
 }
@@ -1238,26 +1018,18 @@ type DeckLabelUsage {
 A deck note: the reader's prose about one deck, optionally naming cards in it. Not a sticky note (the home page's), not an entry note (on a collection or wishlist row), and not a deck to-do list.
 """
 type DeckNote {
-  """
-  The note, as Markdown (CommonMark) source.
-  """
+  """The note, as Markdown (CommonMark) source."""
   body: String!
 
-  """
-  The cards the note names. Often empty.
-  """
+  """The cards the note names. Often empty."""
   cards: [DeckNoteCard!]!
 
-  """
-  Unix seconds.
-  """
+  """Unix seconds."""
   createdAt: Float!
   deckId: Int!
   id: Int!
 
-  """
-  The reader's order within the deck.
-  """
+  """The reader's order within the deck."""
   sortOrder: Int!
 
   """
@@ -1265,15 +1037,11 @@ type DeckNote {
   """
   title: String!
 
-  """
-  Unix seconds.
-  """
+  """Unix seconds."""
   updatedAt: Float!
 }
 
-"""
-A card a deck note names.
-"""
+"""A card a deck note names."""
 type DeckNoteCard {
   """
   A printing to draw a picture of — the deck's own where it holds one. Absent when none is known.
@@ -1285,9 +1053,7 @@ type DeckNoteCard {
   """
   name: String!
 
-  """
-  The card across all its printings — what the note attaches by.
-  """
+  """The card across all its printings — what the note attaches by."""
   oracleId: String!
 }
 
@@ -1295,9 +1061,7 @@ type DeckNoteCard {
 Every printed mana cost in one deck's live list (active `main`, `commander` and `maybe` categories) — what the deck gallery's colour bar is drawn from. Count the coloured symbols in each `cost`, weighted by `copies`.
 """
 type DeckPipCosts {
-  """
-  Each cost once, in no particular order.
-  """
+  """Each cost once, in no particular order."""
   costs: [PipCost!]!
   deckId: Int!
 }
@@ -1311,22 +1075,16 @@ type DeckTodoList {
   """
   body: String!
 
-  """
-  Unix seconds.
-  """
+  """Unix seconds."""
   createdAt: Float!
   deckId: Int!
   id: Int!
   sortOrder: Int!
 
-  """
-  The heading as typed; may be empty (shown as `Untitled list`).
-  """
+  """The heading as typed; may be empty (shown as `Untitled list`)."""
   title: String!
 
-  """
-  Unix seconds.
-  """
+  """Unix seconds."""
   updatedAt: Float!
 }
 
@@ -1334,9 +1092,7 @@ type DeckTodoList {
 A deck to-do list as read across every deck, with the deck it belongs to — only lists whose body is not empty.
 """
 type DeckTodoListEntry {
-  """
-  Whether the deck is archived.
-  """
+  """Whether the deck is archived."""
   archived: Boolean!
 
   """
@@ -1347,29 +1103,19 @@ type DeckTodoListEntry {
   deckId: Int!
   deckName: String!
 
-  """
-  The to-do list's id.
-  """
+  """The to-do list's id."""
   id: Int!
 
-  """
-  The list's order within its deck.
-  """
+  """The list's order within its deck."""
   sortOrder: Int!
 
-  """
-  The heading as typed; may be empty.
-  """
+  """The heading as typed; may be empty."""
   title: String!
 
-  """
-  Whether the deck editor's To-do band is expanded for this deck.
-  """
+  """Whether the deck editor's To-do band is expanded for this deck."""
   todosOpen: Boolean!
 
-  """
-  Unix seconds of the last edit.
-  """
+  """Unix seconds of the last edit."""
   updatedAt: Float!
 }
 
@@ -1398,20 +1144,14 @@ enum DeckVariant {
   theory
 }
 
-"""
-One entry tag and how many collection entries and wishes wear it.
-"""
+"""One entry tag and how many collection entries and wishes wear it."""
 type EntryTagUse {
-  """
-  Collection entries and wishes, summed.
-  """
+  """Collection entries and wishes, summed."""
   count: Int!
   tag: String!
 }
 
-"""
-A printing's finish.
-"""
+"""A printing's finish."""
 enum Finish {
   etched
   foil
@@ -1431,14 +1171,10 @@ type FinishPrices {
 One folder holding entries that break its folder rules (its own or inherited) — counted in that folder alone, not the folders inside it.
 """
 type FolderConflicts {
-  """
-  Copies, summed over those entries.
-  """
+  """Copies, summed over those entries."""
   copies: Int!
 
-  """
-  Rule-breaking entries filed directly in this folder.
-  """
+  """Rule-breaking entries filed directly in this folder."""
   entries: Int!
   folderId: Int!
 }
@@ -1449,30 +1185,20 @@ One deck format and its rules as data — what a deck's legality is checked agai
 type Format {
   allowsCompanion: Boolean!
 
-  """
-  How the commander is judged; absent for a format with no command zone.
-  """
+  """How the commander is judged; absent for a format with no command zone."""
   commanderRule: CommanderRule
 
-  """
-  The most cards a deck may hold; absent when there is no maximum.
-  """
+  """The most cards a deck may hold; absent when there is no maximum."""
   deckMax: Int
 
-  """
-  The fewest cards a deck may hold.
-  """
+  """The fewest cards a deck may hold."""
   deckMin: Int!
   displayName: String!
 
-  """
-  Whether a new deck can be made in this format.
-  """
+  """Whether a new deck can be made in this format."""
   enabledInPicker: Boolean!
 
-  """
-  The platforms the format is playable on. Never empty.
-  """
+  """The platforms the format is playable on. Never empty."""
   games: [Game!]!
 
   """
@@ -1485,9 +1211,7 @@ type Format {
   """
   key: String!
 
-  """
-  Starting life total.
-  """
+  """Starting life total."""
   life: Int!
 
   """
@@ -1495,22 +1219,16 @@ type Format {
   """
   maxCopies: Int
 
-  """
-  A per-card mana value ceiling, when the format has one.
-  """
+  """A per-card mana value ceiling, when the format has one."""
   maxManaValue: Int
   requiresCommander: Boolean!
   restrictedMeaning: RestrictedMeaning!
 
-  """
-  The largest sideboard: `0` means none allowed, absent means uncapped.
-  """
+  """The largest sideboard: `0` means none allowed, absent means uncapped."""
   sideboardMax: Int
   singleton: Boolean!
 
-  """
-  Where a format picker lists it.
-  """
+  """Where a format picker lists it."""
   sortOrder: Int!
 
   """
@@ -1528,18 +1246,12 @@ enum Game {
   paper
 }
 
-"""
-The whole home page: which tiles it shows and where.
-"""
+"""The whole home page: which tiles it shows and where."""
 type HomeLayout {
-  """
-  The layout document's version; `2` today.
-  """
+  """The layout document's version; `2` today."""
   version: Int!
 
-  """
-  Every tile, in stored order. Empty when the reader removed them all.
-  """
+  """Every tile, in stored order. Empty when the reader removed them all."""
   widgets: [HomeWidget!]!
 }
 
@@ -1552,14 +1264,10 @@ type HomeWidget {
   """
   config: JSON
 
-  """
-  Height, in cells.
-  """
+  """Height, in cells."""
   h: Int!
 
-  """
-  Stable across moves; unique within the layout.
-  """
+  """Stable across moves; unique within the layout."""
   id: String!
 
   """
@@ -1572,19 +1280,13 @@ type HomeWidget {
   """
   span: Int
 
-  """
-  Width, in cells.
-  """
+  """Width, in cells."""
   w: Int!
 
-  """
-  Column of the tile's left edge, in cells.
-  """
+  """Column of the tile's left edge, in cells."""
   x: Int!
 
-  """
-  Row of the tile's top edge, in cells.
-  """
+  """Row of the tile's top edge, in cells."""
   y: Int!
 }
 
@@ -1614,13 +1316,9 @@ enum Marketplace {
   tcgplayer
 }
 
-"""
-A marketplace prices are quoted at, and how its money is written.
-"""
+"""A marketplace prices are quoted at, and how its money is written."""
 type MarketplaceInfo {
-  """
-  `usd` or `eur`.
-  """
+  """`usd` or `eur`."""
   currency: String!
   id: Marketplace!
   label: String!
@@ -1632,9 +1330,7 @@ Another card a meld card is part of: the card two halves meld into, or one of th
 type MeldRelation {
   artist: String
 
-  """
-  `meld_part` (a half) or `meld_result` (the melded card).
-  """
+  """`meld_part` (a half) or `meld_result` (the melded card)."""
   component: String!
 
   """
@@ -1648,49 +1344,33 @@ type MeldRelation {
 A Scryfall tag the reader has hidden from the tag search and the tag tree. Muting hides the tag, never a card.
 """
 type MutedTag {
-  """
-  When it was muted, in Unix seconds.
-  """
+  """When it was muted, in Unix seconds."""
   mutedAt: Float!
   namespace: TagNamespace!
 
-  """
-  The slug as it read when the tag was muted. May be out of date.
-  """
+  """The slug as it read when the tag was muted. May be out of date."""
   slug: String!
 
-  """
-  Scryfall's stable id for the tag.
-  """
+  """Scryfall's stable id for the tag."""
   tagId: String!
 }
 
-"""
-A recently released printing of a card the watched decks already hold.
-"""
+"""A recently released printing of a card the watched decks already hold."""
 type NewPrinting {
   collectorNumber: String!
 
-  """
-  The decks holding the card.
-  """
+  """The decks holding the card."""
   decks: [NewPrintingDeck!]!
 
-  """
-  The finishes the printing exists in: `nonfoil`, `foil`, `etched`.
-  """
+  """The finishes the printing exists in: `nonfoil`, `foil`, `etched`."""
   finishes: [String!]
 
-  """
-  The printing's language code, e.g. `en`.
-  """
+  """The printing's language code, e.g. `en`."""
   lang: String!
   name: String!
   oracleId: String!
 
-  """
-  The printing's Scryfall id.
-  """
+  """The printing's Scryfall id."""
   printingId: String!
 
   """
@@ -1699,34 +1379,24 @@ type NewPrinting {
   promoTypes: [String!]
   rarity: String
 
-  """
-  Release date, `YYYY-MM-DD`.
-  """
+  """Release date, `YYYY-MM-DD`."""
   releasedAt: String!
   setCode: String!
   setName: String
 }
 
-"""
-A deck holding the card a new printing reprints.
-"""
+"""A deck holding the card a new printing reprints."""
 type NewPrintingDeck {
   deckId: Int!
   name: String!
 
-  """
-  Copies across the deck's categories, live and theory summed.
-  """
+  """Copies across the deck's categories, live and theory summed."""
   quantity: Int!
 
-  """
-  `live` if the live list holds it at all, else `theory`.
-  """
+  """`live` if the live list holds it at all, else `theory`."""
   variant: DeckVariant!
 
-  """
-  Whether the deck is virtual (not built from owned copies).
-  """
+  """Whether the deck is virtual (not built from owned copies)."""
   virtualOnly: Boolean!
 }
 
@@ -1734,14 +1404,10 @@ type NewPrintingDeck {
 Recent reprints of cards in the watched decks, newest first, and the facts that tell an empty feed's three causes apart (no deck watched, nothing reprinted, card data too short).
 """
 type NewPrintings {
-  """
-  How many decks the scope resolved to; 0 is a real answer.
-  """
+  """How many decks the scope resolved to; 0 is a real answer."""
   decksWatched: Int!
 
-  """
-  The oldest release date in the answer, `YYYY-MM-DD`; null when empty.
-  """
+  """The oldest release date in the answer, `YYYY-MM-DD`; null when empty."""
   oldest: String
   printings: [NewPrinting!]!
 
@@ -1750,19 +1416,13 @@ type NewPrintings {
   """
   seenAt: Float
 
-  """
-  The window's far edge, `YYYY-MM-DD`.
-  """
+  """The window's far edge, `YYYY-MM-DD`."""
   since: String!
 }
 
-"""
-One printing in a wishlist optimise plan.
-"""
+"""One printing in a wishlist optimise plan."""
 type OptimizePrinting {
-  """
-  The printing's Scryfall id.
-  """
+  """The printing's Scryfall id."""
   cardId: String!
   collectorNumber: String!
   lang: String!
@@ -1774,13 +1434,9 @@ type OptimizePrinting {
   setCode: String!
 }
 
-"""
-One distinct printed mana cost in a deck, and how many copies pay it.
-"""
+"""One distinct printed mana cost in a deck, and how many copies pay it."""
 type PipCost {
-  """
-  Copies in the deck with this cost.
-  """
+  """Copies in the deck with this cost."""
   copies: Int!
 
   """
@@ -1798,24 +1454,16 @@ type PriceHistory {
   """
   now: Float
 
-  """
-  One per day, oldest first, stopping before today.
-  """
+  """One per day, oldest first, stopping before today."""
   points: [PricePoint!]!
 
-  """
-  Today's UTC midnight according to the database, in Unix seconds.
-  """
+  """Today's UTC midnight according to the database, in Unix seconds."""
   today: Float!
 }
 
-"""
-One printing (in one finish) whose price moved.
-"""
+"""One printing (in one finish) whose price moved."""
 type PriceMover {
-  """
-  The printing's Scryfall id.
-  """
+  """The printing's Scryfall id."""
   cardId: String!
 
   """
@@ -1825,20 +1473,14 @@ type PriceMover {
   finish: Finish!
   name: String!
 
-  """
-  Today's price.
-  """
+  """Today's price."""
   now: Float!
   setCode: String!
 
-  """
-  Null for a printing whose set has left the card data.
-  """
+  """Null for a printing whose set has left the card data."""
   setName: String
 
-  """
-  The price in the baseline snapshot.
-  """
+  """The price in the baseline snapshot."""
   then: Float!
 }
 
@@ -1860,34 +1502,22 @@ input PriceMoverScopeInput {
   """
   cards: [String!]
 
-  """
-  Collection folder ids; `0` is copies filed in no folder.
-  """
+  """Collection folder ids; `0` is copies filed in no folder."""
   collectionFolders: [Int!]
 
-  """
-  Wishlist folder ids; `0` is wishes filed in no folder.
-  """
+  """Wishlist folder ids; `0` is wishes filed in no folder."""
   wishlistFolders: [Int!]
 }
 
-"""
-Which baseline price movers are measured against.
-"""
+"""Which baseline price movers are measured against."""
 enum PriceMoverWindow {
-  """
-  The oldest snapshot kept.
-  """
+  """The oldest snapshot kept."""
   ALL
 
-  """
-  The snapshot from seven days ago.
-  """
+  """The snapshot from seven days ago."""
   DAYS_7
 
-  """
-  The snapshot from thirty days ago.
-  """
+  """The snapshot from thirty days ago."""
   DAYS_30
 }
 
@@ -1895,14 +1525,10 @@ enum PriceMoverWindow {
 The price movers and what they were measured against. An empty `movers` with `days` of 0 or 1 means there is no history yet, not that nothing moved.
 """
 type PriceMovers {
-  """
-  How many distinct days of price snapshots this marketplace holds.
-  """
+  """How many distinct days of price snapshots this marketplace holds."""
   days: Int!
 
-  """
-  Largest move first.
-  """
+  """Largest move first."""
   movers: [PriceMover!]!
 
   """
@@ -1911,26 +1537,18 @@ type PriceMovers {
   since: Float
 }
 
-"""
-One day of one printing's price.
-"""
+"""One day of one printing's price."""
 type PricePoint {
-  """
-  That day's UTC midnight, in Unix seconds.
-  """
+  """That day's UTC midnight, in Unix seconds."""
   day: Float!
   price: Float!
 }
 
-"""
-One paper printing of a card, as the all-printings list shows it.
-"""
+"""One paper printing of a card, as the all-printings list shows it."""
 type Printing {
   artist: String
 
-  """
-  `black`, `white`, `borderless`, `silver` or `gold`.
-  """
+  """`black`, `white`, `borderless`, `silver` or `gold`."""
   borderColor: String
   collectorNumber: String!
 
@@ -1944,9 +1562,7 @@ type Printing {
   """
   finishes: [Finish!]!
 
-  """
-  Scryfall's frame effects: `showcase`, `extendedart`, `legendary`, …
-  """
+  """Scryfall's frame effects: `showcase`, `extendedart`, `legendary`, …"""
   frameEffects: [String!]!
   fullArt: Boolean!
 
@@ -1960,30 +1576,20 @@ type Printing {
   """
   illustrationId: String
 
-  """
-  Scryfall's language code, e.g. `en`.
-  """
+  """Scryfall's language code, e.g. `en`."""
   lang: String!
 
-  """
-  Scryfall's layout word.
-  """
+  """Scryfall's layout word."""
   layout: String!
 
-  """
-  Scryfall marks this printing a promo.
-  """
+  """Scryfall marks this printing a promo."""
   promo: Boolean!
   rarity: String
 
-  """
-  The printing's release date, `YYYY-MM-DD`.
-  """
+  """The printing's release date, `YYYY-MM-DD`."""
   releasedAt: String
 
-  """
-  Lowercase set code, e.g. `m21`.
-  """
+  """Lowercase set code, e.g. `m21`."""
   setCode: String!
   setName: String
 
@@ -1997,9 +1603,7 @@ type Printing {
 One printing's Oracle Tags (the card's, since every printing shares them), keyed by the printing id.
 """
 type PrintingOracleTags {
-  """
-  The printing's Scryfall id.
-  """
+  """The printing's Scryfall id."""
   cardId: String!
 
   """
@@ -2008,20 +1612,14 @@ type PrintingOracleTags {
   slugs: [String!]!
 }
 
-"""
-One printing's prices per finish, keyed by its id.
-"""
+"""One printing's prices per finish, keyed by its id."""
 type PrintingPrices {
-  """
-  The printing's Scryfall id.
-  """
+  """The printing's Scryfall id."""
   cardId: String!
   finishPrices: FinishPrices!
 }
 
-"""
-Every paper printing of one card, newest first, up to a limit.
-"""
+"""Every paper printing of one card, newest first, up to a limit."""
 type PrintingsPage {
   items: [Printing!]!
 
@@ -2039,9 +1637,7 @@ type Query {
   Recent changes to the collection, the wishlist and every deck, newest first — the home page's activity feed.
   """
   activity(
-    """
-    At most this many lines (1–500).
-    """
+    """At most this many lines (1–500)."""
     limit: Int = 50
   ): [ActivityEntry!]
 
@@ -2054,9 +1650,7 @@ type Query {
   One printing of a card in full — text, faces, legalities and prices per finish. Null when no printing has that id.
   """
   card(
-    """
-    The printing's Scryfall id.
-    """
+    """The printing's Scryfall id."""
     id: String!
     marketplace: Marketplace
   ): CardDetail
@@ -2065,9 +1659,7 @@ type Query {
   How many copies of a card the reader owns, wants, and how many decks play it — every printing of the card together.
   """
   cardHoldings(
-    """
-    The oracle card — `oracleId` on `CardSummary` or `CardDetail`.
-    """
+    """The oracle card — `oracleId` on `CardSummary` or `CardDetail`."""
     oracleId: String!
   ): CardHoldings
 
@@ -2075,19 +1667,13 @@ type Query {
   The cards a meld printing is part of. Empty for every card that is not a meld card.
   """
   cardMeldParts(
-    """
-    The printing's Scryfall id.
-    """
+    """The printing's Scryfall id."""
     id: String!
   ): [MeldRelation!]
 
-  """
-  Every deck note, in any deck, that names a card.
-  """
+  """Every deck note, in any deck, that names a card."""
   cardNotes(
-    """
-    The card across all its printings (Scryfall's oracle id).
-    """
+    """The card across all its printings (Scryfall's oracle id)."""
     oracleId: String!
   ): [CardNote!]
 
@@ -2095,15 +1681,11 @@ type Query {
   Every paper printing of one card (by its oracle id), newest first, each priced per finish.
   """
   cardPrintings(
-    """
-    At most this many printings (default 400, at most 1000).
-    """
+    """At most this many printings (default 400, at most 1000)."""
     limit: Int
     marketplace: Marketplace
 
-    """
-    The oracle card — `oracleId` on `CardSummary` or `CardDetail`.
-    """
+    """The oracle card — `oracleId` on `CardSummary` or `CardDetail`."""
     oracleId: String!
   ): PrintingsPage
 
@@ -2111,9 +1693,7 @@ type Query {
   TCGplayer's product ids for one printing, for a link to its product page. Both null when TCGplayer does not sell it.
   """
   cardTcgplayerIds(
-    """
-    The printing's Scryfall id.
-    """
+    """The printing's Scryfall id."""
     id: String!
   ): TcgplayerIds
 
@@ -2123,9 +1703,7 @@ type Query {
   collectionBreakdown(
     dimension: BreakdownDimension!
 
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): [BreakdownRow!]
 
@@ -2133,9 +1711,7 @@ type Query {
   The collection's entries, one page at a time — every entry, or the ones the arguments narrow to. Name order unless `sort` says otherwise.
   """
   collectionEntries(
-    """
-    Reverse `sort`.
-    """
+    """Reverse `sort`."""
     descending: Boolean
 
     """
@@ -2148,24 +1724,16 @@ type Query {
     """
     folderId: Int
 
-    """
-    Entries per page, 100 by default and at most 500.
-    """
+    """Entries per page, 100 by default and at most 500."""
     limit: Int
 
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
 
-    """
-    `true`: only entries needing review; `false`: only the others.
-    """
+    """`true`: only entries needing review; `false`: only the others."""
     needsReview: Boolean
 
-    """
-    Entries to skip. Default 0.
-    """
+    """Entries to skip. Default 0."""
     offset: Int
 
     """
@@ -2173,14 +1741,10 @@ type Query {
     """
     query: String
 
-    """
-    Only the copies filed in no folder. Ignored when `folderId` is given.
-    """
+    """Only the copies filed in no folder. Ignored when `folderId` is given."""
     rootOnly: Boolean
 
-    """
-    `true`: only entries that break a folder rule of their folder.
-    """
+    """`true`: only entries that break a folder rule of their folder."""
     ruleBreaks: Boolean
     sort: CollectionSortKey
   ): CollectionEntryPage
@@ -2189,9 +1753,7 @@ type Query {
   What each collection folder holds directly (not counting its sub-folders), for every folder that holds something.
   """
   collectionFolderSummaries(
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): [CollectionFolderSummary!]
 
@@ -2204,9 +1766,7 @@ type Query {
   Which collection entries break a folder rule of the folder they are filed in, and how many per folder. A price rule is checked at the marketplace.
   """
   collectionRuleConflicts(
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): RuleConflicts
 
@@ -2224,14 +1784,10 @@ type Query {
     """
     folderId: Int
 
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
 
-    """
-    `true`: only entries needing review; `false`: only the others.
-    """
+    """`true`: only entries needing review; `false`: only the others."""
     needsReview: Boolean
 
     """
@@ -2239,14 +1795,10 @@ type Query {
     """
     query: String
 
-    """
-    Only the copies filed in no folder. Ignored when `folderId` is given.
-    """
+    """Only the copies filed in no folder. Ignored when `folderId` is given."""
     rootOnly: Boolean
 
-    """
-    `true`: only entries that break a folder rule of their folder.
-    """
+    """`true`: only entries that break a folder rule of their folder."""
     ruleBreaks: Boolean
 
     """
@@ -2269,14 +1821,10 @@ type Query {
     """
     folderId: Int
 
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
 
-    """
-    `true`: only entries needing review; `false`: only the others.
-    """
+    """`true`: only entries needing review; `false`: only the others."""
     needsReview: Boolean
 
     """
@@ -2284,20 +1832,14 @@ type Query {
     """
     query: String
 
-    """
-    Only the copies filed in no folder. Ignored when `folderId` is given.
-    """
+    """Only the copies filed in no folder. Ignored when `folderId` is given."""
     rootOnly: Boolean
 
-    """
-    `true`: only entries that break a folder rule of their folder.
-    """
+    """`true`: only entries that break a folder rule of their folder."""
     ruleBreaks: Boolean
   ): CollectionSummary
 
-  """
-  The collection's value over time, cut by `split`.
-  """
+  """The collection's value over time, cut by `split`."""
   collectionValueHistory(marketplace: Marketplace, split: ValueSplit = type): ValueHistory
 
   """
@@ -2306,9 +1848,7 @@ type Query {
   deck(
     id: Int!
 
-    """
-    The marketplace to price at. Defaults to the reader's.
-    """
+    """The marketplace to price at. Defaults to the reader's."""
     marketplace: Marketplace
     variant: DeckVariant = live
   ): DeckDetail
@@ -2318,15 +1858,11 @@ type Query {
   """
   deckCardsToReviewCount: Int
 
-  """
-  The categories of one list of one deck, in order, empty ones included.
-  """
+  """The categories of one list of one deck, in order, empty ones included."""
   deckCategories(
     deckId: Int!
 
-    """
-    The marketplace to price at. Defaults to the reader's.
-    """
+    """The marketplace to price at. Defaults to the reader's."""
     marketplace: Marketplace
     variant: DeckVariant = live
   ): [DeckCategory!]
@@ -2334,11 +1870,7 @@ type Query {
   """
   How far every deck the comparison applies to is along (archived decks included), one row per deck. Join on `deckId` for the deck's name.
   """
-  deckCompletion(
-    compare: DeckCompletionCompare = collection
-    marketplace: Marketplace
-    theoryMatch: DeckCompletionMatch = exact
-  ): [DeckCompletion!]
+  deckCompletion(compare: DeckCompletionCompare = collection, marketplace: Marketplace, theoryMatch: DeckCompletionMatch = exact): [DeckCompletion!]
 
   """
   Every deck folder, flat; build the tree from `parentId` (or walk `subfolders` from the ones with none).
@@ -2351,15 +1883,11 @@ type Query {
   deckHistory(
     deckId: Int!
 
-    """
-    At most this many lines (1–500).
-    """
+    """At most this many lines (1–500)."""
     limit: Int = 50
   ): [DeckHistoryEntry!]
 
-  """
-  Every deck label there is, worn or not, most-used first.
-  """
+  """Every deck label there is, worn or not, most-used first."""
   deckLabels: [DeckLabel!]
 
   """
@@ -2367,9 +1895,7 @@ type Query {
   """
   deckLabelsInDeck(deckId: Int!, variant: DeckVariant = live): [DeckLabelUsage!]
 
-  """
-  One deck's deck notes, in the reader's order. Empty when it has none.
-  """
+  """One deck's deck notes, in the reader's order. Empty when it has none."""
   deckNotes(deckId: Int!): [DeckNote!]
 
   """
@@ -2382,18 +1908,14 @@ type Query {
   """
   deckTodoLists: [DeckTodoListEntry!]
 
-  """
-  One deck's to-do lists, in the reader's order — empty ones included.
-  """
+  """One deck's to-do lists, in the reader's order — empty ones included."""
   deckTodoListsForDeck(deckId: Int!): [DeckTodoList!]
 
   """
   What every deck's live cards are worth at a marketplace, one row per deck.
   """
   deckValues(
-    """
-    The marketplace to price at. Defaults to the reader's.
-    """
+    """The marketplace to price at. Defaults to the reader's."""
     marketplace: Marketplace
   ): [DeckValue!]
 
@@ -2417,9 +1939,7 @@ type Query {
     exactSpelling: Boolean
   ): [EntryTagUse!]
 
-  """
-  Every deck format and its rules, in picker order.
-  """
+  """Every deck format and its rules, in picker order."""
   formats: [Format!]
 
   """
@@ -2437,33 +1957,21 @@ type Query {
   """
   mutedTags: [MutedTag!]
 
-  """
-  Recent reprints of cards the watched decks hold, newest first.
-  """
+  """Recent reprints of cards the watched decks hold, newest first."""
   newPrintings(
-    """
-    How far back to look, in days, clamped to 1–365.
-    """
+    """How far back to look, in days, clamped to 1–365."""
     days: Int = 90
 
-    """
-    Watch only these decks. Absent watches every deck.
-    """
+    """Watch only these decks. Absent watches every deck."""
     deckIds: [Int!]
 
-    """
-    Include basic lands.
-    """
+    """Include basic lands."""
     includeBasics: Boolean = false
 
-    """
-    Count cards that are only on a deck's theory list.
-    """
+    """Count cards that are only on a deck's theory list."""
     includeTheory: Boolean = true
 
-    """
-    Watch virtual decks too.
-    """
+    """Watch virtual decks too."""
     includeVirtual: Boolean = false
 
     """
@@ -2471,9 +1979,7 @@ type Query {
     """
     langs: [String!] = ["en"]
 
-    """
-    At most this many printings, clamped to 1–100.
-    """
+    """At most this many printings, clamped to 1–100."""
     limit: Int = 100
   ): NewPrintings
 
@@ -2481,9 +1987,7 @@ type Query {
   The Oracle Tags (what a card does) of a set of cards, by oracle id. One entry per distinct id — match rows by `oracleId`, never by position. A single card's are also on `CardSummary.oracleTags` and `CardDetail.oracleTags`.
   """
   oracleTagsForCards(
-    """
-    Oracle ids.
-    """
+    """Oracle ids."""
     oracleIds: [String!]!
   ): [CardOracleTags!]
 
@@ -2491,9 +1995,7 @@ type Query {
   The Oracle Tags (what a card does) of a set of printings, by printing id. One entry per distinct id — match rows by `cardId`, never by position.
   """
   oracleTagsForPrintings(
-    """
-    Printing ids.
-    """
+    """Printing ids."""
     cardIds: [String!]!
   ): [PrintingOracleTags!]
 
@@ -2506,9 +2008,7 @@ type Query {
   One printing's daily price in one finish, before today, beside today's price.
   """
   priceHistory(
-    """
-    The printing's Scryfall id.
-    """
+    """The printing's Scryfall id."""
     cardId: String!
     finish: Finish = nonfoil
     marketplace: Marketplace
@@ -2520,15 +2020,11 @@ type Query {
   priceMovers(
     direction: PriceMoverDirection = both
 
-    """
-    At most this many movers, clamped to 1–100.
-    """
+    """At most this many movers, clamped to 1–100."""
     limit: Int = 100
     marketplace: Marketplace
 
-    """
-    Absent for every owned printing.
-    """
+    """Absent for every owned printing."""
     scope: PriceMoverScopeInput
     window: PriceMoverWindow = DAYS_7
   ): PriceMovers
@@ -2537,51 +2033,35 @@ type Query {
   Prices per finish for a set of printings, in one read. A printing id the corpus does not hold is left out of the answer; match rows by `cardId`.
   """
   printingPrices(
-    """
-    Printing ids.
-    """
+    """Printing ids."""
     cardIds: [String!]!
     marketplace: Marketplace
   ): [PrintingPrices!]
 
-  """
-  The cards this device opened most recently, newest first.
-  """
+  """The cards this device opened most recently, newest first."""
   recentCards(
-    """
-    At most this many, clamped to 1–24.
-    """
+    """At most this many, clamped to 1–24."""
     limit: Int = 8
   ): [RecentCard!]
 
-  """
-  Every release of the app up to this build, newest first.
-  """
+  """Every release of the app up to this build, newest first."""
   releaseNotes(
-    """
-    At most this many releases.
-    """
+    """At most this many releases."""
     limit: Int
   ): [ReleaseNote!]
 
-  """
-  The scanner's review tray, in the order it was scanned.
-  """
+  """The scanner's review tray, in the order it was scanned."""
   scannerTray: [ScannerTrayRow!]
 
   """
   Search every Magic card in the corpus (not only the reader's) with Scryfall's search syntax — the same search the app's Search page runs. Each row also says how many copies the reader owns and whether it is wishlisted.
   """
   searchCards(
-    """
-    Rows per page, at most 200.
-    """
+    """Rows per page, at most 200."""
     limit: Int = 50
     marketplace: Marketplace
 
-    """
-    Only printings priced at most this much at the marketplace.
-    """
+    """Only printings priced at most this much at the marketplace."""
     maxPrice: Float
 
     """
@@ -2589,9 +2069,7 @@ type Query {
     """
     minPrice: Float
 
-    """
-    Rows to skip.
-    """
+    """Rows to skip."""
     offset: Int = 0
 
     """
@@ -2604,9 +2082,7 @@ type Query {
     """
     owned: Boolean
 
-    """
-    Hide digital-only (Arena, MTGO) printings.
-    """
+    """Hide digital-only (Arena, MTGO) printings."""
     paperOnly: Boolean = true
 
     """
@@ -2625,14 +2101,10 @@ type Query {
   """
   setCompletion: [SetCompletion!]
 
-  """
-  Every Magic set in the card corpus, newest first.
-  """
+  """Every Magic set in the card corpus, newest first."""
   sets: [CardSet!]
 
-  """
-  Every sticky note, in the reader's arrangement.
-  """
+  """Every sticky note, in the reader's arrangement."""
   stickyNotes: [StickyNote!]
 
   """
@@ -2644,9 +2116,7 @@ type Query {
     """
     namespace: TagNamespace
 
-    """
-    The parent tag's slug. Absent: the top-level tags.
-    """
+    """The parent tag's slug. Absent: the top-level tags."""
     parent: String
   ): [TagHit!]
 
@@ -2654,9 +2124,7 @@ type Query {
   Find Scryfall tags (Oracle Tags and Art Tags) by name: the exact match first, then names starting with the text, then names containing it. Empty text lists the tags with the widest reach. Muted tags are left out.
   """
   tagSearch(
-    """
-    At most this many tags.
-    """
+    """At most this many tags."""
     limit: Int = 50
 
     """
@@ -2664,19 +2132,13 @@ type Query {
     """
     namespace: TagNamespace
 
-    """
-    Part of a tag's name, e.g. `remov` or `dragon`.
-    """
+    """Part of a tag's name, e.g. `remov` or `dragon`."""
     text: String = ""
   ): [TagHit!]
 
-  """
-  Sets with paper printings releasing after today and within `days`.
-  """
+  """Sets with paper printings releasing after today and within `days`."""
   upcomingSets(
-    """
-    How far ahead to look, in days, clamped to 1–365.
-    """
+    """How far ahead to look, in days, clamped to 1–365."""
     days: Int = 90
   ): UpcomingSets
 
@@ -2686,9 +2148,7 @@ type Query {
   wishlistBreakdown(
     dimension: BreakdownDimension!
 
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): [BreakdownRow!]
 
@@ -2696,9 +2156,7 @@ type Query {
   The wishlist's wishes, one page at a time — every wish, or the ones the arguments narrow to. Name order unless `sort` says otherwise.
   """
   wishlistEntries(
-    """
-    Reverse `sort`.
-    """
+    """Reverse `sort`."""
     descending: Boolean
 
     """
@@ -2706,24 +2164,16 @@ type Query {
     """
     folderId: Int
 
-    """
-    Wishes per page, 100 by default and at most 500.
-    """
+    """Wishes per page, 100 by default and at most 500."""
     limit: Int
 
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
 
-    """
-    `true`: only wishes needing review; `false`: only the others.
-    """
+    """`true`: only wishes needing review; `false`: only the others."""
     needsReview: Boolean
 
-    """
-    Wishes to skip. Default 0.
-    """
+    """Wishes to skip. Default 0."""
     offset: Int
 
     """
@@ -2731,9 +2181,7 @@ type Query {
     """
     query: String
 
-    """
-    Only the wishes filed in no folder. Ignored when `folderId` is given.
-    """
+    """Only the wishes filed in no folder. Ignored when `folderId` is given."""
     rootOnly: Boolean
 
     """
@@ -2747,9 +2195,7 @@ type Query {
   What each wishlist folder holds directly (not counting its sub-folders) — wishes, copies, cost.
   """
   wishlistFolderSummaries(
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): [WishlistFolderSummary!]
 
@@ -2772,14 +2218,10 @@ type Query {
     """
     includeManaged: Boolean
 
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
 
-    """
-    `true`: only wishes needing review; `false`: only the others.
-    """
+    """`true`: only wishes needing review; `false`: only the others."""
     needsReview: Boolean
 
     """
@@ -2787,9 +2229,7 @@ type Query {
     """
     query: String
 
-    """
-    Only the wishes filed in no folder. Ignored when `folderId` is given.
-    """
+    """Only the wishes filed in no folder. Ignored when `folderId` is given."""
     rootOnly: Boolean
 
     """
@@ -2802,9 +2242,7 @@ type Query {
   Which wishes break a folder rule of the folder they are filed in, and how many per folder. A price rule is checked at the marketplace.
   """
   wishlistRuleConflicts(
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): RuleConflicts
 
@@ -2817,14 +2255,10 @@ type Query {
     """
     folderId: Int
 
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
 
-    """
-    `true`: only wishes needing review; `false`: only the others.
-    """
+    """`true`: only wishes needing review; `false`: only the others."""
     needsReview: Boolean
 
     """
@@ -2832,9 +2266,7 @@ type Query {
     """
     query: String
 
-    """
-    Only the wishes filed in no folder. Ignored when `folderId` is given.
-    """
+    """Only the wishes filed in no folder. Ignored when `folderId` is given."""
     rootOnly: Boolean
 
     """
@@ -2843,13 +2275,9 @@ type Query {
     shelves: [Int!]
   ): [ShelfCount!]
 
-  """
-  The whole wishlist's totals — wishes, copies, cost. Takes no filters.
-  """
+  """The whole wishlist's totals — wishes, copies, cost. Takes no filters."""
   wishlistSummary(
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): WishlistSummary
 
@@ -2859,37 +2287,25 @@ type Query {
   wishlistValueHistory(marketplace: Marketplace, split: ValueSplit = type): ValueHistory
 }
 
-"""
-A card this device opened recently.
-"""
+"""A card this device opened recently."""
 type RecentCard {
-  """
-  The printing's Scryfall id.
-  """
+  """The printing's Scryfall id."""
   cardId: String!
   name: String!
   setCode: String!
 
-  """
-  When it was last opened, in Unix seconds.
-  """
+  """When it was last opened, in Unix seconds."""
   viewedAt: Float!
 }
 
-"""
-One release of MTG Grimoire and what it changed.
-"""
+"""One release of MTG Grimoire and what it changed."""
 type ReleaseNote {
   htmlUrl: String!
 
-  """
-  The release's notes, as Markdown.
-  """
+  """The release's notes, as Markdown."""
   notes: String!
 
-  """
-  When it was published, as an ISO 8601 date.
-  """
+  """When it was published, as an ISO 8601 date."""
   publishedAt: String
   tag: String!
   version: String!
@@ -2909,22 +2325,16 @@ Which entries break a folder rule of the folder they are filed in — a rule con
 type RuleConflicts {
   folders: [FolderConflicts!]!
 
-  """
-  Every conflicting entry's id.
-  """
+  """Every conflicting entry's id."""
   ids: [Int!]!
 }
 
-"""
-One printing a tray row could be.
-"""
+"""One printing a tray row could be."""
 type ScannerTrayChoice {
   cardId: String!
   collectorNumber: String!
 
-  """
-  The finishes the printing exists in. Absent when unknown.
-  """
+  """The finishes the printing exists in. Absent when unknown."""
   finishes: [String!]
   name: String!
   oracleId: String
@@ -2945,9 +2355,7 @@ enum ScannerTrayFinish {
 A card the scanner read and the reader has not yet added to the collection.
 """
 type ScannerTrayRow {
-  """
-  When it was scanned, in Unix milliseconds.
-  """
+  """When it was scanned, in Unix milliseconds."""
   addedAt: Float!
   cardId: String!
   choices: [ScannerTrayChoice!]!
@@ -2961,9 +2369,7 @@ type ScannerTrayRow {
   setCode: String!
 }
 
-"""
-How much of one set the collection holds.
-"""
+"""How much of one set the collection holds."""
 type SetCompletion {
   name: String!
 
@@ -2972,15 +2378,11 @@ type SetCompletion {
   """
   owned: Int!
 
-  """
-  Release date as `YYYY-MM-DD`, or null where Scryfall published none.
-  """
+  """Release date as `YYYY-MM-DD`, or null where Scryfall published none."""
   releasedAt: String
   setCode: String!
 
-  """
-  The set's printed size, or null when unknown.
-  """
+  """The set's printed size, or null when unknown."""
   size: Int
 }
 
@@ -2988,14 +2390,10 @@ type SetCompletion {
 One folder's counts within a filtered list — the heading of one shelf on the collection's or the wishlist's Shelves view. Only shelves holding something in scope have one.
 """
 type ShelfCount {
-  """
-  Copies, summed over the shelf.
-  """
+  """Copies, summed over the shelf."""
   copies: Int!
 
-  """
-  The folder, or `0` for the cards (or wishes) filed in no folder.
-  """
+  """The folder, or `0` for the cards (or wishes) filed in no folder."""
   folderId: Int!
 
   """
@@ -3023,9 +2421,7 @@ type ShelfCount {
 One of the reader's sticky notes on the home page — free prose attached to no deck and no card (not a deck note).
 """
 type StickyNote {
-  """
-  The note's text, as CommonMark Markdown.
-  """
+  """The note's text, as CommonMark Markdown."""
   body: String!
 
   """
@@ -3033,26 +2429,18 @@ type StickyNote {
   """
   color: String!
 
-  """
-  Unix seconds.
-  """
+  """Unix seconds."""
   createdAt: Float!
   id: Int!
   pinned: Boolean!
 
-  """
-  The reader's own arrangement, ascending.
-  """
+  """The reader's own arrangement, ascending."""
   sortOrder: Int!
 
-  """
-  May be empty; the app then derives a heading from the body.
-  """
+  """May be empty; the app then derives a heading from the body."""
   title: String!
 
-  """
-  Unix seconds.
-  """
+  """Unix seconds."""
   updatedAt: Float!
 }
 
@@ -3065,14 +2453,10 @@ type TagHit {
   """
   cardCount: Int!
 
-  """
-  How many direct child tags it has (muted ones not counted).
-  """
+  """How many direct child tags it has (muted ones not counted)."""
   childCount: Int!
 
-  """
-  Scryfall's own description of the tag.
-  """
+  """Scryfall's own description of the tag."""
   description: String
 
   """
@@ -3080,15 +2464,11 @@ type TagHit {
   """
   id: String!
 
-  """
-  The tag's name for display.
-  """
+  """The tag's name for display."""
   label: String!
   namespace: TagNamespace!
 
-  """
-  Every parent tag — a tag can sit under several.
-  """
+  """Every parent tag — a tag can sit under several."""
   parents: [TagRef!]!
 
   """
@@ -3109,9 +2489,7 @@ enum TagNamespace {
 A Scryfall tag named from somewhere else — enough to show it and ask about it again.
 """
 type TagRef {
-  """
-  The tag's name for display.
-  """
+  """The tag's name for display."""
   label: String!
   namespace: TagNamespace!
 
@@ -3135,29 +2513,19 @@ type TagStatus {
   """
   ingestedAt: Float
 
-  """
-  A refresh is running right now.
-  """
+  """A refresh is running right now."""
   refreshing: Boolean!
 
-  """
-  A refresh is due.
-  """
+  """A refresh is due."""
   stale: Boolean!
 
-  """
-  Tags in the dataset.
-  """
+  """Tags in the dataset."""
   tagCount: Int
 
-  """
-  Tag-to-subject assignments in the dataset.
-  """
+  """Tag-to-subject assignments in the dataset."""
   taggingCount: Int
 
-  """
-  Scryfall's own timestamp for the file these tags came from.
-  """
+  """Scryfall's own timestamp for the file these tags came from."""
   updatedAt: String
 }
 
@@ -3165,14 +2533,10 @@ type TagStatus {
 TCGplayer's product ids for one printing. Both are null for a printing TCGplayer does not sell.
 """
 type TcgplayerIds {
-  """
-  The etched-foil product, which TCGplayer lists separately.
-  """
+  """The etched-foil product, which TCGplayer lists separately."""
   etchedProductId: Int
 
-  """
-  The ordinary product, sold as Normal and Foil.
-  """
+  """The ordinary product, sold as Normal and Foil."""
   productId: Int
 }
 
@@ -3185,9 +2549,7 @@ enum TokenMode {
   managed
 }
 
-"""
-A set with paper printings still to be released.
-"""
+"""A set with paper printings still to be released."""
 type UpcomingSet {
   code: String!
 
@@ -3197,44 +2559,30 @@ type UpcomingSet {
   inDecks: Int!
   name: String!
 
-  """
-  Cards previewed so far (one per card, whatever its printings).
-  """
+  """Cards previewed so far (one per card, whatever its printings)."""
   previewed: Int!
 
-  """
-  The set's earliest card date in the window, `YYYY-MM-DD`.
-  """
+  """The set's earliest card date in the window, `YYYY-MM-DD`."""
   releasedAt: String!
 }
 
-"""
-The sets still to come, and the day they were counted from.
-"""
+"""The sets still to come, and the day they were counted from."""
 type UpcomingSets {
-  """
-  Soonest first, then by code.
-  """
+  """Soonest first, then by code."""
   sets: [UpcomingSet!]!
 
-  """
-  Today's date according to the database (UTC), `YYYY-MM-DD`.
-  """
+  """Today's date according to the database (UTC), `YYYY-MM-DD`."""
   today: String!
 }
 
-"""
-One line of a value history.
-"""
+"""One line of a value history."""
 type ValueBucket {
   """
   The bucket's word. `type`: lowercase card type (`creature` … `land`) or `other`. `color`: `W` `U` `B` `R` `G`, `c` (colorless) or `multi`. `set`: the set code, or `other`.
   """
   key: String!
 
-  """
-  The set's name under the `set` split; null otherwise.
-  """
+  """The set's name under the `set` split; null otherwise."""
   name: String
 }
 
@@ -3248,24 +2596,18 @@ type ValueHistory {
   buckets: [ValueBucket!]!
   points: [ValuePoint!]!
 
-  """
-  Today's UTC midnight according to the database, in Unix seconds.
-  """
+  """Today's UTC midnight according to the database, in Unix seconds."""
   today: Float!
 }
 
-"""
-One point of a value history.
-"""
+"""One point of a value history."""
 type ValuePoint {
   """
   The period's UTC midnight, in Unix seconds. Daily for recent history, weekly further back (a weekly point answers its latest day).
   """
   day: Float!
 
-  """
-  True on the last point only: today's value, computed live.
-  """
+  """True on the last point only: today's value, computed live."""
   live: Boolean!
 
   """
@@ -3273,9 +2615,7 @@ type ValuePoint {
   """
   moved: Float
 
-  """
-  Σ copies × price over the priced copies; an unpriced copy adds 0.
-  """
+  """Σ copies × price over the priced copies; an unpriced copy adds 0."""
   total: Float!
 
   """
@@ -3294,20 +2634,14 @@ enum ValueSplit {
   type
 }
 
-"""
-One pinned wish that a cheaper printing of the same card could answer.
-"""
+"""One pinned wish that a cheaper printing of the same card could answer."""
 type WishOptimizeMove {
   folder: WishlistFolder
 
-  """
-  The wishlist folder the wish is filed in, or null at the root.
-  """
+  """The wishlist folder the wish is filed in, or null at the root."""
   folderId: Int
 
-  """
-  The printing now.
-  """
+  """The printing now."""
   from: OptimizePrinting!
 
   """
@@ -3317,14 +2651,10 @@ type WishOptimizeMove {
   name: String!
   preferredFinish: Finish
 
-  """
-  Copies wanted.
-  """
+  """Copies wanted."""
   quantity: Int!
 
-  """
-  `savedPerCopy` × `quantity`. Null with it.
-  """
+  """`savedPerCopy` × `quantity`. Null with it."""
   saved: Float
 
   """
@@ -3332,9 +2662,7 @@ type WishOptimizeMove {
   """
   savedPerCopy: Float
 
-  """
-  The cheaper printing.
-  """
+  """The cheaper printing."""
   to: OptimizePrinting!
   wishId: Int!
 }
@@ -3343,19 +2671,13 @@ type WishOptimizeMove {
 One collection folder's share of the copies the collection already holds of a wish's card.
 """
 type WishOwnedPlace {
-  """
-  Copies here of the printing the wish asks for.
-  """
+  """Copies here of the printing the wish asks for."""
   exact: Int!
 
-  """
-  The collection folder, or null at the root.
-  """
+  """The collection folder, or null at the root."""
   folder: CollectionFolder
 
-  """
-  The collection folder, or null for copies filed in no folder.
-  """
+  """The collection folder, or null for copies filed in no folder."""
   folderId: Int
 
   """
@@ -3363,9 +2685,7 @@ type WishOwnedPlace {
   """
   held: Boolean!
 
-  """
-  Copies here of other printings of the same card.
-  """
+  """Copies here of other printings of the same card."""
   other: Int!
 }
 
@@ -3378,9 +2698,7 @@ type WishlistEntry {
   """
   artCardId: String
 
-  """
-  The pinned printing's Scryfall id, or null for any printing.
-  """
+  """The pinned printing's Scryfall id, or null for any printing."""
   cardId: String
   collectorNumber: String
 
@@ -3389,9 +2707,7 @@ type WishlistEntry {
   """
   elsewhere: Int!
 
-  """
-  The reader's entry note on this wish — free text.
-  """
+  """The reader's entry note on this wish — free text."""
   entryNote: String
 
   """
@@ -3399,37 +2715,25 @@ type WishlistEntry {
   """
   entryTags: [String!]!
 
-  """
-  The folder this wish is filed in, or null at the root.
-  """
+  """The folder this wish is filed in, or null at the root."""
   folder: WishlistFolder
 
-  """
-  The folder this wish is filed in, or null at the root of the wishlist.
-  """
+  """The folder this wish is filed in, or null at the root of the wishlist."""
   folderId: Int
   id: Int!
   lang: String
 
-  """
-  Scryfall's layout word.
-  """
+  """Scryfall's layout word."""
   layout: String
 
-  """
-  In Scryfall's notation, e.g. `{2}{G}{G}`.
-  """
+  """In Scryfall's notation, e.g. `{2}{G}{G}`."""
   manaCost: String
   name: String!
 
-  """
-  A sentence saying why this wish needs the reader's attention, or null.
-  """
+  """A sentence saying why this wish needs the reader's attention, or null."""
   needsReview: String
 
-  """
-  The card's Scryfall oracle id.
-  """
+  """The card's Scryfall oracle id."""
   oracleId: String
 
   """
@@ -3437,30 +2741,20 @@ type WishlistEntry {
   """
   ownedExact: Int!
 
-  """
-  Copies the collection holds of other printings of the same card.
-  """
+  """Copies the collection holds of other printings of the same card."""
   ownedOther: Int!
 
-  """
-  Where those owned copies are filed, per collection folder.
-  """
+  """Where those owned copies are filed, per collection folder."""
   ownedPlaces: [WishOwnedPlace!]!
 
-  """
-  The finish the reader wants, or null for any.
-  """
+  """The finish the reader wants, or null for any."""
   preferredFinish: Finish
 
-  """
-  Copies wanted.
-  """
+  """Copies wanted."""
   quantity: Int!
   rarity: String
 
-  """
-  Null for any printing.
-  """
+  """Null for any printing."""
   setCode: String
   typeLine: String
 
@@ -3469,21 +2763,15 @@ type WishlistEntry {
   """
   unitPrice: Float
 
-  """
-  When the wish was last written, in Unix seconds.
-  """
+  """When the wish was last written, in Unix seconds."""
   updatedAt: Float!
 }
 
-"""
-One page of wishes.
-"""
+"""One page of wishes."""
 type WishlistEntryPage {
   items: [WishlistEntry!]!
 
-  """
-  Wishes matching, across every page.
-  """
+  """Wishes matching, across every page."""
   total: Int!
 }
 
@@ -3504,9 +2792,7 @@ type WishlistFolder {
   managedTokens: Boolean!
   name: String!
 
-  """
-  The folder this one sits inside, or null at the root.
-  """
+  """The folder this one sits inside, or null at the root."""
   parentId: Int
 
   """
@@ -3514,18 +2800,14 @@ type WishlistFolder {
   """
   rules: JSON!
 
-  """
-  Its position among its siblings, ascending.
-  """
+  """Its position among its siblings, ascending."""
   sortOrder: Int!
 
   """
   What this folder holds directly, not counting its sub-folders. Null when the backend answered no row for it.
   """
   summary(
-    """
-    The marketplace prices are quoted at. Defaults to the reader's.
-    """
+    """The marketplace prices are quoted at. Defaults to the reader's."""
     marketplace: Marketplace
   ): WishlistFolderSummary
 }
@@ -3534,9 +2816,7 @@ type WishlistFolder {
 What one wishlist folder holds **directly** — not counting the folders inside it.
 """
 type WishlistFolderSummary {
-  """
-  Copies those wishes want, summed.
-  """
+  """Copies those wishes want, summed."""
   copies: Int!
 
   """
@@ -3550,9 +2830,7 @@ type WishlistFolderSummary {
   """
   unpriced: Int!
 
-  """
-  Wishes filed directly in this folder.
-  """
+  """Wishes filed directly in this folder."""
   wishes: Int!
 }
 
@@ -3560,14 +2838,10 @@ type WishlistFolderSummary {
 What moving the wishes in scope to their cheapest priced printings would save. Nothing is written. `moves`, `alreadyCheapest` and `skipped` partition `considered`.
 """
 type WishlistOptimizePlan {
-  """
-  Already on the cheapest priced printing, plus every any-printing wish.
-  """
+  """Already on the cheapest priced printing, plus every any-printing wish."""
   alreadyCheapest: Int!
 
-  """
-  Wishes looked at.
-  """
+  """Wishes looked at."""
   considered: Int!
   moves: [WishOptimizeMove!]!
 
@@ -3588,13 +2862,9 @@ enum WishlistSortKey {
   quantity
 }
 
-"""
-The whole wishlist's totals, every folder and the root.
-"""
+"""The whole wishlist's totals, every folder and the root."""
 type WishlistSummary {
-  """
-  Copies wanted, summed.
-  """
+  """Copies wanted, summed."""
   copies: Int!
 
   """
@@ -3602,13 +2872,9 @@ type WishlistSummary {
   """
   cost: Float!
 
-  """
-  Copies the marketplace has no price for, and so left out of `cost`.
-  """
+  """Copies the marketplace has no price for, and so left out of `cost`."""
   unpriced: Int!
 
-  """
-  Wishes (rows), not copies.
-  """
+  """Wishes (rows), not copies."""
   wishes: Int!
 }

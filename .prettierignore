@@ -1,0 +1,4 @@
+# Printed by graphql-js and held byte for byte to the code by
+# `packages/ui/lib/graphql/graphql.test.ts` — write it with `vitest -u`, never with Prettier,
+# which reflows its descriptions and turns the snapshot red.
+packages/ui/lib/graphql/schema.graphql

@@ -286,9 +286,13 @@ export const ARMS = [
   // `apps/light/public/` — the web manifest, its icons, the favicon — is copied into it as it stands.
   { match: ["apps/light/*"], jobs: PAGE_SIDE },
   // shadcn's config (a root file until 2026-10-08, when it moved into `packages/ui/`) and the
-  // formatter's. **Above `packages/ui/*`**, which would take the first and add `web`: neither
-  // reaches a bundle the light entry builds, and only `storybook` and `frontend` read them.
-  { match: ["packages/ui/components.json", ".prettierrc"], jobs: ["frontend", "storybook"] },
+  // formatter's two files. **Above `packages/ui/*`**, which would take the first and add `web`:
+  // none of them reaches a bundle the light entry builds, and only `storybook` and `frontend`
+  // read them.
+  {
+    match: ["packages/ui/components.json", ".prettierrc", ".prettierignore"],
+    jobs: ["frontend", "storybook"],
+  },
   // The desktop's document, `apps/desktop/index.html` (at the root until 2026-10-08). **Not
   // `web`**, whose document is `apps/light/index.html`: the light config names that one as its
   // only input, so this file reaches no `apps/light/dist-web/`. **Above `apps/desktop/*`**, which
