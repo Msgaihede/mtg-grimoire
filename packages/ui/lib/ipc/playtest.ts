@@ -32,7 +32,7 @@ export type PlaytestStage =
 /** Where the turn is, coarse. */
 export type PlaytestPhase = "beginning" | "main1" | "combat" | "main2" | "ending";
 
-/** What picking a card does: kept on top (scry, surveil), discarded, found, kept, revealed, cast… */
+/** What picking a card does: kept on top (scry, surveil), discarded, found, kept, sacrificed, cast… */
 export type PlaytestPickPurpose =
   | "scry"
   | "surveil"
@@ -43,6 +43,7 @@ export type PlaytestPickPurpose =
   | "targets"
   | "choose"
   | "keep"
+  | "sacrifice"
   | "cast";
 
 /** A step the reader can ask the game to stop at. */

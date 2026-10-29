@@ -94,6 +94,18 @@ describe("a keep within a total power (issue #1079)", () => {
   });
 });
 
+describe("a sacrifice (issue #1416)", () => {
+  it("says how many are sacrificed, and confirms only that many", () => {
+    const sacrifice = pick({ purpose: "sacrifice", min: 6, max: 6 });
+    expect(pickTitle(sacrifice)).toBe("Sacrifice 6");
+    expect(pickCounter(sacrifice, 2)).toBe("2 of 6");
+    expect(canConfirm(sacrifice, 5)).toBe(false);
+    expect(canConfirm(sacrifice, 6)).toBe(true);
+    expect(confirmLabel(sacrifice, 6)).toBe("Sacrifice 6");
+    expect(pickOffer(sacrifice)).toBeNull();
+  });
+});
+
 describe("stops", () => {
   it("keeps the reader's main phases on, and toggles the rest", () => {
     expect(fixedStop("you", "main1")).toBe(true);

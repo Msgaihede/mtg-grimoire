@@ -369,6 +369,9 @@ pub enum PlaytestPickPurpose {
     Choose,
     /// The picked permanents are kept; the rest are sacrificed.
     Keep,
+    /// The picked permanents are sacrificed — "each player sacrifices six creatures" (issue
+    /// #1416).
+    Sacrifice,
     /// The picked card is cast — "you may cast a spell from among them" (issue #1329).
     Cast,
 }

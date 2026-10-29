@@ -19,9 +19,9 @@
 //! **A prompt is the engine's question as its legal answers.** phase has well over a hundred kinds
 //! of question, so no board draws each one: the view lists `legal_actions` with the facts in each
 //! (`option_of`), and `auto` answers any of them with the AI's choice for the reader. A question
-//! answered by a set of cards — a scry, a discard, a search — also carries a `pick` (`pick`): the
-//! enumeration offers only a few of its answers. A question with one answer is not asked at all
-//! (`sole_answer`): `advance` takes it, as the reader would have.
+//! answered by a set of cards — a scry, a discard, a search, a sacrifice — also carries a `pick`
+//! (`pick`): the enumeration offers only a few of its answers. A question with one answer is not
+//! asked at all (`sole_answer`): `advance` takes it, as the reader would have.
 //!
 //! **The sandbox is a setting** (`setSandbox`): a hand on the table, phase's debug actions — move a
 //! card anywhere, tap, counters, tokens, draws, life totals — on the reader's own cards and on
@@ -1540,18 +1540,28 @@ impl Playtest {
                 false,
                 PickAnswer::KeptPermanents,
             ),
-            // "You may cast a spell from among them" (issue #1329): a cast from the hand or a
-            // look at the library picked as the ability resolves, one card or none.
+            // "Choose N of these" as an effect resolves, whatever it does with them: "each player
+            // sacrifices six creatures" (issue #1416), "you may cast a spell from among them"
+            // (issue #1329), a put onto the battlefield or into a library. The effect's kind is
+            // only what the picked cards are for; a library they go to in turn takes them in
+            // the order picked.
             WaitingFor::EffectZoneChoice {
                 player,
                 cards,
                 count,
                 min_count,
                 up_to,
-                effect_kind: EffectKind::CastFromZone,
+                effect_kind,
+                library_position,
+                mass_library_order,
                 ..
             } if *player == YOU => (
-                PlaytestPickPurpose::Cast,
+                match effect_kind {
+                    EffectKind::Sacrifice => PlaytestPickPurpose::Sacrifice,
+                    EffectKind::CastFromZone => PlaytestPickPurpose::Cast,
+                    EffectKind::Discard => PlaytestPickPurpose::Discard,
+                    _ => PlaytestPickPurpose::Choose,
+                },
                 all(cards),
                 all(cards),
                 if *up_to {
@@ -1560,7 +1570,7 @@ impl Playtest {
                     (*count).min(cards.len())
                 },
                 (*count).min(cards.len()),
-                false,
+                library_position.is_some() || mass_library_order.is_some(),
                 PickAnswer::Cards,
             ),
             // A free-cast window — Invoke Calamity's graveyard and hand, or the cards exiled

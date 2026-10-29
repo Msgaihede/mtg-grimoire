@@ -719,6 +719,27 @@ export function keepPick(): TurnFive {
 }
 
 /**
+ * "Each player sacrifices two creatures" (issue #1416): exactly two of the reader's three
+ * creatures, the reader's to pick.
+ */
+export function sacrificePick(): TurnFive {
+  const t = turnFive();
+  const cards = t.view.you.battlefield
+    .filter((c) => c.lane === "creature")
+    .map((c) => ({ id: c.id, name: c.name, cardId: c.cardId, text: null, cause: null }));
+  return pickPrompt(t, "EffectZoneChoice", "Necrotic Hex", {
+    purpose: "sacrifice",
+    cards,
+    eligible: cards.map((c) => c.id),
+    min: 2,
+    max: 2,
+    ordered: false,
+    powerCap: null,
+    zone: "battlefield",
+  });
+}
+
+/**
  * "You may cast an instant or sorcery spell from your graveyard" (issue #1329): one card of the
  * reader's graveyard, or none — asked whether before which.
  */
