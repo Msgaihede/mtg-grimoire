@@ -11,8 +11,10 @@ import {
 import { activeScope } from "@grimoire/fake/scope";
 import type { IntegrationsStatus } from "@/lib/ipc";
 import {
+  DISCORD_FIXED,
   IntegrationsPanel,
   NOT_AVAILABLE,
+  NOTHING_WAITING,
   NOT_ENTITLED,
   PRIVACY_SENTENCE,
   SENDING,
@@ -47,8 +49,8 @@ const meta = {
           "the reader's to move, which is the way out when a launch finds it taken. The " +
           "`Local server` stories below are that part.\n\n" +
           "Then the group's switch for a copy of the collection held on a server, so integrations " +
-          "can answer while the reader's devices are off (issue #1396). Nothing reads the copy " +
-          "yet: Discord and a remote MCP server come later.\n\n" +
+          "can answer while the reader's devices are off (issue #1396). No integration is " +
+          "connected yet: Discord and a remote MCP server come later.\n\n" +
           "**The switch and the five boxes are the group's, not the device's** — two devices " +
           "sending under two choices would flap the server's copy between them. While on, the " +
           "boxes draw the group's choice and a change sends the whole set: the server drops " +
@@ -63,7 +65,12 @@ const meta = {
           "format. The switch refuses a press, with the reason beside it, in a build with no " +
           "store address — every real build until the Worker is deployed — and on a device with " +
           "no membership; it stays focusable (`aria-disabled`), so the reason is read with it. " +
-          "Desktop only: the light app's Settings leaves the panel out.",
+          "Desktop only: the light app's Settings leaves the panel out.\n\n" +
+          "**While on, the review list** draws the changes an integration proposed that this " +
+          "device parks rather than applies — Apply (which toasts what went where) or Decline " +
+          "each — and the device's own choice of what it applies without asking: Discord's two " +
+          "adds always (the reader confirmed each in Discord), MCP's the reader's. (Every store " +
+          "the fake holds has two MCP proposals waiting.)",
       },
     },
   },
@@ -327,5 +334,34 @@ export const LocalServerPortTaken: Story = {
     const toggle = await theLocalSwitch(canvas);
     await expect(toggle).toHaveAttribute("aria-checked", "true");
     await expect(toggle).toHaveAccessibleDescription(mcpPortTaken(MCP_DEFAULT_PORT));
+  },
+};
+
+/**
+ * **The review list**, once the switch is on: the fake's store holds two MCP proposals, parked
+ * because this device has not said MCP may apply without asking. Apply takes the first off the
+ * list (and toasts what went where); Discord's rows are fixed on, MCP's are the reader's.
+ */
+export const Reviewing: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await theSwitch(canvas));
+
+    const list = await canvas.findByRole("list", { name: "Waiting for your review" });
+    await expect(
+      within(list).getByText("2× Lightning Bolt (2X2 #117), foil → “Trade binder”"),
+    ).toBeInTheDocument();
+    await expect(within(list).getByText("1× Counterspell → your wishlist")).toBeInTheDocument();
+    const discord = canvas.getByRole("checkbox", { name: "Discord — add to your collection" });
+    await expect(discord).toBeChecked();
+    await expect(discord).toHaveAttribute("aria-disabled", "true");
+    await expect(discord).toHaveAccessibleDescription(DISCORD_FIXED);
+
+    await userEvent.click(canvas.getByRole("button", { name: /^Apply: 2× Lightning Bolt/ }));
+    await waitFor(async () => {
+      await expect(canvas.queryByText(/Lightning Bolt \(2X2/)).not.toBeInTheDocument();
+    });
+    await userEvent.click(canvas.getByRole("button", { name: /^Decline: 1× Counterspell/ }));
+    await expect(await canvas.findByText(NOTHING_WAITING)).toBeInTheDocument();
   },
 };

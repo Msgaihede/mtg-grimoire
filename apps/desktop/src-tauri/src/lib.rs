@@ -139,7 +139,7 @@ pub mod index;
 /// **`grimoire-core`'s bulk-file ingest**, and the one test of it that builds its database with
 /// [`split`].
 pub mod ingest;
-/// **The integrations store** (issue #1396) — `grimoire-core`'s module, re-exported, and the four
+/// **The integrations store** (issue #1396) — `grimoire-core`'s module, re-exported, and the eight
 /// `#[tauri::command]` wrappers behind Settings → Integrations. The publish round the module also
 /// holds is spawned by `desktop::start`, beside live sync.
 pub mod integration;

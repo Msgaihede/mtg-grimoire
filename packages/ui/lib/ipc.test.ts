@@ -86,6 +86,9 @@ import integrationSettingsRs from "../../../crates/grimoire-core/src/integration
 // The local MCP server (issues #1395 and #1396, PR 1): the desktop's own module — a socket on the
 // reader's computer, not the engine's, so it is in `src-tauri` alone.
 import mcpRs from "../../../apps/desktop/src-tauri/src/mcp/mod.rs?raw";
+// PR 3's review list (plan `2026-10-29-integrations-intents.md` §3.5): the parked intents and the
+// device's policy, beside the four commands that answer them.
+import integrationReviewRs from "../../../crates/grimoire-core/src/integration/review.rs?raw";
 import panelwidthRsCore from "../../../crates/grimoire-core/src/panelwidth.rs?raw";
 import panelwidthRsDesktop from "../../../apps/desktop/src-tauri/src/panelwidth/mod.rs?raw";
 import shelffoldsRsCore from "../../../crates/grimoire-core/src/shelffolds.rs?raw";
@@ -5806,6 +5809,45 @@ describe("the local MCP server's wrappers name the commands mcp/mod.rs declares"
 });
 
 /**
+ * The review list's four commands (issue #1396, plan `2026-10-29-integrations-intents.md` §3.5).
+ *
+ * Arguments by their Rust names, for the switch's reason above: `invoke` drops a misspelt key,
+ * and `integrations_set_automatic` with its `on` dropped would be refused as a missing argument at
+ * best. `source` and `kind` are sent **different**, so two passed through each other's names show.
+ */
+describe("the review wrappers name the commands plan §3.5 declares", () => {
+  const review = {
+    intents: [],
+    automatic: [{ source: "mcp", kind: "wishlist.add", on: false, fixed: false }],
+  };
+
+  it("integrationsReview takes no arguments", async () => {
+    invoke.mockResolvedValue(review);
+    expect(await ipc.integrationsReview()).toEqual(review);
+    expect(invoke).toHaveBeenCalledWith("integrations_review");
+  });
+
+  it.each([
+    ["integrationsReviewApply", "integrations_review_apply"],
+    ["integrationsReviewDecline", "integrations_review_decline"],
+  ] as const)("%s sends the intent under `id`", async (method, command) => {
+    invoke.mockResolvedValue(review);
+    expect(await ipc[method]("AAAAAAAAAAAAAAAAAAAAAA")).toEqual(review);
+    expect(invoke).toHaveBeenCalledWith(command, { id: "AAAAAAAAAAAAAAAAAAAAAA" });
+  });
+
+  it("integrationsSetAutomatic sends `source`, `kind` and `on`", async () => {
+    invoke.mockResolvedValue(review);
+    await ipc.integrationsSetAutomatic("mcp", "wishlist.add", true);
+    expect(invoke).toHaveBeenCalledWith("integrations_set_automatic", {
+      source: "mcp",
+      kind: "wishlist.add",
+      on: true,
+    });
+  });
+});
+
+/**
  * Pairing's commands — spec §7.5 and §7.6.
  *
  * **The number is deliberately not written down.** This line said *eight* while `desktop.rs`
@@ -6588,6 +6630,13 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // `undefined` into every client snippet the panel offers — copied, pasted into an agent's
     // config, and refused there with nothing in this app to say why.
     ["McpStatus", mcpRs, "McpStatus"],
+    // **The review list's three** (plan `2026-10-29-integrations-intents.md` §3.5). A renamed
+    // `intents` reads `undefined` and the list draws *nothing waiting* over intents the store
+    // holds; a renamed `fixed` is falsy, and Discord's rows draw as switches the reader can turn
+    // off, whose press the engine then refuses; a renamed `createdAt` is `NaN` in every row's age.
+    ["IntentReview", integrationReviewRs, "IntentReview"],
+    ["ParkedIntent", integrationReviewRs, "ParkedIntent"],
+    ["IntentAutomatic", integrationReviewRs, "IntentAutomatic"],
     // Added 2026-09-08 by a rename that this table would have caught and nothing else could.
     // `missing` became `copies` on both sides by hand when the wishlist stopped subtracting the
     // collection, and a rename reaching only one of them is the quiet kind: every folder card

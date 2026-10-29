@@ -867,6 +867,25 @@ commands! {
         disable(&lane).await
     };
 
+    // integration::review — the intents this device's policy parks (issue #1396, the PR 3 plan
+    // §3.5). The inbox is read with a relay token, so each takes the lane as a press.
+    task integrations_review in integration::review() = |state| async move {
+        let lane = state.lane_for_press().await?;
+        review(&lane).await
+    };
+    task integrations_review_apply in integration::review(id: String) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        apply(&lane, &id).await
+    };
+    task integrations_review_decline in integration::review(id: String) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        decline(&lane, &id).await
+    };
+    task integrations_set_automatic in integration::review(source: String, kind: String, on: bool) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        set_automatic(&lane, &source, &kind, on).await
+    };
+
     // listview
     read list_view in listview() = |conn| Ok(stored(conn));
     write set_list_view in listview(section: String, view: String) = |conn| {
@@ -2507,6 +2526,14 @@ mod tests {
             // The integrations switch: this table's device has an address for the store (the
             // override below) and no membership, so each stops at the one read that asks.
             "integrations_status" | "integrations_disable" => Value::Null,
+            // The review list: no membership, so each answers the switches and asks nobody.
+            "integrations_review" => Value::Null,
+            "integrations_review_apply" | "integrations_review_decline" => {
+                json!({ "id": "i".repeat(22) })
+            }
+            "integrations_set_automatic" => {
+                json!({ "source": "mcp", "kind": "collection.add", "on": true })
+            }
             "integrations_enable" | "integrations_set_fields" => json!({
                 "fields": {
                     "condition": false, "lang": false, "value": false, "tags": false, "notes": false,

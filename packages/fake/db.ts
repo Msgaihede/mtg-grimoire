@@ -218,6 +218,9 @@ import type {
   IntegrationFields,
   IntegrationsStatus,
   McpStatus,
+  IntentAutomatic,
+  IntentReview,
+  ParkedIntent,
   ImportCommitOutcome,
   ImportFile,
   ImportItem,
@@ -2775,6 +2778,19 @@ export interface FakeIntegrations {
   /** `settings::PUBLISH_DUE` — a publish asked for by a switch-on or a change of columns and not
    *  yet run. Cleared by the round that answers it, and withdrawn by a switch-off. */
   pending: boolean;
+  /**
+   * The intents this device parks for review (plan `2026-10-29-integrations-intents.md` §3.5) —
+   * **the store's pending intents that this device's policy does not apply**, oldest first.
+   *
+   * The fake has no integration to write one, so **every store it holds is one an integration has
+   * already proposed two changes into** ({@link fakeParked}): made by the switch, or stood up by
+   * the `integrationsError` world. Without them the review list would have nothing a press could
+   * act on in any world. A switch-off takes them with the store.
+   */
+  parked: ParkedIntent[];
+  /** The device's policy for MCP's two kinds — `integrations_automatic`, an `app_meta` row the
+   *  crate keeps per device and never syncs. Discord's two are fixed on and not stored. */
+  mcpAutomatic: { "collection.add": boolean; "wishlist.add": boolean };
 }
 
 /**
@@ -3950,6 +3966,8 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
       publishedAt: null,
       error: null,
       pending: false,
+      parked: [],
+      mcpAutomatic: { "collection.add": false, "wishlist.add": false },
     },
     // **Off, on its default port, with the token a fresh install generates** — the server is
     // switched on by a press in Settings and by nothing a seed could stand for.
@@ -27894,7 +27912,84 @@ export function applyIntegrationsFault(db: FakeDb): void {
     publishedAt: at - 3_600,
     error: INTEGRATIONS_ROUND_FAILED,
     pending: false,
+    parked: fakeParked(),
+    mcpAutomatic: { ...db.integrations.mcpAutomatic },
   };
+}
+
+/**
+ * The two proposals every store the fake holds has waiting — see
+ * {@link FakeIntegrations.parked}. **Both MCP's**, because a Discord add is applied without
+ * asking (plan §2: the reader pressed Confirm in Discord) and is never parked: a collection add
+ * of a printing into a named folder, and an any-printing wish at the wishlist's root, so the
+ * list draws both shapes of line. Stamped against the clock the panel reads, minutes ago.
+ */
+export function fakeParked(): ParkedIntent[] {
+  const now = Date.now();
+  return [
+    {
+      id: "fakeIntentCollection01",
+      source: "mcp",
+      kind: "collection.add",
+      name: "Lightning Bolt",
+      set: "2x2",
+      cn: "117",
+      finish: "foil",
+      quantity: 2,
+      folder: "Trade binder",
+      createdAt: now - 12 * 60_000,
+      confirmedBy: null,
+    },
+    {
+      id: "fakeIntentWishlist0001",
+      source: "mcp",
+      kind: "wishlist.add",
+      name: "Counterspell",
+      set: null,
+      cn: null,
+      finish: null,
+      quantity: 1,
+      folder: null,
+      createdAt: now - 4 * 60_000,
+      confirmedBy: null,
+    },
+  ];
+}
+
+/** What `integrations_set_automatic` says of a Discord row: the reader confirmed each in Discord,
+ *  so it is not theirs to park — `integration::intents::FIXED`, verbatim. */
+export const INTEGRATIONS_AUTOMATIC_FIXED = "Adds you confirm in Discord are always applied.";
+
+/** What the review answers for an intent the store no longer holds pending — applied or declined
+ *  by another device first, or by a press this one made — `integration::review::GONE`, verbatim. */
+export const INTEGRATIONS_INTENT_GONE =
+  "That change is no longer waiting. Another of your devices may have applied it.";
+
+/** The review list as the crate answers it: the parked intents, and the four policy rows —
+ *  Discord's two fixed on, MCP's two the device's. */
+function intentReview(db: FakeDb): IntentReview {
+  const held = db.integrations;
+  const askable = db.fault !== "integrationsNotDeployed" && isEntitled(db) && held.enabled;
+  const automatic: IntentAutomatic[] = [
+    { source: "discord", kind: "collection.add", on: true, fixed: true },
+    { source: "discord", kind: "wishlist.add", on: true, fixed: true },
+    {
+      source: "mcp",
+      kind: "collection.add",
+      on: held.mcpAutomatic["collection.add"],
+      fixed: false,
+    },
+    { source: "mcp", kind: "wishlist.add", on: held.mcpAutomatic["wishlist.add"], fixed: false },
+  ];
+  return { intents: askable ? held.parked.map((intent) => ({ ...intent })) : [], automatic };
+}
+
+/** The one parked intent a press names, taken off the list — or the refusal that it is gone. */
+function takeParked(db: FakeDb, id: string): ParkedIntent {
+  const at = db.integrations.parked.findIndex((intent) => intent.id === id);
+  if (at < 0) throw refuse(INTEGRATIONS_INTENT_GONE);
+  const [taken] = db.integrations.parked.splice(at, 1);
+  return taken;
 }
 
 /**
@@ -27938,6 +28033,8 @@ export function integrationHandlers(db: FakeDb) {
         checkedAt: integrationsNow(),
         error: null,
         pending: true,
+        // A store made by this press already holds the fake's two proposals — see `parked`.
+        parked: db.integrations.enabled ? db.integrations.parked : fakeParked(),
       };
       return integrationsStatus(db);
     },
@@ -27967,8 +28064,61 @@ export function integrationHandlers(db: FakeDb) {
         publishedAt: null,
         error: null,
         pending: false,
+        // The store's intents go with it; the policy is the device's and stays.
+        parked: [],
+        mcpAutomatic: { ...db.integrations.mcpAutomatic },
       };
       return integrationsStatus(db);
+    },
+    /**
+     * The review list (plan `2026-10-29-integrations-intents.md` §3.5): the parked intents and
+     * the policy. **An empty list and no request** where the store cannot be asked — no address,
+     * no membership, or off — as the crate answers; never `busy`, as the status never is.
+     */
+    integrations_review: (): IntentReview => intentReview(db),
+    /**
+     * Apply one parked intent: taken off the list. **The fake writes no card** — its collection
+     * and wishlist are the seeds', and the toast the panel raises is the page's own; what this
+     * holds is that the intent leaves the list and the answer is the list re-read.
+     */
+    integrations_review_apply: (args: { id: string }): IntentReview => {
+      refuseIfBusy(db);
+      refuseIfNoStore(db);
+      takeParked(db, args.id);
+      return intentReview(db);
+    },
+    /** Decline one parked intent: off the list, nothing written. */
+    integrations_review_decline: (args: { id: string }): IntentReview => {
+      refuseIfBusy(db);
+      refuseIfNoStore(db);
+      takeParked(db, args.id);
+      return intentReview(db);
+    },
+    /**
+     * The device's policy for one `(source, kind)`. Discord's rows refuse. **Switching an MCP
+     * kind on applies what was parked of it** — the crate asks for a round, which applies them
+     * within one poll; the fake has no loop, so they are gone by the answer.
+     */
+    integrations_set_automatic: (args: {
+      source: string;
+      kind: string;
+      on: boolean;
+    }): IntentReview => {
+      refuseIfBusy(db);
+      if (args.source === "discord") throw refuse(INTEGRATIONS_AUTOMATIC_FIXED);
+      if (
+        args.source !== "mcp" ||
+        (args.kind !== "collection.add" && args.kind !== "wishlist.add")
+      ) {
+        throw refuse(`\`${args.source}\` \`${args.kind}\` is not a change this device knows.`);
+      }
+      db.integrations.mcpAutomatic = { ...db.integrations.mcpAutomatic, [args.kind]: args.on };
+      if (args.on) {
+        db.integrations.parked = db.integrations.parked.filter(
+          (intent) => intent.source !== args.source || intent.kind !== args.kind,
+        );
+      }
+      return intentReview(db);
     },
   };
 }

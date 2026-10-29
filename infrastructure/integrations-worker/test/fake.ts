@@ -324,3 +324,112 @@ export function documentOf(
   const currency = marketplace === "cardmarket" ? "EUR" : "USD";
   return { v: 1, table, fields, marketplace, currency, rows };
 }
+
+/** Every scope — what most consumer cases mint. */
+export const ALL_SCOPES = [
+  "collection:read",
+  "wishlist:read",
+  "decks:read",
+  "collection:add",
+  "wishlist:add",
+];
+
+/** `POST /g/{group}/consumers/{integration}` from a device: the token, or the answer that refused it. */
+export async function mintConsumer(
+  fetch: (r: Request) => Promise<Response>,
+  integration = "discord",
+  scopes: string[] = ALL_SCOPES,
+  { days = 30, group = "g1" }: { days?: number; group?: string } = {},
+): Promise<Response> {
+  return fetch(
+    request("POST", `/g/${group}/consumers/${integration}`, {
+      bearer: await token(group),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scopes, days }),
+    }),
+  );
+}
+
+/** {@link mintConsumer}'s token, for a case that only needs one that works. */
+export async function consumerToken(
+  fetch: (r: Request) => Promise<Response>,
+  integration = "discord",
+  scopes: string[] = ALL_SCOPES,
+  options: { days?: number; group?: string } = {},
+): Promise<string> {
+  const res = await mintConsumer(fetch, integration, scopes, options);
+  if (res.status !== 200) throw new Error(`minting answered ${res.status}: ${await res.text()}`);
+  return ((await res.json()) as { token: string }).token;
+}
+
+/** A consumer route, with the token as its bearer and `body` as JSON. */
+export function consumerRequest(
+  method: string,
+  path: string,
+  bearer: string | null,
+  body?: unknown,
+): Request {
+  return request(method, path, {
+    bearer,
+    headers: body === undefined ? {} : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+/** A collection add as plan §3.1 spells one, with its hints. */
+export function collectionAdd(overrides: Record<string, unknown> = {}) {
+  return {
+    kind: "collection.add",
+    payload: {
+      scryfallId: "0000579f-7b35-4ed3-b44c-db2a538066fe",
+      finish: "nonfoil",
+      quantity: 2,
+      folderUid: "fold-binder",
+      name: "Lightning Bolt",
+      set: "2x2",
+      cn: "117",
+      ...overrides,
+    },
+    confirmedBy: "discord:123",
+  };
+}
+
+/** A wishlist add — an any-printing wish at the root. */
+export function wishlistAdd(overrides: Record<string, unknown> = {}) {
+  return {
+    kind: "wishlist.add",
+    payload: {
+      scryfallId: null,
+      oracleId: "4457ed35-7c10-48c8-9776-456485fdf070",
+      finish: null,
+      quantity: 1,
+      folderUid: null,
+      name: "Counterspell",
+      ...overrides,
+    },
+    confirmedBy: null,
+  };
+}
+
+/** `POST /c/intents`. */
+export function postIntent(
+  fetch: (r: Request) => Promise<Response>,
+  bearer: string,
+  body: unknown,
+): Promise<Response> {
+  return fetch(consumerRequest("POST", "/c/intents", bearer, body));
+}
+
+/** A device's request on an inbox route, with the relay token and `body` as JSON. */
+export async function deviceRequest(
+  method: string,
+  path: string,
+  body?: unknown,
+  group = "g1",
+): Promise<Request> {
+  return request(method, path, {
+    bearer: await token(group),
+    headers: body === undefined ? {} : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}

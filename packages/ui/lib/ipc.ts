@@ -51,6 +51,7 @@
  * `ShareFields`                                   — `apps/desktop/src-tauri/src/share/commands.rs`
  * `IntegrationFields`                             — `crates/grimoire-core/src/integration/projection.rs`
  * `IntegrationsStatus`                            — `crates/grimoire-core/src/integration/settings.rs`
+ * `IntentReview`/`ParkedIntent`/`IntentAutomatic` — `crates/grimoire-core/src/integration/review.rs`
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
  * `ScannerCaptured`/`ScannerPrefs`/
  * `ScannerTrayRow`/`ScannerTrayChoice`             — `crates/grimoire-core/src/scanner.rs`

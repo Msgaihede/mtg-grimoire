@@ -2,9 +2,9 @@
 //!
 //! The module itself is `grimoire-core`'s and is re-exported here whole — the projection, the
 //! store's client, the switch's cache and commands, and the publish round — so a path through this
-//! one reaches that crate's item, except for what is defined below: the four `#[tauri::command]`
-//! wrappers behind Settings → Integrations, each its table entry's twin in name and arguments
-//! (`command_table` holds them to it).
+//! one reaches that crate's item, except for what is defined below: the eight `#[tauri::command]`
+//! wrappers behind Settings → Integrations — the switch's four and the review list's four — each
+//! its table entry's twin in name and arguments (`command_table` holds them to it).
 //!
 //! **No logic of their own.** Each runs the core's command on a worker with a runtime of its own
 //! (`sync::on_a_worker`, the sync commands' shape): the three writes through the sync lane as a
@@ -16,6 +16,7 @@ pub use grimoire_core::integration::*;
 
 use crate::sync::{self, AppState};
 use grimoire_core::integration::projection::IntegrationFields;
+use grimoire_core::integration::review::IntentReview;
 use grimoire_core::integration::settings::IntegrationsStatus;
 use std::sync::Arc;
 
@@ -74,6 +75,67 @@ pub async fn integrations_disable(
     sync::on_a_worker(move || async move {
         let lane = core.lane_for_press().await?;
         settings::disable(&lane).await
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// The intents this device's policy parks, and the per-kind switches.
+#[tauri::command]
+pub async fn integrations_review(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<IntentReview, String> {
+    let core = state.core.clone();
+    sync::on_a_worker(move || async move {
+        let lane = core.lane_for_press().await?;
+        review::review(&lane).await
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// Apply one parked intent, whatever the policy says.
+#[tauri::command]
+pub async fn integrations_review_apply(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<IntentReview, String> {
+    let core = state.core.clone();
+    sync::on_a_worker(move || async move {
+        let lane = core.lane_for_press().await?;
+        review::apply(&lane, &id).await
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// Decline one parked intent.
+#[tauri::command]
+pub async fn integrations_review_decline(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: String,
+) -> Result<IntentReview, String> {
+    let core = state.core.clone();
+    sync::on_a_worker(move || async move {
+        let lane = core.lane_for_press().await?;
+        review::decline(&lane, &id).await
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// Switch one `(source, kind)` automatic on this device, or off.
+#[tauri::command]
+pub async fn integrations_set_automatic(
+    state: tauri::State<'_, Arc<AppState>>,
+    source: String,
+    kind: String,
+    on: bool,
+) -> Result<IntentReview, String> {
+    let core = state.core.clone();
+    sync::on_a_worker(move || async move {
+        let lane = core.lane_for_press().await?;
+        review::set_automatic(&lane, &source, &kind, on).await
     })
     .await
     .map_err(unfinished)?

@@ -326,3 +326,11 @@ export const INTEGRATIONS_KEY: QueryKey = ["integrations", "status"];
  * (`crossWindow.ts`' `FOLLOW_LIVE_APP_META`) without a refresh there ever reaching the network.
  */
 export const MCP_KEY: QueryKey = ["mcp", "status"];
+
+/**
+ * The intents this device parks for review, and its policy — `ipc.integrationsReview` (issue
+ * #1396, plan `2026-10-29-integrations-intents.md` §3.5). Beside {@link INTEGRATIONS_KEY} under
+ * the same root; every review command answers a fresh list, written back here as the switch's
+ * answers are.
+ */
+export const INTEGRATIONS_REVIEW_KEY: QueryKey = ["integrations", "review"];

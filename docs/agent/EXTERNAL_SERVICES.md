@@ -374,7 +374,11 @@ Workers now, set by the owner with one value), and its own secret is `INTEGRATIO
 wraps each group's data key. Payloads are sealed; only the columns a lookup needs are clear.
 **Off unless the reader switches it on** in Settings → Integrations (desktop), and the switch is
 the group's: it creates or deletes the group's object, and every device learns which from the
-store. No integration reads it yet — intents are PR 3, Discord PR 4.
+store. **Integrations reach it with tokens the store mints and never a relay token** (PR 3,
+2026-10-29): a consumer token reads the projection through `/c/…` and writes **intents** — typed
+adds a device of the group checks against its own allow-list, applies as an ordinary local write
+and acks. The token key is drawn from the group's data key, so switching the store off revokes
+every token. No integration is wired to it yet — Discord is PR 4, remote MCP PR 5.
 
 **`integration::store::INTEGRATIONS_BASE` is the placeholder `<set on first deploy>`**, the share
 Worker's own history: the owner picks the Custom Domain (provisional

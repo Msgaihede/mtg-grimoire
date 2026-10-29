@@ -1,5 +1,7 @@
 //! **The integrations Worker's client** (`infrastructure/integrations-worker/`, plan §3.2): the
-//! four requests a device makes of its group's store, and the refusals they answer.
+//! requests a device makes of its group's store, and the refusals they answer — the projection's
+//! four (PR 2), and the inbox's and the consumer tokens' (PR 3, plan
+//! `2026-10-29-integrations-intents.md` §3.2).
 //!
 //! | Request | Answers |
 //! | --- | --- |
@@ -7,6 +9,10 @@
 //! | [`put_settings`] — `PUT /g/{group}/settings` | the settings as stored, and whether that made the store; `None` for no store when asked not to make one |
 //! | [`put_table`] — `PUT /g/{group}/projection/{table}` | a [`Put`]: stored, stale, other settings, no store, or refused |
 //! | [`delete_group`] — `DELETE /g/{group}` | nothing; a 404 is as good as a 204 |
+//! | [`pending_intents`] — `GET /g/{group}/intents` | the pending intents, or `None` for no store |
+//! | [`claim_intent`] — `POST …/intents/{id}/claim` | a [`Claim`]: held with a lease, taken, acked, gone |
+//! | [`ack_intent`] — `POST …/intents/{id}/ack` | an [`Acked`]: done, taken, settled, gone |
+//! | [`mint_consumer`], [`consumers`], [`revoke_consumer`] — `…/consumers/{integration}` | a token, the live list, nothing |
 //!
 //! **`share::publish`'s conventions, for its reasons**: [`http`] and never a fresh client, the URL
 //! from a `format!` over [`base`], the body written by hand with an explicit `content-type`, the
@@ -35,7 +41,7 @@ use crate::state::Store;
 use crate::sync_engine::{client, commands, entitlement};
 use crate::sync_pair::identity;
 use rusqlite::Connection;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -152,6 +158,17 @@ impl Door {
 
     fn bearer(&self) -> String {
         format!("Bearer {}", self.token)
+    }
+
+    /// A door to `base` with `token` for `group`, minted by nobody — for a suite in another module
+    /// of this one, which cannot build the struct.
+    #[cfg(test)]
+    pub(crate) fn for_tests(base: &str, token: &str, group: &str) -> Door {
+        Door {
+            base: base.to_owned(),
+            token: token.to_owned(),
+            group: group.to_owned(),
+        }
     }
 }
 
@@ -609,6 +626,308 @@ pub async fn delete_group(db: &impl Store, door: &Door) -> Result<(), String> {
     Err(refused(db, OPERATION, &url, status, &body, "a switch-off"))
 }
 
+// ---------------------------------------------------------------------------------------
+// The inbox (PR 3, plan `2026-10-29-integrations-intents.md` §3.2)
+// ---------------------------------------------------------------------------------------
+
+/// The inbox's refusal codes this side acts on — the Worker's `intents.ts` constants, the same
+/// words in a second language (`the_inbox_codes_and_caps_are_the_workers_own` reads them there).
+/// An intent that is gone — acked and purged, or never this group's — is a state, not a failure.
+const NO_INTENT: &str = "no_intent";
+const CLAIMED: &str = "claimed";
+const ALREADY_ACKED: &str = "already_acked";
+
+/// **How long a claim holds an intent for its device** — the Worker's `LEASE_MS`, read here only
+/// by the test that holds the two to one number. A device applies within milliseconds of the
+/// claim; the lease is what keeps a second device from applying the same add while it does.
+pub const LEASE_MS: i64 = 10 * 60 * 1000;
+
+/// One page of the inbox, as the Worker writes it: its pending intents oldest first, and whether
+/// more wait behind them. **Each intent is kept as JSON** and read by [`super::intents`] one at a
+/// time, so one the device cannot read is that intent's refusal and never the whole page's.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Inbox {
+    #[serde(default)]
+    pub intents: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub more: bool,
+}
+
+/// What a claim came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Claim {
+    /// This device holds the intent until the lease runs out, and acks with `lease`.
+    Held { lease: String },
+    /// Another device holds a live lease on it: it is applying it now.
+    Taken,
+    /// Already acked — by another device, or by this one in a round whose ack came back late.
+    Acked,
+    /// Not in the inbox: purged, or the store itself is gone.
+    Gone,
+}
+
+/// An ack, as sent — `POST …/intents/{id}/ack`'s body (plan §3.2). **Kept as written** in the
+/// owed-ack row an apply writes in its own savepoint ([`super::intents`]), so an ack a crash
+/// interrupted is sent the same on the next round.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Ack {
+    /// `applied` or `refused`.
+    pub state: String,
+    /// The refusal's sentence, shown by the integration. `None` on an apply.
+    pub reason: Option<String>,
+    /// The claim's lease: required on an apply, and sent on a refusal when this device held one.
+    pub lease: Option<String>,
+    /// This device's `sync_clock` after the apply's write — what the store keeps the add in its
+    /// overlay until a published table reaches (plan §2). `None` on a refusal.
+    pub hlc_ms: Option<i64>,
+    pub hlc_ctr: Option<i64>,
+}
+
+/// What an ack came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Acked {
+    /// The store holds the state this device sent — newly, or already.
+    Done,
+    /// Another device holds a live lease on the intent, and this device does not.
+    Taken,
+    /// The store already holds the other state: another device settled it first.
+    Settled,
+    /// Not in the inbox: purged, or the store itself is gone.
+    Gone,
+}
+
+/// The status and code of a refusal, read once.
+fn code_of(body: &str) -> Option<String> {
+    Refusal::of(body).code
+}
+
+/// `GET /g/{group}/intents` — the pending intents, oldest first, or `None` when the group has no
+/// store. **Pending only**: an acked intent is nothing a device has to do.
+pub async fn pending_intents(db: &impl Store, door: &Door) -> Result<Option<Inbox>, String> {
+    const OPERATION: &str = "integrations_intents";
+    let url = door.url("/intents");
+    let (status, body) = send(
+        db,
+        OPERATION,
+        &url,
+        http().get(&url).header("authorization", &door.bearer()),
+    )
+    .await?;
+    if (200..300).contains(&status) {
+        return parsed(db, OPERATION, &url, &body).map(Some);
+    }
+    if status == 404 && Refusal::of(&body).is(NO_STORE) {
+        return Ok(None);
+    }
+    // **Any other 404 is a Worker with no inbox** — one deployed before intents, whose router
+    // answers an unknown path `404 not_found`. Nothing waits there, and an app updated before its
+    // Worker is not a failure on every round.
+    if status == 404 {
+        return Ok(Some(Inbox::default()));
+    }
+    Err(refused(
+        db,
+        OPERATION,
+        &url,
+        status,
+        &body,
+        "a look at the inbox",
+    ))
+}
+
+/// `POST /g/{group}/intents/{id}/claim` — **hold an intent before applying it** (plan §2): two
+/// devices that both read one pending add and both applied it would add the card twice. Only the
+/// holder of a live lease may ack it applied.
+pub async fn claim_intent(db: &impl Store, door: &Door, id: &str) -> Result<Claim, String> {
+    const OPERATION: &str = "integrations_claim";
+    let url = door.url(&format!("/intents/{id}/claim"));
+    let (status, body) = send(
+        db,
+        OPERATION,
+        &url,
+        http().post(&url).header("authorization", &door.bearer()),
+    )
+    .await?;
+    if (200..300).contains(&status) {
+        #[derive(Deserialize)]
+        struct Held {
+            lease: String,
+        }
+        let held: Held = parsed(db, OPERATION, &url, &body)?;
+        return Ok(Claim::Held { lease: held.lease });
+    }
+    Ok(match (status, code_of(&body).as_deref()) {
+        (409, Some(CLAIMED)) => Claim::Taken,
+        (409, Some(ALREADY_ACKED)) => Claim::Acked,
+        (404, Some(NO_INTENT | NO_STORE)) => Claim::Gone,
+        _ => return Err(refused(db, OPERATION, &url, status, &body, "a claim")),
+    })
+}
+
+/// `POST /g/{group}/intents/{id}/ack` — the outcome, for the integration to show and every other
+/// device to see. An ack repeating the state the store holds is [`Acked::Done`]: a round that
+/// sends an owed ack the store already took is told it is done.
+pub async fn ack_intent(
+    db: &impl Store,
+    door: &Door,
+    id: &str,
+    ack: &Ack,
+) -> Result<Acked, String> {
+    const OPERATION: &str = "integrations_ack";
+    let url = door.url(&format!("/intents/{id}/ack"));
+    let json = serde_json::to_string(ack).map_err(|e| e.to_string())?;
+    let (status, body) = send(
+        db,
+        OPERATION,
+        &url,
+        http()
+            .post(&url)
+            .header("content-type", "application/json")
+            .header("authorization", &door.bearer())
+            .body(json),
+    )
+    .await?;
+    if (200..300).contains(&status) {
+        return Ok(Acked::Done);
+    }
+    Ok(match (status, code_of(&body).as_deref()) {
+        (409, Some(CLAIMED)) => Acked::Taken,
+        (409, Some(ALREADY_ACKED)) => Acked::Settled,
+        (404, Some(NO_INTENT | NO_STORE)) => Acked::Gone,
+        _ => return Err(refused(db, OPERATION, &url, status, &body, "an ack")),
+    })
+}
+
+// ---------------------------------------------------------------------------------------
+// Consumer tokens (plan §3.2) — no command or panel row calls these yet: PR 4 wires Discord's,
+// PR 5 remote MCP's.
+// ---------------------------------------------------------------------------------------
+
+/// A token the store minted for one integration: the bearer its `/c/…` requests carry.
+/// **`exp` is Unix seconds.** Shown once, to whatever hands it to the integration — the store
+/// keeps only its id, and minting again for the same integration revokes this one.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Consumer {
+    pub integration: String,
+    pub token: String,
+    pub scopes: Vec<String>,
+    pub exp: i64,
+}
+
+/// One integration's live token, as `GET …/consumers` lists it — never the token itself.
+/// `issued_at` is Unix milliseconds, `exp` Unix seconds, as the Worker writes them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumerInfo {
+    pub integration: String,
+    pub scopes: Vec<String>,
+    pub issued_at: i64,
+    pub exp: i64,
+}
+
+/// `POST /g/{group}/consumers/{integration}` — a token for `integration` (`discord` or `mcp`)
+/// under `scopes`, good for `days` (1–365), replacing any it held. `None` when the group has no
+/// store: a token is a key to the store, and there is nothing to open.
+pub async fn mint_consumer(
+    db: &impl Store,
+    door: &Door,
+    integration: &str,
+    scopes: &[&str],
+    days: i64,
+) -> Result<Option<Consumer>, String> {
+    const OPERATION: &str = "integrations_consumer";
+    let url = door.url(&format!("/consumers/{integration}"));
+    let body = serde_json::to_string(&serde_json::json!({ "scopes": scopes, "days": days }))
+        .map_err(|e| e.to_string())?;
+    let (status, text) = send(
+        db,
+        OPERATION,
+        &url,
+        http()
+            .post(&url)
+            .header("content-type", "application/json")
+            .header("authorization", &door.bearer())
+            .body(body),
+    )
+    .await?;
+    if (200..300).contains(&status) {
+        return parsed(db, OPERATION, &url, &text).map(Some);
+    }
+    if status == 404 && Refusal::of(&text).is(NO_STORE) {
+        return Ok(None);
+    }
+    Err(refused(
+        db,
+        OPERATION,
+        &url,
+        status,
+        &text,
+        "a new integration token",
+    ))
+}
+
+/// `GET /g/{group}/consumers` — the integrations holding a live token, or `None` with no store.
+pub async fn consumers(db: &impl Store, door: &Door) -> Result<Option<Vec<ConsumerInfo>>, String> {
+    const OPERATION: &str = "integrations_consumers";
+    #[derive(Deserialize)]
+    struct Listed {
+        #[serde(default)]
+        consumers: Vec<ConsumerInfo>,
+    }
+    let url = door.url("/consumers");
+    let (status, body) = send(
+        db,
+        OPERATION,
+        &url,
+        http().get(&url).header("authorization", &door.bearer()),
+    )
+    .await?;
+    if (200..300).contains(&status) {
+        return parsed::<Listed>(db, OPERATION, &url, &body).map(|l| Some(l.consumers));
+    }
+    if status == 404 && Refusal::of(&body).is(NO_STORE) {
+        return Ok(None);
+    }
+    Err(refused(
+        db,
+        OPERATION,
+        &url,
+        status,
+        &body,
+        "a list of integration tokens",
+    ))
+}
+
+/// `DELETE /g/{group}/consumers/{integration}` — that integration's token revoked. **A 404 is
+/// success**, [`delete_group`]'s rule: there is no token, which is what was asked.
+pub async fn revoke_consumer(
+    db: &impl Store,
+    door: &Door,
+    integration: &str,
+) -> Result<(), String> {
+    const OPERATION: &str = "integrations_revoke";
+    let url = door.url(&format!("/consumers/{integration}"));
+    let (status, body) = send(
+        db,
+        OPERATION,
+        &url,
+        http().delete(&url).header("authorization", &door.bearer()),
+    )
+    .await?;
+    if status == 404 || (200..300).contains(&status) {
+        return Ok(());
+    }
+    Err(refused(
+        db,
+        OPERATION,
+        &url,
+        status,
+        &body,
+        "a revoked integration token",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,6 +1119,51 @@ mod tests {
         };
         assert_eq!(MAX_GZIP_BYTES, read("MAX_GZIP_BYTES"));
         assert_eq!(MAX_INFLATED_BYTES, read("MAX_INFLATED_BYTES"));
+    }
+
+    /// ⚠️ **The inbox's code words, its caps and its lease are the Worker's own**, read from
+    /// `intents.ts` — a code spelled differently here is a claim taken read as a failure, and the
+    /// device's bounds are the Worker's so neither refuses what the other took.
+    #[test]
+    fn the_inbox_codes_and_caps_are_the_workers_own() {
+        let source = include_str!("../../../../infrastructure/integrations-worker/src/intents.ts");
+        for (name, value) in [
+            ("NO_INTENT", NO_INTENT),
+            ("CLAIMED", CLAIMED),
+            ("ALREADY_ACKED", ALREADY_ACKED),
+        ] {
+            assert!(
+                source.contains(&format!("export const {name} = \"{value}\";")),
+                "{name}"
+            );
+        }
+        let number = |name: &str| -> i64 {
+            let marker = format!("export const {name} =");
+            let at = source
+                .find(&marker)
+                .unwrap_or_else(|| panic!("intents.ts has no {name}"));
+            let rest = &source[at + marker.len()..];
+            let expression = &rest[..rest.find(';').expect("no `;`")];
+            expression
+                .split('*')
+                .map(|f| f.trim().replace('_', "").parse::<i64>().expect(expression))
+                .product()
+        };
+        assert_eq!(LEASE_MS, number("LEASE_MS"));
+        assert_eq!(super::super::intents::MAX_QUANTITY, 99);
+        assert_eq!(
+            super::super::intents::MAX_ID_CHARS as i64,
+            number("MAX_ID_CHARS")
+        );
+        assert_eq!(
+            super::super::intents::MAX_HINT_CHARS as i64,
+            number("MAX_HINT_CHARS")
+        );
+        // The kinds and sources, word for word.
+        for kind in super::super::intents::KINDS {
+            assert!(source.contains(&format!("\"{kind}\"")), "{kind}");
+        }
+        assert!(source.contains(r#"export const SOURCES = ["discord", "mcp", "trade"] as const;"#));
     }
 
     /// The watermark is the clock's row, and a database without one is the floor.
