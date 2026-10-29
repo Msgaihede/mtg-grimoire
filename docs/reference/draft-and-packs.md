@@ -58,7 +58,7 @@ weights, `printing_prices` answers the prices at the reader's marketplace, and t
 - **expected value** — per sheet the weighted mean price, × the slot's count, summed per variant and
   weighted by the variant; a colour-balanced slot counts its one card of each colour from that
   colour's cards, as it is opened. Found on the story's own figures (2026-10-29): without it the
-  theory read $676 against a simulated $1,076, the fake's only red common being a $620 Lightning
+  theory read $676 against a simulated $1,076 on the fake corpus, whose red commons include a $620 Lightning
   Bolt;
 - **standard deviation** — per variant `Σ count · Var(sheet)` plus the variance of the variant means
   (draws with replacement: an approximation the simulation corrects);
