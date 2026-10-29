@@ -8,17 +8,17 @@ Desktop only — the light app draws no such page, and every command it calls is
 Design: [the spec](../../../../docs/superpowers/specs/2026-10-29-draft-and-packs-design.md).
 Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-packs.md).
 
-| Folder / file | Holds |
-| --- | --- |
-| `booster/` | Pure booster logic: `open.ts` (collation, `draftProduct`), `value.ts` (expected value, variance, simulation, percentile), `rng.ts` (seeded `mulberry32`), `prices.ts` (`useBoosterPrices`) |
-| `sets.ts`, `SetGrid.tsx` | The sets a booster can come from, one set's `BoosterSet` (`useBoosterSet`), the set wall |
-| `packs/` | Open Packs: the product picker, the opened wall, the figures and the histogram |
-| `DraftPage.tsx` | The hub (*Draft in progress*, *Start new*) and the page-local state machine |
-| `setup/` | Quick, Sealed and Cube setup; `deal.ts` deals boosters to seats |
-| `pick/` | The pick screen, the pool by mana value, the table strip |
-| `build/` | The hand-over from a finished draft to a draft deck |
-| `lobby/` | Pod drafts: create (a supporter's), join by code, the host's and the guest's rooms |
-| `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode: `DraftDeckBar`, the unsaved list, opening a draft deck |
+| Folder / file                                | Holds                                                                                                                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `booster/`                                   | Pure booster logic: `open.ts` (collation, `draftProduct`), `value.ts` (expected value, variance, simulation, percentile), `rng.ts` (seeded `mulberry32`), `prices.ts` (`useBoosterPrices`) |
+| `sets.ts`, `SetGrid.tsx`                     | The sets a booster can come from, one set's `BoosterSet` (`useBoosterSet`), the set wall                                                                                                   |
+| `packs/`                                     | Open Packs: the product picker, the opened wall, the figures and the histogram                                                                                                             |
+| `DraftPage.tsx`                              | The hub (_Draft in progress_, _Start new_) and the page-local state machine                                                                                                                |
+| `setup/`                                     | Quick, Sealed and Cube setup; `deal.ts` deals boosters to seats                                                                                                                            |
+| `pick/`                                      | The pick screen, the pool by mana value, the table strip                                                                                                                                   |
+| `build/`                                     | The hand-over from a finished draft to a draft deck                                                                                                                                        |
+| `lobby/`                                     | Pod drafts: create (a supporter's), join by code, the host's and the guest's rooms                                                                                                         |
+| `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode: `DraftDeckBar`, the unsaved list, opening a draft deck                                                                                                       |
 
 ## Binding rules
 
