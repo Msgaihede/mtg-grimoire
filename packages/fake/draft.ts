@@ -9,14 +9,16 @@
  * data is MTGJSON's set file; neither is reproduced here. What *is* kept is every shape the page
  * reads — a `BoosterSet` with a `play` and a `collector` product and sealed products that hold
  * boosters (one directly, one through another), a `DraftView` that passes packs left and right
- * and ends in `deckbuilding`, and a draft deck that is a **virtual** `limited` deck with a `Deck`
- * pile and a `Pool` pile on the unsaved list.
+ * and ends in `deckbuilding` (two cards a pick in a Commander draft), a Winston draft's shared
+ * stack and three piles against a bot that always takes the first pile, and a draft deck that is
+ * a **virtual** `limited` deck with a `Deck` pile and a `Pool` pile on the unsaved list (a Casual
+ * one with a `Commander` pile too, for a Commander draft).
  *
  * **State per world, in a `WeakMap` keyed by the `FakeDb`**, the bulk-undo tickets' arrangement:
  * a story's `installWorld` makes a fresh `FakeDb`, so a draft never outlives its story and no
  * field is added to the world's own table.
  *
- * **Lobbies refuse** (`LOBBIES_OFF`) — the fake has no relay and no second app to meet in one —
+ * **Lobbies refuse** (`LOBBIES_OFF`), `lobby_winston` with them, — the fake has no relay and no second app to meet in one —
  * except the two reads a page makes on arrival, which answer *no lobby*.
  */
 import type {
@@ -34,6 +36,7 @@ import type {
   EntryChange,
   LobbyState,
   SealedProduct,
+  WinstonView,
 } from "@grimoire/ui/lib/ipc";
 import type { FakeCard } from "./cards";
 import type { FakeDb } from "./db";
@@ -48,6 +51,16 @@ export const NOT_IN_PACK = "That card is not in your pack.";
 export const DRAFT_OVER = "The draft is over — build your deck from the pool.";
 /** `draft_resume` with nothing left off. */
 export const NOTHING_SAVED = "There is no draft to resume.";
+/** A pick of the wrong number of cards — a Commander draft takes two. */
+export const WRONG_COUNT = (n: number) => `Pick ${n === 1 ? "one card" : `${n} cards`}.`;
+/** `draft_winston` in a draft that is not a Winston draft. */
+export const NOT_WINSTON = "This draft has no Winston table.";
+/** `draft_pick` in a Winston draft. */
+export const WINSTON_NO_PICK = "A Winston draft takes or declines a pile.";
+/** `draft_winston` out of turn, or on a pile the turn is not looking at. */
+export const NOT_YOUR_PILE = "That pile is not the one in front of you.";
+/** Declining the last pile with the stack empty — nothing is left to take blind. */
+export const STACK_EMPTY = "The stack is empty — take this pile.";
 
 /** Milliseconds: when every fake booster file was "fetched", and every draft last moved. Fixed,
  *  so a story's *Draft in progress* line reads the same on every run. */
@@ -81,7 +94,20 @@ interface DraftState {
   packs: DraftCard[][];
   pools: DraftCard[][];
   done: boolean;
+  /** A Winston draft's table; `null` for every other. */
+  winston: WinstonState | null;
 }
+
+/** The shared stack, its three piles, whose turn and which pile it is looking at. */
+interface WinstonState {
+  main: DraftCard[];
+  piles: DraftCard[][];
+  turn: number;
+  active: number;
+}
+
+/** A Winston table's piles (draft-core's `SharedStackPiles { pile_count: 3 }`). */
+const WINSTON_PILES = 3;
 
 interface DraftWorld {
   draft: DraftState | null;
@@ -306,20 +332,55 @@ function viewOf(state: DraftState): DraftView {
     })),
     packSets: setup.packSets,
     minDeckSize: setup.minDeckSize,
+    podFormat: setup.podFormat ?? "booster",
+    picksPerStep: picksPerStep(setup),
+    commanders: isCommander(setup) ? 1 : 0,
+    stack: state.winston === null ? null : winstonView(state, state.winston),
+  };
+}
+
+function isCommander(setup: DraftSetup): boolean {
+  return setup.mode === "commander" || (setup.mode === "pod" && setup.podFormat === "commander");
+}
+
+function isWinston(setup: DraftSetup): boolean {
+  return setup.mode === "winston" || (setup.mode === "pod" && setup.podFormat === "winston");
+}
+
+function picksPerStep(setup: DraftSetup): number {
+  return isCommander(setup) ? 2 : 1;
+}
+
+function winstonView(state: DraftState, w: WinstonState): WinstonView {
+  const yourTurn = !state.done && w.turn === 0;
+  return {
+    mainCount: w.main.length,
+    piles: w.piles.map((pile, i) => ({
+      count: pile.length,
+      cards: yourTurn && i === w.active ? pile : [],
+      active: !state.done && i === w.active,
+    })),
+    turnSeat: w.turn,
+    yourTurn,
+    activePile: state.done ? null : w.active,
   };
 }
 
 /**
- * Seat 0 takes `ids`, every other seat takes the first card it holds (the fake's bots, and the
- * fake's people in a pod), and the packs move on — left in rounds 1 and 3, right in round 2. An
+ * Seat 0 takes `ids` (one card, or two in a Commander draft), every other seat takes as many from
+ * the front of what it holds (the fake's bots, and the fake's people in a pod), and the packs move
+ * on — left in rounds 1 and 3, right in round 2. An
  * empty table opens the next round, or ends the draft.
  */
 function pickAll(db: FakeDb, state: DraftState, ids: readonly string[]): void {
   if (state.done) throw new Error(DRAFT_OVER);
+  if (state.winston !== null) throw new Error(WINSTON_NO_PICK);
   const mine = state.packs[0] ?? [];
   if (ids.length === 0 || ids.some((id) => !mine.some((c) => c.instanceId === id))) {
     throw new Error(NOT_IN_PACK);
   }
+  const need = Math.min(picksPerStep(state.setup), mine.length);
+  if (new Set(ids).size !== need) throw new Error(WRONG_COUNT(need));
   const seats = state.packs.length;
   for (let seat = 0; seat < seats; seat++) {
     const pack = state.packs[seat];
@@ -355,8 +416,19 @@ function startDraft(db: FakeDb, setup: DraftSetup, name: number): DraftState {
     packs: [],
     pools: setup.seats.map(() => []),
     done: false,
+    winston: null,
   };
-  if (setup.mode === "sealed") {
+  if (isWinston(setup)) {
+    // Every booster into one stack — seat by seat, round by round, unshuffled: the page's deal is
+    // already seeded, and a story should see the same piles every run — then a card to each pile.
+    const main = setup.packs.flatMap((byRound, seat) =>
+      byRound.flatMap((ids, round) => ids.map((id, n) => draftCard(db, id, seat, round, n))),
+    );
+    const piles = Array.from({ length: WINSTON_PILES }, () => main.splice(0, 1));
+    state.packSize = setup.packs[0]?.[0]?.length ?? 0;
+    state.winston = { main, piles, turn: 0, active: 0 };
+    if (piles.every((p) => p.length === 0)) state.done = true;
+  } else if (setup.mode === "sealed") {
     // Sealed: every booster straight into its seat's pool, and nothing to pick.
     state.pools = setup.packs.map((byRound, seat) =>
       byRound.flatMap((ids, round) => ids.map((id, n) => draftCard(db, id, seat, round, n))),
@@ -367,6 +439,70 @@ function startDraft(db: FakeDb, setup: DraftSetup, name: number): DraftState {
     openRound(db, state, 0);
   }
   return state;
+}
+
+/**
+ * One Winston decision by the seat whose turn it is: **take** the pile (into the pool; the pile is
+ * refilled with the stack's top card), or **decline** it (the stack's top card joins it, and the
+ * next pile is looked at; declining the last takes the stack's top card). A turn that ends hands
+ * the table on; the fake's bot then takes the first pile with cards in it, at once.
+ */
+function winstonDecide(state: DraftState, pile: number, take: boolean): void {
+  const w = state.winston;
+  if (w === null) throw new Error(NOT_WINSTON);
+  if (state.done) throw new Error(DRAFT_OVER);
+  if (pile !== w.active) throw new Error(NOT_YOUR_PILE);
+  const pool = state.pools[w.turn];
+  const refill = () => w.main.splice(0, 1);
+  if (take) {
+    pool.push(...w.piles[pile]);
+    w.piles[pile] = refill();
+    endTurn(state, w);
+    return;
+  }
+  const last = pile === w.piles.length - 1;
+  if (last && w.main.length === 0) throw new Error(STACK_EMPTY);
+  w.piles[pile].push(...refill());
+  if (last) {
+    pool.push(...refill());
+    endTurn(state, w);
+  } else {
+    w.active = nextPile(w, pile + 1);
+  }
+}
+
+/** The first pile from `from` on with cards in it, or `from` itself when none has any. */
+function nextPile(w: WinstonState, from: number): number {
+  for (let i = from; i < w.piles.length; i++) if (w.piles[i].length > 0) return i;
+  return Math.min(from, w.piles.length - 1);
+}
+
+function endTurn(state: DraftState, w: WinstonState): void {
+  if (w.turn === 0) state.pick += 1;
+  const seats = state.pools.length;
+  w.turn = (w.turn + 1) % seats;
+  w.active = nextPile(w, 0);
+  if (w.main.length === 0 && w.piles.every((p) => p.length === 0)) {
+    state.done = true;
+    return;
+  }
+  // The fake's bots: the first pile with cards, taken — or, with every pile empty, the stack's
+  // top card.
+  // Every seat but the reader's is the fake's, as `pickAll` treats a pod's people.
+  while (!state.done && w.turn !== 0) {
+    const first = w.piles.findIndex((p) => p.length > 0);
+    if (first === -1) {
+      state.pools[w.turn].push(...w.main.splice(0, 1));
+      w.turn = (w.turn + 1) % seats;
+      w.active = nextPile(w, 0);
+    } else {
+      state.pools[w.turn].push(...w.piles[first]);
+      w.piles[first] = w.main.splice(0, 1);
+      w.turn = (w.turn + 1) % seats;
+      w.active = nextPile(w, 0);
+    }
+    if (w.main.length === 0 && w.piles.every((p) => p.length === 0)) state.done = true;
+  }
 }
 
 function current(db: FakeDb, name: number): DraftState {
@@ -381,6 +517,8 @@ function current(db: FakeDb, name: number): DraftState {
  * `draft_deck::create` over the world's own deck writes: a **virtual** `limited` deck named
  * after the draft, its predefined zones taken away for two piles — **Deck** (`main`, the deck's
  * default, empty) and **Pool** (`side`, every drafted card) — and the deck on the unsaved list.
+ * With `commander` (a Commander draft's) it is a `casual` deck with a third, empty **Commander**
+ * pile.
  * A printing the corpus does not hold is skipped, as the crate skips it.
  *
  * Exported for a story or a test that wants a draft deck already made — *Draft in progress* with
@@ -392,9 +530,14 @@ export function createDraftDeck(
   writes: DraftDeckWrites,
   name: string,
   cardIds: readonly string[],
+  commander = false,
 ): DeckRow {
   const row = writes.deck_create({
-    deck: { name: name.trim() === "" ? "Draft" : name, formatKey: "limited", virtualOnly: true },
+    deck: {
+      name: name.trim() === "" ? "Draft" : name,
+      formatKey: commander ? "casual" : "limited",
+      virtualOnly: true,
+    },
   });
   db.deckCategories = db.deckCategories.filter((c) => c.deckId !== row.id);
   const nextCategoryId = () => db.deckCategories.reduce((n, c) => Math.max(n, c.id), 0) + 1;
@@ -412,6 +555,16 @@ export function createDraftDeck(
   const poolPile = { ...deckPile, id: nextCategoryId(), name: "Pool", kind: "side" as const };
   poolPile.sortOrder = 1;
   db.deckCategories.push(poolPile);
+  if (commander) {
+    // A Commander draft's deck: an empty Commander pile, for the reader to move a legend into.
+    db.deckCategories.push({
+      ...deckPile,
+      id: nextCategoryId(),
+      name: "Commander",
+      kind: "commander" as const,
+      sortOrder: 2,
+    });
+  }
   const deck = db.decks.find((d) => d.id === row.id);
   if (deck !== undefined) deck.defaultCategoryId = deckPile.id;
 
@@ -476,9 +629,24 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
     },
     draft_auto_pick: (args: { draft: number }): DraftView => {
       const state = current(db, args.draft);
-      const first = state.packs[0]?.[0];
-      if (first === undefined) throw new Error(DRAFT_OVER);
-      pickAll(db, state, [first.instanceId]);
+      if (state.winston !== null) {
+        // The bots' Winston choice for the reader: take the pile in front of them.
+        winstonDecide(state, state.winston.active, true);
+        return viewOf(state);
+      }
+      const mine = state.packs[0] ?? [];
+      if (state.done || mine.length === 0) throw new Error(DRAFT_OVER);
+      const need = Math.min(picksPerStep(state.setup), mine.length);
+      pickAll(
+        db,
+        state,
+        mine.slice(0, need).map((c) => c.instanceId),
+      );
+      return viewOf(state);
+    },
+    draft_winston: (args: { draft: number; pile: number; take: boolean }): DraftView => {
+      const state = current(db, args.draft);
+      winstonDecide(state, args.pile, args.take);
       return viewOf(state);
     },
     draft_end: (args: { draft: number }): void => {
@@ -506,8 +674,8 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
       return viewOf(state);
     },
 
-    draft_deck_create: (args: { name: string; cardIds: string[] }): DeckRow =>
-      createDraftDeck(db, writes, args.name, args.cardIds),
+    draft_deck_create: (args: { name: string; cardIds: string[]; commander?: boolean }): DeckRow =>
+      createDraftDeck(db, writes, args.name, args.cardIds, args.commander === true),
     /** Only the decks that still exist — a draft deck deleted from the gallery leaves the list. */
     draft_deck_ids: (): number[] => {
       const world = worldOf(db);
@@ -540,6 +708,9 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
       throw new Error(LOBBIES_OFF);
     },
     lobby_pick: (): void => {
+      throw new Error(LOBBIES_OFF);
+    },
+    lobby_winston: (): void => {
       throw new Error(LOBBIES_OFF);
     },
     lobby_kick: (): void => {
