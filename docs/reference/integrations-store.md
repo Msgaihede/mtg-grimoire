@@ -1,16 +1,20 @@
 # The integrations store — `Projection v1`, the one publisher, and the per-group object
 
-[Issue #1396](https://github.com/Msgaihede/mtg-grimoire/issues/1396), its plan's second PR. The
+[Issue #1396](https://github.com/Msgaihede/mtg-grimoire/issues/1396), its plan's second and third PRs. The
 design is [2026-10-24-integration-data-access-design.md](../superpowers/specs/2026-10-24-integration-data-access-design.md)
 (option B); what PR 2 built of it, and the choices it took, are in
-[the PR 2 plan](../superpowers/plans/2026-10-25-integrations-projection-store.md). This page is the
+[the PR 2 plan](../superpowers/plans/2026-10-25-integrations-projection-store.md), and what PR 3 added
+— intents, consumer tokens, the read overlay — in
+[the PR 3 plan](../superpowers/plans/2026-10-29-integrations-intents.md) (§8 here). This page is the
 record: what each piece is, why it is shaped that way, and every figure with its date.
 
 **The one sentence: the reader's own devices publish a curated, current-state copy of chosen
 tables to a per-group object that holds no key of the group's, and nothing in sync changes.** The
-store can be read by its consumers (none yet — intents are PR 3, Discord PR 4) and by the operator;
-it cannot write into sync, forge an op, evict a device or publish a share, because it never holds a
-relay token, a group key or a device identity.
+store can be read by its consumers (none is wired up yet — Discord is PR 4, remote MCP PR 5) and by
+the operator; it cannot write into sync, forge an op, evict a device or publish a share, because it
+never holds a relay token, a group key or a device identity. **What a consumer writes is an intent**
+(§8): a proposal a device of the group checks against its own allow-list and applies as its own
+write, or refuses.
 
 ⚠️ **Nothing has been deployed.** The Worker has run under Node in its suite and under `workerd`
 locally (`wrangler dev --local`), never on Cloudflare. The app's address for it,
