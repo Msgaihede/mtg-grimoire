@@ -101,6 +101,8 @@ jobs:
         with:
           workspaces: ". -> target"
           key: android-x86_64
+          # `main` writes it, a pull request reads it — `ci.yml`'s `rust` job says why.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # From `apps/light/`, so the CLI finds the light host's `tauri.conf.json`, as in `ci.yml`.
       - name: Build the APK

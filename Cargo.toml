@@ -150,6 +150,30 @@ opt-level = 3
 [profile.dev.package.rten-vecmath]
 opt-level = 3
 
+# **phase.rs's rules engine, AI and draft bots at `opt-level = 1` in a debug build** (2026-10-29),
+# for `grimoire-play`'s tests: a game played out at `0` is slow enough that its 125 tests were
+# the second-longest test binary in CI (46–100 s). Measured on 4 cores, the suite ran 65.5 s at
+# `0`, 24.8 s at `1` and 17.9 s at `2`; the price is a cold compile of the three crates, 407 s
+# of the test build at `0` against 617 at `1` and 725 at `2` — paid once per `rev`, and in CI
+# only on a cache miss. `1` takes most of the gain for two-thirds of the extra compile. A goldfish
+# board in `tauri dev` gets the same engine.
+[profile.dev.package.phase-engine]
+opt-level = 1
+[profile.dev.package.phase-ai]
+opt-level = 1
+[profile.dev.package.draft-core]
+opt-level = 1
+
+# **SQLite at `opt-level = 2` in a debug build** (2026-10-29), for `grimoire-core`'s 3789 tests,
+# the longest test binary in CI (86–155 s), nearly every one of which opens a database.
+# `libsqlite3-sys` compiles the bundled `sqlite3.c` with the C compiler at the package's own
+# opt-level, which was `0`. Measured on 4 cores, `cargo test -p grimoire-core --lib`: 147.4 s at
+# `0`, 113.4 s with these two at `2`; the cold test build 173 s against 180.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 2
+[profile.dev.package.rusqlite]
+opt-level = 2
+
 # **The web host's module** — `node scripts/build-wasm.ts`, which builds `grimoire-web` for
 # `wasm32-unknown-unknown` with `--profile wasm`. A profile of its own, inheriting `release`,
 # so that nothing here reaches the desktop's or the APK's build: **`[profile.release]` is

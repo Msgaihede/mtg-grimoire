@@ -271,7 +271,23 @@ const SCANNED = Object.entries(MODULES)
  * existed when Task 8 landed (5 story files, 5 plays); they are deliberately not exact, so
  * adding a story file never means editing this test.
  */
-describe("story files", () => {
+/**
+ * **Which quarter of the plays this run is** (2026-10-29): `vitest.config.ts` collects this file as
+ * four projects, `stories-1` … `stories-4`, and hands each `STORIES_PART` — `"2/4"` is every fourth
+ * play from the second. Dealt one play at a time across the sorted files, so a file with many
+ * plays is spread over all four instead of weighing one down. The blocks that are not plays run
+ * in the first part alone. Unset — a config that collects this file once — it is the whole file.
+ */
+const [PART, PARTS] = String(import.meta.env.STORIES_PART ?? "1/1")
+  .split("/")
+  .map(Number);
+const mine = (() => {
+  let dealt = 0;
+  return () => dealt++ % PARTS === PART - 1;
+})();
+const FIRST_PART = PART === 1;
+
+describe.runIf(FIRST_PART)("story files", () => {
   it("globbed story modules, and found plays inside them", () => {
     expect(SCANNED.length, SCANNED.map((s) => s.file).join(", ")).toBeGreaterThanOrEqual(5);
     expect(SCANNED.flatMap((s) => s.plays).length).toBeGreaterThanOrEqual(5);
@@ -282,10 +298,11 @@ for (const { file, plays } of SCANNED) {
   // No `describe` for a file with no plays: most story files are all-visible states and want
   // none, and an empty block per file would be ceremony. The count above is what notices a
   // file that lost the plays it used to have.
-  if (plays.length === 0) continue;
+  const ours = plays.filter(mine);
+  if (ours.length === 0) continue;
 
   describe(file, () => {
-    for (const [name, story] of plays) {
+    for (const [name, story] of ours) {
       it(`${name} plays`, async () => {
         // Runs with the project annotations installed above, so `preview.tsx`'s `FakeWorld`
         // decorator is in place and every story here — props-only or backend-driven — gets the
@@ -334,7 +351,7 @@ for (const { file, plays } of SCANNED) {
  * Both pairs are written so that each half asserts something **positive** that only its own
  * seed can produce. A pair of negatives would stay green on a page where nothing rendered.
  */
-describe("two stories with different seeds, mounted together", () => {
+describe.runIf(FIRST_PART)("two stories with different seeds, mounted together", () => {
   /** What `sync_status` answers under the `starter` seed — `db.cards.length`, which is the
    *  generated corpus. Derived rather than typed, so a regeneration moves it. */
   const STARTER_CARDS = CARDS.length.toLocaleString("en-US");
