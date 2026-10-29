@@ -513,6 +513,37 @@ pub fn list_categories(
         .map_err(|e| e.to_string())
 }
 
+/// [`list_categories`] for many decks in one statement, whatever their number — each deck's
+/// piles of one list in the order `list_categories` answers them, keyed by deck id. A deck with
+/// no pile in that list is absent from the map rather than present with an empty one.
+///
+/// The read graph's batch (`crates/grimoire-graph`): a widget asking for every deck's categories
+/// is one read per list and marketplace rather than one `list_categories` per deck.
+pub fn categories_of_decks(
+    conn: &Connection,
+    deck_ids: &[i64],
+    variant: &str,
+    marketplace: crate::sorting::Marketplace,
+) -> Result<std::collections::HashMap<i64, Vec<DeckCategoryRow>>, String> {
+    let variant = valid_variant(variant)?;
+    let ids = serde_json::to_string(deck_ids).map_err(|e| e.to_string())?;
+    let sql = format!(
+        "{} WHERE cat.deck_id IN (SELECT value FROM json_each(?1)) AND cat.variant = ?2
+          ORDER BY cat.deck_id, cat.sort_order, cat.id",
+        category_select(marketplace)
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![ids, variant], category_row)
+        .map_err(|e| e.to_string())?;
+    let mut out: std::collections::HashMap<i64, Vec<DeckCategoryRow>> = Default::default();
+    for row in rows {
+        let row = row.map_err(|e| e.to_string())?;
+        out.entry(row.deck_id).or_default().push(row);
+    }
+    Ok(out)
+}
+
 /// Find a category of one list by name, or make one there — a **new one is always
 /// `kind = 'main'`**, but the lookup is by name alone and will happily answer with a predefined
 /// category.
@@ -1484,6 +1515,50 @@ pub fn list_labels(
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
+}
+
+/// [`list_labels`] for many decks in one statement, whatever their number — the labels each
+/// deck's list wears, in the order `list_labels` answers them, keyed by deck id. A deck whose
+/// list wears none is absent from the map.
+///
+/// The read graph's batch (`crates/grimoire-graph`): a widget asking for every deck's labels is
+/// one read per list rather than one `list_labels` per deck.
+pub fn labels_of_decks(
+    conn: &Connection,
+    deck_ids: &[i64],
+    variant: &str,
+) -> Result<std::collections::HashMap<i64, Vec<DeckLabelRow>>, String> {
+    let variant = valid_variant(variant)?;
+    let ids = serde_json::to_string(deck_ids).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT dc.deck_id, t.id, t.name, t.color, sum(dc.quantity)
+               FROM deck_labels t
+               JOIN deck_cards dc ON dc.label_id = t.id
+              WHERE dc.deck_id IN (SELECT value FROM json_each(?1)) AND dc.variant = ?2
+              GROUP BY dc.deck_id, t.id, t.name, t.color
+              ORDER BY dc.deck_id, sum(dc.quantity) DESC, t.name",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![ids, variant], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                DeckLabelRow {
+                    id: r.get(1)?,
+                    name: r.get(2)?,
+                    color: r.get(3)?,
+                    card_count: r.get(4)?,
+                },
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out: std::collections::HashMap<i64, Vec<DeckLabelRow>> = Default::default();
+    for row in rows {
+        let (deck_id, label) = row.map_err(|e| e.to_string())?;
+        out.entry(deck_id).or_default().push(label);
+    }
+    Ok(out)
 }
 
 /// Every label there is, most-used first — [`GlobalLabel`]'s read, and **the only list that can
@@ -4343,6 +4418,56 @@ mod tests {
             .collect();
         assert_eq!(live, vec!["Live only"]);
         assert_eq!(theory, vec!["Theory only"]);
+    }
+
+    /// The batches answer each deck what the one-deck reads do — same rows, same order — and
+    /// leave out a deck with nothing to answer.
+    #[test]
+    fn many_decks_labels_and_categories_are_each_deck_s_own() {
+        // The rows carry no `PartialEq`; their wire form is what a caller sees anyway.
+        fn json<T: Serialize>(rows: &T) -> serde_json::Value {
+            serde_json::to_value(rows).unwrap()
+        }
+        let conn = conn();
+        let burn = deck(&conn, "Burn");
+        let control = deck(&conn, "Control");
+        let bare = deck(&conn, "Bare");
+        let removal = create_label(&conn, Some(burn), "Removal", "red").unwrap();
+        let ramp = create_label(&conn, Some(burn), "Ramp", "green").unwrap();
+        labelled(&conn, burn, "bolt-lea", removal.id, 4);
+        labelled(&conn, burn, "elves-lea", ramp.id, 1);
+        labelled(&conn, control, "swords-lea", removal.id, 2);
+        category(&conn, burn, "side", "Sideboard");
+        theory_category(&conn, control, "main", "Plan");
+
+        let labels = labels_of_decks(&conn, &[burn, control, bare], "live").unwrap();
+        for id in [burn, control] {
+            assert_eq!(
+                json(&labels[&id]),
+                json(&list_labels(&conn, id, "live").unwrap())
+            );
+        }
+        assert!(!labels.contains_key(&bare));
+        assert!(labels_of_decks(&conn, &[burn], "theory")
+            .unwrap()
+            .is_empty());
+
+        for variant in ["live", "theory"] {
+            let piles =
+                categories_of_decks(&conn, &[burn, control, bare], variant, ANY_MARKET).unwrap();
+            for id in [burn, control, bare] {
+                let one = list_categories(&conn, id, variant, ANY_MARKET).unwrap();
+                match piles.get(&id) {
+                    Some(batch) => assert_eq!(json(batch), json(&one), "{variant} {id}"),
+                    None => assert!(one.is_empty(), "{variant} {id}"),
+                }
+            }
+        }
+        assert_eq!(
+            categories_of_decks(&conn, &[control], "theory", ANY_MARKET).unwrap()[&control].len(),
+            1
+        );
+        assert!(labels_of_decks(&conn, &[burn], "nope").is_err());
     }
 
     #[test]

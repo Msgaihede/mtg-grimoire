@@ -339,6 +339,44 @@ pub fn list(conn: &Connection, deck_id: i64, limit: i64) -> Result<Vec<DeckAudit
         .map_err(|e| e.to_string())
 }
 
+/// [`list`] for many decks in one statement, whatever their number — each deck's newest `limit`
+/// lines (clamped as `list` clamps it), in `list`'s order, keyed by deck id. A deck with no
+/// history is absent from the map.
+///
+/// The limit is per deck, which is what the window is for: a plain `LIMIT` would let the
+/// busiest deck's history crowd every other deck out of the answer.
+///
+/// The read graph's batch (`crates/grimoire-graph`): a widget asking for every deck's history is
+/// one read rather than one `list` per deck.
+pub fn list_of_decks(
+    conn: &Connection,
+    deck_ids: &[i64],
+    limit: i64,
+) -> Result<std::collections::HashMap<i64, Vec<DeckAuditEntry>>, String> {
+    let limit = limit.clamp(1, MAX_LIMIT);
+    let ids = serde_json::to_string(deck_ids).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, deck_id, at, variant, kind, card_id, card_name, payload, delta
+               FROM (SELECT *, row_number() OVER (PARTITION BY deck_id ORDER BY at DESC, id DESC)
+                               AS nth
+                       FROM deck_audit
+                      WHERE deck_id IN (SELECT value FROM json_each(?1)))
+              WHERE nth <= ?2
+              ORDER BY deck_id, at DESC, id DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![ids, limit], entry_from_row)
+        .map_err(|e| e.to_string())?;
+    let mut out: std::collections::HashMap<i64, Vec<DeckAuditEntry>> = Default::default();
+    for row in rows {
+        let row = row.map_err(|e| e.to_string())?;
+        out.entry(row.deck_id).or_default().push(row);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +476,33 @@ mod tests {
             crate::schema::AUDIT_KINDS
         );
         assert_eq!(DECK_LEVEL, "live");
+    }
+
+    /// The batch answers each deck what [`list`] does, and its limit is each deck's: the busy
+    /// deck's lines do not push the quiet one's out.
+    #[test]
+    fn many_decks_histories_are_each_deck_s_own_newest_first() {
+        let conn = seeded();
+        let busy = deck(&conn, "Burn");
+        let quiet = deck(&conn, "Storm");
+        let silent = deck(&conn, "Empty");
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
+        for n in 0..5 {
+            record(&conn, busy, DECK_LEVEL, DECK, None, &json!({ "n": n }), 0).unwrap();
+        }
+        record(&conn, quiet, DECK_LEVEL, DECK, None, &json!({ "n": 0 }), 0).unwrap();
+
+        let batch = list_of_decks(&conn, &[busy, quiet, silent], 3).unwrap();
+        assert_eq!(batch.get(&busy), Some(&list(&conn, busy, 3).unwrap()));
+        assert_eq!(batch[&busy].len(), 3);
+        assert_eq!(batch.get(&quiet), Some(&list(&conn, quiet, 3).unwrap()));
+        assert!(!batch.contains_key(&silent));
+        assert_eq!(
+            list_of_decks(&conn, &[busy], 0).unwrap()[&busy].len(),
+            1,
+            "clamped as `list` clamps"
+        );
+        assert!(list_of_decks(&conn, &[], 50).unwrap().is_empty());
     }
 
     /// The rule this table exists for. Each command is driven **once**, over a deck whose

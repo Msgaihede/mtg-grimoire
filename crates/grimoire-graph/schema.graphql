@@ -1,4 +1,52 @@
 """
+One line of the home page's activity feed: a recent change to the collection, the wishlist or
+a deck, as facts rather than a sentence. `id` is unique only within a `scope`.
+"""
+type ActivityEntry {
+	"""
+	Unix seconds.
+	"""
+	at: Float!
+	"""
+	The printing the change was about; absent when it was about no one card.
+	"""
+	cardId: String
+	cardName: String
+	"""
+	The deck changed, when `scope` is `deck` and the deck still exists.
+	"""
+	deck: Deck
+	"""
+	The deck changed; present only when `scope` is `deck`.
+	"""
+	deckId: Int
+	"""
+	Signed change in copies (+n added, −n removed); 0 when no count changed.
+	"""
+	delta: Int!
+	"""
+	Unique within its scope only; key by scope and id.
+	"""
+	id: Int!
+	"""
+	What was done; the words depend on `scope`. Collection and wishlist: `add`, `remove`,
+	`quantity`, `move`, `edit`, `folder`, `import`, `clear`. Deck: the `DeckHistoryKind`
+	words.
+	"""
+	kind: String!
+	"""
+	The change's details; the shape depends on `scope` and `kind`, and every key may be
+	missing. Deck lines carry `DeckHistoryEntry.payload`'s shapes.
+	"""
+	payload: JSON!
+	"""
+	Where the change was made: `collection`, `wishlist` or `deck` (a newer app may write
+	another word).
+	"""
+	scope: String!
+}
+
+"""
 One way to slice the collection or the wishlist: by `rarity`, by `color` (a colour bucket —
 `multi` for two or more colours, `c` for colourless), by `set`, or by `finish`.
 """
@@ -257,6 +305,31 @@ type CardLegality {
 }
 
 """
+A deck note seen from one card it names: the same note as `DeckNote`, carrying the deck it was
+written in instead of its cards.
+"""
+type CardNote {
+	"""
+	The note, as Markdown (CommonMark) source.
+	"""
+	body: String!
+	"""
+	The deck the note is in.
+	"""
+	deck: Deck
+	deckId: Int!
+	deckName: String!
+	"""
+	The deck note's id.
+	"""
+	id: Int!
+	"""
+	The heading as typed; may be empty.
+	"""
+	title: String!
+}
+
+"""
 One card's Oracle Tags, keyed by its oracle id.
 """
 type CardOracleTags {
@@ -429,6 +502,30 @@ type CardSummary {
 	printing of the card.
 	"""
 	wishlisted: Boolean!
+}
+
+"""
+What a deck category is for, which is what the rules read (its name is the reader's and can
+be anything). `main` is every pile the reader makes; `side` is the Sideboard, `commander` the
+Commander zone, `companion` the Companion zone, `maybe` the Maybeboard. A deck's size counts
+active `main`, `commander` and `maybe` piles; `side` and `companion` are played beside the
+deck.
+"""
+enum CategoryKind {
+	commander
+	companion
+	main
+	maybe
+	side
+}
+
+"""
+Who made a deck category: `user` (the reader, including the four predefined piles), or `auto`
+(the app, while filing a card — such a pile is drawn only while it holds a card).
+"""
+enum CategoryOrigin {
+	auto
+	user
 }
 
 type CollectionEntry {
@@ -647,6 +744,19 @@ type CollectionSummary {
 }
 
 """
+Which rule a format judges its commander by. A rule name, not a format name: two formats may
+share one (`predh` uses `edh`).
+"""
+enum CommanderRule {
+	brawl
+	duel
+	edh
+	oathbreaker
+	pdh
+	tlr
+}
+
+"""
 A copy's condition. `NONE` is a copy nobody graded.
 """
 enum Condition {
@@ -659,56 +769,268 @@ enum Condition {
 }
 
 """
-A deck — a named list of cards for a format, with its own folder, deck tags and settings.
+One deck, as the deck gallery lists it. Every deck has a live list (the cards as built); a
+deck with `theoryEnabled` also has a theory list (the version being planned).
 """
 type Deck {
 	archived: Boolean!
 	"""
-	The reader's Commander bracket for the deck, 0 when none was set.
+	The Commander bracket (1–5) the reader declared for the deck, or 0 when they have not
+	(the app then estimates one).
 	"""
 	bracket: Int!
 	"""
-	How many cards the deck's live list holds, counting copies.
+	Copies in the live list's active `main`, `commander` and `maybe` categories — what “a
+	60-card deck” means.
 	"""
 	cardCount: Int!
+	"""
+	The categories of one of the deck's lists, in order, empty ones included.
+	`marketplace` is the one to price at; the reader's own when omitted.
+	"""
+	categories(marketplace: Marketplace, variant: DeckVariant = live): [DeckCategory!]!
+	"""
+	The cover's illustrator. Credit them wherever the cover is shown; when absent, do not
+	draw the cover.
+	"""
 	coverArtist: String
 	"""
-	The printing whose art is the deck's cover; pass it to the CardImage component.
+	The printing whose art crop is the deck's cover.
 	"""
 	coverCardId: String
 	description: String
+	"""
+	The deck folder it is filed in; absent at the root.
+	"""
+	folder: DeckFolder
+	"""
+	The deck folder it is filed in; absent at the root.
+	"""
 	folderId: Int
 	"""
-	The format's key, e.g. `commander`, `modern`, `casual`.
+	The deck's format and its rules; absent for a format this app no longer knows.
+	"""
+	format: Format
+	"""
+	The format's id (`commander`, `modern`, `casual`, …).
 	"""
 	formatKey: String!
 	"""
-	The format's display name, absent for a format this build does not know.
+	The format's display name; absent for a format this app no longer knows.
 	"""
 	formatName: String
+	gameKey: DeckGame!
+	"""
+	The deck's history, newest first.
+	At most `limit` lines (1–500).
+	"""
+	history(limit: Int = 50): [DeckHistoryEntry!]!
 	id: Int!
+	"""
+	The deck labels this deck's cards wear in one list, most-used first.
+	"""
+	labels(variant: DeckVariant = live): [DeckLabelUsage!]!
+	"""
+	The list the deck editor was last showing.
+	"""
+	lastVariant: DeckVariant!
+	managedWishlist: ManagedWishlistMode!
 	name: String!
 	"""
-	The deck's deck notes, in the reader's order — batched across every deck in the answer.
+	The deck's notes, in the reader's order.
 	"""
 	notes: [DeckNote!]!
+	"""
+	Whether the deck editor's Notes band is expanded.
+	"""
 	notesOpen: Boolean!
 	"""
-	The deck's deck tags — the reader's own words about the whole deck (`Budget`, `Meme`).
+	The live list's printed mana costs, for a colour bar. Empty for a deck of lands or no
+	cards.
+	"""
+	pipCosts: [PipCost!]!
+	"""
+	Deck tags: the reader's free-text words for the whole deck (`Budget`, `Meme`), in the
+	order added. Not deck labels and not Scryfall tags.
 	"""
 	tags: [String!]!
-	theoryEnabled: Boolean!
-	todosOpen: Boolean!
 	"""
-	When the deck last changed, in Unix seconds.
+	Whether the deck keeps a theory list (a plan) beside its live one.
+	"""
+	theoryEnabled: Boolean!
+	"""
+	The deck's to-do lists, in the reader's order — empty ones included.
+	"""
+	todoLists: [DeckTodoList!]!
+	"""
+	Whether the deck editor's To-do band is expanded.
+	"""
+	todosOpen: Boolean!
+	tokenMode: TokenMode!
+	"""
+	Unix seconds of the last change to the deck or its cards.
 	"""
 	updatedAt: Float!
 	"""
-	What the deck's live list is worth — batched: one read per marketplace, whatever the
-	number of decks.
+	What the deck's live cards are worth at a marketplace.
+	`marketplace` is the one to price at; the reader's own when omitted.
 	"""
 	value(marketplace: Marketplace): DeckValue
+	"""
+	Whether the deck is tracked without owning the cards (an Arena or MTGO list, a proxy
+	pile). Such a deck reads nothing from the collection.
+	"""
 	virtualOnly: Boolean!
+}
+
+"""
+One card row in one category of one deck list: the printing, how many copies, the deck label
+it wears, the card's facts, its price, and how many of it the reader owns for this deck. Card
+facts are absent when the printing has left the card database.
+"""
+type DeckCard {
+	"""
+	The Scryfall id of the printing.
+	"""
+	cardId: String!
+	"""
+	False when the row's category is switched off, so it counts toward nothing.
+	"""
+	categoryActive: Boolean!
+	categoryId: Int!
+	categoryKind: CategoryKind!
+	categoryName: String!
+	"""
+	Mana value.
+	"""
+	cmc: Float
+	collectorNumber: String!
+	"""
+	Colour identity letters run together (`"WU"`).
+	"""
+	colorIdentity: String
+	"""
+	Colour letters run together (`"WU"`), not a list. `""` is colourless.
+	"""
+	colors: String
+	"""
+	Printed at uncommon on any printing — what makes a Pauper Commander commander.
+	"""
+	everUncommon: Boolean!
+	"""
+	Scryfall's `card_faces` array for a card with more than one face, verbatim; absent for a
+	one-faced card.
+	"""
+	faces: JSON
+	"""
+	The finish the deck plays: `foil` or `etched`, or absent for the regular (nonfoil) copy.
+	"""
+	finish: Finish
+	"""
+	On the Commander Game Changers list.
+	"""
+	gameChanger: Boolean
+	id: Int!
+	labelColor: String
+	"""
+	The deck label this card wears, if any. The three label fields go together.
+	"""
+	labelId: Int
+	labelName: String
+	lang: String!
+	layout: String
+	"""
+	This printing's legality per format, as Scryfall gives it: an object of format key →
+	`legal` | `not_legal` | `restricted` | `banned`.
+	"""
+	legalities: JSON
+	"""
+	In Scryfall's symbol form, e.g. `"{2}{G}{G}"`.
+	"""
+	manaCost: String
+	name: String!
+	"""
+	A sentence when a sync could not keep this row's printing.
+	"""
+	needsReview: String
+	"""
+	The card across all its printings (Scryfall's oracle id).
+	"""
+	oracleId: String
+	oracleText: String
+	"""
+	Copies of this printing and finish the reader owns for this row: on the live list, the
+	copies filed in the deck's own collection group; on the theory list, every copy the deck
+	could use. Always 0 in a switched-off category.
+	"""
+	ownedQuantity: Int!
+	"""
+	As printed — may be `"*"`.
+	"""
+	power: String
+	"""
+	Every finish this printing exists in (`nonfoil`, `foil`, `etched`) — not the finish the
+	deck plays, which is `finish`.
+	"""
+	printingFinishes: [String!]
+	"""
+	The colours of mana the card can make, letters run together (`"C"` for colourless); `""`
+	when it makes none, absent when unknown.
+	"""
+	producedMana: String
+	"""
+	Scryfall's `promo_types` (`surgefoil`, `halofoil`, …), which name a foil's kind.
+	"""
+	promoTypes: [String!]
+	"""
+	Copies in this row.
+	"""
+	quantity: Int!
+	rarity: String
+	"""
+	Lowercase, as Scryfall stores it.
+	"""
+	setCode: String!
+	setName: String
+	toughness: String
+	typeLine: String
+	"""
+	One copy's price at the marketplace asked for, at the row's finish, as a decimal amount in
+	that marketplace's currency; absent when it has none.
+	"""
+	unitPrice: Float
+	variant: DeckVariant!
+}
+
+"""
+One category of one list (live or theory) of a deck: a named pile of cards, drawn as a column
+in the deck editor.
+"""
+type DeckCategory {
+	"""
+	Copies in the pile, not rows.
+	"""
+	cardCount: Int!
+	deckId: Int!
+	id: Int!
+	"""
+	Whether the pile counts. A switched-off pile counts toward no deck size, copy limit or
+	legality check; the Maybeboard starts switched off.
+	"""
+	isActive: Boolean!
+	kind: CategoryKind!
+	"""
+	As the reader named it.
+	"""
+	name: String!
+	origin: CategoryOrigin!
+	sortOrder: Int!
+	"""
+	Unit price × copies over the pile, as a decimal amount in the marketplace's currency; a
+	partial sum over the copies that have a price, absent when none do.
+	"""
+	totalPrice: Float
+	variant: DeckVariant!
 }
 
 type DeckCompletion {
@@ -761,47 +1083,296 @@ enum DeckCompletionMatch {
 	missing
 }
 
+"""
+One list (live or theory) of one deck, with everything in it.
+"""
+type DeckDetail {
+	"""
+	Every card row of the list, by category order then name.
+	"""
+	cards: [DeckCard!]!
+	"""
+	Every category of the list, in order — empty and switched-off ones included.
+	"""
+	categories: [DeckCategory!]!
+	deck: Deck!
+	"""
+	The deck labels the list's cards wear.
+	"""
+	labels: [DeckLabelUsage!]!
+}
+
+"""
+A folder of the deck gallery's tree. Folders nest through `parentId`; a folder files decks and
+belongs to none.
+"""
+type DeckFolder {
+	"""
+	The decks filed directly in this folder (not in its subfolders).
+	"""
+	decks: [Deck!]!
+	id: Int!
+	name: String!
+	parent: DeckFolder
+	"""
+	The folder this one is inside; absent at the root.
+	"""
+	parentId: Int
+	"""
+	Its place among its siblings.
+	"""
+	sortOrder: Int!
+	"""
+	The folders directly inside this one, in order.
+	"""
+	subfolders: [DeckFolder!]!
+}
+
+"""
+The platform a deck is built for: one of the `Game` values, or `any` for a deck not pinned to
+one (the default).
+"""
+enum DeckGame {
+	any
+	arena
+	mtgo
+	paper
+}
+
+"""
+One line of a deck's history: what changed, as facts rather than a sentence. Newest first.
+"""
+type DeckHistoryEntry {
+	"""
+	Unix seconds.
+	"""
+	at: Float!
+	"""
+	The printing the change was about; absent for changes about no card.
+	"""
+	cardId: String
+	cardName: String
+	deckId: Int!
+	"""
+	Signed change in copies (+n added, −n removed); 0 when no count changed.
+	"""
+	delta: Int!
+	id: Int!
+	"""
+	What the line is about. Known kinds: `add`, `remove` and `quantity` change how many
+	copies a deck holds; `move` moves cards between categories; `swap` changes a card's
+	printing; `label` puts a deck label on a card or creates, renames or deletes one;
+	`category`, `folder` and `deck` change a category, the deck's folder, or a setting of the
+	deck itself. A history written by a newer version of the app can hold other kinds: show
+	them, do not drop them.
+	"""
+	kind: String!
+	"""
+	The change's details; the shape depends on `kind`, and every key may be missing. Roughly:
+	add `{category, quantity}`; remove `{category, quantity, reason}`; quantity `{category,
+	from, to}`; move `{from, to}` (category names); swap `{category, fromSet, toSet,
+	folded}`; label `{label, previous}` or `{action, label, previous}`; category `{action,
+	name, previousName, cards}`; folder `{action, folder}`; deck `{field, from, to}`.
+	"""
+	payload: JSON!
+	"""
+	The list changed — meaningful only for card changes; deck-level lines always say `live`.
+	Do not filter history by it.
+	"""
+	variant: DeckVariant!
+}
+
+"""
+A deck label: the reader's coloured mark for a card inside a deck (`Cut candidate`,
+`Upgrade`). One label is shared by every deck — renaming or recolouring it changes it
+everywhere — and a card in a deck wears at most one. Not a deck tag and not a Scryfall tag.
+"""
+type DeckLabel {
+	"""
+	Copies wearing it across every deck and both lists. `0` when unused.
+	"""
+	cardCount: Int!
+	"""
+	The label's colour, normally `#rrggbb`; older rows may hold a palette word.
+	"""
+	color: String!
+	"""
+	Decks with at least one card wearing it.
+	"""
+	deckCount: Int!
+	id: Int!
+	name: String!
+}
+
+"""
+A deck label as worn in one list (live or theory) of one deck, with how many copies there
+wear it. A deck label is the reader's coloured mark on one card inside a deck — not a deck
+tag and not a Scryfall tag.
+"""
+type DeckLabelUsage {
+	"""
+	Copies wearing it in this deck's list. Never zero.
+	"""
+	cardCount: Int!
+	"""
+	The label's colour, normally `#rrggbb`; older rows may hold a palette word.
+	"""
+	color: String!
+	"""
+	The label's id — the same as `DeckLabel.id`.
+	"""
+	id: Int!
+	name: String!
+}
+
+"""
+A deck note: the reader's prose about one deck, optionally naming cards in it. Not a sticky
+note (the home page's), not an entry note (on a collection or wishlist row), and not a deck
+to-do list.
+"""
 type DeckNote {
 	"""
-	The note's text, as Markdown.
+	The note, as Markdown (CommonMark) source.
 	"""
 	body: String!
 	"""
-	The cards the note is attached to.
+	The cards the note names. Often empty.
 	"""
 	cards: [DeckNoteCard!]!
 	"""
-	In Unix seconds.
+	Unix seconds.
+	"""
+	createdAt: Float!
+	deckId: Int!
+	id: Int!
+	"""
+	The reader's order within the deck.
+	"""
+	sortOrder: Int!
+	"""
+	The heading as typed; may be empty, in which case the app shows the body's first line or
+	`Untitled note`.
+	"""
+	title: String!
+	"""
+	Unix seconds.
+	"""
+	updatedAt: Float!
+}
+
+"""
+A card a deck note names.
+"""
+type DeckNoteCard {
+	"""
+	A printing to draw a picture of — the deck's own where it holds one. Absent when none is
+	known.
+	"""
+	cardId: String
+	"""
+	The card's name, or its oracle id when the card database has no row for it.
+	"""
+	name: String!
+	"""
+	The card across all its printings — what the note attaches by.
+	"""
+	oracleId: String!
+}
+
+"""
+Every printed mana cost in one deck's live list (active `main`, `commander` and `maybe`
+categories) — what the deck gallery's colour bar is drawn from. Count the coloured symbols in
+each `cost`, weighted by `copies`.
+"""
+type DeckPipCosts {
+	"""
+	Each cost once, in no particular order.
+	"""
+	costs: [PipCost!]!
+	deckId: Int!
+}
+
+"""
+One of a deck's to-do lists: a titled Markdown document of headings, text and `- [ ]` /
+`- [x]` to-dos. A deck can have many. Not a deck note.
+"""
+type DeckTodoList {
+	"""
+	The list as Markdown: headings, paragraphs and task lines `- [ ] open` / `- [x] done`.
+	Empty for a list with nothing in it yet.
+	"""
+	body: String!
+	"""
+	Unix seconds.
 	"""
 	createdAt: Float!
 	deckId: Int!
 	id: Int!
 	sortOrder: Int!
+	"""
+	The heading as typed; may be empty (shown as `Untitled list`).
+	"""
 	title: String!
 	"""
-	In Unix seconds.
+	Unix seconds.
 	"""
 	updatedAt: Float!
 }
 
-type DeckNoteCard {
+"""
+A deck to-do list as read across every deck, with the deck it belongs to — only lists whose
+body is not empty.
+"""
+type DeckTodoListEntry {
 	"""
-	A printing of the card to draw — one in the deck when there is one.
+	Whether the deck is archived.
 	"""
-	cardId: String
-	name: String!
-	oracleId: String!
+	archived: Boolean!
+	"""
+	The list as Markdown: headings, paragraphs and task lines `- [ ] open` / `- [x] done`.
+	Never empty here.
+	"""
+	body: String!
+	deck: Deck
+	deckId: Int!
+	deckName: String!
+	"""
+	The to-do list's id.
+	"""
+	id: Int!
+	"""
+	The list's order within its deck.
+	"""
+	sortOrder: Int!
+	"""
+	The heading as typed; may be empty.
+	"""
+	title: String!
+	"""
+	Whether the deck editor's To-do band is expanded for this deck.
+	"""
+	todosOpen: Boolean!
+	"""
+	Unix seconds of the last edit.
+	"""
+	updatedAt: Float!
 }
 
+"""
+What one deck's cards are worth at one marketplace: the live list's copies in active
+categories of kind `main`, `commander` or `maybe` — the same cards a deck's `cardCount`
+counts. Sideboard, companion, switched-off categories and the theory list are not included.
+"""
 type DeckValue {
 	deckId: Int!
 	"""
-	How many copies have no price at the marketplace and are left out of `value`.
+	Copies in that pile with no price at this marketplace, left out of `value`.
 	"""
 	unpriced: Int!
 	"""
-	Copies × unit price over the priced copies of the live list, in the marketplace's
-	currency as a decimal; absent when no copy is priced.
+	The total, as a decimal amount in the marketplace's currency (`12.5` is $12.50 or €12.50
+	— see `marketplace.currency`). Summed over the copies that have a price; absent when none
+	do, which is not the same as zero.
 	"""
 	value: Float
 }
@@ -853,6 +1424,81 @@ type FolderConflicts {
 	"""
 	entries: Int!
 	folderId: Int!
+}
+
+"""
+One deck format and its rules as data — what a deck's legality is checked against. Seeded
+with the app; changes only with an app update.
+"""
+type Format {
+	allowsCompanion: Boolean!
+	"""
+	How the commander is judged; absent for a format with no command zone.
+	"""
+	commanderRule: CommanderRule
+	"""
+	The most cards a deck may hold; absent when there is no maximum.
+	"""
+	deckMax: Int
+	"""
+	The fewest cards a deck may hold.
+	"""
+	deckMin: Int!
+	displayName: String!
+	"""
+	Whether a new deck can be made in this format.
+	"""
+	enabledInPicker: Boolean!
+	"""
+	The platforms the format is playable on. Never empty.
+	"""
+	games: [Game!]!
+	"""
+	Whether cards carry a legality for this format (false for Casual and Limited).
+	"""
+	hasLegalityData: Boolean!
+	"""
+	The format's id, as a deck's `formatKey` names it (`commander`, `modern`, …).
+	"""
+	key: String!
+	"""
+	Starting life total.
+	"""
+	life: Int!
+	"""
+	The most copies of one card (basic lands aside); absent when unlimited.
+	"""
+	maxCopies: Int
+	"""
+	A per-card mana value ceiling, when the format has one.
+	"""
+	maxManaValue: Int
+	requiresCommander: Boolean!
+	restrictedMeaning: RestrictedMeaning!
+	"""
+	The largest sideboard: `0` means none allowed, absent means uncapped.
+	"""
+	sideboardMax: Int
+	singleton: Boolean!
+	"""
+	Where a format picker lists it.
+	"""
+	sortOrder: Int!
+	"""
+	Whether a deck in this format is checked at all — false only for a deck whose format
+	nobody has chosen yet.
+	"""
+	validates: Boolean!
+}
+
+"""
+Where Magic is played, in Scryfall's words: `paper`, `arena` (MTG Arena) or `mtgo` (Magic
+Online).
+"""
+enum Game {
+	arena
+	mtgo
+	paper
 }
 
 type HomeLayout {
@@ -910,6 +1556,19 @@ type HomeWidget {
 A scalar that can represent any JSON value.
 """
 scalar JSON
+
+"""
+What a deck's managed wishlist folder holds, kept up to date by the app: `off` (no folder),
+`all` (every card the deck's theory list plans), `missing` (the planned cards the live list
+lacks) or `other` (planned cards held in a different printing). Only a deck with a theory list
+beside its live one uses it.
+"""
+enum ManagedWishlistMode {
+	all
+	missing
+	off
+	other
+}
 
 """
 A marketplace prices are quoted at. Spelt as `MARKETPLACE_IDS` in `packages/ui/lib/
@@ -1057,6 +1716,22 @@ type OptimizePrinting {
 	"""
 	price: Float
 	setCode: String!
+}
+
+"""
+One distinct printed mana cost in a deck, and how many copies pay it.
+"""
+type PipCost {
+	"""
+	Copies in the deck with this cost.
+	"""
+	copies: Int!
+	"""
+	The printed cost in Scryfall's symbol form — `"{1}{R}"`, `"{2/W}"`, and
+	`"{1}{R} // {1}{U}"` for a card with two faces. Never empty: lands and other costless
+	cards are left out.
+	"""
+	cost: String!
 }
 
 """
@@ -1331,6 +2006,11 @@ type PrintingsPage {
 
 type Query {
 	"""
+	Recent changes to the collection, the wishlist and every deck, newest first — the home
+	page's activity feed. At most `limit` lines (1–500).
+	"""
+	activity(limit: Int = 50): [ActivityEntry!] @invalidatedBy(roots: ["collection", "wishlist", "decks"])
+	"""
 	How fresh the Art Tags dataset (what an illustration shows) is on this machine. Never
 	fails — a dataset never downloaded answers nulls with `stale: true`.
 	"""
@@ -1364,6 +2044,11 @@ type Query {
 		"""
 		id: String!
 	): [MeldRelation!] @invalidatedBy(roots: ["card"])
+	"""
+	Every deck note, in any deck, that names a card. `oracleId` is the card across all its
+	printings (Scryfall's oracle id).
+	"""
+	cardNotes(oracleId: String!): [CardNote!] @invalidatedBy(roots: ["decks"])
 	"""
 	Every paper printing of one card (by its oracle id), newest first, each priced per
 	finish.
@@ -1517,26 +2202,71 @@ type Query {
 	"""
 	collectionValueHistory(marketplace: Marketplace, split: ValueSplit = type): ValueHistory @invalidatedBy(roots: ["collection"])
 	"""
+	One list of one deck, with its cards, categories and the deck labels its cards wear.
+	Absent when no deck has that id.
+	`marketplace` is the one to price at; the reader's own when omitted.
+	"""
+	deck(id: Int!, marketplace: Marketplace, variant: DeckVariant = live): DeckDetail @invalidatedBy(roots: ["decks", "collection"])
+	"""
 	How many deck card rows are flagged for review (rows, not copies) — e.g. after an import
 	or sync could not settle them.
 	"""
 	deckCardsToReviewCount: Int @invalidatedBy(roots: ["decks"])
+	"""
+	The categories of one list of one deck, in order, empty ones included.
+	`marketplace` is the one to price at; the reader's own when omitted.
+	"""
+	deckCategories(deckId: Int!, marketplace: Marketplace, variant: DeckVariant = live): [DeckCategory!] @invalidatedBy(roots: ["decks"])
 	"""
 	How far every deck the comparison applies to is along (archived decks included), one row
 	per deck. Join on `deckId` for the deck's name.
 	"""
 	deckCompletion(compare: DeckCompletionCompare = collection, marketplace: Marketplace, theoryMatch: DeckCompletionMatch = exact): [DeckCompletion!] @invalidatedBy(roots: ["decks", "collection"])
 	"""
-	One deck's deck notes, in the reader's order.
+	Every deck folder, flat; build the tree from `parentId` (or walk `subfolders` from the
+	ones with none).
+	"""
+	deckFolders: [DeckFolder!] @invalidatedBy(roots: ["decks"])
+	"""
+	One deck's history, newest first. Empty for a deck that does not exist.
+	At most `limit` lines (1–500).
+	"""
+	deckHistory(deckId: Int!, limit: Int = 50): [DeckHistoryEntry!] @invalidatedBy(roots: ["decks"])
+	"""
+	Every deck label there is, worn or not, most-used first.
+	"""
+	deckLabels: [DeckLabel!] @invalidatedBy(roots: ["decks"])
+	"""
+	The deck labels one list of one deck is wearing, with how many copies wear each,
+	most-used first.
+	"""
+	deckLabelsInDeck(deckId: Int!, variant: DeckVariant = live): [DeckLabelUsage!] @invalidatedBy(roots: ["decks"])
+	"""
+	One deck's deck notes, in the reader's order. Empty when it has none.
 	"""
 	deckNotes(deckId: Int!): [DeckNote!] @invalidatedBy(roots: ["decks"])
 	"""
-	Every deck's worth at one marketplace.
+	Every deck's printed mana costs, for colour bars. A deck with no costed cards is absent.
+	"""
+	deckPipCosts: [DeckPipCosts!] @invalidatedBy(roots: ["decks"])
+	"""
+	Every deck to-do list with something in it, across all decks (archived ones included),
+	most recently edited first.
+	"""
+	deckTodoLists: [DeckTodoListEntry!] @invalidatedBy(roots: ["decks"])
+	"""
+	One deck's to-do lists, in the reader's order — empty ones included.
+	"""
+	deckTodoListsForDeck(deckId: Int!): [DeckTodoList!] @invalidatedBy(roots: ["decks"])
+	"""
+	What every deck's live cards are worth at a marketplace, one row per deck.
+	`marketplace` is the one to price at; the reader's own when omitted.
 	"""
 	deckValues(marketplace: Marketplace): [DeckValue!] @invalidatedBy(roots: ["decks"])
 	"""
-	Every deck, in the gallery's order. `archived` narrows to the archived or the
-	unarchived ones; absent, both.
+	Every deck, as the deck gallery lists them: archived decks last, then most recently
+	changed first. `archived`: only archived decks (`true`) or only active ones (`false`);
+	omit for both.
 	"""
 	decks(archived: Boolean): [Deck!] @invalidatedBy(roots: ["decks"])
 	"""
@@ -1549,6 +2279,10 @@ type Query {
 		"""
 		exactSpelling: Boolean
 	): [EntryTagUse!] @invalidatedBy(roots: ["entryTags", "collection", "wishlist"])
+	"""
+	Every deck format and its rules, in picker order.
+	"""
+	formats: [Format!] @invalidatedBy(roots: ["formatSpecs"])
 	"""
 	The home page's tiles and where they sit, as stored. A version-1 document (an older
 	build's) answers its tiles unplaced — `x`, `y`, `w` and `h` at `0`, `span` kept — where
@@ -1962,6 +2696,15 @@ type ReleaseNote {
 	version: String!
 }
 
+"""
+What a card Scryfall marks `restricted` means in a format: `max_one` (one copy at most, as in
+Vintage) or `banned_as_commander` (in the singleton formats that use the word).
+"""
+enum RestrictedMeaning {
+	banned_as_commander
+	max_one
+}
+
 type RuleConflicts {
 	folders: [FolderConflicts!]!
 	"""
@@ -2212,6 +2955,17 @@ type TcgplayerIds {
 	The ordinary product, sold as Normal and Foil.
 	"""
 	productId: Int
+}
+
+"""
+How a deck keeps the tokens and emblems its cards make: `managed` and `collection` draw a
+Tokens & Emblems pile in the deck editor, `hidden` leaves it out. The pile never counts toward
+the deck's size or legality.
+"""
+enum TokenMode {
+	collection
+	hidden
+	managed
 }
 
 type UpcomingSet {
