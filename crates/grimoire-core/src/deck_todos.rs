@@ -169,6 +169,35 @@ pub fn lists_for(conn: &Connection, deck_id: i64) -> Result<Vec<DeckTodoList>, S
         .map_err(|e| e.to_string())
 }
 
+/// [`lists_for`] for many decks in one statement, whatever their number — each deck's lists in
+/// the order `lists_for` answers them, keyed by deck id. A deck with no lists is absent from the
+/// map rather than present with an empty one.
+///
+/// The read graph's batch (`crates/grimoire-graph`): a widget asking for every deck's to-do
+/// lists is one read rather than one `lists_for` per deck.
+pub fn lists_of_decks(
+    conn: &Connection,
+    deck_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, Vec<DeckTodoList>>, String> {
+    let ids = serde_json::to_string(deck_ids).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {LIST_COLUMNS} FROM deck_todo_lists
+              WHERE deck_id IN (SELECT value FROM json_each(?1))
+              ORDER BY deck_id, sort_order, id"
+        ))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![ids], list_from)
+        .map_err(|e| e.to_string())?;
+    let mut out: std::collections::HashMap<i64, Vec<DeckTodoList>> = Default::default();
+    for list in rows {
+        let list = list.map_err(|e| e.to_string())?;
+        out.entry(list.deck_id).or_default().push(list);
+    }
+    Ok(out)
+}
+
 /// A new list at the end of the deck's lists — `max(sort_order) + 1`, or `0` for a deck's first.
 ///
 /// **A missing deck is [`crate::deck::GONE`]**, answered by `touch_deck` before the insert, so a
@@ -366,6 +395,23 @@ mod tests {
         let second = create_list(&conn, 1, "", "").unwrap();
         assert_eq!(second.sort_order, 8, "max(sort_order) + 1, not a count");
         assert_eq!(second.title, "", "an empty title is stored as it was sent");
+    }
+
+    /// The batch answers each deck what the one-deck read does, and leaves a deck with no lists
+    /// out of the map.
+    #[test]
+    fn many_decks_lists_are_each_deck_s_own() {
+        let conn = db();
+        create_list(&conn, 1, "Mana", "- [ ] Cut a land").unwrap();
+        create_list(&conn, 1, "", "").unwrap();
+        create_list(&conn, 2, "Upgrades", "- [x] Bolt").unwrap();
+
+        let batch = lists_of_decks(&conn, &[1, 2, 3]).unwrap();
+        assert_eq!(batch.get(&1), Some(&lists_for(&conn, 1).unwrap()));
+        assert_eq!(batch.get(&2), Some(&lists_for(&conn, 2).unwrap()));
+        assert_eq!(batch[&1].len(), 2, "an empty list is still a list");
+        assert!(!batch.contains_key(&3));
+        assert!(lists_of_decks(&conn, &[]).unwrap().is_empty());
     }
 
     #[test]
