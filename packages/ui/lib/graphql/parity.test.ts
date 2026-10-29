@@ -54,9 +54,19 @@ const page = buildSchema(printSchema(built));
 /** A Rust argument → the page argument it replaces, compared by presence only. */
 const RENAMED_ARGS: Readonly<Record<string, string>> = { filters: "query" };
 
+/** The types that argument brings with it (`crates/grimoire-graph/src/filters.rs`), which the
+ *  page's graph never had. */
+const RUST_ONLY_TYPES = new Set([
+  "CardFilterInput",
+  "TagTermsInput",
+  "PredicateInput",
+  "PredicateField",
+  "PredicateOp",
+]);
+
 const BUILT_IN = new Set(["String", "Int", "Float", "Boolean", "ID"]);
 const rustTypes = Object.values(rust.getTypeMap()).filter(
-  (t) => !t.name.startsWith("__") && !BUILT_IN.has(t.name),
+  (t) => !t.name.startsWith("__") && !BUILT_IN.has(t.name) && !RUST_ONLY_TYPES.has(t.name),
 );
 
 function kindOf(t: GraphQLNamedType): string {

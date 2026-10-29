@@ -35,25 +35,20 @@ fn the_printed_schema_is_the_reviewed_one() {
     assert_eq!(sdl.trim_end(), want.replace("\r\n", "\n").trim_end());
 }
 
-/// Every root field names the roots the page re-asks it under, in the printout itself.
+/// Every root field names the roots the page re-asks it under, in the printout itself — read
+/// back through apollo-compiler, so a field whose arguments print over several lines counts too.
 #[test]
 fn every_root_field_carries_its_cache_roots() {
     let sdl = Graph::new().sdl();
-    let query = &sdl[sdl.find("type Query").unwrap()..];
-    let query = &query[..query.find("\n}").unwrap()];
-    for name in [
-        "decks",
-        "deckValues",
-        "deckNotes",
-        "collectionSummary",
-        "collectionFolders",
-    ] {
-        let at = query
-            .find(&format!("\t{name}"))
-            .unwrap_or_else(|| panic!("{name} is a root"));
-        let line = &query[at..query[at..].find('\n').map_or(query.len(), |n| at + n)];
-        assert!(line.contains("@invalidatedBy(roots: ["), "{name}: {line}");
-    }
+    let schema = crate::validate::schema(&sdl);
+    let query = schema.get_object("Query").expect("a Query type");
+    let missing: Vec<&str> = query
+        .fields
+        .iter()
+        .filter(|(_, f)| f.directives.get("invalidatedBy").is_none())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(missing, Vec::<&str>::new());
 }
 
 #[test]
