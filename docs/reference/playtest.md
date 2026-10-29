@@ -959,6 +959,19 @@ step). A refusal goes back to that guest alone, as `lobby:refused`. A guest's st
 relay's 64 KiB frame as JSON and a tenth of that packed; one that still would not fit is sent
 without the library, which only the sandbox draws.
 
+**The page.** The setup's aside has a _Play with friends_ block (`features/playtesting/lobby/`):
+**Create lobby** for a supporter (`useMayHostPod`, the draft's own reading of the membership) and
+**Join with a code** for anyone. While a `game` lobby is held the aside is its panel. The host sees
+the code, Duel or Four-player, their own seat and any AI seats picked from the wall, the guests in
+join order with the deck each sent (`table.ts`' `lobbySeats`, `lobbyReadiness`), the AI's skill
+and Start. A guest picks one deck from the wall, which is sent at once (`useSendDeck`), and
+waits. The host's game is an ordinary held game dealt by `lobbyGameStart`, which also shows each
+`playtest:step` of its own `game`. A guest's is `holdGuestGame` (`play/guestGame.ts`), fed by
+`lobby:game` and `lobby:refused`, acting through `lobbyAct`. Both draw the one board, which reads
+`waiting` as "Waiting for {name}…" and, on the host's, offers "Let the AI play {name}" for a guest
+who is offline or gone (`lobbyKick`). Back puts the game away and leaves the lobby: the host's
+closes it for everyone.
+
 ## What is not there yet
 
 - **Holding priority over your own spell.** The reader's own spell on top never stops them, so
