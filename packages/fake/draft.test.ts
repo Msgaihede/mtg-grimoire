@@ -93,6 +93,16 @@ describe("the draft", () => {
     expect(h.draft_saved()).toMatchObject({ status: "deckbuilding", label: "Fake · Fake" });
   });
 
+  it("answers fresh arrays, so a later pick never grows a view the page holds", () => {
+    const { db, h } = world();
+    const first = h.draft_start({ setup: setup(db), draft: 1 });
+    const pool = first.pool;
+    const next = h.draft_pick({ draft: 1, cardInstanceIds: [first.pack[0].instanceId] });
+    expect(pool).toEqual([]);
+    expect(next.pool).toHaveLength(1);
+    expect(next.pool).not.toBe(pool);
+  });
+
   it("refuses a card not in the pack and a replaced draft's name", () => {
     const { db, h } = world();
     h.draft_start({ setup: setup(db), draft: 1 });

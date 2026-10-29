@@ -92,7 +92,18 @@ original would have.
 | Quick (sets, you + 7 bots) | `Quick`, set source | 2–8 |
 | Cube (a pasted list, you + bots) | `Quick`, cube source | 1–255 |
 | Sealed (six boosters into your pool) | `Sealed` | exactly 6 boosters; a lone seat is padded with a hidden bot that opens six empty ones |
-| Pod (people from a lobby, bots in the empty seats) | `Premier` with bot seats | 2–8 |
+| Pod (people from a lobby, bots in the empty seats) | `Premier` with bot seats; a pod drafts any of booster, Commander or Winston (`podFormat`) | 2–8 booster, 3–8 Commander, 2–4 Winston |
+| Commander (sets, you + 3 bots, two cards a pick, a 60-card deck with a commander) | `CommanderDraft` | 3–8 (the setup offers 3–8, default 4) |
+| Winston (sets, you + 1 bot, one shared stack in three piles) | `Winston`, `SharedStackPiles { pile_count: 3 }` | 2–4 (solo is 2) |
+
+A Commander draft's set wall puts Commander Legends (`cmr`) and Battle for Baldur's Gate (`clb`)
+first, marked _Suggested_, where the corpus has them; any set's booster is allowed. Its pick
+screen chooses two cards and picks them together (`draft_pick` with two ids), and its deck is a
+virtual Casual deck with a Commander pile (`draft_deck_create(…, commander: true)`); the draft bar
+checks 60 cards and a commander itself. A Winston draft deals its boosters `[seat][round]` like
+every other mode — the host shuffles them into the stack — and draws a table in the pack's place:
+the stack and the piles face down with their counts, the active pile face up on your turn with
+**Take pile** and **Decline** (`draft_winston`, or a guest's `lobby_winston`).
 
 A refused pick changes nothing (the session is cloned and put back on any error). A solo draft is
 saved after each change (`app_meta` `draft_session`) and can be resumed; a pod cannot.
@@ -127,7 +138,6 @@ sends every seat its view, and tells the page through `lobby:state` and `draft:v
 
 ## What is not there yet
 
-- Commander Draft and Winston Draft (draft-core has both; neither is offered).
 - Playing the drafted deck against the bots' decks; the deck can be goldfished or playtested
   against a deck of the reader's from the editor as any deck can.
 - A sealed product's own price: the Packs page asks the reader what they paid.

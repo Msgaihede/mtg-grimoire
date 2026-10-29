@@ -2918,9 +2918,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * piles, which is what they asked for, so the editor has one fact to pass rather than two and
    * this recomputes only when the format does.
    */
+  //
+  // **A Commander draft's deck is the one exception the format cannot answer**: it is Casual (no
+  // command zone of its own) yet draft_deck_create gives it an empty Commander pile for the reader to
+  // move a legend into, and the draft bar points at it. So a draft deck with a commander pile draws
+  // it empty too.
+  const draftCommanderZone = draft && categories.some((c) => c.kind === "commander");
   const emptyGroupRules = useMemo(
-    () => ({ requiresCommander: spec?.requiresCommander ?? false }),
-    [spec],
+    () => ({ requiresCommander: (spec?.requiresCommander ?? false) || draftCommanderZone }),
+    [spec, draftCommanderZone],
   );
 
   /**
@@ -3073,7 +3079,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
   // A Commander draft's deck (a Commander pile beside Deck and Pool, spec §4a): the bar checks its
   // size and its commander itself. Two numbers, memoised on themselves, for the memoised bar.
-  const draftCommanderPile = draft && categories.some((c) => c.kind === "commander");
+  const draftCommanderPile = draftCommanderZone;
   let draftDeckCards = 0;
   let draftCommanders = 0;
   if (draftCommanderPile) {

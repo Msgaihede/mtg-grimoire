@@ -2,6 +2,9 @@
 
 The desktop's Draft & Packs page: drafting a pool against phase.rs's draft bots or with people in a
 lobby, building it into a deck in the deck editor, and opening boosters against their average.
+Modes: Quick, Sealed, Cube, Pod (booster, Commander or Winston), Commander (you + 3 bots, two cards
+a pick, a 60-card deck with a commander) and Winston (you + 1 bot, a shared stack in three piles) —
+spec §4a.
 Desktop only — the light app draws no such page, and every command it calls is on the desktop's
 `DESKTOP_ONLY` list.
 
@@ -14,10 +17,10 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 | `sets.ts`, `SetGrid.tsx`                     | The sets a booster can come from, one set's `BoosterSet` (`useBoosterSet`), the set wall                                                                                                   |
 | `packs/`                                     | Open Packs: the product picker, the opened wall, the figures and the histogram                                                                                                             |
 | `DraftPage.tsx`                              | The hub (_Draft in progress_, _Start new_) and the page-local state machine                                                                                                                |
-| `setup/`                                     | Quick, Sealed and Cube setup; `deal.ts` deals boosters to seats                                                                                                                            |
-| `pick/`                                      | The pick screen, the pool by mana value, the table strip                                                                                                                                   |
+| `setup/`                                     | Quick, Sealed, Cube, Commander and Winston setup; `deal.ts` deals boosters to seats and holds each table's seat bounds                                                                     |
+| `pick/`                                      | The pick screen (one card a pick, or two in a Commander draft), the Winston table, the pool by mana value, the table strip                                                                 |
 | `build/`                                     | The hand-over from a finished draft to a draft deck                                                                                                                                        |
-| `lobby/`                                     | Pod drafts: create (a supporter's), join by code, the host's and the guest's rooms                                                                                                         |
+| `lobby/`                                     | Pod drafts: create (a supporter's), join by code, the host's room (format and seats) and the guest's                                                                                       |
 | `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode: `DraftDeckBar`, the unsaved list, opening a draft deck                                                                                                       |
 
 ## Binding rules

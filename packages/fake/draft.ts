@@ -308,6 +308,11 @@ function passLeft(round: number): boolean {
   return round % 2 === 0;
 }
 
+/**
+ * The view as a host sends it: **fresh arrays every time**. The engine answers JSON, so a page
+ * never holds the engine's own lists; handing back `state.pools[0]` itself would let the next pick
+ * grow an array the page has memoised on, and the pool would read "7 cards" over empty columns.
+ */
 function viewOf(state: DraftState): DraftView {
   const { setup } = state;
   return {
@@ -320,9 +325,9 @@ function viewOf(state: DraftState): DraftView {
     pickNumber: state.pick,
     packSize: state.packSize,
     passLeft: passLeft(state.round),
-    pack: state.done ? [] : (state.packs[0] ?? []),
+    pack: state.done ? [] : [...(state.packs[0] ?? [])],
     waiting: false,
-    pool: state.pools[0] ?? [],
+    pool: [...(state.pools[0] ?? [])],
     seats: setup.seats.map((s, i) => ({
       name: s.name,
       bot: s.bot,
@@ -330,7 +335,7 @@ function viewOf(state: DraftState): DraftView {
       picked: false,
       poolCount: state.pools[i]?.length ?? 0,
     })),
-    packSets: setup.packSets,
+    packSets: [...setup.packSets],
     minDeckSize: setup.minDeckSize,
     podFormat: setup.podFormat ?? "booster",
     picksPerStep: picksPerStep(setup),
@@ -357,7 +362,7 @@ function winstonView(state: DraftState, w: WinstonState): WinstonView {
     mainCount: w.main.length,
     piles: w.piles.map((pile, i) => ({
       count: pile.length,
-      cards: yourTurn && i === w.active ? pile : [],
+      cards: yourTurn && i === w.active ? [...pile] : [],
       active: !state.done && i === w.active,
     })),
     turnSeat: w.turn,

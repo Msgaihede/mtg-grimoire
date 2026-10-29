@@ -186,13 +186,13 @@ const MODES: readonly {
   {
     id: "commander",
     title: "Commander Draft",
-    blurb: "Two cards a pick round a table of bots, then a 60-card Commander deck from your pool.",
+    blurb: "Two cards a pick round a table of bots, then a 60-card Commander deck.",
     icon: Crown,
   },
   {
     id: "winston",
     title: "Winston Draft",
-    blurb: "You and a bot share one face-down stack in three piles — take a pile or decline it.",
+    blurb: "One face-down stack in three piles — take a pile or decline it.",
     icon: WinstonPiles,
   },
   {
