@@ -18,6 +18,7 @@ import {
   sweepClaims,
 } from "./claim";
 import { allowedOrigin, preflight, withCors, type CorsEnv } from "./cors";
+import { handleLobbyCreate, handleLobbySocket, Lobby } from "./lobby";
 import { handlePair } from "./pair";
 import { required } from "./patreon";
 import { limited, type LimitedRoute, type Limiters } from "./ratelimit";
@@ -78,10 +79,18 @@ import { newestKeys, stillInGroup, verify, type Claims } from "./token";
  * untouched. The socket is the one route that differs in kind — CORS does not cover an upgrade —
  * so `/ws` checks the origin itself and takes its bearer from a sub-protocol when there is no
  * header; `ticket.ts` is why.
+ *
+ * **The `/lobby` routes are not `/g/…` routes, and stand ahead of the group router** (draft & packs
+ * spec §6). `POST /lobby` carries a bearer verified as the gate verifies one, with no group to
+ * compare; a lobby's socket carries none, because its code is the capability. `lobby.ts` is both,
+ * and the object.
  */
 
 export interface Env extends Limiters, CorsEnv {
   GROUP: DurableObjectNamespace;
+
+  /** One Durable Object per pod-draft lobby, addressed by `idFromName(code)` — `lobby.ts`. */
+  LOBBY: DurableObjectNamespace;
 
   /** The entitlement store. `infrastructure/relay/schema.sql` is its shape. */
   DB: D1Database;
@@ -129,6 +138,12 @@ export interface Env extends Limiters, CorsEnv {
  * for one from outside is a 404 here like any other path that is not a route.
  */
 const ROUTE = new RegExp(`^/g/(${GROUP_SEGMENT})/(push|pull|ack|ws|rotate|keys)$`);
+
+/**
+ * `/lobby/{code}/ws`, the segment unconstrained here on purpose: `lobby.ts`'s `lobbyCode` reads it,
+ * so a code of the wrong shape is that file's 404 and not this router's.
+ */
+const LOBBY_SOCKET = /^\/lobby\/([^/]+)\/ws$/;
 
 /** `/p/{rv}/{slot}` — 32 hex characters, and one of exactly two slots. */
 const RENDEZVOUS = /^\/p\/([0-9a-f]{32})\/(offer|join)$/;
@@ -371,6 +386,19 @@ async function route(request: Request, env: Env, url: URL): Promise<Response> {
       : handleRendezvousGet(env, id, slot, Date.now());
   }
 
+  // A lobby: no D1, and no group. Creation is behind a bearer of its own checking; the socket
+  // behind its code. Neither takes CORS — the draft is the desktop's — and the socket checks a
+  // browser's origin itself, as `/ws` does.
+  if (url.pathname === "/lobby") {
+    if (request.method !== "POST") return methodNotAllowed("POST");
+    return handleLobbyCreate(request, env);
+  }
+  const lobby = LOBBY_SOCKET.exec(url.pathname);
+  if (lobby) {
+    if (request.method !== "GET") return methodNotAllowed("GET");
+    return handleLobbySocket(request, env, url, lobby[1]);
+  }
+
   const match = ROUTE.exec(url.pathname);
   if (!match) return new Response("not found", { status: 404 });
 
@@ -506,4 +534,4 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-export { Group };
+export { Group, Lobby };

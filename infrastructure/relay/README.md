@@ -3,7 +3,9 @@
 A Cloudflare Worker with **one SQLite-backed Durable Object per pairing group**, plus a D1
 database that says who is allowed to reach one. It holds a compacted log of sealed envelopes,
 hands each device the ones it has not seen, and forgets the ones every device has acked once
-they are older than thirty days.
+they are older than thirty days. **Since 2026-10-29 it also holds lobbies for pod drafts** — a
+second class, one object per six-character code, that routes frames between a host and up to
+seven guests and forgets the lobby six hours after it was made ("Lobbies for pod drafts", below).
 
 **It is one hosted service now, not one deployment per reader, and that is the change everything
 else in this file follows from.** The address is compiled into the app —
@@ -870,6 +872,39 @@ closes after, each close on its own: one that throws costs nothing else.
   `grimoire.live.v1` back and kept it. What is left is the deployed edge, which a real browser
   with a real membership settles.
 
+### Lobbies for pod drafts
+
+A pod draft (draft & packs spec §6) runs on the host's app; the relay only carries its frames.
+**The `/lobby` routes are not `/g/…` routes** and reach a class of their own, `Lobby`, one object
+per code by `idFromName(code)`. Neither reads D1.
+
+| Request | Answer |
+| --- | --- |
+| `POST /lobby`, `Authorization: Bearer <access>` | `201 {"code": "K7QX2M", "hostKey": "<32 hex>", "expiresAt": <ms>}`. `401` without a token `verify` accepts — the gate's check, signature and expiry, with no group compared — then `RL_MINT`'s `429`. A code is 6 of `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`; one already live is drawn again (four tries, then `503`) |
+| `GET /lobby/{code}/ws?role=host&key=…` | `101`, a hibernatable socket. `403` for a wrong key, before any upgrade |
+| `GET /lobby/{code}/ws?role=guest&name=…[&rejoin=<peer>.<secret>]` | `101`. No bearer: the code is the capability. A name is trimmed and 1–24 characters with no control character, else `400` |
+
+The socket is refused ahead of the object, in this order, for a code of the wrong shape (`404`,
+upper-cased first), a foreign `Origin` (`403`, as `/ws`), no upgrade (`426`), a malformed query
+(`400`) and `RL_READ`'s limit (`429`); then the object answers `404` for a code that is not live.
+**Creation is a supporter's because the token is**: `claim.ts` mints one only through `grantFor`,
+which every door reaches after `settle` has read the membership `active` or `grace`.
+
+**The frames and close codes are `src/lobby.ts`'s doc** and the spec's §6, a contract the desktop
+implements: `peers` and `msg` (with `from`) to the host; `send` (to a peer or `*`), `lock`, `kick`
+and `close` from it; `welcome`, `host` and `msg` to a guest; `msg` from one, dropped while the host
+is offline. 4000 closed, 4001 kicked, 4003 started (locked, and not a rejoin), 4004 full, 4005
+replaced; a frame over 64 KiB closes its socket with 1009, and a frame that is not JSON or has an
+unknown `t` is ignored. A guest that goes stays on the roster offline and rejoins with its secret;
+a kicked one is removed, and its rejoin is a fresh join.
+
+**What it holds**: the host key's SHA-256, each guest's peer id, name and secret's SHA-256, the
+lock, and the expiry — for six hours, when an alarm closes every socket with 4000 and deletes the
+storage; a host's `close` does the same at once. Bodies pass through and are never stored.
+⚠️ **The host key and a rejoin secret travel in the query string**, so with `observability` on they
+are in this account's Workers Logs for their retention, as a browser's sub-protocol token is
+(above); each is worth one lobby for six hours at most.
+
 ## Where the logic is
 
 `src/log.ts` — `since`, `compact`, `departures` and the roster's parse and ordering, as pure
@@ -920,6 +955,12 @@ untouched.
 `src/cors.ts` — `allowedOrigin`, `preflight` and `withCors`: the allow-list's exact match, the 204,
 and the rebuilt response. Pure, and tested through `worker.fetch` in `cors.test.ts`, where each
 answer is asked for twice — without an `Origin` and with one — and compared.
+
+`src/lobby.ts` — the pod-draft lobby: `POST /lobby` and the socket's checks ahead of the object
+(`handleLobbyCreate`, `handleLobbySocket`, `parseJoin`, `lobbyCode`), and the `Lobby` class.
+`lobby.test.ts` drives it through `worker.fetch` into real objects over `src/fakeLobby.ts`, a
+stand-in with a fresh socket pair per connection, attachments, key-value storage and an alarm —
+none of which `Group` touches, so `fakeState.ts` does not fake them.
 
 `src/ticket.ts` — what a browser's socket needs: `bearerTicket` (the `bearer.` sub-protocol the
 gate reads for `ws` alone), `selectedProtocol` (what the 101 names), and `KEEPALIVE`, the
@@ -1028,6 +1069,10 @@ deploy between releases, which is still asked for.
    command sets.
 4. `npx wrangler deploy`, then register the redirect URI and the webhook with Patreon. **Verify
    against the host and never against an exit code** — that is what the 500 above was.
+
+**The lobby's class ships as Durable Object migration `v2`** (`wrangler.jsonc`), which the deploy
+applies itself — no D1 migration and no step above. It goes out with the next release's
+`relay-deploy` like the rest of the tree; until then `/lobby` is the old Worker's `404`.
 
 **Three secrets, never in this repository and never in a committed `.dev.vars`:**
 
