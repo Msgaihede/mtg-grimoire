@@ -217,6 +217,7 @@ import type {
   HomeWidget,
   IntegrationFields,
   IntegrationsStatus,
+  McpStatus,
   ImportCommitOutcome,
   ImportFile,
   ImportItem,
@@ -1650,6 +1651,16 @@ export interface FakeUpdate {
  * switch that is on. Every round in this world fails, so a press clears the sentence (the crate's
  * `settle_on`) and the round after it puts it back. The writes still go through: a round that
  * failed is not a switch that cannot be pressed.
+ *
+ * **`mcpPortTaken`** is the local MCP server switched on, at a launch where another program had
+ * already taken its port: `enabled` and not `running`, with the bind's sentence as the status's
+ * `error` (issue #1395). **Another program holds {@link MCP_DEFAULT_PORT} for as long as the world
+ * lasts**, so `mcp_enable` refuses on it too, and the way out is the reader's — a port of their
+ * own through `mcp_set_port`, which starts a switched-on server there (the desktop's
+ * `mcp_set_port` binds while running *or* switched on). Written into the world by
+ * {@link applyMcpFault}, `integrationsError`'s shape: the panel must draw the state with nothing
+ * having been pressed. {@link MCP_TAKEN_PORT} is taken in every world, so a refused move to a
+ * port is storyable without this fault.
  */
 export type Fault =
   | "busy"
@@ -1684,7 +1695,8 @@ export type Fault =
   | "lentStorage"
   | "pairOnly"
   | "integrationsNotDeployed"
-  | "integrationsError";
+  | "integrationsError"
+  | "mcpPortTaken";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -2544,6 +2556,11 @@ export interface FakeDb {
    */
   integrations: FakeIntegrations;
   /**
+   * The local MCP server — **off in every world** but the `mcpPortTaken` fault's, at
+   * {@link MCP_DEFAULT_PORT} with {@link FAKE_MCP_TOKEN}. See {@link FakeMcp}.
+   */
+  mcp: FakeMcp;
+  /**
    * `trades` — every trade the reader has open or has put away, and **empty in every world but
    * the `trades` seed**: a trade is something a reader started, so no collection implies one.
    */
@@ -2758,6 +2775,30 @@ export interface FakeIntegrations {
   /** `settings::PUBLISH_DUE` — a publish asked for by a switch-on or a change of columns and not
    *  yet run. Cleared by the round that answers it, and withdrawn by a switch-off. */
   pending: boolean;
+}
+
+/**
+ * The local MCP server as the desktop holds it (issue #1395): the `app_meta` row `mcp_server` —
+ * the switch, the port and the token — and whether the socket is open in this process.
+ *
+ * **There is no socket**: nothing here listens, and no agent can reach a story. What is held is
+ * the panel's half — the switch, the port, the token and the one way a bind fails — which is the
+ * whole of what the panel draws.
+ */
+export interface FakeMcp {
+  /** The switch as stored. */
+  enabled: boolean;
+  /** Listening now. Only ever `true` while {@link enabled}. */
+  running: boolean;
+  /** 1024 to 65535. */
+  port: number;
+  /** 64 hex characters. {@link FAKE_MCP_TOKEN} until a rotation. */
+  token: string;
+  /** Why an enabled server is not running, or `null`. */
+  error: string | null;
+  /** How many times the token has been replaced — what the next one is built from, so every
+   *  rotation in a world answers a token the reader has not seen before. */
+  rotations: number;
 }
 
 /**
@@ -3909,6 +3950,16 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
       publishedAt: null,
       error: null,
       pending: false,
+    },
+    // **Off, on its default port, with the token a fresh install generates** — the server is
+    // switched on by a press in Settings and by nothing a seed could stand for.
+    mcp: {
+      enabled: false,
+      running: false,
+      port: MCP_DEFAULT_PORT,
+      token: FAKE_MCP_TOKEN,
+      error: null,
+      rotations: 0,
     },
     // No trades, which is the Trade page's first-run state and what `starter` stands in too: the
     // `trades` seed is the one world that has some.
@@ -27922,6 +27973,115 @@ export function integrationHandlers(db: FakeDb) {
   };
 }
 
+/* ------------------------------------------------------------------ local MCP server --- */
+
+/** The port a fresh install listens on — the desktop's default (issue #1395). */
+export const MCP_DEFAULT_PORT = 39147;
+
+/** The token every world opens with: 64 hex characters, the shape the desktop generates.
+ *  Fixed, so a story or a test can assert the token the panel reveals and copies. */
+export const FAKE_MCP_TOKEN = "5f1c9e2ab7d04c38e6a1f09b3d7c4e2a8b6f1d0c9e3a7b5d2f4c8e1a6b0d9f37";
+
+/** A port another program holds in every world — a refused `mcp_set_port` with no fault. */
+export const MCP_TAKEN_PORT = 8080;
+
+/**
+ * The refusal for a port another program holds — `mcp::bind`'s `AddrInUse` sentence, verbatim.
+ * `mcp.test.ts` reads the Rust and holds the two to each other.
+ */
+export function mcpPortTaken(port: number): string {
+  return `Port ${port} is already in use by another program. Choose another port below.`;
+}
+
+/** The refusal for a port below 1024 — `mcp_set_port`'s own, verbatim (a port above 65535 is no
+ *  `u16`, refused before the command runs; the fake answers it the same). */
+export const MCP_PORT_RANGE =
+  "Choose a port from 1024 to 65535 — the ones below are reserved for the system.";
+
+/** Whether another program holds `port` in this world. */
+function mcpTaken(db: FakeDb, port: number): boolean {
+  return port === MCP_TAKEN_PORT || (db.fault === "mcpPortTaken" && port === MCP_DEFAULT_PORT);
+}
+
+/** The status every MCP command answers, built in one place — `integrationsStatus`' reason. */
+function mcpStatus(db: FakeDb): McpStatus {
+  const held = db.mcp;
+  return {
+    enabled: held.enabled,
+    running: held.running,
+    port: held.port,
+    url: `http://127.0.0.1:${held.port}/mcp`,
+    token: held.token,
+    error: held.error,
+  };
+}
+
+/**
+ * The `mcpPortTaken` world: switched on, and not listening, because the launch could not bind the
+ * default port — see {@link Fault}. Exported for `world.ts`, beside {@link applyIntegrationsFault}.
+ */
+export function applyMcpFault(db: FakeDb): void {
+  if (db.fault !== "mcpPortTaken") return;
+  db.mcp = {
+    ...db.mcp,
+    enabled: true,
+    running: false,
+    port: MCP_DEFAULT_PORT,
+    error: mcpPortTaken(MCP_DEFAULT_PORT),
+  };
+}
+
+/**
+ * The local MCP server's five commands (issue #1395) — the switch, the token and the port.
+ *
+ * **A group of their own**, `integrationHandlers`' shape, and **none answers `busy`**: the server
+ * takes no sync lane — its state is one `app_meta` row and a socket, and its agents' writes take
+ * the database's ordinary path, which a story never reaches.
+ *
+ * Every command answers the status re-read. A refusal changes nothing: `mcp_enable` on a taken
+ * port leaves the switch off, and `mcp_set_port` on one keeps the old port (and, while running,
+ * the old port serving) — the desktop's two promises the panel's refusal line leans on.
+ */
+export function mcpHandlers(db: FakeDb) {
+  return {
+    mcp_status: (): McpStatus => mcpStatus(db),
+    mcp_enable: (): McpStatus => {
+      // Refused with nothing changed, as the desktop does: the switch is stored only once the
+      // socket is open, so a press that could not open one leaves what was there — off, or a
+      // launch's On-and-not-running with its sentence.
+      if (!db.mcp.running && mcpTaken(db, db.mcp.port)) throw refuse(mcpPortTaken(db.mcp.port));
+      db.mcp = { ...db.mcp, enabled: true, running: true, error: null };
+      return mcpStatus(db);
+    },
+    mcp_disable: (): McpStatus => {
+      db.mcp = { ...db.mcp, enabled: false, running: false, error: null };
+      return mcpStatus(db);
+    },
+    /** A token the world has not answered before: the counter, in hex, over the fixed one's tail. */
+    mcp_rotate_token: (): McpStatus => {
+      const rotations = db.mcp.rotations + 1;
+      const head = rotations.toString(16).padStart(8, "0");
+      db.mcp = { ...db.mcp, rotations, token: head + FAKE_MCP_TOKEN.slice(8) };
+      return mcpStatus(db);
+    },
+    /**
+     * Move to `port`, as `mcp_set_port` does: **a server that is running or switched on binds** —
+     * the new port before the old is let go, so a port that cannot be bound is refused with the
+     * old one still serving (or, switched on and stopped, still stopped with its sentence). A
+     * switched-on server the launch could not start starts on the new port — the reader's way
+     * out of `mcpPortTaken`. Off, the port is only stored.
+     */
+    mcp_set_port: (args: { port: number }): McpStatus => {
+      const { port } = args;
+      if (!Number.isInteger(port) || port < 1024 || port > 65535) throw refuse(MCP_PORT_RANGE);
+      const binds = db.mcp.running ? port !== db.mcp.port : db.mcp.enabled;
+      if (binds && mcpTaken(db, port)) throw refuse(mcpPortTaken(port));
+      db.mcp = { ...db.mcp, port, error: null, running: db.mcp.running || db.mcp.enabled };
+      return mcpStatus(db);
+    },
+  };
+}
+
 /**
  * The scanner's commands. The panel stories are driven from fixtures directly; **a camera that
  * does open is answered by a script** — `scannerScript.ts`' pile of five cards, a frame at a time
@@ -28202,6 +28362,7 @@ export function allHandlers(db: FakeDb) {
     ...undoHandlers(db),
     ...scannerHandlers(db),
     ...integrationHandlers(db),
+    ...mcpHandlers(db),
     // Draft & Packs (2026-10-29): boosters, the draft against bots that take the first card, the
     // draft deck, and lobbies that refuse. Its deck writes are this world's own, unjournalled —
     // a draft deck's birth is `deck_create`'s, which records no undo step either.

@@ -3,19 +3,29 @@ import userEvent from "@testing-library/user-event";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { IntegrationFields, IntegrationsStatus } from "@/lib/ipc";
+import type { IntegrationFields, IntegrationsStatus, McpStatus } from "@/lib/ipc";
 
 const integrationsStatus = vi.hoisted(() => vi.fn());
 const integrationsEnable = vi.hoisted(() => vi.fn());
 const integrationsSetFields = vi.hoisted(() => vi.fn());
 const integrationsDisable = vi.hoisted(() => vi.fn());
+// The local MCP server's read, which the panel's first part makes on mount. Its own suite is
+// `LocalMcpSection.test.tsx`; here it answers Off so the cloud part's assertions stand alone.
+const mcpStatus = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { integrationsStatus, integrationsEnable, integrationsSetFields, integrationsDisable },
+  ipc: {
+    integrationsStatus,
+    integrationsEnable,
+    integrationsSetFields,
+    integrationsDisable,
+    mcpStatus,
+  },
 }));
 
 import {
   checkedLine,
+  CLOUD_HEADING,
   IntegrationsPanel,
   NOT_AVAILABLE,
   NOT_ENTITLED,
@@ -25,6 +35,7 @@ import {
   sentLine,
   STRANDED,
 } from "./IntegrationsPanel";
+import { MCP_HEADING } from "./LocalMcpSection";
 
 /** A fixed instant every "2 hours ago" below is read against. */
 const NOW = Math.floor(Date.now() / 1000);
@@ -94,7 +105,18 @@ const theSwitch = () => screen.findByRole("switch", { name: /^Keep a copy for in
 const box = (name: string) => screen.getByRole("checkbox", { name });
 const theQuestion = () => screen.getByRole("dialog", { name: "Turn off integrations" });
 
+/** The local server off — typed, for `status`'s reason. */
+const MCP_OFF: McpStatus = {
+  enabled: false,
+  running: false,
+  port: 39147,
+  url: "http://127.0.0.1:39147/mcp",
+  token: "0123456789abcdef".repeat(4),
+  error: null,
+};
+
 beforeEach(() => {
+  mcpStatus.mockReset().mockResolvedValue(MCP_OFF);
   integrationsStatus.mockReset().mockResolvedValue(status());
   integrationsEnable.mockReset();
   integrationsSetFields.mockReset();
@@ -134,6 +156,26 @@ describe("IntegrationsPanel", () => {
         "Changing these while the copy is on deletes it from the server, and your devices send it again under the new choice.",
       ),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * **Two switches in one panel that must not read as one** — the local MCP server above, the
+   * cloud copy below, each under its own heading, and the cloud copy's sentences inside its own
+   * part: the local server reads the database, never the copy.
+   */
+  it("draws the local server and the cloud copy as two named parts, the local one first", async () => {
+    setup();
+    await theSwitch();
+
+    const local = screen.getByRole("group", { name: MCP_HEADING });
+    const cloud = screen.getByRole("group", { name: CLOUD_HEADING });
+    expect(local.compareDocumentPosition(cloud) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(cloud).getByText(PRIVACY_SENTENCE)).toBeInTheDocument();
+    expect(within(cloud).getByRole("switch")).toHaveAccessibleName(/^Keep a copy for integrations/);
+    expect(within(local).queryByText(PRIVACY_SENTENCE)).toBeNull();
+    expect(
+      await within(local).findByRole("switch", { name: /^Let agents on this computer connect/ }),
+    ).toHaveAttribute("aria-checked", "false");
   });
 
   it("opens off, with all five boxes clear and pressable", async () => {

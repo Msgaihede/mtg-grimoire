@@ -8,10 +8,19 @@ import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { SWITCH, switchTone, TOUCH_FLOOR } from "./controls";
+import { LocalMcpSection } from "./LocalMcpSection";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /** The panel's id stem — `SettingsSection`'s heading is `integrations-heading`. */
 const ID = "integrations";
+
+/**
+ * The cloud copy's heading inside the panel, under the local MCP server's
+ * ({@link LocalMcpSection}'s `MCP_HEADING`). **Two headings for two switches that must not read as
+ * one**: the first is a socket on this computer and free, this one a copy on a server behind a
+ * membership — and nothing the first serves is read from the second.
+ */
+export const CLOUD_HEADING = "Copy for cloud integrations";
 
 /**
  * What a server holding the reader's collection means, **verbatim from spec §4.B**
@@ -106,7 +115,10 @@ export function checkedLine(checkedAt: number | null, nowMs: number = Date.now()
 
 /**
  * Settings → Integrations (issue #1396, plan §1 item 5): the group's switch for a copy of the
- * collection held on a server, and the five columns it may carry.
+ * collection held on a server, and the five columns it may carry — **under the local MCP server**
+ * ({@link LocalMcpSection}, issue #1395), which is the panel's first part and owns its own
+ * status, commands and heading. The local part comes first because it is the one any reader can
+ * switch on: free, with no membership, and nothing leaving the computer.
  *
  * **The switch is the group's, and so are the columns** (plan §2): the store's existence is what
  * every device reads as on or off, and two devices projecting under two choices would flap it.
@@ -247,92 +259,106 @@ export function IntegrationsPanel(): JSX.Element {
     // A literal id, never `ID`: `nav.test.ts` holds every `SettingsSection` stem to a `PanelId`
     // by reading the source, and an expression is a stem no text sweep can read.
     <SettingsSection id="integrations" title="Integrations">
-      <p className="text-sm">{PRIVACY_SENTENCE}</p>
-      {/* True in this release: Discord and a remote MCP server are later PRs (issue #1396), and
+      <LocalMcpSection />
+
+      {/* The cloud copy, ruled off from the local server above it and named apart: a reader who
+          switched that one on has put nothing on a server, and this part must not read as its
+          second half. */}
+      <div
+        role="group"
+        aria-labelledby={`${ID}-cloud-heading`}
+        className="space-y-4 border-t border-border pt-4"
+      >
+        <h3 id={`${ID}-cloud-heading`} className="text-sm font-medium">
+          {CLOUD_HEADING}
+        </h3>
+        <p className="text-sm">{PRIVACY_SENTENCE}</p>
+        {/* True in this release: Discord and a remote MCP server are later PRs (issue #1396), and
           a reader deciding whether to switch this on should know nothing reads it yet. */}
-      <p className="text-sm text-dim">No integration reads this copy yet.</p>
+        <p className="text-sm text-dim">No integration reads this copy yet.</p>
 
-      {/* No switch until the status has answered: an Off drawn over a store that may exist would
+        {/* No switch until the status has answered: an Off drawn over a store that may exist would
           be a claim this panel has not checked. A read that failed says so below instead. */}
-      {status === null ? (
-        !read.isError && <p className="text-sm text-dim">Checking…</p>
-      ) : (
-        <SwitchRow
-          status={status}
-          note={
-            gate ??
-            (!on
-              ? "Off. Our servers keep no copy."
-              : status.pending
-                ? SENDING
-                : sentLine(status.publishedAt))
-          }
-          // On, in a build that can reach the store, on a device that can no longer ask it.
-          stranded={on && status.available && !status.entitled}
-          pressable={pressable}
-          busy={enable.isPending || disable.isPending}
-          onToggle={toggle}
-          buttonRef={switchRef}
-        />
-      )}
+        {status === null ? (
+          !read.isError && <p className="text-sm text-dim">Checking…</p>
+        ) : (
+          <SwitchRow
+            status={status}
+            note={
+              gate ??
+              (!on
+                ? "Off. Our servers keep no copy."
+                : status.pending
+                  ? SENDING
+                  : sentLine(status.publishedAt))
+            }
+            // On, in a build that can reach the store, on a device that can no longer ask it.
+            stranded={on && status.available && !status.entitled}
+            pressable={pressable}
+            busy={enable.isPending || disable.isPending}
+            onToggle={toggle}
+            buttonRef={switchRef}
+          />
+        )}
 
-      <PanelAlert tone="problem">{problem}</PanelAlert>
+        <PanelAlert tone="problem">{problem}</PanelAlert>
 
-      {/* The rule is on a box around the fieldset, because a fieldset's own border is drawn
+        {/* The rule is on a box around the fieldset, because a fieldset's own border is drawn
           through its legend. */}
-      <div className="border-t border-border pt-4">
-        <fieldset className="space-y-2">
-          <legend className="text-sm">What the copy includes</legend>
-          <p className="text-xs leading-snug text-dim">
-            Always your cards, folders, wishlist and decks — names, printings, finishes and
-            quantities. These are off until you tick them:
-          </p>
-          <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
-            {FIELD_ROWS.map(({ key, label }) => (
-              <label
-                key={key}
-                className={cn(
-                  "flex items-center gap-2",
-                  TOUCH_FLOOR,
-                  !pressable && "cursor-not-allowed text-dim",
-                )}
-              >
-                <input
-                  type="checkbox"
-                  checked={shown[key]}
-                  aria-disabled={!pressable || undefined}
-                  onChange={(e) => tick(key, e.target.checked)}
+        <div className="border-t border-border pt-4">
+          <fieldset className="space-y-2">
+            <legend className="text-sm">What the copy includes</legend>
+            <p className="text-xs leading-snug text-dim">
+              Always your cards, folders, wishlist and decks — names, printings, finishes and
+              quantities. These are off until you tick them:
+            </p>
+            <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+              {FIELD_ROWS.map(({ key, label }) => (
+                <label
+                  key={key}
                   className={cn(
-                    "size-4 accent-accent",
-                    !pressable && "cursor-not-allowed opacity-50",
-                    FOCUS,
+                    "flex items-center gap-2",
+                    TOUCH_FLOOR,
+                    !pressable && "cursor-not-allowed text-dim",
                   )}
-                />
-                {label}
-              </label>
-            ))}
-          </div>
-          <p className="text-xs leading-snug text-dim">
-            Changing these while the copy is on deletes it from the server, and your devices send it
-            again under the new choice.
-          </p>
-          {/* Absent from the format rather than switched off in it (plan §3.1), so there is no
+                >
+                  <input
+                    type="checkbox"
+                    checked={shown[key]}
+                    aria-disabled={!pressable || undefined}
+                    onChange={(e) => tick(key, e.target.checked)}
+                    className={cn(
+                      "size-4 accent-accent",
+                      !pressable && "cursor-not-allowed opacity-50",
+                      FOCUS,
+                    )}
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <p className="text-xs leading-snug text-dim">
+              Changing these while the copy is on deletes it from the server, and your devices send
+              it again under the new choice.
+            </p>
+            {/* Absent from the format rather than switched off in it (plan §3.1), so there is no
               box that could ever send one. Saying so is the point: a reader deciding about this
               copy is deciding about what they paid. */}
-          <p className="text-xs leading-snug text-dim">
-            Purchase price, purchase currency, acquired date and acquisition source are never
-            included.
-          </p>
-          <p className="text-xs leading-snug text-dim">
-            Locked folders are included — this copy is private to your integrations, not a public
-            share.
-          </p>
-        </fieldset>
-      </div>
+            <p className="text-xs leading-snug text-dim">
+              Purchase price, purchase currency, acquired date and acquisition source are never
+              included.
+            </p>
+            <p className="text-xs leading-snug text-dim">
+              Locked folders are included — this copy is private to your integrations, not a public
+              share.
+            </p>
+          </fieldset>
+        </div>
 
-      {status !== null && status.checkedAt !== null && (
-        <p className="text-xs text-dim">{checkedLine(status.checkedAt)}</p>
-      )}
+        {status !== null && status.checkedAt !== null && (
+          <p className="text-xs text-dim">{checkedLine(status.checkedAt)}</p>
+        )}
+      </div>
 
       <ConfirmDialog
         open={asking}

@@ -313,3 +313,16 @@ export const REVIEW_KEY: QueryKey = ["sync", "review"];
  * a later integration's own keys can sit beside it.
  */
 export const INTEGRATIONS_KEY: QueryKey = ["integrations", "status"];
+
+/**
+ * The local MCP server's status — `ipc.mcpStatus` (issues #1395 and #1396, PR 1).
+ *
+ * Written back by every command of the server, {@link INTEGRATIONS_KEY}'s rule: each answers a
+ * fresh status, so a press draws its outcome without a second read.
+ *
+ * **A root of its own, `["mcp"]`, and not under `["integrations"]`** though the two are drawn in
+ * one panel: that root is the group's copy on a server and may grow keys that ask a Worker, while
+ * this is a socket in this process — so it follows another window's switch
+ * (`crossWindow.ts`' `FOLLOW_LIVE_APP_META`) without a refresh there ever reaching the network.
+ */
+export const MCP_KEY: QueryKey = ["mcp", "status"];
