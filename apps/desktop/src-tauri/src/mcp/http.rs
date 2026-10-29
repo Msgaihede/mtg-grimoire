@@ -448,7 +448,12 @@ mod tests {
         .map(read)
         .unwrap()
         .await;
-        assert_eq!(listed["result"]["tools"].as_array().unwrap().len(), 10);
+        // Every tool `tools::list` offers — counted there (`every_tool_has_a_closed_object_schema…`),
+        // so this asks only that the socket hands over the whole list.
+        assert_eq!(
+            listed["result"]["tools"].as_array().unwrap().len(),
+            crate::mcp::tools::list().len()
+        );
 
         let called = post(
             serde_json::json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
