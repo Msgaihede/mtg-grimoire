@@ -36,7 +36,7 @@ import { invoke, type Unlisten } from "./invoke";
  * game — settled, not a replay — and offers nothing but the stops until they have.
  */
 export type PlaytestStage =
-  "mulligan" | "main" | "attack" | "block" | "respond" | "prompt" | "watching" | "waiting" | "over";
+  "mulligan" | "main" | "attack" | "block" | "respond" | "prompt" | "waiting" | "watching" | "over";
 
 /** Where the turn is, coarse. */
 export type PlaytestPhase = "beginning" | "main1" | "combat" | "main2" | "ending";
