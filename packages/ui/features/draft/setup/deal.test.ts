@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SET } from "@/features/draft/booster/fixture";
 import { mulberry32 } from "@/features/draft/booster/rng";
-import type { ImportResolveRow } from "@/lib/ipc";
+import type { BoosterCard, ImportResolveRow } from "@/lib/ipc";
 import {
   cubeCards,
   dealCube,
@@ -60,11 +60,20 @@ describe("dealSetPacks", () => {
   });
 
   it("never deals a card this corpus lacks", () => {
-    const missing = SET.cards[0].cardId;
-    const set = {
-      ...SET,
-      cards: SET.cards.map((c) => (c.cardId === missing ? { ...c, inCorpus: false } : c)),
+    const missing = SET.products[0].sheets[0].cards[0].cardId;
+    const unknown: BoosterCard = {
+      cardId: missing,
+      name: "Unknown",
+      setCode: SET.code,
+      collectorNumber: "1",
+      rarity: null,
+      typeLine: null,
+      manaCost: null,
+      cmc: null,
+      colors: null,
+      inCorpus: false,
     };
+    const set = { ...SET, cards: [...SET.cards, unknown] };
     const packs = dealSetPacks([set, set, set], 8, mulberry32(3));
     expect(packs.flat(2)).not.toContain(missing);
     const product = playable(set.products[0], set);
