@@ -30,6 +30,29 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.63.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.62.0...v0.63.0) (2026-10-29)
+
+
+### Features
+
+* **desktop:** Draft & Packs host commands, MTGJSON cache, lobby client ([defbe6d](https://github.com/Msgaihede/mtg-grimoire/commit/defbe6df4979096b87404dc2da728bab3824be3b))
+* **draft:** Commander and Winston drafts in the page; draft deck story ([5bd5df7](https://github.com/Msgaihede/mtg-grimoire/commit/5bd5df7938f8d3e446c7917263f03c062f7b9120))
+* **draft:** Commander and Winston drafts on the Rust side ([06822e1](https://github.com/Msgaihede/mtg-grimoire/commit/06822e171eacf6bd3bb2507d8a7c8fda207db970))
+* **draft:** Draft & Packs — drafting over phase.rs, pod lobbies, pack opening ([771c247](https://github.com/Msgaihede/mtg-grimoire/commit/771c2476ca3e36b4329feac28300be1919ee94d3))
+* **draft:** no import into a draft deck; area docs ([bd1a49b](https://github.com/Msgaihede/mtg-grimoire/commit/bd1a49b8c29e6d7c910de98fa385557b313004a3))
+* **playtesting:** multiplayer lobbies with join codes ([a35d7ab](https://github.com/Msgaihede/mtg-grimoire/commit/a35d7ab1f04f409065e07231a032408649782c99))
+* **playtesting:** multiplayer lobbies with join codes ([#1419](https://github.com/Msgaihede/mtg-grimoire/issues/1419)) ([ac6a01c](https://github.com/Msgaihede/mtg-grimoire/commit/ac6a01c1ba8c1adc3f6d18b6307b8caa54e59ba5))
+* **relay:** lobbies for pod drafts ([198ffcc](https://github.com/Msgaihede/mtg-grimoire/commit/198ffccddf42bbdb65af5b575274095444d30be3))
+
+
+### Bug Fixes
+
+* **draft:** expected value counts colour-balanced slots as they are opened ([c0ab134](https://github.com/Msgaihede/mtg-grimoire/commit/c0ab1347b0570f7e9ddaa9d6d31e953bca0447f2))
+* **draft:** never deal a card the corpus lacks ([73332cf](https://github.com/Msgaihede/mtg-grimoire/commit/73332cf16394956c1de003f7af8931c7a387cb19))
+* **playtest:** ask which permanents a multi-sacrifice takes ([74c61fc](https://github.com/Msgaihede/mtg-grimoire/commit/74c61fc5b5a8152e34eddc20a636f648f9bbb32f))
+* **playtest:** ask which permanents a multi-sacrifice takes ([1518d53](https://github.com/Msgaihede/mtg-grimoire/commit/1518d535f425078575951859095d008cd2159549)), closes [#1416](https://github.com/Msgaihede/mtg-grimoire/issues/1416)
+* **scanner:** thinner, square scanner corners ([#1412](https://github.com/Msgaihede/mtg-grimoire/issues/1412)) ([ba6042f](https://github.com/Msgaihede/mtg-grimoire/commit/ba6042f6991afa3972b07609719a5692f9d32f5b))
+
 ## [0.62.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.61.0...v0.62.0) (2026-10-25)
 
 
