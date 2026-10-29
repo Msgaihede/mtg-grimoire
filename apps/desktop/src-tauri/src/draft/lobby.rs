@@ -8,12 +8,19 @@
 //! base64, so a Commander board fits the relay's 64 KiB frame) and sends its actions (`act`), and
 //! a refused one is told back to that guest alone (`refused`).
 //!
+//! **Or a trade's** ([`LobbyKind::Trade`]): two readers build one trade between them, each on
+//! their own copy of it (`crate::trade::lobby`). The host's app holds the deal — both offers, a
+//! revision and each reader's acceptance — and answers every change with it (`deal`); a guest
+//! sends its offer (`offer`) and its acceptance of a revision (`accept`). Each app writes the
+//! other reader's offer as the `theirs` side of its own copy, read in its own card data.
+//!
 //! **The host's app runs the draft** — the `Draft` in [`super::DraftSlot`], phase.rs's reducer
 //! the authority — and every guest's app is sent its own seat's view and sends its picks. The
 //! relay carries JSON frames and knows nothing of a draft; what rides inside them is the app's
 //! own body (`v: 1`): `room`, `view` and `end` from the host, `pick`, `winston` (a Winston turn:
 //! `{"v":1,"kind":"winston","pile":n,"take":bool}`) and `sync` from a guest — and, in a game's
-//! lobby, `game` and `refused` from the host, `deck` and `act` from a guest.
+//! lobby, `game` and `refused` from the host, `deck` and `act` from a guest; in a trade's,
+//! `deal` from the host, `offer` and `accept` from a guest.
 //!
 //! **Creating a lobby is a supporter's**: `lobby_create` asks `sync_engine::commands::entitled`
 //! first and then sends the relay's access token (`entitlement::access_token` over the lane, as
@@ -46,6 +53,8 @@ use tokio_tungstenite::tungstenite::{self, Message};
 use super::{Outcome, Shared};
 use crate::playtest::lobby::{GameSeats, GuestDeck};
 use crate::sync::AppState;
+use crate::trade::lobby::{tidy, LobbyTrade, TradeDeal};
+use grimoire_core::trade::TradeOfferLine;
 
 // ---------------------------------------------------------------------------------------
 // The wire (mirrored in `packages/ui/lib/ipc/draft.ts`)
@@ -59,17 +68,20 @@ pub enum LobbyRole {
     Guest,
 }
 
-/// What a lobby seats: a pod draft (Draft & Packs), or a Playtesting game (issue #1419).
+/// What a lobby seats: a pod draft (Draft & Packs), a Playtesting game (issue #1419), or a
+/// trade between two readers (`crate::trade::lobby`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LobbyKind {
     #[default]
     Draft,
     Game,
+    Trade,
 }
 
 /// Where a lobby is. `Connecting` while a dropped socket is opened again; `Drafting` once a
-/// draft's lobby has started, `Playing` once a game's has.
+/// draft's lobby has started, `Playing` once a game's has, `Agreed` once both readers of a
+/// trade's have accepted the same deal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LobbyPhase {
@@ -77,6 +89,7 @@ pub enum LobbyPhase {
     Open,
     Drafting,
     Playing,
+    Agreed,
     Closed,
 }
 
@@ -110,6 +123,10 @@ pub struct LobbyState {
     /// The host's draft, as the room describes it.
     pub label: String,
     pub closed_reason: Option<String>,
+    /// A trade's lobby: this reader's copy of the trade and the deal on the table. `None` in a
+    /// draft's or a game's, and for a guest that joined from a page with no trade to hold.
+    #[serde(default)]
+    pub trade: Option<LobbyTrade>,
 }
 
 /// What a host tells its guests about the room.
@@ -141,7 +158,7 @@ const WRONG_KEY: &str = "That lobby would not take this app as its host.";
 const CLOSED_BY_HOST: &str = "The host closed the lobby.";
 const LOBBY_ENDED: &str = "The lobby has closed.";
 const KICKED: &str = "You were removed from the lobby.";
-const STARTED: &str = "That lobby's draft or game has already started.";
+const STARTED: &str = "That lobby's draft, game or trade has already started.";
 const FULL: &str = "That lobby is full.";
 const REPLACED: &str = "This lobby was opened again in another window or on another computer.";
 const TOO_BIG: &str = "The lobby closed the connection: a message was too large.";
@@ -158,6 +175,10 @@ const NOT_A_DRAFT_LOBBY: &str = "This lobby is for a game, not a draft.";
 const NOT_A_GAME_LOBBY: &str = "This lobby is for a draft, not a game.";
 const GUEST_ONLY_DECK: &str = "Only a guest sends its deck through the lobby.";
 const GUEST_ONLY_ACT: &str = "Only a guest plays its seat through the lobby.";
+const NOT_A_TRADE_LOBBY: &str = "This lobby is not for a trade.";
+const NO_TRADE_HELD: &str = "A trade's lobby needs a trade of yours to hold.";
+const AGREED: &str = "You have both agreed to this trade: a change now stays on your copy of it.";
+const DEAL_MOVED: &str = "The trade changed before you accepted it. Look it over and accept again.";
 
 // ---------------------------------------------------------------------------------------
 // Pure pieces: codes, names, addresses, frames, reactions
@@ -175,6 +196,8 @@ pub const PING_EVERY: Duration = Duration::from_secs(30);
 const MAX_RECONNECTS: u32 = 6;
 /// How long the first frame may take after a socket opens.
 const FIRST_FRAME_WAIT: Duration = Duration::from_secs(15);
+/// How many times the other reader's offer is written while a sync holds the write connection.
+const WRITE_TRIES: u32 = 6;
 
 /// A code as the relay names a lobby: trimmed and upper-cased, six of [`LOBBY_ALPHABET`].
 pub fn lobby_code(raw: &str) -> Result<String, String> {
@@ -294,6 +317,17 @@ pub fn game_body(packed: &str) -> Value {
 pub fn refused_body(reason: &str) -> Value {
     json!({ "v": 1, "kind": "refused", "reason": reason })
 }
+/// A trade's: a guest's offer, its acceptance of revision `rev` (or taking one back), and the
+/// deal as the host holds it.
+pub fn offer_body(lines: &[TradeOfferLine]) -> Value {
+    json!({ "v": 1, "kind": "offer", "lines": lines })
+}
+pub fn accept_body(rev: u64, yes: bool) -> Value {
+    json!({ "v": 1, "kind": "accept", "rev": rev, "yes": yes })
+}
+pub fn deal_body(deal: &TradeDeal) -> Value {
+    json!({ "v": 1, "kind": "deal", "deal": deal })
+}
 
 /// A frame the relay sent, read.
 #[derive(Debug, Clone, PartialEq)]
@@ -335,6 +369,15 @@ pub enum Body {
     Game(String),
     /// A game's lobby: the host refused this guest's action, saying why.
     Refused(String),
+    /// A trade's lobby: what a guest offers.
+    Offer(Vec<TradeOfferLine>),
+    /// A trade's lobby: a guest accepts revision `rev` of the deal, or takes that back.
+    Accept {
+        rev: u64,
+        yes: bool,
+    },
+    /// A trade's lobby: the deal, as the host holds it.
+    Deal(Box<TradeDeal>),
     Other,
 }
 
@@ -363,6 +406,14 @@ fn body_of(value: &Value) -> Body {
             )),
             "game" => Body::Game(value.get("z")?.as_str()?.to_owned()),
             "refused" => Body::Refused(value.get("reason")?.as_str()?.to_owned()),
+            "offer" => Body::Offer(serde_json::from_value(value.get("lines")?.clone()).ok()?),
+            "accept" => Body::Accept {
+                rev: value.get("rev")?.as_u64()?,
+                yes: value.get("yes")?.as_bool()?,
+            },
+            "deal" => Body::Deal(Box::new(
+                serde_json::from_value(value.get("deal")?.clone()).ok()?,
+            )),
             _ => Body::Other,
         })
     };
@@ -425,6 +476,14 @@ pub enum Act {
     ShowGame(String),
     /// Guest: the host refused this seat's action.
     Refused(String),
+    /// Host of a trade's lobby: send the deal to the other reader.
+    BroadcastDeal,
+    /// Host of a trade's lobby: the other reader is here, so nobody else may join.
+    Lock,
+    /// Host of a trade's lobby: a second guest raced the lock in, and goes.
+    Kick(String),
+    /// A trade's lobby: write the other reader's offer as `theirs` on this reader's copy.
+    WriteTheirs(Vec<TradeOfferLine>),
 }
 
 /// The room as a host describes it to its guests.
@@ -434,7 +493,10 @@ pub fn room_of(state: &LobbyState) -> LobbyRoom {
         host_name: state.host_name.clone(),
         label: state.label.clone(),
         peers: state.peers.clone(),
-        started: matches!(state.phase, LobbyPhase::Drafting | LobbyPhase::Playing),
+        started: matches!(
+            state.phase,
+            LobbyPhase::Drafting | LobbyPhase::Playing | LobbyPhase::Agreed
+        ),
     }
 }
 
@@ -455,6 +517,12 @@ pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
             }
             state.peers = peers.clone();
             let mut acts = vec![Act::BroadcastRoom];
+            if state.kind == Some(LobbyKind::Trade) && !peers.is_empty() {
+                // A trade is two people: the first guest is the other reader, and the room is
+                // shut behind them.
+                acts.push(Act::Lock);
+                acts.extend(peers.iter().skip(1).map(|p| Act::Kick(p.peer.clone())));
+            }
             if state.phase == LobbyPhase::Drafting {
                 acts.push(Act::SeatsOnline(peers));
             }
@@ -502,6 +570,43 @@ pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
             },
         ) if state.phase == LobbyPhase::Playing => vec![Act::Play { from, action }],
         (
+            LobbyRole::Host,
+            Heard::Msg {
+                from: Some(from),
+                body: Body::Offer(lines),
+            },
+        ) if state.phase == LobbyPhase::Open && partner(state, &from) => {
+            let lines = tidy(lines);
+            let Some(trade) = state.trade.as_mut() else {
+                return Vec::new();
+            };
+            if !trade.deal.offer(false, lines.clone()) {
+                return Vec::new();
+            }
+            vec![Act::WriteTheirs(lines), Act::BroadcastDeal]
+        }
+        (
+            LobbyRole::Host,
+            Heard::Msg {
+                from: Some(from),
+                body: Body::Accept { rev, yes },
+            },
+        ) if state.phase == LobbyPhase::Open && partner(state, &from) => {
+            let Some(trade) = state.trade.as_mut() else {
+                return Vec::new();
+            };
+            if !trade.deal.accept(false, rev, yes) {
+                // An acceptance of a deal that has since moved: the guest is shown the one
+                // on the table.
+                return vec![Act::BroadcastDeal];
+            }
+            if trade.deal.agreed() {
+                state.phase = LobbyPhase::Agreed;
+                return vec![Act::BroadcastDeal, Act::BroadcastRoom];
+            }
+            vec![Act::BroadcastDeal]
+        }
+        (
             LobbyRole::Guest,
             Heard::Welcome {
                 peer,
@@ -541,10 +646,38 @@ pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
             }
             Body::Refused(reason) => vec![Act::Refused(reason)],
             Body::End(reason) => vec![Act::End(reason)],
+            Body::Deal(deal) => {
+                let Some(trade) = state.trade.as_mut() else {
+                    return Vec::new();
+                };
+                let deal = *deal;
+                let deal = TradeDeal {
+                    host: tidy(deal.host),
+                    guest: tidy(deal.guest),
+                    ..deal
+                };
+                let moved = trade.deal.host != deal.host;
+                let agreed = deal.agreed();
+                trade.deal = deal;
+                if agreed && state.phase == LobbyPhase::Open {
+                    state.phase = LobbyPhase::Agreed;
+                }
+                if moved {
+                    vec![Act::WriteTheirs(trade.deal.host.clone())]
+                } else {
+                    Vec::new()
+                }
+            }
             _ => Vec::new(),
         },
         _ => Vec::new(),
     }
+}
+
+/// Whether `from` is the other reader of a trade's lobby: the first guest in, the one the room
+/// was locked behind.
+fn partner(state: &LobbyState, from: &str) -> bool {
+    state.kind == Some(LobbyKind::Trade) && state.peers.first().is_some_and(|p| p.peer == from)
 }
 
 /// The phase a lobby of `kind` is in once it has started.
@@ -552,6 +685,7 @@ pub fn started(kind: LobbyKind) -> LobbyPhase {
     match kind {
         LobbyKind::Draft => LobbyPhase::Drafting,
         LobbyKind::Game => LobbyPhase::Playing,
+        LobbyKind::Trade => LobbyPhase::Agreed,
     }
 }
 
@@ -834,7 +968,12 @@ impl Ctx {
 
     /// Send `peer` the room and, in a draft, its seat's view — in a game, its seat's step.
     async fn resend(&self, peer: String) {
-        self.with(|live| live.send(send_frame(&peer, &room_body(&room_of(&live.state)))));
+        self.with(|live| {
+            live.send(send_frame(&peer, &room_body(&room_of(&live.state))));
+            if let Some(trade) = &live.state.trade {
+                live.send(send_frame(&peer, &deal_body(&trade.deal)));
+            }
+        });
         if let Some(seats) = self.game() {
             let Some(seat) = seats.seat_of(&peer) else {
                 return;
@@ -945,8 +1084,63 @@ impl Ctx {
             Act::Refused(reason) => {
                 let _ = self.app.emit("lobby:refused", reason);
             }
+            Act::BroadcastDeal => self.broadcast_deal(),
+            Act::Lock => {
+                self.with(|live| live.send(lock_frame()));
+            }
+            Act::Kick(peer) => {
+                self.with(|live| live.send(kick_frame(&peer)));
+            }
+            Act::WriteTheirs(lines) => self.write_theirs(lines).await,
         }
         None
+    }
+
+    /// Host of a trade's lobby: the deal, to the other reader.
+    fn broadcast_deal(&self) {
+        self.with(|live| {
+            if let Some(trade) = &live.state.trade {
+                live.send(send_frame("*", &deal_body(&trade.deal)));
+            }
+        });
+    }
+
+    /// The other reader's offer written as `theirs` on this reader's copy of the trade, and the
+    /// state told again — always, so the page reads the trade afresh whatever the write did.
+    /// A refused write (the reader has finished or deleted their copy) leaves the copy as the
+    /// reader left it. **A sync holding the write connection is waited out**, a few times over:
+    /// the offer is not sent twice, so a write given up here would leave this copy behind the
+    /// deal its reader is asked to accept.
+    async fn write_theirs(&self, lines: Vec<TradeOfferLine>) {
+        let Some(id) = self
+            .with(|live| live.state.trade.as_ref().and_then(|t| t.trade_id))
+            .flatten()
+        else {
+            return;
+        };
+        let mut written = Err(String::new());
+        for _ in 0..WRITE_TRIES {
+            let state = self.state.clone();
+            let lines = lines.clone();
+            written = tauri::async_runtime::spawn_blocking(move || {
+                crate::sync::with_write(&state, |c| {
+                    grimoire_core::trade::replace_side(c, id, grimoire_core::trade::THEIRS, &lines)
+                })
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+            if !matches!(&written, Err(e) if e == grimoire_core::db::BUSY) {
+                break;
+            }
+        }
+        if let Ok(unknown) = written {
+            self.with(|live| {
+                if let Some(trade) = live.state.trade.as_mut() {
+                    trade.unknown = unknown;
+                }
+            });
+        }
+        self.emit_state();
     }
 
     /// One text frame: the state changed, `lobby:state` emitted if it moved, the acts done.
@@ -1184,6 +1378,7 @@ fn unreachable_state() -> LobbyState {
         peers: Vec::new(),
         label: String::new(),
         closed_reason: None,
+        trade: None,
     }
 }
 
@@ -1280,9 +1475,11 @@ async fn relay(state: &Arc<AppState>) -> Result<(String, bool), String> {
 // Commands
 // ---------------------------------------------------------------------------------------
 
-/// Open a lobby for `kind` — a pod draft, or a Playtesting game — and host it, as `name`: a
-/// supporter's. Answers once the relay has the host's socket.
+/// Open a lobby for `kind` — a pod draft, a Playtesting game, or a trade — and host it, as
+/// `name`: a supporter's. A trade's names the reader's own copy of the trade (`trade`), whose
+/// `mine` side is what they offer. Answers once the relay has the host's socket.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn lobby_create(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -1290,8 +1487,17 @@ pub async fn lobby_create(
     lobby: tauri::State<'_, LobbySlot>,
     name: String,
     kind: LobbyKind,
+    trade: Option<i64>,
 ) -> Result<LobbyState, String> {
     let name = lobby_name(&name)?;
+    let trade = match (kind, trade) {
+        (LobbyKind::Trade, None) => return Err(NO_TRADE_HELD.to_owned()),
+        (LobbyKind::Trade, Some(id)) => Some(LobbyTrade {
+            trade_id: Some(id),
+            ..LobbyTrade::default()
+        }),
+        _ => None,
+    };
     let (base, allowed) = relay(state.inner()).await?;
     if !allowed {
         return Err(NOT_ON.to_owned());
@@ -1326,6 +1532,7 @@ pub async fn lobby_create(
             peers: Vec::new(),
             label: String::new(),
             closed_reason: None,
+            trade,
         },
         base,
         Some(made.host_key),
@@ -1343,8 +1550,11 @@ pub async fn lobby_create(
     .await)
 }
 
-/// Join the lobby `code` as `name`. Answers once the relay has welcomed this app.
+/// Join the lobby `code` as `name`. A page that joins for a trade names the reader's own copy of
+/// it (`trade`), which the host's lobby, once it says it is a trade's, fills. Answers once the
+/// relay has welcomed this app.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn lobby_join(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -1352,6 +1562,7 @@ pub async fn lobby_join(
     lobby: tauri::State<'_, LobbySlot>,
     code: String,
     name: String,
+    trade: Option<i64>,
 ) -> Result<LobbyState, String> {
     let code = lobby_code(&code)?;
     let name = lobby_name(&name)?;
@@ -1377,6 +1588,10 @@ pub async fn lobby_join(
             peers: Vec::new(),
             label: String::new(),
             closed_reason: None,
+            trade: trade.map(|id| LobbyTrade {
+                trade_id: Some(id),
+                ..LobbyTrade::default()
+            }),
         },
         base,
         None,
@@ -1690,6 +1905,147 @@ pub async fn lobby_game_start(
     Ok(host)
 }
 
+// ---------------------------------------------------------------------------------------
+// A trade's lobby
+// ---------------------------------------------------------------------------------------
+
+/// The trade this app holds in its lobby, checked for a change to the deal: the generation, the
+/// role, and the reader's copy of the trade. A deal that is agreed is final ([`AGREED`]).
+fn trade_lobby(lobby: &LobbySlot) -> Result<(u64, LobbyRole, i64), String> {
+    let held = lock(&lobby.0);
+    let live = held.as_ref().ok_or(NO_LOBBY)?;
+    if live.state.kind.is_some_and(|k| k != LobbyKind::Trade) {
+        return Err(NOT_A_TRADE_LOBBY.to_owned());
+    }
+    let id = live
+        .state
+        .trade
+        .as_ref()
+        .and_then(|t| t.trade_id)
+        .ok_or(NOT_A_TRADE_LOBBY)?;
+    match live.state.phase {
+        LobbyPhase::Closed => Err(NO_LOBBY.to_owned()),
+        LobbyPhase::Agreed => Err(AGREED.to_owned()),
+        _ => Ok((live.generation, live.state.role, id)),
+    }
+}
+
+/// Send what this reader offers: the `mine` side of their copy of the trade, as it stands, read
+/// here. A host's moves the deal at once and tells the other reader; a guest's goes to the host,
+/// and the deal comes back as `lobby:state`. **Sent again unchanged, it changes nothing** — the
+/// page sends it whenever its side may have moved.
+#[tauri::command]
+pub async fn lobby_trade_offer(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, super::DraftSlot>,
+    lobby: tauri::State<'_, LobbySlot>,
+) -> Result<(), String> {
+    let (generation, role, id) = trade_lobby(&lobby)?;
+    let read = state.inner().clone();
+    let lines = tauri::async_runtime::spawn_blocking(move || {
+        grimoire_core::trade::side_offer(
+            &crate::sync::lock_db_read(&read),
+            id,
+            grimoire_core::trade::MINE,
+        )
+    })
+    .await
+    .map_err(|e| format!("the trade could not be read: {e}"))??;
+    let lines = tidy(lines);
+    if role == LobbyRole::Guest {
+        let held = lock(&lobby.0);
+        let live = held
+            .as_ref()
+            .filter(|l| l.generation == generation)
+            .ok_or(NO_LOBBY)?;
+        live.send(guest_frame(&offer_body(&lines)));
+        return Ok(());
+    }
+    let ctx = Ctx {
+        app,
+        lobby: lobby.0.clone(),
+        draft: slot.0.clone(),
+        state: state.inner().clone(),
+        generation,
+        role,
+    };
+    let moved = ctx
+        .with(|live| {
+            live.state
+                .trade
+                .as_mut()
+                .is_some_and(|t| t.deal.offer(true, lines))
+        })
+        .ok_or(NO_LOBBY)?;
+    if moved {
+        ctx.broadcast_deal();
+        ctx.emit_state();
+    }
+    Ok(())
+}
+
+/// This reader accepts revision `rev` of the deal — the one the page is showing — or, with
+/// `accept` false, takes that back. A host's counts at once; a guest's goes to the host, and the
+/// deal comes back as `lobby:state`. **A revision that is no longer the deal's accepts nothing**
+/// ([`DEAL_MOVED`]): the other reader changed their offer before the press. Once both readers
+/// have accepted the same revision the lobby is `agreed`, and each finishes their own copy.
+#[tauri::command]
+pub async fn lobby_trade_accept(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, super::DraftSlot>,
+    lobby: tauri::State<'_, LobbySlot>,
+    rev: u64,
+    accept: bool,
+) -> Result<(), String> {
+    let (generation, role, _) = trade_lobby(&lobby)?;
+    let ctx = Ctx {
+        app,
+        lobby: lobby.0.clone(),
+        draft: slot.0.clone(),
+        state: state.inner().clone(),
+        generation,
+        role,
+    };
+    if role == LobbyRole::Guest {
+        let current = ctx
+            .with(|live| {
+                let rev_now = live.state.trade.as_ref().map(|t| t.deal.rev);
+                if rev_now == Some(rev) {
+                    live.send(guest_frame(&accept_body(rev, accept)));
+                }
+                rev_now
+            })
+            .ok_or(NO_LOBBY)?;
+        return if current == Some(rev) {
+            Ok(())
+        } else {
+            Err(DEAL_MOVED.to_owned())
+        };
+    }
+    let answer = ctx
+        .with(|live| {
+            let trade = live.state.trade.as_mut().ok_or(NOT_A_TRADE_LOBBY)?;
+            if trade.deal.rev != rev {
+                return Err(DEAL_MOVED);
+            }
+            let counted = trade.deal.accept(true, rev, accept);
+            if trade.deal.agreed() {
+                live.state.phase = LobbyPhase::Agreed;
+            }
+            Ok(counted)
+        })
+        .ok_or(NO_LOBBY)?
+        .map_err(str::to_owned)?;
+    if answer {
+        ctx.broadcast_deal();
+        ctx.with(|live| live.send(send_frame("*", &room_body(&room_of(&live.state)))));
+        ctx.emit_state();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1711,6 +2067,7 @@ mod tests {
             peers: Vec::new(),
             label: String::new(),
             closed_reason: None,
+            trade: None,
         }
     }
 
@@ -2152,6 +2509,174 @@ mod tests {
         assert_eq!(late.phase, LobbyPhase::Playing);
     }
 
+    fn offered(card_id: &str, quantity: i64) -> TradeOfferLine {
+        TradeOfferLine {
+            card_id: card_id.into(),
+            finish: "nonfoil".into(),
+            quantity,
+        }
+    }
+
+    fn trading(role: LobbyRole) -> LobbyState {
+        let mut s = state(role, LobbyPhase::Open);
+        s.kind = Some(LobbyKind::Trade);
+        s.trade = Some(LobbyTrade {
+            trade_id: Some(5),
+            ..LobbyTrade::default()
+        });
+        s
+    }
+
+    #[test]
+    fn a_trades_host_shuts_the_room_behind_the_other_reader_and_removes_a_third() {
+        let mut host = trading(LobbyRole::Host);
+        assert_eq!(
+            react(&mut host, Heard::Peers(Vec::new())),
+            vec![Act::BroadcastRoom],
+            "nobody yet: the room stays open"
+        );
+        assert_eq!(
+            react(
+                &mut host,
+                Heard::Peers(vec![peer("p1", "Bo", true), peer("p2", "Cy", true)])
+            ),
+            vec![Act::BroadcastRoom, Act::Lock, Act::Kick("p2".into())]
+        );
+    }
+
+    #[test]
+    fn a_trades_host_takes_the_other_readers_offer_and_agrees_when_both_accept_one_deal() {
+        let mut host = trading(LobbyRole::Host);
+        host.peers = vec![peer("p1", "Bo", true), peer("p2", "Cy", true)];
+        let from = |who: &str, body| Heard::Msg {
+            from: Some(who.into()),
+            body,
+        };
+
+        // Only the other reader offers.
+        assert_eq!(
+            react(&mut host, from("p2", Body::Offer(vec![offered("goyf", 1)]))),
+            vec![]
+        );
+        assert_eq!(
+            react(
+                &mut host,
+                from("p1", Body::Offer(vec![offered("bolt", 2), offered("", 1)]))
+            ),
+            vec![
+                Act::WriteTheirs(vec![offered("bolt", 2)]),
+                Act::BroadcastDeal
+            ]
+        );
+        let deal = |s: &LobbyState| s.trade.as_ref().unwrap().deal.clone();
+        assert_eq!(deal(&host).rev, 1);
+        assert_eq!(deal(&host).guest, [offered("bolt", 2)]);
+        // The same offer again moves nothing.
+        assert_eq!(
+            react(&mut host, from("p1", Body::Offer(vec![offered("bolt", 2)]))),
+            vec![]
+        );
+
+        // An acceptance of an older deal is answered with the one on the table.
+        assert_eq!(
+            react(&mut host, from("p1", Body::Accept { rev: 0, yes: true })),
+            vec![Act::BroadcastDeal]
+        );
+        assert!(!deal(&host).guest_accepted);
+        assert_eq!(
+            react(&mut host, from("p1", Body::Accept { rev: 1, yes: true })),
+            vec![Act::BroadcastDeal]
+        );
+        assert_eq!(host.phase, LobbyPhase::Open, "the host has not accepted");
+
+        host.trade.as_mut().unwrap().deal.host_accepted = true;
+        host.trade.as_mut().unwrap().deal.guest_accepted = false;
+        assert_eq!(
+            react(&mut host, from("p1", Body::Accept { rev: 1, yes: true })),
+            vec![Act::BroadcastDeal, Act::BroadcastRoom]
+        );
+        assert_eq!(host.phase, LobbyPhase::Agreed);
+        assert!(room_of(&host).started);
+        // Agreed is final: nothing more is taken.
+        assert_eq!(
+            react(&mut host, from("p1", Body::Offer(vec![offered("goyf", 1)]))),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_trades_guest_writes_the_hosts_offer_and_follows_the_deal_to_agreement() {
+        let mut guest = trading(LobbyRole::Guest);
+        guest.kind = None;
+        let msg = |body| Heard::Msg { from: None, body };
+        react(
+            &mut guest,
+            msg(Body::Room(LobbyRoom {
+                kind: LobbyKind::Trade,
+                host_name: "Ada".into(),
+                label: String::new(),
+                peers: Vec::new(),
+                started: false,
+            })),
+        );
+        assert_eq!(guest.kind, Some(LobbyKind::Trade));
+
+        let mut deal = TradeDeal {
+            rev: 1,
+            host: vec![offered("bolt", 2)],
+            ..TradeDeal::default()
+        };
+        assert_eq!(
+            react(&mut guest, msg(Body::Deal(Box::new(deal.clone())))),
+            vec![Act::WriteTheirs(vec![offered("bolt", 2)])]
+        );
+        // The guest's own offer echoed back moves nothing to write.
+        deal.rev = 2;
+        deal.guest = vec![offered("goyf", 1)];
+        assert_eq!(
+            react(&mut guest, msg(Body::Deal(Box::new(deal.clone())))),
+            vec![]
+        );
+        assert_eq!(guest.trade.as_ref().unwrap().deal.rev, 2);
+
+        deal.host_accepted = true;
+        deal.guest_accepted = true;
+        react(&mut guest, msg(Body::Deal(Box::new(deal))));
+        assert_eq!(guest.phase, LobbyPhase::Agreed);
+
+        // A guest that joined with no trade to hold takes no deal.
+        let mut bare = state(LobbyRole::Guest, LobbyPhase::Open);
+        assert_eq!(react(&mut bare, msg(Body::Deal(Box::default()))), vec![]);
+    }
+
+    #[test]
+    fn a_trades_bodies_cross_as_written() {
+        let read = |body: Value| match decode(&json!({"t": "msg", "body": body}).to_string()) {
+            Heard::Msg { body, .. } => body,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            read(offer_body(&[offered("bolt", 2)])),
+            Body::Offer(vec![offered("bolt", 2)])
+        );
+        assert_eq!(
+            read(accept_body(4, false)),
+            Body::Accept { rev: 4, yes: false }
+        );
+        let deal = TradeDeal {
+            rev: 3,
+            host: vec![offered("bolt", 1)],
+            guest: Vec::new(),
+            host_accepted: true,
+            guest_accepted: false,
+        };
+        assert_eq!(read(deal_body(&deal)), Body::Deal(Box::new(deal)));
+        assert_eq!(
+            read(json!({"v": 1, "kind": "accept", "rev": "x"})),
+            Body::Other
+        );
+    }
+
     #[test]
     fn a_close_code_is_a_sentence_and_anything_else_is_a_drop() {
         use LobbyRole::{Guest, Host};
@@ -2192,7 +2717,7 @@ mod tests {
             serde_json::to_value(&s).unwrap(),
             json!({"role": "guest", "kind": "draft", "code": "K7QX2M", "phase": "drafting", "name": "Ada",
                    "hostName": "", "hostOnline": false, "peers": [], "label": "",
-                   "closedReason": "x"})
+                   "closedReason": "x", "trade": null})
         );
     }
 
@@ -2228,6 +2753,10 @@ mod tests {
             NOT_A_GAME_LOBBY,
             GUEST_ONLY_DECK,
             GUEST_ONLY_ACT,
+            NOT_A_TRADE_LOBBY,
+            NO_TRADE_HELD,
+            AGREED,
+            DEAL_MOVED,
         ] {
             let lower = sentence.to_lowercase();
             for word in ["member", "supporter", "patreon", "patron", "subscri"] {

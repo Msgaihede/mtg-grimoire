@@ -1097,6 +1097,47 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * A trade over a lobby: the lobby is created and joined with the reader's own copy of the
+   * trade, and the offer and the acceptance are the draft lobby's file's two trade commands.
+   */
+  it("sends a trade lobby's commands under the names their commands declare", async () => {
+    invoke.mockResolvedValue({});
+    await ipc.lobbyCreate("Ada", "trade", 7);
+    expect(invoke).toHaveBeenLastCalledWith("lobby_create", {
+      name: "Ada",
+      kind: "trade",
+      trade: 7,
+    });
+    await ipc.lobbyJoin("K7QX2M", "Bo", 8);
+    expect(invoke).toHaveBeenLastCalledWith("lobby_join", { code: "K7QX2M", name: "Bo", trade: 8 });
+    await ipc.lobbyJoin("K7QX2M", "Bo");
+    expect(invoke).toHaveBeenLastCalledWith("lobby_join", { code: "K7QX2M", name: "Bo" });
+    invoke.mockResolvedValue(undefined);
+    await ipc.lobbyTradeOffer();
+    expect(invoke).toHaveBeenLastCalledWith("lobby_trade_offer");
+    await ipc.lobbyTradeAccept(3, true);
+    expect(invoke).toHaveBeenLastCalledWith("lobby_trade_accept", { rev: 3, accept: true });
+
+    const declares = (command: string, param: string) =>
+      expect(draftLobbyRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares("lobby_create", "trade");
+    declares("lobby_join", "code");
+    declares("lobby_join", "name");
+    declares("lobby_join", "trade");
+    declares("lobby_trade_accept", "rev");
+    declares("lobby_trade_accept", "accept");
+    for (const registered of [
+      "draft::lobby::lobby_join,",
+      "draft::lobby::lobby_trade_offer,",
+      "draft::lobby::lobby_trade_accept,",
+    ]) {
+      expect(desktopRs).toContain(registered);
+    }
+  });
+
+  /**
    * The deck search column's width (issue #932) — the deck's id rides both commands, and the
    * write names the width. Read from the Rust source rather than trusted, like the hidden stacks.
    */

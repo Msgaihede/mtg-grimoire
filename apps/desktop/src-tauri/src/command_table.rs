@@ -186,6 +186,14 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "Playtesting is desktop-only: a game's lobby seats phase.rs's rules engine, which this host alone links",
     ),
     (
+        "lobby_trade_offer",
+        "A trade's lobby is the desktop's: it meets in the one lobby the desktop alone opens, over its own socket",
+    ),
+    (
+        "lobby_trade_accept",
+        "A trade's lobby is the desktop's: it meets in the one lobby the desktop alone opens, over its own socket",
+    ),
+    (
         "packs_booster_set",
         "MTGJSON booster data feeds only the desktop's Draft & Packs page",
     ),

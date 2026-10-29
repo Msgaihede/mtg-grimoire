@@ -8,7 +8,9 @@
  * replaces. ESLint refuses the import, and `ipc.test.ts` reads this file with its siblings, so the
  * struct-parity and argument-name fences cover it.
  *
- * Every shape here mirrors `crates/grimoire-core/src/trade.rs`.
+ * Every shape here mirrors `crates/grimoire-core/src/trade.rs`, but for a trade's lobby — two
+ * readers building one trade, each on their own copy of it — whose `TradeDeal` and `LobbyTrade`
+ * are the desktop host's `trade/lobby.rs`, and whose two commands are `draft/lobby.rs`'s.
  */
 import type { FinishPrices } from "./cards";
 import { invoke } from "./invoke";
@@ -153,6 +155,33 @@ export interface TradeSummary {
   lines: TradeSummaryLine[];
 }
 
+/** One printing and finish a reader offers across a trade's lobby, and how many copies. Names,
+ *  prices and where the copies are filed stay on the device that offers them. */
+export interface TradeOfferLine {
+  cardId: string;
+  finish: Finish;
+  quantity: number;
+}
+
+/** What the two readers of a trade's lobby have put on the table, as the host's app holds it. */
+export interface TradeDeal {
+  /** Moves with every change to either offer; an acceptance names the one it accepts. */
+  rev: number;
+  host: TradeOfferLine[];
+  guest: TradeOfferLine[];
+  hostAccepted: boolean;
+  guestAccepted: boolean;
+}
+
+/** This app's side of a trade's lobby (`LobbyState.trade`). */
+export interface LobbyTrade {
+  /** This reader's copy of the trade: their offer is its `mine` side, the other's its `theirs`. */
+  tradeId: number | null;
+  deal: TradeDeal;
+  /** Lines of the other reader's offer naming a printing this app's card data does not have. */
+  unknown: number;
+}
+
 /** The trade commands — spread into `ipc` by `../ipc.ts`, which is the only reader of this object. */
 export const tradeCommands = {
   /** Every trade, newest first, each with just enough of its lines to state a balance. */
@@ -182,4 +211,13 @@ export const tradeCommands = {
   /** A new open trade with the same lines, percentages and marketplace. Answers its id. */
   tradeDuplicate: (id: number) => invoke<number>("trade_duplicate", { id }),
   tradeDelete: (id: number) => invoke<void>("trade_delete", { id }),
+
+  /** A trade's lobby (desktop only): send what this reader offers — their copy's `mine` side as
+   *  it stands. Sent again unchanged it changes nothing, so a page sends it whenever it may have
+   *  moved. The deal comes back as `lobby:state`. */
+  lobbyTradeOffer: () => invoke<void>("lobby_trade_offer"),
+  /** Accept revision `rev` of the deal — the one on screen — or, with `accept` false, take that
+   *  back. A revision the deal has moved past is refused, in a sentence. */
+  lobbyTradeAccept: (rev: number, accept: boolean) =>
+    invoke<void>("lobby_trade_accept", { rev, accept }),
 };

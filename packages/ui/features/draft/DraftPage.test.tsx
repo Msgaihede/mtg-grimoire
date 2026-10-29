@@ -198,6 +198,7 @@ describe("DraftPage", () => {
       peers: [{ peer: "p1", name: "Bea", online: true, deck: null }],
       label: "The Hobbit",
       closedReason: null,
+      trade: null,
     };
     ipcMock.lobbyState.mockResolvedValue(lobby);
     setup();

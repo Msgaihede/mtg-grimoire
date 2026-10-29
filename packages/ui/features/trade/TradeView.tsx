@@ -97,6 +97,8 @@ export function TradeView({
   onDeleted,
   barSlot,
   landOn,
+  askFinish = false,
+  onFinishAsked,
 }: {
   trade: Trade;
   /** Take the caret on mount: this trade is the answer to a press whose own control is gone. */
@@ -121,6 +123,13 @@ export function TradeView({
    * absent, this view's own section.
    */
   landOn?: RefObject<HTMLElement | null>;
+  /**
+   * Finish trade is asked for from outside: the trade lobby's trade, whose two readers have both
+   * accepted (`lobby/TradeLobbyBand`). While it is asked the dialog is up on an open trade; every
+   * way out of it says the ask is spent (`onFinishAsked`), so the page does not ask again.
+   */
+  askFinish?: boolean;
+  onFinishAsked?: () => void;
 }): JSX.Element {
   const tip = useTooltip();
   const client = useQueryClient();
@@ -151,6 +160,12 @@ export function TradeView({
 
   const editable = isOpen(trade.status);
   const settled = isSettled(trade.status);
+  /** Finish trade is up: pressed here, or asked for by the page. */
+  const finishOpen = finishing || (askFinish && editable);
+  const stopFinishing = () => {
+    setFinishing(false);
+    onFinishAsked?.();
+  };
   const currency = tradeCurrency(trade);
   const money = tradeMoney(trade);
 
@@ -290,11 +305,7 @@ export function TradeView({
       titleGrows={renaming}
       title={
         renaming ? (
-          <RenameField
-            initial={trade.name}
-            onSubmit={rename}
-            onCancel={() => setRenaming(false)}
-          />
+          <RenameField initial={trade.name} onSubmit={rename} onCancel={() => setRenaming(false)} />
         ) : (
           <span
             className="block min-w-0 truncate"
@@ -492,17 +503,17 @@ export function TradeView({
       {editable && (
         <>
           <FinishTradeDialog
-            open={finishing}
+            open={finishOpen}
             trade={trade}
             onFinished={() => {
-              setFinishing(false);
+              stopFinishing();
               land();
             }}
             onDismiss={() => {
-              setFinishing(false);
+              stopFinishing();
               finishRef.current?.focus();
             }}
-            onClose={() => setFinishing(false)}
+            onClose={stopFinishing}
           />
           <TradeScanDialog
             open={scanOpen}

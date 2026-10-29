@@ -17,6 +17,7 @@ import { core } from "@/lib/core";
 import type { DeckRow } from "./decks";
 import { invoke, type Unlisten } from "./invoke";
 import type { PlaytestDifficulty } from "./playtest";
+import type { LobbyTrade } from "./trade";
 
 /**
  * Which kind of draft: boosters with bots, sealed, a cube with bots, a pod of people, a Commander
@@ -158,13 +159,15 @@ export interface BasicLand {
 export type LobbyRole = "host" | "guest";
 
 /**
- * What a lobby meets for: a pod's draft (Draft & Packs), or a game on decks (Playtesting, issue
- * #1419). One lobby at a time, of either kind; each page leaves the other's alone.
+ * What a lobby meets for: a pod's draft (Draft & Packs), a game on decks (Playtesting, issue
+ * #1419), or a trade between two readers (the Trade page). One lobby at a time, of any kind; each
+ * page leaves the others' alone.
  */
-export type LobbyKind = "draft" | "game";
+export type LobbyKind = "draft" | "game" | "trade";
 
-/** Where a lobby is. A draft's is `drafting` once dealt, a game's `playing`. */
-export type LobbyPhase = "connecting" | "open" | "drafting" | "playing" | "closed";
+/** Where a lobby is. A draft's is `drafting` once dealt, a game's `playing`, a trade's `agreed`
+ *  once both readers have accepted the same deal. */
+export type LobbyPhase = "connecting" | "open" | "drafting" | "playing" | "agreed" | "closed";
 
 /** A guest in a lobby. */
 export interface LobbyPeer {
@@ -191,6 +194,9 @@ export interface LobbyState {
   /** The host's draft, as the room describes it. */
   label: string;
   closedReason: string | null;
+  /** A trade's lobby: this reader's copy of the trade and the deal on the table. `null` in a
+   *  draft's or a game's. */
+  trade: LobbyTrade | null;
 }
 
 /** What a host tells its guests about the room. */
@@ -236,10 +242,16 @@ export const draftCommands = {
   /** The five basics, in a printing of `setCodes` where the corpus has one. */
   draftBasicLands: (setCodes: string[]) => invoke<BasicLand[]>("draft_basic_lands", { setCodes }),
 
-  /** Open a lobby — a supporter's — for a pod's draft or a game on decks. */
-  lobbyCreate: (name: string, kind: LobbyKind) =>
-    invoke<LobbyState>("lobby_create", { name, kind }),
-  lobbyJoin: (code: string, name: string) => invoke<LobbyState>("lobby_join", { code, name }),
+  /** Open a lobby — a supporter's — for a pod's draft, a game on decks, or a trade; a trade's
+   *  names the reader's own copy of the trade (`trade`), whose `mine` side is their offer. */
+  lobbyCreate: (name: string, kind: LobbyKind, trade?: number) =>
+    invoke<LobbyState>(
+      "lobby_create",
+      trade === undefined ? { name, kind } : { name, kind, trade },
+    ),
+  /** Join by code; a page joining for a trade names the reader's own copy of it (`trade`). */
+  lobbyJoin: (code: string, name: string, trade?: number) =>
+    invoke<LobbyState>("lobby_join", trade === undefined ? { code, name } : { code, name, trade }),
   lobbyState: () => invoke<LobbyState | null>("lobby_state"),
   /** Leave; a host closes the lobby. */
   lobbyLeave: () => invoke<void>("lobby_leave"),

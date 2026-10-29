@@ -254,7 +254,11 @@ export function PlaytestSetup({
   const gameLobby = lobby === undefined ? null : lobbyFor(lobby, "game");
   const room = isLive(gameLobby) ? gameLobby : null;
   const role: "solo" | "host" | "guest" = room === null ? "solo" : room.role;
-  const draftLobby = lobby != null && isLive(lobby) && lobby.kind === "draft" ? lobby : null;
+  // A pod's lobby or a trade's — another page's, said rather than replaced by a press here.
+  const draftLobby =
+    lobby != null && isLive(lobby) && (lobby.kind === "draft" || lobby.kind === "trade")
+      ? lobby
+      : null;
   const closed = gameLobby !== null && gameLobby.phase === "closed" ? gameLobby : null;
 
   const playable = useMemo(() => decks.filter((d) => !d.archived), [decks]);

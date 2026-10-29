@@ -30,8 +30,8 @@ import { forgetGuestGame } from "../keptGame";
 
 /**
  * The door: the reader's name at the table, **Create lobby** (a supporter's) and **Join with a
- * code**. A lobby that closed says why above it; a lobby that turned out to be a draft's says
- * where it belongs instead (`draft`), and offers the way out.
+ * code**. A lobby that closed says why above it; a lobby that turned out to be a draft's or a
+ * trade's says where it belongs instead (`draft`), and offers the way out.
  */
 export function FriendsDoor({
   closed,
@@ -39,7 +39,8 @@ export function FriendsDoor({
 }: {
   /** The game lobby that closed, if the last one did. */
   closed: LobbyState | null;
-  /** A draft's lobby this app holds — joined here by its code, or hosted on Draft & Packs. */
+  /** Another page's lobby this app holds — a draft's (Draft & Packs) or a trade's (Trade),
+   *  joined here by its code or hosted there. */
   draft: LobbyState | null;
 }): JSX.Element {
   const client = useQueryClient();
@@ -79,9 +80,13 @@ export function FriendsDoor({
       <section aria-label="Play with friends" className={SECTION}>
         <h3 className={LABEL}>Play with friends</h3>
         <p role="status" className="m-0 text-sm">
-          {draft.role === "guest"
-            ? "That code is a draft’s lobby — join it from Draft & Packs."
-            : `Your lobby ${draft.code} is a draft’s, on Draft & Packs. Close it there to open one for a game.`}
+          {draft.kind === "trade"
+            ? draft.role === "guest"
+              ? "That code is a trade’s lobby — join it from Trade."
+              : `Your lobby ${draft.code} is a trade’s, on Trade. Close it there to open one for a game.`
+            : draft.role === "guest"
+              ? "That code is a draft’s lobby — join it from Draft & Packs."
+              : `Your lobby ${draft.code} is a draft’s, on Draft & Packs. Close it there to open one for a game.`}
         </p>
         <LeaveLobby host={draft.role === "host"} className="self-start" />
       </section>

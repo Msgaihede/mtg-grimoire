@@ -664,6 +664,8 @@ pub fn run() {
             draft::lobby::lobby_deck,
             draft::lobby::lobby_act,
             draft::lobby::lobby_game_start,
+            draft::lobby::lobby_trade_offer,
+            draft::lobby::lobby_trade_accept,
             packs::packs_booster_set,
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.
             stackhide::hidden_stacks,
