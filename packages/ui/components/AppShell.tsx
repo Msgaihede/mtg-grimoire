@@ -83,7 +83,7 @@ const NEW_WINDOW = shortcut("global", "newWindow");
 
 /**
  * The list `Ctrl+1…9` is bound against, by index — `NAV` minus the one row that is not always
- * drawn.
+ * drawn, and minus Draft & Packs, which arrived with every digit spoken for.
  *
  * **Ten destinations against nine digits, and the one that goes without is `shared`, because
  * its row is _conditional_.** Somebody else's binder appears on the rail only once a link has
@@ -101,10 +101,17 @@ const NEW_WINDOW = shortcut("global", "newWindow");
  * collection's **Open a shared collection** stood in for it until issue #1028 removed that too.
  * `docs/reference/keyboard-shortcuts.md` carries the record.
  *
+ * **`draft` is the second exclusion, and it is a decision** (Draft & Packs, 2026-10-29). The run
+ * was exactly full — Home on `Ctrl+1`, Settings on `Ctrl+9` — and the row sits before Settings so
+ * Settings stays last; joining the run would have pushed Settings off the end of nine, a fourth
+ * renumbering of digits readers have in their fingers. So the new row goes without, and every
+ * existing chord stays where it was.
+ *
  * Derived rather than written out, so a destination added to `NAV` joins the list by construction
- * and only a deliberate second *exclusion* could ever be a decision again.
+ * and only a deliberate *exclusion* — these two — is a decision.
  */
-const CHORD_NAV = NAV.filter((n) => n.id !== "shared");
+const UNCHORDED: ReadonlySet<ViewId> = new Set<ViewId>(["shared", "draft"]);
+const CHORD_NAV = NAV.filter((n) => !UNCHORDED.has(n.id));
 
 /**
  * The window: sidebar, header, and whatever view the store points at.

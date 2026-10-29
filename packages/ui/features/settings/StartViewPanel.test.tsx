@@ -109,6 +109,7 @@ describe("StartViewPanel", () => {
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Collection",
       "Decks",
+      "Draft & Packs",
       "Home",
       "Playtesting",
       "Scanner",

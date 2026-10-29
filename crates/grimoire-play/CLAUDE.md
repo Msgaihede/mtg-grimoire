@@ -1,4 +1,4 @@
-# grimoire-play — games on a deck, over phase.rs's rules engine
+# grimoire-play — games on a deck and drafts, over phase.rs's rules engine
 
 The one place the app touches a rules engine: [phase.rs](https://github.com/phase-rs/phase)'s
 `phase-engine` (library `engine`) and its AI, `phase-ai`, taken from git at one pinned `rev`. It
@@ -7,8 +7,12 @@ opponent that takes no actions), or against one other deck or three, each oppone
 phase's AI. Goldfishing and playtesting are that one game (the owner's decision of 2026-10-17).
 `table.rs` reads the table off the engine's state (a card, a zone's place, a seat's mana), `view.rs`
 is the table's shared wire types, and `playtest/view.rs` the game's; `support.rs` says what the
-engine plays of a deck before a game. Facts go in (`CardFacts`, Scryfall's fields for a deck row),
-and a view and what happened come out. It knows nothing of SQLite, Tauri or a window.
+engine plays of a deck before a game. It also holds **one draft** (`draft/mod.rs`' `Draft`) over
+phase's `draft-core`: boosters the page made, passed around a table of people and bots (two
+cards a pick in a Commander draft), six straight into a sealed pool, or shuffled into a Winston
+draft's shared stack; `draft/view.rs` is its wire and `draft/bots.rs` phase's draft bots (both
+the pick-and-pass and the Winston bot), ported. Facts go in (`CardFacts`, Scryfall's fields for
+a deck row), and a view and what happened come out. It knows nothing of SQLite, Tauri or a window.
 
 Design, measurements and licences: [goldfish.md](../../docs/reference/goldfish.md) (the engine,
 the pin, the hybrid model, the goldfish, the table's pieces) and
@@ -22,13 +26,15 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   `grimoire-core`: the web host's module is measured to the byte, and the light app has no
   Playtesting. Its commands are on `command_table::DESKTOP_ONLY`.
 - **Every call into the engine runs on `on_engine_stack`** (16 MiB). Never call `Playtest::new` or
-  its `act` straight from a Tauri command or a tokio worker. phase's recursion overflows small
-  stacks, and an overflow aborts the app. Tests go through it too (`playtest/tests.rs`' and
-  `playtest/goldfish_tests.rs`' `engine`).
-- **The rev moves by a commit that runs the whole gate**, and `phase-engine` and `phase-ai` move
-  together, never apart: the AI reads the engine's `GameState`. phase changes daily. This crate's
-  tests are the proof that a move kept the game playing, against the AI and the goldfish. A move
-  may change what the parser understands, and that is the point.
+  its `act`, or any `Draft` method that can let a bot pick (`new`, `restore`, `pick`, `auto_pick`,
+  `replace_with_bot`), straight from a Tauri command or a tokio worker. phase's recursion overflows
+  small stacks, and an overflow aborts the app. Tests go through it too (`playtest/tests.rs`' and
+  `playtest/goldfish_tests.rs`' `engine`, and `draft/tests.rs`').
+- **The rev moves by a commit that runs the whole gate**, and `phase-engine`, `phase-ai` and
+  `draft-core` move together, never apart: the AI reads the engine's `GameState`, and the draft
+  reducer the engine's types. phase changes daily. This crate's tests are the proof that a move
+  kept the game playing, against the AI and the goldfish, and the draft drafting. A move may change
+  what the parser understands, and that is the point.
 - **The toolchain pin is a nightly because of this dependency** (`rust-toolchain.toml` has the
   record). If phase drops `cargo-features` from its root manifest, or a fork does, the pin can go
   back to a stable release.
@@ -95,12 +101,49 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   Like a game, it runs on `on_engine_stack`. A game asks the same of its own faces once, in
   `Playtest::new`, and every `GameCard` carries its face's `gaps` (issue #1093).
 - **Only the deck's cards are parsed**, with phase's own `build_oracle_face`. Never fetch phase's
-  `card-data.json`: it is a 93 MB external host this app does not use.
+  `card-data.json`: it is a 93 MB external host this app does not use. A draft parses its own
+  boosters' cards the same way (`cards::database`), and only for bots that read faces.
+
+### The draft
+
+- **phase's reducer is the authority on the draft** (`draft_core::session::apply`): passing, rounds,
+  what a pick may name, the table's size. Never move a card between packs or pools in this crate.
+  Modes map onto phase's kinds — `quick` and `cube` are `Quick`, `sealed` is `Sealed`,
+  `commander` is `CommanderDraft`, `winston` is `Winston`, `pod` is its `PodFormat`'s (`booster`
+  `Premier`, `commander` `CommanderDraft`, `winston` `Winston`) with `DraftSeat::Bot` seats — and
+  its procedure table bounds the table: 2 to 8 seats from sets, any number for a cube (a cube
+  source), six boosters for sealed, 3 to 8 for Commander, 2 to 4 and three boosters for Winston.
+  A pick takes the procedure's `cards_per_pick` ids (`DraftView::picks_per_step`). phase's Sealed
+  seats two at the least, so a pool of one sits beside a hidden bot with empty boosters, never
+  shown.
+- **The page makes the boosters; the draft deals exactly those** (`SetupPacks`, our `PackSource`).
+  Never let phase collate a booster: Packs and Draft open from one generator. An instance id is
+  `"{card_id}#{seat}.{round}.{index}"`, which every app, a guest's too, resolves in its own corpus.
+- **Bots pick as phase's own do.** `bots.rs` is `draft-wasm/src/bot_ai.rs`, both halves,
+  ported (that crate is a `cdylib`); keep it phase's and move it with the `rev`, never tune it here.
+  After every call that can hand a bot a pack, bots pick until none holds a pack it has not picked
+  from — a loop, because a completed round deals the next boosters. Their dice come from the seed
+  and the cards picked so far, never from state kept between calls, so a restored draft picks as
+  the original would have. In a Winston draft a bot's turn is phase's `winston_decision`, read off
+  its own `filter_for_player` projection (never the session), chosen among the decisions the
+  engine published as legal, with no dice; bots decide until it is a person's turn, bounded as
+  phase's `resolve_shared_stack_bot_turns` is.
+- **A refused pick changes nothing.** `pick`, `winston` and `replace_with_bot` keep the session
+  and put it back on any `Err`, the bots' picks after it included. `pick` in a Winston draft is
+  refused; `auto_pick` there is the bot's decision for the person's turn.
+- **A view shows a seat its own pack and pool only**; every other seat is a count and a flag
+  (`DraftSeatView`). A guest is sent its own `view(seat)`, never the host's. A Winston view's
+  `stack` comes from draft-core's projection: the seat whose turn it is sees the cards of the pile
+  in play, and every other pile, the stack and every other seat's view are counts. Never read a
+  pile's cards off `SharedStackState` into a view.
+- **The wire is mirrored by hand**: `draft/view.rs` ↔ `packages/ui/lib/ipc/draft.ts`, held by
+  `ipc.test.ts`. A snapshot (`snapshot` / `restore`) is the setup less its boosters and phase's
+  whole session, with a version `restore` checks.
 
 ## Commands
 
-| Command                                                      | Action                                                                                      |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `cargo test -p grimoire-play`                                | The game end to end on the engine's stack, against the goldfish and against a `VeryEasy` AI |
-| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                       |
-| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                      |
+| Command                                                      | Action                                                                                                      |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `cargo test -p grimoire-play`                                | The game end to end on the engine's stack, against the goldfish and against a `VeryEasy` AI; the drafts too |
+| `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                                       |
+| `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                                      |

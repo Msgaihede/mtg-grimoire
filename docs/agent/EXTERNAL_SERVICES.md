@@ -174,6 +174,17 @@ without a credential can see**, and nobody has yet said that a released desktop 
 through the streamed answer in production. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
 real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
+**Lobbies for pod drafts** (since 2026-10-29, draft & packs spec §6; not deployed until the next
+release's `relay-deploy`, which applies the Durable Object migration `v2` itself — no D1
+migration). The same Worker holds a second class, `Lobby`, one object per six-character code:
+`POST /lobby` makes one and `GET /lobby/{code}/ws` is its socket, a host's and up to seven
+guests'. **Creating one is a supporter's**: the request carries the relay's access token, checked
+as the `/g/…` gate checks one, and the relay mints that token only for an entitled membership.
+**Joining needs only the code.** What passes through is names and frames — the host's app runs
+the draft, and the relay never reads a frame's body or stores one; what it keeps is the roster
+(names, peer ids, hashes of the host key and each guest's secret) for six hours, when an alarm
+closes every socket and deletes it. `infrastructure/relay/README.md` has the routes and close codes.
+
 ## Entitlements, removal and leaving
 
 **An entitlement is a property of the GROUP, not of the device that pressed Connect** — so a

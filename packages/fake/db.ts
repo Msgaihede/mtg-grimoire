@@ -101,6 +101,7 @@
  */
 import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
+import { draftHandlers } from "./draft";
 import { worldEmitter } from "./event";
 import { qrMatrix } from "./qr";
 import { FAKE_FRAME_MS, newScanScript, resetScanScript, scanStep } from "./scannerScript";
@@ -28201,6 +28202,10 @@ export function allHandlers(db: FakeDb) {
     ...undoHandlers(db),
     ...scannerHandlers(db),
     ...integrationHandlers(db),
+    // Draft & Packs (2026-10-29): boosters, the draft against bots that take the first card, the
+    // draft deck, and lobbies that refuse. Its deck writes are this world's own, unjournalled —
+    // a draft deck's birth is `deck_create`'s, which records no undo step either.
+    ...draftHandlers(db, writeHandlers(db)),
     ...windowHandlers(),
     ...pluginHandlers(),
   };

@@ -288,7 +288,7 @@ fn token_facts(token: grimoire_core::play::PlayToken) -> TokenFacts {
 
 /// The core's row as the engine crate takes it. `faces` is Scryfall's `card_faces` verbatim, read
 /// leniently: a blob that does not parse is a card of one face, which the engine still plays.
-fn facts(card: grimoire_core::play::PlayCard) -> CardFacts {
+pub(crate) fn facts(card: grimoire_core::play::PlayCard) -> CardFacts {
     let faces = card
         .faces
         .as_deref()

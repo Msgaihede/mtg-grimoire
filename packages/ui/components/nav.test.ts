@@ -24,6 +24,9 @@ describe("the navigation census", () => {
       "scanner",
       "trade",
       "playtesting",
+      // Draft & Packs (2026-10-29), before Settings so Settings stays last — and without a
+      // chord, so Settings keeps `Ctrl+9` (see the last case here).
+      "draft",
       "settings",
     ]);
     expect(new Set(ids).size).toBe(ids.length);
@@ -55,7 +58,7 @@ describe("the navigation census", () => {
    * module.
    *
    * `Ctrl+1…9` is bound **by index**: `AppShell` walks `switchView`'s chords and activates
-   * `CHORD_NAV[i]`, where `CHORD_NAV` is this list minus `shared`. So the two lists are one
+   * `CHORD_NAV[i]`, where `CHORD_NAV` is this list minus `shared` and `draft`. So the two lists are one
    * binding written down twice, and nothing in the program holds them together —
    * `shortcuts.ts` deliberately does not import this module, because the catalogue is pure data
    * over a plain event and a runtime edge from it to a file of React components is the wrong
@@ -65,13 +68,16 @@ describe("the navigation census", () => {
    * `shared` goes without because its row is **conditional**, and a digit bound to a row that
    * appears and disappears would mean two things to two readers. Settings was the second, pushed
    * past `Ctrl+9` when Home arrived; the Tagger row leaving (issue #937, tag search is the search
-   * page's sidebar now) gave it back.
+   * page's sidebar now) gave it back. Draft & Packs (2026-10-29) arrived with every digit spoken
+   * for and goes without too, so that Settings keeps the ninth.
    *
    * **The first and ninth entries are pinned by name**, because a length can only say *how many*
    * are reached, never *which* — and it is the *which* a reader has in their fingers.
    */
   it("puts nine destinations inside the run of digits, ending at Settings", () => {
-    const chorded = NAV.filter((n) => n.id !== "shared");
+    // Written out rather than imported from `AppShell`, per the rule that an assertion must not
+    // read its own constant: these are the two rows without a digit.
+    const chorded = NAV.filter((n) => n.id !== "shared" && n.id !== "draft");
     // The run itself: nine digits, `Ctrl+1` through `Ctrl+9`, as `shortcuts.test.ts` pins
     // literally. Read rather than restated, so the two files cannot disagree about the length.
     const digits = shortcut("global", "switchView").chords.length;
@@ -87,6 +93,10 @@ describe("the navigation census", () => {
     // And `shared` is left out of `CHORD_NAV` altogether, for its own reason.
     expect(NAV.map((n) => n.id)).toContain("shared");
     expect(chorded.map((n) => n.id)).not.toContain("shared");
-    expect(chorded).toHaveLength(NAV.length - 1);
+    // …and so is `draft`, which arrived with every digit spoken for: `Ctrl+8` is still
+    // Playtesting, the row just above it.
+    expect(chorded.map((n) => n.id)).not.toContain("draft");
+    expect(chorded[7].id).toBe("playtesting");
+    expect(chorded).toHaveLength(NAV.length - 2);
   });
 });

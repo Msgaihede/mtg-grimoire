@@ -58,6 +58,9 @@ pub mod activity;
 pub mod app_meta;
 /// Portable user-data snapshots, independent of the archive container a host writes.
 pub mod archive;
+/// **One set's boosters, as MTGJSON describes them, joined to the corpus** — the Draft & Packs
+/// page's facts. Pure: the host fetches the files.
+pub mod boosters;
 pub mod bulk_undo;
 pub mod card;
 /// **One Scryfall card object as the `cards` row it becomes**, and `raw`'s gzip.
@@ -96,6 +99,9 @@ pub mod deckpane;
 pub mod decksort;
 /// **What a launch would download now, and about how much** — the light app's mobile-data prompt.
 pub mod downloads;
+/// **A drafted pool as a virtual Limited deck**, and the `app_meta` list of the ones not saved
+/// yet.
+pub mod draft_deck;
 /// **Entry tags**: the reader's free-text tags on one collection row or one wish (user schema
 /// v67) — written whole, counted across both tables. Not deck tags.
 pub mod entry_tags;

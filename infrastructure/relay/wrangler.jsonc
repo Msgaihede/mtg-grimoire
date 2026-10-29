@@ -18,8 +18,15 @@
   "workers_dev": true,
   // One Durable Object per pairing group, addressed by the group id. No R2, no KV: KV allows
   // 1 000 writes/day on the free plan, which this would spend in an afternoon.
+  //
+  // **`LOBBY` is one per pod-draft lobby**, addressed by its six-character code (`src/lobby.ts`,
+  // draft & packs spec §6): a router between a host's socket and seven guests', holding a roster
+  // for six hours and then nothing.
   "durable_objects": {
-    "bindings": [{ "name": "GROUP", "class_name": "Group" }],
+    "bindings": [
+      { "name": "GROUP", "class_name": "Group" },
+      { "name": "LOBBY", "class_name": "Lobby" },
+    ],
   },
   "migrations": [
     {
@@ -27,6 +34,13 @@
       // `new_sqlite_classes` and NOT `new_classes`: Durable Objects are on the free plan
       // **SQLite-backed only**, and the key-value backend is a paid feature.
       "new_sqlite_classes": ["Group"],
+    },
+    {
+      // The lobby's class, on the same terms as `Group`'s. A tag is applied once, by the deploy
+      // that first carries it — the next release's `relay-deploy` for this one — and is never
+      // edited after: a new class is a new tag after it, and `v1` stays as it is.
+      "tag": "v2",
+      "new_sqlite_classes": ["Lobby"],
     },
   ],
   // The entitlement store — `infrastructure/relay/schema.sql` is its shape, the baseline;
@@ -101,8 +115,8 @@
   // no rule on it; `workers.dev`, which still answers, has none — so a rule could only ever
   // cover one of the two addresses, and the limits stay in here.
   //
-  // One binding per limit, because a binding carries exactly one: `/claim`; `/token` and
-  // `/rotate`; `/keys` and the pairing rendezvous. Per client address, per 60 seconds — `period`
+  // One binding per limit, because a binding carries exactly one: `/claim`; `/token`, `/rotate`
+  // and `POST /lobby`; `/keys`, the pairing rendezvous and a lobby's socket. Per client address, per 60 seconds — `period`
   // takes 10 or 60 and nothing else. `namespace_id` is an integer of our own choosing, unique to
   // this account, and the bucket a count is kept in: reusing one across two bindings would have
   // them spend each other's budget.

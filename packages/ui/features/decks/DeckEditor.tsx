@@ -125,6 +125,9 @@ import { deckShareTarget } from "./deckShare";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
+import { DraftDeckBar } from "@/features/draft/deck/DraftDeckBar";
+import { withoutCollectionAdds } from "@/features/draft/deck/draftMenu";
+import { useIsDraftDeck } from "@/features/draft/useDraftDecks";
 import { validateForMarks } from "./validation/engine";
 import { sameViolations, violationsBySlot } from "./violations";
 
@@ -486,6 +489,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * than more.
    */
   const tracks = row !== null && tracksCollection(row);
+
+  /**
+   * **A draft deck** (Draft & Packs, spec §5): a deck a draft made from its pool, on `app_meta`'s
+   * unsaved list until the reader saves it. It is built from the Pool alone — the owner's rule is
+   * *without the collection and without the global search* — so this flag takes away every way a
+   * card arrives from either: the docked search panel (its corpus search and its Collection tab),
+   * Quick Add (the toolbar's and the undocked bar's), and the card menu's `Add to ▸ Collection` /
+   * `Wishlist` rows. The collection-reading surfaces (pull, add missing, `Collection ▸`, the
+   * shortfall block) are already gone by {@link tracks}: a draft deck is virtual. In their place
+   * the editor draws `DraftDeckBar` — basics, Save, Export, Discard.
+   *
+   * `false` until the list has answered, which is the ordinary deck's answer; see
+   * `useIsDraftDeck`.
+   */
+  const draft = useIsDraftDeck(deckId);
 
   /**
    * Whether the ledger's `Game Changers` chip is pressed — **the thing that answers _which cards
@@ -2264,8 +2282,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const deckCardMenuFor = useCallback(
     (card: DeckCard, flips: boolean) => {
-      const build = () =>
-        buildDeckCardMenu(card, {
+      const build = () => {
+        const items = buildDeckCardMenu(card, {
           // **The slot, not a destination.** The row used to re-anchor the card pane onto this
           // deck row so that the pane's printings list could offer "Use this printing"; the modal
           // takes the slot directly, so the pane is out of the path entirely and the deck stays
@@ -2361,6 +2379,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             ? pickedCards
             : [],
         });
+        // A draft deck is built without the collection (spec §5), so the shared half's two binder
+        // destinations go — see `withoutCollectionAdds`.
+        return draft ? withoutCollectionAdds(items) : items;
+      };
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
     [
@@ -2395,6 +2417,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       coverCardId,
       setCoverFrom,
       pickedCards,
+      draft,
     ],
   );
 
@@ -2423,8 +2446,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     (categoryId: number, stacks: boolean) => {
       const category = categories.find((c) => c.id === categoryId);
       if (category === undefined) return undefined;
-      const build = () =>
-        buildCategoryMenu(category, {
+      const build = () => {
+        const items = buildCategoryMenu(category, {
           // The deck's own rows, never `shown`: exporting "Removal" means the pile rather than
           // the four of it the toolbar's filter happens to be showing.
           cards: deckCardsRef.current,
@@ -2473,9 +2496,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               }
             : undefined,
         });
+        // A draft deck is built from its pool alone (spec §5): a pasted list would bring in any
+        // card of the corpus, so its piles offer no import.
+        return draft ? items.filter((item) => item.id !== "import") : items;
+      };
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
     [
+      draft,
       menu,
       menuKey,
       categories,
@@ -2890,9 +2918,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * piles, which is what they asked for, so the editor has one fact to pass rather than two and
    * this recomputes only when the format does.
    */
+  //
+  // **A Commander draft's deck is the one exception the format cannot answer**: it is Casual (no
+  // command zone of its own) yet draft_deck_create gives it an empty Commander pile for the reader to
+  // move a legend into, and the draft bar points at it. So a draft deck with a commander pile draws
+  // it empty too.
+  const draftCommanderZone = draft && categories.some((c) => c.kind === "commander");
   const emptyGroupRules = useMemo(
-    () => ({ requiresCommander: spec?.requiresCommander ?? false }),
-    [spec],
+    () => ({ requiresCommander: (spec?.requiresCommander ?? false) || draftCommanderZone }),
+    [spec, draftCommanderZone],
   );
 
   /**
@@ -3029,6 +3063,57 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     targetCategoryId === AUTO_CATEGORY
       ? null
       : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
+
+  /**
+   * The draft bar's three hand-offs (`DraftDeckBar`, {@link draft}). Built on every deck and read
+   * only on a draft one: a hook cannot be called conditionally, and each is cheap.
+   *
+   * **`draftSetCodes` is memoised on its joined text**, not on `deck.cards`: every stepper press is
+   * a new `deck.cards` (issue #1402), and a new array here would redraw the memoised bar and re-key
+   * its basics read on a press that moved no set.
+   */
+  const draftSetKey = draft ? [...new Set(deck.cards.map((c) => c.setCode))].sort().join(",") : "";
+  const draftSetCodes = useMemo(
+    () => (draftSetKey === "" ? [] : draftSetKey.split(",")),
+    [draftSetKey],
+  );
+  // A Commander draft's deck (a Commander pile beside Deck and Pool, spec §4a): the bar checks its
+  // size and its commander itself. Two numbers, memoised on themselves, for the memoised bar.
+  const draftCommanderPile = draftCommanderZone;
+  let draftDeckCards = 0;
+  let draftCommanders = 0;
+  if (draftCommanderPile) {
+    for (const c of deck.cards) {
+      if (!c.categoryActive) continue;
+      if (c.categoryKind === "main" || c.categoryKind === "commander") draftDeckCards += c.quantity;
+      if (c.categoryKind === "commander") draftCommanders += c.quantity;
+    }
+  }
+  const draftCommanderCheck = useMemo(
+    () => (draftCommanderPile ? { cards: draftDeckCards, commanders: draftCommanders } : null),
+    [draftCommanderPile, draftDeckCards, draftCommanders],
+  );
+  // A basics press is the editor's own add, into the pile adds land in — the deck's `Deck` pile
+  // on a draft deck. Exempt from the toast rule like a stepper; a refusal is the banner's.
+  const writeBasic = deck.addCard.mutateAsync;
+  const addBasic = useCallback(
+    (cardId: string, quantity: number) =>
+      handled(
+        writeBasic(
+          targetCategoryId === AUTO_CATEGORY
+            ? { cardId, typeLine: "Basic Land", finish: null, quantity }
+            : { cardId, categoryId: targetCategoryId, finish: null, quantity },
+        ).then((change) => markAdded(change.id)),
+      ),
+    [writeBasic, targetCategoryId, markAdded],
+  );
+  // The header's own `Export deck` layer, opened from the bar — the caret goes back to the bar's
+  // button when the dialog closes.
+  const exportFromDraftBar = useCallback(
+    (trigger: HTMLElement) =>
+      openLayer({ kind: "export", categoryId: null }, () => trigger.focus()),
+    [openLayer],
+  );
 
   /**
    * Undo and redo, and the picked set's Delete — `useDeckKeyboard`, where both handlers and every
@@ -3465,7 +3550,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           width: barWidth,
           onTop: backToTop,
           quickAddTarget: targetName,
-          onQuickAdd: (card) => addTo(card.id, targetCategoryId, card.typeLine),
+          // No Quick Add on a draft deck — it searches the whole corpus ({@link draft}).
+          onQuickAdd: draft ? null : (card) => addTo(card.id, targetCategoryId, card.typeLine),
           lists: theoryEnabled
             ? {
                 variant,
@@ -3506,6 +3592,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         settingsIcon={settingsIcon}
         openGoldfish={playtests ? openGoldfish : undefined}
         share={share}
+        importable={!draft}
       />
 
       {/* **The ledger is a thin row, 6px off the rules either side of it** (the owner's note,
@@ -3557,19 +3644,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           the panel's select that answered for both, which is the asymmetry that made the
           choice worth moving out to a *setting*. What the field shows instead is the answer,
           in its own label ({@link targetName}). */}
-      <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-3")}>
-        <span className="text-[0.6875rem] text-dim">Quick add</span>
-        {/* The field, its suggestions and its status line are one control and live in one
+      {/* Not on a draft deck: Quick Add searches the whole corpus, and a draft deck is built from
+          its Pool alone ({@link draft}). */}
+      {!draft && (
+        <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-3")}>
+          <span className="text-[0.6875rem] text-dim">Quick add</span>
+          {/* The field, its suggestions and its status line are one control and live in one
             component. What stays here is the *decision* — which pile an add lands in, and
             the write that puts it there — because that is the editor's, and because the
             search answered a whole `CardSummary`: the type line is already in hand, so the
             auto arm costs nothing extra, which is the point of filing from a *found* card
             rather than from a typed name. */}
-        <QuickAdd
-          targetName={targetName}
-          onAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine)}
-        />
-      </div>
+          <QuickAdd
+            targetName={targetName}
+            onAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine)}
+          />
+        </div>
+      )}
 
       {/* **Icons rather than words, and on this row rather than in the header.** The
           header's actions block measured 825px against the ~729 a 1280px window can spare
@@ -3632,6 +3723,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /** Everything between the toolbar and the desk. */
   const notices = (
     <>
+      {/* The draft deck's bar (spec §5) — first, above the banner, because it is the deck's own
+          state rather than a write's answer. See {@link draft}. */}
+      {draft && row && (
+        <DraftDeckBar
+          deckId={deckId}
+          name={row.name}
+          setCodes={draftSetCodes}
+          commander={draftCommanderCheck}
+          onAddBasic={addBasic}
+          onExport={exportFromDraftBar}
+        />
+      )}
+
       {/* The banner grows into place rather than shoving the whole desk down by its height the
           instant a write is refused — which, with four surfaces writing through six mutations,
           is a jump the reader sees while their eye is somewhere else entirely. The animated
@@ -3671,8 +3775,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     </>
   );
 
-  /** The docked search panel's dock, the desk row's second child. */
-  const dock = (
+  /** The docked search panel's dock, the desk row's second child — none on a draft deck, whose
+   *  cards come from its Pool alone ({@link draft}): neither the corpus search nor the Collection
+   *  tab is mounted, so neither reads anything. */
+  const dock = draft ? null : (
     <>
       {/* The panel's dock — `sticky` so the search stays put while a deck taller than the
           window scrolls past it, `self-start` so the row's own `stretch` does not draw it as

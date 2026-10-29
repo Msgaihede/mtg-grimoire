@@ -79,6 +79,7 @@ This file contains only global instructions. **The binding rules for any specifi
 | [`apps/light/CLAUDE.md`](apps/light/CLAUDE.md)                                       | Light app — Android and web UI faces and responsive boundary                                                |
 | [`packages/ui/CLAUDE.md`](packages/ui/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |
 | [`packages/ui/features/decks/CLAUDE.md`](packages/ui/features/decks/CLAUDE.md)       | Deck validation, categories, deck editor views, and drag-and-drop interactions                              |
+| [`packages/ui/features/draft/CLAUDE.md`](packages/ui/features/draft/CLAUDE.md)       | Draft & Packs: booster collation and value math, draft flows, pods by lobby code, the deck editor's draft mode |
 | [`packages/ui/features/transfer/CLAUDE.md`](packages/ui/features/transfer/CLAUDE.md) | Decklist import and export parsing, planning, and dialogs                                                   |
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md)                                       | Storybook workbench, mock database (`packages/fake/db.ts`), seed fixtures, and fault simulation             |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md)                                             | CI workflows, path routers, and release-please configuration                                                |

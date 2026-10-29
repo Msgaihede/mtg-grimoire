@@ -1180,6 +1180,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "draft-core"
+version = "0.107.0"
+source = "git+https://github.com/phase-rs/phase?rev=b8d3b82c17f09d228b743bd762f3486a9be6d1ef#b8d3b82c17f09d228b743bd762f3486a9be6d1ef"
+dependencies = [
+ "phase-engine",
+ "rand 0.9.5",
+ "rand_chacha",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1877,6 +1890,7 @@ dependencies = [
 name = "grimoire-play"
 version = "0.62.0"
 dependencies = [
+ "draft-core",
  "phase-ai",
  "phase-engine",
  "rand 0.9.5",
@@ -3005,6 +3019,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite",
  "webview2-com",
  "windows-sys 0.61.2",
  "zip",

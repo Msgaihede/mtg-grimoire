@@ -102,6 +102,10 @@ pub mod deckpane;
 /// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
 /// will look.
 pub mod decksort;
+/// **The Draft & Packs page's draft** — one draft at a time over phase.rs's draft module
+/// (`grimoire-play`), kept in `app_meta` while solo; the deck its pool becomes (`draft::deck`);
+/// and a pod's lobby on the relay (`draft::lobby`).
+pub mod draft;
 /// **Entry tags** (user schema v67): a stack's own tags, on a collection row or a wish —
 /// `grimoire-core`'s, with the three desktop wrappers.
 pub mod entry_tags;
@@ -172,6 +176,9 @@ pub mod nav;
 /// the *seen* cursor; no table of its own, no filesystem and no network, and its only clock is
 /// SQLite's `date('now')`.
 pub mod new_printings;
+/// **MTGJSON's booster data for the Draft & Packs page**: one set's file fetched, cached a week
+/// under the data folder's `boosters/`, and handed to `grimoire_core::boosters`.
+pub mod packs;
 pub mod paths;
 /// The game board's three commands, over phase.rs's rules engine (`grimoire-play`): a deck
 /// against the goldfish, or against another deck or three played by phase.rs's AI.

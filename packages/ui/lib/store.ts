@@ -39,8 +39,10 @@ import type { MarketplaceId } from "./marketplace";
  * asserting it literally.
  *
  * **Two of the eleven have no chord and the reasons are different**, which is the thing to carry
- * away rather than the count: `shared` because its row is conditional, `settings` because the run
- * of digits is nine long and this list is eleven. `lib/shortcuts.ts`'s `switchView` argues both.
+ * away rather than the count: `shared` because its row is conditional, `draft` (Draft & Packs,
+ * 2026-10-29) because the run of digits is nine long and every digit was already in a reader's
+ * fingers — a row inserted before Settings would have renumbered it. `lib/shortcuts.ts`'s
+ * `switchView` argues both.
  */
 export type ViewId =
   | "home"
@@ -52,6 +54,7 @@ export type ViewId =
   | "scanner"
   | "trade"
   | "playtesting"
+  | "draft"
   | "settings";
 
 /**

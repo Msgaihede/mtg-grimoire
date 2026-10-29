@@ -29,12 +29,16 @@
 export const LIMITS = {
   /** `/claim` — one per Connect press. */
   RL_CLAIM: { limit: 10, period: 60 },
-  /** `/token` and `/rotate` — a device mints about once every eighteen hours. */
+  /**
+   * `/token` and `/rotate` — a device mints about once every eighteen hours — and `POST /lobby`,
+   * which a supporter presses once a draft night.
+   */
   RL_MINT: { limit: 30, period: 60 },
   /**
    * `/keys` and the pairing rendezvous — one `/keys` per sync trip, and a pairing dialog polls
    * `/p/{rv}/{slot}` every 1.5 s, which is 40 a minute from one device and 80 from the two of a
-   * pair sitting behind one address.
+   * pair sitting behind one address. And a lobby's socket (`GET /lobby/{code}/ws`): eight seats
+   * and their reconnects, which is a handful a minute even from one table's shared address.
    */
   RL_READ: { limit: 240, period: 60 },
 } as const;
@@ -48,6 +52,10 @@ const BINDING = {
   rotate: "RL_MINT",
   keys: "RL_READ",
   rendezvous: "RL_READ",
+  // A lobby is a Durable Object brought to life, which no other route here reaches unasked, so
+  // `lobby.ts` limits both of its routes although neither reads D1 — see its `handleLobbyCreate`.
+  lobby: "RL_MINT",
+  lobbySocket: "RL_READ",
 } as const satisfies Record<string, Binding>;
 
 export type LimitedRoute = keyof typeof BINDING;
