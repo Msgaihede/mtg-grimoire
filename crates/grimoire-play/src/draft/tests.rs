@@ -1,6 +1,8 @@
 //! Drafts end to end on the engine's stack: a quick draft against seven bots to its last pick,
 //! a sealed pool, a cube, a pod that waits for its people, a bot taking a seat, refusals that
-//! change nothing, and a snapshot that resumes where it left off. Boosters are 14 cards dealt by
+//! change nothing, and a snapshot that resumes where it left off; a Commander draft two cards a
+//! pick; Winston drafts against a bot and between two people, every card ending in a pool and no
+//! seat ever shown a pile it is not deciding on. Boosters are 14 cards (20 for Commander) dealt by
 //! a seeded die from 35 cards of five colours, so every run is the same.
 
 use rand::{Rng, SeedableRng};
@@ -9,7 +11,10 @@ use rand_chacha::ChaCha8Rng;
 use crate::cards::CardFacts;
 use crate::{on_engine_stack, Difficulty};
 
-use super::{Draft, DraftCardFacts, DraftMode, DraftSeatSetup, DraftSetup, DraftStatus, DraftView};
+use super::{
+    Draft, DraftCardFacts, DraftMode, DraftSeatSetup, DraftSetup, DraftStatus, DraftView,
+    PodFormat,
+};
 
 fn engine<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     on_engine_stack(work).expect("the engine ran")
@@ -178,6 +183,7 @@ fn setup(
         packs,
         pack_sets: vec!["tst".into(); rounds],
         min_deck_size: 40,
+        pod_format: PodFormat::Booster,
     }
 }
 
@@ -570,4 +576,279 @@ fn the_wire_is_camel_case() {
 fn a_draft_crosses_threads() {
     fn send<T: Send + 'static>() {}
     send::<Draft>();
+}
+
+/// You and three bots, three rounds of 20-card boosters, two cards a pick.
+fn commander(difficulty: Difficulty) -> DraftSetup {
+    let mut seats = vec![person("You")];
+    seats.extend(bots(3));
+    let mut setup = setup(DraftMode::Commander, seats, 3, difficulty);
+    setup.packs = boosters(4, 3, 20, 11);
+    setup.min_deck_size = 60;
+    setup
+}
+
+#[test]
+fn a_commander_draft_picks_two_at_a_time_to_deckbuilding() {
+    engine(|| {
+        let mut draft = start(commander(Difficulty::Medium));
+        let view = draft.view(0);
+        assert_eq!((view.picks_per_step, view.commanders), (2, 1));
+        assert_eq!(view.pack_size, 20);
+        assert!(view.stack.is_none());
+        assert!(view.seats[1..].iter().all(|s| s.picked), "the bots picked two each");
+        assert!(draft.pool(1).len() == 2);
+
+        let before = draft.snapshot();
+        let refusal = draft.pick(0, first(&view)).unwrap_err();
+        assert_eq!(refusal, "Pick 2 cards from the pack.");
+        assert_eq!(draft.snapshot(), before, "a one-card pick changes nothing");
+
+        let mut steps = 0;
+        while draft.status() == DraftStatus::Drafting {
+            let view = draft.view(0);
+            assert!(!view.waiting);
+            let ids: Vec<String> = view.pack[..2].iter().map(|c| c.instance_id.clone()).collect();
+            draft.pick(0, ids).expect("two cards are a pick");
+            steps += 1;
+            assert!(steps <= 30);
+        }
+        // Ten steps a 20-card booster, three boosters: every seat drafts all sixty it saw.
+        assert_eq!(steps, 30);
+        for seat in 0..4 {
+            assert_eq!(draft.pool(seat).len(), 60, "seat {seat}'s pool");
+        }
+        assert_eq!(draft.view(0).commanders, 1);
+
+        // "Pick for me" picks two.
+        let mut auto = start(commander(Difficulty::Easy));
+        auto.auto_pick(0).unwrap();
+        assert_eq!(auto.view(0).pool.len(), 2);
+
+        // phase seats a Commander draft three at the least.
+        let mut small = commander(Difficulty::VeryEasy);
+        small.seats.truncate(2);
+        small.packs.truncate(2);
+        assert!(Draft::new(small, cards()).is_err());
+    });
+}
+
+/// Every instance id `setup`'s boosters deal, sorted.
+fn dealt(setup: &DraftSetup) -> Vec<String> {
+    let mut ids: Vec<String> = setup
+        .packs
+        .iter()
+        .enumerate()
+        .flat_map(|(seat, rounds)| {
+            rounds.iter().enumerate().flat_map(move |(round, booster)| {
+                booster
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, id)| format!("{id}#{seat}.{round}.{index}"))
+            })
+        })
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Every instance id in a pool, sorted.
+fn pooled(draft: &Draft) -> Vec<String> {
+    let mut ids: Vec<String> = draft
+        .session
+        .pools
+        .iter()
+        .flatten()
+        .map(|c| c.instance_id.clone())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// You against one bot, three boosters each.
+fn winston(difficulty: Difficulty) -> DraftSetup {
+    let mut seats = vec![person("You")];
+    seats.extend(bots(1));
+    setup(DraftMode::Winston, seats, 3, difficulty)
+}
+
+/// The seat's view tells it no card it may not see: no pack, and a pile's cards only on its own
+/// turn, for the pile in play, the whole pile.
+fn sees_only_its_pile(view: &DraftView) {
+    assert!(view.pack.is_empty());
+    let stack = view.stack.as_ref().expect("a Winston view has its table");
+    assert_eq!(stack.piles.len(), 3);
+    assert_eq!(view.waiting, view.status == DraftStatus::Drafting && !stack.your_turn);
+    for (i, pile) in stack.piles.iter().enumerate() {
+        assert_eq!(pile.active, stack.active_pile == Some(i as u8));
+        if stack.your_turn && pile.active {
+            assert_eq!(pile.cards.len() as u32, pile.count);
+        } else {
+            assert!(pile.cards.is_empty(), "pile {i} shown off its turn");
+        }
+    }
+}
+
+#[test]
+fn a_winston_draft_against_a_bot_runs_to_the_end() {
+    engine(|| {
+        let setup = winston(Difficulty::Medium);
+        let all = dealt(&setup);
+        assert_eq!(all.len(), 84);
+        let mut draft = start(setup);
+        let view = draft.view(0);
+        assert_eq!(view.mode, DraftMode::Winston);
+        assert_eq!((view.pack_number, view.pick_number, view.pack_size), (0, 0, 0));
+        assert_eq!((view.picks_per_step, view.commanders), (1, 0));
+        let stack = view.stack.clone().unwrap();
+        assert!(stack.your_turn, "the bot took its turns before the view");
+        assert_eq!(stack.turn_seat, 0);
+        assert!(!view.waiting && view.seats[1].picked && !view.seats[0].picked);
+        sees_only_its_pile(&view);
+        sees_only_its_pile(&draft.view(1));
+
+        // No pick in a Winston draft, no other pile, no turn for a bot's seat.
+        let before = draft.snapshot();
+        assert!(draft.pick(0, vec!["x".into()]).is_err());
+        assert_eq!(draft.winston(0, 1, true).unwrap_err(), "That is not the pile in play.");
+        assert!(draft.winston(1, 0, true).is_err());
+        assert_eq!(draft.snapshot(), before);
+
+        let mut decisions = 0;
+        let mut takes = 0;
+        while draft.status() == DraftStatus::Drafting {
+            let view = draft.view(0);
+            sees_only_its_pile(&view);
+            sees_only_its_pile(&draft.view(1));
+            assert!(!view.waiting, "the bot never keeps the reader waiting");
+            let stack = view.stack.unwrap();
+            let pile = stack.active_pile.unwrap();
+            // Decline while the rules allow it; a refused decline changes nothing.
+            let before = draft.snapshot();
+            if draft.winston(0, pile, false).is_err() {
+                assert_eq!(draft.snapshot(), before);
+                draft.winston(0, pile, true).expect("a take is always there");
+                takes += 1;
+            }
+            decisions += 1;
+            assert!(decisions < 500, "the draft ends");
+        }
+        assert!(takes > 0);
+        assert_eq!(pooled(&draft), all, "every card ends in a pool, once");
+        let view = draft.view(0);
+        assert_eq!(view.status, DraftStatus::Deckbuilding);
+        let stack = view.stack.unwrap();
+        assert_eq!(stack.active_pile, None);
+        assert!(!stack.your_turn && stack.main_count == 0);
+        assert!(stack.piles.iter().all(|p| p.count == 0 && p.cards.is_empty()));
+        assert!(!view.waiting);
+        assert_eq!(
+            view.pool.len() + draft.pool(1).len(),
+            84,
+            "the two pools are the whole stack"
+        );
+        assert!(draft.winston(0, 0, true).is_err());
+
+        // A Winston draft opens three boosters a seat.
+        let mut short = winston(Difficulty::VeryEasy);
+        short.packs = boosters(2, 2, 14, 7);
+        short.pack_sets.truncate(2);
+        assert!(Draft::new(short, cards()).is_err());
+    });
+}
+
+#[test]
+fn a_pod_winston_between_two_people_takes_turns() {
+    engine(|| {
+        let mut seats = vec![person("Host"), person("Guest")];
+        seats[1].peer = Some("p1".into());
+        let mut setup = setup(DraftMode::Pod, seats, 3, Difficulty::VeryEasy);
+        setup.pod_format = PodFormat::Winston;
+        let all = dealt(&setup);
+        let mut draft = start(setup);
+        assert_eq!(draft.view(0).pod_format, PodFormat::Winston);
+
+        let mut takes = 0;
+        let mut decisions = 0;
+        while draft.status() == DraftStatus::Drafting {
+            let turn = draft.view(0).stack.unwrap().turn_seat;
+            let other = 1 - turn;
+            let (mine, theirs) = (draft.view(turn), draft.view(other));
+            sees_only_its_pile(&mine);
+            sees_only_its_pile(&theirs);
+            assert!(!mine.waiting && theirs.waiting);
+            assert!(theirs.seats[usize::from(other)].picked);
+            // The seat off its turn is refused, and nothing moves.
+            let before = draft.snapshot();
+            assert!(draft.auto_pick(other).is_err());
+            assert!(draft.winston(other, 0, true).is_err());
+            assert_eq!(draft.snapshot(), before);
+
+            let stack = mine.stack.unwrap();
+            let pile = stack.active_pile.unwrap();
+            if stack.piles[usize::from(pile)].count > 0 {
+                draft.winston(turn, pile, true).expect("a pile with cards is taken");
+                takes += 1;
+                if draft.status() == DraftStatus::Drafting {
+                    let next = draft.view(0).stack.unwrap();
+                    assert_eq!(next.turn_seat, other, "a take ends the turn");
+                    assert_eq!(next.active_pile, Some(0));
+                }
+            } else {
+                draft.auto_pick(turn).expect("the first legal decision is taken");
+            }
+            decisions += 1;
+            assert!(decisions < 500);
+        }
+        assert!(takes > 10);
+        assert_eq!(pooled(&draft), all);
+        // A pod is a pod; its format only says what it drafts.
+        assert_eq!(draft.view(1).mode, DraftMode::Pod);
+    });
+}
+
+#[test]
+fn a_winston_snapshot_resumes_mid_turn() {
+    engine(|| {
+        let mut draft = start(winston(Difficulty::Medium));
+        for _ in 0..12 {
+            draft.auto_pick(0).unwrap();
+        }
+        let snapshot = draft.snapshot();
+        let ids = Draft::card_ids(&snapshot).unwrap();
+        let facts: Vec<CardFacts> = cards()
+            .into_iter()
+            .map(|c| c.card)
+            .filter(|c| ids.contains(&c.card_id))
+            .collect();
+        assert_eq!(ids.len(), facts.len());
+        let mut resumed = Draft::restore(&snapshot, facts).expect("the draft resumes");
+        assert_eq!(resumed.view(0), draft.view(0));
+        assert_eq!(resumed.view(1), draft.view(1));
+        while draft.status() == DraftStatus::Drafting {
+            draft.auto_pick(0).unwrap();
+        }
+        while resumed.status() == DraftStatus::Drafting {
+            resumed.auto_pick(0).unwrap();
+        }
+        assert_eq!(resumed.snapshot(), draft.snapshot(), "the bot decides as it would have");
+    });
+}
+
+#[test]
+fn a_snapshot_from_before_pod_formats_still_resumes() {
+    engine(|| {
+        let draft = start(quick(Difficulty::VeryEasy));
+        let mut old: serde_json::Value = serde_json::from_str(&draft.snapshot()).unwrap();
+        old["setup"]
+            .as_object_mut()
+            .unwrap()
+            .remove("podFormat")
+            .expect("the snapshot names the pod's format");
+        let old = old.to_string();
+        let facts: Vec<CardFacts> = cards().into_iter().map(|c| c.card).collect();
+        let resumed = Draft::restore(&old, facts).expect("a version-1 snapshot resumes");
+        assert_eq!(resumed.view(0), draft.view(0));
+        assert_eq!(resumed.view(0).pod_format, PodFormat::Booster);
+    });
 }

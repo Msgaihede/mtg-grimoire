@@ -507,7 +507,7 @@ function HostRoom({
               {lobby.phase === "connecting"
                 ? "Connecting to the lobby…"
                 : crowded
-                  ? `${plural(people, "person", "people")} are in — a ${POD_FORMATS.find((f) => f.id === held.format)?.label ?? ""} pod seats ${range.max} at most.`
+                  ? `${people} people are in; ${POD_FORMATS.find((f) => f.id === held.format)?.label ?? "this format"} seats ${range.max} at most.`
                   : held.rounds.length < DRAFT_PACKS
                     ? `Choose ${DRAFT_PACKS - held.rounds.length} more ${DRAFT_PACKS - held.rounds.length === 1 ? "pack" : "packs"} to start.`
                     : `${seats} seats: whoever is online now, and bots.`}
