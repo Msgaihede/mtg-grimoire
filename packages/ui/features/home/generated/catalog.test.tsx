@@ -12,7 +12,13 @@ import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 
 import { catalog } from "./catalog";
 import { SpecView } from "./SpecView";
-import { DECKS_EXAMPLE, EXAMPLES, RARITY_EXAMPLE } from "./examples";
+import {
+  DECKS_EXAMPLE,
+  EXAMPLES,
+  FILTER_EXAMPLE,
+  GALLERY_EXAMPLE,
+  RARITY_EXAMPLE,
+} from "./examples";
 import { executeAction, registry } from "./registry";
 
 let qc: QueryClient;
@@ -123,6 +129,44 @@ describe("drawing a spec", () => {
     expect(screen.getByText("Mythic")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("switch", { name: "Show breakdown" }));
     expect(screen.queryByText("Mythic")).toBeNull();
+  });
+
+  it("narrows rows by the widget's own chips and price range", async () => {
+    draw(FILTER_EXAMPLE);
+
+    // The range's ceiling starts at 100, so The One Ring is out before anything is pressed.
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByText("Sol Ring")).toBeInTheDocument();
+    expect(screen.queryByText("The One Ring")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Foil" }));
+    expect(screen.queryByText("Lightning Bolt")).toBeNull();
+    expect(screen.getByText("Sol Ring")).toBeInTheDocument();
+  });
+
+  it("binds a segmented choice, a chip and a stepper to state", async () => {
+    draw(GALLERY_EXAMPLE);
+
+    const week = screen.getByRole("button", { name: "Week" });
+    expect(week).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(week);
+    expect(week).toHaveAttribute("aria-pressed", "true");
+
+    const chip = screen.getByRole("button", { name: "NM, Near mint" });
+    await userEvent.click(chip);
+    expect(chip).toHaveAttribute("aria-pressed", "true");
+
+    const rows = screen.getByRole("spinbutton", { name: "Rows" });
+    expect(rows).toHaveValue(5);
+    await userEvent.click(screen.getByRole("button", { name: "Increase Rows" }));
+    expect(rows).toHaveValue(6);
+  });
+
+  it("picks a radio", async () => {
+    draw(GALLERY_EXAMPLE);
+    const cards = screen.getByRole("radio", { name: "Cards" });
+    await userEvent.click(cards);
+    expect(cards).toBeChecked();
   });
 
   it("formats money through a $computed function", () => {

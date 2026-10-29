@@ -4,7 +4,13 @@ import type { Spec } from "@json-render/core";
 import { CARDS } from "@grimoire/fake/cards";
 import { makeFit, spanPx } from "../fit";
 import { SpecView } from "./SpecView";
-import { CARDS_EXAMPLE, DECKS_EXAMPLE, GALLERY_EXAMPLE, RARITY_EXAMPLE } from "./examples";
+import {
+  CARDS_EXAMPLE,
+  DECKS_EXAMPLE,
+  FILTER_EXAMPLE,
+  GALLERY_EXAMPLE,
+  RARITY_EXAMPLE,
+} from "./examples";
 import { CatalogFitContext } from "./registry";
 
 /** The grid's target cell — the size the page aims its columns at. Not exported, for CSF. */
@@ -88,6 +94,17 @@ export const Rarity: Story = {
   },
 };
 
+/** Rows narrowed by the widget's own inputs — a chip and a price range read by `visible`. */
+export const Filter: Story = {
+  args: { spec: FILTER_EXAMPLE, w: 4, h: 4 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Lightning Bolt")).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "Foil" }));
+    await waitFor(() => expect(canvas.queryByText("Lightning Bolt")).toBeNull());
+  },
+};
+
 /** A wall of card tiles over the fake's printings, each opening its card. */
 export const Cards: Story = {
   args: {
@@ -114,7 +131,7 @@ export const Gallery: Story = {
       state: { ...GALLERY_EXAMPLE.state, cardId: printing("Rhystic Study", null).id },
     },
     w: 6,
-    h: 8,
+    h: 12,
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

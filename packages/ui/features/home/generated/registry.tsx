@@ -23,7 +23,18 @@ import { defineRegistry, useBoundProp, type ComponentContext } from "@json-rende
 import { CardArt } from "@/components/CardArt";
 import { CardTile } from "@/components/CardTile";
 import { CountTag } from "@/components/CountTag";
-import { Dropdown } from "@/components/Dropdown/Dropdown";
+import { Dropdown, MultiDropdown } from "@/components/Dropdown/Dropdown";
+import { ToggleChip as FilterToggleChip } from "@/components/FilterChips";
+import { GameChangerMark } from "@/components/GameChangerMark";
+import { OwnedBadge } from "@/components/OwnedBadge";
+import { PriceRange as PriceRangeControl } from "@/components/PriceRange";
+import { QuantityStepper } from "@/components/QuantityStepper";
+import { useTooltip } from "@/components/tooltip/useTooltip";
+import { BarChart, StatsCard } from "@/features/decks/stats/StatsCard";
+import { histogram } from "@/features/draft/booster/value";
+import { ValueHistogram } from "@/features/draft/packs/ValueHistogram";
+import { Segmented as SegmentedControl } from "@/features/draft/setup/parts";
+import { ModeRadios } from "@/features/transfer/import/shared/ModeRadios";
 import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
@@ -269,6 +280,162 @@ function Switch({ props, bindings }: ComponentContext<Catalog, "Switch">): React
   );
 }
 
+/** The bins a price histogram is drawn in: enough for a shape, few enough that each is a bar. */
+const HISTOGRAM_BINS = 24;
+
+function Hint({ props, children }: ComponentContext<Catalog, "Hint">): ReactElement {
+  const tip = useTooltip();
+  return (
+    <span className="inline-flex min-w-0" {...tip(props.text)}>
+      {children}
+    </span>
+  );
+}
+
+function Columns({ props }: ComponentContext<Catalog, "ColumnChart">): ReactElement {
+  const max = Math.max(1, ...props.columns.map((c) => c.count));
+  return (
+    <BarChart
+      bars={props.columns.map((c, i) => ({
+        key: `${i}:${c.label}`,
+        label: c.label,
+        count: c.count,
+        said: c.said,
+      }))}
+      max={max}
+      height={props.height ?? 120}
+      fill={PAINT[props.color ?? "accent"]}
+      variant={props.mana ? "mana" : "default"}
+    />
+  );
+}
+
+function Histogram({ props }: ComponentContext<Catalog, "PriceHistogram">): ReactElement | null {
+  const currency = useCurrency();
+  const bins = useMemo(
+    () => histogram(Float64Array.from(props.values).sort(), HISTOGRAM_BINS),
+    [props.values],
+  );
+  return (
+    <ValueHistogram
+      bins={bins}
+      marked={props.marked}
+      markedLabel={props.markedLabel ?? ""}
+      paid={null}
+      currency={currency}
+      unit={props.unit}
+      summary={props.summary}
+    />
+  );
+}
+
+function Combobox({ props, bindings }: ComponentContext<Catalog, "Combobox">): ReactElement {
+  const [value, setValue] = useBoundProp<string>(props.value ?? undefined, bindings?.value);
+  return (
+    <Dropdown
+      searchable
+      label={props.label}
+      options={props.options}
+      value={value ?? ""}
+      placeholder={props.placeholder ?? undefined}
+      onChange={setValue}
+    />
+  );
+}
+
+function MultiSelect({ props, bindings }: ComponentContext<Catalog, "MultiSelect">): ReactElement {
+  const [selected, setSelected] = useBoundProp<string[]>(
+    props.selected ?? undefined,
+    bindings?.selected,
+  );
+  const picked = selected ?? [];
+  return (
+    <MultiDropdown
+      label={props.label}
+      options={props.options}
+      selected={picked}
+      triggerLabel={props.triggerLabel}
+      onToggle={(v) =>
+        setSelected(picked.includes(v) ? picked.filter((p) => p !== v) : [...picked, v])
+      }
+    />
+  );
+}
+
+function Segmented({ props, bindings }: ComponentContext<Catalog, "Segmented">): ReactElement {
+  const [value, setValue] = useBoundProp<string>(props.value ?? undefined, bindings?.value);
+  return (
+    <SegmentedControl
+      label={props.label}
+      options={props.options.map((o) => ({ id: o.value, label: o.label }))}
+      value={value ?? ""}
+      onPick={setValue}
+    />
+  );
+}
+
+function RadioGroup({ props, bindings }: ComponentContext<Catalog, "RadioGroup">): ReactElement {
+  const [value, setValue] = useBoundProp<string>(props.value ?? undefined, bindings?.value);
+  return (
+    <ModeRadios
+      label={props.label}
+      modes={props.options.map((o) => ({ key: o.value, label: o.label, hint: o.hint ?? "" }))}
+      value={value ?? ""}
+      onChange={setValue}
+    />
+  );
+}
+
+function ToggleChip({ props, bindings }: ComponentContext<Catalog, "ToggleChip">): ReactElement {
+  const [pressed, setPressed] = useBoundProp<boolean>(
+    props.pressed ?? undefined,
+    bindings?.pressed,
+  );
+  const on = pressed ?? false;
+  return (
+    <FilterToggleChip
+      label={props.label}
+      hint={props.hint ?? undefined}
+      pressed={on}
+      onClick={() => setPressed(!on)}
+    />
+  );
+}
+
+function NumberStepper({
+  props,
+  bindings,
+}: ComponentContext<Catalog, "NumberStepper">): ReactElement {
+  const [value, setValue] = useBoundProp<number>(props.value ?? undefined, bindings?.value);
+  const min = props.min ?? 0;
+  return (
+    <QuantityStepper
+      label={props.label}
+      value={value ?? min}
+      min={min}
+      max={props.max ?? undefined}
+      onChange={setValue}
+    />
+  );
+}
+
+function PriceRange({ props, bindings }: ComponentContext<Catalog, "PriceRange">): ReactElement {
+  const currency = useCurrency();
+  const [min, setMin] = useBoundProp<number | null>(props.min, bindings?.min);
+  const [max, setMax] = useBoundProp<number | null>(props.max, bindings?.max);
+  return (
+    <PriceRangeControl
+      min={min ?? undefined}
+      max={max ?? undefined}
+      currency={currency}
+      onChange={(low, high) => {
+        setMin(low ?? null);
+        setMax(high ?? null);
+      }}
+    />
+  );
+}
+
 /**
  * An action param as its value. Inside a `repeat`, json-render resolves `{ "$item": "id" }` in an
  * action's params to the item's **state path** (`/decks/1/id`) — the shape its own `setState`
@@ -325,6 +492,7 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
       </div>
     ),
     Divider: () => <hr className="border-border" />,
+    Panel: ({ props, children }) => <StatsCard title={props.title}>{children}</StatsCard>,
     Heading: ({ props }) => {
       const level = props.level ?? 2;
       const className = cn(
@@ -353,6 +521,7 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
     ),
     ManaText: ({ props }) => <ManaText source={props.text} className="text-sm text-text" />,
     Price,
+    Hint,
     Figures,
     Bars,
     RowList,
@@ -360,6 +529,8 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
     Message: ({ props }) => <WidgetMessage tone={props.tone ?? "dim"}>{props.text}</WidgetMessage>,
     Footer: ({ props }) => <WidgetFooterLine line={props.line} said={props.said ?? undefined} />,
     PriceChart: Chart,
+    ColumnChart: Columns,
+    PriceHistogram: Histogram,
     CardArt: ({ props }) => (
       <div className={ART_WIDTH[props.size ?? "md"]}>
         <CardArt
@@ -387,6 +558,10 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
       />
     ),
     CountTag: ({ props }) => <CountTag count={props.count} title={props.title} />,
+    OwnedBadge: ({ props }) => (
+      <OwnedBadge owned={props.owned} wishlisted={props.wishlisted ?? false} />
+    ),
+    GameChangerMark: () => <GameChangerMark />,
     Button: ({ props, emit }) => (
       <button
         type="button"
@@ -399,6 +574,13 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
     TextInput,
     Select,
     Switch,
+    Combobox,
+    MultiSelect,
+    Segmented,
+    RadioGroup,
+    ToggleChip,
+    NumberStepper,
+    PriceRange,
   },
   actions: {
     openCard: async (params, _, state) => {

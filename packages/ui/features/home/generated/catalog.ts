@@ -13,7 +13,7 @@
  * **What is in it, and why those.** The home widgets' own parts (`WidgetParts.tsx`: figures, bars,
  * rows, a message, a footer line), the card visuals (`CardArt`, `CardTile`, the rarity gem, the
  * finish mark, the set symbol, the count tag, mana symbols in text), the price chart, layout and
- * text, and four inputs. Nothing here fetches: data arrives through the spec's `$state`
+ * text, and the app's inputs. Nothing here fetches: data arrives through the spec's `$state`
  * expressions, so a component is a picture of facts it is handed.
  *
  * **The inputs write only the widget's own state** (`$bindState`). The graph is read-only and so
@@ -39,6 +39,9 @@ const FINISH = z.enum(["nonfoil", "foil", "etched"]);
 /** A colour a bar or a figure may take: the app's accent, rising and falling, and the five mana
  *  colours plus colourless. Never a free colour — the widget wears the app's palette. */
 const PAINT = z.enum(["accent", "up", "down", "dim", "W", "U", "B", "R", "G", "C"]);
+
+/** A choice an input offers: the value it writes, and the words it shows. */
+const OPTIONS = z.array(z.object({ value: z.string(), label: z.string() }));
 
 /** Where the app can take the reader, for `openView`. */
 export const VIEWS = [
@@ -81,6 +84,12 @@ export const catalog = defineCatalog(schema, {
       props: z.object({}),
       description: "A thin horizontal rule between two parts of a widget.",
     },
+    Panel: {
+      props: z.object({ title: z.string() }),
+      slots: ["default"],
+      description:
+        "A bordered section with a small title — groups a chart or a few rows under a heading, as the deck editor's stats band does.",
+    },
 
     // --- text -------------------------------------------------------------------------------
     Heading: {
@@ -113,6 +122,12 @@ export const catalog = defineCatalog(schema, {
       }),
       description:
         "An amount of money in the reader's marketplace currency, written the app's way. `null` draws an em dash — a price nobody quotes is not zero.",
+    },
+    Hint: {
+      props: z.object({ text: z.string() }),
+      slots: ["default"],
+      description:
+        "Shows `text` as the app's tooltip when its children are hovered or focused — an explanation that does not fit on the widget.",
     },
 
     // --- the home widgets' own parts ---------------------------------------------------------
@@ -193,6 +208,29 @@ export const catalog = defineCatalog(schema, {
       description:
         "A line of money over time — a card's price or a collection's value. `day` is Unix seconds, oldest first; `value` is in the reader's currency. `summary` describes the line in words for screen readers.",
     },
+    ColumnChart: {
+      props: z.object({
+        columns: z.array(
+          z.object({ label: z.string(), count: z.number().int().min(0), said: z.string() }),
+        ),
+        color: PAINT.nullable(),
+        height: z.number().int().min(40).max(240).nullable(),
+        mana: z.boolean().nullable(),
+      }),
+      description:
+        "Vertical columns of card counts, each count on its column and its word under it — a mana curve, cards per type, per colour. A screen reader hears `<count> cards <said>` (`said`: `at mana value 2`). `mana: true` draws the words as circled numerals, the deck editor's curve. `height` in px (default 120).",
+    },
+    PriceHistogram: {
+      props: z.object({
+        values: z.array(z.number()),
+        unit: z.string(),
+        marked: z.number().nullable(),
+        markedLabel: z.string().nullable(),
+        summary: z.string(),
+      }),
+      description:
+        "How a list of prices spreads, as a histogram in the reader's currency — the app bins them. `unit` names what one value is (`cards`). `marked` draws a line at one value with `markedLabel` over it. `summary` describes the spread in words for screen readers.",
+    },
 
     // --- cards and their marks --------------------------------------------------------------
     CardArt: {
@@ -246,6 +284,19 @@ export const catalog = defineCatalog(schema, {
       description:
         "A small count badge, as drawn over card art (`4`). `title` says the count in words (`4 copies`).",
     },
+    OwnedBadge: {
+      props: z.object({
+        owned: z.number().int().min(0),
+        wishlisted: z.boolean().nullable(),
+      }),
+      description:
+        "Whether the reader owns a card — a check with the count when `owned` is above 0, a heart when `wishlisted`, nothing otherwise. Drawn over a card's art or beside its name.",
+    },
+    GameChangerMark: {
+      props: z.object({}),
+      description:
+        "The Commander Game Changer mark, for a card on that list (it counts toward a deck's bracket).",
+    },
 
     // --- inputs: the widget's own state, never the reader's data ----------------------------
     Button: {
@@ -269,7 +320,7 @@ export const catalog = defineCatalog(schema, {
       props: z.object({
         label: z.string(),
         value: z.string().nullable(),
-        options: z.array(z.object({ value: z.string(), label: z.string() })),
+        options: OPTIONS,
       }),
       description:
         "A dropdown of options. Bind `value` with `$bindState` to the widget's own state.",
@@ -280,6 +331,73 @@ export const catalog = defineCatalog(schema, {
         checked: z.boolean().nullable(),
       }),
       description: "An on/off switch. Bind `checked` with `$bindState` to the widget's own state.",
+    },
+    Combobox: {
+      props: z.object({
+        label: z.string(),
+        value: z.string().nullable(),
+        options: OPTIONS,
+        placeholder: z.string().nullable(),
+      }),
+      description:
+        "A dropdown with a search box that narrows its options as the reader types — for a long list (sets, decks, tags). Bind `value` with `$bindState`.",
+    },
+    MultiSelect: {
+      props: z.object({
+        label: z.string(),
+        selected: z.array(z.string()).nullable(),
+        options: OPTIONS,
+        triggerLabel: z.string(),
+      }),
+      description:
+        "A dropdown that stays open while the reader ticks several options. `triggerLabel` is what the closed box says (`Colours`). Bind `selected` (an array of values) with `$bindState`.",
+    },
+    Segmented: {
+      props: z.object({
+        label: z.string(),
+        value: z.string().nullable(),
+        options: OPTIONS,
+      }),
+      description:
+        "A row of two to five segments, exactly one pressed — a short choice always in view (`Week`, `Month`, `Year`). Bind `value` with `$bindState`.",
+    },
+    RadioGroup: {
+      props: z.object({
+        label: z.string(),
+        value: z.string().nullable(),
+        options: z.array(
+          z.object({ value: z.string(), label: z.string(), hint: z.string().nullable() }),
+        ),
+      }),
+      description:
+        "Radio buttons, one per line, each with an optional dim `hint` under it — a choice that needs a sentence of explanation. Bind `value` with `$bindState`.",
+    },
+    ToggleChip: {
+      props: z.object({
+        label: z.string(),
+        pressed: z.boolean().nullable(),
+        hint: z.string().nullable(),
+      }),
+      description:
+        "A filter chip that is on or off — the Search page's chips. Several in a horizontal Stack make a filter row. `hint` expands a short label (`NM` → `Near mint`). Bind `pressed` with `$bindState`.",
+    },
+    NumberStepper: {
+      props: z.object({
+        label: z.string(),
+        value: z.number().int().nullable(),
+        min: z.number().int().nullable(),
+        max: z.number().int().nullable(),
+      }),
+      description:
+        "A whole number with minus and plus buttons — how many rows to show, a threshold. Bind `value` with `$bindState`.",
+    },
+    PriceRange: {
+      props: z.object({
+        min: z.number().nullable(),
+        max: z.number().nullable(),
+      }),
+      description:
+        "Two price boxes and a slider bounding a price in the reader's currency — the Search page's price filter. `null` is open-ended. Bind `min` and `max` with `$bindState`, and read them in `visible` conditions (`lte`/`gte`).",
     },
   },
 

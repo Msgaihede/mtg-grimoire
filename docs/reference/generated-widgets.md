@@ -25,14 +25,36 @@ its peer): it is young and its minor versions move.
 
 ## What is in it
 
-- **Layout and text**: `Stack`, `Grid`, `Divider`, `Heading`, `Text`, `ManaText`, `Price`.
+- **Layout and text**: `Stack`, `Grid`, `Divider`, `Panel` (`StatsCard`), `Heading`, `Text`,
+  `ManaText`, `Price`, `Hint` (the app's tooltip over its children).
 - **The home widgets' own parts** (`WidgetParts.tsx`): `Figures`, `Bars`, `RowList`, `Row`,
   `Message`, `Footer`. The measured ones (`Figures`, `Bars`, `RowList`) read the widget card's
   `WidgetFit` from `CatalogFitContext`; outside a card it is a medium card's.
-- **A chart**: `PriceChart` — `priceHistory/PriceChart`, money over time. A breakdown is `Bars`.
+- **Charts**: `PriceChart` (`priceHistory/PriceChart`, money over time), `ColumnChart` (the deck
+  stats band's `BarChart` — card counts, `mana: true` for the curve's circled numerals),
+  `PriceHistogram` (Draft & Packs' `ValueHistogram`, binned by its own `histogram`). A horizontal
+  breakdown is `Bars`.
 - **Cards and their marks**: `CardArt`, `CardTile`, `RarityGem`, `FinishMark`, `SetSymbol`,
-  `CountTag`.
-- **Inputs**: `Button`, `TextInput`, `Select` (`Dropdown`), `Switch`.
+  `CountTag`, `OwnedBadge`, `GameChangerMark`.
+- **Inputs**, each the control the app already uses for the job:
+
+  | Name            | Drawn by                       | Binds                 |
+  | --------------- | ------------------------------ | --------------------- |
+  | `Button`        | `BUTTON` (Settings' controls)  | — (`press` event)     |
+  | `TextInput`     | an input with `TOUCH_FIELD`    | `value`               |
+  | `Select`        | `Dropdown`                     | `value`               |
+  | `Combobox`      | `Dropdown` with `searchable`   | `value`               |
+  | `MultiSelect`   | `MultiDropdown`                | `selected` (an array) |
+  | `Segmented`     | Draft & Packs' `Segmented`     | `value`               |
+  | `RadioGroup`    | the importer's `ModeRadios`    | `value`               |
+  | `Switch`        | `SWITCH` + `switchTone`        | `checked`             |
+  | `ToggleChip`    | the Search page's `ToggleChip` | `pressed`             |
+  | `NumberStepper` | `QuantityStepper`              | `value`               |
+  | `PriceRange`    | the Search page's `PriceRange` | `min` and `max`       |
+
+Left out on purpose: dialogs, menus and the virtual table (a widget is a tile, not a page), and
+controls tied to one feature's data (`TagChips`, `FinishRadios`, `SyncProgress`, `ValueChart`'s
+history views).
 
 A component is a picture of facts it is handed: nothing in the catalogue fetches.
 
@@ -65,6 +87,7 @@ A component is a picture of facts it is handed: nothing in the catalogue fetches
 ## Stories
 
 `Home/Generated/SpecView`: Decks (figures, a `repeat` of rows that open their deck, a `$template`
-footer), Rarity (bars, a switch hiding them), Cards (a wall of tiles over the fake's printings) and
-Gallery (one of every component). Each spec sits in a box a widget of its footprint covers, with
+footer), Rarity (bars, a switch hiding them), Filter (rows narrowed by a chip and a price range
+through `visible`), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
+component). Each spec sits in a box a widget of its footprint covers, with
 that box's fit.

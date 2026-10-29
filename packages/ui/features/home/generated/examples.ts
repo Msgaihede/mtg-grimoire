@@ -173,6 +173,82 @@ export const CARDS_EXAMPLE: Spec = {
   },
 };
 
+/** Rows a reader narrows with the widget's own inputs: chips and a price range, read by each
+ *  row's `visible` condition. */
+export const FILTER_EXAMPLE: Spec = {
+  root: "body",
+  elements: {
+    body: {
+      type: "Stack",
+      props: { direction: null, gap: "md", align: null, justify: null, wrap: null },
+      children: ["filters", "list"],
+    },
+    filters: {
+      type: "Stack",
+      props: { direction: "horizontal", gap: "sm", align: "center", justify: null, wrap: true },
+      children: ["foil", "range"],
+    },
+    foil: {
+      type: "ToggleChip",
+      props: { label: "Foil", pressed: { $bindState: "/foilOnly" }, hint: null },
+      children: [],
+    },
+    range: {
+      type: "PriceRange",
+      props: { min: { $bindState: "/min" }, max: { $bindState: "/max" } },
+      children: [],
+    },
+    list: {
+      type: "RowList",
+      props: { label: null },
+      repeat: { statePath: "/cards", key: "id" },
+      children: ["card"],
+    },
+    card: {
+      type: "Row",
+      props: {
+        name: { $item: "name" },
+        caption: { $item: "finish" },
+        value: { $item: "price" },
+        money: true,
+        delta: null,
+        rarity: { $item: "rarity" },
+        setCode: null,
+        track: null,
+      },
+      visible: {
+        $and: [
+          { $item: "price", lte: { $state: "/max" } },
+          {
+            $or: [
+              { $state: "/foilOnly", not: true },
+              { $item: "foil", eq: true },
+            ],
+          },
+        ],
+      },
+      children: [],
+    },
+  },
+  state: {
+    foilOnly: false,
+    min: null,
+    max: 100,
+    cards: [
+      {
+        id: "a",
+        name: "Lightning Bolt",
+        finish: "nonfoil",
+        foil: false,
+        price: 2.1,
+        rarity: "common",
+      },
+      { id: "b", name: "Sol Ring", finish: "foil", foil: true, price: 4.8, rarity: "uncommon" },
+      { id: "c", name: "The One Ring", finish: "foil", foil: true, price: 140, rarity: "mythic" },
+    ],
+  },
+};
+
 /** One of everything the catalogue has, for the gallery story — and a check that each draws. */
 export const GALLERY_EXAMPLE: Spec = {
   root: "body",
@@ -180,7 +256,18 @@ export const GALLERY_EXAMPLE: Spec = {
     body: {
       type: "Stack",
       props: { direction: null, gap: "lg", align: null, justify: null, wrap: null },
-      children: ["heading", "texts", "divider", "marks", "chart", "art", "inputs", "message"],
+      children: [
+        "heading",
+        "texts",
+        "divider",
+        "marks",
+        "chart",
+        "stats",
+        "art",
+        "inputs",
+        "moreInputs",
+        "message",
+      ],
     },
     heading: { type: "Heading", props: { text: "Everything", level: 2 }, children: [] },
     texts: {
@@ -205,7 +292,19 @@ export const GALLERY_EXAMPLE: Spec = {
     marks: {
       type: "Stack",
       props: { direction: "horizontal", gap: "md", align: "center", justify: null, wrap: true },
-      children: ["gem", "finish", "set", "count"],
+      children: ["gem", "finish", "set", "count", "owned", "gameChanger", "hint"],
+    },
+    owned: { type: "OwnedBadge", props: { owned: 3, wishlisted: null }, children: [] },
+    gameChanger: { type: "GameChangerMark", props: {}, children: [] },
+    hint: {
+      type: "Hint",
+      props: { text: "Counted across every folder" },
+      children: ["hinted"],
+    },
+    hinted: {
+      type: "Text",
+      props: { text: "Hover me", tone: "dim", size: "xs", mono: null, truncate: null },
+      children: [],
     },
     gem: { type: "RarityGem", props: { rarity: "mythic", withLabel: true }, children: [] },
     finish: { type: "FinishMark", props: { finish: "foil" }, children: [] },
@@ -216,6 +315,41 @@ export const GALLERY_EXAMPLE: Spec = {
       props: {
         points: { $state: "/history" },
         summary: "Rising from 2.10 to 3.40 over a month",
+      },
+      children: [],
+    },
+    stats: {
+      type: "Grid",
+      props: { columns: 2, gap: "md" },
+      children: ["curvePanel", "spreadPanel"],
+    },
+    curvePanel: { type: "Panel", props: { title: "Mana curve" }, children: ["curve"] },
+    curve: {
+      type: "ColumnChart",
+      props: {
+        columns: [
+          { label: "1", count: 6, said: "at mana value 1" },
+          { label: "2", count: 11, said: "at mana value 2" },
+          { label: "3", count: 9, said: "at mana value 3" },
+          { label: "4", count: 5, said: "at mana value 4" },
+          { label: "5", count: 3, said: "at mana value 5" },
+          { label: "6", count: 1, said: "at mana value 6" },
+        ],
+        color: null,
+        height: 96,
+        mana: true,
+      },
+      children: [],
+    },
+    spreadPanel: { type: "Panel", props: { title: "Price spread" }, children: ["spread"] },
+    spread: {
+      type: "PriceHistogram",
+      props: {
+        values: { $state: "/prices" },
+        unit: "cards",
+        marked: 12,
+        markedLabel: "Median",
+        summary: "40 cards from 0.10 to 80.00",
       },
       children: [],
     },
@@ -281,6 +415,81 @@ export const GALLERY_EXAMPLE: Spec = {
     },
     primary: { type: "Button", props: { label: "Primary", variant: "primary" }, children: [] },
     quiet: { type: "Button", props: { label: "Quiet", variant: "quiet" }, children: [] },
+    moreInputs: {
+      type: "Grid",
+      props: { columns: 2, gap: "md" },
+      children: ["combo", "multi", "segmented", "radios", "chip", "stepper", "range"],
+    },
+    combo: {
+      type: "Combobox",
+      props: {
+        label: "Set",
+        value: { $bindState: "/set" },
+        options: [
+          { value: "mh3", label: "Modern Horizons 3" },
+          { value: "lea", label: "Limited Edition Alpha" },
+          { value: "cmm", label: "Commander Masters" },
+        ],
+        placeholder: "Any set",
+      },
+      children: [],
+    },
+    multi: {
+      type: "MultiSelect",
+      props: {
+        label: "Colours",
+        selected: { $bindState: "/colors" },
+        options: [
+          { value: "W", label: "White" },
+          { value: "U", label: "Blue" },
+          { value: "B", label: "Black" },
+          { value: "R", label: "Red" },
+          { value: "G", label: "Green" },
+        ],
+        triggerLabel: "Colours",
+      },
+      children: [],
+    },
+    segmented: {
+      type: "Segmented",
+      props: {
+        label: "Window",
+        value: { $bindState: "/window" },
+        options: [
+          { value: "7d", label: "Week" },
+          { value: "30d", label: "Month" },
+          { value: "365d", label: "Year" },
+        ],
+      },
+      children: [],
+    },
+    radios: {
+      type: "RadioGroup",
+      props: {
+        label: "Count",
+        value: { $bindState: "/count" },
+        options: [
+          { value: "copies", label: "Copies", hint: "Every copy, foils and all" },
+          { value: "cards", label: "Cards", hint: null },
+        ],
+      },
+      children: [],
+    },
+    chip: {
+      type: "ToggleChip",
+      props: { label: "NM", pressed: { $bindState: "/nearMint" }, hint: "Near mint" },
+      children: [],
+    },
+    stepper: {
+      type: "NumberStepper",
+      props: { label: "Rows", value: { $bindState: "/rows" }, min: 1, max: 20 },
+      children: [],
+    },
+    range: {
+      type: "PriceRange",
+      props: { min: { $bindState: "/min" }, max: { $bindState: "/max" } },
+      children: [],
+    },
     message: { type: "Message", props: { text: "No decks yet.", tone: null }, children: [] },
   },
   state: {
@@ -288,6 +497,15 @@ export const GALLERY_EXAMPLE: Spec = {
     filter: "",
     sort: "value",
     foils: false,
+    set: "",
+    colors: ["R"],
+    window: "30d",
+    count: "copies",
+    nearMint: false,
+    rows: 5,
+    min: null,
+    max: null,
+    prices: Array.from({ length: 40 }, (_, i) => Math.round(0.1 * 1.2 ** i * 100) / 100),
     history: Array.from({ length: 30 }, (_, i) => ({
       day: 1_790_000_000 + i * 86_400,
       value: 2.1 + (i / 29) * 1.3 + Math.sin(i / 3) * 0.15,
@@ -299,5 +517,6 @@ export const EXAMPLES = {
   decks: DECKS_EXAMPLE,
   rarity: RARITY_EXAMPLE,
   cards: CARDS_EXAMPLE,
+  filter: FILTER_EXAMPLE,
   gallery: GALLERY_EXAMPLE,
 } as const;
