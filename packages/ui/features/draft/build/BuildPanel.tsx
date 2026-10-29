@@ -17,7 +17,9 @@ export type DraftRole = "solo" | "host" | "guest";
 /**
  * The Build step: what the pool holds, a name for the deck, and the press that turns the pool
  * into a deck in the deck editor's draft mode (spec §5) — a **virtual** Limited deck whose Pool
- * holds every card drafted, never the collection's.
+ * holds every card drafted, never the collection's. A Commander draft's (`view.commanders > 0`,
+ * spec §4a) is a Casual deck with a Commander pile beside Deck and Pool, built with
+ * `draft_deck_create`'s `commander` flag.
  *
  * Once the deck exists the draft is put away: a solo draft's saved copy is dropped
  * (`draft_end`), and a pod's seat leaves the lobby (`lobby_leave` — for the host that closes the
@@ -47,6 +49,7 @@ export function BuildPanel({
   const creatures = view.pool.filter((c) => !isLand(c) && /\bCreature\b/.test(c.typeLine)).length;
   const others = view.pool.length - lands - creatures;
   const ready = name.trim() !== "" && view.pool.length > 0;
+  const commander = view.commanders > 0;
 
   const build = async () => {
     setBusy(true);
@@ -54,6 +57,7 @@ export function BuildPanel({
       const row = await ipc.draftDeckCreate(
         name.trim(),
         view.pool.map((c) => c.cardId),
+        commander,
       );
       try {
         if (role === "solo" && draft !== null) await ipc.draftEnd(draft);
@@ -81,8 +85,11 @@ export function BuildPanel({
         </h3>
         <p className="m-0 max-w-[60ch] text-sm text-dim">
           The draft is done. Your {plural(view.pool.length, "card")} go into a deck of their own,
-          all in its Pool — move the ones you play into the Deck and add basics in the editor. A
-          deck needs {view.minDeckSize} cards. Nothing is added to your collection.
+          all in its Pool — move the ones you play into the Deck and add basics in the editor.{" "}
+          {commander
+            ? `A Commander deck needs ${view.minDeckSize} cards and ${view.commanders === 1 ? "a commander" : `${view.commanders} commanders`} in its Commander pile.`
+            : `A deck needs ${view.minDeckSize} cards.`}{" "}
+          Nothing is added to your collection.
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">

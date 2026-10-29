@@ -11,6 +11,7 @@ import {
   type LobbyPeer,
   type LobbyState,
   type PlaytestDifficulty,
+  type PodFormat,
   type SetSummary,
 } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
@@ -18,12 +19,14 @@ import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import type { DraftRole } from "../build/BuildPanel";
 import {
+  COMMANDER_DECK_SIZE,
+  COMMANDER_SETS,
   DEFAULT_DIFFICULTY,
   DIFFICULTIES,
   DRAFT_PACKS,
   freshDraftName,
+  POD_SEATS,
   podSeats,
-  TABLE_SEATS,
 } from "../setup/deal";
 import { AddPackWall, PackOrder } from "../setup/PackOrder";
 import {
@@ -34,6 +37,7 @@ import {
   PANEL,
   PrimaryButton,
   QUIET_BUTTON,
+  SeatPicker,
   Segmented,
 } from "../setup/parts";
 import { useDealDraft } from "../setup/useDealDraft";
@@ -48,10 +52,35 @@ import {
 
 /** The name the reader goes by in a lobby, for the window's life. */
 const nameMemory = viewMemory<string>("draft.lobbyName");
-/** The host's packs and bots, for the window's life. */
-const hostMemory = viewMemory<{ rounds: SetSummary[]; difficulty: PlaytestDifficulty }>(
-  "draft.lobbyHost",
-);
+/** What the host has chosen: the packs, the bots' skill, what the pod drafts and how many seats
+ *  each format's table has. */
+interface HostHeld {
+  rounds: SetSummary[];
+  difficulty: PlaytestDifficulty;
+  format: PodFormat;
+  seats: Record<PodFormat, number>;
+}
+
+const HOST_FRESH: HostHeld = {
+  rounds: [],
+  difficulty: DEFAULT_DIFFICULTY,
+  format: "booster",
+  seats: {
+    booster: POD_SEATS.booster.start,
+    commander: POD_SEATS.commander.start,
+    winston: POD_SEATS.winston.start,
+  },
+};
+
+/** The host's choices, for the window's life. */
+const hostMemory = viewMemory<HostHeld>("draft.lobbyHost");
+
+/** A pod's formats, in the host's words (spec §4a). */
+const POD_FORMATS: readonly { id: PodFormat; label: string }[] = [
+  { id: "booster", label: "Booster draft" },
+  { id: "commander", label: "Commander" },
+  { id: "winston", label: "Winston" },
+];
 
 /**
  * The Pod Draft flow before the first pick: create a lobby or join one by its code, then the
@@ -290,19 +319,23 @@ function CodePlate({ code }: { code: string }): JSX.Element {
 /** Who is in the room: the host, each guest (online or dropped), and how many bots fill in. */
 function People({
   lobby,
+  seats,
   onKick,
 }: {
   lobby: LobbyState;
+  /** The table's seats, when this app knows them (the host's); a guest is told no bot count. */
+  seats?: number;
   onKick?: (peer: LobbyPeer) => void;
 }): JSX.Element {
   const online = lobby.peers.filter((p) => p.online).length;
-  const bots = Math.max(0, TABLE_SEATS - 1 - online);
+  const bots = seats === undefined ? 0 : Math.max(0, seats - 1 - online);
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-baseline justify-between">
         <h3 className={LABEL}>At the table</h3>
         <span className="text-xs text-dim">
-          {plural(1 + online, "person", "people")} · {plural(bots, "bot")}
+          {plural(1 + online, "person", "people")}
+          {seats !== undefined && ` · ${plural(bots, "bot")}`}
         </span>
       </div>
       <ul aria-label="People" className="m-0 flex list-none flex-col gap-1.5 p-0">
@@ -361,7 +394,13 @@ function OnlineDot({ online }: { online: boolean }): JSX.Element {
   );
 }
 
-/** The host's room: the code, the people, the packs, the bots' skill, and Start. */
+/**
+ * The host's room: the code, the people, what the pod drafts (a booster draft of 2–8, a Commander
+ * draft of 3–8, a Winston draft of 2–4) and at how many seats, the packs, the bots' skill, and
+ * Start — which deals three boosters for every seat and sends the format (`podFormat`); a
+ * Commander pod's deck floor is 60. A seat count below the people in the room is not offered: the
+ * table seats everyone online, and bots in the rest.
+ */
 function HostRoom({
   lobby,
   onDraft,
@@ -369,10 +408,9 @@ function HostRoom({
   lobby: LobbyState;
   onDraft: (draft: number | null, view: DraftView | null, role: DraftRole) => void;
 }): JSX.Element {
-  const [held, setHeldState] = useState(
-    () => hostMemory.recall() ?? { rounds: [] as SetSummary[], difficulty: DEFAULT_DIFFICULTY },
-  );
-  const setHeld = (patch: Partial<typeof held>) => {
+  // Over `HOST_FRESH`, so a shape kept before the format was added still has every field.
+  const [held, setHeldState] = useState<HostHeld>(() => ({ ...HOST_FRESH, ...hostMemory.recall() }));
+  const setHeld = (patch: Partial<HostHeld>) => {
     const next = { ...held, ...patch };
     hostMemory.keep(next);
     setHeldState(next);
@@ -380,7 +418,11 @@ function HostRoom({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { dealSets } = useDealDraft();
-  const ready = held.rounds.length === DRAFT_PACKS && lobby.phase === "open";
+  const range = POD_SEATS[held.format];
+  const people = 1 + lobby.peers.filter((p) => p.online).length;
+  const seats = Math.min(range.max, Math.max(held.seats[held.format], people, range.min));
+  const crowded = people > range.max;
+  const ready = held.rounds.length === DRAFT_PACKS && lobby.phase === "open" && !crowded;
 
   const start = async () => {
     setBusy(true);
@@ -388,9 +430,10 @@ function HostRoom({
     try {
       const setup = await dealSets({
         mode: "pod",
+        podFormat: held.format,
         rounds: held.rounds,
         difficulty: held.difficulty,
-        seats: podSeats(lobby.name, lobby.peers),
+        seats: podSeats(lobby.name, lobby.peers, seats),
       });
       const draft = freshDraftName();
       const view = await ipc.lobbyStart(setup, draft);
@@ -413,13 +456,35 @@ function HostRoom({
           chosen={held.rounds}
           max={DRAFT_PACKS}
           onChange={(rounds) => setHeld({ rounds })}
+          suggested={held.format === "commander" ? COMMANDER_SETS : undefined}
         />
       </div>
       <aside
         aria-label="Pod setup"
         className="flex w-[24rem] shrink-0 flex-col gap-6 overflow-y-auto border-l border-border bg-surface/45 px-6 pb-6 pt-3"
       >
-        <People lobby={lobby} onKick={kick} />
+        <People lobby={lobby} seats={seats} onKick={kick} />
+        <Segmented
+          label="Format"
+          options={POD_FORMATS}
+          value={held.format}
+          onPick={(format) => setHeld({ format })}
+        />
+        {!crowded && (
+          <SeatPicker
+            range={range}
+            floor={people}
+            value={seats}
+            onPick={(n) => setHeld({ seats: { ...held.seats, [held.format]: n } })}
+          />
+        )}
+        <p className="m-0 text-xs leading-relaxed text-dim">
+          {held.format === "commander"
+            ? `Two cards a pick; everyone builds a ${COMMANDER_DECK_SIZE}-card deck with a commander.`
+            : held.format === "winston"
+              ? "One face-down stack in three piles, shared by the table: take a pile or decline it."
+              : "Three boosters each, passed left, right, left."}
+        </p>
         <Segmented
           label="Bot difficulty"
           options={DIFFICULTIES}
@@ -441,9 +506,11 @@ function HostRoom({
             <p className="m-0 text-center text-xs text-dim">
               {lobby.phase === "connecting"
                 ? "Connecting to the lobby…"
-                : held.rounds.length < DRAFT_PACKS
-                  ? `Choose ${DRAFT_PACKS - held.rounds.length} more ${DRAFT_PACKS - held.rounds.length === 1 ? "pack" : "packs"} to start.`
-                  : `${TABLE_SEATS} seats: whoever is online now, and bots.`}
+                : crowded
+                  ? `${plural(people, "person", "people")} are in — a ${POD_FORMATS.find((f) => f.id === held.format)?.label ?? ""} pod seats ${range.max} at most.`
+                  : held.rounds.length < DRAFT_PACKS
+                    ? `Choose ${DRAFT_PACKS - held.rounds.length} more ${DRAFT_PACKS - held.rounds.length === 1 ? "pack" : "packs"} to start.`
+                    : `${seats} seats: whoever is online now, and bots.`}
             </p>
           )}
         </div>
