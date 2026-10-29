@@ -3,7 +3,9 @@
 **Status: decided, 2026-10-24. §10's step 2 — `Projection v1`, the publisher and the store, read-only
 — is built (2026-10-25,
 [the PR 2 plan](../plans/2026-10-25-integrations-projection-store.md),
-[integrations-store.md](../../reference/integrations-store.md)); nothing else here is.** The owner asked for a reconsideration of
+[integrations-store.md](../../reference/integrations-store.md)), and step 3 — intents, consumer
+tokens and the review list — on 2026-10-29 ([the PR 3 plan](../plans/2026-10-29-integrations-intents.md));
+nothing else here is.** The owner asked for a reconsideration of
 how cloud-side components reach a reader's data, prompted by four issues and by the expectation of
 more integrations after them. This document weighs the ways of doing that and recommends one; **the
 owner chose the recommendation, option B (§4), the same day.** The tracking issue carries the

@@ -34,6 +34,7 @@
 //! collection takes holds neither the writer nor a reader's edit; and the round gives a host with
 //! one thread a turn between shares and between tables ([`timer::yield_to_host`]).
 
+use super::intents::{self, IntentsReport};
 use super::projection;
 use super::readable;
 use super::settings::{self, ROUND_FAILED};
@@ -63,6 +64,13 @@ pub const LONGEST_MS: u64 = 5 * 60 * 1000;
 /// last heard "on" asks on every round; one that has never asked, asks.
 pub const OFF_RECHECK_SECS: i64 = 6 * 60 * 60;
 
+/// **How often a device whose store is on reads its inbox when no trip has made a round due**
+/// (the PR 3 plan §4): every five minutes. A round reads the inbox anyway; this is for the device
+/// left open and idle, which would otherwise apply a Discord add only after the reader's next edit.
+/// One request a poll on a device with nothing waiting — the inbox's `GET` — and none at all while
+/// the store is off.
+pub const INTENTS_POLL_MS: u64 = 5 * 60 * 1000;
+
 // ---------------------------------------------------------------------------------------
 // When
 // ---------------------------------------------------------------------------------------
@@ -79,6 +87,9 @@ pub struct Seen {
     pub acted: Option<i64>,
     /// When the first trip not yet acted on was read.
     pub waiting_since: Option<u64>,
+    /// When the inbox was last read — by a round of either kind. `None` until the first, so a
+    /// device that launches with its store on reads it at its first poll.
+    pub intents_at: Option<u64>,
 }
 
 impl Seen {
@@ -133,6 +144,15 @@ pub fn due(seen: &Seen, requested: bool, now: u64) -> bool {
     quiet || long
 }
 
+/// Whether an intents-only round is due at `now`: **only while the store was last heard on**, and
+/// [`INTENTS_POLL_MS`] after the inbox was last read — at once when it never has been.
+pub fn intents_due(seen: &Seen, enabled: bool, now: u64) -> bool {
+    enabled
+        && seen
+            .intents_at
+            .is_none_or(|at| now.saturating_sub(at) >= INTENTS_POLL_MS)
+}
+
 // ---------------------------------------------------------------------------------------
 // What
 // ---------------------------------------------------------------------------------------
@@ -163,6 +183,9 @@ pub struct Report {
     pub held: Vec<&'static str>,
     /// The projection half's failure.
     pub error: Option<String>,
+    /// The intents half — run when the store answered its digests, between the shares and the
+    /// projection, so the tables the round then sends carry what it applied.
+    pub intents: IntentsReport,
 }
 
 /// One round. **Skipped silently — no request, no row — unless this device is entitled and in a
@@ -250,6 +273,12 @@ async fn project(db: &impl Store, corpus_current: bool, report: &mut Report) {
         Err(e) => return failed(db, report, e),
     };
     report.store = Some(true);
+
+    // **The inbox, before the projection is read** (the PR 3 plan §4): an add applied here is then
+    // in the tables this round sends, and its overlay in the store is dropped by this publish rather
+    // than the next. Its failures are its own rows, and never the panel's sentence — that one says
+    // the copy could not be sent.
+    report.intents = intents::half(db, &door, corpus_current).await;
 
     // **The read connection**, where the host has one: the six documents and the watermark they
     // go up under, **in one read transaction**, so the tables agree with each other and with the
@@ -399,6 +428,8 @@ pub enum Stepped {
     /// A round ran: for a trip (`by_trip`, which marks the trip acted on), or only because a
     /// publish was asked for (which marks no trip — see [`step`]).
     Round { by_trip: bool, report: Report },
+    /// No round was due, and the inbox was: an intents-only round ran ([`intents_round`]).
+    Intents { report: IntentsReport },
 }
 
 /// One poll: read the trip stamp, the publish request and whether there is card data ([`look`]);
@@ -416,6 +447,10 @@ pub enum Stepped {
 /// **No card data, no round, and nothing marked or cleared**: the device that has not finished
 /// its first download, or whose download a metered link holds, publishes the moment it has one.
 ///
+/// **With no round due, the inbox may be** ([`intents_due`]): while the store was last heard on,
+/// an intents-only round every [`INTENTS_POLL_MS`], under the lane as a round is. A round of either
+/// kind resets that clock — a full round reads the inbox too.
+///
 /// `now` is the loop's monotonic clock, in milliseconds.
 pub async fn step(state: &Arc<State>, seen: &mut Seen, now: u64) -> Stepped {
     let looked = look(state).await;
@@ -425,8 +460,20 @@ pub async fn step(state: &Arc<State>, seen: &mut Seen, now: u64) -> Stepped {
     }
     let by_trip = due(seen, false, now);
     if !by_trip && !looked.requested {
-        return Stepped::Idle;
+        if !intents_due(seen, looked.enabled, now) {
+            return Stepped::Idle;
+        }
+        seen.intents_at = Some(now);
+        let owned = Arc::clone(state);
+        let report = spawn::on_a_worker(move || async move {
+            let lane = owned.lane().await;
+            intents_round(&lane).await
+        })
+        .await
+        .unwrap_or_default();
+        return Stepped::Intents { report };
     }
+    seen.intents_at = Some(now);
     let acting_on = seen.latest.map(|(stamp, _)| stamp);
     let owned = Arc::clone(state);
     let report = spawn::on_a_worker(move || async move {
@@ -443,6 +490,24 @@ pub async fn step(state: &Arc<State>, seen: &mut Seen, now: u64) -> Stepped {
         seen.acted_on(acting_on);
     }
     Stepped::Round { by_trip, report }
+}
+
+/// **The intents half alone** — what [`step`] runs every [`INTENTS_POLL_MS`] while the store is
+/// on and no round is due. The round's own gates: nothing on a device that is not entitled, and a
+/// door that cannot be had is nothing done (its failures are already rows). `db` is the lane.
+pub async fn intents_round(db: &impl Store) -> IntentsReport {
+    let Ok((entitled, current)) =
+        db.reading(|conn| Ok((store::entitled(conn), readable::corpus_current(conn))))
+    else {
+        return IntentsReport::default();
+    };
+    if !entitled {
+        return IntentsReport::default();
+    }
+    match store::door(db, "integrations_intents").await {
+        Ok(door) => intents::half(db, &door, current).await,
+        Err(_) => IntentsReport::default(),
+    }
 }
 
 /// The publisher: runs for the life of the process, and is the host's to spawn — beside
@@ -477,6 +542,9 @@ struct Look {
     requested: bool,
     /// Whether this device has any card data at all (`sync::has_cards`).
     cards: bool,
+    /// Whether this build can reach the store and last heard it on — what makes the inbox worth
+    /// reading between rounds ([`intents_due`]).
+    enabled: bool,
 }
 
 /// The trip stamp, the publish request and whether there is card data — **the read connection**,
@@ -490,6 +558,7 @@ async fn look(state: &Arc<State>) -> Look {
             stamp: client::get_state(&conn, client::LAST_SYNC_AT).and_then(|v| v.parse().ok()),
             requested: settings::publish_requested(&conn),
             cards: crate::sync::has_cards(&conn),
+            enabled: store::endpoint(&conn).is_ok() && settings::read_cache(&conn).enabled,
         }
     })
     .await
@@ -497,6 +566,7 @@ async fn look(state: &Arc<State>) -> Look {
         stamp: None,
         requested: false,
         cards: false,
+        enabled: false,
     })
 }
 
@@ -520,6 +590,20 @@ mod tests {
     // -----------------------------------------------------------------------------------
 
     const T0: u64 = 1_790_000_000_000;
+
+    /// **The inbox between rounds**: never while the store is off; at once on a first poll with it
+    /// on; then every [`INTENTS_POLL_MS`] and not before.
+    #[test]
+    fn the_inbox_is_read_every_five_minutes_while_the_store_is_on() {
+        let mut seen = Seen::default();
+        assert!(!intents_due(&seen, false, T0));
+        assert!(intents_due(&seen, true, T0), "a first poll reads it");
+        seen.intents_at = Some(T0);
+        assert!(!intents_due(&seen, true, T0 + 1));
+        assert!(!intents_due(&seen, true, T0 + INTENTS_POLL_MS - 1));
+        assert!(intents_due(&seen, true, T0 + INTENTS_POLL_MS));
+        assert!(!intents_due(&seen, false, T0 + 10 * INTENTS_POLL_MS));
+    }
 
     #[test]
     fn nothing_seen_is_never_due_and_a_request_always_is() {
@@ -1244,6 +1328,83 @@ mod tests {
         );
     }
 
+    /// **The inbox is read before the projection** (the PR 3 plan §4): a Discord add waiting in it
+    /// is applied by this round, and the `collection_entries` table the same round sends carries it
+    /// — the store's overlay is then dropped by this publish rather than the next.
+    #[tokio::test]
+    async fn an_add_in_the_inbox_is_in_the_tables_the_same_round_sends() {
+        let server = httpmock::MockServer::start_async().await;
+        let conn = open_db();
+        entitled(&conn, &server.base_url());
+        // Capture, so the add gets the `sync_uid` a projected row needs, as a paired device's does.
+        crate::sync_engine::capture::install(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'dev-a', x'00', x'01', 'dev-a', 0)",
+            [],
+        )
+        .unwrap();
+        folder(&conn, "Binder");
+        no_shares(&server).await;
+        store_holds(&server, digests_body(IntegrationFields::default(), &[])).await;
+        let id = "i".repeat(22);
+        let inbox = serde_json::json!({
+            "intents": [{
+                "id": id, "group": "g1", "source": "discord", "kind": "collection.add",
+                "payload": { "scryfallId": "c-seed", "finish": "nonfoil", "quantity": 3,
+                             "folderUid": "uid-Binder" },
+                "createdAt": 1, "confirmedBy": "discord:1", "state": "pending", "reason": null,
+            }],
+            "more": false,
+        })
+        .to_string();
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/g/g1/intents");
+                then.status(200).body(inbox);
+            })
+            .await;
+        let claimed =
+            serde_json::json!({ "id": id, "lease": "L".repeat(22), "leaseUntil": 1 }).to_string();
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path(format!("/g/g1/intents/{id}/claim"));
+                then.status(200).body(claimed);
+            })
+            .await;
+        let acked = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path(format!("/g/g1/intents/{id}/ack"));
+                then.status(200).body("{}");
+            })
+            .await;
+        let carried = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT)
+                    .path("/g/g1/projection/collection_entries")
+                    .is_true(|req| {
+                        gunzip(req.body_ref()).is_some_and(|doc| {
+                            doc["rows"].as_array().is_some_and(|rows| {
+                                rows.iter().any(|row| {
+                                    row["scryfallId"] == "c-seed" && row["quantity"] == 3
+                                })
+                            })
+                        })
+                    });
+                then.status(200).body("{}");
+            })
+            .await;
+        let others = any_put(&server, 200, "{}").await;
+
+        let report = round(&conn).await;
+        assert_eq!(report.intents.applied, vec![id], "{report:?}");
+        acked.assert_calls_async(1).await;
+        carried.assert_calls_async(1).await;
+        assert_eq!(others.calls_async().await, TABLES.len() - 1);
+    }
+
     // -----------------------------------------------------------------------------------
     // One poll — `step`, on a host's state
     // -----------------------------------------------------------------------------------
@@ -1260,7 +1421,7 @@ mod tests {
 
     fn by_trip(stepped: &Stepped) -> Option<bool> {
         match stepped {
-            Stepped::Idle => None,
+            Stepped::Idle | Stepped::Intents { .. } => None,
             Stepped::Round { by_trip, .. } => Some(*by_trip),
         }
     }
@@ -1290,6 +1451,44 @@ mod tests {
         assert_eq!(
             by_trip(&step(&state, &mut seen, later + QUIET_MS).await),
             Some(true)
+        );
+    }
+
+    /// **The inbox between rounds**: with the store last heard on and no trip unacted, a poll runs
+    /// an intents-only round, the polls inside five minutes are idle, and the one after runs again.
+    /// This device is not entitled, so each asks nobody: what is held here is the timing.
+    #[tokio::test]
+    async fn an_idle_device_reads_its_inbox_every_five_minutes_while_the_store_is_on() {
+        let (state, _dir) =
+            crate::state::fixtures::on_files("publish-step-intents", "http://127.0.0.1:1");
+        {
+            let conn = state.lock_db();
+            crate::schema::fixtures::seed_card(&conn, "c-seed", "lea", "1");
+            client::set_state(&conn, store::INTEGRATIONS_URL, "http://127.0.0.1:1").unwrap();
+            let mut cache = settings::read_cache(&conn);
+            cache.enabled = true;
+            settings::write_cache(&conn, &cache).unwrap();
+        }
+        let mut seen = Seen::default();
+        let intents = |stepped: &Stepped| matches!(stepped, Stepped::Intents { .. });
+        assert!(intents(&step(&state, &mut seen, T0).await));
+        assert_eq!(
+            step(&state, &mut seen, T0 + POLL.as_millis() as u64).await,
+            Stepped::Idle
+        );
+        assert!(intents(
+            &step(&state, &mut seen, T0 + INTENTS_POLL_MS).await
+        ));
+        // Switched off: no more reads.
+        {
+            let conn = state.lock_db();
+            let mut cache = settings::read_cache(&conn);
+            cache.enabled = false;
+            settings::write_cache(&conn, &cache).unwrap();
+        }
+        assert_eq!(
+            step(&state, &mut seen, T0 + 3 * INTENTS_POLL_MS).await,
+            Stepped::Idle
         );
     }
 

@@ -238,7 +238,7 @@ export async function rowMac(key: CryptoKey, table: string, row: unknown): Promi
   );
 }
 
-/** A sealed row opened — for the queries of PR 3 and 4, and for this Worker's suite today. */
+/** A sealed row opened — what a consumer route answers with (`store.ts`'s reads). */
 export async function openRow(
   key: CryptoKey,
   table: string,
@@ -246,4 +246,65 @@ export async function openRow(
   blob: Uint8Array,
 ): Promise<unknown> {
   return JSON.parse(decoder.decode(await open(key, blob, rowAad(table, uid))));
+}
+
+// ---------------------------------------------------------------------------------------
+// The inbox and the consumer tokens (the PR 3 plan, §3.3 and §3.4)
+// ---------------------------------------------------------------------------------------
+
+/** The HKDF salt the inbox's key is drawn with: apart from every row key's and the MAC key's. */
+const INTENT_SALT = encoder.encode("mtg-grimoire/integrations/intent/v1");
+
+/** The HKDF salt the consumer tokens' key is drawn with. */
+const CONSUMER_SALT = encoder.encode("mtg-grimoire/integrations/consumer/v1");
+
+/**
+ * **The key a store's intents are sealed under**: AES-256-GCM, drawn from the data key by HKDF
+ * with a salt and an info string of its own. One key for the inbox and not one per intent: an
+ * integration writes at most a few hundred a day (`intents.ts`'s cap), so its random 96-bit nonces
+ * stay where they never meet.
+ */
+export async function intentKey(dataKey: Uint8Array): Promise<CryptoKey> {
+  const base = await crypto.subtle.importKey("raw", dataKey, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: INTENT_SALT, info: encoder.encode("intents") },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+const intentAad = (id: string) => encoder.encode(`intent\u0000${id}`);
+
+/**
+ * An intent's sealed half — `{ payload, confirmedBy }` — bound to its id, so a body moved to
+ * another intent does not open. What stays in the clear beside it is what the overlay and the
+ * caps query (`store.ts`'s `intents` table).
+ */
+export async function sealIntent(key: CryptoKey, id: string, body: unknown): Promise<Uint8Array> {
+  return seal(key, encoder.encode(JSON.stringify(body)), intentAad(id));
+}
+
+/** An intent's sealed half, opened. Throws when it was sealed for another id or another store. */
+export async function openIntent(key: CryptoKey, id: string, blob: Uint8Array): Promise<unknown> {
+  return JSON.parse(decoder.decode(await open(key, blob, intentAad(id))));
+}
+
+/**
+ * **The key a store's consumer tokens are signed under**: HMAC-SHA-256, drawn from the group's
+ * data key — never from `INTEGRATIONS_KEK` (plan §2). So a KEK rotation, which rewraps the data
+ * key and keeps it, moves no token; and `deleteAll`, which takes the data key with everything
+ * else, takes the key every token of the group was signed under — every one of them dies with the
+ * store, whatever its `exp` says, with no list to walk.
+ */
+export async function consumerKey(dataKey: Uint8Array): Promise<CryptoKey> {
+  const base = await crypto.subtle.importKey("raw", dataKey, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: CONSUMER_SALT, info: encoder.encode("consumer-token") },
+    base,
+    { name: "HMAC", hash: "SHA-256", length: 256 },
+    false,
+    ["sign", "verify"],
+  );
 }

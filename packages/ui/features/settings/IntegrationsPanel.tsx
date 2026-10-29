@@ -1,13 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState, type JSX, type RefObject } from "react";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError, type IntegrationFields, type IntegrationsStatus } from "@/lib/ipc";
-import { INTEGRATIONS_KEY } from "@/lib/query";
+import {
+  ipc,
+  ipcError,
+  type IntegrationFields,
+  type IntegrationsStatus,
+  type IntentAutomatic,
+  type IntentReview,
+  type ParkedIntent,
+} from "@/lib/ipc";
+import { notify } from "@/lib/notifications";
+import { INTEGRATIONS_KEY, INTEGRATIONS_REVIEW_KEY } from "@/lib/query";
 import { ago } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
-import { writeFailure } from "@/lib/writes";
+import { toasted, writeFailure } from "@/lib/writes";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { SWITCH, switchTone, TOUCH_FLOOR } from "./controls";
+import { PANEL_BUTTON, SWITCH, switchTone, TOUCH_FLOOR } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /** The panel's id stem — `SettingsSection`'s heading is `integrations-heading`. */
@@ -47,6 +56,13 @@ const NO_FIELDS: IntegrationFields = {
   tags: false,
   notes: false,
 };
+
+/**
+ * What reads the copy in this release: nothing yet. The store takes an integration's proposals
+ * (plan `2026-10-29-integrations-intents.md`), but Discord and a remote MCP server — the first
+ * integrations to connect — are later PRs of issue #1396.
+ */
+export const NONE_CONNECTED = "No integration is connected to this copy yet.";
 
 /** Why the switch cannot be pressed in a build with no store address (plan §2). */
 export const NOT_AVAILABLE = "This build can't reach the integrations service yet.";
@@ -248,9 +264,10 @@ export function IntegrationsPanel(): JSX.Element {
     // by reading the source, and an expression is a stem no text sweep can read.
     <SettingsSection id="integrations" title="Integrations">
       <p className="text-sm">{PRIVACY_SENTENCE}</p>
-      {/* True in this release: Discord and a remote MCP server are later PRs (issue #1396), and
-          a reader deciding whether to switch this on should know nothing reads it yet. */}
-      <p className="text-sm text-dim">No integration reads this copy yet.</p>
+      {/* True in this release: the store can take an integration's proposals, but Discord and a
+          remote MCP server are later PRs (issue #1396), and a reader deciding whether to switch
+          this on should know nothing is connected to it yet. */}
+      <p className="text-sm text-dim">{NONE_CONNECTED}</p>
 
       {/* No switch until the status has answered: an Off drawn over a store that may exist would
           be a claim this panel has not checked. A read that failed says so below instead. */}
@@ -333,6 +350,10 @@ export function IntegrationsPanel(): JSX.Element {
       {status !== null && status.checkedAt !== null && (
         <p className="text-xs text-dim">{checkedLine(status.checkedAt)}</p>
       )}
+
+      {/* Only while on: a store that does not exist holds no intents, and the policy rows would
+          be switches about integrations that cannot write anything. */}
+      {on && <ReviewSection pressable={pressable} />}
 
       <ConfirmDialog
         open={asking}
@@ -418,6 +439,239 @@ function SwitchRow({
       >
         <span id={`${ID}-switch-state`}>{on ? "On" : "Off"}</span>
       </button>
+    </div>
+  );
+}
+
+/**
+ * The source's name as the review list draws it. **A word this page does not know is drawn as it
+ * came** rather than refused: the device owns the list of sources and kinds (`integration::intents`),
+ * and a later one must not blank a row.
+ */
+const SOURCE_LABELS: Record<string, string> = {
+  discord: "Discord",
+  mcp: "MCP",
+  trade: "A trade",
+};
+
+/** What a kind asks for, as the policy rows name it. */
+const KIND_LABELS: Record<string, string> = {
+  "collection.add": "Add to your collection",
+  "wishlist.add": "Add to your wishlist",
+};
+
+export const sourceLabel = (source: string): string => SOURCE_LABELS[source] ?? source;
+export const kindLabel = (kind: string): string => KIND_LABELS[kind] ?? kind;
+
+/** What the review list says with nothing parked. */
+export const NOTHING_WAITING = "Nothing is waiting for your review.";
+
+/** Why Discord's two rows cannot be switched off: the reader already confirmed each one. */
+export const DISCORD_FIXED = "Always — you confirm each one in Discord.";
+
+/**
+ * Where a parked intent's copies go, as a phrase after "to": the folder by name in curly quotes,
+ * or the wishlist's (or, defensively, the collection's) root.
+ */
+export function destination(intent: Pick<ParkedIntent, "kind" | "folder">): string {
+  if (intent.folder !== null) return `“${intent.folder}”`;
+  return intent.kind === "wishlist.add" ? "your wishlist" : "your collection";
+}
+
+/**
+ * One parked intent as a line — `2× Lightning Bolt (2X2 #117), foil → “Binder”`. The printing
+ * only where the intent names one (an any-printing wish names none), and the finish only where it
+ * is not the ordinary one.
+ */
+export function intentLine(intent: ParkedIntent): string {
+  const printing =
+    intent.set === null
+      ? ""
+      : ` (${intent.set.toUpperCase()}${intent.cn === null ? "" : ` #${intent.cn}`})`;
+  const finish = intent.finish !== null && intent.finish !== "nonfoil" ? `, ${intent.finish}` : "";
+  return `${intent.quantity}× ${intent.name}${printing}${finish} → ${destination(intent)}`;
+}
+
+/** Who proposed it and when — `From Discord (discord:123), 5 minutes ago.` `createdAt` is ms. */
+export function originLine(intent: ParkedIntent, nowMs: number = Date.now()): string {
+  const who = intent.confirmedBy === null ? "" : ` (${intent.confirmedBy})`;
+  return `From ${sourceLabel(intent.source)}${who}, ${ago(Math.floor(intent.createdAt / 1000), nowMs)}.`;
+}
+
+/** The toast an applied intent raises — the owner's rule: every deliberate add says what moved
+ *  where, with a count. */
+export function appliedTitle(intent: ParkedIntent): string {
+  return `Added ${intent.quantity}× ${intent.name} to ${destination(intent)}`;
+}
+
+/**
+ * **The review list** (plan `2026-10-29-integrations-intents.md` §1 item 6, §3.5): the changes an
+ * integration proposed that this device parks rather than applies, each with Apply and Decline,
+ * and the policy that decides what is parked — one row per `(source, kind)`.
+ *
+ * **It reaches the backend itself**, as the panel does, under its own key: every command answers
+ * a fresh {@link IntentReview}, written straight back. A refusal re-reads the list — whatever
+ * refused it (another device applied the intent first, the store was switched off) is what the
+ * list should draw next.
+ *
+ * **Apply is a collection or wishlist add and toasts** (the owner's rule, 2026-10-12): success
+ * says what went where, a refusal is `notify.error` — so the banner here seats it `toasted` and
+ * says it once. Decline and the policy are not edits to the collection; their refusals are the
+ * banner's.
+ *
+ * `pressable` is the panel's: no press while the build or the membership refuses, or while the
+ * switch's own press is out.
+ */
+function ReviewSection({ pressable: panelPressable }: { pressable: boolean }) {
+  const client = useQueryClient();
+  const read = useQuery({
+    queryKey: INTEGRATIONS_REVIEW_KEY,
+    queryFn: () => ipc.integrationsReview(),
+  });
+  const review = read.data ?? null;
+  const settle = (next: IntentReview) =>
+    client.setQueryData<IntentReview>(INTEGRATIONS_REVIEW_KEY, next);
+  const reread = () => void client.invalidateQueries({ queryKey: INTEGRATIONS_REVIEW_KEY });
+  // The panel's reason: a read already out would land after the press's answer and undo it.
+  const holdReads = () => client.cancelQueries({ queryKey: INTEGRATIONS_REVIEW_KEY });
+
+  const apply = useMutation({
+    mutationFn: (intent: ParkedIntent) => ipc.integrationsReviewApply(intent.id),
+    onMutate: holdReads,
+    onSuccess: (next, intent) => {
+      settle(next);
+      notify.success(appliedTitle(intent));
+    },
+    onError: (e, intent) => {
+      notify.error(`Couldn't add ${intent.name}`, { body: ipcError(e) });
+      reread();
+    },
+  });
+  const decline = useMutation({
+    mutationFn: (intent: ParkedIntent) => ipc.integrationsReviewDecline(intent.id),
+    onMutate: holdReads,
+    onSuccess: settle,
+    onError: reread,
+  });
+  const setAutomatic = useMutation({
+    mutationFn: (row: IntentAutomatic) =>
+      ipc.integrationsSetAutomatic(row.source, row.kind, !row.on),
+    onMutate: holdReads,
+    onSuccess: settle,
+    onError: reread,
+  });
+  const busy = apply.isPending || decline.isPending || setAutomatic.isPending;
+  const pressable = panelPressable && review !== null && !busy;
+
+  const problem =
+    writeFailure([toasted(apply), decline, setAutomatic]) ??
+    (review === null && read.isError ? ipcError(read.error) : null);
+
+  return (
+    <div className="space-y-3 border-t border-border pt-4">
+      <div>
+        <h3 id="integrations-review-heading" className="text-sm">
+          Waiting for your review
+        </h3>
+        <p className="mt-0.5 text-xs leading-snug text-dim">
+          Changes an integration proposed that this device waits for you to approve.
+        </p>
+      </div>
+
+      {review === null ? (
+        !read.isError && <p className="text-sm text-dim">Checking…</p>
+      ) : review.intents.length === 0 ? (
+        <p className="text-sm text-dim">{NOTHING_WAITING}</p>
+      ) : (
+        <ul aria-labelledby="integrations-review-heading" className="space-y-2">
+          {review.intents.map((intent) => (
+            <li
+              key={intent.id}
+              className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-sm">{intentLine(intent)}</p>
+                <p className="text-xs leading-snug text-dim">{originLine(intent)}</p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  aria-label={`Apply: ${intentLine(intent)}`}
+                  aria-disabled={!pressable || undefined}
+                  aria-busy={(apply.isPending && apply.variables?.id === intent.id) || undefined}
+                  onClick={() => pressable && apply.mutate(intent)}
+                  className={cn(PANEL_BUTTON, !pressable && "cursor-not-allowed opacity-50")}
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Decline: ${intentLine(intent)}`}
+                  aria-disabled={!pressable || undefined}
+                  aria-busy={
+                    (decline.isPending && decline.variables?.id === intent.id) || undefined
+                  }
+                  onClick={() => pressable && decline.mutate(intent)}
+                  className={cn(PANEL_BUTTON, !pressable && "cursor-not-allowed opacity-50")}
+                >
+                  Decline
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <PanelAlert tone="problem">{problem}</PanelAlert>
+
+      {review !== null && review.automatic.length > 0 && (
+        <fieldset className="space-y-2">
+          <legend className="text-sm">Apply automatically on this device</legend>
+          {review.automatic.map((row) => {
+            const locked = row.fixed || !pressable;
+            return (
+              <div key={`${row.source}:${row.kind}`}>
+                <label
+                  className={cn(
+                    "flex items-center gap-2 text-sm",
+                    TOUCH_FLOOR,
+                    locked && "cursor-not-allowed",
+                    !pressable && !row.fixed && "text-dim",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={row.on}
+                    aria-disabled={locked || undefined}
+                    aria-describedby={
+                      row.fixed ? `integrations-auto-${row.source}-${row.kind}-why` : undefined
+                    }
+                    // Nothing set on a refused press: React puts a controlled box back.
+                    onChange={() => !locked && setAutomatic.mutate(row)}
+                    className={cn(
+                      "size-4 accent-accent",
+                      locked && "cursor-not-allowed opacity-50",
+                      FOCUS,
+                    )}
+                  />
+                  {sourceLabel(row.source)} — {kindLabel(row.kind).toLowerCase()}
+                </label>
+                {row.fixed && (
+                  <p
+                    id={`integrations-auto-${row.source}-${row.kind}-why`}
+                    className="ml-6 text-xs leading-snug text-dim"
+                  >
+                    {DISCORD_FIXED}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+          <p className="text-xs leading-snug text-dim">
+            Anything else waits here. Your other devices keep their own choice.
+          </p>
+        </fieldset>
+      )}
     </div>
   );
 }
