@@ -857,6 +857,7 @@ async fn connection(ctx: &Ctx, ws: Ws, rx: &mut UnboundedReceiver<Out>) -> Ended
 
 /// Put `live` in the slot — closing whatever lobby was there — do what its first frame asked,
 /// and start its task. Answers the state.
+#[allow(clippy::too_many_arguments)]
 async fn install(
     app: tauri::AppHandle,
     state: Arc<AppState>,
@@ -888,7 +889,7 @@ async fn install(
     let answer = ctx.with(|live| live.state.clone());
     ctx.emit_state();
     tauri::async_runtime::spawn(run(ctx, ws, rx));
-    answer.unwrap_or_else(|| unreachable_state())
+    answer.unwrap_or_else(unreachable_state)
 }
 
 /// A state for a lobby replaced before its command could answer: closed, with no reason.
@@ -1184,13 +1185,13 @@ pub async fn lobby_start(
         super::end_pod(&slot.0, draft);
         return Err(NO_LOBBY.to_owned());
     }
+    // Seat 0's view is the answer, not an event: only the guests are sent theirs.
     ctx.pass_on(&Outcome {
         before: Some(outcome.view.clone()),
-        ..outcome
+        ..outcome.clone()
     });
     ctx.emit_state();
-    let view = super::on_draft(&slot.0, draft, |d| d.view(0)).await?;
-    Ok(view)
+    Ok(outcome.view)
 }
 
 /// A guest's pick of `card_instance_ids`, sent to the host; the view arrives as `draft:view`.

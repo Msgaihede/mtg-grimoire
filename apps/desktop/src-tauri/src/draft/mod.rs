@@ -158,6 +158,7 @@ pub struct SavedRow {
 
 /// What a change to a draft leaves for its caller to pass on: seat 0's view before and after,
 /// every lobby peer's own view, and a solo draft's row to keep.
+#[derive(Clone)]
 pub(crate) struct Outcome {
     pub before: Option<DraftView>,
     pub view: DraftView,

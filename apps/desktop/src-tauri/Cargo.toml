@@ -37,7 +37,8 @@ thiserror = "2"
 # Content-Encoding, so transparent decompression would corrupt the download. `stream` is what
 # makes `bytes_stream()` available.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
-futures-util = "0.3"
+# `sink`: the lobby socket's writer half (`draft::lobby`) sends through `SinkExt`.
+futures-util = { version = "0.3", features = ["sink"] }
 
 # The user schema's derived uids, and the updater's transport check: every GitHub release asset
 # carries a `digest` (`sha256:…`, measured live 2026-08-09 on all five), which says a download
@@ -164,10 +165,19 @@ tauri-plugin-mcp-bridge = "0.12"
 # **No `macros`**: it was `sync_engine::live`'s `tokio::select!` and nothing else, and that
 # loop is `grimoire-core`'s since the light app's phase 6. The tests' `#[tokio::test]` asks for
 # it under `[dev-dependencies]`.
-tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
+# `net` is the lobby socket's stream type (`draft::lobby`), which `tokio-tungstenite` turns on
+# already; named because this crate's source names `tokio::net::TcpStream`.
+tokio = { version = "1", features = ["fs", "io-util", "net", "rt", "sync", "time"] }
 # **`tokio-tungstenite`, the relay doorbell's socket, is `grimoire-core`'s since the light app's
-# phase 6** — `platform::socket` is the one module that names it, and the argument for its
-# version and its TLS roots moved to that manifest with it.
+# phase 6** — `platform::socket` is the one module there that names it, and the argument for its
+# version and its TLS roots is in that manifest.
+#
+# **And this host's again for a pod draft's lobby (`draft::lobby`, 2026-10-29)**, whose socket
+# sends the relay's frames — `platform::socket` only listens and pings. **Exactly the core's
+# line** — version, `default-features = false`, `connect` and `rustls-tls-webpki-roots` — so the
+# lockfile gains an edge and no second copy (`cargo tree -d -p mtg-grimoire | grep tungstenite`
+# is the check), and no second TLS stack comes in with it.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 # Waiting for the process an update replaced to actually terminate, which is the one thing
 # std cannot express: there is no portable "is this PID alive". `0.61` is already in the
