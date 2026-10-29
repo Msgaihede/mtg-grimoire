@@ -4,7 +4,8 @@
 //! **The host's app runs the draft** — the `Draft` in [`super::DraftSlot`], phase.rs's reducer
 //! the authority — and every guest's app is sent its own seat's view and sends its picks. The
 //! relay carries JSON frames and knows nothing of a draft; what rides inside them is the app's
-//! own body (`v: 1`): `room`, `view` and `end` from the host, `pick` and `sync` from a guest.
+//! own body (`v: 1`): `room`, `view` and `end` from the host, `pick`, `winston` (a Winston turn:
+//! `{"v":1,"kind":"winston","pile":n,"take":bool}`) and `sync` from a guest.
 //!
 //! **Creating a lobby is a supporter's**: `lobby_create` asks `sync_engine::commands::entitled`
 //! first and then sends the relay's access token (`entitlement::access_token` over the lane, as
@@ -13,6 +14,7 @@
 //!
 //! **One lobby at a time, one task per lobby** on Tauri's async runtime: it reads frames, keeps
 //! [`LobbyState`] and emits `lobby:state` on every change; for a host it applies a guest's pick
+//! (or Winston turn)
 //! to the draft (on the engine's stack, waiting its turn) and sends every guest its view, and
 //! emits `draft:view` with the host's own when it moved; for a guest it emits `draft:view` with
 //! each view the host sends. A protocol ping goes out every [`PING_EVERY`], and a peer that has
@@ -118,6 +120,7 @@ const LOST: &str = "The connection to the lobby was lost.";
 const NO_LOBBY: &str = "There is no lobby open.";
 const HOST_ONLY: &str = "Only the lobby's host can do that.";
 const GUEST_ONLY: &str = "Only a guest picks through the lobby.";
+const GUEST_ONLY_WINSTON: &str = "Only a guest takes its Winston turn through the lobby.";
 const NOT_OPEN_NOW: &str = "The lobby is not open for a new draft.";
 const NOT_A_POD: &str = "A lobby's draft is a pod draft.";
 const NOT_IN_LOBBY: &str = "A seat names someone who is not in the lobby.";
@@ -238,6 +241,9 @@ pub fn end_body(reason: &str) -> Value {
 pub fn pick_body(ids: &[String]) -> Value {
     json!({ "v": 1, "kind": "pick", "ids": ids })
 }
+pub fn winston_body(pile: u8, take: bool) -> Value {
+    json!({ "v": 1, "kind": "winston", "pile": pile, "take": take })
+}
 pub fn sync_body() -> Value {
     json!({ "v": 1, "kind": "sync" })
 }
@@ -268,6 +274,11 @@ pub enum Body {
     View(Box<DraftView>),
     End(String),
     Pick(Vec<String>),
+    /// A Winston turn: take the pile in play, or decline it.
+    Winston {
+        pile: u8,
+        take: bool,
+    },
     Sync,
     Other,
 }
@@ -284,6 +295,10 @@ fn body_of(value: &Value) -> Body {
             )),
             "end" => Body::End(value.get("reason")?.as_str()?.to_owned()),
             "pick" => Body::Pick(serde_json::from_value(value.get("ids")?.clone()).ok()?),
+            "winston" => Body::Winston {
+                pile: u8::try_from(value.get("pile")?.as_u64()?).ok()?,
+                take: value.get("take")?.as_bool()?,
+            },
             "sync" => Body::Sync,
             _ => Body::Other,
         })
@@ -324,6 +339,8 @@ pub enum Act {
     SeatsOnline(Vec<LobbyPeer>),
     /// Host: a guest's pick, for the draft.
     Pick { from: String, ids: Vec<String> },
+    /// Host: a guest's Winston turn, for the draft.
+    Winston { from: String, pile: u8, take: bool },
     /// Host: a guest asked for the room and its view again.
     Resend(String),
     /// Guest: show the host's view of this seat.
@@ -364,6 +381,13 @@ pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
                 body: Body::Pick(ids),
             },
         ) if state.phase == LobbyPhase::Drafting => vec![Act::Pick { from, ids }],
+        (
+            LobbyRole::Host,
+            Heard::Msg {
+                from: Some(from),
+                body: Body::Winston { pile, take },
+            },
+        ) if state.phase == LobbyPhase::Drafting => vec![Act::Winston { from, pile, take }],
         (
             LobbyRole::Host,
             Heard::Msg {
@@ -659,6 +683,19 @@ impl Ctx {
                     .await;
                 // A refused pick: the guest is shown its seat as it still stands.
                 if picked.is_err() {
+                    self.resend(from).await;
+                }
+            }
+            Act::Winston { from, pile, take } => {
+                let peer = from.clone();
+                let decided = self
+                    .change_pod(move |d| {
+                        let seat = seat_of(d, &peer).ok_or(NOT_SEATED)?;
+                        d.winston(seat, pile, take)
+                    })
+                    .await;
+                // A refused turn: the guest is shown its seat as it still stands.
+                if decided.is_err() {
                     self.resend(from).await;
                 }
             }
@@ -1221,6 +1258,22 @@ pub fn lobby_pick(
     Ok(())
 }
 
+/// A guest's Winston turn — take (`take`) the pile `pile` or decline it — sent to the host; the
+/// view arrives as `draft:view`.
+#[tauri::command]
+pub fn lobby_winston(lobby: tauri::State<'_, LobbySlot>, pile: u8, take: bool) -> Result<(), String> {
+    let held = lock(&lobby.0);
+    let live = held.as_ref().ok_or(NO_LOBBY)?;
+    if live.state.role != LobbyRole::Guest {
+        return Err(GUEST_ONLY_WINSTON.to_owned());
+    }
+    if live.state.phase == LobbyPhase::Closed {
+        return Err(NO_LOBBY.to_owned());
+    }
+    live.send(guest_frame(&winston_body(pile, take)));
+    Ok(())
+}
+
 /// The host removes `peer` from the lobby. Once the draft has started, a bot takes the seat.
 #[tauri::command]
 pub async fn lobby_kick(
@@ -1305,6 +1358,10 @@ mod tests {
             seats: Vec::new(),
             pack_sets: vec!["blb".into()],
             min_deck_size: 40,
+            pod_format: grimoire_play::PodFormat::Booster,
+            picks_per_step: 1,
+            commanders: 0,
+            stack: None,
         }
     }
 
@@ -1378,6 +1435,10 @@ mod tests {
             json!({"t": "msg", "body": {"v": 1, "kind": "pick", "ids": ["a#1.0.0"]}})
         );
         assert_eq!(
+            v(guest_frame(&winston_body(2, false))),
+            json!({"t": "msg", "body": {"v": 1, "kind": "winston", "pile": 2, "take": false}})
+        );
+        assert_eq!(
             v(guest_frame(&sync_body())),
             json!({"t": "msg", "body": {"v": 1, "kind": "sync"}})
         );
@@ -1417,6 +1478,30 @@ mod tests {
                 body: Body::Pick(vec!["x".into()])
             }
         );
+        assert_eq!(
+            decode(r#"{"t":"msg","from":"p1","body":{"v":1,"kind":"winston","pile":1,"take":true}}"#),
+            Heard::Msg {
+                from: Some("p1".into()),
+                body: Body::Winston {
+                    pile: 1,
+                    take: true
+                }
+            }
+        );
+        for bad in [
+            r#"{"t":"msg","body":{"v":1,"kind":"winston","pile":300,"take":true}}"#,
+            r#"{"t":"msg","body":{"v":1,"kind":"winston","pile":-1,"take":true}}"#,
+            r#"{"t":"msg","body":{"v":1,"kind":"winston","pile":0}}"#,
+        ] {
+            assert_eq!(
+                decode(bad),
+                Heard::Msg {
+                    from: None,
+                    body: Body::Other
+                },
+                "{bad}"
+            );
+        }
         let sent = send_frame("p1", &view_body(&view()));
         let body: Value = serde_json::from_str::<Value>(&sent).unwrap()["body"].clone();
         let heard = decode(&json!({"t": "msg", "body": body}).to_string());
@@ -1478,6 +1563,27 @@ mod tests {
                 from: "p1".into(),
                 ids: vec!["x".into()]
             }]
+        );
+        let winston = || Heard::Msg {
+            from: Some("p1".into()),
+            body: Body::Winston {
+                pile: 0,
+                take: false,
+            },
+        };
+        assert!(react(&mut open, winston()).is_empty());
+        assert_eq!(
+            react(&mut drafting, winston()),
+            vec![Act::Winston {
+                from: "p1".into(),
+                pile: 0,
+                take: false
+            }]
+        );
+        let mut guest = state(LobbyRole::Guest, LobbyPhase::Drafting);
+        assert!(
+            react(&mut guest, winston()).is_empty(),
+            "a guest never decides another's turn"
         );
         let sync = Heard::Msg {
             from: Some("p1".into()),

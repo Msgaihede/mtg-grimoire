@@ -636,6 +636,7 @@ pub fn run() {
             draft::draft_start,
             draft::draft_view,
             draft::draft_pick,
+            draft::draft_winston,
             draft::draft_auto_pick,
             draft::draft_end,
             draft::draft_saved,
@@ -651,6 +652,7 @@ pub fn run() {
             draft::lobby::lobby_leave,
             draft::lobby::lobby_start,
             draft::lobby::lobby_pick,
+            draft::lobby::lobby_winston,
             draft::lobby::lobby_kick,
             packs::packs_booster_set,
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.

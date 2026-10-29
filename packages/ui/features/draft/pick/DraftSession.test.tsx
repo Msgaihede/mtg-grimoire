@@ -2,16 +2,18 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DraftCard, DraftView } from "@/lib/ipc";
+import type { DraftCard, DraftView, WinstonView } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
 
 const ipcMock = vi.hoisted(() => ({
   draftPick: vi.fn(),
   draftAutoPick: vi.fn(),
+  draftWinston: vi.fn(),
   draftView: vi.fn(),
   draftEnd: vi.fn(),
   draftDeckCreate: vi.fn(),
   lobbyPick: vi.fn(),
+  lobbyWinston: vi.fn(),
   lobbyLeave: vi.fn(),
   onDraftView: vi.fn(),
 }));
@@ -63,8 +65,41 @@ function view(over: Partial<DraftView> = {}): DraftView {
     })),
     packSets: ["TST", "TST", "TST"],
     minDeckSize: 40,
+    podFormat: "booster",
+    picksPerStep: 1,
+    commanders: 0,
+    stack: null,
     ...over,
   };
+}
+
+/** A Winston table on the reader's turn, looking at pile 1 (two cards). */
+function stack(over: Partial<WinstonView> = {}): WinstonView {
+  return {
+    mainCount: 30,
+    piles: [
+      { count: 2, cards: [card("Shock"), card("Opt")], active: true },
+      { count: 1, cards: [], active: false },
+      { count: 3, cards: [], active: false },
+    ],
+    turnSeat: 0,
+    yourTurn: true,
+    activePile: 0,
+    ...over,
+  };
+}
+
+function winston(over: Partial<DraftView> = {}): DraftView {
+  return view({
+    mode: "winston",
+    pack: [],
+    stack: stack(),
+    seats: [
+      { name: "You", bot: false, connected: true, picked: false, poolCount: 0 },
+      { name: "Bot 1", bot: true, connected: true, picked: false, poolCount: 0 },
+    ],
+    ...over,
+  });
 }
 
 /** The `draft:view` push, as the suite fires it. */
@@ -166,10 +201,11 @@ describe("DraftSession", () => {
     expect(screen.getByRole("textbox", { name: "Deck name" })).toHaveValue("Test Set Draft");
     await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
     await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(9));
-    expect(ipcMock.draftDeckCreate).toHaveBeenCalledWith("Test Set Draft", [
-      "id-Shock",
-      "id-Mountain",
-    ]);
+    expect(ipcMock.draftDeckCreate).toHaveBeenCalledWith(
+      "Test Set Draft",
+      ["id-Shock", "id-Mountain"],
+      false,
+    );
     expect(ipcMock.draftEnd).toHaveBeenCalledWith(42);
     expect(ipcMock.draftDeckCreate.mock.invocationCallOrder[0]).toBeLessThan(
       openDraftDeck.mock.invocationCallOrder[0],
@@ -178,6 +214,28 @@ describe("DraftSession", () => {
       tone: "success",
       title: "Built “Test Set Draft” from a 2-card pool",
     });
+  });
+
+  it("builds a Commander draft's pool into a deck with a Commander pile", async () => {
+    ipcMock.draftDeckCreate.mockResolvedValue({ id: 4, name: "Test Set Draft" });
+    ipcMock.draftEnd.mockResolvedValue(undefined);
+    setup(
+      view({
+        mode: "commander",
+        status: "deckbuilding",
+        pack: [],
+        pool: [card("Shock")],
+        minDeckSize: 60,
+        picksPerStep: 2,
+        commanders: 1,
+      }),
+    );
+    expect(
+      screen.getByText(/A Commander deck needs 60 cards and a commander in its Commander pile\./),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
+    await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(4));
+    expect(ipcMock.draftDeckCreate).toHaveBeenCalledWith("Test Set Draft", ["id-Shock"], true);
   });
 
   it("leaves the lobby, not the draft, once a guest has built", async () => {
@@ -192,5 +250,121 @@ describe("DraftSession", () => {
     await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(3));
     expect(ipcMock.lobbyLeave).toHaveBeenCalledOnce();
     expect(ipcMock.draftEnd).not.toHaveBeenCalled();
+  });
+
+  describe("a pick of two", () => {
+    const three = () =>
+      view({ mode: "commander", picksPerStep: 2, pack: [card("Shock"), card("Opt"), card("Duress")] });
+
+    it("chooses two cards and sends both ids in one pick", async () => {
+      ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+      setup(three());
+      expect(screen.getByText("Choose 2")).toBeInTheDocument();
+      const pick = screen.getByRole("button", { name: "Pick 2" });
+      expect(pick).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(within(pack()).getByRole("button", { name: "Shock" }));
+      // A second click on a chosen card takes it back out rather than picking it.
+      await userEvent.click(within(pack()).getByRole("button", { name: "Shock" }));
+      expect(screen.getByText("0 of 2 chosen")).toBeInTheDocument();
+      await userEvent.click(within(pack()).getByRole("button", { name: "Shock" }));
+      await userEvent.click(within(pack()).getByRole("button", { name: "Duress" }));
+      expect(screen.getByText("2 of 2 chosen")).toBeInTheDocument();
+      expect(ipcMock.draftPick).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "Pick Shock and Duress" }));
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, [
+        "Shock#0.0.0",
+        "Duress#0.0.0",
+      ]);
+    });
+
+    it("picks with Enter once two are chosen", async () => {
+      ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+      setup(three());
+      within(pack()).getByRole("button", { name: "Shock" }).focus();
+      // Enter on a tile before two are chosen is the tile's own press: it chooses it.
+      await userEvent.keyboard("{Enter}");
+      await userEvent.keyboard("{ArrowRight}{Enter}");
+      expect(screen.getByText("2 of 2 chosen")).toBeInTheDocument();
+      expect(ipcMock.draftPick).not.toHaveBeenCalled();
+      await userEvent.keyboard("{Enter}");
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0", "Opt#0.0.0"]);
+    });
+
+    it("sends a guest's two cards to the host", async () => {
+      ipcMock.lobbyPick.mockResolvedValue(undefined);
+      setup({ ...three(), mode: "pod", podFormat: "commander" }, "guest", null);
+      await userEvent.click(within(pack()).getByRole("button", { name: "Opt" }));
+      await userEvent.click(within(pack()).getByRole("button", { name: "Duress" }));
+      await userEvent.click(screen.getByRole("button", { name: "Pick Opt and Duress" }));
+      expect(ipcMock.lobbyPick).toHaveBeenCalledExactlyOnceWith(["Opt#0.0.0", "Duress#0.0.0"]);
+    });
+  });
+
+  describe("a Winston table", () => {
+    it("draws the stack, the piles and the active pile face up", () => {
+      setup(winston());
+      const table = screen.getByRole("list", { name: "Stack and piles" });
+      expect(within(table).getByRole("img", { name: "The stack, 30 cards" })).toBeInTheDocument();
+      expect(
+        within(table).getByRole("img", { name: "Pile 1, 2 cards, being looked at" }),
+      ).toBeInTheDocument();
+      expect(within(table).getByRole("img", { name: "Pile 3, 3 cards" })).toBeInTheDocument();
+      const pile = screen.getByRole("list", { name: "Pile 1" });
+      expect(within(pile).getAllByRole("listitem")).toHaveLength(2);
+      expect(screen.queryByRole("list", { name: "Pack" })).not.toBeInTheDocument();
+    });
+
+    it("takes and declines a pile through draft_winston", async () => {
+      ipcMock.draftWinston.mockResolvedValueOnce(
+        winston({ stack: stack({ activePile: 1 }), pickNumber: 0 }),
+      );
+      ipcMock.draftWinston.mockResolvedValueOnce(winston({ pickNumber: 1 }));
+      setup(winston());
+      await userEvent.click(screen.getByRole("button", { name: "Decline" }));
+      expect(ipcMock.draftWinston).toHaveBeenLastCalledWith(42, 0, false);
+      await userEvent.click(await screen.findByRole("button", { name: "Take pile" }));
+      expect(ipcMock.draftWinston).toHaveBeenLastCalledWith(42, 1, true);
+    });
+
+    it("keeps Pick for me on the reader's turn", async () => {
+      ipcMock.draftAutoPick.mockResolvedValue(winston({ pickNumber: 1 }));
+      setup(winston());
+      await userEvent.click(screen.getByRole("button", { name: "Pick for me" }));
+      expect(ipcMock.draftAutoPick).toHaveBeenCalledWith(42);
+    });
+
+    it("says the bot is deciding on its turn", () => {
+      setup(winston({ stack: stack({ yourTurn: false, turnSeat: 1, piles: stack().piles.map((p) => ({ ...p, cards: [] })) }) }));
+      expect(screen.getByText("Bot 1 is deciding…")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Take pile" })).not.toBeInTheDocument();
+    });
+
+    it("sends a guest's decision with lobby_winston, and holds it until the host's push", async () => {
+      ipcMock.lobbyWinston.mockResolvedValue(undefined);
+      const seats = [
+        { name: "Ada", bot: false, connected: true, picked: false, poolCount: 0 },
+        { name: "Bea", bot: false, connected: true, picked: false, poolCount: 0 },
+      ];
+      setup(winston({ mode: "pod", podFormat: "winston", seats }), "guest", null);
+      await userEvent.click(screen.getByRole("button", { name: "Take pile" }));
+      expect(ipcMock.lobbyWinston).toHaveBeenCalledExactlyOnceWith(0, true);
+      expect(ipcMock.draftWinston).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Take pile" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      act(() =>
+        push(
+          winston({
+            mode: "pod",
+            podFormat: "winston",
+            seats,
+            pickNumber: 1,
+            stack: stack({ yourTurn: false, turnSeat: 1, activePile: 0 }),
+          }),
+        ),
+      );
+      expect(screen.getByText("Waiting for Bea")).toBeInTheDocument();
+    });
   });
 });

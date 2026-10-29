@@ -102,6 +102,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
     ),
     (
+        "draft_winston",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
         "draft_auto_pick",
         "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
     ),
@@ -159,6 +163,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
     ),
     (
         "lobby_pick",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
+        "lobby_winston",
         "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
     ),
     (

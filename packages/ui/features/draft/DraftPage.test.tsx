@@ -65,6 +65,10 @@ const VIEW: DraftView = {
   seats: [],
   packSets: ["FDN", "HOB", "HOB"],
   minDeckSize: 40,
+  podFormat: "booster",
+  picksPerStep: 1,
+  commanders: 0,
+  stack: null,
 };
 
 const DRAFT_DECK = { id: 5, name: "Hobbit Draft", cardCount: 45 } as DeckRow;
@@ -100,13 +104,21 @@ function setup() {
 }
 
 describe("DraftPage", () => {
-  it("offers the five ways to start, and nothing in progress when there is none", async () => {
+  it("offers the seven ways to start, and nothing in progress when there is none", async () => {
     setup();
     expect(screen.getByRole("heading", { name: "Draft & Packs" })).toBeInTheDocument();
     const start = screen.getByRole("region", { name: "Start new" });
-    for (const mode of ["Quick Draft", "Sealed", "Cube Draft", "Pod Draft", "Open Packs"]) {
-      expect(within(start).getByRole("button", { name: new RegExp(`^${mode}`) })).toBeVisible();
-    }
+    const modes = [
+      "Quick Draft",
+      "Sealed",
+      "Cube Draft",
+      "Pod Draft",
+      "Commander Draft",
+      "Winston Draft",
+      "Open Packs",
+    ];
+    const cards = within(start).getAllByRole("button");
+    expect(cards.map((c) => modes.find((m) => c.textContent?.startsWith(m)))).toEqual(modes);
     await vi.waitFor(() => expect(ipcMock.draftSaved).toHaveBeenCalled());
     expect(screen.queryByRole("region", { name: "Draft in progress" })).not.toBeInTheDocument();
   });
@@ -145,6 +157,18 @@ describe("DraftPage", () => {
     expect(screen.getByText("0 packs chosen — up to 6")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Back to Draft & Packs" }));
     expect(screen.getByRole("region", { name: "Start new" })).toBeInTheDocument();
+  });
+
+  it("opens a Commander draft's and a Winston draft's setup from the hub", async () => {
+    setup();
+    await userEvent.click(screen.getByRole("button", { name: /^Commander Draft/ }));
+    expect(screen.getByRole("button", { name: "Commander" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Back to Draft & Packs" }));
+    await userEvent.click(screen.getByRole("button", { name: /^Winston Draft/ }));
+    expect(screen.getByRole("button", { name: "Winston" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("keeps Create lobby from a reader who is not a supporter", async () => {
