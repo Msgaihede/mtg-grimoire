@@ -314,7 +314,7 @@ jobs:
         with:
           workspaces: ". -> target"
           key: linux-${{ matrix.part }}
-          save-if: ${{ github.ref == 'refs/heads/main' || github.head_ref == 'claude/elegant-wozniak-5rizs2' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # **All of it runs from the repository root, over every workspace member** (2026-10-02):
       # the app in `apps/desktop/src-tauri`, the engine in `crates/grimoire-core`, the light app's Android
@@ -643,7 +643,7 @@ jobs:
           workspaces: ". -> target"
           key: android-aarch64
           # `main` writes it, a pull request reads it — `rust` says why.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.head_ref == 'claude/elegant-wozniak-5rizs2' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # From `apps/light/`, so the CLI finds `apps/light/src-tauri/tauri.conf.json` — from the repository
       # root it finds the desktop's. `beforeBuildCommand` builds the light bundle into
