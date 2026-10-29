@@ -1,5 +1,7 @@
 //! One draft, over phase.rs's `draft-core`: boosters passed around a table of people and bots,
-//! picked one card at a time, three rounds; or six boosters straight into a sealed pool.
+//! picked one card at a time (two in a Commander draft), three rounds; six boosters straight into
+//! a sealed pool; or a Winston draft, every booster shuffled into one face-down stack dealt into
+//! three piles that each turn takes or declines.
 //!
 //! **The page makes the boosters** (`packages/ui/features/draft/booster/`, the one collation for
 //! Packs and Draft) and hands them over as printing ids (`DraftSetup::packs`). `SetupPacks`, our
@@ -10,15 +12,29 @@
 //!
 //! Modes → phase's kinds: `quick` and `cube` are `DraftKind::Quick` (a set source, or a cube
 //! source when a round names no set); `sealed` is `DraftKind::Sealed` (every booster into its
-//! seat's pool, deckbuilding at once); `pod` is `DraftKind::Premier`, with `DraftSeat::Bot` in the
-//! seats no person took. phase's procedure table bounds the table: a draft from sets seats 2 to
-//! 8, a cube 1 or more, and sealed 1 to 8 — phase's Sealed needs two seats, so a sealed pool of one
-//! is seated beside a hidden bot with six empty boosters, which no view shows.
+//! seat's pool, deckbuilding at once); `commander` is `DraftKind::CommanderDraft` (two cards a
+//! pick, a 60-card deck with one commander); `winston` is `DraftKind::Winston` (phase's
+//! `SharedStackPiles { pile_count: 3 }`: three boosters a seat, shuffled by phase's reducer into
+//! one stack); `pod` is its `PodFormat`'s kind — `booster` `DraftKind::Premier`, `commander`
+//! `CommanderDraft`, `winston` `Winston` — with `DraftSeat::Bot` in the seats no person took.
+//! phase's procedure table bounds the table: a draft from sets seats 2 to 8, a cube 1 or more,
+//! sealed 1 to 8 — phase's Sealed needs two seats, so a sealed pool of one is seated beside a
+//! hidden bot with six empty boosters, which no view shows — a Commander draft 3 to 8, and a
+//! Winston draft 2 to 4.
+//!
+//! **A Winston turn** is `winston(seat, pile, take)`, phase's `SharedStackDecision`. Its view
+//! (`DraftView::stack`) is read off draft-core's own projection (`view::filter_for_player`): the
+//! seat whose turn it is sees the cards of the pile it is deciding on, and nobody sees any other
+//! pile's cards or the stack's — only counts. A Winston view has no pack (`pack` empty,
+//! `pack_number`, `pick_number` and `pack_size` 0, `pass_left` false), `waiting` is "not your
+//! turn", and a seat's `picked` is "not the seat the table waits on".
 //!
 //! **Bots pick as phase's own do** (`bots.rs`, ported from `draft-wasm`), after every call that
 //! could hand one a pack, until no bot holds a pack it has not picked from — a completed round
 //! deals the next boosters, so it is a loop. Their dice are seeded from the setup's seed and the
-//! cards picked so far, so a restored draft picks as the original would have.
+//! cards picked so far, so a restored draft picks as the original would have. In a Winston draft
+//! every bot whose turn it is decides (`bots::winston_decision`, phase's, from its own
+//! projection and no dice), turn after turn, until it is a person's turn or the draft is over.
 //!
 //! **Every call runs on `on_engine_stack`**, `new` and `restore` above all: the evaluating bots
 //! (`Medium` and up) read a `CardDatabase` of the draft's own cards, parsed by phase's oracle
@@ -41,9 +57,11 @@ use draft_core::pick_pass::required_pick_count;
 use draft_core::session::apply;
 use draft_core::types::{
     self as dc, DeckAddableCards, DraftAction, DraftCardInstance, DraftConfig, DraftError,
-    DraftKind, DraftPack, DraftSeat, DraftSession, DraftSource, PassDirection, PodPolicy,
-    SetLayout, SpectatorVisibility, TournamentFormat, MAX_PACK_COUNT, SEALED_PACK_COUNT,
+    DraftKind, DraftPack, DraftSeat, DraftSession, DraftSource, PackDistribution, PassDirection,
+    PodPolicy, SetLayout, SharedStackPileDecision, SharedStackRefusal, SpectatorVisibility,
+    TournamentFormat, MAX_PACK_COUNT, SEALED_PACK_COUNT,
 };
+use draft_core::view::filter_for_player;
 use engine::database::CardDatabase;
 use engine::types::player::PlayerId;
 use rand::SeedableRng;
@@ -54,8 +72,13 @@ use crate::cards::{database, CardFacts};
 
 pub use view::{
     DraftCard, DraftMode, DraftSaved, DraftSeatSetup, DraftSeatView, DraftSetup, DraftStatus,
-    DraftView,
+    DraftView, PodFormat, WinstonPile, WinstonView,
 };
+
+const NOT_WINSTON: &str = "Only a Winston draft takes or declines a pile.";
+const NO_PICK_IN_WINSTON: &str = "A Winston draft takes or declines a pile; there is no card to pick.";
+const NOT_YOUR_TURN: &str = "It is not that seat's turn.";
+const OVER: &str = "The draft is over.";
 
 /// What the host knows of one printing a booster names: the card's facts, as a deck row's, and
 /// the printing's own set, number and rarity, which a deck row does not carry. Rarity is what
@@ -79,7 +102,9 @@ impl From<CardFacts> for DraftCardFacts {
     }
 }
 
-/// The snapshot's shape. Bumped when a field changes meaning; `restore` refuses another.
+/// The snapshot's shape. Bumped when a field changes meaning; `restore` refuses another. A
+/// snapshot from before Commander and Winston drafts is still version 1: its setup has no
+/// `pod_format` (serde's default, `booster`) and phase's session the same shape.
 const SNAPSHOT_VERSION: u32 = 1;
 
 /// What `snapshot` writes: the setup (its boosters dropped — the session holds every card) and
@@ -148,14 +173,24 @@ impl Draft {
             ));
         }
 
-        let kind = match setup.mode {
-            DraftMode::Quick | DraftMode::Cube => DraftKind::Quick,
-            DraftMode::Sealed => DraftKind::Sealed,
-            DraftMode::Pod => DraftKind::Premier,
-        };
+        if setup.mode != DraftMode::Pod {
+            setup.pod_format = PodFormat::Booster;
+        }
+        let kind = kind_of(setup.mode, setup.pod_format);
         let procedure = kind.procedure();
-        if kind == DraftKind::Sealed && pack_count != usize::from(SEALED_PACK_COUNT) {
-            return Err(format!("A sealed pool opens {SEALED_PACK_COUNT} boosters."));
+        match procedure.distribution {
+            PackDistribution::AllAtOnce if pack_count != usize::from(SEALED_PACK_COUNT) => {
+                return Err(format!("A sealed pool opens {SEALED_PACK_COUNT} boosters."));
+            }
+            PackDistribution::SharedStackPiles { .. }
+                if pack_count != usize::from(procedure.packs_per_player) =>
+            {
+                return Err(format!(
+                    "A Winston draft opens {} boosters a seat.",
+                    procedure.packs_per_player
+                ));
+            }
+            _ => {}
         }
         let source = source(&setup, kind);
 
@@ -235,12 +270,23 @@ impl Draft {
     pub fn view(&self, seat: u8) -> DraftView {
         let session = &self.session;
         let status = self.status();
+        let drafting = status == DraftStatus::Drafting;
+        let winston = self.is_winston();
         let pack_count = session.config.pack_count;
-        let pack_number = session
-            .current_pack_number
-            .min(pack_count.saturating_sub(1));
-        let waiting = status == DraftStatus::Drafting && !self.owes_pick(seat);
-        let pack = if status == DraftStatus::Drafting && !waiting {
+        let pack_number = if winston {
+            0
+        } else {
+            session
+                .current_pack_number
+                .min(pack_count.saturating_sub(1))
+        };
+        let waiting = drafting
+            && if winston {
+                !self.winston_turn(seat)
+            } else {
+                !self.owes_pick(seat)
+            };
+        let pack = if drafting && !waiting && !winston {
             self.current_pack(seat)
                 .iter()
                 .map(|c| self.card(c))
@@ -260,8 +306,12 @@ impl Draft {
                     name: setup.name.clone(),
                     bot,
                     connected: bot || session.connected_seats.get_or(i, true),
-                    picked: status == DraftStatus::Drafting
-                        && session.seats_picked_this_round.get(i),
+                    picked: drafting
+                        && if winston {
+                            !self.winston_turn(i)
+                        } else {
+                            session.seats_picked_this_round.get(i)
+                        },
                     pool_count: self.pool_cards(i).len() as u32,
                 }
             })
@@ -273,23 +323,92 @@ impl Draft {
             seat,
             pack_number,
             pack_count,
-            pick_number: session.pick_number,
-            pack_size: session.cards_in_pack(pack_number),
-            pass_left: session.pass_direction == PassDirection::Left,
+            pick_number: if winston { 0 } else { session.pick_number },
+            pack_size: if winston {
+                0
+            } else {
+                session.cards_in_pack(pack_number)
+            },
+            pass_left: !winston && session.pass_direction == PassDirection::Left,
             pack,
             waiting,
             pool: self.pool_cards(seat).iter().map(|c| self.card(c)).collect(),
             seats,
             pack_sets: self.setup.pack_sets.clone(),
             min_deck_size: self.setup.min_deck_size,
+            pod_format: self.setup.pod_format,
+            picks_per_step: session.kind.procedure().cards_per_pick,
+            commanders: session.kind.commanders_required(),
+            stack: winston.then(|| self.winston_view(seat)),
         }
     }
 
-    /// A person at `seat` picks `ids` (one card) from their pack; then the bots pick until none
-    /// holds a pack it has not picked from. Refused — and nothing changed — for a bot's seat, a
-    /// seat that has picked this step, a card not in the pack, or a draft that is over.
+    /// A Winston draft's table from `seat`, off draft-core's own projection: the pile the turn is
+    /// on shows its cards to the seat whose turn it is (draft-core's `revealed`, the prefix that
+    /// seat has looked at — the whole pile), and every other pile, and every pile to everyone
+    /// else, is a count. Once the draft is over there is no turn: counts, no active pile.
+    fn winston_view(&self, seat: u8) -> WinstonView {
+        let live = (usize::from(seat) < self.session.seats.len())
+            .then(|| filter_for_player(&self.session, seat).shared_stack)
+            .flatten();
+        if let Some(live) = live {
+            let your_turn = live.active_seat == seat;
+            return WinstonView {
+                main_count: live.main_stack_remaining as u32,
+                piles: live
+                    .piles
+                    .iter()
+                    .map(|pile| {
+                        let active = pile.index == live.active_pile;
+                        WinstonPile {
+                            count: pile.total as u32,
+                            cards: if your_turn && active {
+                                pile.revealed.iter().map(|c| self.card(c)).collect()
+                            } else {
+                                Vec::new()
+                            },
+                            active,
+                        }
+                    })
+                    .collect(),
+                turn_seat: live.active_seat,
+                your_turn,
+                active_pile: Some(live.active_pile),
+            };
+        }
+        let state = self.session.shared_stack.as_ref();
+        let drafting = self.session.status == dc::DraftStatus::Drafting;
+        WinstonView {
+            main_count: state.map_or(0, |s| s.main_stack.len() as u32),
+            piles: state
+                .map(|s| {
+                    s.piles
+                        .iter()
+                        .enumerate()
+                        .map(|(i, pile)| WinstonPile {
+                            count: pile.len() as u32,
+                            cards: Vec::new(),
+                            active: drafting && i == usize::from(s.cursor),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            turn_seat: state.map_or(0, |s| s.active_seat),
+            your_turn: false,
+            active_pile: state.filter(|_| drafting).map(|s| s.cursor),
+        }
+    }
+
+    /// A person at `seat` picks `ids` (one card, two in a Commander draft — the view's
+    /// `picks_per_step`, fewer only when the pack holds fewer) from their pack; then the bots pick
+    /// until none holds a pack it has not picked from. Refused — and nothing changed — for a bot's
+    /// seat, a seat that has picked this step, a card not in the pack, the wrong number of cards,
+    /// a Winston draft, or a draft that is over.
     pub fn pick(&mut self, seat: u8, ids: Vec<String>) -> Result<(), String> {
         self.person(seat)?;
+        if self.is_winston() {
+            return Err(NO_PICK_IN_WINSTON.into());
+        }
         self.keeping(|draft| {
             apply(
                 &mut draft.session,
@@ -305,17 +424,63 @@ impl Draft {
     }
 
     /// The bots' pick for a person — "Pick for me" — at the draft's difficulty; then the bots
-    /// pick, as after `pick`.
+    /// pick, as after `pick`. In a Winston draft, the bot's decision for that seat's turn.
     pub fn auto_pick(&mut self, seat: u8) -> Result<(), String> {
         self.person(seat)?;
         if self.status() != DraftStatus::Drafting {
-            return Err("The draft is over.".into());
+            return Err(OVER.into());
+        }
+        if self.is_winston() {
+            if !self.winston_turn(seat) {
+                return Err(NOT_YOUR_TURN.into());
+            }
+            let (pile, decision) = self
+                .winston_choice(seat)
+                .ok_or("There is no pile that seat may take or decline.")?;
+            return self.winston(seat, pile, decision == SharedStackPileDecision::Take);
         }
         if !self.owes_pick(seat) {
             return Err("That seat has picked; the table is catching up.".into());
         }
         let ids = self.choose(seat);
         self.pick(seat, ids)
+    }
+
+    /// A person at `seat` takes (`take`) or declines the Winston pile `pile` (0-based — the pile
+    /// the turn is on; another is refused, so a repeated press never decides the next pile);
+    /// then every bot whose turn it is decides, until it is a person's turn or the draft is over.
+    /// Refused — and nothing changed — for a bot's seat, a seat whose turn it is not, a pile not
+    /// in play, an empty pile, a decline that would leave the seat no card, or a draft that is not
+    /// a Winston draft or is over.
+    pub fn winston(&mut self, seat: u8, pile: u8, take: bool) -> Result<(), String> {
+        self.person(seat)?;
+        if !self.is_winston() {
+            return Err(NOT_WINSTON.into());
+        }
+        if self.session.status != dc::DraftStatus::Drafting {
+            return Err(OVER.into());
+        }
+        if !self.winston_turn(seat) {
+            return Err(NOT_YOUR_TURN.into());
+        }
+        let decision = if take {
+            SharedStackPileDecision::Take
+        } else {
+            SharedStackPileDecision::Decline
+        };
+        self.keeping(|draft| {
+            apply(
+                &mut draft.session,
+                DraftAction::SharedStackDecision {
+                    seat,
+                    pile,
+                    decision,
+                },
+                None,
+            )
+            .map_err(refusal)?;
+            draft.bots_act()
+        })
     }
 
     /// Whether a person's app is on the line, for the seats' view. A bot's seat, or one out of
@@ -419,6 +584,12 @@ impl Draft {
             .chain(session.packs_by_seat.iter().flatten())
             .flat_map(|pack| pack.0.iter())
             .chain(session.pools.iter().flatten())
+            .chain(
+                session
+                    .shared_stack
+                    .iter()
+                    .flat_map(|s| s.main_stack.iter().chain(s.piles.iter().flatten())),
+            )
             .map(|c| card_id(&c.instance_id))
             .filter(|id| seen.insert(*id))
             .map(str::to_string)
@@ -472,9 +643,79 @@ impl Draft {
                 acted = true;
             }
             if !acted {
-                return Ok(());
+                return self.winston_bots_act();
             }
         }
+    }
+
+    /// Every Winston turn that is a bot's, one decision after another — a turn is up to three,
+    /// and bots may sit next to each other — until it is a person's turn or the draft is over.
+    /// Bounded as phase's driver is (`resolve_shared_stack_bot_turns`): every decision moves a
+    /// card or the cursor, so more than the undrafted cards times the piles and one is a defect,
+    /// and is said, never spun on.
+    fn winston_bots_act(&mut self) -> Result<(), String> {
+        let Some(state) = self.session.shared_stack.as_ref() else {
+            return Ok(());
+        };
+        let undrafted = state.main_stack.len() + state.piles.iter().map(Vec::len).sum::<usize>();
+        let bound = undrafted
+            .saturating_mul(state.piles.len() + 1)
+            .saturating_add(1);
+        let mut applied = 0usize;
+        while self.session.status == dc::DraftStatus::Drafting {
+            let Some(state) = self.session.shared_stack.as_ref() else {
+                break;
+            };
+            let seat = state.active_seat;
+            if !self.is_bot(seat) {
+                break;
+            }
+            applied += 1;
+            if applied > bound {
+                return Err("A bot could not finish its Winston turn.".into());
+            }
+            let (pile, decision) = self
+                .winston_choice(seat)
+                .ok_or("A bot found no pile it may take or decline.")?;
+            apply(
+                &mut self.session,
+                DraftAction::SharedStackDecision {
+                    seat,
+                    pile,
+                    decision,
+                },
+                None,
+            )
+            .map_err(|e| format!("A bot could not decide: {e}."))?;
+        }
+        Ok(())
+    }
+
+    /// The Winston bot's decision for `seat`'s turn, from that seat's own projection alone.
+    fn winston_choice(&self, seat: u8) -> Option<(u8, SharedStackPileDecision)> {
+        bots::winston_decision(
+            &filter_for_player(&self.session, seat),
+            bots::level(self.setup.difficulty),
+            self.db.as_ref(),
+        )
+    }
+
+    /// A shared-stack draft: phase's Winston.
+    fn is_winston(&self) -> bool {
+        matches!(
+            self.session.kind.procedure().distribution,
+            PackDistribution::SharedStackPiles { .. }
+        )
+    }
+
+    /// Whether it is `seat`'s Winston turn.
+    fn winston_turn(&self, seat: u8) -> bool {
+        self.session.status == dc::DraftStatus::Drafting
+            && self
+                .session
+                .shared_stack
+                .as_ref()
+                .is_some_and(|s| s.active_seat == seat)
     }
 
     /// The bots' choice for `seat`'s pick step, as instance ids.
@@ -659,6 +900,21 @@ fn colors(card: &CardFacts) -> Vec<String> {
         .collect()
 }
 
+/// phase's kind for a mode (and, for a pod, what it drafts).
+fn kind_of(mode: DraftMode, pod_format: PodFormat) -> DraftKind {
+    match mode {
+        DraftMode::Quick | DraftMode::Cube => DraftKind::Quick,
+        DraftMode::Sealed => DraftKind::Sealed,
+        DraftMode::Commander => DraftKind::CommanderDraft,
+        DraftMode::Winston => DraftKind::Winston,
+        DraftMode::Pod => match pod_format {
+            PodFormat::Booster => DraftKind::Premier,
+            PodFormat::Commander => DraftKind::CommanderDraft,
+            PodFormat::Winston => DraftKind::Winston,
+        },
+    }
+}
+
 /// The source phase's reducer is told of: the rounds' sets, or a cube when a round names none.
 /// Sealed is always a set source (phase's rule), a cube's rounds spelled `cube`.
 fn source(setup: &DraftSetup, kind: DraftKind) -> DraftSource {
@@ -731,6 +987,13 @@ fn refusal(error: DraftError) -> String {
         DraftError::InvalidTransition { .. } => "The draft is not picking now.".into(),
         DraftError::SeatOutOfRange { .. } => "There is no such seat at this table.".into(),
         DraftError::SeatIsBot { .. } => "A bot sits in that seat.".into(),
+        DraftError::SharedStackDecisionRefused { reason, .. } => match reason {
+            SharedStackRefusal::PileNotActive => "That is not the pile in play.".into(),
+            SharedStackRefusal::PileEmpty => "That pile is empty.".into(),
+            SharedStackRefusal::NoGuaranteedCard => {
+                "That pile must be taken: declining it would leave no card to take.".into()
+            }
+        },
         other => format!("The draft could not do that: {other}."),
     }
 }
