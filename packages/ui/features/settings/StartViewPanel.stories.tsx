@@ -75,6 +75,7 @@ export const Default: Story = {
     await expect(canvas.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Collection",
       "Decks",
+      "Draft & Packs",
       "Home",
       "Playtesting",
       "Scanner",
