@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   Boxes,
+  Crown,
   Hammer,
   Layers,
   Package,
@@ -29,6 +30,7 @@ import { ago } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import type { DraftRole } from "./build/BuildPanel";
+import { WinstonPiles } from "./icons";
 import { LobbyScreen } from "./lobby/LobbyScreen";
 import { isLive, useLobbyState } from "./lobby/useLobby";
 import { currentDraft } from "./pick/current";
@@ -61,8 +63,8 @@ function firstFlow(): Flow {
 /**
  * The Draft & Packs view (`docs/superpowers/specs/2026-10-29-draft-and-packs-design.md` §7): a hub
  * — *Draft in progress* (a saved solo draft to resume, the draft decks not saved yet, a live lobby)
- * and *Start new* (Quick Draft, Sealed, Cube Draft, Pod Draft, Open Packs) — and the flow each
- * starts: Choose → Draft → Build.
+ * and *Start new* (Quick Draft, Sealed, Cube Draft, Pod Draft, Commander Draft, Winston Draft,
+ * Open Packs) — and the flow each starts: Choose → Draft → Build.
  *
  * **The page holds which screen is up** (`Flow`), as Playtesting holds its setup and its board:
  * a state here, kept in window memory so going to another view and back lands on the same screen.
@@ -182,6 +184,18 @@ const MODES: readonly {
     icon: Users,
   },
   {
+    id: "commander",
+    title: "Commander Draft",
+    blurb: "Two cards a pick round a table of bots, then a 60-card Commander deck from your pool.",
+    icon: Crown,
+  },
+  {
+    id: "winston",
+    title: "Winston Draft",
+    blurb: "You and a bot share one face-down stack in three piles — take a pile or decline it.",
+    icon: WinstonPiles,
+  },
+  {
     id: "packs",
     title: "Open Packs",
     blurb: "Open any booster or box and see how it stacks up against its average.",
@@ -189,7 +203,7 @@ const MODES: readonly {
   },
 ];
 
-/** The hub: what is under way, and the five ways to start something new. */
+/** The hub: what is under way, and the seven ways to start something new. */
 function DraftHub({
   lobby,
   onStart,
@@ -328,6 +342,8 @@ const MODE_ICON: Record<DraftMode, LucideIcon> = {
   sealed: Package,
   cube: Boxes,
   pod: Users,
+  commander: Crown,
+  winston: WinstonPiles,
 };
 
 /**

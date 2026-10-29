@@ -9,23 +9,30 @@ import {
   type DraftSeatSetup,
   type DraftSetup,
   type PlaytestDifficulty,
+  type PodFormat,
   type SetSummary,
 } from "@/lib/ipc";
 import {
   dealCube,
   dealSetPacks,
-  MIN_DECK_SIZE,
+  minDeckSizeFor,
   setsLabel,
   soloSeats,
   type CubeShape,
 } from "./deal";
 
-/** What a set-booster draft is dealt from: a set per round, the bots' skill, and the table. */
+/**
+ * What a set-booster draft is dealt from: a set per round, the bots' skill, and the table. Every
+ * set mode deals the same `[seat][round]` boosters — a Winston draft's host shuffles them into its
+ * stack — so only the seat count and the deck's floor differ.
+ */
 export interface SetDraftChoice {
-  mode: Extract<DraftMode, "quick" | "sealed" | "pod">;
+  mode: Extract<DraftMode, "quick" | "sealed" | "pod" | "commander" | "winston">;
   rounds: readonly SetSummary[];
   difficulty: PlaytestDifficulty;
   seats?: DraftSeatSetup[];
+  /** What a pod drafts; ignored (sent as `"booster"`) for every other mode. */
+  podFormat?: PodFormat;
 }
 
 export interface CubeDraftChoice {
@@ -68,6 +75,7 @@ export function useDealDraft(): {
       const fetched = await Promise.all(codes.map(boosterSet));
       const byCode = new Map<string, BoosterSet>(codes.map((code, i) => [code, fetched[i]]));
       const seats = choice.seats ?? soloSeats();
+      const podFormat: PodFormat = choice.mode === "pod" ? (choice.podFormat ?? "booster") : "booster";
       const seed = randomSeed();
       const rng = mulberry32(seed);
       const packs = dealSetPacks(
@@ -83,7 +91,8 @@ export function useDealDraft(): {
         seats,
         packs,
         packSets: choice.rounds.map((s) => s.code.toUpperCase()),
-        minDeckSize: MIN_DECK_SIZE,
+        minDeckSize: minDeckSizeFor(choice.mode, podFormat),
+        podFormat,
       };
     },
     [boosterSet],
@@ -101,6 +110,7 @@ export function useDealDraft(): {
       packs,
       packSets: Array.from({ length: choice.shape.packs }, () => ""),
       minDeckSize: choice.minDeckSize,
+      podFormat: "booster",
     };
   }, []);
 

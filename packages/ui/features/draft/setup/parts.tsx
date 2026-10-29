@@ -201,6 +201,38 @@ export function Segmented<T extends string>({
   );
 }
 
+/**
+ * How many seats the table has, one segment per count in `range` — `Segmented` over the numbers.
+ * The counts below `floor` (people already sitting, in a pod) are left off.
+ */
+export function SeatPicker({
+  range,
+  value,
+  onPick,
+  floor = range.min,
+  label = "Seats",
+}: {
+  range: { min: number; max: number };
+  value: number;
+  onPick: (seats: number) => void;
+  floor?: number;
+  label?: string;
+}): JSX.Element {
+  const from = Math.max(range.min, floor);
+  const options = Array.from({ length: Math.max(0, range.max - from + 1) }, (_, i) => {
+    const n = String(from + i);
+    return { id: n, label: n };
+  });
+  return (
+    <Segmented
+      label={label}
+      options={options}
+      value={String(value)}
+      onPick={(id) => onPick(Number(id))}
+    />
+  );
+}
+
 /** A refusal said where the reader is looking — the backend's sentence, or the page's own. */
 export function InlineError({ message }: { message: string | null }): JSX.Element | null {
   if (message === null) return null;

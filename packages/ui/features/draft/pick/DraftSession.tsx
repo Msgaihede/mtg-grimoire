@@ -14,6 +14,8 @@ export const MODE_TITLE: Record<DraftMode, string> = {
   sealed: "Sealed",
   cube: "Cube Draft",
   pod: "Pod Draft",
+  commander: "Commander Draft",
+  winston: "Winston Draft",
 };
 
 /**

@@ -6,28 +6,37 @@ import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { MODE_TITLE } from "../pick/DraftSession";
 import {
+  COMMANDER_DECK_SIZE,
+  COMMANDER_SETS,
   cubeCards,
   DEFAULT_DIFFICULTY,
   DIFFICULTIES,
   DRAFT_PACKS,
   freshDraftName,
   MIN_DECK_SIZE,
+  POD_SEATS,
   readCubeList,
   SEALED_PACKS,
   soloSeats,
   TABLE_SEATS,
+  WINSTON_SEATS,
 } from "./deal";
 import { AddPackWall, PackOrder } from "./PackOrder";
-import { FIELD, FlowBar, InlineError, LABEL, PrimaryButton, Segmented } from "./parts";
+import { FIELD, FlowBar, InlineError, LABEL, PrimaryButton, Segmented, SeatPicker } from "./parts";
 import { useDealDraft } from "./useDealDraft";
 
 /** The modes the setup's tabs switch between. A pod has a lobby of its own (`lobby/`). */
-export type SetupMode = "quick" | "sealed" | "cube";
+export type SetupMode = "quick" | "sealed" | "cube" | "commander" | "winston";
+
+/** The modes whose packs come from sets — each with its own pack order. */
+type SetMode = Exclude<SetupMode, "cube">;
 
 const TABS: readonly { id: SetupMode; label: string }[] = [
   { id: "quick", label: "Quick Draft" },
   { id: "sealed", label: "Sealed" },
   { id: "cube", label: "Cube Draft" },
+  { id: "commander", label: "Commander" },
+  { id: "winston", label: "Winston" },
 ];
 
 /** What the setup holds, for the window's life (`lib/viewMemory.ts`): a reader who drafts, builds,
@@ -35,6 +44,10 @@ const TABS: readonly { id: SetupMode; label: string }[] = [
 interface SetupHeld {
   quick: SetSummary[];
   sealed: SetSummary[];
+  commander: SetSummary[];
+  winston: SetSummary[];
+  /** A Commander draft's table: you and the bots, 3–8 seats. */
+  commanderSeats: number;
   difficulty: PlaytestDifficulty;
   cube: CubeHeld;
 }
@@ -51,6 +64,9 @@ interface CubeHeld {
 const FRESH: SetupHeld = {
   quick: [],
   sealed: [],
+  commander: [],
+  winston: [],
+  commanderSeats: POD_SEATS.commander.start,
   difficulty: DEFAULT_DIFFICULTY,
   cube: {
     name: "",
@@ -66,9 +82,12 @@ const memory = viewMemory<SetupHeld>("draft.setup");
 
 /**
  * The Choose step for a draft against bots: Quick Draft (three boosters, any sets, repeats
- * allowed), Sealed (six boosters straight into the pool) and Cube Draft (a pasted list, dealt into
- * boosters). Start deals the boosters here and hands them to the host (`draft_start`), and the
- * page moves on to the pick screen with the view it answers.
+ * allowed), Sealed (six boosters straight into the pool), Cube Draft (a pasted list, dealt into
+ * boosters), Commander Draft (three boosters each round a table of 3–8, two cards a pick, a
+ * 60-card deck — Commander Legends' sets first on the wall) and Winston Draft (you and one bot,
+ * three boosters each shuffled by the host into one shared stack). Start deals the boosters here
+ * and hands them to the host (`draft_start`), and the page moves on to the pick screen with the
+ * view it answers.
  */
 export function SetupScreen({
   mode,
@@ -81,7 +100,8 @@ export function SetupScreen({
   onBack: () => void;
   onStarted: (draft: number, view: DraftView) => void;
 }): JSX.Element {
-  const [held, setHeldState] = useState<SetupHeld>(() => memory.recall() ?? FRESH);
+  // Over `FRESH`, so a shape kept before a field was added (a hot reload) still has every field.
+  const [held, setHeldState] = useState<SetupHeld>(() => ({ ...FRESH, ...memory.recall() }));
   const setHeld = (patch: Partial<SetupHeld>) =>
     setHeldState((cur) => {
       const next = { ...cur, ...patch };
@@ -96,9 +116,9 @@ export function SetupScreen({
   const { dealSets, dealCubeDraft } = useDealDraft();
 
   const packsFor = mode === "sealed" ? SEALED_PACKS : DRAFT_PACKS;
-  const chosen = mode === "sealed" ? held.sealed : held.quick;
-  const setChosen = (next: SetSummary[]) =>
-    setHeld(mode === "sealed" ? { sealed: next } : { quick: next });
+  const setMode: SetMode = mode === "cube" ? "quick" : mode;
+  const chosen = held[setMode];
+  const setChosen = (next: SetSummary[]) => setHeld({ [setMode]: next } as Partial<SetupHeld>);
 
   const ready = mode === "cube" ? held.cube.list.trim() !== "" : chosen.length === packsFor;
 
@@ -136,8 +156,16 @@ export function SetupScreen({
           rounds: chosen,
           difficulty: held.difficulty,
           // Sealed passes nothing, so it is dealt to the reader alone: six boosters, one seat
-          // (the draft module's rule for `DraftKind::Sealed`). A quick draft is the full table.
-          seats: mode === "sealed" ? soloSeats(1) : soloSeats(),
+          // (the draft module's rule for `DraftKind::Sealed`). A quick draft is the full table,
+          // a Commander draft the table the reader chose, a Winston draft the reader and a bot.
+          seats:
+            mode === "sealed"
+              ? soloSeats(1)
+              : mode === "commander"
+                ? soloSeats(held.commanderSeats)
+                : mode === "winston"
+                  ? soloSeats(WINSTON_SEATS)
+                  : soloSeats(),
         }),
       );
       return;
@@ -177,7 +205,12 @@ export function SetupScreen({
           {mode === "cube" ? (
             <CubeList value={held.cube.list} onChange={(list) => setCube({ list })} />
           ) : (
-            <AddPackWall chosen={chosen} max={packsFor} onChange={setChosen} />
+            <AddPackWall
+              chosen={chosen}
+              max={packsFor}
+              onChange={setChosen}
+              suggested={mode === "commander" ? COMMANDER_SETS : undefined}
+            />
           )}
         </div>
         <aside
@@ -192,6 +225,14 @@ export function SetupScreen({
               onPick={(difficulty) => setHeld({ difficulty })}
             />
           )}
+          {mode === "commander" && (
+            <SeatPicker
+              range={POD_SEATS.commander}
+              value={held.commanderSeats}
+              onPick={(commanderSeats) => setHeld({ commanderSeats })}
+            />
+          )}
+          {(mode === "commander" || mode === "winston") && <ModeRules mode={mode} held={held} />}
           {mode === "cube" ? (
             <CubeFields cube={held.cube} onChange={setCube} />
           ) : (
@@ -246,7 +287,26 @@ export function SetupScreen({
   );
 }
 
-/** Quick Draft | Sealed | Cube Draft — the setup's three ways to sit down against bots. */
+/** What a Commander or a Winston draft asks of the reader, said once beside its setup. */
+function ModeRules({
+  mode,
+  held,
+}: {
+  mode: "commander" | "winston";
+  held: SetupHeld;
+}): JSX.Element {
+  const bots = held.commanderSeats - 1;
+  return (
+    <p className="m-0 text-xs leading-relaxed text-dim">
+      {mode === "commander"
+        ? `You and ${bots} ${bots === 1 ? "bot" : "bots"}, three packs each, two cards a pick. Build a ${COMMANDER_DECK_SIZE}-card deck and put your commander in its Commander pile. Commander Legends' sets are made for it; any set works.`
+        : "You and one bot, three packs each, shuffled into one face-down stack dealt into three piles. On your turn look at a pile: take it, or decline it and look at the next. Declining the last takes the stack's top card."}
+    </p>
+  );
+}
+
+/** Quick Draft | Sealed | Cube Draft | Commander | Winston — the setup's ways to sit down
+ *  against bots. */
 function ModeTabs({
   mode,
   onMode,
