@@ -1,5 +1,5 @@
 //! **A drafted pool as a virtual Limited deck** — the Draft & Packs page's deck
-//! (`docs/superpowers/specs/2026-10-29-draft-and-packs-design.md` §5).
+//! (`docs/superpowers/specs/2026-10-29-draft-and-packs-design.md` §5, §4a).
 //!
 //! **A deck like any other, made by the deck writes that already exist**: [`create_deck`] makes
 //! it virtual (no cardboard, no group, nothing in the collection — the owner's rule) in format
@@ -7,6 +7,11 @@
 //! as it does after any import. Two piles: **Deck**, an empty `main` pile that is the deck's
 //! default, and **Pool**, the deck's own Sideboard renamed — a list holds one `side` pile
 //! (`idx_deck_categories_kind`), and in Limited the pool *is* the sideboard.
+//!
+//! **A Commander draft's deck** (`create`'s `commander`) is made in format `casual` — no 40-card
+//! Limited floor; the draft bar checks its 60 cards and its one commander itself — and has a
+//! third pile, **Commander** (kind `commander`, empty, a reader's pile so it is drawn while
+//! empty), beside Deck and Pool.
 //!
 //! **Until the reader saves it, it is a draft deck**: its id is on the `app_meta` row
 //! [`K_DRAFT_DECKS`] (a JSON array; `app_meta` is never synced), which is what the editor asks to
@@ -33,9 +38,13 @@ pub const K_DRAFT_DECKS: &str = "draft_decks";
 /// The format a draft deck is made in.
 pub const LIMITED: &str = "limited";
 
-/// The two piles' names.
+/// The format a Commander draft's deck is made in: the deck module's own default, `casual`.
+pub const CASUAL: &str = crate::deck::DEFAULT_FORMAT;
+
+/// The piles' names.
 pub const DECK_PILE: &str = "Deck";
 pub const POOL_PILE: &str = "Pool";
+pub const COMMANDER_PILE: &str = "Commander";
 
 /// What a pool none of whose cards this corpus knows says.
 pub const NO_CARDS: &str =
@@ -65,11 +74,17 @@ const BASICS: [(&str, &str); 5] = [
 
 /// Make the draft deck `name` holding `card_ids` (a repeated id is that many copies) in Pool,
 /// and put it on [`K_DRAFT_DECKS`]. An id this corpus lacks, and a token printing, is skipped;
-/// a pool with nothing left is [`NO_CARDS`].
+/// a pool with nothing left is [`NO_CARDS`]. With `commander` — a Commander draft's pool — the
+/// deck is [`CASUAL`] rather than [`LIMITED`] and has an empty [`COMMANDER_PILE`] too.
 ///
 /// [`create_deck`] remembers the format a deck was made in for the New deck dialog; a draft deck
 /// is not the reader choosing Limited, so the remembered format is put back as it was.
-pub fn create(conn: &Connection, name: &str, card_ids: &[String]) -> Result<DeckRow, String> {
+pub fn create(
+    conn: &Connection,
+    name: &str,
+    card_ids: &[String],
+    commander: bool,
+) -> Result<DeckRow, String> {
     let mut counted: BTreeMap<&str, i64> = BTreeMap::new();
     for id in card_ids {
         *counted.entry(id.as_str()).or_default() += 1;
@@ -105,7 +120,7 @@ pub fn create(conn: &Connection, name: &str, card_ids: &[String]) -> Result<Deck
         conn,
         &DeckInput {
             name: name.to_owned(),
-            format_key: LIMITED.to_owned(),
+            format_key: if commander { CASUAL } else { LIMITED }.to_owned(),
             virtual_only: Some(true),
             ..Default::default()
         },
@@ -122,7 +137,7 @@ pub fn create(conn: &Connection, name: &str, card_ids: &[String]) -> Result<Deck
     // A preference lost is not worth the deck — `create_deck`'s own rule for this row.
     let _ = restored;
 
-    let filled = piles(conn, deck.id)
+    let filled = piles(conn, deck.id, commander)
         .and_then(|()| commit_import(conn, deck.id, LIVE, "merge", &items).map(|_| ()))
         .and_then(|()| {
             let mut list = listed(conn);
@@ -138,9 +153,34 @@ pub fn create(conn: &Connection, name: &str, card_ids: &[String]) -> Result<Deck
 
 /// The Sideboard renamed Pool, and an empty Deck pile in front as the deck's default — straight
 /// to the columns, in one transaction: `rename_category` refuses a predefined zone's name, and a
-/// fresh deck has no history these two need to be undone from.
-fn piles(conn: &Connection, deck_id: i64) -> Result<(), String> {
+/// fresh deck has no history these two need to be undone from. With `commander`, the deck's
+/// Commander zone (seeded with every deck) is made sure of: named [`COMMANDER_PILE`], active,
+/// and the reader's (`origin = 'user'`, drawn while empty) — or made, should it be missing.
+fn piles(conn: &Connection, deck_id: i64, commander: bool) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if commander {
+        let found = tx
+            .execute(
+                "UPDATE deck_categories SET name = ?2, is_active = 1, origin = 'user',
+                        updated_at = unixepoch()
+                  WHERE deck_id = ?1 AND variant = ?3 AND kind = 'commander'",
+                params![deck_id, COMMANDER_PILE, LIVE],
+            )
+            .map_err(|e| e.to_string())?;
+        if found == 0 {
+            tx.execute(
+                "INSERT INTO deck_categories
+                    (deck_id, variant, name, kind, is_active, sort_order, origin,
+                     created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'commander', 1,
+                         (SELECT coalesce(max(sort_order), -1) + 1 FROM deck_categories
+                           WHERE deck_id = ?1 AND variant = ?2),
+                         'user', unixepoch(), unixepoch())",
+                params![deck_id, LIVE, COMMANDER_PILE],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
     tx.execute(
         "UPDATE deck_categories SET name = ?2, updated_at = unixepoch()
           WHERE deck_id = ?1 AND variant = ?3 AND kind = 'side'",
@@ -299,7 +339,7 @@ mod tests {
     #[test]
     fn create_makes_a_virtual_limited_deck_with_the_pool_in_its_side_pile() {
         let conn = conn();
-        let deck = create(&conn, "HOB draft", &pool()).unwrap();
+        let deck = create(&conn, "HOB draft", &pool(), false).unwrap();
         assert_eq!(deck.name, "HOB draft");
         assert_eq!(deck.format_key, LIMITED);
         assert!(deck.virtual_only);
@@ -352,9 +392,49 @@ mod tests {
     }
 
     #[test]
+    fn a_commander_drafts_deck_is_casual_with_an_empty_commander_pile() {
+        let conn = conn();
+        let deck = create(&conn, "CMR draft", &pool(), true).unwrap();
+        assert_eq!(deck.format_key, CASUAL);
+        assert_eq!(CASUAL, "casual");
+        assert!(deck.virtual_only);
+
+        let piles: Vec<(String, String, bool, String, i64)> = conn
+            .prepare(
+                "SELECT cat.name, cat.kind, cat.is_active, cat.origin,
+                        (SELECT count(*) FROM deck_cards dc WHERE dc.category_id = cat.id)
+                   FROM deck_categories cat
+                  WHERE cat.deck_id = ?1 AND cat.variant = 'live'
+                    AND cat.kind IN ('main', 'side', 'commander')
+                  ORDER BY cat.sort_order",
+            )
+            .unwrap()
+            .query_map([deck.id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            piles,
+            vec![
+                ("Deck".into(), "main".into(), true, "user".into(), 0),
+                ("Commander".into(), "commander".into(), true, "user".into(), 0),
+                ("Pool".into(), "side".into(), true, "user".into(), 2),
+            ],
+            "Deck first, the Commander pile empty and drawn while empty, the pool in Pool"
+        );
+        assert_eq!(ids(&conn), vec![deck.id]);
+
+        // Without it, the deck is Limited.
+        let limited = create(&conn, "HOB draft", &pool(), false).unwrap();
+        assert_eq!(limited.format_key, LIMITED);
+    }
+
+    #[test]
     fn a_pool_the_corpus_does_not_know_makes_no_deck() {
         let conn = conn();
-        let err = create(&conn, "x", &["ghost".to_string()]).unwrap_err();
+        let err = create(&conn, "x", &["ghost".to_string()], false).unwrap_err();
         assert_eq!(err, NO_CARDS);
         let decks: i64 = conn
             .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
@@ -366,7 +446,7 @@ mod tests {
     fn the_remembered_format_survives_a_draft_deck() {
         let conn = conn();
         set_app_meta(&conn, K_LAST_DECK_FORMAT, "modern").unwrap();
-        create(&conn, "x", &pool()).unwrap();
+        create(&conn, "x", &pool(), false).unwrap();
         assert_eq!(
             get_app_meta(&conn, K_LAST_DECK_FORMAT).as_deref(),
             Some("modern")
@@ -376,9 +456,9 @@ mod tests {
     #[test]
     fn keep_and_discard_take_a_deck_off_the_list() {
         let conn = conn();
-        let a = create(&conn, "a", &pool()).unwrap().id;
-        let b = create(&conn, "b", &pool()).unwrap().id;
-        let c = create(&conn, "c", &pool()).unwrap().id;
+        let a = create(&conn, "a", &pool(), false).unwrap().id;
+        let b = create(&conn, "b", &pool(), false).unwrap().id;
+        let c = create(&conn, "c", &pool(), false).unwrap().id;
         assert_eq!(ids(&conn), vec![a, b, c]);
 
         keep(&conn, a).unwrap();
