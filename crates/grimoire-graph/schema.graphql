@@ -106,6 +106,56 @@ type Deck {
 	virtualOnly: Boolean!
 }
 
+type DeckCompletion {
+	deckId: Int!
+	"""
+	Which list the figures are a fraction of: `live` under `collection`, `theory` under
+	`theory`.
+	"""
+	list: DeckVariant!
+	"""
+	`wanted - owned`; never negative.
+	"""
+	missing: Int!
+	"""
+	What the missing copies cost. Null when nothing in the list is priced at this marketplace
+	(draw a dash, not 0).
+	"""
+	missingCost: Float
+	"""
+	Of those, copies already covered. Never more than `wanted`.
+	"""
+	owned: Int!
+	"""
+	Missing copies this marketplace has no price for, left out of `missingCost`.
+	"""
+	unpricedMissing: Int!
+	"""
+	Copies the measured list asks for.
+	"""
+	wanted: Int!
+}
+
+"""
+What deck completion measures. `collection`: every non-virtual deck's live list against the
+copies the collection files in that deck's own folder group. `theory`: every deck that keeps a
+theory list (virtual ones included), its live list against that plan.
+"""
+enum DeckCompletionCompare {
+	collection
+	theory
+}
+
+"""
+How a planned copy is matched under `theory` (ignored under `collection`). `exact`: only the
+exact printing and finish counts. `missing`: any printing of the same card in the live list
+counts, so what is missing is what no printing in the deck covers.
+"""
+enum DeckCompletionMatch {
+	exact
+	missing
+}
+
 type DeckNote {
 	"""
 	The note's text, as Markdown.
@@ -152,6 +202,74 @@ type DeckValue {
 }
 
 """
+Which list of a deck: `live` is the deck as built, `theory` the version being planned.
+"""
+enum DeckVariant {
+	live
+	theory
+}
+
+"""
+A printing's finish.
+"""
+enum Finish {
+	etched
+	foil
+	nonfoil
+}
+
+type HomeLayout {
+	"""
+	The layout document's version: `2` for every layout this build writes, `1` for one an
+	older build wrote (whose tiles have no place yet).
+	"""
+	version: Int!
+	"""
+	Every tile, in stored order. Empty when the reader removed them all.
+	"""
+	widgets: [HomeWidget!]!
+}
+
+type HomeWidget {
+	"""
+	The tile's own settings, as the widget stored them (keys depend on `kind`). `null` means
+	every setting is at its default.
+	"""
+	config: JSON
+	"""
+	Height, in cells. `0` on a version-1 document's tile.
+	"""
+	h: Int!
+	"""
+	Stable across moves; unique within the layout.
+	"""
+	id: String!
+	"""
+	Which widget this is, e.g. `summary`, `priceMovers`, `stickyNotes`. An open set: a layout
+	written by a newer build may carry kinds this one does not know.
+	"""
+	kind: String!
+	"""
+	The legacy width (1 = one column, 2 = the whole row) kept for older builds. Use `w`
+	instead.
+	"""
+	span: Int
+	"""
+	Width, in cells. `0` on a version-1 document's tile — the page places it from `span`.
+	"""
+	w: Int!
+	"""
+	Column of the tile's left edge, in cells. `0` on a version-1 document's tile, which has
+	never been placed.
+	"""
+	x: Int!
+	"""
+	Row of the tile's top edge, in cells. `0` on a version-1 document's tile.
+	"""
+	y: Int!
+}
+
+"""
 A scalar that can represent any JSON value.
 """
 scalar JSON
@@ -168,6 +286,203 @@ enum Marketplace {
 	tcgplayer
 }
 
+type MarketplaceInfo {
+	"""
+	`usd` or `eur`.
+	"""
+	currency: String!
+	id: Marketplace!
+	"""
+	The marketplace's name as the app writes it, e.g. `TCGplayer`, `Card Kingdom`.
+	"""
+	label: String!
+}
+
+type NewPrinting {
+	collectorNumber: String!
+	"""
+	The decks holding the card.
+	"""
+	decks: [NewPrintingDeck!]!
+	"""
+	The finishes the printing exists in: `nonfoil`, `foil`, `etched`.
+	"""
+	finishes: [String!]
+	"""
+	The printing's language code, e.g. `en`.
+	"""
+	lang: String!
+	name: String!
+	oracleId: String!
+	"""
+	The printing's Scryfall id.
+	"""
+	printingId: String!
+	"""
+	Scryfall's `promo_types` for the printing, e.g. `showcase`, `borderless`.
+	"""
+	promoTypes: [String!]
+	rarity: String
+	"""
+	Release date, `YYYY-MM-DD`.
+	"""
+	releasedAt: String!
+	setCode: String!
+	setName: String
+}
+
+type NewPrintingDeck {
+	deckId: Int!
+	name: String!
+	"""
+	Copies across the deck's categories, live and theory summed.
+	"""
+	quantity: Int!
+	"""
+	`live` if the live list holds it at all, else `theory`.
+	"""
+	variant: DeckVariant!
+	"""
+	Whether the deck is virtual (not built from owned copies).
+	"""
+	virtualOnly: Boolean!
+}
+
+type NewPrintings {
+	"""
+	How many decks the scope resolved to; 0 is a real answer.
+	"""
+	decksWatched: Int!
+	"""
+	The oldest release date in the answer, `YYYY-MM-DD`; null when empty.
+	"""
+	oldest: String
+	printings: [NewPrinting!]!
+	"""
+	When this device last saw a non-empty feed, in Unix seconds; null for never. A printing
+	released after it is unseen.
+	"""
+	seenAt: Float
+	"""
+	The window's far edge, `YYYY-MM-DD`.
+	"""
+	since: String!
+}
+
+type PriceHistory {
+	"""
+	Today's live price; null when this marketplace has no price for it today.
+	"""
+	now: Float
+	"""
+	One per day, oldest first, stopping before today.
+	"""
+	points: [PricePoint!]!
+	"""
+	Today's UTC midnight according to the database, in Unix seconds.
+	"""
+	today: Float!
+}
+
+type PriceMover {
+	"""
+	The printing's Scryfall id.
+	"""
+	cardId: String!
+	"""
+	`now - then`, signed; never 0 (a printing that did not move is not a mover).
+	"""
+	delta: Float!
+	finish: Finish!
+	name: String!
+	"""
+	Today's price.
+	"""
+	now: Float!
+	setCode: String!
+	"""
+	Null for a printing whose set has left the card data.
+	"""
+	setName: String
+	"""
+	The price in the baseline snapshot.
+	"""
+	then: Float!
+}
+
+"""
+Which way a mover went: `up` gainers, `down` losers, `both` the two together ranked by the
+size of the move.
+"""
+enum PriceMoverDirection {
+	both
+	down
+	up
+}
+
+"""
+Narrows price movers to the printings named here instead of every owned printing. Folder ids
+are direct — a folder's subfolders are not included unless listed. A scope naming nothing
+answers no movers.
+"""
+input PriceMoverScopeInput {
+	"""
+	Printing ids (Scryfall), owned or not, each measured in every finish it is priced in. A
+	card only has history once it is owned, wished for or watched.
+	"""
+	cards: [String!]
+	"""
+	Collection folder ids; `0` is copies filed in no folder.
+	"""
+	collectionFolders: [Int!]
+	"""
+	Wishlist folder ids; `0` is wishes filed in no folder.
+	"""
+	wishlistFolders: [Int!]
+}
+
+"""
+Which baseline price movers are measured against.
+"""
+enum PriceMoverWindow {
+	"""
+	The oldest snapshot kept.
+	"""
+	ALL
+	"""
+	The snapshot from thirty days ago.
+	"""
+	DAYS_30
+	"""
+	The snapshot from seven days ago.
+	"""
+	DAYS_7
+}
+
+type PriceMovers {
+	"""
+	How many distinct days of price snapshots this marketplace holds.
+	"""
+	days: Int!
+	"""
+	Largest move first.
+	"""
+	movers: [PriceMover!]!
+	"""
+	The baseline snapshot actually used, in Unix seconds; null when no snapshot is old enough
+	to compare against.
+	"""
+	since: Float
+}
+
+type PricePoint {
+	"""
+	That day's UTC midnight, in Unix seconds.
+	"""
+	day: Float!
+	price: Float!
+}
+
 type Query {
 	"""
 	Every folder of the collection's cabinet, parents before children.
@@ -178,6 +493,20 @@ type Query {
 	(`rootOnly`).
 	"""
 	collectionSummary(excludeLocked: Boolean, folderId: Int, marketplace: Marketplace, needsReview: Boolean, rootOnly: Boolean, ruleBreaks: Boolean): CollectionSummary @invalidatedBy(roots: ["collection"])
+	"""
+	The collection's value over time, cut by `split`.
+	"""
+	collectionValueHistory(marketplace: Marketplace, split: ValueSplit = type): ValueHistory @invalidatedBy(roots: ["collection"])
+	"""
+	How many deck card rows are flagged for review (rows, not copies) — e.g. after an import
+	or sync could not settle them.
+	"""
+	deckCardsToReviewCount: Int @invalidatedBy(roots: ["decks"])
+	"""
+	How far every deck the comparison applies to is along (archived decks included), one row
+	per deck. Join on `deckId` for the deck's name.
+	"""
+	deckCompletion(compare: DeckCompletionCompare = collection, marketplace: Marketplace, theoryMatch: DeckCompletionMatch = exact): [DeckCompletion!] @invalidatedBy(roots: ["decks", "collection"])
 	"""
 	One deck's deck notes, in the reader's order.
 	"""
@@ -191,6 +520,330 @@ type Query {
 	unarchived ones; absent, both.
 	"""
 	decks(archived: Boolean): [Deck!] @invalidatedBy(roots: ["decks"])
+	"""
+	The home page's tiles and where they sit, as stored. A version-1 document (an older
+	build's) answers its tiles unplaced — `x`, `y`, `w` and `h` at `0`, `span` kept — where
+	the page places them on the grid itself.
+	"""
+	homeLayout: HomeLayout @invalidatedBy(roots: ["homeLayout"])
+	"""
+	The marketplace every priced field answers at when it is not given one — the reader's
+	choice, or this host's fallback when it cannot reach that one.
+	"""
+	marketplace: MarketplaceInfo @invalidatedBy(roots: ["marketplace"])
+	"""
+	Recent reprints of cards the watched decks hold, newest first.
+	"""
+	newPrintings(
+		"""
+		How far back to look, in days, clamped to 1–365.
+		"""
+		days: Int = 90,
+		"""
+		Watch only these decks. Absent watches every deck.
+		"""
+		deckIds: [Int!],
+		"""
+		Include basic lands.
+		"""
+		includeBasics: Boolean = false,
+		"""
+		Count cards that are only on a deck's theory list.
+		"""
+		includeTheory: Boolean = true,
+		"""
+		Watch virtual decks too.
+		"""
+		includeVirtual: Boolean = false,
+		"""
+		Language codes to answer in; an empty list is every language (one row per language of a reprint).
+		"""
+		langs: [String!] = ["en"],
+		"""
+		At most this many printings, clamped to 1–100.
+		"""
+		limit: Int = 100
+	): NewPrintings @invalidatedBy(roots: ["newPrintings", "decks"])
+	"""
+	One printing's daily price in one finish, before today, beside today's price.
+	"""
+	priceHistory(
+		"""
+		The printing's Scryfall id.
+		"""
+		cardId: String!,		finish: Finish = nonfoil,		marketplace: Marketplace
+	): PriceHistory @invalidatedBy(roots: ["collection"])
+	"""
+	The owned printings whose price moved most since the window's baseline snapshot, largest
+	move first — or, given a `scope`, the printings it names.
+	"""
+	priceMovers(		direction: PriceMoverDirection = both,
+		"""
+		At most this many movers, clamped to 1–100.
+		"""
+		limit: Int = 100,		marketplace: Marketplace,
+		"""
+		Absent for every owned printing.
+		"""
+		scope: PriceMoverScopeInput,		window: PriceMoverWindow = DAYS_7
+	): PriceMovers @invalidatedBy(roots: ["collection", "wishlist"])
+	"""
+	The cards this device opened most recently, newest first.
+	"""
+	recentCards(
+		"""
+		At most this many, clamped to 1–24.
+		"""
+		limit: Int = 8
+	): [RecentCard!] @invalidatedBy(roots: ["recentCards"])
+	"""
+	Every release of the app up to this build, newest first.
+	"""
+	releaseNotes(
+		"""
+		At most this many releases.
+		"""
+		limit: Int
+	): [ReleaseNote!] @invalidatedBy(roots: ["bundledReleaseHistory"])
+	"""
+	The scanner's review tray, in the order it was scanned. An unreadable tray is an empty
+	one.
+	"""
+	scannerTray: [ScannerTrayRow!] @invalidatedBy(roots: ["scanner"])
+	"""
+	Every set the collection holds a card from, with how much of it is owned.
+	"""
+	setCompletion: [SetCompletion!] @invalidatedBy(roots: ["collection"])
+	"""
+	Every sticky note, in the reader's arrangement.
+	"""
+	stickyNotes: [StickyNote!] @invalidatedBy(roots: ["stickyNotes"])
+	"""
+	Sets with paper printings releasing after today and within `days`.
+	"""
+	upcomingSets(
+		"""
+		How far ahead to look, in days, clamped to 1–365.
+		"""
+		days: Int = 90
+	): UpcomingSets @invalidatedBy(roots: ["decks"])
+	"""
+	The wishlist's value (what the wishes would cost) over time, cut by `split`. A step not
+	explained by `moved` is wishes added, bought or removed.
+	"""
+	wishlistValueHistory(marketplace: Marketplace, split: ValueSplit = type): ValueHistory @invalidatedBy(roots: ["wishlist"])
+}
+
+type RecentCard {
+	"""
+	The printing's Scryfall id.
+	"""
+	cardId: String!
+	name: String!
+	setCode: String!
+	"""
+	When it was last opened, in Unix seconds.
+	"""
+	viewedAt: Float!
+}
+
+type ReleaseNote {
+	htmlUrl: String!
+	"""
+	The release's notes, as Markdown.
+	"""
+	notes: String!
+	"""
+	When it was published, as an ISO 8601 date.
+	"""
+	publishedAt: String
+	tag: String!
+	version: String!
+}
+
+type ScannerTrayChoice {
+	cardId: String!
+	collectorNumber: String!
+	"""
+	The finishes the printing exists in. Empty when unknown.
+	"""
+	finishes: [String!]
+	name: String!
+	oracleId: String
+	setCode: String!
+}
+
+"""
+A tray row's finish — a printing's, or `unknown` until the reader says.
+"""
+enum ScannerTrayFinish {
+	etched
+	foil
+	nonfoil
+	unknown
+}
+
+type ScannerTrayRow {
+	"""
+	When it was scanned, in Unix milliseconds.
+	"""
+	addedAt: Float!
+	cardId: String!
+	"""
+	The printings the row could be, while it is still a choice to make; empty once settled.
+	"""
+	choices: [ScannerTrayChoice!]!
+	collectorNumber: String!
+	finish: ScannerTrayFinish!
+	"""
+	The finishes the row's printing exists in; null when unknown.
+	"""
+	finishes: [String!]
+	"""
+	The page's own stable id for the row.
+	"""
+	key: String!
+	name: String!
+	oracleId: String
+	quantity: Int!
+	setCode: String!
+}
+
+type SetCompletion {
+	name: String!
+	"""
+	Distinct collector numbers the collection holds any copy of (any finish or language)
+	within `1..size`; every collector number held when `size` is null.
+	"""
+	owned: Int!
+	"""
+	Release date as `YYYY-MM-DD`, or null where Scryfall published none.
+	"""
+	releasedAt: String
+	setCode: String!
+	"""
+	The set's printed size, or null when unknown.
+	"""
+	size: Int
+}
+
+type StickyNote {
+	"""
+	The note's text, as CommonMark Markdown.
+	"""
+	body: String!
+	"""
+	The note's colour word. Open-ended: a word the app does not know is drawn as `slate`.
+	"""
+	color: String!
+	"""
+	Unix seconds.
+	"""
+	createdAt: Float!
+	id: Int!
+	pinned: Boolean!
+	"""
+	The reader's own arrangement, ascending.
+	"""
+	sortOrder: Int!
+	"""
+	May be empty; the app then derives a heading from the body.
+	"""
+	title: String!
+	"""
+	Unix seconds.
+	"""
+	updatedAt: Float!
+}
+
+type UpcomingSet {
+	code: String!
+	"""
+	Distinct cards in it that the reader's non-virtual decks hold (live or theory), basic
+	lands left out.
+	"""
+	inDecks: Int!
+	name: String!
+	"""
+	Cards previewed so far (one per card, whatever its printings).
+	"""
+	previewed: Int!
+	"""
+	The set's earliest card date in the window, `YYYY-MM-DD`.
+	"""
+	releasedAt: String!
+}
+
+type UpcomingSets {
+	"""
+	Soonest first, then by code.
+	"""
+	sets: [UpcomingSet!]!
+	"""
+	Today's date according to the database (UTC), `YYYY-MM-DD`.
+	"""
+	today: String!
+}
+
+type ValueBucket {
+	"""
+	The bucket's word. `type`: lowercase card type (`creature` … `land`) or `other`. `color`:
+	`W` `U` `B` `R` `G`, `c` (colorless) or `multi`. `set`: the set code, or `other`.
+	"""
+	key: String!
+	"""
+	The set's name under the `set` split; null otherwise.
+	"""
+	name: String
+}
+
+type ValueHistory {
+	"""
+	The lines the split cuts the value into; empty for `total`. At most eight named buckets
+	plus `other` for `type` and `set`.
+	"""
+	buckets: [ValueBucket!]!
+	points: [ValuePoint!]!
+	"""
+	Today's UTC midnight according to the database, in Unix seconds.
+	"""
+	today: Float!
+}
+
+type ValuePoint {
+	"""
+	The period's UTC midnight, in Unix seconds. Daily for recent history, weekly further back
+	(a weekly point answers its latest day).
+	"""
+	day: Float!
+	"""
+	True on the last point only: today's value, computed live.
+	"""
+	live: Boolean!
+	"""
+	How much of `total - previous total` came from price changes alone; the rest is copies
+	added or removed. Null on the first point.
+	"""
+	moved: Float
+	"""
+	Σ copies × price over the priced copies; an unpriced copy adds 0.
+	"""
+	total: Float!
+	"""
+	One value per bucket of the history, in the same order; empty under the `total` split.
+	"""
+	values: [Float!]!
+}
+
+"""
+How a value history is cut into lines: `total` is one line and no buckets; `type`, `color`
+and `set` put every copy in exactly one bucket, so a point's bucket values sum to its total.
+"""
+enum ValueSplit {
+	color
+	set
+	total
+	type
 }
 
 """
