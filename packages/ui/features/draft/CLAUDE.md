@@ -41,6 +41,9 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   Add, no import and no `Add to ▸ Collection/Wishlist`. A new way into a deck must be switched off
   for a draft deck too. Call `rememberDraftDeck` before `openDraftDeck`, so the editor's first frame
   is already in draft mode.
+- **A lobby is a draft's or a game's** (`LobbyState.kind`, issue #1419): this page draws a
+  `draft` lobby only; a `game` lobby is the Playtesting page's, which hosts and joins it with the
+  same hooks (`useLobbyState`, `useMayHostPod`, `normalizeCode`). Create a lobby with its kind.
 - **Hosting a pod is a supporter's; joining is anybody's.** The page reads the membership the way
   `useMaySendScans` does (`useMayHostPod`); the host refuses a device that is not entitled, and the
   relay mints tokens only for an entitled membership.

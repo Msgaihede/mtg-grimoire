@@ -1,11 +1,19 @@
 //! **A pod's lobby, this app's end of it**: the socket to the relay's `Lobby` object
 //! (`infrastructure/relay/src/lobby.ts`), as the host of a lobby or a guest in one (spec §6).
 //!
+//! **A lobby is a draft's or a game's** ([`LobbyKind`], issue #1419): the same code, socket,
+//! roster and reconnection either way. A game's lobby seats a Playtesting game instead of a pod
+//! draft — each guest sends the deck it brings (`deck`), the host's app runs the game
+//! (`crate::playtest::lobby`), each guest is sent its own seat's step (`game`, gzipped and in
+//! base64, so a Commander board fits the relay's 64 KiB frame) and sends its actions (`act`), and
+//! a refused one is told back to that guest alone (`refused`).
+//!
 //! **The host's app runs the draft** — the `Draft` in [`super::DraftSlot`], phase.rs's reducer
 //! the authority — and every guest's app is sent its own seat's view and sends its picks. The
 //! relay carries JSON frames and knows nothing of a draft; what rides inside them is the app's
 //! own body (`v: 1`): `room`, `view` and `end` from the host, `pick`, `winston` (a Winston turn:
-//! `{"v":1,"kind":"winston","pile":n,"take":bool}`) and `sync` from a guest.
+//! `{"v":1,"kind":"winston","pile":n,"take":bool}`) and `sync` from a guest — and, in a game's
+//! lobby, `game` and `refused` from the host, `deck` and `act` from a guest.
 //!
 //! **Creating a lobby is a supporter's**: `lobby_create` asks `sync_engine::commands::entitled`
 //! first and then sends the relay's access token (`entitlement::access_token` over the lane, as
@@ -22,12 +30,13 @@
 //! times with backoff (a guest with its `rejoin` secret). The frames, the reactions and the
 //! close codes are pure functions below, tested without a network.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use grimoire_play::{DraftMode, DraftSetup, DraftView};
+use grimoire_play::{DraftMode, DraftSetup, DraftView, PlaytestAction, PlaytestStep};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::Emitter;
@@ -35,6 +44,7 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_tungstenite::tungstenite::{self, Message};
 
 use super::{Outcome, Shared};
+use crate::playtest::lobby::{GameSeats, GuestDeck};
 use crate::sync::AppState;
 
 // ---------------------------------------------------------------------------------------
@@ -49,13 +59,24 @@ pub enum LobbyRole {
     Guest,
 }
 
-/// Where a lobby is. `Connecting` while a dropped socket is opened again.
+/// What a lobby seats: a pod draft (Draft & Packs), or a Playtesting game (issue #1419).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LobbyKind {
+    #[default]
+    Draft,
+    Game,
+}
+
+/// Where a lobby is. `Connecting` while a dropped socket is opened again; `Drafting` once a
+/// draft's lobby has started, `Playing` once a game's has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LobbyPhase {
     Connecting,
     Open,
     Drafting,
+    Playing,
     Closed,
 }
 
@@ -66,6 +87,10 @@ pub struct LobbyPeer {
     pub peer: String,
     pub name: String,
     pub online: bool,
+    /// The name of the deck this guest brings to a game, once it has sent one. The relay's
+    /// roster has none; the host fills it in from the guests' `deck` bodies.
+    #[serde(default)]
+    pub deck: Option<String>,
 }
 
 /// This app's lobby.
@@ -73,6 +98,8 @@ pub struct LobbyPeer {
 #[serde(rename_all = "camelCase")]
 pub struct LobbyState {
     pub role: LobbyRole,
+    /// What the lobby seats — a guest's is `None` until the host's room says.
+    pub kind: Option<LobbyKind>,
     pub code: String,
     pub phase: LobbyPhase,
     /// This reader's name in the lobby.
@@ -89,6 +116,8 @@ pub struct LobbyState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LobbyRoom {
+    #[serde(default)]
+    pub kind: LobbyKind,
     pub host_name: String,
     pub label: String,
     pub peers: Vec<LobbyPeer>,
@@ -112,7 +141,7 @@ const WRONG_KEY: &str = "That lobby would not take this app as its host.";
 const CLOSED_BY_HOST: &str = "The host closed the lobby.";
 const LOBBY_ENDED: &str = "The lobby has closed.";
 const KICKED: &str = "You were removed from the lobby.";
-const STARTED: &str = "That draft has already started.";
+const STARTED: &str = "That lobby's draft or game has already started.";
 const FULL: &str = "That lobby is full.";
 const REPLACED: &str = "This lobby was opened again in another window or on another computer.";
 const TOO_BIG: &str = "The lobby closed the connection: a message was too large.";
@@ -125,6 +154,10 @@ const NOT_OPEN_NOW: &str = "The lobby is not open for a new draft.";
 const NOT_A_POD: &str = "A lobby's draft is a pod draft.";
 const NOT_IN_LOBBY: &str = "A seat names someone who is not in the lobby.";
 const NOT_SEATED: &str = "That guest has no seat at the table.";
+const NOT_A_DRAFT_LOBBY: &str = "This lobby is for a game, not a draft.";
+const NOT_A_GAME_LOBBY: &str = "This lobby is for a draft, not a game.";
+const GUEST_ONLY_DECK: &str = "Only a guest sends its deck through the lobby.";
+const GUEST_ONLY_ACT: &str = "Only a guest plays its seat through the lobby.";
 
 // ---------------------------------------------------------------------------------------
 // Pure pieces: codes, names, addresses, frames, reactions
@@ -247,6 +280,20 @@ pub fn winston_body(pile: u8, take: bool) -> Value {
 pub fn sync_body() -> Value {
     json!({ "v": 1, "kind": "sync" })
 }
+/// A game's: the deck a guest brings, its action, the step it is sent (packed, `z`), and a
+/// refusal of its action.
+pub fn deck_body(deck: &GuestDeck) -> Value {
+    json!({ "v": 1, "kind": "deck", "deck": deck })
+}
+pub fn act_body(action: &PlaytestAction) -> Value {
+    json!({ "v": 1, "kind": "act", "action": action })
+}
+pub fn game_body(packed: &str) -> Value {
+    json!({ "v": 1, "kind": "game", "z": packed })
+}
+pub fn refused_body(reason: &str) -> Value {
+    json!({ "v": 1, "kind": "refused", "reason": reason })
+}
 
 /// A frame the relay sent, read.
 #[derive(Debug, Clone, PartialEq)]
@@ -280,6 +327,14 @@ pub enum Body {
         take: bool,
     },
     Sync,
+    /// A game's lobby: the deck a guest brings.
+    Deck(Box<GuestDeck>),
+    /// A game's lobby: a guest's action.
+    Act(Box<PlaytestAction>),
+    /// A game's lobby: this guest's step, packed (`crate::playtest::lobby::unpack`).
+    Game(String),
+    /// A game's lobby: the host refused this guest's action, saying why.
+    Refused(String),
     Other,
 }
 
@@ -300,6 +355,14 @@ fn body_of(value: &Value) -> Body {
                 take: value.get("take")?.as_bool()?,
             },
             "sync" => Body::Sync,
+            "deck" => Body::Deck(Box::new(
+                serde_json::from_value(value.get("deck")?.clone()).ok()?,
+            )),
+            "act" => Body::Act(Box::new(
+                serde_json::from_value(value.get("action")?.clone()).ok()?,
+            )),
+            "game" => Body::Game(value.get("z")?.as_str()?.to_owned()),
+            "refused" => Body::Refused(value.get("reason")?.as_str()?.to_owned()),
             _ => Body::Other,
         })
     };
@@ -351,22 +414,45 @@ pub enum Act {
     Remember { peer: String, secret: String },
     /// Guest: the host ended the lobby, saying why.
     End(String),
+    /// Host: the deck a guest brings to the game.
+    Deck { from: String, deck: Box<GuestDeck> },
+    /// Host: a guest's action, for the game.
+    Play {
+        from: String,
+        action: Box<PlaytestAction>,
+    },
+    /// Guest: show the host's step of this seat (packed).
+    ShowGame(String),
+    /// Guest: the host refused this seat's action.
+    Refused(String),
 }
 
 /// The room as a host describes it to its guests.
 pub fn room_of(state: &LobbyState) -> LobbyRoom {
     LobbyRoom {
+        kind: state.kind.unwrap_or_default(),
         host_name: state.host_name.clone(),
         label: state.label.clone(),
         peers: state.peers.clone(),
-        started: state.phase == LobbyPhase::Drafting,
+        started: matches!(state.phase, LobbyPhase::Drafting | LobbyPhase::Playing),
     }
 }
+
+/// The longest name a guest's deck goes by in the room, in characters.
+const MAX_DECK_NAME_CHARS: usize = 80;
 
 /// One frame heard: `state` changed as it says, and what is left to do.
 pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
     match (state.role, heard) {
-        (LobbyRole::Host, Heard::Peers(peers)) => {
+        (LobbyRole::Host, Heard::Peers(mut peers)) => {
+            // The roster knows nobody's deck: each guest keeps the one it sent.
+            for peer in &mut peers {
+                peer.deck = state
+                    .peers
+                    .iter()
+                    .find(|p| p.peer == peer.peer)
+                    .and_then(|p| p.deck.clone());
+            }
             state.peers = peers.clone();
             let mut acts = vec![Act::BroadcastRoom];
             if state.phase == LobbyPhase::Drafting {
@@ -396,6 +482,26 @@ pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
             },
         ) => vec![Act::Resend(from)],
         (
+            LobbyRole::Host,
+            Heard::Msg {
+                from: Some(from),
+                body: Body::Deck(deck),
+            },
+        ) if state.kind == Some(LobbyKind::Game) && state.phase == LobbyPhase::Open => {
+            let Some(peer) = state.peers.iter_mut().find(|p| p.peer == from) else {
+                return Vec::new();
+            };
+            peer.deck = Some(deck.name.chars().take(MAX_DECK_NAME_CHARS).collect());
+            vec![Act::Deck { from, deck }, Act::BroadcastRoom]
+        }
+        (
+            LobbyRole::Host,
+            Heard::Msg {
+                from: Some(from),
+                body: Body::Act(action),
+            },
+        ) if state.phase == LobbyPhase::Playing => vec![Act::Play { from, action }],
+        (
             LobbyRole::Guest,
             Heard::Welcome {
                 peer,
@@ -412,11 +518,12 @@ pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
         }
         (LobbyRole::Guest, Heard::Msg { body, .. }) => match body {
             Body::Room(room) => {
+                state.kind = Some(room.kind);
                 state.host_name = room.host_name;
                 state.label = room.label;
                 state.peers = room.peers;
                 if room.started && state.phase == LobbyPhase::Open {
-                    state.phase = LobbyPhase::Drafting;
+                    state.phase = started(room.kind);
                 }
                 Vec::new()
             }
@@ -426,10 +533,25 @@ pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
                 }
                 vec![Act::ShowView(view)]
             }
+            Body::Game(packed) => {
+                if state.phase == LobbyPhase::Open {
+                    state.phase = LobbyPhase::Playing;
+                }
+                vec![Act::ShowGame(packed)]
+            }
+            Body::Refused(reason) => vec![Act::Refused(reason)],
             Body::End(reason) => vec![Act::End(reason)],
             _ => Vec::new(),
         },
         _ => Vec::new(),
+    }
+}
+
+/// The phase a lobby of `kind` is in once it has started.
+pub fn started(kind: LobbyKind) -> LobbyPhase {
+    match kind {
+        LobbyKind::Draft => LobbyPhase::Drafting,
+        LobbyKind::Game => LobbyPhase::Playing,
     }
 }
 
@@ -493,6 +615,10 @@ pub(crate) struct Live {
     rejoin: Option<(String, String)>,
     /// The host's pod draft, once started.
     draft: Option<u64>,
+    /// The host's game, once started: whose seat is whose.
+    game: Option<GameSeats>,
+    /// The deck each guest of a game's lobby sent, by peer: what it is dealt.
+    decks: HashMap<String, GuestDeck>,
     /// The phase a dropped socket was in, put back when it is open again.
     resume: Option<LobbyPhase>,
 }
@@ -532,6 +658,41 @@ pub(crate) fn send_views(lobby: &LobbySlot, views: &[(String, DraftView)]) {
             }
         }
     }
+}
+
+/// Each guest's step of the host's `game`, sent to it — after an action of the host's own on the
+/// board (`playtest_act`). Nothing is sent for a game that is not this lobby's.
+pub(crate) fn send_game_steps(lobby: &LobbySlot, game: u64, steps: &[(u8, PlaytestStep)]) {
+    if steps.is_empty() {
+        return;
+    }
+    if let Some(live) = lock(&lobby.0).as_ref() {
+        if live.state.role != LobbyRole::Host {
+            return;
+        }
+        if let Some(seats) = live.game.as_ref().filter(|g| g.game == game) {
+            for (peer, body) in game_frames(seats, steps, false) {
+                live.send(send_frame(&peer, &body));
+            }
+        }
+    }
+}
+
+/// The `game` body each guest of `seats` is sent for its step.
+fn game_frames(
+    seats: &GameSeats,
+    steps: &[(u8, PlaytestStep)],
+    dealt: bool,
+) -> Vec<(String, Value)> {
+    steps
+        .iter()
+        .filter_map(|(seat, step)| {
+            let peer = seats.peer_of(*seat)?.to_owned();
+            let packed =
+                crate::playtest::lobby::pack(&seats.guest_game(*seat, step.clone(), dealt));
+            Some((peer, game_body(&packed)))
+        })
+        .collect()
 }
 
 /// Everything the task and the commands that act on a lobby need.
@@ -608,6 +769,46 @@ impl Ctx {
         self.with(|live| live.draft).flatten()
     }
 
+    fn game(&self) -> Option<GameSeats> {
+        self.with(|live| live.game.clone()).flatten()
+    }
+
+    fn send_body(&self, to: &str, body: &Value) {
+        self.with(|live| live.send(send_frame(to, body)));
+    }
+
+    /// A move of the host's game passed on: the host's board shown the host's step, each guest
+    /// sent its own.
+    fn pass_on_game(&self, seats: &GameSeats, host: PlaytestStep, guests: &[(u8, PlaytestStep)]) {
+        crate::playtest::lobby::emit_host(&self.app, seats.game, host);
+        self.with(|live| {
+            for (peer, body) in game_frames(seats, guests, false) {
+                live.send(send_frame(&peer, &body));
+            }
+        });
+    }
+
+    /// `peer`'s seat of the host's game handed to the AI, and the game played on.
+    async fn hand_over(&self, peer: &str) -> Result<(), String> {
+        let Some(seats) = self.game() else {
+            return Ok(());
+        };
+        let Some(seat) = seats.seat_of(peer) else {
+            return Ok(());
+        };
+        let (host, guests) = crate::playtest::lobby::hand_over(&self.app, seats.game, seat).await?;
+        let seats = self
+            .with(|live| {
+                let game = live.game.as_mut()?;
+                game.peers.retain(|(p, _)| p != peer);
+                Some(game.clone())
+            })
+            .flatten()
+            .unwrap_or(seats);
+        self.pass_on_game(&seats, host, &guests);
+        Ok(())
+    }
+
     /// A change to the pod draft passed on: each guest its view, the host's own when it moved.
     fn pass_on(&self, outcome: &Outcome) {
         self.with(|live| {
@@ -631,9 +832,20 @@ impl Ctx {
         Ok(())
     }
 
-    /// Send `peer` the room and, in a draft, its seat's view.
+    /// Send `peer` the room and, in a draft, its seat's view — in a game, its seat's step.
     async fn resend(&self, peer: String) {
         self.with(|live| live.send(send_frame(&peer, &room_body(&room_of(&live.state)))));
+        if let Some(seats) = self.game() {
+            let Some(seat) = seats.seat_of(&peer) else {
+                return;
+            };
+            if let Ok(step) = crate::playtest::lobby::step_of(&self.app, seats.game, seat).await {
+                for (to, body) in game_frames(&seats, &[(seat, step)], false) {
+                    self.send_body(&to, &body);
+                }
+            }
+            return;
+        }
         let Some(draft) = self.pod() else {
             return;
         };
@@ -708,6 +920,32 @@ impl Ctx {
                 self.with(|live| live.rejoin = Some((peer, secret)));
             }
             Act::End(reason) => return Some(Ended::Final(reason)),
+            Act::Deck { from, deck } => {
+                self.with(|live| live.decks.insert(from, *deck));
+            }
+            Act::Play { from, action } => {
+                let Some(seats) = self.game() else {
+                    return None;
+                };
+                let Some(seat) = seats.seat_of(&from) else {
+                    self.send_body(&from, &refused_body(NOT_SEATED));
+                    return None;
+                };
+                match crate::playtest::lobby::play(&self.app, seats.game, seat, *action).await {
+                    Ok((host, guests)) => self.pass_on_game(&seats, host, &guests),
+                    // A refused action changed nothing: the guest is told why, and its board
+                    // keeps the step it had.
+                    Err(reason) => self.send_body(&from, &refused_body(&reason)),
+                }
+            }
+            Act::ShowGame(packed) => {
+                if let Some(game) = crate::playtest::lobby::unpack(&packed) {
+                    let _ = self.app.emit("lobby:game", game);
+                }
+            }
+            Act::Refused(reason) => {
+                let _ = self.app.emit("lobby:refused", reason);
+            }
         }
         None
     }
@@ -938,6 +1176,7 @@ async fn install(
 fn unreachable_state() -> LobbyState {
     LobbyState {
         role: LobbyRole::Guest,
+        kind: None,
         code: String::new(),
         phase: LobbyPhase::Closed,
         name: String::new(),
@@ -975,6 +1214,8 @@ fn new_live(
         key,
         rejoin: None,
         draft: None,
+        game: None,
+        decks: HashMap::new(),
         resume: None,
     };
     (live, rx)
@@ -1040,8 +1281,8 @@ async fn relay(state: &Arc<AppState>) -> Result<(String, bool), String> {
 // Commands
 // ---------------------------------------------------------------------------------------
 
-/// Open a lobby and host it, as `name` — a supporter's. Answers once the relay has the host's
-/// socket.
+/// Open a lobby for `kind` — a pod draft, or a Playtesting game — and host it, as `name`: a
+/// supporter's. Answers once the relay has the host's socket.
 #[tauri::command]
 pub async fn lobby_create(
     app: tauri::AppHandle,
@@ -1049,6 +1290,7 @@ pub async fn lobby_create(
     slot: tauri::State<'_, super::DraftSlot>,
     lobby: tauri::State<'_, LobbySlot>,
     name: String,
+    kind: LobbyKind,
 ) -> Result<LobbyState, String> {
     let name = lobby_name(&name)?;
     let (base, allowed) = relay(state.inner()).await?;
@@ -1076,6 +1318,7 @@ pub async fn lobby_create(
     let (live, rx) = new_live(
         LobbyState {
             role: LobbyRole::Host,
+            kind: Some(kind),
             code,
             phase: LobbyPhase::Open,
             name: name.clone(),
@@ -1126,6 +1369,7 @@ pub async fn lobby_join(
     let (live, rx) = new_live(
         LobbyState {
             role: LobbyRole::Guest,
+            kind: None,
             code,
             phase: LobbyPhase::Open,
             name,
@@ -1195,6 +1439,9 @@ pub async fn lobby_start(
         }
         if live.state.phase != LobbyPhase::Open {
             return Err(NOT_OPEN_NOW.to_owned());
+        }
+        if live.state.kind != Some(LobbyKind::Draft) {
+            return Err(NOT_A_DRAFT_LOBBY.to_owned());
         }
         (live.generation, live.state.peers.clone())
     };
@@ -1278,7 +1525,8 @@ pub fn lobby_winston(
     Ok(())
 }
 
-/// The host removes `peer` from the lobby. Once the draft has started, a bot takes the seat.
+/// The host removes `peer` from the lobby. Once the draft has started, a bot takes the seat; once
+/// a game has, the AI does, and the game plays on.
 #[tauri::command]
 pub async fn lobby_kick(
     app: tauri::AppHandle,
@@ -1305,13 +1553,142 @@ pub async fn lobby_kick(
         role: LobbyRole::Host,
     };
     if ctx.pod().is_some() {
+        let peer = peer.clone();
         ctx.change_pod(move |d| match seat_of(d, &peer) {
             Some(seat) => d.replace_with_bot(seat),
             None => Ok(()),
         })
         .await?;
     }
+    ctx.with(|live| live.decks.remove(&peer));
+    ctx.hand_over(&peer).await
+}
+
+// ---------------------------------------------------------------------------------------
+// A game's lobby (issue #1419)
+// ---------------------------------------------------------------------------------------
+
+/// A guest of a game's lobby sends the host the deck it brings: `deck_id` as it stands in
+/// `variant`, read here and sent as printings and counts, which the host's app reads in its own
+/// card data. Answers the deck's name; the room comes back with it beside this guest's.
+#[tauri::command]
+pub async fn lobby_deck(
+    state: tauri::State<'_, Arc<AppState>>,
+    lobby: tauri::State<'_, LobbySlot>,
+    deck_id: i64,
+    variant: String,
+) -> Result<String, String> {
+    {
+        let held = lock(&lobby.0);
+        let live = held.as_ref().ok_or(NO_LOBBY)?;
+        if live.state.role != LobbyRole::Guest {
+            return Err(GUEST_ONLY_DECK.to_owned());
+        }
+        if live.state.kind == Some(LobbyKind::Draft) {
+            return Err(NOT_A_GAME_LOBBY.to_owned());
+        }
+        if live.state.phase != LobbyPhase::Open {
+            return Err(NOT_OPEN_NOW.to_owned());
+        }
+    }
+    let deck = crate::playtest::lobby::guest_deck(state.inner().clone(), deck_id, variant).await?;
+    let held = lock(&lobby.0);
+    let live = held.as_ref().ok_or(NO_LOBBY)?;
+    live.send(guest_frame(&deck_body(&deck)));
+    Ok(deck.name)
+}
+
+/// A guest's action in the host's game, sent to the host; the step arrives as `lobby:game`, a
+/// refusal as `lobby:refused`.
+#[tauri::command]
+pub fn lobby_act(lobby: tauri::State<'_, LobbySlot>, action: PlaytestAction) -> Result<(), String> {
+    let held = lock(&lobby.0);
+    let live = held.as_ref().ok_or(NO_LOBBY)?;
+    if live.state.role != LobbyRole::Guest {
+        return Err(GUEST_ONLY_ACT.to_owned());
+    }
+    if live.state.phase == LobbyPhase::Closed {
+        return Err(NO_LOBBY.to_owned());
+    }
+    live.send(guest_frame(&act_body(&action)));
     Ok(())
+}
+
+/// The host deals the lobby's game as `game`: its own `deck_id` in `variant` against `seats`, the
+/// opponents in turn order — one for a duel, three for a four-player game — each a guest who has
+/// sent its deck (`peer`) or an AI deck of the host's. The lobby is locked, every guest sent its
+/// seat's first step, and the host's answered, as `playtest_start` answers it; the host plays on
+/// with `playtest_act` and ends with `playtest_end`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn lobby_game_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, super::DraftSlot>,
+    lobby: tauri::State<'_, LobbySlot>,
+    game: u64,
+    deck_id: i64,
+    variant: String,
+    seats: Vec<crate::playtest::lobby::LobbyGameSeat>,
+    difficulty: grimoire_play::Difficulty,
+    seed: u64,
+) -> Result<PlaytestStep, String> {
+    let (generation, host_name, peers, decks) = {
+        let held = lock(&lobby.0);
+        let live = held.as_ref().ok_or(NO_LOBBY)?;
+        if live.state.role != LobbyRole::Host {
+            return Err(HOST_ONLY.to_owned());
+        }
+        if live.state.kind != Some(LobbyKind::Game) {
+            return Err(NOT_A_GAME_LOBBY.to_owned());
+        }
+        if live.state.phase != LobbyPhase::Open {
+            return Err(NOT_OPEN_NOW.to_owned());
+        }
+        (
+            live.generation,
+            live.state.host_name.clone(),
+            live.state.peers.clone(),
+            live.decks.clone(),
+        )
+    };
+    let table = crate::playtest::lobby::table(&host_name, &seats, &peers, &decks)?;
+    let label = table.label();
+    let (host, guests, seated) = crate::playtest::lobby::deal(
+        &app,
+        state.inner().clone(),
+        game,
+        deck_id,
+        variant,
+        table,
+        difficulty,
+        seed,
+    )
+    .await?;
+    let ctx = Ctx {
+        app,
+        lobby: lobby.0.clone(),
+        draft: slot.0.clone(),
+        state: state.inner().clone(),
+        generation,
+        role: LobbyRole::Host,
+    };
+    let started = ctx.with(|live| {
+        live.game = Some(seated.clone());
+        live.state.phase = LobbyPhase::Playing;
+        live.state.label = label;
+        live.send(lock_frame());
+        live.send(send_frame("*", &room_body(&room_of(&live.state))));
+        for (peer, body) in game_frames(&seated, &guests, true) {
+            live.send(send_frame(&peer, &body));
+        }
+    });
+    if started.is_none() {
+        crate::playtest::lobby::end(&ctx.app, game);
+        return Err(NO_LOBBY.to_owned());
+    }
+    ctx.emit_state();
+    Ok(host)
 }
 
 #[cfg(test)]
@@ -1322,6 +1699,7 @@ mod tests {
     fn state(role: LobbyRole, phase: LobbyPhase) -> LobbyState {
         LobbyState {
             role,
+            kind: Some(LobbyKind::Draft),
             code: "K7QX2M".into(),
             phase,
             name: "Ada".into(),
@@ -1342,6 +1720,7 @@ mod tests {
             peer: id.into(),
             name: name.into(),
             online,
+            deck: None,
         }
     }
 
@@ -1447,6 +1826,7 @@ mod tests {
             json!({"t": "msg", "body": {"v": 1, "kind": "sync"}})
         );
         let room = LobbyRoom {
+            kind: LobbyKind::Draft,
             host_name: "Ada".into(),
             label: "".into(),
             peers: vec![peer("p1", "Bo", true)],
@@ -1455,8 +1835,20 @@ mod tests {
         assert_eq!(
             room_body(&room),
             json!({"v": 1, "kind": "room", "room": {
-                "hostName": "Ada", "label": "", "started": false,
-                "peers": [{"peer": "p1", "name": "Bo", "online": true}]}})
+                "kind": "draft", "hostName": "Ada", "label": "", "started": false,
+                "peers": [{"peer": "p1", "name": "Bo", "online": true, "deck": null}]}})
+        );
+        assert_eq!(
+            v(guest_frame(&act_body(&PlaytestAction::Pass))),
+            json!({"t": "msg", "body": {"v": 1, "kind": "act", "action": {"type": "pass"}}})
+        );
+        assert_eq!(
+            v(send_frame("p1", &refused_body("no"))),
+            json!({"t": "send", "to": "p1", "body": {"v": 1, "kind": "refused", "reason": "no"}})
+        );
+        assert_eq!(
+            v(send_frame("p1", &game_body("H4sI"))),
+            json!({"t": "send", "to": "p1", "body": {"v": 1, "kind": "game", "z": "H4sI"}})
         );
     }
 
@@ -1624,6 +2016,7 @@ mod tests {
         assert!(guest.host_online);
 
         let room = LobbyRoom {
+            kind: LobbyKind::Draft,
             host_name: "Cy".into(),
             label: "Bloomburrow".into(),
             peers: vec![peer("p2", "Ada", true)],
@@ -1657,6 +2050,107 @@ mod tests {
         );
         // A guest never answers what only a host is sent.
         assert!(react(&mut guest, Heard::Peers(Vec::new())).is_empty());
+    }
+
+    fn game_deck(name: &str) -> GuestDeck {
+        GuestDeck {
+            name: name.into(),
+            cards: Vec::new(),
+            tokens: Vec::new(),
+        }
+    }
+
+    /// Issue #1419: a game's lobby keeps each guest's deck beside its seat in the room, and plays
+    /// its guests' actions once the game is on.
+    #[test]
+    fn a_game_lobby_hears_each_guests_deck_and_then_its_actions() {
+        let mut open = state(LobbyRole::Host, LobbyPhase::Open);
+        open.kind = Some(LobbyKind::Game);
+        react(&mut open, Heard::Peers(vec![peer("p1", "Bo", true)]));
+        let deck = Heard::Msg {
+            from: Some("p1".into()),
+            body: Body::Deck(Box::new(game_deck("Elves"))),
+        };
+        assert_eq!(
+            react(&mut open, deck.clone()),
+            vec![
+                Act::Deck {
+                    from: "p1".into(),
+                    deck: Box::new(game_deck("Elves"))
+                },
+                Act::BroadcastRoom
+            ]
+        );
+        assert_eq!(open.peers[0].deck.as_deref(), Some("Elves"));
+        // The relay's roster knows no deck, and a guest keeps the one it sent.
+        react(
+            &mut open,
+            Heard::Peers(vec![peer("p1", "Bo", false), peer("p2", "Cy", true)]),
+        );
+        assert_eq!(open.peers[0].deck.as_deref(), Some("Elves"));
+        assert_eq!(open.peers[1].deck, None);
+        // A draft's lobby takes no deck.
+        let mut draft = state(LobbyRole::Host, LobbyPhase::Open);
+        react(&mut draft, Heard::Peers(vec![peer("p1", "Bo", true)]));
+        assert!(react(&mut draft, deck).is_empty());
+
+        let act = || Heard::Msg {
+            from: Some("p1".into()),
+            body: Body::Act(Box::new(PlaytestAction::Pass)),
+        };
+        assert!(react(&mut open, act()).is_empty(), "no game yet");
+        let mut playing = state(LobbyRole::Host, LobbyPhase::Playing);
+        playing.kind = Some(LobbyKind::Game);
+        assert_eq!(
+            react(&mut playing, act()),
+            vec![Act::Play {
+                from: "p1".into(),
+                action: Box::new(PlaytestAction::Pass)
+            }]
+        );
+        assert!(room_of(&playing).started);
+        assert_eq!(room_of(&playing).kind, LobbyKind::Game);
+    }
+
+    #[test]
+    fn a_game_lobbys_guest_learns_the_kind_from_the_room_and_is_shown_its_steps() {
+        let mut guest = state(LobbyRole::Guest, LobbyPhase::Open);
+        guest.kind = None;
+        let msg = |body| Heard::Msg { from: None, body };
+        react(
+            &mut guest,
+            msg(Body::Room(LobbyRoom {
+                kind: LobbyKind::Game,
+                host_name: "Cy".into(),
+                label: String::new(),
+                peers: Vec::new(),
+                started: false,
+            })),
+        );
+        assert_eq!(guest.kind, Some(LobbyKind::Game));
+        assert_eq!(guest.phase, LobbyPhase::Open);
+        assert_eq!(
+            react(&mut guest, msg(Body::Game("H4sI".into()))),
+            vec![Act::ShowGame("H4sI".into())]
+        );
+        assert_eq!(guest.phase, LobbyPhase::Playing);
+        assert_eq!(
+            react(&mut guest, msg(Body::Refused("no".into()))),
+            vec![Act::Refused("no".into())]
+        );
+        // A room that has started puts a late guest straight into the game.
+        let mut late = state(LobbyRole::Guest, LobbyPhase::Open);
+        react(
+            &mut late,
+            msg(Body::Room(LobbyRoom {
+                kind: LobbyKind::Game,
+                host_name: "Cy".into(),
+                label: "Duel".into(),
+                peers: Vec::new(),
+                started: true,
+            })),
+        );
+        assert_eq!(late.phase, LobbyPhase::Playing);
     }
 
     #[test]
@@ -1697,7 +2191,7 @@ mod tests {
         s.closed_reason = Some("x".into());
         assert_eq!(
             serde_json::to_value(&s).unwrap(),
-            json!({"role": "guest", "code": "K7QX2M", "phase": "drafting", "name": "Ada",
+            json!({"role": "guest", "kind": "draft", "code": "K7QX2M", "phase": "drafting", "name": "Ada",
                    "hostName": "", "hostOnline": false, "peers": [], "label": "",
                    "closedReason": "x"})
         );
@@ -1731,6 +2225,10 @@ mod tests {
             NOT_A_POD,
             NOT_IN_LOBBY,
             NOT_SEATED,
+            NOT_A_DRAFT_LOBBY,
+            NOT_A_GAME_LOBBY,
+            GUEST_ONLY_DECK,
+            GUEST_ONLY_ACT,
         ] {
             let lower = sentence.to_lowercase();
             for word in ["member", "supporter", "patreon", "patron", "subscri"] {

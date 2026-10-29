@@ -32,7 +32,7 @@ import { viewMemory } from "@/lib/viewMemory";
 import type { DraftRole } from "./build/BuildPanel";
 import { WinstonPiles } from "./icons";
 import { LobbyScreen } from "./lobby/LobbyScreen";
-import { isLive, useLobbyState } from "./lobby/useLobby";
+import { isLive, lobbyFor, useLobbyState } from "./lobby/useLobby";
 import { currentDraft } from "./pick/current";
 import { DraftSession, MODE_TITLE } from "./pick/DraftSession";
 import { freshDraftName } from "./setup/deal";
@@ -76,7 +76,9 @@ function firstFlow(): Flow {
 export function DraftPage(): JSX.Element {
   const [flow, setFlowState] = useState<Flow>(firstFlow);
   const queryClient = useQueryClient();
-  const lobby = useLobbyState();
+  // A game's lobby is the Playtesting page's (issue #1419): no *Draft in progress* row for it,
+  // and no notice on a guest's pool when it closes.
+  const lobby = lobbyFor(useLobbyState(), "draft");
 
   const setFlow = useCallback((next: Flow) => {
     flowMemory.keep(next);

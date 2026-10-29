@@ -2,6 +2,7 @@ import {
   ipc,
   ipcError,
   type DeckVariant,
+  type LobbyGameSeat,
   type PlaytestAction,
   type PlaytestDifficulty,
   type PlaytestHappened,
@@ -25,6 +26,19 @@ export interface PlaytestPicks {
   /** How well the AI plays; {@link DEFAULT_DIFFICULTY} when left out, and unused by the goldfish,
    *  whose page has nothing to pick. */
   difficulty?: PlaytestDifficulty;
+  /**
+   * **A game with people at the table, over the lobby** (issue #1419) — the host's — dealt by
+   * `ipc.lobbyGameStart` from `seats` (`opponents` is then empty and unread): the opponents in turn
+   * order after the reader, each a guest or one of the reader's decks for the AI. `names` are their
+   * plates', in the same order: a person's lobby name, an AI seat's deck. A guest's board holds
+   * its own kind of game (`./guestGame.ts`), whose picks carry an empty `seats`.
+   */
+  lobby?: { seats: LobbyGameSeat[]; names: string[] };
+}
+
+/** The picks are the goldfish's: no opponent decks, and no lobby to bring people. */
+export function isGoldfish(picks: PlaytestPicks): boolean {
+  return picks.opponents.length === 0 && picks.lobby === undefined;
 }
 
 /** The setup page's own first pick, for a caller that has none to give. */
@@ -41,6 +55,9 @@ export function picksKey(picks: PlaytestPicks): string {
     picks.variant,
     picks.opponents.map((o) => [o.deckId, o.variant]),
     picks.difficulty ?? DEFAULT_DIFFICULTY,
+    ...(picks.lobby === undefined
+      ? []
+      : [picks.lobby.seats.map((s) => [s.peer, s.deckId, s.variant])]),
   ]);
 }
 
@@ -111,6 +128,14 @@ export interface HeldBoard {
  * (`../undo.ts`' `LogBook`), once the last replay has been logged whole. **The stops and the
  * sandbox are settings, not actions** (`setStops`, `setSandbox`): the engine does not remember
  * them for undo, so neither does the log.
+ *
+ * **A lobby game (`picks.lobby`, issue #1419) is the host's, played here**: dealt by
+ * `lobbyGameStart` and acted on by `playtestAct` like any other, with two differences. **The game
+ * moves without the reader**: a guest's action, or the AI's in a guest's seat handed to it, is
+ * answered to the guest and pushed here as `playtest:step` — listened for from the deal until
+ * the end, and shown as an answer is when it names this game. **And it is never dealt again**
+ * (`newGame` does nothing): the people at the table sat down to this one, and a new deal is a new
+ * lobby's.
  */
 export interface HeldGame {
   readonly picks: PlaytestPicks;
@@ -149,6 +174,9 @@ export function holdGame(picks: PlaytestPicks): HeldGame {
   const { deckId, variant } = picks;
   const difficulty = picks.difficulty ?? DEFAULT_DIFFICULTY;
   const opponents = picks.opponents.map((o) => ({ deckId: o.deckId, variant: o.variant }));
+  const lobby = picks.lobby;
+  /** How many opponents the table seats, for the deal's line. */
+  const seats = lobby?.seats.length ?? opponents.length;
 
   let state: HeldState = {
     view: null,
@@ -172,6 +200,8 @@ export function holdGame(picks: PlaytestPicks): HeldGame {
   let game = 0;
   let live = false;
   let board: HeldBoard | null = null;
+  /** A lobby game's `playtest:step` listener, from the deal to the end. */
+  let unlisten: (() => void) | null = null;
 
   const apply = (entry: ReplayEntry) =>
     set((s) => ({
@@ -214,14 +244,18 @@ export function holdGame(picks: PlaytestPicks): HeldGame {
     game = named;
     enqueue(() => {
       if (mine !== generation) return Promise.resolve();
-      return ipc.playtestStart(named, deckId, variant, opponents, difficulty, fresh()).then(
+      const dealing =
+        lobby === undefined
+          ? ipc.playtestStart(named, deckId, variant, opponents, difficulty, fresh())
+          : ipc.lobbyGameStart(named, deckId, variant, lobby.seats, difficulty, fresh());
+      return dealing.then(
         (step) => {
           if (mine !== generation) return;
           // The goldfish's deck is nobody's to shuffle: the old goldfish board's first line.
           const dealt =
-            opponents.length === 0
+            seats === 0
               ? "Shuffled and drew seven"
-              : opponents.length > 1
+              : seats > 1
                 ? "Shuffled every deck and drew seven"
                 : "Shuffled both decks and drew seven";
           set(() => ({ book: freshBook([{ turn: 0, text: dealt, kind: "deal" }]) }));
@@ -245,6 +279,17 @@ export function holdGame(picks: PlaytestPicks): HeldGame {
     start: () => {
       if (live) return;
       live = true;
+      if (lobby !== undefined && unlisten === null) {
+        unlisten = ipc.onPlaytestStep((pushed) => {
+          // Another game's step — one this held game replaced, or a step from before an end — is
+          // not this board's to draw.
+          if (!live || pushed.game !== game) return;
+          set(() => ({ error: null }));
+          // The replay of an earlier answer, if one is still playing, is logged whole first.
+          skip();
+          show(pushed.step);
+        });
+      }
       request(++generation);
     },
     live: () => live,
@@ -288,6 +333,8 @@ export function holdGame(picks: PlaytestPicks): HeldGame {
       });
     },
     newGame: () => {
+      // A lobby's table sat down to this game; the board offers no New game for it.
+      if (lobby !== undefined) return;
       const mine = ++generation;
       // The old game is put away by the deal itself: the host's slot is the new name's from the
       // moment `playtestStart` arrives.
@@ -301,6 +348,8 @@ export function holdGame(picks: PlaytestPicks): HeldGame {
       live = false;
       generation++;
       board?.cancel();
+      unlisten?.();
+      unlisten = null;
       // Not queued: an action the AI is still playing out ends with it, rather than first.
       void ipc.playtestEnd(game).catch(() => undefined);
     },

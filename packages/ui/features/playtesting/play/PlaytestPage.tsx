@@ -1,4 +1,5 @@
 import { useState, type JSX } from "react";
+import type { PlaytestPlayer } from "@/lib/ipc";
 import { BELOW_CAPTION } from "@/components/TitleBar";
 import { useEdition } from "@/lib/edition";
 import { LAYER } from "@/lib/layers";
@@ -6,7 +7,8 @@ import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { useTableSounds } from "../sound/useTableSounds";
 import { EndGameDialog } from "./EndGameDialog";
-import type { HeldGame } from "./heldGame";
+import { isGuestGame } from "./guestGame";
+import { isGoldfish, type HeldGame } from "./heldGame";
 import { PlaytestBoard } from "./PlaytestBoard";
 import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
 
@@ -37,6 +39,10 @@ import { usePlaytestGame, type PlaytestPicks } from "./usePlaytestGame";
  *
  * **The board's sounds are made here** (`../sound/useTableSounds`), from the game's beats and
  * the board's actions, for both ways onto it; the board draws only their mute button.
+ *
+ * **A lobby game (issue #1419) is shown here too** — the host's (`picks.lobby`) or a guest's
+ * (`./guestGame.ts`), each a held game of the Playtesting page's — and its way back leaves the
+ * lobby, so the question says so. Neither is dealt again, so there is no New game to ask about.
  */
 export function PlaytestPage({
   picks,
@@ -44,6 +50,8 @@ export function PlaytestPage({
   opponentNames,
   returnTo = "setup",
   held,
+  handOver,
+  notice,
   onBack,
 }: {
   picks: PlaytestPicks;
@@ -57,6 +65,10 @@ export function PlaytestPage({
   /** Where the board was opened from, which its way back returns to — `PlaytestBoard`'s own
    *  `returnTo`, passed on: the setup page (the default) or the deck editor. */
   returnTo?: "setup" | "deck";
+  /** A lobby game's way to let the AI play an offline guest's seat — `PlaytestBoard`'s own. */
+  handOver?: (player: PlaytestPlayer) => (() => void) | null;
+  /** A sentence about the lobby (it closed, the host dropped) — `PlaytestBoard`'s own. */
+  notice?: string | null;
   onBack: () => void;
 }): JSX.Element {
   const game = usePlaytestGame(picks, held);
@@ -84,7 +96,8 @@ export function PlaytestPage({
     onDismiss: game.replaying ? game.skip : back,
     enabled: !open,
   });
-  const goldfish = picks.opponents.length === 0;
+  const goldfish = isGoldfish(picks);
+  const lobby = held !== undefined && isGuestGame(held) ? "guest" : picks.lobby ? "host" : null;
 
   return (
     <>
@@ -111,20 +124,34 @@ export function PlaytestPage({
           onAct={act}
           onBack={back}
           onNewGame={newGame}
+          handOver={handOver}
+          notice={notice}
         />
       </div>
       <EndGameDialog
         open={open}
-        title={asking === "newGame" ? "Start a new game?" : "End this game?"}
-        confirmLabel={asking === "newGame" ? "New game" : "End game"}
+        title={
+          asking === "newGame"
+            ? "Start a new game?"
+            : lobby === "guest"
+              ? "Leave this game?"
+              : "End this game?"
+        }
+        confirmLabel={
+          asking === "newGame" ? "New game" : lobby === "guest" ? "Leave game" : "End game"
+        }
         onConfirm={confirm}
         onCancel={() => setOpen(false)}
       >
         {asking === "newGame"
           ? `This game is put away for good, and a new one is dealt from the same ${goldfish ? "deck" : "decks"}.`
-          : held === undefined
-            ? "This game is put away for good."
-            : "This game is put away for good. To come back to it later, go to another page instead: the game is kept until you end it."}
+          : lobby === "host"
+            ? "The game ends for everyone at the table, and the lobby closes."
+            : lobby === "guest"
+              ? "You leave the lobby and this game. The host can let the AI play your seat."
+              : held === undefined
+                ? "This game is put away for good."
+                : "This game is put away for good. To come back to it later, go to another page instead: the game is kept until you end it."}
       </EndGameDialog>
     </>
   );

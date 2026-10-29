@@ -10,7 +10,9 @@ import {
 } from "react";
 import {
   ArrowRight,
+  Bot,
   ChevronLeft,
+  Hourglass,
   LoaderCircle,
   Menu,
   SkipForward,
@@ -79,7 +81,7 @@ import {
   opponentHandWidth,
 } from "./OpponentZones";
 import { PlateFrame } from "./PlateFrame";
-import { OPPONENTS, playerPossessive, seatOfPlayer, tableCards } from "./players";
+import { OPPONENTS, playerName, playerPossessive, seatOfPlayer, tableCards } from "./players";
 import { pickableCards } from "./prompt";
 import { PickPanel } from "./PickPanel";
 import { PromptPanel } from "./PromptPanel";
@@ -146,6 +148,12 @@ import { RespondPrompt, respondingTo } from "./RespondPrompt";
  * **Every action can take seconds** — the AI plays its whole turn before the engine answers — so
  * while one is with the engine (`busy`) the stage button says so and nothing new is offered;
  * `PlaytestPage`'s hook queues anything sent anyway, in order.
+ *
+ * **A lobby game is the same board** (`view.lobby`, issue #1419) — the host's, or a guest's drawn
+ * from the step the host sends it — with the people at the table on the opponents' plates. It has
+ * no undo, no redo, no sandbox and no New game, so none is drawn; and while the game waits on
+ * another person (`waiting`, `view.deciding`) the board shows the game, settled, and says who it
+ * waits on — offering, on the host's board, to let the AI play a guest who has gone offline.
  */
 export interface PlaytestBoardProps {
   /** The reader's deck. */
@@ -169,6 +177,15 @@ export interface PlaytestBoardProps {
   /** The opponent's actions are being played back: the board is read-only, Skip ends it. */
   replaying?: boolean;
   onSkip?: () => void;
+  /**
+   * In a lobby game's `waiting` stage, the way to hand the seat being waited on to the AI — for a
+   * guest who has gone offline, on the host's board — or `null` for a seat that has none (a guest
+   * still there, an AI seat, the guest's own board). The board offers "Let the AI play …".
+   */
+  handOver?: (player: PlaytestPlayer) => (() => void) | null;
+  /** A sentence about the table rather than the game — the lobby closed, the host dropped —
+   *  shown under the top band until it is gone. */
+  notice?: string | null;
   /**
    * Where the board was opened from, which its way back returns to: the Playtesting page's setup
    * ("setup", the default) or the deck editor ("deck", the goldfish button). It names the back
@@ -283,6 +300,8 @@ export function PlaytestBoard({
   happened = NONE,
   replaying = false,
   onSkip,
+  handOver,
+  notice = null,
   returnTo = "setup",
 }: PlaytestBoardProps): JSX.Element {
   const [pointed, setPointed] = useState<{ pointed: Pointed; side: Side } | null>(null);
@@ -341,8 +360,22 @@ export function PlaytestBoard({
     [onAct, view],
   );
 
-  /** Nothing new is offered while the engine is busy or the opponent's turn is played back. */
-  const locked = busy || replaying;
+  /** The engine is busy, or the opponent's turn is played back: not even a setting is offered. */
+  const frozen = busy || replaying;
+  /**
+   * **A lobby game waits on another person** (issue #1419): the view is settled — not a replay —
+   * so it is drawn and pointed at as ever, but nothing is offered on it but the stops, which are
+   * the reader's own settings. Every table piece is handed {@link offer} rather than `onAct`, so a
+   * double-click or a drop does nothing rather than earn the engine's refusal.
+   */
+  const waiting = view?.stage === "waiting";
+  /** Nothing new is offered while the engine is busy, the opponent's turn is played back, or the
+   *  game waits on somebody else. */
+  const locked = frozen || waiting;
+  const offer = useMemo<(action: PlaytestAction) => void>(
+    () => (waiting ? () => {} : onAct),
+    [waiting, onAct],
+  );
   /** The sandbox is on — the setting, whatever the stage: the plates have steppers. */
   const sandboxOn = view?.sandbox ?? false;
   /**
@@ -367,10 +400,10 @@ export function PlaytestBoard({
         to === "battlefield" && view !== null && !locked ? retractDrop(view, picks, drag) : null;
       if (back !== null) setPicks(() => back);
       const action = dropAction(drag, to, edits);
-      if (action !== null) onAct(action);
+      if (action !== null) offer(action);
       setPointed(null);
     },
-    [onAct, edits, view, locked, picks, setPicks],
+    [offer, edits, view, locked, picks, setPicks],
   );
 
   // **A card carried onto a card or a player** (`aim.ts`): the declare steps' picks, or a play or
@@ -491,7 +524,13 @@ export function PlaytestBoard({
   // Undo and redo (issue #1022): not while the engine is busy; during a replay, `act` shows its
   // end first, as it does for any action. The catalogue's scope is where the board was opened
   // from: the deck editor's goldfish, or the Playtesting page.
-  useUndoKeys(returnTo === "deck" ? "goldfish" : "playtesting", view, act, !busy);
+  // A lobby game has neither (issue #1419): the host refuses them, so the keys are not offered.
+  useUndoKeys(
+    returnTo === "deck" ? "goldfish" : "playtesting",
+    view,
+    act,
+    !busy && !(view?.lobby ?? false),
+  );
 
   // **The board's keys**: Space presses the stage button (to combat, end the turn, declare), and
   // T, G, E, H tap, bury, exile or return to hand the reader's own card under the pointer — the
@@ -630,6 +669,14 @@ export function PlaytestBoard({
   /** The goldfish's life has reached 0 on this turn of the reader's; `null` while it is above. */
   const deadOn = goldfish ? (opponent?.deadOn ?? null) : null;
   const backLabel = returnTo === "deck" ? "Back to the deck" : "Back to setup";
+  /** Who a lobby game waits on, by their plate's name — a person's, or an AI seat's deck. */
+  const waitingOn =
+    view?.deciding == null
+      ? "the table"
+      : view.deciding === "you"
+        ? "you"
+        : (opponentNames[OPPONENTS.indexOf(view.deciding)] ??
+          playerName(view.deciding, opponentCount, "mid"));
 
   return (
     <div
@@ -697,7 +744,7 @@ export function PlaytestBoard({
               library: view.you.library,
               libraryLands: view.you.libraryCards.filter((c) => c.isLand).length,
             }}
-            onAct={onAct}
+            onAct={offer}
             onPoint={pointYou}
             onUnpoint={unpoint}
           />
@@ -725,7 +772,7 @@ export function PlaytestBoard({
                   aimable={aimable.includes(seat.player)}
                   onAim={() => setPicks((p) => aimAttacker(p, view, seat.player))}
                   onLife={(life) => act({ type: "setLife", seat: seat.player, life })}
-                  onAct={onAct}
+                  onAct={offer}
                   onDrop={drop}
                   onPoint={pointThem[seat.player]}
                   onPointEmblem={pointLoose}
@@ -742,7 +789,7 @@ export function PlaytestBoard({
                 emblems={view.opponents[0].emblems}
                 onPointEmblem={pointLoose}
                 sandbox={edits}
-                onAct={onAct}
+                onAct={offer}
                 onDrop={drop}
                 onPoint={pointOpponent}
                 onUnpoint={unpoint}
@@ -762,7 +809,7 @@ export function PlaytestBoard({
             picks={picks}
             status={status}
             failed={error !== null}
-            onStops={locked ? undefined : (stops) => act({ type: "setStops", stops })}
+            onStops={frozen ? undefined : (stops) => act({ type: "setStops", stops })}
             onSandbox={(on) => act({ type: "setSandbox", on })}
             className="absolute inset-x-[var(--table-x)] top-[calc(50%-46px)] h-7"
           />
@@ -773,7 +820,7 @@ export function PlaytestBoard({
               emblems={view.you.emblems}
               onPointEmblem={pointLoose}
               sandbox={edits}
-              onAct={onAct}
+              onAct={offer}
               onDrop={drop}
               onPoint={pointYou}
               onUnpoint={unpoint}
@@ -825,8 +872,9 @@ export function PlaytestBoard({
                       canRedo: view.canRedo && !busy,
                       sandbox: view.sandbox,
                     },
-              playing: playing && !locked,
+              playing: playing && !frozen,
               sandbox: edits,
+              lobby: view?.lobby ?? false,
               backLabel,
               playmat,
               commanderName: commander?.name ?? null,
@@ -982,7 +1030,7 @@ export function PlaytestBoard({
         <CommandZone
           view={you}
           sandbox={edits}
-          onAct={onAct}
+          onAct={offer}
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
@@ -1011,7 +1059,7 @@ export function PlaytestBoard({
         <LibraryZone
           view={you}
           sandbox={edits}
-          onAct={onAct}
+          onAct={offer}
           onDrop={drop}
           onLook={lookYou}
           size={zone}
@@ -1023,7 +1071,7 @@ export function PlaytestBoard({
         <HandFan
           cards={view.you.hand}
           sandbox={edits}
-          onAct={onAct}
+          onAct={offer}
           onDrop={drop}
           onPoint={pointYou}
           onUnpoint={unpoint}
@@ -1072,7 +1120,12 @@ export function PlaytestBoard({
           <span className="text-xs text-dim">
             {view.you.manaOpen} mana open · hand {view.you.hand.length}
           </span>
-          {busy ? (
+          {waiting && !busy ? (
+            <Waiting
+              name={waitingOn}
+              onHandOver={view.deciding === null ? null : (handOver?.(view.deciding) ?? null)}
+            />
+          ) : busy ? (
             <span
               role="status"
               className="inline-flex h-[58px] items-center gap-2.5 rounded-2xl border border-border bg-surface px-6 text-[15px] text-dim"
@@ -1168,9 +1221,22 @@ export function PlaytestBoard({
           out={view.you.out}
           turn={view.turn}
           backLabel={backLabel}
-          onNewGame={onNewGame}
+          // A lobby's table sat down to this game: a new one is a new lobby's (issue #1419).
+          onNewGame={view.lobby ? undefined : onNewGame}
           onBack={onBack}
         />
+      )}
+
+      {notice !== null && (
+        <p
+          role="status"
+          className={cn(
+            "absolute top-[52px] right-3 m-0 max-w-[320px] rounded-xl border border-mana-r/60 bg-surface px-3 py-2 text-xs text-text",
+            LAYER.raised,
+          )}
+        >
+          {notice}
+        </p>
       )}
 
       <BoardArrows root={root} arrows={arrows} />
@@ -1215,7 +1281,7 @@ export function PlaytestBoard({
 
       {panel === "help" && (
         <HelpPanel heading="Playing a game" onClose={() => setPanel(null)}>
-          <PlaytestHelp sandbox={sandboxOn} goldfish={goldfish} />
+          <PlaytestHelp sandbox={sandboxOn} goldfish={goldfish} lobby={view?.lobby ?? false} />
         </HelpPanel>
       )}
       {panel === "log" && <LogPanel log={log} onClose={() => setPanel(null)} />}
@@ -1227,7 +1293,7 @@ export function PlaytestBoard({
           readOnly={!edits}
           opponent={look.side !== "you"}
           owner={playerPossessive(look.side, opponentCount)}
-          onAct={onAct}
+          onAct={offer}
           onPoint={look.side === "you" ? pointYou : pointThem[look.side]}
           onUnpoint={unpoint}
           onClose={() => {
@@ -1293,6 +1359,46 @@ function StageButton({ label, onPress }: { label: string; onPress: () => void })
 }
 
 /**
+ * The foot's place for the stage button while a lobby game waits on another person (issue
+ * #1419): who it waits on, and — on the host's board, for a guest gone offline — the way to let
+ * the AI play their seat (`lobbyKick`), so a table is never stuck on somebody who left.
+ */
+function Waiting({
+  name,
+  onHandOver,
+}: {
+  name: string;
+  onHandOver: (() => void) | null;
+}): JSX.Element {
+  return (
+    <div className="flex flex-col items-end gap-2">
+      {onHandOver !== null && (
+        <button
+          type="button"
+          onClick={onHandOver}
+          className={cn(
+            "inline-flex h-9 items-center gap-2 rounded-full border border-border bg-surface px-4",
+            "text-[13px] text-text transition-colors motion-reduce:transition-none hover:border-accent",
+            PRESS,
+            FOCUS,
+          )}
+        >
+          <Bot className="size-4" aria-hidden="true" />
+          Let the AI play {name}
+        </button>
+      )}
+      <span
+        role="status"
+        className="inline-flex h-[58px] items-center gap-2.5 rounded-2xl border border-border bg-surface px-6 text-[15px] text-dim"
+      >
+        <Hourglass className="size-[18px]" aria-hidden="true" />
+        Waiting for {name}…
+      </span>
+    </div>
+  );
+}
+
+/**
  * The result, over the middle of the board — the tables stay drawn around it to be looked at.
  * **A reader who is out has lost**, though `winner` is `null` then (the others play on, unseen):
  * only a game that ended with no winner and the reader still in is a draw.
@@ -1311,7 +1417,8 @@ function GameOver({
   turn: number;
   /** "Back to setup", "Back to the deck". */
   backLabel: string;
-  onNewGame: () => void;
+  /** Absent in a lobby game, which is never dealt again. */
+  onNewGame?: () => void;
   onBack: () => void;
 }): JSX.Element {
   const title = winner === "you" ? "You won" : out || winner !== null ? "You lost" : "Draw";
@@ -1327,19 +1434,21 @@ function GameOver({
       <h2 className="m-0 font-heading text-3xl font-semibold">{title}</h2>
       <p className="m-0 text-sm text-dim">On turn {turn}</p>
       <div className="flex gap-2.5">
-        <button
-          type="button"
-          onClick={onNewGame}
-          className={cn(
-            "inline-flex h-10 items-center rounded-full border border-accent bg-surface px-5",
-            "text-[14px] font-semibold text-accent transition-colors motion-reduce:transition-none",
-            "hover:bg-accent hover:text-accent-fg",
-            PRESS,
-            FOCUS,
-          )}
-        >
-          New game
-        </button>
+        {onNewGame !== undefined && (
+          <button
+            type="button"
+            onClick={onNewGame}
+            className={cn(
+              "inline-flex h-10 items-center rounded-full border border-accent bg-surface px-5",
+              "text-[14px] font-semibold text-accent transition-colors motion-reduce:transition-none",
+              "hover:bg-accent hover:text-accent-fg",
+              PRESS,
+              FOCUS,
+            )}
+          >
+            New game
+          </button>
+        )}
         <button
           type="button"
           onClick={onBack}
@@ -1361,7 +1470,16 @@ function GameOver({
  * The help panel's lines: the rules' clicks, always, and the sandbox's handling said as it stands
  * — what it offers while on, how to turn it on while off.
  */
-function PlaytestHelp({ sandbox, goldfish }: { sandbox: boolean; goldfish: boolean }): JSX.Element {
+function PlaytestHelp({
+  sandbox,
+  goldfish,
+  lobby,
+}: {
+  sandbox: boolean;
+  goldfish: boolean;
+  /** A game with people at the table: no sandbox, no undo, and turns that wait on them. */
+  lobby: boolean;
+}): JSX.Element {
   return (
     <>
       <span>
@@ -1386,7 +1504,12 @@ function PlaytestHelp({ sandbox, goldfish }: { sandbox: boolean; goldfish: boole
         Click a land to tap it for mana: the mana waits in your pool for your next spell, until the
         step ends.
       </span>
-      {sandbox ? (
+      {lobby ? (
+        <span className="text-dim">
+          Other people at the table decide for their own seats: while one does, the board waits for
+          them. A game with people has no sandbox and no undo.
+        </span>
+      ) : sandbox ? (
         <>
           <span className="text-dim">
             The sandbox is on: in your main phase, drag any of your cards anywhere, click a
@@ -1408,9 +1531,11 @@ function PlaytestHelp({ sandbox, goldfish }: { sandbox: boolean; goldfish: boole
       <span className="text-dim">
         Press Space for the button at the bottom right: to combat, end the turn, attack or block.
       </span>
-      <span className="text-dim">
-        Press Ctrl+Z to undo back to your last decision and Ctrl+Y to redo, or use the game menu.
-      </span>
+      {!lobby && (
+        <span className="text-dim">
+          Press Ctrl+Z to undo back to your last decision and Ctrl+Y to redo, or use the game menu.
+        </span>
+      )}
     </>
   );
 }

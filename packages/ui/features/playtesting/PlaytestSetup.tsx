@@ -29,13 +29,41 @@ import {
 } from "@/features/decks/FolderTree";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
-import type { DeckFolder, DeckRow, DeckVariant, PlaytestDifficulty } from "@/lib/ipc";
+import { CodePlate } from "@/features/draft/lobby/LobbyParts";
+import { isLive, lobbyFor } from "@/features/draft/lobby/useLobby";
+import { InlineError } from "@/features/draft/setup/parts";
+import {
+  ipc,
+  ipcError,
+  type DeckFolder,
+  type DeckRow,
+  type DeckVariant,
+  type LobbyPeer,
+  type LobbyState,
+  type PlaytestDifficulty,
+} from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
+import {
+  FriendsDoor,
+  GuestRoomHeader,
+  GuestSeatRow,
+  LeaveLobby,
+  useSendDeck,
+} from "./lobby/GameLobby";
+import {
+  LOBBY_OPPONENTS,
+  lobbyGameSeats,
+  lobbyReadiness,
+  lobbySeats,
+  unseated,
+  type LobbyTable,
+  type SeatDeck,
+} from "./lobby/table";
 import { DEFAULT_DIFFICULTY, type PlaytestPicks } from "./play/usePlaytestGame";
 import {
   gapWords,
@@ -104,6 +132,15 @@ const NOTHING_PICKED: SetupPicks = {
  */
 const memory = viewMemory<SetupPicks>("playtesting.setup");
 
+/** A lobby host's table size, for the window's life — apart from the solo gamemode, so a game
+ *  with friends and one against the AI each open as the reader left them. */
+const tableMemory = viewMemory<LobbyTable>("playtesting.lobbyTable");
+
+/** The gamemodes a lobby's table can be: a game with people has no goldfish. */
+const LOBBY_TABLES = GAMEMODES.filter(
+  (m): m is (typeof GAMEMODES)[number] & { id: LobbyTable } => m.id !== "goldfish",
+);
+
 const NO_FOLDERS: readonly DeckFolder[] = [];
 
 /** The flat wall's heading — the Decks page's own words for every deck at once. */
@@ -160,8 +197,17 @@ function seatPlate(seat: number, opponents: number): string {
  * and on a seat a ✓ or that ⚠ — which opens the cards it means. A deck with such cards can still
  * be played; the reader is told, never stopped.
  *
+ * **With friends, over a lobby** (issue #1419): the aside's foot is a way into one — create (a
+ * supporter's) or join by code — and while a game's lobby is held, the aside is its room. The
+ * host's is this same table: the code to share, a duel or four players, the host's seat and any AI
+ * seat picked from the wall as ever, and each guest in the seat after the host's in the order they
+ * joined, with the deck they brought (`./lobby/table.ts` has the rules). A guest's is one seat —
+ * its own, picked from the wall and sent to the host on every pick — and the wait for the host's
+ * Start. A pod's lobby is Draft & Packs', and is only named here.
+ *
  * Presentational over the deck rows and folders, so the page's reads are the one read and the
- * tests and stories hand it rows; the engine's verdict on them is the one thing asked here.
+ * tests and stories hand it rows; the engine's verdict on them is the one thing asked here, and
+ * the lobby's commands the only other.
  */
 export function PlaytestSetup({
   decks,
@@ -169,6 +215,7 @@ export function PlaytestSetup({
   marks = NO_WALL_MARKS,
   sort = DEFAULT_DECK_SORT,
   loading = false,
+  lobby,
   onStart,
 }: {
   decks: readonly DeckRow[];
@@ -178,6 +225,11 @@ export function PlaytestSetup({
   /** The order the reader keeps the Decks page in, so the two walls agree. */
   sort?: DeckSort;
   loading?: boolean;
+  /**
+   * This app's lobby (the page's `useLobbyState`), `null` for none — or left out on a face with
+   * no lobbies to offer (a story or test of the solo table alone), which draws no way into one.
+   */
+  lobby?: LobbyState | null;
   onStart: (picks: PlaytestPicks) => void;
 }): JSX.Element {
   const [held, setHeld] = useState<SetupPicks>(() => memory.recall() ?? NOTHING_PICKED);
@@ -189,25 +241,70 @@ export function PlaytestSetup({
     });
   /** The seat the reader last pressed, or picked into — `null` until they do. */
   const [chosen, setChosen] = useState<number | null>(null);
+  const [table, setTableState] = useState<LobbyTable>(() => tableMemory.recall() ?? "duel");
+  const setTable = (next: LobbyTable) => {
+    tableMemory.keep(next);
+    setTableState(next);
+  };
+  const [lobbyError, setLobbyError] = useState<string | null>(null);
+
+  // **Whose table this is**: the reader's alone, or a game lobby's — as its host or a guest. A
+  // pod's lobby is not this page's (`lobbyFor`); a game's that closed leaves the solo table, with
+  // the reason over the way back in.
+  const gameLobby = lobby === undefined ? null : lobbyFor(lobby, "game");
+  const room = isLive(gameLobby) ? gameLobby : null;
+  const role: "solo" | "host" | "guest" = room === null ? "solo" : room.role;
+  const draftLobby = lobby != null && isLive(lobby) && lobby.kind === "draft" ? lobby : null;
+  const closed = gameLobby !== null && gameLobby.phase === "closed" ? gameLobby : null;
 
   const playable = useMemo(() => decks.filter((d) => !d.archived), [decks]);
   const byId = (id: number | null) => playable.find((d) => d.id === id);
-  const opponents = GAMEMODES.find((m) => m.id === held.mode)?.opponents ?? 1;
+  const opponents =
+    role === "host"
+      ? LOBBY_OPPONENTS[table]
+      : role === "guest"
+        ? 0
+        : (GAMEMODES.find((m) => m.id === held.mode)?.opponents ?? 1);
   const played = opponents + 1;
+  /** The host's opponent seats: the guests in join order, then the AI's. */
+  const tableSeats = room !== null && role === "host" ? lobbySeats(room.peers, opponents) : [];
+  /**
+   * **The seats the wall picks for**, by their place at the table: every seat of a solo game; the
+   * host's own and each AI seat at a lobby's (a guest brings their own deck); a guest's own alone.
+   */
+  const picking =
+    role === "host"
+      ? [0, ...tableSeats.flatMap((t) => (t.kind === "ai" ? [t.seat] : []))]
+      : Array.from({ length: played }, (_, i) => i);
   // A remembered deck since archived or deleted is no longer a pick.
   const seated = held.seats.slice(0, played).map((s) => byId(s.deckId));
-  const firstEmpty = seated.findIndex((d) => d === undefined);
+  const firstEmpty = picking.find((i) => seated[i] === undefined) ?? -1;
   const ready = firstEmpty === -1;
-  // The seat being picked for: the one the reader chose while the gamemode still plays it, else
+  // The seat being picked for: the one the reader chose while the table still plays it, else
   // the first empty seat, else the reader's own.
-  const active = chosen !== null && chosen < played ? chosen : Math.max(firstEmpty, 0);
-  const title = (seat: number) => seatTitle(seat, opponents);
+  const active = chosen !== null && picking.includes(chosen) ? chosen : Math.max(firstEmpty, 0);
+  const title = (seat: number) =>
+    role === "host" && seat > 0 ? `${seatTitle(seat, opponents)} · AI` : seatTitle(seat, opponents);
+  /** The deck an AI seat is dealt, in the list it is dealt from. */
+  const aiDeck = (seat: number): SeatDeck | undefined => {
+    const deck = seated[seat];
+    return deck === undefined
+      ? undefined
+      : { deck, variant: dealt(deck, held.seats[seat].variant) };
+  };
+  // A guest's deck goes to the host on every pick (`useSendDeck`), so the host's Start can deal.
+  const sent = useSendDeck(
+    room,
+    role === "guest" ? (seated[0]?.id ?? null) : null,
+    seated[0] === undefined ? "live" : dealt(seated[0], held.seats[0].variant),
+  );
 
   // The seats' decks first, in the lists they are dealt from; then every deck on the wall, in the
   // list it is first dealt from, for the marks on the tiles.
-  const asked: SupportAsk[] = seated.flatMap((d, i) =>
-    d === undefined ? [] : [{ deckId: d.id, variant: dealt(d, held.seats[i].variant) }],
-  );
+  const asked: SupportAsk[] = picking.flatMap((i) => {
+    const d = seated[i];
+    return d === undefined ? [] : [{ deckId: d.id, variant: dealt(d, held.seats[i].variant) }];
+  });
   const supportOf = usePlaytestSupport(
     asked,
     playable.map((d) => ({ deckId: d.id, variant: firstVariant(d) })),
@@ -221,10 +318,11 @@ export function PlaytestSetup({
       i === active ? { deckId: deck.id, variant: firstVariant(deck) } : s,
     );
     pick({ seats });
-    // The next seat still to fill, going on round the table from this one.
+    // The next seat still to fill, going on round the seats the wall picks for from this one.
     let next = active;
-    for (let step = 1; step < played; step++) {
-      const seat = (active + step) % played;
+    const at = picking.indexOf(active);
+    for (let step = 1; step < picking.length; step++) {
+      const seat = picking[(at + step) % picking.length];
       if (byId(seats[seat].deckId) === undefined) {
         next = seat;
         break;
@@ -249,9 +347,32 @@ export function PlaytestSetup({
     );
   };
 
+  /** The host's Start at a lobby's table: every seat's deck, the guests' sent ones included. */
+  const readiness =
+    room !== null && role === "host"
+      ? lobbyReadiness({ lobby: room, table, yours: seated[0], aiDeck })
+      : null;
+  const startLobby = () => {
+    const yours = seated[0];
+    if (readiness === null || !readiness.ready || yours === undefined) return;
+    const dealing = lobbyGameSeats(tableSeats, aiDeck);
+    if (dealing === null) return;
+    onStart({
+      deckId: yours.id,
+      variant: dealt(yours, held.seats[0].variant),
+      opponents: [],
+      difficulty: held.difficulty,
+      lobby: dealing,
+    });
+  };
+  const kick = (peer: LobbyPeer) => {
+    setLobbyError(null);
+    ipc.lobbyKick(peer.peer).catch((e: unknown) => setLobbyError(ipcError(e)));
+  };
+
   /** What sits on a tile's art: the plates of the seats it is in, and the engine's ⚠. */
   const cornerFor = (deck: DeckRow): ReactNode => {
-    const seats = seated.flatMap((d, i) => (d?.id === deck.id ? [i] : []));
+    const seats = picking.filter((i) => seated[i]?.id === deck.id);
     const state = supportOf(deck.id, firstVariant(deck));
     const partly = state.state === "known" ? state.support.unsupported.length : 0;
     if (seats.length === 0 && partly === 0) return undefined;
@@ -296,6 +417,146 @@ export function PlaytestSetup({
 
   const mirror = ready && opponents === 1 && seated[0]?.id === seated[1]?.id;
 
+  /** One of the seats the wall picks for, as its row. */
+  const seatRow = (seat: number) => {
+    const deck = seated[seat];
+    return (
+      <SeatRow
+        // A seat is its place at the table, which never moves.
+        key={seat}
+        title={title(seat)}
+        deck={deck}
+        variant={held.seats[seat].variant}
+        active={seat === active}
+        state={
+          deck === undefined ? undefined : supportOf(deck.id, dealt(deck, held.seats[seat].variant))
+        }
+        onActivate={() => setChosen(seat)}
+        onVariant={(variant) => setSeat(seat, { ...held.seats[seat], variant })}
+        onClear={() => {
+          setSeat(seat, EMPTY_SEAT);
+          setChosen(seat);
+        }}
+      />
+    );
+  };
+
+  const solo = (
+    <>
+      <Gamemodes mode={held.mode} onMode={(mode) => pick({ mode })} />
+
+      <div className="flex flex-col gap-2.5">
+        <h3 className={LABEL}>Seats</h3>
+        <ol aria-label="Seats" className="m-0 flex list-none flex-col gap-2 p-0">
+          {picking.map(seatRow)}
+          {opponents === 0 && <GoldfishSeat />}
+        </ol>
+      </div>
+
+      {opponents > 0 && (
+        <Segmented
+          label="AI skill"
+          options={DIFFICULTIES}
+          value={held.difficulty}
+          onPick={(difficulty) => pick({ difficulty })}
+        />
+      )}
+
+      <div className="mt-auto flex flex-col gap-2 pt-2">
+        <StartButton ready={ready} onPress={start} />
+        <p className="m-0 min-h-4 text-center text-xs text-dim">
+          {!ready
+            ? firstEmpty === 0
+              ? "Pick your deck to start."
+              : `Pick a deck for ${title(firstEmpty)} to start.`
+            : mirror
+              ? "A mirror match."
+              : null}
+        </p>
+      </div>
+      {lobby !== undefined && <FriendsDoor closed={closed} draft={draftLobby} />}
+    </>
+  );
+
+  const host = room !== null && role === "host" && (
+    <>
+      <CodePlate code={room.code} compact />
+      <Gamemodes
+        label="Table"
+        modes={LOBBY_TABLES}
+        mode={table}
+        onMode={(mode) => {
+          if (mode !== "goldfish") setTable(mode);
+        }}
+      />
+
+      <div className="flex flex-col gap-2.5">
+        <h3 className={LABEL}>Seats</h3>
+        <ol aria-label="Seats" className="m-0 flex list-none flex-col gap-2 p-0">
+          {seatRow(0)}
+          {tableSeats.map((t, i) =>
+            t.kind === "guest" ? (
+              <GuestSeatRow
+                key={`guest:${t.peer.peer}`}
+                title={seatTitle(i + 1, opponents)}
+                peer={t.peer}
+                onKick={kick}
+              />
+            ) : (
+              seatRow(t.seat)
+            ),
+          )}
+          {unseated(room.peers, opponents).map((peer) => (
+            <GuestSeatRow key={`guest:${peer.peer}`} title="No seat" peer={peer} onKick={kick} />
+          ))}
+        </ol>
+      </div>
+
+      {tableSeats.some((t) => t.kind === "ai") && (
+        <Segmented
+          label="AI skill"
+          options={DIFFICULTIES}
+          value={held.difficulty}
+          onPick={(difficulty) => pick({ difficulty })}
+        />
+      )}
+
+      <div className="mt-auto flex flex-col gap-2 pt-2">
+        <StartButton ready={readiness?.ready ?? false} onPress={startLobby} />
+        <InlineError message={lobbyError} />
+        <p className="m-0 min-h-4 text-center text-xs text-dim">{readiness?.hint ?? null}</p>
+        <LeaveLobby host className="items-center" />
+      </div>
+    </>
+  );
+
+  const guest = room !== null && role === "guest" && (
+    <>
+      <GuestRoomHeader lobby={room} />
+      <div className="flex flex-col gap-2.5">
+        <h3 className={LABEL}>Your seat</h3>
+        <ol aria-label="Seats" className="m-0 flex list-none flex-col gap-2 p-0">
+          {seatRow(0)}
+        </ol>
+        {room.phase === "open" && (
+          <p role="status" className="m-0 text-xs text-dim">
+            {seated[0] === undefined
+              ? "Pick the deck you bring to the table."
+              : sent.sending
+                ? `Sending your deck to ${room.hostName}…`
+                : sent.name !== null
+                  ? `${room.hostName} has your deck: ${sent.name}.`
+                  : null}
+          </p>
+        )}
+        <InlineError message={sent.error} />
+      </div>
+      <div className="mt-auto flex flex-col gap-2 pt-2">
+        <LeaveLobby host={false} className="items-center" />
+      </div>
+    </>
+  );
+
   return (
     <section className="flex h-full min-h-0 flex-col">
       <h2 className="sr-only">Playtesting</h2>
@@ -310,79 +571,11 @@ export function PlaytestSetup({
         onPick={seatDeck}
         beside={
           <aside
-            aria-label="Game setup"
+            aria-label={role === "solo" ? "Game setup" : "Game lobby"}
             // `pt-3`: the page bar's rule is the edge above it, 12px off as under the wall.
             className="flex w-[26rem] shrink-0 flex-col gap-6 overflow-y-auto border-l border-border bg-surface/45 px-6 pb-6 pt-3"
           >
-            <Gamemodes mode={held.mode} onMode={(mode) => pick({ mode })} />
-
-            <div className="flex flex-col gap-2.5">
-              <h3 className={LABEL}>Seats</h3>
-              <ol aria-label="Seats" className="m-0 flex list-none flex-col gap-2 p-0">
-                {seated.map((deck, seat) => (
-                  <SeatRow
-                    // A seat is its place at the table, which never moves.
-                    key={seat}
-                    title={title(seat)}
-                    deck={deck}
-                    variant={held.seats[seat].variant}
-                    active={seat === active}
-                    state={
-                      deck === undefined
-                        ? undefined
-                        : supportOf(deck.id, dealt(deck, held.seats[seat].variant))
-                    }
-                    onActivate={() => setChosen(seat)}
-                    onVariant={(variant) => setSeat(seat, { ...held.seats[seat], variant })}
-                    onClear={() => {
-                      setSeat(seat, EMPTY_SEAT);
-                      setChosen(seat);
-                    }}
-                  />
-                ))}
-                {opponents === 0 && <GoldfishSeat />}
-              </ol>
-            </div>
-
-            {opponents > 0 && (
-              <Segmented
-                label="AI skill"
-                options={DIFFICULTIES}
-                value={held.difficulty}
-                onPick={(difficulty) => pick({ difficulty })}
-              />
-            )}
-
-            <div className="mt-auto flex flex-col gap-2 pt-2">
-              <button
-                type="button"
-                // `aria-disabled`, never the attribute: a `disabled` button leaves the tab
-                // order, and this one ungreys as the reader seats decks.
-                aria-disabled={!ready}
-                onClick={start}
-                className={cn(
-                  "inline-flex h-12 items-center justify-center gap-2.5 rounded-full border",
-                  "text-[15px] font-semibold transition-colors motion-reduce:transition-none",
-                  PRESS,
-                  FOCUS,
-                  ready
-                    ? "border-accent bg-accent text-accent-fg hover:bg-accent/90"
-                    : "cursor-default border-border bg-surface text-dim active:scale-100",
-                )}
-              >
-                <Play className="size-4 fill-current" aria-hidden="true" />
-                Start game
-              </button>
-              <p className="m-0 min-h-4 text-center text-xs text-dim">
-                {!ready
-                  ? firstEmpty === 0
-                    ? "Pick your deck to start."
-                    : `Pick a deck for ${title(firstEmpty)} to start.`
-                  : mirror
-                    ? "A mirror match."
-                    : null}
-              </p>
-            </div>
+            {host || guest || solo}
           </aside>
         }
       />
@@ -391,6 +584,33 @@ export function PlaytestSetup({
 }
 
 const LABEL = "m-0 text-[0.6875rem] font-normal tracking-[0.08em] text-dim uppercase";
+
+/** The table's Start game: lit once it would deal, a solo game's or a lobby host's. */
+function StartButton({ ready, onPress }: { ready: boolean; onPress: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      // `aria-disabled`, never the attribute: a `disabled` button leaves the tab order, and this
+      // one ungreys as the reader seats decks.
+      aria-disabled={!ready}
+      onClick={() => {
+        if (ready) onPress();
+      }}
+      className={cn(
+        "inline-flex h-12 items-center justify-center gap-2.5 rounded-full border",
+        "text-[15px] font-semibold transition-colors motion-reduce:transition-none",
+        PRESS,
+        FOCUS,
+        ready
+          ? "border-accent bg-accent text-accent-fg hover:bg-accent/90"
+          : "cursor-default border-border bg-surface text-dim active:scale-100",
+      )}
+    >
+      <Play className="size-4 fill-current" aria-hidden="true" />
+      Start game
+    </button>
+  );
+}
 
 /** A seat's plate on a tile's art: the seat's word in accent, the app's mark for a pick. */
 const SEAT_PLATE = cn(
@@ -626,18 +846,28 @@ function DeckWall({
 function Gamemodes({
   mode,
   onMode,
+  label = "Gamemode",
+  modes = GAMEMODES,
 }: {
   mode: Gamemode;
   onMode: (mode: Gamemode) => void;
+  /** The heading: "Gamemode", or a lobby's "Table". */
+  label?: string;
+  /** The tiles drawn: every gamemode, or a lobby's two (no goldfish). */
+  modes?: readonly (typeof GAMEMODES)[number][];
 }): JSX.Element {
   const id = useId();
   return (
     <div className="flex flex-col gap-2.5">
       <h3 id={id} className={LABEL}>
-        Gamemode
+        {label}
       </h3>
-      <div role="group" aria-labelledby={id} className="grid grid-cols-3 gap-2">
-        {GAMEMODES.map((m) => {
+      <div
+        role="group"
+        aria-labelledby={id}
+        className={cn("grid gap-2", modes.length === 3 ? "grid-cols-3" : "grid-cols-2")}
+      >
+        {modes.map((m) => {
           const pressed = m.id === mode;
           return (
             <button

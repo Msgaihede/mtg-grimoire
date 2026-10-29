@@ -171,6 +171,8 @@ export function turnFive(): TurnFive {
     commanderDamageLethal: null,
     canUndo: false,
     canRedo: false,
+    lobby: false,
+    deciding: null,
   };
   return { view, goyf, elves, delver, ragavan, reckoner, jace };
 }
@@ -515,6 +517,18 @@ export function gameOver(): TurnFive {
       opponents: [{ ...t.view.opponents[0], life: 0 }],
       winner: "you",
     },
+  };
+}
+
+/**
+ * A lobby game (issue #1419) on the opponent's turn 5: the opponent is a person, and the game
+ * waits on them to decide — the board settled, nothing offered but the stops.
+ */
+export function lobbyWaiting(): TurnFive {
+  const t = turnFive();
+  return {
+    ...t,
+    view: { ...t.view, stage: "waiting", active: "opponent", lobby: true, deciding: "opponent" },
   };
 }
 

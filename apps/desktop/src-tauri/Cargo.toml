@@ -23,6 +23,9 @@ tauri-build = { version = "2", features = [] }
 # **`unicode-normalization` is `grimoire-core`'s since 2026-10-02** — `schema::label_name_key` is the
 # one function that names it, and the comment that argues it moved to that manifest with it.
 flate2 = "1"
+# A lobby game's step to a guest (`playtest::lobby::pack`): gzipped, then base64 to ride in the
+# relay's JSON text frame. The core's own version and features, so `Cargo.lock` gains no copy.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # **Reading** one entry — `mtg-grimoire.exe` — out of the portable release archive, which is
 # `update`'s.
 #
