@@ -199,8 +199,9 @@ Directs the executor to include this field or fragment only when the `if` argume
 directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 """
 The roots of the page's query cache a root field's answer is stale under — the first segment
-of the key the app's own reader of the same command uses. `useGraphQL` reads them off this
-schema's printout to know which invalidations re-ask a document.
+of the key the app's own reader of the same command uses. [`Graph::run`] returns the union a
+document reads in `extensions.invalidatedBy`, which is how `useGraphQL` knows which
+invalidations re-ask it.
 """
 directive @invalidatedBy(roots: [String!]!) on FIELD_DEFINITION
 """

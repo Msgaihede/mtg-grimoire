@@ -222,3 +222,64 @@ fn root_fields_are_nullable() {
     assert!(sdl.contains("\tcollectionSummary("), "{sdl}");
     assert!(sdl.contains("): CollectionSummary @invalidatedBy"), "{sdl}");
 }
+
+/// The answer carries the document's cache roots, so the page needs no parser of its own to
+/// know which invalidations re-ask it — through fragments, once each, sorted.
+#[test]
+fn an_answer_carries_the_roots_its_document_reads() {
+    let state = state("graph-roots");
+    let response = Graph::new().run(
+        &state,
+        "query Board { ...F collectionFolders { id } } fragment F on Query { decks { id } deckValues { deckId } }",
+        None,
+        None,
+        None,
+    );
+    assert!(response.errors.is_empty(), "{:?}", response.errors);
+    let roots = serde_json::to_value(&response.extensions["invalidatedBy"]).unwrap();
+    assert_eq!(roots, json!(["collection", "decks"]));
+    // Introspection reads nothing a write can change.
+    assert!(Graph::new().roots_of("{ __typename }", None).is_empty());
+}
+
+/// A structured filter is read by the core's own `Deserialize` — the same JSON the Search page
+/// sends — so a group's `terms`, an operator and a finish mean what they mean there.
+#[test]
+fn a_filter_input_is_the_core_s_card_filters() {
+    use crate::filters::{
+        CardFilterInput, PredicateField, PredicateInput, PredicateOp, TagTermsInput,
+    };
+    let input = CardFilterInput {
+        colors: Some("UR".into()),
+        colors_strict: Some(true),
+        printed_finishes: Some(vec![crate::enums::Finish::Etched]),
+        oracle_tags: Some(TagTermsInput {
+            include: vec!["ramp".into()],
+            exclude: vec![],
+        }),
+        predicates: Some(vec![PredicateInput {
+            field: PredicateField::AnyOf,
+            op: PredicateOp::Colon,
+            value: String::new(),
+            negated: true,
+            terms: vec![PredicateInput {
+                field: PredicateField::TypeLine,
+                op: PredicateOp::Gte,
+                value: "goblin".into(),
+                negated: false,
+                terms: vec![],
+            }],
+        }]),
+        ..CardFilterInput::default()
+    };
+    let core = input.into_core().unwrap();
+    assert_eq!(core.colors.as_deref(), Some("UR"));
+    assert_eq!(core.colors_strict, Some(true));
+    assert_eq!(core.printed_finishes, Some(vec!["etched".to_owned()]));
+    assert_eq!(core.oracle_tags.unwrap().include, vec!["ramp".to_owned()]);
+    let group = &core.predicates.unwrap()[0];
+    assert!(group.negated);
+    assert_eq!(group.terms.len(), 1);
+    assert_eq!(format!("{:?}", group.terms[0].field), "TypeLine");
+    assert_eq!(format!("{:?}", group.terms[0].op), "Gte");
+}

@@ -14,15 +14,32 @@
 //! already on a thread that may block (the blocking pool, a test), and a read in this app
 //! never runs on an async worker.
 //!
-//! **This is the spike** (2026-10-29): the decks and the collection, ported from the
-//! page's graph in `packages/ui/lib/graphql/`, which stays the full graph until the rest is
-//! moved. Every type and field here is spelt as it is there — `packages/ui/lib/graphql/
-//! parity.test.ts` holds this schema's printout (`schema.graphql` beside this file) to it.
+//! **One module per domain**, named after the `ipc` file whose reads it answers (`decks`,
+//! `collection`, `wishlist`, `entry_tags`, `home`, `app`, `prefs`, `scanner`, `cards`, `tags`).
+//! Each owns its root fields (a `…Query` struct merged into [`Query`]), its object types and its
+//! batch loaders, which it puts on a request through its own `data` function — so a domain is
+//! changed in its own file and nowhere else. Shared words are [`enums`]; a card search is
+//! [`filters::CardFilterInput`].
+//!
+//! **Every root field is nullable** (`Result<Option<T>>`), so a refusal nulls that field alone
+//! and the rest of a widget's document stands; below the root, nullability is the core's shape.
+//! **Every root field carries `@invalidatedBy(roots: [...])`**: the query-cache roots the page
+//! re-asks it under, returned with each answer ([`Graph::run`]'s `extensions.invalidatedBy`).
 
+mod app;
+mod cards;
 mod collection;
 mod decks;
+mod entry_tags;
+pub mod enums;
+pub mod filters;
+mod home;
 mod loaders;
+mod prefs;
+mod scanner;
+mod tags;
 mod validate;
+mod wishlist;
 
 #[cfg(test)]
 mod tests;
@@ -38,8 +55,9 @@ use grimoire_core::state::State;
 pub use validate::{Problem, MAX_DEPTH};
 
 /// The roots of the page's query cache a root field's answer is stale under — the first segment
-/// of the key the app's own reader of the same command uses. `useGraphQL` reads them off this
-/// schema's printout to know which invalidations re-ask a document.
+/// of the key the app's own reader of the same command uses. [`Graph::run`] returns the union a
+/// document reads in `extensions.invalidatedBy`, which is how `useGraphQL` knows which
+/// invalidations re-ask it.
 #[TypeDirective(location = "FieldDefinition")]
 pub(crate) fn invalidatedBy(roots: Vec<String>) {}
 
@@ -102,7 +120,18 @@ pub(crate) fn read<T>(
 }
 
 #[derive(MergedObject, Default)]
-pub struct Query(decks::DecksQuery, collection::CollectionQuery);
+pub struct Query(
+    app::AppQuery,
+    cards::CardsQuery,
+    collection::CollectionQuery,
+    decks::DecksQuery,
+    entry_tags::EntryTagsQuery,
+    home::HomeQuery,
+    prefs::PrefsQuery,
+    scanner::ScannerQuery,
+    tags::TagsQuery,
+    wishlist::WishlistQuery,
+);
 
 pub type GraphSchema = Schema<Query, EmptyMutation, EmptySubscription>;
 
@@ -141,11 +170,18 @@ impl Graph {
         validate::validate(&self.checked, query)
     }
 
+    /// The query-cache roots a document's root fields are stale under — the union of their
+    /// `@invalidatedBy` roots, sorted. Empty for a document that names no root field it knows.
+    pub fn roots_of(&self, query: &str, operation_name: Option<&str>) -> Vec<String> {
+        validate::roots_of(&self.checked, query, operation_name)
+    }
+
     /// Execute one read against `state`'s read connection. `marketplace` is what a priced field
     /// with no `marketplace` argument answers at; `None` reads the reader's stored choice.
     ///
     /// Never fails as a call: a syntax, validation or resolver error is an entry in the
-    /// response's `errors`, beside whatever `data` the rest of the document answered.
+    /// response's `errors`, beside whatever `data` the rest of the document answered. The
+    /// document's cache roots ([`Graph::roots_of`]) ride in `extensions.invalidatedBy`.
     pub fn run(
         &self,
         state: &Arc<State>,
@@ -158,16 +194,39 @@ impl Graph {
             .unwrap_or_else(|| grimoire_core::marketplace::stored(&state.lock_db_read()));
         let mut request = Request::new(query)
             .data(state.clone())
-            .data(Defaults { marketplace })
-            .data(loaders::deck_notes(state))
-            .data(loaders::deck_values(state));
+            .data(Defaults { marketplace });
+        for data in [
+            app::data,
+            cards::data,
+            collection::data,
+            decks::data,
+            entry_tags::data,
+            home::data,
+            prefs::data,
+            scanner::data,
+            tags::data,
+            wishlist::data,
+        ] {
+            request = data(request, state);
+        }
         if let Some(variables) = variables {
             request = request.variables(Variables::from_json(variables));
         }
         if let Some(name) = operation_name {
             request = request.operation_name(name);
         }
-        futures_executor::block_on(self.schema.execute(request))
+        let mut response = futures_executor::block_on(self.schema.execute(request));
+        let roots = self.roots_of(query, operation_name);
+        response.extensions.insert(
+            "invalidatedBy".to_owned(),
+            async_graphql::Value::List(
+                roots
+                    .into_iter()
+                    .map(async_graphql::Value::String)
+                    .collect(),
+            ),
+        );
+        response
     }
 }
 

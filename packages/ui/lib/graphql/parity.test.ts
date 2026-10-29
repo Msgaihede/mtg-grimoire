@@ -22,6 +22,11 @@ import { schema as page } from "./schema";
  * field or argument missing there is the port's progress; one that exists there and differs, or
  * exists only there, is a bug in one of them.
  *
+ * **One argument differs on purpose**: a card search. The page's graph took `query: String` in
+ * Scryfall's syntax, which only TypeScript parses; the Rust graph takes `filters: CardFilterInput`,
+ * the core's own `CardFilters` structured (the owner's decision, 2026-10-29). {@link RENAMED_ARGS}
+ * is that exception and nothing else.
+ *
  * The Rust printout is `crates/grimoire-graph/schema.graphql`, held to the crate's code by its own
  * golden test (`the_printed_schema_is_the_reviewed_one`). Descriptions are not compared — each
  * side words its own.
@@ -35,6 +40,9 @@ const RUST_SDL = Object.values(
 )[0];
 
 const rust = buildSchema(RUST_SDL);
+
+/** A Rust argument → the page argument it replaces, compared by presence only. */
+const RENAMED_ARGS: Readonly<Record<string, string>> = { filters: "query" };
 
 const BUILT_IN = new Set(["String", "Int", "Float", "Boolean", "ID"]);
 const rustTypes = Object.values(rust.getTypeMap()).filter(
@@ -92,12 +100,21 @@ describe("the Rust graph against the page's", () => {
       return Object.values(t.getFields()).flatMap((f) => {
         const mine = fields[f.name];
         if (!mine) return [`${t.name}.${f.name}: only in Rust`];
-        const argNames = new Set(f.args.map((a) => a.name));
+        const renamed = f.args.filter((a) => a.name in RENAMED_ARGS);
+        const unmatched = renamed.filter(
+          (a) => !mine.args.some((m) => m.name === RENAMED_ARGS[a.name]),
+        );
+        if (unmatched.length > 0) {
+          return [`${t.name}.${f.name}: ${unmatched[0].name} replaces no page argument`];
+        }
+        const argNames = new Set(
+          f.args.filter((a) => !(a.name in RENAMED_ARGS)).map((a) => a.name),
+        );
         const missing = [...argNames].filter((n) => !mine.args.some((a) => a.name === n));
         if (missing.length > 0)
           return [`${t.name}.${f.name}: arguments only in Rust: ${missing.join(", ")}`];
         const ours = signature(mine, argNames);
-        const theirs = signature(f);
+        const theirs = signature(f, argNames);
         return ours === theirs ? [] : [`${t.name}: Rust ${theirs} — page ${ours}`];
       });
     });

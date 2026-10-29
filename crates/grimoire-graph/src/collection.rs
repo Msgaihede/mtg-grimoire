@@ -83,6 +83,14 @@ impl CollectionFolder {
     }
 }
 
+/// This domain's batch loaders, for one execution — none yet.
+pub(crate) fn data(
+    request: async_graphql::Request,
+    _state: &std::sync::Arc<grimoire_core::state::State>,
+) -> async_graphql::Request {
+    request
+}
+
 #[derive(Default)]
 pub struct CollectionQuery;
 

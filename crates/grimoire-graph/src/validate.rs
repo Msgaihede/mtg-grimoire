@@ -113,3 +113,62 @@ fn depth_of<'a>(
     }
     deepest + 1
 }
+
+/// The `@invalidatedBy` roots of every root field `query`'s operation selects, through
+/// fragments, sorted and once each. Read off a partial parse, so a document with an error
+/// elsewhere still names the roots of the fields it does have.
+pub(crate) fn roots_of(
+    schema: &Valid<Schema>,
+    query: &str,
+    operation: Option<&str>,
+) -> Vec<String> {
+    let doc = match ExecutableDocument::parse(schema, query, "query.graphql") {
+        Ok(doc) => doc,
+        Err(with) => with.partial,
+    };
+    let Ok(op) = doc.operations.get(operation) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    root_fields(&doc, &op.selection_set, &mut HashSet::new(), &mut names);
+    let mut roots: Vec<String> = names
+        .iter()
+        .filter_map(|name| schema.type_field("Query", name).ok())
+        .filter_map(|field| field.directives.get("invalidatedBy").cloned())
+        .filter_map(|d| d.specified_argument_by_name("roots").cloned())
+        .flat_map(|list| {
+            list.as_list()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_else(Vec::new)
+        })
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn root_fields<'a>(
+    doc: &'a ExecutableDocument,
+    set: &'a SelectionSet,
+    seen: &mut HashSet<&'a str>,
+    out: &mut Vec<&'a str>,
+) {
+    for sel in &set.selections {
+        match sel {
+            Selection::Field(f) => out.push(f.name.as_str()),
+            Selection::InlineFragment(i) => root_fields(doc, &i.selection_set, seen, out),
+            Selection::FragmentSpread(s) => {
+                if seen.insert(s.fragment_name.as_str()) {
+                    if let Some(frag) = doc.fragments.get(&s.fragment_name) {
+                        root_fields(doc, &frag.selection_set, seen, out);
+                    }
+                }
+            }
+        }
+    }
+}

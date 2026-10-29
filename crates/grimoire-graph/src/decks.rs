@@ -172,6 +172,16 @@ impl DeckNoteCard {
     }
 }
 
+/// This domain's batch loaders, for one execution.
+pub(crate) fn data(
+    request: async_graphql::Request,
+    state: &std::sync::Arc<grimoire_core::state::State>,
+) -> async_graphql::Request {
+    request
+        .data(crate::loaders::deck_notes(state))
+        .data(crate::loaders::deck_values(state))
+}
+
 #[derive(Default)]
 pub struct DecksQuery;
 
