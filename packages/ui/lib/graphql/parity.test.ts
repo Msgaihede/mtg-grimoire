@@ -6,11 +6,12 @@ import {
   isScalarType,
   Kind,
   print,
+  printSchema,
   type GraphQLField,
   type GraphQLNamedType,
 } from "graphql";
 import { ROOTS } from "./builder";
-import { schema as page } from "./schema";
+import { schema as built } from "./schema";
 
 /**
  * **The Rust graph is the page's graph, field for field, for everything it has ported.**
@@ -40,6 +41,15 @@ const RUST_SDL = Object.values(
 )[0];
 
 const rust = buildSchema(RUST_SDL);
+
+/**
+ * The page's graph **read back from its own printout**, not the object Pothos built: a schema
+ * built in code has no syntax nodes, so every argument's default would read as absent and any
+ * Rust default would fail to match it. Printed and re-read, both sides carry their defaults the
+ * same way. The cache roots are not in the printout — they are Pothos extensions — so they are
+ * read off `built`.
+ */
+const page = buildSchema(printSchema(built));
 
 /** A Rust argument → the page argument it replaces, compared by presence only. */
 const RENAMED_ARGS: Readonly<Record<string, string>> = { filters: "query" };
@@ -141,7 +151,7 @@ describe("the Rust graph against the page's", () => {
   });
 
   it("re-asks every ported root field under the same cache roots", () => {
-    const pageFields = page.getQueryType()?.getFields() ?? {};
+    const pageFields = built.getQueryType()?.getFields() ?? {};
     const wrong = Object.values(rust.getQueryType()?.getFields() ?? {}).flatMap((f) => {
       const ours = [
         ...((pageFields[f.name]?.extensions[ROOTS] as string[] | undefined) ?? []),
