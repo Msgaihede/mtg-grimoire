@@ -924,9 +924,8 @@ impl Ctx {
                 self.with(|live| live.decks.insert(from, *deck));
             }
             Act::Play { from, action } => {
-                let Some(seats) = self.game() else {
-                    return None;
-                };
+                // No game: nothing to play, and the connection goes on.
+                let seats = self.game()?;
                 let Some(seat) = seats.seat_of(&from) else {
                     self.send_body(&from, &refused_body(NOT_SEATED));
                     return None;

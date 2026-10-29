@@ -341,7 +341,10 @@ impl Eyes {
         PlayerId((self.you.0 + seat.index()) % self.players)
     }
 
-    /// Whether a card is face down and someone else's: its face is not this seat's to see.
+    /// Whether a card's face is hidden from this seat: someone else's face-down card — a morph or
+    /// a manifest on the battlefield, a face-down spell, a hideaway or foretold card in exile. A
+    /// seat looks at its own (CR 708.5) and at nobody else's. Where a card it may not see is
+    /// described — the log, the table, the stack, a prompt — it has no name and no printing.
     pub(super) fn concealed(self, o: &engine::game::GameObject) -> bool {
         o.face_down && o.owner != self.you && o.controller != self.you
     }
@@ -3748,11 +3751,6 @@ fn names_source(action: &GameAction, id: ObjectId) -> bool {
     .iter()
     .any(|key| data.get(*key).and_then(Value::as_u64) == Some(id.0))
 }
-
-/// Whether a card's face is hidden from the reader: an opponent's face-down card — a morph or a
-/// manifest on the battlefield, a face-down spell, a hideaway or foretold card in exile. The
-/// reader looks at their own (CR 708.5) and at nobody else's. Where a card the reader may not
-/// see is described — the log, the table, the stack, a prompt — it has no name and no printing.
 
 /// What a run of the engine's events comes to, as the log's facts. `state` is the game after
 /// them, which names the objects they point at. An opponent's draws are told without the card,
