@@ -14,6 +14,7 @@ import {
   MIN_DECK_SIZE,
   readCubeList,
   SEALED_PACKS,
+  soloSeats,
   TABLE_SEATS,
 } from "./deal";
 import { AddPackWall, PackOrder } from "./PackOrder";
@@ -129,7 +130,16 @@ export function SetupScreen({
   const start = async () => {
     setMissing(null);
     if (mode !== "cube") {
-      await begin(() => dealSets({ mode, rounds: chosen, difficulty: held.difficulty }));
+      await begin(() =>
+        dealSets({
+          mode,
+          rounds: chosen,
+          difficulty: held.difficulty,
+          // Sealed passes nothing, so it is dealt to the reader alone: six boosters, one seat
+          // (the draft module's rule for `DraftKind::Sealed`). A quick draft is the full table.
+          seats: mode === "sealed" ? soloSeats(1) : soloSeats(),
+        }),
+      );
       return;
     }
     const list = readCubeList(held.cube.list);

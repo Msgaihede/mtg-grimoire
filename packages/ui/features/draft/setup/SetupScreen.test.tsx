@@ -78,6 +78,21 @@ describe("SetupScreen", () => {
     expect(onStarted).toHaveBeenCalledWith(draft, VIEW);
   });
 
+  it("deals a sealed pool's six boosters to the reader's seat alone", async () => {
+    setup("sealed");
+    const wall = await screen.findByRole("list", { name: "Sets" });
+    await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Test Set for the rest" }));
+    await userEvent.click(screen.getByRole("button", { name: /Open sealed pool/ }));
+    await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
+    const setupArg = draftStart.mock.calls[0][0] as DraftSetup;
+    expect(setupArg.mode).toBe("sealed");
+    expect(setupArg.seats).toEqual([{ name: "You", bot: false, peer: null }]);
+    expect(setupArg.packs).toHaveLength(1);
+    expect(setupArg.packs[0]).toHaveLength(6);
+    expect(setupArg.packSets).toEqual(["TST", "TST", "TST", "TST", "TST", "TST"]);
+  });
+
   it("sends the bots' skill the reader picked", async () => {
     setup("quick");
     const wall = await screen.findByRole("list", { name: "Sets" });
