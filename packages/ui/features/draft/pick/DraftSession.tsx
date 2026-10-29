@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 import { LogOut, Trash2 } from "lucide-react";
 import { ipc, ipcError, type DraftCard, type DraftMode, type DraftView } from "@/lib/ipc";
+import { cn } from "@/lib/utils";
 import { BuildPanel, type DraftRole } from "../build/BuildPanel";
 import { FlowBar, QUIET_BUTTON } from "../setup/parts";
 import { currentDraft } from "./current";
@@ -33,11 +34,14 @@ export function DraftSession({
   role,
   initial,
   onBack,
+  notice = null,
 }: {
   draft: number | null;
   role: DraftRole;
   initial: DraftView | null;
   onBack: () => void;
+  /** A sentence over the draft — a guest's lobby that closed under it. */
+  notice?: string | null;
 }): JSX.Element {
   const [view, setView] = useState<DraftView | null>(initial);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +49,15 @@ export function DraftSession({
   // A ref as well as the state: a fast second click lands before the re-render that greys the
   // pack, and a pick sent twice is a refusal from the engine at best.
   const inFlight = useRef(false);
+  // Abandon and Leave ask twice: the first press arms the button for a few seconds, the second
+  // puts the draft away. A whole draft is too much to lose to one stray click, and a dialog for
+  // it would be heavier than the question.
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = window.setTimeout(() => setArmed(false), 4000);
+    return () => window.clearTimeout(t);
+  }, [armed]);
 
   useEffect(() => {
     currentDraft.keep({ draft, role, view });
@@ -54,6 +67,24 @@ export function DraftSession({
     () => ipc.onDraftView((pushed) => setView((cur) => (acceptsView(cur, pushed) ? pushed : cur))),
     [],
   );
+
+  // A draft this app runs is asked for its view again on arrival: the reader may be back from
+  // another view, and a guest's picks moved the host's seat on meanwhile with no one listening.
+  useEffect(() => {
+    if (role === "guest" || draft === null) return;
+    let live = true;
+    ipc.draftView(draft).then(
+      (fresh) => {
+        if (live && fresh !== null) setView((cur) => (acceptsView(cur, fresh) ? fresh : cur));
+      },
+      () => {
+        // The view on screen stays; the next pick will say what is wrong, in the host's words.
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [draft, role]);
 
   const run = async (work: () => Promise<void>) => {
     if (inFlight.current) return;
@@ -116,22 +147,35 @@ export function DraftSession({
         onBack={onBack}
         step={building ? "build" : "draft"}
         actions={
-          <button type="button" onClick={abandon} className={QUIET_BUTTON}>
+          <button
+            type="button"
+            onClick={() => (armed ? abandon() : setArmed(true))}
+            className={cn(QUIET_BUTTON, armed && "border-destructive/60 text-destructive")}
+          >
             {role === "solo" ? (
-              <>
-                <Trash2 className="size-4" aria-hidden="true" />
-                Abandon
-              </>
+              <Trash2 className="size-4" aria-hidden="true" />
             ) : (
-              <>
-                <LogOut className="size-4" aria-hidden="true" />
-                Leave pod
-              </>
+              <LogOut className="size-4" aria-hidden="true" />
             )}
+            {armed
+              ? role === "solo"
+                ? "Abandon this draft?"
+                : "Leave the pod?"
+              : role === "solo"
+                ? "Abandon"
+                : "Leave pod"}
           </button>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto pb-8 pt-3 pr-1">
+        {notice !== null && (
+          <p
+            role="status"
+            className="m-0 mb-4 rounded-lg border border-border bg-surface px-4 py-3 text-sm"
+          >
+            {notice}
+          </p>
+        )}
         {view === null ? (
           <p role="status" className="m-0 py-16 text-center text-sm text-dim">
             Waiting for the host to deal…

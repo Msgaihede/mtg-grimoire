@@ -138,7 +138,11 @@ impl Draft {
         {
             return Err("A booster must hold between 1 and 255 cards.".into());
         }
-        if let Some(missing) = setup.card_ids().into_iter().find(|id| !facts.contains_key(id)) {
+        if let Some(missing) = setup
+            .card_ids()
+            .into_iter()
+            .find(|id| !facts.contains_key(id))
+        {
             return Err(format!(
                 "A booster names a card this app has no facts for ({missing})."
             ));
@@ -151,9 +155,7 @@ impl Draft {
         };
         let procedure = kind.procedure();
         if kind == DraftKind::Sealed && pack_count != usize::from(SEALED_PACK_COUNT) {
-            return Err(format!(
-                "A sealed pool opens {SEALED_PACK_COUNT} boosters."
-            ));
+            return Err(format!("A sealed pool opens {SEALED_PACK_COUNT} boosters."));
         }
         let source = source(&setup, kind);
 
@@ -276,11 +278,7 @@ impl Draft {
             pass_left: session.pass_direction == PassDirection::Left,
             pack,
             waiting,
-            pool: self
-                .pool_cards(seat)
-                .iter()
-                .map(|c| self.card(c))
-                .collect(),
+            pool: self.pool_cards(seat).iter().map(|c| self.card(c)).collect(),
             seats,
             pack_sets: self.setup.pack_sets.clone(),
             min_deck_size: self.setup.min_deck_size,
@@ -430,8 +428,7 @@ impl Draft {
     /// A draft from its `snapshot`, its cards' `facts` re-read for the bots (`card_ids`).
     pub fn restore(json: &str, facts: Vec<CardFacts>) -> Result<Draft, String> {
         let Snapshot { setup, session, .. } = read_snapshot(json)?;
-        if session.seats.len() < setup.seats.len() || session.pools.len() != session.seats.len()
-        {
+        if session.seats.len() < setup.seats.len() || session.pools.len() != session.seats.len() {
             return Err("That saved draft is damaged and cannot be resumed.".into());
         }
         let db = card_database(setup.difficulty, &facts);
@@ -502,7 +499,9 @@ impl Draft {
     /// nothing kept between calls, so a restored draft rolls as the original would have.
     fn dice(&self, seat: u8) -> ChaCha8Rng {
         let picked: u64 = self.session.pools.iter().map(|p| p.len() as u64).sum();
-        ChaCha8Rng::seed_from_u64((u64::from(self.setup.seed) << 32) ^ (picked << 8) ^ u64::from(seat))
+        ChaCha8Rng::seed_from_u64(
+            (u64::from(self.setup.seed) << 32) ^ (picked << 8) ^ u64::from(seat),
+        )
     }
 
     /// Whether `seat` holds a pack it has not picked from this step.
@@ -671,7 +670,13 @@ fn source(setup: &DraftSetup, kind: DraftKind) -> DraftSource {
             setup
                 .pack_sets
                 .iter()
-                .map(|c| if c.is_empty() { "cube".into() } else { c.clone() })
+                .map(|c| {
+                    if c.is_empty() {
+                        "cube".into()
+                    } else {
+                        c.clone()
+                    }
+                })
                 .collect()
         };
         DraftSource::Set {

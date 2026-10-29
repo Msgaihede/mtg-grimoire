@@ -226,7 +226,10 @@ fn draft_out(draft: &mut Draft) -> usize {
 fn a_quick_draft_runs_to_deckbuilding() {
     engine(|| {
         let mut draft = start(quick(Difficulty::Medium));
-        let db = draft.db.as_ref().expect("the evaluating bots read the draft's cards");
+        let db = draft
+            .db
+            .as_ref()
+            .expect("the evaluating bots read the draft's cards");
         assert!(db.get_face_by_name("Forest Dragon").is_some());
         let view = draft.view(0);
         assert_eq!(view.status, DraftStatus::Drafting);
@@ -348,7 +351,9 @@ fn sealed_opens_six_boosters_into_the_pool() {
         assert_eq!(view.pack_count, 6);
         // phase's second seat, which sealed needs, is never shown.
         assert_eq!(view.seats.len(), 1);
-        assert!(draft.pick(0, vec![view.pool[0].instance_id.clone()]).is_err());
+        assert!(draft
+            .pick(0, vec![view.pool[0].instance_id.clone()])
+            .is_err());
         assert!(draft.auto_pick(0).is_err());
 
         let short = setup_sealed_short();
@@ -443,7 +448,10 @@ fn a_bot_takes_the_seat_of_a_person_who_left() {
         draft.set_connected(1, false);
         assert!(!draft.view(0).seats[1].connected);
         draft.set_connected(4, false);
-        assert!(draft.view(0).seats[4].connected, "a bot is always on the line");
+        assert!(
+            draft.view(0).seats[4].connected,
+            "a bot is always on the line"
+        );
 
         draft.pick(0, first(&draft.view(0))).unwrap();
         assert!(draft.view(0).waiting);
@@ -454,7 +462,10 @@ fn a_bot_takes_the_seat_of_a_person_who_left() {
         assert_eq!(host.seats[1].name, "Guest");
         // Its pick for the step the table waited on, and its pick from the next pack.
         assert_eq!(draft.pool(1).len(), 2);
-        assert!(draft.replace_with_bot(1).is_err(), "a bot already sits there");
+        assert!(
+            draft.replace_with_bot(1).is_err(),
+            "a bot already sits there"
+        );
         assert!(draft.pick(1, first(&host)).is_err());
 
         // From here the host drafts alone, to the end.

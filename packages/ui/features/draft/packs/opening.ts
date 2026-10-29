@@ -3,7 +3,13 @@
  * order the opened cards are laid out in. The components only draw these.
  */
 import type { BoosterCard, BoosterSet } from "@/lib/ipc";
-import { openBooster, openSealed, type ColorsOf, type OpenedCard } from "../booster/open";
+import {
+  openBooster,
+  openSealed,
+  walkSealed,
+  type ColorsOf,
+  type OpenedCard,
+} from "../booster/open";
 import { mulberry32 } from "../booster/rng";
 import {
   expectedValue,
@@ -62,6 +68,28 @@ export function openOne(set: BoosterSet, openable: Openable, seed: number): Open
   };
 }
 
+/**
+ * The expected value of `openable` alone — what the session's tally adds per press, without the
+ * ten thousand packs {@link figuresOf} simulates.
+ */
+export function theoreticalValue(set: BoosterSet, openable: Openable, priceOf: PriceOf): number {
+  if (openable.kind === "booster") {
+    const product = set.products.find((p) => p.key === openable.id);
+    return product === undefined ? 0 : expectedValue(product, priceOf);
+  }
+  let ev = 0;
+  walkSealed(set, openable.id, {
+    booster: (product) => {
+      ev += expectedValue(product, priceOf);
+    },
+    card: (card) => {
+      ev += priceOf(card.cardId, card.foil) ?? 0;
+    },
+    skip: () => {},
+  });
+  return ev;
+}
+
 /** A product's figures, theoretical and simulated. */
 export interface Figures {
   ev: number;
@@ -83,7 +111,7 @@ export function figuresOf(
   const colorsOf = colorLookup(set);
   let ev = 0;
   let sd = 0;
-  let simulated = new Float64Array(0);
+  let simulated: Float64Array = new Float64Array(0);
   if (openable.kind === "booster") {
     const product = set.products.find((p) => p.key === openable.id);
     if (product !== undefined) {
@@ -143,7 +171,8 @@ export function sortOpened(
   rows.sort((a, b) => {
     let d = 0;
     if (by === "rarity") {
-      d = rarityRank(facts.get(a.card.cardId)?.rarity) - rarityRank(facts.get(b.card.cardId)?.rarity);
+      d =
+        rarityRank(facts.get(a.card.cardId)?.rarity) - rarityRank(facts.get(b.card.cardId)?.rarity);
     } else if (by === "number") {
       const fa = facts.get(a.card.cardId);
       const fb = facts.get(b.card.cardId);

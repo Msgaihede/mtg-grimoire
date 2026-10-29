@@ -51,7 +51,14 @@ const FRESH: SetupHeld = {
   quick: [],
   sealed: [],
   difficulty: DEFAULT_DIFFICULTY,
-  cube: { name: "", seats: TABLE_SEATS, packs: 3, packSize: 15, minDeckSize: MIN_DECK_SIZE, list: "" },
+  cube: {
+    name: "",
+    seats: TABLE_SEATS,
+    packs: 3,
+    packSize: 15,
+    minDeckSize: MIN_DECK_SIZE,
+    list: "",
+  },
 };
 
 const memory = viewMemory<SetupHeld>("draft.setup");
@@ -92,8 +99,7 @@ export function SetupScreen({
   const setChosen = (next: SetSummary[]) =>
     setHeld(mode === "sealed" ? { sealed: next } : { quick: next });
 
-  const ready =
-    mode === "cube" ? held.cube.list.trim() !== "" : chosen.length === packsFor;
+  const ready = mode === "cube" ? held.cube.list.trim() !== "" : chosen.length === packsFor;
 
   const begin = async (deal: () => Promise<Parameters<typeof ipc.draftStart>[0]>) => {
     setBusy(true);
@@ -128,7 +134,9 @@ export function SetupScreen({
     }
     const list = readCubeList(held.cube.list);
     if (list.lines.length === 0) {
-      setError("Nothing in the list reads as a card — write one per line, like “1 Lightning Bolt”.");
+      setError(
+        "Nothing in the list reads as a card — write one per line, like “1 Lightning Bolt”.",
+      );
       return;
     }
     setBusy(true);
@@ -180,9 +188,14 @@ export function SetupScreen({
             <PackOrder chosen={chosen} max={packsFor} onChange={setChosen} />
           )}
           {missing !== null && (
-            <div role="alert" className="flex flex-col gap-2 rounded-lg border border-destructive/50 p-3">
+            <div
+              role="alert"
+              className="flex flex-col gap-2 rounded-lg border border-destructive/50 p-3"
+            >
               <p className="m-0 text-sm">
-                {missing.names.length === 1 ? "One name matches" : `${missing.names.length} names match`}{" "}
+                {missing.names.length === 1
+                  ? "One name matches"
+                  : `${missing.names.length} names match`}{" "}
                 no card here:
               </p>
               <ul className="m-0 flex max-h-40 list-none flex-col gap-0.5 overflow-y-auto p-0 text-sm text-dim">
@@ -261,7 +274,13 @@ function ModeTabs({
 }
 
 /** The cube's list, one card per line. */
-function CubeList({ value, onChange }: { value: string; onChange: (v: string) => void }): JSX.Element {
+function CubeList({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}): JSX.Element {
   const id = useId();
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2.5">
@@ -323,7 +342,8 @@ function NumberField({
         }}
         onBlur={() => {
           const n = Math.round(Number(text));
-          const clamped = Number.isFinite(n) && text !== "" ? Math.min(max, Math.max(min, n)) : value;
+          const clamped =
+            Number.isFinite(n) && text !== "" ? Math.min(max, Math.max(min, n)) : value;
           setText(String(clamped));
           onChange(clamped);
         }}

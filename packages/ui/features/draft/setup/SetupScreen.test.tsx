@@ -1,0 +1,126 @@
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SET } from "@/features/draft/booster/fixture";
+import type { DraftSetup, DraftView, ImportResolveLine, SetSummary } from "@/lib/ipc";
+
+const listSets = vi.hoisted(() => vi.fn());
+const packsBoosterSet = vi.hoisted(() => vi.fn());
+const draftStart = vi.hoisted(() => vi.fn());
+const importResolve = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ipc")>()),
+  ipc: { listSets, packsBoosterSet, draftStart, importResolve },
+}));
+
+import { SetupScreen, type SetupMode } from "./SetupScreen";
+
+const TEST_SET: SetSummary = {
+  code: "tst",
+  name: "Test Set",
+  setType: "expansion",
+  releasedAt: "2026-01-01",
+  cardCount: 12,
+};
+
+const VIEW = { status: "drafting" } as DraftView;
+
+beforeEach(() => {
+  listSets.mockReset().mockResolvedValue([TEST_SET]);
+  packsBoosterSet.mockReset().mockResolvedValue(SET);
+  draftStart.mockReset().mockResolvedValue(VIEW);
+  importResolve.mockReset();
+});
+
+function setup(mode: SetupMode) {
+  const onStarted = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={client}>
+      <SetupScreen mode={mode} onMode={vi.fn()} onBack={vi.fn()} onStarted={onStarted} />
+    </QueryClientProvider>,
+  );
+  return { onStarted };
+}
+
+const start = () => screen.getByRole("button", { name: /Start draft/ });
+
+describe("SetupScreen", () => {
+  it("deals a quick draft's three packs to all eight seats and starts it", async () => {
+    const { onStarted } = setup("quick");
+    const wall = await screen.findByRole("list", { name: "Sets" });
+    expect(start()).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
+    // One pick and the rest filled with it — three of one set is a set's own draft.
+    await userEvent.click(screen.getByRole("button", { name: "Test Set for the rest" }));
+    expect(screen.getByText("3 packs chosen — all 3")).toBeInTheDocument();
+    await userEvent.click(start());
+
+    await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
+    // The set's boosters are read once, however many packs it opens.
+    expect(packsBoosterSet).toHaveBeenCalledExactlyOnceWith("tst", false);
+    const [setupArg, draft] = draftStart.mock.calls[0] as [DraftSetup, number];
+    expect(setupArg).toMatchObject({
+      mode: "quick",
+      difficulty: "medium",
+      label: "Test Set",
+      packSets: ["TST", "TST", "TST"],
+      minDeckSize: 40,
+    });
+    expect(setupArg.seats).toHaveLength(8);
+    expect(setupArg.seats[0]).toEqual({ name: "You", bot: false, peer: null });
+    expect(setupArg.seats.slice(1).every((s) => s.bot)).toBe(true);
+    expect(setupArg.packs).toHaveLength(8);
+    expect(setupArg.packs.every((seat) => seat.length === 3)).toBe(true);
+    expect(setupArg.packs[0][0]).toHaveLength(7);
+    expect(typeof draft).toBe("number");
+    expect(onStarted).toHaveBeenCalledWith(draft, VIEW);
+  });
+
+  it("sends the bots' skill the reader picked", async () => {
+    setup("quick");
+    const wall = await screen.findByRole("list", { name: "Sets" });
+    await userEvent.click(screen.getByRole("button", { name: "Very hard" }));
+    for (let i = 0; i < 3; i += 1) {
+      await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
+    }
+    await userEvent.click(start());
+    await waitFor(() => expect(draftStart).toHaveBeenCalledOnce());
+    expect((draftStart.mock.calls[0][0] as DraftSetup).difficulty).toBe("veryHard");
+  });
+
+  it("says a set's refusal where the reader is looking", async () => {
+    packsBoosterSet.mockRejectedValue("MTGJSON could not be reached.");
+    setup("quick");
+    const wall = await screen.findByRole("list", { name: "Sets" });
+    await userEvent.click(within(wall).getByRole("button", { name: /Test Set/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Test Set for the rest" }));
+    await userEvent.click(start());
+    expect(await screen.findByRole("alert")).toHaveTextContent("MTGJSON could not be reached.");
+    expect(draftStart).not.toHaveBeenCalled();
+  });
+
+  it("names the cube's cards nothing matched, and starts nothing", async () => {
+    importResolve.mockImplementation((lines: ImportResolveLine[]) =>
+      Promise.resolve(
+        lines.map((line, index) => ({
+          index,
+          matched: line.name === "Lightning Bolt" ? { cardId: "bolt" } : null,
+          hintMissed: false,
+        })),
+      ),
+    );
+    setup("cube");
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Cube list" }),
+      "1 Lightning Bolt{enter}1 Not A Card",
+    );
+    await userEvent.click(start());
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Not A Card");
+    expect(importResolve).toHaveBeenCalledOnce();
+    expect(within(alert).getByRole("button", { name: "Draft without them" })).toBeInTheDocument();
+    expect(draftStart).not.toHaveBeenCalled();
+  });
+});

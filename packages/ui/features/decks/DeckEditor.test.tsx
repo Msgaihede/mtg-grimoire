@@ -193,6 +193,11 @@ const cardPrintings = vi.hoisted(() => vi.fn());
 // nothing opens straight onto (managed tokens spec §3.6). Hoisted for the case that adds a first
 // token by hand there; answered with nothing otherwise.
 const tokenPrintings = vi.hoisted(() => vi.fn());
+// Draft & Packs (spec §5): the unsaved draft decks — what decides whether the editor draws its
+// draft mode — and the draft bar's basics read. Every open asks the first, so it is answered
+// with no draft decks unless a case says otherwise.
+const draftDeckIds = vi.hoisted(() => vi.fn());
+const draftBasicLands = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -312,6 +317,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // function`, and every `getByRole("alert")` in this file starts finding whatever that
     // control draws for a refused read.
     wishlistFolderList: vi.fn().mockResolvedValue([]),
+    draftDeckIds,
+    draftBasicLands,
+    draftDeckKeep: vi.fn().mockResolvedValue(undefined),
+    draftDeckDiscard: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -925,6 +934,8 @@ function viewport(px: number) {
 
 beforeEach(() => {
   resetRowIds();
+  draftDeckIds.mockReset().mockResolvedValue([]);
+  draftBasicLands.mockReset().mockResolvedValue([]);
   useAppStore.setState({
     activeView: "decks",
     openDeckId: 4,
@@ -10028,5 +10039,98 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 
     await waitFor(() => expect(pile()).not.toBeNull());
     await waitFor(() => expect(askedForTheory()).toBe(true));
+  });
+});
+
+/**
+ * **The draft mode** (Draft & Packs, spec §5): a deck on the unsaved draft list is built from its
+ * Pool alone, so the editor mounts no docked card search (neither tab), no Quick Add, and draws
+ * the draft bar in their place. An ordinary deck is the control case: everything is where it was.
+ */
+describe("a draft deck", () => {
+  const draftDeck = () =>
+    detail(
+      { virtualOnly: true, formatKey: "limited", formatName: "Limited", name: "Quick Draft" },
+      [bolt()],
+    );
+
+  it("keeps the search dock and Quick Add on an ordinary deck, and draws no draft bar", async () => {
+    await open();
+    await waitFor(() => expect(draftDeckIds).toHaveBeenCalled());
+
+    expect(await screen.findByRole("button", { name: PANEL_TOGGLE })).toBeInTheDocument();
+    expect(screen.getByLabelText("Quick add a card")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Draft deck" })).not.toBeInTheDocument();
+  });
+
+  it("mounts no search dock and no Quick Add, and draws the draft bar", async () => {
+    draftDeckIds.mockResolvedValue([4]);
+    deckGet.mockResolvedValue(draftDeck());
+    await open();
+
+    expect(await screen.findByRole("region", { name: "Draft deck" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: PANEL_TOGGLE })).not.toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Search cards" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "All cards" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Quick add a card/)).not.toBeInTheDocument();
+    // Nothing the dock would have read was asked for.
+    expect(searchCards).not.toHaveBeenCalled();
+  });
+
+  it("adds a basic to the deck's default pile, five on a Shift-press, and toasts nothing", async () => {
+    draftDeckIds.mockResolvedValue([4]);
+    deckGet.mockResolvedValue({
+      ...draftDeck(),
+      deck: { ...draftDeck().deck, defaultCategoryId: MAIN },
+    });
+    draftBasicLands.mockResolvedValue([{ color: "R", name: "Mountain", cardId: "mountain-1" }]);
+    useNotifications.setState({ notices: [], toasts: [] });
+    const user = userEvent.setup();
+    await open();
+
+    const mountain = await screen.findByRole("button", { name: "Add Mountain" });
+    await user.click(mountain);
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(4, "mountain-1", MAIN, null, "live", null, 1),
+    );
+    await user.keyboard("{Shift>}");
+    await user.click(mountain);
+    await user.keyboard("{/Shift}");
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(4, "mountain-1", MAIN, null, "live", null, 5),
+    );
+    // The basics' set codes are the deck's own cards'.
+    expect(draftBasicLands).toHaveBeenCalledWith([bolt().setCode]);
+    expect(useNotifications.getState().toasts).toEqual([]);
+  });
+
+  it("opens the editor's own export dialog from the bar's Export", async () => {
+    draftDeckIds.mockResolvedValue([4]);
+    deckGet.mockResolvedValue(draftDeck());
+    await open();
+
+    const bar = await screen.findByRole("region", { name: "Draft deck" });
+    await userEvent.click(within(bar).getByRole("button", { name: "Export" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("takes the card menu's Add to ▸ Collection and Wishlist away, and keeps Deck", async () => {
+    draftDeckIds.mockResolvedValue([4]);
+    deckGet.mockResolvedValue(draftDeck());
+    await open();
+    await screen.findByRole("region", { name: "Draft deck" });
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt", null)}"]`,
+    );
+    expect(el).not.toBeNull();
+    fireEvent.contextMenu(el as HTMLElement);
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    const panels = screen.getAllByRole("menu");
+    const addTo = panels[panels.length - 1] as HTMLElement;
+    expect(await within(addTo).findByRole("menuitem", { name: "Deck" })).toBeInTheDocument();
+    expect(within(addTo).queryByRole("menuitem", { name: "Collection" })).not.toBeInTheDocument();
+    expect(within(addTo).queryByRole("menuitem", { name: "Wishlist" })).not.toBeInTheDocument();
   });
 });

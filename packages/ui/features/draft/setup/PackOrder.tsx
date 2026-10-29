@@ -46,7 +46,10 @@ export function PackOrder({
               className="flex h-10 items-center gap-2.5 rounded-lg border border-border bg-surface pl-3 pr-1"
             >
               <span className="font-mono text-xs text-dim">P{i + 1}</span>
-              <i className={cn(setGlyphClass(set.code), "text-lg leading-none")} aria-hidden="true" />
+              <i
+                className={cn(setGlyphClass(set.code), "text-lg leading-none")}
+                aria-hidden="true"
+              />
               <span className="min-w-0 flex-1 truncate text-sm">{set.name}</span>
               <span className="font-mono text-[0.6875rem] uppercase text-dim">{set.code}</span>
               <button
@@ -68,7 +71,9 @@ export function PackOrder({
       {last !== undefined && chosen.length < max && (
         <button
           type="button"
-          onClick={() => onChange([...chosen, ...Array.from({ length: max - chosen.length }, () => last)])}
+          onClick={() =>
+            onChange([...chosen, ...Array.from({ length: max - chosen.length }, () => last)])
+          }
           className={cn(QUIET_BUTTON, "self-start")}
         >
           <Copy className="size-4" aria-hidden="true" />
