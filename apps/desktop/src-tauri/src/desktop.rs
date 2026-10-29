@@ -16,9 +16,9 @@ use crate::sync::AppState;
 use crate::{
     activity, archive, camera, card, collection, collection_alloc, collection_folders, combos, db,
     deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
-    deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort,
+    deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, draft,
     entry_tags, errors, export, home, images, import, index, integration, listview, markcolors,
-    marketplace, marketplace_feed, mirror, nav, new_printings, panelwidth, paths, playtest,
+    marketplace, marketplace_feed, mirror, nav, new_printings, packs, panelwidth, paths, playtest,
     price_history, recent_cards, reset, scan_history, scanner, scansounds, schema, scryfall,
     search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide, startup,
     startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets, update,
@@ -631,6 +631,28 @@ pub fn run() {
             playtest::playtest_act,
             playtest::playtest_end,
             playtest::playtest_support,
+            // Draft & Packs: one draft at a time (phase.rs's draft module), its deck, a pod's
+            // lobby, and MTGJSON's booster data.
+            draft::draft_start,
+            draft::draft_view,
+            draft::draft_pick,
+            draft::draft_auto_pick,
+            draft::draft_end,
+            draft::draft_saved,
+            draft::draft_resume,
+            draft::deck::draft_deck_create,
+            draft::deck::draft_deck_ids,
+            draft::deck::draft_deck_keep,
+            draft::deck::draft_deck_discard,
+            draft::deck::draft_basic_lands,
+            draft::lobby::lobby_create,
+            draft::lobby::lobby_join,
+            draft::lobby::lobby_state,
+            draft::lobby::lobby_leave,
+            draft::lobby::lobby_start,
+            draft::lobby::lobby_pick,
+            draft::lobby::lobby_kick,
+            packs::packs_booster_set,
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.
             stackhide::hidden_stacks,
             stackhide::set_stack_hidden,
@@ -855,6 +877,10 @@ pub fn run() {
             app.manage(playtest::PlaytestSlot::default());
             // What the engine plays of each card the Playtesting setup has asked about.
             app.manage(playtest::PlaytestSupport::default());
+            // The Draft & Packs page's one draft, and a pod's lobby — empty until a reader
+            // starts one, opens one or joins one.
+            app.manage(draft::DraftSlot::default());
+            app.manage(draft::lobby::LobbySlot::default());
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("startup".to_owned())

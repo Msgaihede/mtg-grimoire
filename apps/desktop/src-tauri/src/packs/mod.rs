@@ -242,7 +242,9 @@ mod tests {
         assert_eq!(file_code(" fdn ").unwrap(), "FDN");
         assert_eq!(file_code("40k").unwrap(), "40K");
         assert_eq!(file_code("PLST20").unwrap(), "PLST20");
-        for bad in ["", "a", "abcdefg", "../x", "a b", "ab/c", "hób", "ab.c", "ab?c"] {
+        for bad in [
+            "", "a", "abcdefg", "../x", "a b", "ab/c", "hób", "ab.c", "ab?c",
+        ] {
             assert_eq!(file_code(bad).unwrap_err(), NOT_A_SET, "{bad:?}");
         }
     }

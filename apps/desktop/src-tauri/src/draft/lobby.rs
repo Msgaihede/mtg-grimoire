@@ -165,8 +165,13 @@ pub fn lobby_name(raw: &str) -> Result<String, String> {
 /// Who a socket is opened as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Join {
-    Host { key: String },
-    Guest { name: String, rejoin: Option<(String, String)> },
+    Host {
+        key: String,
+    },
+    Guest {
+        name: String,
+        rejoin: Option<(String, String)>,
+    },
 }
 
 /// `text` for a query string: RFC 3986's unreserved characters as they are, every other byte
@@ -439,9 +444,8 @@ pub fn backoff(attempt: u32) -> Duration {
 // The lobby held, and its task
 // ---------------------------------------------------------------------------------------
 
-type Ws = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// The one lobby, or none. Shared with its task.
 #[derive(Default)]
@@ -713,11 +717,12 @@ enum Unopened {
 async fn open(url: &str, role: LobbyRole) -> Result<Ws, Unopened> {
     match tokio_tungstenite::connect_async(url).await {
         Ok((ws, _)) => Ok(ws),
-        Err(tungstenite::Error::Http(response)) => match refused(role, response.status().as_u16())
-        {
-            Some(reason) => Err(Unopened::Refused(reason)),
-            None => Err(Unopened::Failed),
-        },
+        Err(tungstenite::Error::Http(response)) => {
+            match refused(role, response.status().as_u16()) {
+                Some(reason) => Err(Unopened::Refused(reason)),
+                None => Err(Unopened::Failed),
+            }
+        }
         Err(_) => Err(Unopened::Failed),
     }
 }
@@ -919,7 +924,11 @@ fn leave_live(draft: &Shared, live: Live) {
     let _ = live.out.send(Out::Close);
 }
 
-fn new_live(state: LobbyState, base: String, key: Option<String>) -> (Live, UnboundedReceiver<Out>) {
+fn new_live(
+    state: LobbyState,
+    base: String,
+    key: Option<String>,
+) -> (Live, UnboundedReceiver<Out>) {
     let (out, rx) = unbounded_channel();
     let live = Live {
         generation: GENERATION.fetch_add(1, Ordering::Relaxed) + 1,
@@ -1302,7 +1311,9 @@ mod tests {
     #[test]
     fn a_code_is_six_of_the_relays_alphabet_upper_cased() {
         assert_eq!(lobby_code(" k7qx2m ").unwrap(), "K7QX2M");
-        for bad in ["", "K7QX2", "K7QX2MM", "K7QX0M", "K7QXIM", "K7QX1M", "K7-X2M", "K7QX2Ö"] {
+        for bad in [
+            "", "K7QX2", "K7QX2MM", "K7QX0M", "K7QXIM", "K7QX1M", "K7-X2M", "K7QX2Ö",
+        ] {
             assert_eq!(lobby_code(bad).unwrap_err(), NOT_A_CODE, "{bad:?}");
         }
     }

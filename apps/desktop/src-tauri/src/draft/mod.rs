@@ -29,8 +29,7 @@ use std::time::Duration;
 
 use grimoire_core::app_meta::{get_app_meta, set_app_meta};
 use grimoire_play::{
-    on_engine_stack, CardFacts, Draft, DraftCardFacts, DraftMode, DraftSaved, DraftSetup,
-    DraftView,
+    on_engine_stack, CardFacts, Draft, DraftCardFacts, DraftMode, DraftSaved, DraftSetup, DraftView,
 };
 use serde::{Deserialize, Serialize};
 
@@ -327,8 +326,7 @@ fn draft_facts(conn: &rusqlite::Connection, ids: &[String]) -> Result<Vec<DraftC
     Ok(cards
         .into_iter()
         .map(|card| {
-            let (set_code, collector_number, rarity) =
-                of.remove(&card.card_id).unwrap_or_default();
+            let (set_code, collector_number, rarity) = of.remove(&card.card_id).unwrap_or_default();
             DraftCardFacts {
                 card: crate::playtest::facts(card),
                 set_code,
@@ -414,7 +412,10 @@ pub async fn draft_start(
 
 /// Seat 0's view of `draft`, or `None` when it is not the draft at the table.
 #[tauri::command(async)]
-pub fn draft_view(slot: tauri::State<'_, DraftSlot>, draft: u64) -> Result<Option<DraftView>, String> {
+pub fn draft_view(
+    slot: tauri::State<'_, DraftSlot>,
+    draft: u64,
+) -> Result<Option<DraftView>, String> {
     match &slot.0.lock().slot {
         Slot::Held(d, held) if *d == draft => Ok(Some(held.view(0))),
         Slot::Busy(d) | Slot::Dealing(d) if *d == draft => Err(BUSY.into()),

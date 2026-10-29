@@ -89,6 +89,85 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
     (
         "playtest_support",
         "what the playtest board's rules engine plays of a deck is this host's to say",
+    ),    (
+        "draft_start",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
+        "draft_view",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
+        "draft_pick",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
+        "draft_auto_pick",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
+        "draft_end",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
+        "draft_saved",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
+        "draft_resume",
+        "Draft & Packs is desktop-only: phase.rs's draft module is linked by this host alone",
+    ),
+    (
+        "draft_deck_create",
+        "Draft & Packs is desktop-only: the deck a drafted pool becomes is made from this host's draft page",
+    ),
+    (
+        "draft_deck_ids",
+        "Draft & Packs is desktop-only: the deck a drafted pool becomes is made from this host's draft page",
+    ),
+    (
+        "draft_deck_keep",
+        "Draft & Packs is desktop-only: the deck a drafted pool becomes is made from this host's draft page",
+    ),
+    (
+        "draft_deck_discard",
+        "Draft & Packs is desktop-only: the deck a drafted pool becomes is made from this host's draft page",
+    ),
+    (
+        "draft_basic_lands",
+        "Draft & Packs is desktop-only: the deck a drafted pool becomes is made from this host's draft page",
+    ),
+    (
+        "lobby_create",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
+        "lobby_join",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
+        "lobby_state",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
+        "lobby_leave",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
+        "lobby_start",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
+        "lobby_pick",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
+        "lobby_kick",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
+        "packs_booster_set",
+        "MTGJSON booster data feeds only the desktop's Draft & Packs page",
     ),
 ];
 
