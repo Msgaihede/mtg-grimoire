@@ -95,19 +95,92 @@ pub fn deck_cards(conn: &Connection, deck_id: i64, variant: &str) -> Result<Vec<
             .optional()
             .map_err(|e| e.to_string())?
             .flatten();
-        let json: serde_json::Value = blob
-            .and_then(|b| crate::card_row::raw_json(&b))
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
-        let keywords = json
-            .get("keywords")
-            .and_then(|k| serde_json::from_value::<Vec<String>>(k.clone()).ok())
-            .unwrap_or_default();
-        let loyalty = text_of(json.get("loyalty"));
-        let defense = text_of(json.get("defense"));
+        let json = opened(blob);
+        let (keywords, loyalty, defense) = extras(&json);
         out.push(card(row, keywords, loyalty, defense));
     }
     Ok(out)
+}
+
+/// Printings by id, as a game deals them — the draft's pool, which is no deck yet: one row per
+/// distinct id in `ids`' order, `quantity` 1 and never a commander. An id `cards` lacks is left
+/// out. The same facts [`deck_cards`] answers, read from `cards` rather than through a deck.
+pub fn cards_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<PlayCard>, String> {
+    let mut stmt = conn
+        .prepare_cached(
+            "SELECT id, name, oracle_id, mana_cost, type_line, oracle_text, power, toughness,
+                    cmc, layout, colors, color_identity, faces, CAST(raw AS BLOB)
+               FROM cards WHERE id = ?1",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for id in ids {
+        if !seen.insert(id.as_str()) {
+            continue;
+        }
+        let row = stmt
+            .query_row([id], |r| {
+                let blob: Option<Vec<u8>> = r.get(13)?;
+                Ok((
+                    PlayCard {
+                        card_id: r.get(0)?,
+                        name: r.get(1)?,
+                        quantity: 1,
+                        commander: false,
+                        oracle_id: r.get(2)?,
+                        mana_cost: r.get(3)?,
+                        type_line: r.get(4)?,
+                        oracle_text: r.get(5)?,
+                        power: r.get(6)?,
+                        toughness: r.get(7)?,
+                        loyalty: None,
+                        defense: None,
+                        cmc: r.get(8)?,
+                        layout: r.get(9)?,
+                        colors: letters(r.get(10)?),
+                        color_identity: letters(r.get(11)?),
+                        keywords: Vec::new(),
+                        faces: r.get(12)?,
+                    },
+                    blob,
+                ))
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((mut card, blob)) = row else {
+            continue;
+        };
+        let json = opened(blob);
+        (card.keywords, card.loyalty, card.defense) = extras(&json);
+        // A row synced before the P/T columns were filled has them in its blob alone.
+        if card.power.is_none() && card.toughness.is_none() {
+            card.power = text_of(json.get("power"));
+            card.toughness = text_of(json.get("toughness"));
+        }
+        out.push(card);
+    }
+    Ok(out)
+}
+
+/// A printing's Scryfall blob, opened; `Null` for none or an unreadable one.
+fn opened(blob: Option<Vec<u8>>) -> serde_json::Value {
+    blob.and_then(|b| crate::card_row::raw_json(&b))
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// The three facts a game reads from the blob: keywords, loyalty, defense.
+fn extras(json: &serde_json::Value) -> (Vec<String>, Option<String>, Option<String>) {
+    let keywords = json
+        .get("keywords")
+        .and_then(|k| serde_json::from_value::<Vec<String>>(k.clone()).ok())
+        .unwrap_or_default();
+    (
+        keywords,
+        text_of(json.get("loyalty")),
+        text_of(json.get("defense")),
+    )
 }
 
 /// The tokens `variant`'s list keeps, one per token, in the printing the deck's token wall draws
@@ -216,6 +289,33 @@ mod tests {
             vec!["G".to_string(), "W".to_string()]
         );
         assert!(letters(None).is_empty());
+    }
+
+    #[test]
+    fn cards_by_ids_answers_each_known_printing_once() {
+        let conn = crate::schema::memory_pair();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,lang,set_code,collector_number,layout,
+                                  mana_cost,cmc,type_line,colors,color_identity,raw)
+               VALUES ('jace','o-jace','Jace Beleren','en','lrw','76','normal','{1}{U}{U}',3.0,
+                       'Legendary Planeswalker — Jace','U','U',
+                       '{"keywords":[],"loyalty":"3"}'),
+                      ('bear','o-bear','Grizzly Bears','en','lea','189','normal','{1}{G}',2.0,
+                       'Creature — Bear','G','G','{"keywords":["Trample"],"power":"2",
+                       "toughness":"2"}');"#,
+        )
+        .unwrap();
+        let ids = ["bear", "ghost", "jace", "bear"].map(String::from);
+        let out = cards_by_ids(&conn, &ids).unwrap();
+        let names: Vec<&str> = out.iter().map(|c| c.card_id.as_str()).collect();
+        assert_eq!(names, vec!["bear", "jace"]);
+        assert_eq!(out[0].quantity, 1);
+        assert!(!out[0].commander);
+        assert_eq!(out[0].keywords, vec!["Trample".to_string()]);
+        assert_eq!(out[0].power.as_deref(), Some("2"), "from the blob");
+        assert_eq!(out[0].colors, vec!["G".to_string()]);
+        assert_eq!(out[1].loyalty.as_deref(), Some("3"));
+        assert_eq!(out[1].oracle_id.as_deref(), Some("o-jace"));
     }
 
     mod tokens {

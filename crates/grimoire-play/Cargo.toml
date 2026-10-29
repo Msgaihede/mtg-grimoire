@@ -2,7 +2,7 @@
 name = "grimoire-play"
 # **The app's version**, as every workspace member's is: inherited from `[workspace.package]`.
 version.workspace = true
-description = "MTG Grimoire: games played on a deck — against the goldfish or phase.rs's AI — over phase.rs's rules engine"
+description = "MTG Grimoire: games played on a deck — against the goldfish or phase.rs's AI — and drafts against phase.rs's draft bots, over phase.rs's rules engine"
 authors = ["Markus Seerup"]
 license.workspace = true
 edition.workspace = true
@@ -12,8 +12,10 @@ publish = false
 # app already stores about a deck's cards (Scryfall's name, cost, type line, rules text, P/T),
 # has phase.rs's oracle parser turn them into the engine's card faces, and runs one game on them:
 # the reader's deck against the goldfish (an opponent that does nothing) or against decks played
-# by phase's AI (`phase-ai`, which takes the same `GameState`). It knows nothing of SQLite, Tauri
-# or a window: facts in, a view and what happened out. `docs/reference/goldfish.md` (the engine)
+# by phase's AI (`phase-ai`, which takes the same `GameState`). It also holds one draft over
+# phase's `draft-core` (`src/draft/`): boosters the page made, passed around a table of people and
+# bots that pick as phase's own draft bots do. It knows nothing of SQLite, Tauri or a window:
+# facts in, a view and what happened out. `docs/reference/goldfish.md` (the engine)
 # and `docs/reference/playtest.md` (the game) have the design.
 #
 # **Linked by the desktop host alone** (the owner's decision, 2026-10-12). The light app's spec
@@ -37,8 +39,15 @@ publish = false
 phase-engine = { git = "https://github.com/phase-rs/phase", rev = "b8d3b82c17f09d228b743bd762f3486a9be6d1ef" }
 # **phase.rs's AI, from the same commit** — the playtest board's opponent. Its `choose_action`
 # takes the very `GameState` the engine plays on, so the AI seat is one call per decision. Same
-# licence and same rule for the `rev` as the engine above: the two move together, never apart.
+# licence and same rule for the `rev` as the engine above: it moves with the engine (and with
+# `draft-core` below), never apart.
 phase-ai = { git = "https://github.com/phase-rs/phase", rev = "b8d3b82c17f09d228b743bd762f3486a9be6d1ef" }
+# **phase.rs's draft reducer, from the same commit** — the draft's passing, picks, rounds and
+# sealed pools (`src/draft/`). The lib is named `draft_core`; it reads the engine's own types, so
+# the three move together, never apart. Same licence and same rule for the `rev`. Its bots live
+# in `draft-wasm`, a `cdylib` no crate can link, so their pick-and-pass half is ported in
+# `src/draft/bots.rs`.
+draft-core = { git = "https://github.com/phase-rs/phase", rev = "b8d3b82c17f09d228b743bd762f3486a9be6d1ef" }
 # The AI's dice: `choose_action` takes any `rand::Rng`, seeded from the game's seed so a game
 # replays the same. 0.9 is the version phase-ai itself is built on.
 rand = "0.9"

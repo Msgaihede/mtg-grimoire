@@ -111,8 +111,11 @@ export interface DeckHeaderBarProps {
   onTop: () => void;
   /** `QuickAdd`'s `targetName` — the pile an add lands in, or `null` under `AUTO_CATEGORY`. */
   quickAddTarget: string | null;
-  /** `QuickAdd`'s `onAdd`: the same write the toolbar's field makes. */
-  onQuickAdd: (card: CardSummary) => void;
+  /**
+   * `QuickAdd`'s `onAdd`: the same write the toolbar's field makes. `null` draws no field — a
+   * draft deck's editor, which is built from its Pool alone (Draft & Packs, spec §5).
+   */
+  onQuickAdd: ((card: CardSummary) => void) | null;
   /**
    * The deck's two lists and the comparison between them, or `null` for a deck with no plan —
    * which draws neither the switch nor `Compare`, the header's own rule: a two-way switch over
@@ -396,12 +399,14 @@ export function DeckHeaderBar({
                   `addTo` the header's instance calls. Its width follows the rung, and its status
                   line goes under it rather than beside it: this line has no room beside
                   anything, and what is under it is the deck. */}
-              <QuickAdd
-                targetName={quickAddTarget}
-                onAdd={onQuickAdd}
-                fieldClassName={QUICK_ADD_WIDTH[width]}
-                status="below"
-              />
+              {onQuickAdd !== null && (
+                <QuickAdd
+                  targetName={quickAddTarget}
+                  onAdd={onQuickAdd}
+                  fieldClassName={QUICK_ADD_WIDTH[width]}
+                  status="below"
+                />
+              )}
 
               {lists && (
                 <>

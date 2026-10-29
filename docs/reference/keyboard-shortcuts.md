@@ -261,6 +261,12 @@ is again the one destination without a chord, for its own reason. `nav.test.ts` 
 entry as `settings`. Another breaking change to a binding readers have in their fingers, and it
 belongs in the release note as one.
 
+### Draft & Packs joined the rail without a chord
+
+**Draft & Packs (2026-10-29) sits between Playtesting and Settings and has no digit**: the run was
+exactly full, and a chord for it would have pushed Settings off `Ctrl+9` for a fourth renumbering,
+so `CHORD_NAV` leaves out `draft` by id, beside `shared`, and every existing chord stays where it was.
+
 ## Undo and redo on the game boards
 
 **`Ctrl+Z` takes the last action back on the game board, against the goldfish or the AI; `Ctrl+Y`

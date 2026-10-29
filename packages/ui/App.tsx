@@ -26,7 +26,7 @@ import { useAppStore } from "@/lib/store";
 import { useUpdate, type Update } from "@/lib/useUpdate";
 
 /**
- * **Six views are a chunk of their own each, fetched the first time the reader opens one**
+ * **Seven views are a chunk of their own each, fetched the first time the reader opens one**
  * (issue #557). Every view used to be a static import here, so the app's first script was one
  * 1.72 MB file (537 KB gzipped) that carried the scanner, `jsQR` for the pairing camera, the
  * Settings panels and four more views the reader may never open in a session — and on the web
@@ -37,8 +37,8 @@ import { useUpdate, type Update } from "@/lib/useUpdate";
  * the Collection, the Wishlist and the Decks view — stay in the first chunk: the app opens on one
  * of them (`useStartView`), the sidebar's drop targets borrow their writes, and a fetch on a
  * press is a blank frame on the views a reader moves between most. Scanner, Settings,
- * Trade, Playtesting and Shared are the ones a session can go without, and the scanner and
- * Settings are where the heavy dependencies are.
+ * Trade, Playtesting, Draft & Packs and Shared are the ones a session can go without, and the
+ * scanner and Settings are where the heavy dependencies are.
  *
  * A named export each, so `.then` lifts it into the default `lazy` wants. **The `import()`
  * literals are what Vite splits on**, so they stay written out here rather than built from a
@@ -55,6 +55,12 @@ const TradePage = lazy(() =>
 );
 const PlaytestingPage = lazy(() =>
   import("@/features/playtesting/PlaytestingPage").then((m) => ({ default: m.PlaytestingPage })),
+);
+// **Draft & Packs** (2026-10-29): drafting against phase.rs's bots or a lobby's pod, and opening
+// boosters against their average. Desktop only, and occasional by nature — a session that never
+// drafts never fetches the booster generator, the pick board or the lobby.
+const DraftPage = lazy(() =>
+  import("@/features/draft/DraftPage").then((m) => ({ default: m.DraftPage })),
 );
 // **The goldfish**, the Decks view's third state: a game of the open deck against the goldfish on
 // phase.rs's rules engine — the playtest board, opened from the editor. Lazy for the reason the
@@ -95,6 +101,10 @@ function ActiveView({ update }: { update: Update }) {
   if (activeView === "scanner") return <ScannerPage />;
   if (activeView === "trade") return <TradePage />;
   if (activeView === "playtesting") return <PlaytestingPage />;
+  // No chord, like Shared but for its own reason: it arrived with every digit spoken for, and a
+  // digit for it would have pushed Settings off `Ctrl+9` (`AppShell`'s `CHORD_NAV`). A draft's
+  // deck is built in the Decks view's editor, in its draft mode (`features/draft/navigation.ts`).
+  if (activeView === "draft") return <DraftPage />;
   if (activeView === "settings") return <SettingsPage update={update} />;
   // The gallery is the Decks view in its first state and the editor is the same view with a
   // deck open — one destination, two states, which is why the id lives in the store and not in

@@ -123,10 +123,13 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
        *
        * **Nine is the ceiling this spelling has**: `Ctrl+0` is not a tenth step of this run — it
        * reads as zero and sits at the wrong end of the keyboard — so a rail longer than nine has
-       * to leave rows off. The rail is ten rows, and **`shared` is the one that goes without,
+       * to leave rows off. The rail is eleven rows, and **`shared` is one that goes without,
        * because its row is _conditional_.** A chord's whole value is that it does not move; a
        * digit bound to a row that appears and disappears would mean two things to two readers.
-       * That is a reason no amount of room would change.
+       * That is a reason no amount of room would change. **`draft` (Draft & Packs, 2026-10-29)
+       * is the other**, for the opposite reason: it is always drawn, but it arrived with all
+       * nine digits spoken for, and taking one would have renumbered Settings off `Ctrl+9`.
+       * `AppShell`'s `CHORD_NAV` leaves both out by name, so the digits did not move.
        *
        * ⚠️ **The run has been renumbered three times**, and each was a break in a binding
        * readers have in their fingers. Home's arrival at the top pushed every digit one row down
@@ -231,6 +234,9 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
    * scope draws too.
    */
   playtesting: BOARD,
+  // The Draft & Packs page binds nothing of its own: a pick is a click (or a double-click) on
+  // the card, and its confirm is a focused button rather than a chord live across the view.
+  draft: [],
   settings: [],
   deckEditor: [
     { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },

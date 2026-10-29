@@ -51,6 +51,7 @@ const VIEW_IDS: Record<StartView, true> = {
   scanner: true,
   trade: true,
   playtesting: true,
+  draft: true,
   settings: true,
 };
 

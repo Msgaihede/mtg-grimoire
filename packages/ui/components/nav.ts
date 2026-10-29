@@ -3,6 +3,7 @@ import {
   Handshake,
   Heart,
   House,
+  PackageOpen,
   Receipt,
   Search,
   Settings,
@@ -20,7 +21,7 @@ export interface NavEntry {
 }
 
 /**
- * The ten destinations, in the order the column draws them — and the order is the point.
+ * The eleven destinations, in the order the column draws them — and the order is the point.
  *
  * Home first, then the way into the database, then the three lists the reader owns, then the
  * three things a reader *does* with them, then Settings. **Home is at the top because it is where
@@ -33,6 +34,11 @@ export interface NavEntry {
  *
  * **`shared` is a list of cards too, which is why it is filed with them rather than beside
  * Scanner** — and it is the one the reader does not own, which is why it is last of the four.
+ *
+ * **`draft` (Draft & Packs, 2026-10-29) is the second row with no chord**, after Playtesting and
+ * before Settings: the run of digits was full, and giving it one would have pushed Settings off
+ * `Ctrl+9` — a renumbering of a binding readers already have. `AppShell`'s `CHORD_NAV` leaves it
+ * out, as it leaves out `shared`.
  *
  * **This module is still the whole set, and `AppShell` is what hides a row.** Shared appears only
  * once a reader has opened a link (spec decision 6), and the filter lives at the shell rather
@@ -86,7 +92,16 @@ export const NAV: readonly NavEntry[] = [
   // whole record of why an insertion or a removal anywhere but the end renumbers.
   { id: "trade", label: "Trade", Icon: Receipt },
   { id: "playtesting", label: "Playtesting", Icon: Swords },
+  // Draft & Packs (2026-10-29): drafting against phase.rs's bots or a lobby's pod, and opening
+  // boosters. `PackageOpen` because both halves begin by tearing a pack open. Desktop only — the
+  // light edition's `LIGHT_VIEWS` does not hold it.
+  //
+  // ⚠️ **No chord, deliberately.** Every digit was spoken for and Settings sits on `Ctrl+9`; a
+  // row here with a digit would have renumbered Settings for the fourth time. So it goes without,
+  // like Shared, and `CHORD_NAV` filters it out by name — the digits do not move.
+  { id: "draft", label: "Draft & Packs", Icon: PackageOpen },
   // `Ctrl+9` — Settings' chord from 2026-09-08 until Home pushed it off the end of the run, and
-  // again since the Tagger row left (issue #937): ten rows, Shared without a digit, nine chords.
+  // again since the Tagger row left (issue #937): eleven rows, Shared and Draft & Packs without a
+  // digit, nine chords.
   { id: "settings", label: "Settings", Icon: Settings },
 ];

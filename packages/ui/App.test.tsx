@@ -665,6 +665,7 @@ it("loads the occasional views on first open rather than with the app", () => {
     "trade/TradePage",
     "playtesting/PlaytestingPage",
     "playtesting/GoldfishPage",
+    "draft/DraftPage",
     "share/SharedPage",
   ]) {
     expect(appSource).toContain(`import("@/features/${view}")`);
@@ -680,7 +681,7 @@ it("swaps the main pane when a sidebar entry is picked", async () => {
   // The ribbon's `h1` is the only place the view is named — the placeholder used to
   // repeat it as an `h2`, which was a second heading saying the same word.
   expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeInTheDocument();
-  // `find`, not `get`: Settings is one of the six views `App.tsx` loads on first open (issue
+  // `find`, not `get`: Settings is one of the seven views `App.tsx` loads on first open (issue
   // #557), so its panels arrive a tick after the ribbon has already named the view.
   expect(await screen.findByText(/import \(coming soon\)/i)).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();

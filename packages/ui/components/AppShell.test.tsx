@@ -331,7 +331,7 @@ it("renders nav and refresh button", async () => {
   //
   // **In DOM order, because the order is a decision rather than the array's history** — Home
   // first, then the two ways into the database, then the three lists the reader owns, then
-  // Scanner, then the two placeholders, then Settings.
+  // Scanner, then the two placeholders, then Draft & Packs, then Settings.
   // Separate `getByRole` calls stayed green through any shuffle of the column, which is
   // the one thing about this list a reader would notice from across the room. `within` the rail
   // keeps the ribbon's own title out of the answer, and the rail's foot — the notifications
@@ -350,6 +350,7 @@ it("renders nav and refresh button", async () => {
     "Scanner",
     "Trade",
     "Playtesting",
+    "Draft & Packs",
     "Settings",
     "Notifications",
     "Collapse",
@@ -404,6 +405,7 @@ describe("the Shared row", () => {
       "Scanner",
       "Trade",
       "Playtesting",
+      "Draft & Packs",
       "Settings",
       "Notifications",
       "Collapse",
@@ -869,6 +871,7 @@ describe("collapsing the sidebar", () => {
       "Scanner",
       "Trade",
       "Playtesting",
+      "Draft & Packs",
       "Settings",
     ]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
@@ -1582,6 +1585,32 @@ describe("the shell's keyboard bindings", () => {
     // The end of the run: Settings, which Home had pushed off it until the Tagger row left.
     await user.keyboard("{Control>}9{/Control}");
     expect(useAppStore.getState().activeView).toBe("settings");
+  });
+
+  /**
+   * Draft & Packs (2026-10-29) sits between Playtesting and Settings on the rail and on no digit:
+   * the run was full, and a chord for it would have pushed Settings off `Ctrl+9`. So `Ctrl+8` and
+   * `Ctrl+9` are where they were, and no digit lands on the new row.
+   */
+  it("gives Draft & Packs no digit, and leaves Ctrl+8 and Ctrl+9 where they were", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    for (const digit of ["1", "2", "3", "4", "5", "6", "7", "8", "9"]) {
+      await user.keyboard(`{Control>}${digit}{/Control}`);
+      expect(useAppStore.getState().activeView).not.toBe("draft");
+    }
+    await user.keyboard("{Control>}8{/Control}");
+    expect(useAppStore.getState().activeView).toBe("playtesting");
+    await user.keyboard("{Control>}9{/Control}");
+    expect(useAppStore.getState().activeView).toBe("settings");
+
+    await user.click(screen.getByRole("button", { name: "Draft & Packs" }));
+    expect(useAppStore.getState().activeView).toBe("draft");
   });
 
   it("does not switch view while a modal is open", async () => {
