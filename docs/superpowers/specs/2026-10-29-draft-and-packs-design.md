@@ -231,6 +231,33 @@ that holds a pack has picked), `auto_pick(seat)` (the bot's choice for a person)
 `draft` is the page's name for a draft, as `playtest`'s `game` is: a call naming a replaced draft is
 refused.
 
+## 4a. Commander and Winston drafts (the owner's follow-up, 2026-10-29)
+
+Every draft type phase.rs's page offers is offered here: Quick, Sealed, Cube, Pod, **Commander** and
+**Winston**.
+
+- **Commander** → `DraftKind::CommanderDraft`: you + 3 bots (draft-core allows 3–8 seats), three
+  boosters each, **two cards a pick** (`picks_per_step: 2`), a 60-card deck that designates one
+  commander (`commanders: 1`). Commander Legends' sets (CMR, CLB) are what the format is built for
+  and are offered first; any set's draft booster is allowed.
+- **Winston** → `DraftKind::Winston` (`PackDistribution::SharedStackPiles { pile_count: 3 }`): you +
+  1 bot (2–4 seats), three boosters each shuffled into one face-down stack. On your turn you look at
+  pile 1: take it (and it is refilled from the stack) or decline it (one card from the stack is
+  added to it) and look at the next; declining the last pile takes the stack's top card. The view's
+  `stack` (`WinstonView`) tells the deciding seat the active pile's cards and everyone else counts.
+  The bot's turn is phase.rs's `winston_decision` (`draft-wasm/src/bot_ai.rs`, over
+  `phase_ai::winston_eval`), ported like the pick-and-pass bot.
+- **A pod drafts any of the three** (`DraftSetup::pod_format`: `booster` 2–8 seats, `commander` 3–8,
+  `winston` 2–4); empty seats are bots.
+- Wire additions: `DraftMode::{Commander, Winston}`, `PodFormat`, `DraftSetup::pod_format`
+  (`#[serde(default)]`), `DraftView::{pod_format, picks_per_step, commanders, stack}`, `WinstonView`,
+  `WinstonPile`. Commands: `draft_winston(draft, pile, take) -> DraftView`;
+  `lobby_winston(pile, take) -> ()` with the guest body `{"v":1,"kind":"winston","pile":n,"take":bool}`.
+  A Commander pick is `draft_pick` / `lobby_pick` with two ids.
+- A Commander draft's deck: `draft_deck_create(name, cardIds, commander: true)` makes a virtual
+  **Casual** deck (no 40-card Limited floor) with a **Commander** pile beside Deck and Pool; the
+  draft bar checks 60 cards and one commander itself.
+
 ## 5. The deck (`crates/grimoire-core/src/draft_deck.rs`)
 
 A drafted pool becomes a **virtual** deck (`virtual_only = 1`: no cardboard, no allocation, no

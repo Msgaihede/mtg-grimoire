@@ -11,8 +11,10 @@ use serde::{Deserialize, Serialize};
 use crate::Difficulty;
 
 /// Which kind of draft: boosters from sets with bots (`quick`), six boosters straight into the
-/// pool (`sealed`), boosters dealt from a cube list with bots (`cube`), or people from a lobby
-/// with bots in the empty seats (`pod`).
+/// pool (`sealed`), boosters dealt from a cube list with bots (`cube`), people from a lobby with
+/// bots in the empty seats (`pod`, in its [`PodFormat`]), a Commander draft — two cards a pick, a
+/// 60-card deck with a commander — with bots (`commander`), or a Winston draft against a bot
+/// (`winston`): one shared face-down stack dealt into three piles, each taken or declined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DraftMode {
@@ -20,6 +22,19 @@ pub enum DraftMode {
     Sealed,
     Cube,
     Pod,
+    Commander,
+    Winston,
+}
+
+/// What a pod drafts: boosters passed round the table (`booster`), a Commander draft
+/// (`commander`), or a Winston draft (`winston`). Read only when the mode is `pod`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PodFormat {
+    #[default]
+    Booster,
+    Commander,
+    Winston,
 }
 
 /// Picking, or done picking and building. Everything phase's reducer has past drafting is
@@ -48,8 +63,11 @@ pub struct DraftSetup {
     pub packs: Vec<Vec<Vec<String>>>,
     /// Per round, the set code to show (`""` for a cube).
     pub pack_sets: Vec<String>,
-    /// The deck the pool is built into: 40 for Limited.
+    /// The deck the pool is built into: 40 for Limited, 60 for a Commander draft.
     pub min_deck_size: u32,
+    /// What a pod drafts; `booster` for every other mode.
+    #[serde(default)]
+    pub pod_format: PodFormat,
 }
 
 impl DraftSetup {
@@ -131,6 +149,37 @@ pub struct DraftView {
     pub seats: Vec<DraftSeatView>,
     pub pack_sets: Vec<String>,
     pub min_deck_size: u32,
+    pub pod_format: PodFormat,
+    /// Cards a pick takes: 2 in a Commander draft, else 1.
+    pub picks_per_step: u8,
+    /// Commanders the deck designates: 1 in a Commander draft, else 0.
+    pub commanders: u8,
+    /// A Winston draft's table; `None` for every other.
+    pub stack: Option<WinstonView>,
+}
+
+/// A Winston draft's table from one seat: the face-down stack's count, the three piles, and whose
+/// turn it is. A pile's cards are told only to the seat whose turn it is, for the pile it is
+/// looking at — everyone else, and every other pile, is a count.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinstonView {
+    pub main_count: u32,
+    pub piles: Vec<WinstonPile>,
+    pub turn_seat: u8,
+    pub your_turn: bool,
+    /// The pile the turn is deciding on, 0-based.
+    pub active_pile: Option<u8>,
+}
+
+/// One of a Winston draft's piles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WinstonPile {
+    pub count: u32,
+    /// Its cards, for the seat deciding on it; empty for everyone else.
+    pub cards: Vec<DraftCard>,
+    pub active: bool,
 }
 
 /// The solo draft left off, for *Draft in progress*.
