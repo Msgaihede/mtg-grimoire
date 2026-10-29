@@ -18,11 +18,11 @@ use crate::{
     deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, draft,
     entry_tags, errors, export, home, images, import, index, integration, listview, markcolors,
-    marketplace, marketplace_feed, mirror, nav, new_printings, packs, panelwidth, paths, playtest,
-    price_history, recent_cards, reset, scan_history, scanner, scansounds, schema, scryfall,
-    search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide, startup,
-    startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets, update,
-    value_history, window, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    marketplace, marketplace_feed, mcp, mirror, nav, new_printings, packs, panelwidth, paths,
+    playtest, price_history, recent_cards, reset, scan_history, scanner, scansounds, schema,
+    scryfall, search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide,
+    startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets,
+    update, value_history, window, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -448,6 +448,13 @@ pub fn run() {
             integration::integrations_enable,
             integration::integrations_set_fields,
             integration::integrations_disable,
+            // The local MCP server (issue #1395): its switch, its token and its port. Desktop
+            // only — the server is this process's, on this computer's loopback.
+            mcp::mcp_status,
+            mcp::mcp_enable,
+            mcp::mcp_disable,
+            mcp::mcp_rotate_token,
+            mcp::mcp_set_port,
             // The review list (issue #1396, the PR 3 plan §3.5): the intents this device's policy
             // parks, Apply and Decline, and the per-kind switches — each the core's command of the
             // same name on a worker, through the sync lane.
@@ -893,6 +900,9 @@ pub fn run() {
             // starts one, opens one or joins one.
             app.manage(draft::DraftSlot::default());
             app.manage(draft::lobby::LobbySlot::default());
+            // The local MCP server's one listener — empty until `start` resumes a switched-on
+            // server or the panel switches one on.
+            app.manage(Arc::new(mcp::McpSlot::default()));
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("startup".to_owned())
@@ -1126,6 +1136,12 @@ fn start(app: &tauri::AppHandle) {
     // tables that did; it replaced the shell's five-minute share timer. On an installation that
     // has connected nothing it is one local read every fifteen seconds.
     tauri::async_runtime::spawn(crate::integration::publish::run(state.core.clone()));
+
+    // The local MCP server, if the reader left it on (issue #1395). After `settle` like every
+    // background task: a tool call is a command, and nothing may answer one before the state is
+    // in place. A port taken since the last launch is the panel's to say, not a launch failure.
+    let slot = app.state::<Arc<mcp::McpSlot>>().inner().clone();
+    tauri::async_runtime::spawn(mcp::resume(state.clone(), slot));
 }
 
 /// Start the launch's optional feeds, each on a task of its own: the selected marketplace's

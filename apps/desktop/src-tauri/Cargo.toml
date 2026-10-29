@@ -182,6 +182,16 @@ tokio = { version = "1", features = ["fs", "io-util", "net", "rt", "sync", "time
 # is the check), and no second TLS stack comes in with it.
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
+# The local MCP server (`src/mcp/`, issue #1395): an HTTP/1.1 listener on `127.0.0.1` that an AI
+# agent on this computer talks streamable-HTTP MCP to. **Every one of these was already in
+# `Cargo.lock`** — `hyper` and `hyper-util` under `reqwest`, `http-body-util` and `bytes` under
+# it and `httpmock` — so the lockfile gains edges and no package. `server` + `http1` and nothing
+# else: no HTTP/2 (no MCP client on a loopback asks for it), no client half, no `full`.
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
 # Waiting for the process an update replaced to actually terminate, which is the one thing
 # std cannot express: there is no portable "is this PID alive". `0.61` is already in the
 # tree via tauri/tao, so this adds no build. Two functions, hence two features.

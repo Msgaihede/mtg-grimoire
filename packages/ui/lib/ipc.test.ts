@@ -83,6 +83,9 @@ import shareRsDesktop from "../../../apps/desktop/src-tauri/src/share/commands.r
 // that obeys it, and the panel's status beside the switch's commands.
 import integrationProjectionRs from "../../../crates/grimoire-core/src/integration/projection.rs?raw";
 import integrationSettingsRs from "../../../crates/grimoire-core/src/integration/settings.rs?raw";
+// The local MCP server (issues #1395 and #1396, PR 1): the desktop's own module — a socket on the
+// reader's computer, not the engine's, so it is in `src-tauri` alone.
+import mcpRs from "../../../apps/desktop/src-tauri/src/mcp/mod.rs?raw";
 // PR 3's review list (plan `2026-10-29-integrations-intents.md` §3.5): the parked intents and the
 // device's policy, beside the four commands that answer them.
 import integrationReviewRs from "../../../crates/grimoire-core/src/integration/review.rs?raw";
@@ -168,6 +171,7 @@ import {
   type DeckTokenRow,
   type FeedProgressEvent,
   type FolderRule,
+  type McpStatus,
   type OracleTagProgressEvent,
   type RelayOutcome,
   type ScannerSubmission,
@@ -5680,6 +5684,131 @@ describe("the integrations wrappers name the commands plan §3.3 declares", () =
 });
 
 /**
+ * The local MCP server's five commands (issues #1395 and #1396, PR 1) — desktop-only, and every
+ * one answers a fresh {@link McpStatus}.
+ *
+ * Four take no arguments, `sticky_notes`' trap: an argument object sent to a command that
+ * declares none is a deserialisation error and not a type error. `mcp_set_port` takes one, and
+ * `port` under that name is the case worth writing down — `invoke` matches by name, and a wrapper
+ * that sent `{ value }` would type-check and be refused with a sentence about a missing field.
+ *
+ * **The parameters are read off the crate, found by search** (the entry tags' way): whichever
+ * file under `src-tauri/src/mcp/` declares a command, it must be declared exactly once and with
+ * exactly the parameters the wrapper sends — the managed state and the app handle aside, which
+ * Tauri injects and no caller names. `port` is held to `u16` too, because that is what the panel's
+ * 1024–65535 check is the lower half of: a wider type would accept a port the panel refuses.
+ */
+describe("the local MCP server's wrappers name the commands mcp/mod.rs declares", () => {
+  const status: McpStatus = {
+    enabled: true,
+    running: true,
+    port: 39147,
+    url: "http://127.0.0.1:39147/mcp",
+    token: "ab".repeat(32),
+    error: null,
+  };
+
+  it.each([
+    ["mcpStatus", "mcp_status"],
+    ["mcpEnable", "mcp_enable"],
+    ["mcpDisable", "mcp_disable"],
+    ["mcpRotateToken", "mcp_rotate_token"],
+  ] as const)("%s takes no arguments", async (method, command) => {
+    invoke.mockResolvedValue(status);
+
+    // The answer is handed back whole: the panel writes it straight into its cache.
+    expect(await ipc[method]()).toEqual(status);
+    expect(invoke).toHaveBeenCalledWith(command);
+  });
+
+  it("mcpSetPort sends the port under `port`", async () => {
+    invoke.mockResolvedValue({ ...status, port: 40000, url: "http://127.0.0.1:40000/mcp" });
+
+    await ipc.mcpSetPort(40000);
+
+    expect(invoke).toHaveBeenCalledWith("mcp_set_port", { port: 40000 });
+  });
+
+  const MCP_SOURCES = import.meta.glob<string>(
+    ["/apps/desktop/src-tauri/src/mcp/**/*.rs", "!/apps/desktop/src-tauri/src/mcp/**/*tests.rs"],
+    { query: "?raw", import: "default", eager: true },
+  );
+
+  /**
+   * `name: type` for each parameter of the one `#[tauri::command]` called `command` under `mcp/`,
+   * less what Tauri injects. Depth-counted from the `(` to its match, so a `State<'_, Mutex<…>>`
+   * with commas of its own is one parameter.
+   */
+  const declared = (command: string): [name: string, type: string][] => {
+    const commandAt = new RegExp(`#\\[tauri::command[^\\]]*\\]\\s*pub (?:async )?fn ${command}\\(`);
+    const homes = Object.entries(MCP_SOURCES).flatMap(([path, src]) => {
+      const m = commandAt.exec(src);
+      return m === null ? [] : [[path, src.slice(m.index + m[0].length)] as const];
+    });
+    expect(
+      homes.map(([path]) => path),
+      `\`${command}\` should be one \`#[tauri::command]\` under src-tauri/src/mcp/`,
+    ).toHaveLength(1);
+    const rest = homes[0][1];
+    const params: string[] = [];
+    let depth = 0;
+    let from = 0;
+    for (let i = 0; i < rest.length; i += 1) {
+      const c = rest[i];
+      if (c === "(" || c === "<" || c === "[") depth += 1;
+      else if ((c === ">" && rest[i - 1] !== "-") || c === "]") depth -= 1;
+      else if (c === ")") {
+        if (depth === 0) {
+          params.push(rest.slice(from, i));
+          break;
+        }
+        depth -= 1;
+      } else if (c === "," && depth === 0) {
+        params.push(rest.slice(from, i));
+        from = i + 1;
+      }
+    }
+    return (
+      params
+        .map((p) => p.trim())
+        .filter((p) => p !== "")
+        .map((p) => {
+          const at = p.search(/:(?!:)/);
+          return [
+            p
+              .slice(0, at)
+              .replace(/^mut\s+/, "")
+              .trim(),
+            p.slice(at + 1).trim(),
+          ] as [string, string];
+        })
+        // `State` at the end of a name, not a word: the module's `SlotState<'_>` is an alias of
+        // `tauri::State`, injected like it.
+        .filter(([, type]) => !/(State|AppHandle|Window|Webview)\b/.test(type))
+    );
+  };
+
+  it.each(["mcp_status", "mcp_enable", "mcp_disable", "mcp_rotate_token"])(
+    "%s declares no parameter a caller names",
+    (command) => {
+      expect(
+        Object.keys(MCP_SOURCES).length,
+        "nothing read under src-tauri/src/mcp/",
+      ).toBeGreaterThan(0);
+      expect(declared(command)).toEqual([]);
+    },
+  );
+
+  it("mcp_set_port declares `port: u16` and nothing else a caller names", () => {
+    expect(
+      Object.keys(MCP_SOURCES).length,
+      "nothing read under src-tauri/src/mcp/",
+    ).toBeGreaterThan(0);
+    expect(declared("mcp_set_port")).toEqual([["port", "u16"]]);
+  });
+});
+
+/**
  * The review list's four commands (issue #1396, plan `2026-10-29-integrations-intents.md` §3.5).
  *
  * Arguments by their Rust names, for the switch's reason above: `invoke` drops a misspelt key,
@@ -6493,6 +6622,14 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // already there. A renamed `available` or `entitled` disables the switch for every reader.
     ["IntegrationFields", integrationProjectionRs, "IntegrationFields"],
     ["IntegrationsStatus", integrationSettingsRs, "IntegrationsStatus"],
+    // **The local MCP server's one** (issues #1395 and #1396, PR 1), pinned to its module for the
+    // pair above's reason. Every field is a control or the thing a reader copies: a renamed
+    // `enabled` draws the switch Off over a server that is listening, and the press that follows
+    // asks to start one already started; a renamed `running` is falsy, so a healthy server reads
+    // as enabled-but-not-running and its line goes blank; and a renamed `url` or `token` puts
+    // `undefined` into every client snippet the panel offers — copied, pasted into an agent's
+    // config, and refused there with nothing in this app to say why.
+    ["McpStatus", mcpRs, "McpStatus"],
     // **The review list's three** (plan `2026-10-29-integrations-intents.md` §3.5). A renamed
     // `intents` reads `undefined` and the list draws *nothing waiting* over intents the store
     // holds; a renamed `fixed` is falsy, and Discord's rows draw as switches the reader can turn
