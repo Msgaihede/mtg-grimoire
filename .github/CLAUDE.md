@@ -11,7 +11,7 @@ The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 
 - **`ci-ok` is the single protected check**:
   - Branch protection pins `ci-ok` as the required status check.
   - Acts as an aggregator requiring success or deliberate skip across all job dependencies:
-    `changes`, `frontend`, `rust`, `core`, `powershell`, `storybook`, `android`, and `web`.
+    `changes`, `frontend`, `rust`, `rust-windows`, `core`, `powershell`, `storybook`, `android`, and `web`.
   - `enforce_admins` is `false`: a red PR cannot merge, but direct administrative pushes to `main` remain possible.
 - **CLAUDE.md line budget check**: The `changes` job runs `node scripts/check-claude-md.ts` before classification, failing CI immediately if any `CLAUDE.md` in the repository grows beyond 200 lines.
 - **Path routing (`changes` job)**:
@@ -45,13 +45,16 @@ The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 
   - Pushes to `main` use dedicated concurrency groups so history is never cancelled mid-route.
 - **Job specifics**:
   - **Install**: every job that installs does `pnpm/action-setup` (pinned by SHA, version from `package.json`'s `packageManager`), then `actions/setup-node` with `cache: pnpm`, then `pnpm install --frozen-lockfile`; `scripts/toolchain.test.ts` holds pnpm's step directly above Node's.
-  - **`frontend`**: Matrix of 5 legs: 1 leg for `pnpm build`, `pnpm share:build` and `pnpm lint`; 4 parallel shards for `pnpm test:run --shard=N/4`.
+  - **`frontend`**: Matrix of 7 legs: 1 leg for `pnpm build`, `pnpm share:build` and `pnpm lint`; 6 parallel shards for `pnpm test:run --shard=N/6`.
+    The shards are packed by time, not file count: `scripts/vitest-shard.ts` (the config's `sequence.sequencer`) reads `scripts/vitest-durations.json`; a file it lacks weighs the median. Regenerate with `pnpm test:durations` when one shard runs long. A file is the smallest unit a shard gets, so `packages/ui/stories.test.tsx` (~1100 plays, 304 s alone) is collected as four projects, `stories-1`…`stories-4`, each playing every fourth story (`STORIES_PART`).
   - **`storybook`**: Runs `pnpm build-storybook`. Gates `.storybook/DesignSystem.mdx` and `preview.css`.
-  - **`rust`**: Windows and Linux matrix. Writes a stub `apps/desktop/dist/index.html` (and `apps/light/dist-mobile/index.html`) so `tauri-build` compiles on fresh checkouts.
-    Runs `cargo fmt --check` (Linux only, with `-p` for each workspace member; never `--all`), `clippy --workspace --all-targets -D warnings`,
-    and `cargo test --workspace`. Also runs `crates/card-scanner`'s test suite twice, at `--features cli` and with no feature (the crate as the browser's module links it) — tests only, the crate is not fmt- or clippy-clean.
-    Compiles shipping binaries without dev-dependencies (`cargo check -p mtg-grimoire -p grimoire-light`) and verifies no host enables the core's `testing` feature.
-    `Swatinem/rust-cache` is configured with `workspaces: ". -> target"`: `.cargo/config.toml` pins `target-dir = "target"`, so the workspace builds into `target/` at the repository root.
+  - **`rust`**: three parallel Linux legs (`matrix.part`), each running the same `--workspace` commands the one job did — never a job per crate, which would resolve dependency features per crate and recompile them. Writes a stub `apps/desktop/dist/index.html` (and `apps/light/dist-mobile/index.html`) so `tauri-build` compiles on fresh checkouts.
+    - `lint`: `cargo fmt --check` (with `-p` for each workspace member; never `--all`), `clippy --workspace --all-targets -D warnings`, the shipped binaries without dev-dependencies (`cargo check -p mtg-grimoire -p grimoire-light`, Linux only by the owner's decision) and the `cargo tree` proof that no host enables the core's `testing` feature.
+    - `test`: `cargo test --workspace`.
+    - `card-scanner`: `crates/card-scanner`'s suite twice, at `--features cli` and with no feature (the crate as the browser's module links it) — tests only, the crate is not fmt- or clippy-clean. No cache.
+  - **`rust-windows`**: **not a pull request's job** (the owner's decision, 2026-10-29: it was the critical path at 12–29 min). On a push to `main` routed to `rust`, it runs `clippy --workspace --all-targets` and `cargo test --workspace` on `windows-latest`, so a Windows-only break turns `main`'s `ci-ok` red after the merge.
+  - **Caches — `main` writes, a pull request reads** (2026-10-29): every `Swatinem/rust-cache` step says `save-if: ${{ github.ref == 'refs/heads/main' }}`. The repository has 10 GB of Actions cache and one full run saved ~9.4 GB; pull requests saving their own copies evicted `main`'s, and runs compiled cold. `core` has no cache (1.2 GB a leg for a ~1.5 min job).
+    `workspaces: ". -> target"`: `.cargo/config.toml` pins `target-dir = "target"`, so the workspace builds into `target/` at the repository root.
   - **`core`**: Target compile gate on `ubuntu-24.04` (requires clang ≥ 18 for `sqlite-wasm-rs`) for `wasm32-unknown-unknown` and `aarch64-linux-android`.
     Sets `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` and the NDK `bin` path explicitly because cargo does not read `NDK_HOME`.
   - **`android`**: Builds the light app on `ubuntu-24.04` via `pnpm exec tauri android build --apk --aab --target aarch64` with JDK 21 (debug-signed, no secret), holds it to its version (`scripts/android-release/check-version.sh`),
