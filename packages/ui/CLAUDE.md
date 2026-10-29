@@ -28,6 +28,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **ASCII JSON headers**: Serializing JSON for IPC headers (e.g. the scanner capture's `x-scanner-capture` sidecar) must use `asciiJson` (escapes non-ASCII) to satisfy header byte constraints.
 - **One rejection shape**: every `ipc.*` wrapper rejects with the backend's sentence as a plain `string` on every host (`invoke` runs the rejection through `ipcError`). Never branch on `instanceof Error` for an IPC failure; render it with `ipcError(e)`.
 - **The read graph (`lib/graphql/`)**: the page holds no GraphQL schema and no GraphQL library. The graph is the desktop's (`crates/grimoire-graph`, answered from SQLite); `useGraphQL` sends a document to `graphql_query` as a string and keeps it fresh by the roots each answer names (`extensions.invalidatedBy`). Never add `graphql` or a schema builder back to the page. `features/home/graphCoverage.test.ts` holds every read the home widgets make to a root field of the printed schema. See [graphql.md](../../docs/reference/graphql.md).
+- **Generated widgets (`features/home/generated/`)**: the json-render catalogue a generated widget is drawn from. Each name draws with the app's own part (never a second component for the same job), colours are palette words, inputs write only the widget's own state and actions only navigate. A component added to `catalog.ts` needs its registry entry and a place in an example (`examples.ts`; the suite checks both). See [generated-widgets.md](../../docs/reference/generated-widgets.md).
 
 ---
 
