@@ -269,7 +269,7 @@ fn parse_string_array(text: Option<&str>) -> Option<Vec<String>> {
 }
 
 /// The core's stored word read back as one of an enum's values; an error naming both for a word
-/// this build does not know, as the page's graph refuses one.
+/// this build does not know — a wrong answer is worse than a refused field.
 fn word<T: EnumType>(id: &str) -> Result<T> {
     T::items()
         .iter()
@@ -1806,7 +1806,7 @@ mod tests {
         assert_eq!(runs.into_iter().min(), Some(4));
     }
 
-    /// Stored JSON text is parsed as the page's graph parsed it: text that is not JSON stays
+    /// Stored JSON text is parsed leniently: text that is not JSON stays
     /// visible as a string, and a list keeps only its strings.
     #[test]
     fn stored_json_text_is_read_as_the_page_read_it() {

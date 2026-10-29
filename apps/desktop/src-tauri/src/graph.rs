@@ -5,11 +5,18 @@
 //! The MCP server reaches the same [`Graph`] through the same three methods (`sdl`, `validate`,
 //! `run`), so what a model is told about a document is what the page gets when it runs it.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use grimoire_graph::Graph;
 
 use crate::sync::AppState;
+
+/// The one schema this process builds — the page's command and the MCP server's three graph
+/// tools (`mcp::tools`) both answer from it. Built on first use; cheap to share.
+pub fn graph() -> &'static Graph {
+    static GRAPH: OnceLock<Graph> = OnceLock::new();
+    GRAPH.get_or_init(Graph::new)
+}
 
 /// Run one read of the graph. **Read-only** connection, blocking pool — as every read in this
 /// app is. Never an `Err` for a bad document: a syntax, validation or resolver error is an
@@ -18,16 +25,14 @@ use crate::sync::AppState;
 #[tauri::command]
 pub async fn graphql_query(
     state: tauri::State<'_, Arc<AppState>>,
-    graph: tauri::State<'_, Graph>,
     query: String,
     variables: Option<serde_json::Value>,
     operation_name: Option<String>,
     marketplace: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let core = state.core.clone();
-    let graph = graph.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let response = graph.run(
+        let response = graph().run(
             &core,
             &query,
             variables,

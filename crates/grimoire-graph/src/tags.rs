@@ -1,7 +1,6 @@
 //! Scryfall's two Tagger datasets — **Oracle Tags** (what a card does: `removal`, `ramp`) and
 //! **Art Tags** (what an illustration shows: `dragon`, `forest`) — their tree, their search, each
-//! dataset's freshness, and the tags the reader has muted. Ported from the page's graph
-//! (`packages/ui/lib/graphql/schema/tags.ts`).
+//! dataset's freshness, and the tags the reader has muted.
 //!
 //! A "tag" in this file is only ever one of those two datasets: never an entry tag on a
 //! collection or wishlist row, a deck tag, a deck label or a keyword ability

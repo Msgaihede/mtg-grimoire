@@ -7217,10 +7217,15 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   // that would make the walk ask for an `in` it should not need. Reading the other ~255 files
   // (12 MB) costs this file about three seconds (6.4 s against 3.7 s, 2026-10-11) — the price
   // of a struct in a module nobody imported here still being found.
+  //
+  // **`crates/grimoire-graph` is left out too**: the read graph is not the `ipc` wire. Its
+  // wrapper types are named after the GraphQL types they print (`DeckDetail`, `ReleaseNote`),
+  // which are the core's names on purpose, and none of them is what a command sends.
   const RUST_SOURCES = import.meta.glob<string>(
     [
       "/crates/*/src/**/*.rs",
       "/apps/*/src-tauri/src/**/*.rs",
+      "!/crates/grimoire-graph/**",
       "!/crates/*/src/bin/**",
       "!/{crates/*/src,apps/*/src-tauri/src}/**/tests/**",
       "!/{crates/*/src,apps/*/src-tauri/src}/**/*tests.rs",
@@ -7279,6 +7284,9 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     SyncLiveEvent: 'Rust side is `json!({ "state": state })` in `sync_engine/live.rs`\'s `emit`',
     ReconciledEvent:
       "Rust side is a `json!` of three of `ReconcileStats`' four counts, in `sync.rs` — `skipped` stays home",
+    GraphResponse:
+      "async-graphql's `Response`, serialised by `graph.rs`' `graphql_query` — the GraphQL specification's shape, not a struct of ours",
+    GraphError: "async-graphql's `ServerError`, serialised inside a `GraphResponse`",
   };
 
   const tabled = new Set([...mirrors, ...plainMirrors, ...snakeMirrors].map(([ts]) => ts));

@@ -1571,8 +1571,7 @@ enum ManagedWishlistMode {
 }
 
 """
-A marketplace prices are quoted at. Spelt as `MARKETPLACE_IDS` in `packages/ui/lib/
-marketplace.ts`, lower-case, because that is how the page's graph spells them.
+A marketplace prices are quoted at. A priced field without one answers at the reader's choice.
 """
 enum Marketplace {
 	cardkingdom

@@ -1,5 +1,4 @@
-//! The closed words more than one domain of the graph speaks, spelt as the page's graph spelt
-//! them (and as the core stores them). An enum only one domain uses lives in that domain's file.
+//! The closed words more than one domain of the graph speaks, spelt as the core stores them. An enum only one domain uses lives in that domain's file.
 
 use async_graphql::Enum;
 use serde::Serialize;

@@ -1,5 +1,5 @@
 //! The one preference a widget's numbers depend on — which marketplace prices are quoted at, and
-//! in what currency. Ported from the page's graph (`packages/ui/lib/graphql/schema/prefs.ts`).
+//! in what currency.
 //!
 //! The rest of the page's prefs is window chrome (zoom, pane widths, folds), which no widget
 //! draws. The core stores the marketplace's id and nothing else ([`grimoire_core::marketplace`]);

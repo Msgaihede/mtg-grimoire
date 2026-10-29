@@ -496,9 +496,9 @@ export const ARMS = [
 
   // **The read graph's crate** (2026-10-29): `grimoire-graph`, a read-only GraphQL schema over
   // the core's reads. **Only the desktop links it**, so `rust` formats, lints and tests it, and
-  // `frontend` because `packages/ui/lib/graphql/parity.test.ts` reads its printed
-  // `schema.graphql` as text and holds it to the page's graph. Not `core` and not `web`, for
-  // `grimoire-play`'s reason. Above `crates/*`, which would send it to both.
+  // `frontend` because `packages/ui/features/home/graphCoverage.test.ts` reads its printed
+  // `schema.graphql` as text and holds every home widget's read to a root field of it. Not `core`
+  // and not `web`, for `grimoire-play`'s reason. Above `crates/*`, which would send it to both.
   { match: ["crates/grimoire-graph/*"], jobs: RUST_SIDE },
 
   // The engine: `grimoire-core`, a workspace member three hosts link. `rust` compiles it for

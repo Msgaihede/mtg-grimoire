@@ -3,7 +3,7 @@
 //! binder itself, paged.
 //!
 //! The shapes the wishlist answers too — a breakdown bucket, a shelf count, rule conflicts — are
-//! declared here and `crate::wishlist` uses them, as the page's graph does.
+//! declared here and `crate::wishlist` uses them.
 //!
 //! **Folder scope is one spelling on both lists**: `folderId` names a folder, `rootOnly` narrows
 //! to the cards filed nowhere, and neither is every folder. The core's `CollectionQuery` takes

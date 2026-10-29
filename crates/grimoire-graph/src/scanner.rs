@@ -1,6 +1,5 @@
 //! The scanner's review tray — the cards scanned and not yet added, which the home page's To
-//! review widget counts. Ported from the page's graph (`packages/ui/lib/graphql/schema/
-//! scanner.ts`).
+//! review widget counts.
 //!
 //! The tray is the row the page built, stored as the page sent it ([`grimoire_core::scanner::
 //! stored_tray`]), so its words are read back here as the page reads them over `ipc`.

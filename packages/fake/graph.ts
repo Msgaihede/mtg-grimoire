@@ -1,32 +1,23 @@
 /**
- * The read graph's command, answered by the page's own graph (`@grimoire/ui/lib/graphql/`).
+ * The read graph's command, refused in words.
  *
- * The desktop answers `graphql_query` from SQLite (`crates/grimoire-graph`); the fake answers it by
- * running the same document through the TypeScript schema, whose resolvers call this fake's other
- * handlers. So a story or a suite reads exactly what the page's graph says the data is, and
- * `lib/graphql/parity.test.ts` holds the two schemas to the same shape.
- *
- * Round-tripped through JSON so the answer is what the command's wire carries — plain objects,
- * never graphql-js's `GraphQLError` instances.
+ * The graph is the desktop's alone (`crates/grimoire-graph`, answered from SQLite), and the page
+ * holds no schema to answer it with — so a story or a suite that draws a widget over the graph
+ * hands that widget its answer itself (`vi.spyOn(ipc, "graphqlQuery")`), and anything else that
+ * asks is told, in the specification's shape rather than as a rejection, exactly as a bad
+ * document would be.
  */
-import { runQuery } from "@grimoire/ui/lib/graphql/execute";
-import { isMarketplaceId } from "@grimoire/ui/lib/marketplace";
+import type { GraphResponse } from "@grimoire/ui/lib/ipc";
+
+/** What the fake says to every document. */
+export const GRAPH_ON_THE_DESKTOP = "The read graph is answered by the desktop app alone.";
 
 export function graphHandlers() {
   return {
-    graphql_query: async (args: {
-      query: string;
-      variables?: Record<string, unknown> | null;
-      operationName?: string | null;
-      marketplace?: string | null;
-    }): Promise<unknown> => {
-      const marketplace =
-        args.marketplace && isMarketplaceId(args.marketplace) ? args.marketplace : undefined;
-      const result = await runQuery(
-        { query: args.query, variables: args.variables, operationName: args.operationName },
-        { marketplace },
-      );
-      return JSON.parse(JSON.stringify(result)) as unknown;
-    },
+    graphql_query: (): GraphResponse => ({
+      data: null,
+      errors: [{ message: GRAPH_ON_THE_DESKTOP }],
+      extensions: { invalidatedBy: [] },
+    }),
   };
 }

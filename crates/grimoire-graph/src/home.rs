@@ -1,7 +1,7 @@
 //! The home page's own reads — its layout, the recently viewed strip, set completion, price
 //! movers and one printing's price history, the collection's and the wishlist's value over time,
 //! sticky notes, the new printings feed, deck completion, the deck-card review count and the sets
-//! still to come. Ported from the page's graph (`packages/ui/lib/graphql/schema/home.ts`).
+//! still to come.
 //!
 //! Every argument defaults to what the matching widget asks when nobody has configured it, so a
 //! bare `{ priceMovers { … } }` is the question the Price movers widget asks out of the box.
@@ -9,7 +9,7 @@
 //! **Every money figure here is a decimal amount in the asked marketplace's currency**, and every
 //! instant is Unix **seconds** — the core's `unixepoch()`, never milliseconds.
 //!
-//! **`homeLayout` answers the document as the core stores it.** The page's graph runs
+//! **`homeLayout` answers the document as the core stores it.** The page runs
 //! `parseLayout` (`features/home/layout.ts`) over it, which places a version-1 document's tiles
 //! on the grid — and where a tile lands depends on the footprint the widget registry
 //! (`features/home/widgets.ts`) gives each kind, which is TypeScript's. So a version-1 row answers
@@ -135,7 +135,7 @@ pub enum DeckCompletionMatch {
 }
 
 /// A closed word the core answers as a string, read back — an error naming the word when this
-/// build does not know it, as the page's graph refuses a value outside its enum.
+/// build does not know it — a wrong answer is worse than a refused field.
 fn known<T>(word: &str, what: &str, parse: impl FnOnce(&str) -> Option<T>) -> Result<T> {
     parse(word).ok_or_else(|| async_graphql::Error::new(format!("`{word}` is not a {what}.")))
 }
@@ -469,7 +469,7 @@ impl StickyNote {
 // ── New printings ────────────────────────────────────────────────────────────────────────────
 
 /// A JSON array of strings stored as text, read leniently: anything else is `None`, and an
-/// entry that is not a string is dropped — the page's graph's `stringList`.
+/// entry that is not a string is dropped.
 fn string_list(json: Option<&str>) -> Option<Vec<String>> {
     match serde_json::from_str::<serde_json::Value>(json?).ok()? {
         serde_json::Value::Array(items) => Some(

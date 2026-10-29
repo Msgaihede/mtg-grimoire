@@ -22,8 +22,9 @@ fn answer(graph: &Graph, state: &Arc<State>, query: &str) -> Value {
     response.data.into_json().unwrap()
 }
 
-/// The printout is what `packages/ui/lib/graphql/parity.test.ts` holds to the page's graph, so a
-/// change here is a reviewed diff. `GRAPH_SDL_WRITE=1 cargo test -p grimoire-graph` rewrites it.
+/// The printout is what an agent is handed (`graph_schema`) and what the page's
+/// `graphCoverage.test.ts` reads, so a change here is a reviewed diff.
+/// `GRAPH_SDL_WRITE=1 cargo test -p grimoire-graph` rewrites it.
 #[test]
 fn the_printed_schema_is_the_reviewed_one() {
     let sdl = Graph::new().sdl();

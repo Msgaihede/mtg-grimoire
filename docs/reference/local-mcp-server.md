@@ -14,36 +14,40 @@ an agent reads and adds with the fidelity of a press, at once, and nothing leave
 
 ## 1. What it is, and what it is not
 
-| | |
-| --- | --- |
-| Transport | MCP **streamable HTTP**: `POST /mcp`, one JSON-RPC message (or a batch) per request, answered with one `application/json` body, or `202` and no body for notifications. No SSE stream: `GET` is `405`, which the transport names as the answer of a server that offers none. No session id. |
-| Revisions | `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`. `initialize` answers the client's own revision when it is one of these and the newest otherwise. An `MCP-Protocol-Version` header naming another is `400`. |
-| Address | `127.0.0.1` only (the IPv4 loopback — clients are configured with `127.0.0.1`, never `localhost`, which can resolve to `::1` first). Port `39147` by default, movable in the panel (1024–65535). |
-| Who serves it | **The running app.** Not a second process: a second process opening `user.db` is the single-instance trap (`docs/agent/RUNNING_AND_VERIFYING.md`). Closing the app closes the server; the agent's calls fail until it is open again. |
-| Gating | **None but the token.** It costs the service nothing, so it is free (issue #1396, knob 5). |
-| Platforms | The desktop only. The light app (Android, web) has no server and no row for it. |
+|               |                                                                                                                                                                                                                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transport     | MCP **streamable HTTP**: `POST /mcp`, one JSON-RPC message (or a batch) per request, answered with one `application/json` body, or `202` and no body for notifications. No SSE stream: `GET` is `405`, which the transport names as the answer of a server that offers none. No session id. |
+| Revisions     | `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`. `initialize` answers the client's own revision when it is one of these and the newest otherwise. An `MCP-Protocol-Version` header naming another is `400`.                                                                          |
+| Address       | `127.0.0.1` only (the IPv4 loopback — clients are configured with `127.0.0.1`, never `localhost`, which can resolve to `::1` first). Port `39147` by default, movable in the panel (1024–65535).                                                                                            |
+| Who serves it | **The running app.** Not a second process: a second process opening `user.db` is the single-instance trap (`docs/agent/RUNNING_AND_VERIFYING.md`). Closing the app closes the server; the agent's calls fail until it is open again.                                                        |
+| Gating        | **None but the token.** It costs the service nothing, so it is free (issue #1396, knob 5).                                                                                                                                                                                                  |
+| Platforms     | The desktop only. The light app (Android, web) has no server and no row for it.                                                                                                                                                                                                             |
 
 The remote tier — the same tools for a hosted agent while the computer is off — is PR 5 of the plan,
 over the integrations store. It is not this.
 
 ## 2. The tools
 
-Every tool is a translation onto `grimoire_core::commands::dispatch`, the table the light app's
-hosts answer through. Nothing in `mcp/tools.rs` reads or writes SQL of its own; a refusal is the
+Every tool but the read graph's three is a translation onto `grimoire_core::commands::dispatch`,
+the table the light app's hosts answer through; those three are `crates/grimoire-graph`'s doors,
+over the same read connection. Nothing in `mcp/tools.rs` reads or writes SQL of its own; a refusal is the
 core's own sentence, handed to the agent as a tool result with `isError: true`.
 
-| Tool | Calls | Answers |
-| --- | --- | --- |
-| `find_cards` | `search_cards` (paper printings; one per card unless `allPrintings`) | Printings with their Scryfall id (`cardId`), set, number, rarity, cost, type and price |
-| `get_card` | `card_detail`, `card_holdings` | Oracle text, finishes, legalities, prices per finish, and what the reader owns of the card |
-| `search_collection` | `collection_list` | Entries by name words and folder: printing, finish, condition, language, quantity, folder |
-| `search_wishlist` | `wishlist_list`, `wishlist_folder_list` | Wishes by name words and folder, with whether a wish is for any printing |
-| `list_folders` | `collection_folder_list` / `wishlist_folder_list` / `deck_folder_list` | Folder ids, names and parents; a collection folder's `kind` (only `user` takes an add) |
-| `list_decks` | `deck_list` | Deck ids, names, formats and card counts; archived decks only when asked |
-| `get_deck` | `deck_get` | One list (`live` or `theory`) pile by pile |
-| `add_to_collection` | `collection_add` | Copies of one printing into the root or a `user` folder |
-| `add_to_wishlist` | `wishlist_add` (with `card_detail` for an any-printing wish) | A wish for the printing, or for the card |
-| `add_card_to_deck` | `deck_category_list`, `deck_add_card` | Copies into a named pile (made if missing) or the list's first main pile — `Main deck` when it has none yet (the editor's by-type pile choice is TypeScript's and is not repeated) |
+| Tool                | Calls                                                                  | Answers                                                                                                                                                                                                                                  |
+| ------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `find_cards`        | `search_cards` (paper printings; one per card unless `allPrintings`)   | Printings with their Scryfall id (`cardId`), set, number, rarity, cost, type and price                                                                                                                                                   |
+| `get_card`          | `card_detail`, `card_holdings`                                         | Oracle text, finishes, legalities, prices per finish, and what the reader owns of the card                                                                                                                                               |
+| `search_collection` | `collection_list`                                                      | Entries by name words and folder: printing, finish, condition, language, quantity, folder                                                                                                                                                |
+| `search_wishlist`   | `wishlist_list`, `wishlist_folder_list`                                | Wishes by name words and folder, with whether a wish is for any printing                                                                                                                                                                 |
+| `list_folders`      | `collection_folder_list` / `wishlist_folder_list` / `deck_folder_list` | Folder ids, names and parents; a collection folder's `kind` (only `user` takes an add)                                                                                                                                                   |
+| `list_decks`        | `deck_list`                                                            | Deck ids, names, formats and card counts; archived decks only when asked                                                                                                                                                                 |
+| `get_deck`          | `deck_get`                                                             | One list (`live` or `theory`) pile by pile                                                                                                                                                                                               |
+| `add_to_collection` | `collection_add`                                                       | Copies of one printing into the root or a `user` folder                                                                                                                                                                                  |
+| `add_to_wishlist`   | `wishlist_add` (with `card_detail` for an any-printing wish)           | A wish for the printing, or for the card                                                                                                                                                                                                 |
+| `graph_schema`      | `grimoire_graph::Graph::sdl`                                           | The read graph's whole schema (SDL): everything above and the home page's figures, as one read-only GraphQL schema with a description on every field — what a model writes a home widget's data query against ([graphql.md](graphql.md)) |
+| `graph_validate`    | `Graph::validate`                                                      | Whether a GraphQL query is valid, and every problem with its line and column, without running it                                                                                                                                         |
+| `graph_query`       | `Graph::run`                                                           | The query's answer as a widget gets it: `data`, `errors` (a failed field is `null` beside the rest) and `extensions.invalidatedBy`                                                                                                       |
+| `add_card_to_deck`  | `deck_category_list`, `deck_add_card`                                  | Copies into a named pile (made if missing) or the list's first main pile — `Main deck` when it has none yet (the editor's by-type pile choice is TypeScript's and is not repeated)                                                       |
 
 **The three writes are adds, and only adds** — the issue's list. Nothing changes or removes a row;
 an agent proposing that asks the reader, whose app is open. A quantity is 1–99. Each add is a real
@@ -69,7 +73,7 @@ opens**. So a request meets five gates, in this order, before its body is read (
    passes; any web page, `null`, and `https://` are refused.
 3. **`POST /mcp`** — anything else is `404` or `405`.
 4. **`Authorization: Bearer <token>`**, compared in constant time. The token is 32 random bytes as 64
-   hex digits, made on the first read of the setting, replaced by *New token* and in force on the next
+   hex digits, made on the first read of the setting, replaced by _New token_ and in force on the next
    request (a client holding the old one is refused at once). It lives in `app_meta` `mcp_server`
    beside the switch and the port — a row on no sync spec, so it never leaves this installation.
 5. **At most 1 MiB of body**, counted as it arrives.
@@ -113,7 +117,13 @@ advice, because Windows splits an argument containing a space:
   "mcpServers": {
     "mtg-grimoire": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://127.0.0.1:39147/mcp", "--header", "Authorization:${AUTH}"],
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://127.0.0.1:39147/mcp",
+        "--header",
+        "Authorization:${AUTH}"
+      ],
       "env": { "AUTH": "Bearer <token>" }
     }
   }
@@ -128,7 +138,7 @@ curl -s http://127.0.0.1:39147/mcp -H "Authorization: Bearer <token>" -H "Conten
 
 ## 5. The switch
 
-- **Off by default.** *On* binds the port first and stores the switch only if the bind succeeded,
+- **Off by default.** _On_ binds the port first and stores the switch only if the bind succeeded,
   so a port another program holds is the press's refusal, never a switch that says on over a server
   nobody answers.
 - **At launch**, `desktop::start` resumes a switched-on server after `startup::settle`. A port taken

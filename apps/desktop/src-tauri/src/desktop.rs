@@ -898,8 +898,6 @@ pub fn run() {
             // The board's one game — the goldfish or the AI — empty until a reader starts one
             // from a deck's goldfish button or from Playtesting.
             app.manage(playtest::PlaytestSlot::default());
-            // The read graph's schema, built once for every window and the MCP server.
-            app.manage(grimoire_graph::Graph::new());
             // What the engine plays of each card the Playtesting setup has asked about.
             app.manage(playtest::PlaytestSupport::default());
             // The Draft & Packs page's one draft, and a pod's lobby — empty until a reader

@@ -1,5 +1,4 @@
-//! The app's own release notes, which the Change notes widget draws. Ported from the page's graph
-//! (`packages/ui/lib/graphql/schema/app.ts`).
+//! The app's own release notes, which the Change notes widget draws.
 //!
 //! Read from the notes bundled into this build — every `changelog/<version>.md`, which
 //! `release.yml`'s `publish` makes each release's GitHub body, and each release's day off

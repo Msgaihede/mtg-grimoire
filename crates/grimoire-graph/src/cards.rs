@@ -1,7 +1,6 @@
 //! The cards domain: the card corpus — search, one printing in full, every printing of a card,
-//! prices per finish, the sets, and what the reader holds of a card. Ported from the page's graph
-//! (`packages/ui/lib/graphql/schema/cards.ts`), and answered by the core's own reads
-//! (`search`, `card`).
+//! prices per finish, the sets, and what the reader holds of a card — answered by the core's own
+//! reads (`search`, `card`).
 //!
 //! **One deliberate difference from the page:** `searchCards` takes `filters: CardFilterInput`
 //! ([`crate::filters`]) where the page took `query: String` in Scryfall's syntax, which only

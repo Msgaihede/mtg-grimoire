@@ -67,8 +67,9 @@ pub(crate) fn roots(roots: &[&str]) -> Vec<String> {
     roots.iter().map(|r| (*r).to_owned()).collect()
 }
 
-/// A marketplace prices are quoted at. Spelt as `MARKETPLACE_IDS` in `packages/ui/lib/
-/// marketplace.ts`, lower-case, because that is how the page's graph spells them.
+// Spelt as `MARKETPLACE_IDS` in `packages/ui/lib/marketplace.ts`, lower-case, because that is how
+// the page and the core spell them.
+/// A marketplace prices are quoted at. A priced field without one answers at the reader's choice.
 #[derive(Enum, Copy, Clone, Debug, PartialEq, Eq)]
 #[graphql(rename_items = "lowercase")]
 pub enum Marketplace {
@@ -152,8 +153,8 @@ impl Default for Graph {
 impl Graph {
     pub fn new() -> Self {
         let schema = Schema::build(Query::default(), EmptyMutation, EmptySubscription)
-            // The page's graph counts the same way (`MAX_DEPTH` in `execute.ts`), and
-            // [`Graph::validate`] reports it in words; this is the backstop for `run`.
+            // [`Graph::validate`] reports the depth limit in words; this is the backstop for
+            // `run`.
             .limit_depth(MAX_DEPTH + 1)
             .finish();
         let checked = Arc::new(validate::schema(&sdl_of(&schema)));

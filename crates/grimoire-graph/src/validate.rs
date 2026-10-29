@@ -3,8 +3,7 @@
 //!
 //! async-graphql validates only on the way into an execution, so this reads the schema's own
 //! printout ([`crate::Graph::sdl`]) with apollo-compiler, which checks every rule of the
-//! specification, and adds the graph's two of its own — the same two the page's graph adds
-//! (`packages/ui/lib/graphql/execute.ts`):
+//! specification, and adds the graph's two of its own:
 //!
 //! - **queries only** — there is no `Mutation` type, and a `mutation` or `subscription` is
 //!   refused in words of its own rather than as a missing root;
