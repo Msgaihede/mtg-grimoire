@@ -25,6 +25,7 @@ import {
   goldfishTurn,
   castPick,
   keepPick,
+  lobbyWaiting,
   sacrificePick,
   openingHand,
   optionalEffectPrompt,
@@ -40,7 +41,7 @@ import {
 } from "./fixtures";
 import { playtestLines } from "./log";
 import { replayEntries, useReplay, type ReplayEntry } from "./useReplay";
-import { PlaytestBoard } from "./PlaytestBoard";
+import { PlaytestBoard, type PlaytestBoardProps } from "./PlaytestBoard";
 
 /**
  * The board drawn from a fixture view, each action recorded (`onAct`). There is no engine and no
@@ -57,6 +58,8 @@ function Board({
   opponentNames = ["Boros Aggro"],
   initialPlaymat,
   returnTo,
+  handOver,
+  notice,
 }: {
   view: PlaytestView | null;
   onAct: (a: PlaytestAction) => void;
@@ -69,6 +72,8 @@ function Board({
   opponentNames?: readonly string[];
   initialPlaymat?: Playmat;
   returnTo?: "setup" | "deck";
+  handOver?: PlaytestBoardProps["handOver"];
+  notice?: string | null;
 }): JSX.Element {
   // Handed over a moment after the first paint, as a step's facts arrive after its view.
   const [later, setLater] = useState<PlaytestHappened[] | undefined>(undefined);
@@ -91,6 +96,8 @@ function Board({
       happened={later}
       initialPlaymat={initialPlaymat}
       returnTo={returnTo}
+      handOver={handOver}
+      notice={notice}
     />
   );
 }
@@ -418,6 +425,34 @@ export const GameOver: Story = {
   args: { view: gameOver().view },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByRole("heading", { name: "You won" })).toBeVisible();
+  },
+};
+
+/**
+ * A lobby game (issue #1419) waiting on Bea, a guest at the host's table who has gone offline: the
+ * board settled and read-only but for the stops, no sandbox chip, and the host's way to let the
+ * AI play her seat.
+ */
+export const LobbyWaiting: Story = {
+  args: {
+    view: lobbyWaiting().view,
+    opponentNames: ["Bea"],
+    handOver: () => () => {},
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Waiting for Bea…")).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Let the AI play Bea" })).toBeVisible();
+    await expect(canvas.queryByRole("button", { name: "Sandbox" })).toBeNull();
+  },
+};
+
+/** A lobby game whose lobby has closed: the game is drawn, and the reason said over it. */
+export const LobbyClosed: Story = {
+  args: {
+    view: { ...turnFive().view, lobby: true },
+    opponentNames: ["Bea"],
+    notice: "The lobby closed: the host left.",
   },
 };
 

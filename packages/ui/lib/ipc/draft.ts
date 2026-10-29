@@ -157,19 +157,30 @@ export interface BasicLand {
 /** Hosting a lobby, or a guest in one. */
 export type LobbyRole = "host" | "guest";
 
-/** Where a lobby is. */
-export type LobbyPhase = "connecting" | "open" | "drafting" | "closed";
+/**
+ * What a lobby meets for: a pod's draft (Draft & Packs), or a game on decks (Playtesting, issue
+ * #1419). One lobby at a time, of either kind; each page leaves the other's alone.
+ */
+export type LobbyKind = "draft" | "game";
+
+/** Where a lobby is. A draft's is `drafting` once dealt, a game's `playing`. */
+export type LobbyPhase = "connecting" | "open" | "drafting" | "playing" | "closed";
 
 /** A guest in a lobby. */
 export interface LobbyPeer {
   peer: string;
   name: string;
   online: boolean;
+  /** The name of the deck this guest brings to a game (`lobbyDeck`); `null` until it sent one,
+   *  and always in a draft. */
+  deck: string | null;
 }
 
 /** This app's lobby. */
 export interface LobbyState {
   role: LobbyRole;
+  /** What the lobby is for. A guest's is `null` until the host's room says. */
+  kind: LobbyKind | null;
   code: string;
   phase: LobbyPhase;
   /** This reader's name in the lobby. */
@@ -184,6 +195,7 @@ export interface LobbyState {
 
 /** What a host tells its guests about the room. */
 export interface LobbyRoom {
+  kind: LobbyKind;
   hostName: string;
   label: string;
   peers: LobbyPeer[];
@@ -222,11 +234,11 @@ export const draftCommands = {
   /** Discard: the deck is deleted. */
   draftDeckDiscard: (deckId: number) => invoke<void>("draft_deck_discard", { deckId }),
   /** The five basics, in a printing of `setCodes` where the corpus has one. */
-  draftBasicLands: (setCodes: string[]) =>
-    invoke<BasicLand[]>("draft_basic_lands", { setCodes }),
+  draftBasicLands: (setCodes: string[]) => invoke<BasicLand[]>("draft_basic_lands", { setCodes }),
 
-  /** Open a lobby — a supporter's. */
-  lobbyCreate: (name: string) => invoke<LobbyState>("lobby_create", { name }),
+  /** Open a lobby — a supporter's — for a pod's draft or a game on decks. */
+  lobbyCreate: (name: string, kind: LobbyKind) =>
+    invoke<LobbyState>("lobby_create", { name, kind }),
   lobbyJoin: (code: string, name: string) => invoke<LobbyState>("lobby_join", { code, name }),
   lobbyState: () => invoke<LobbyState | null>("lobby_state"),
   /** Leave; a host closes the lobby. */

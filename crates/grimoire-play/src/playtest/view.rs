@@ -9,6 +9,10 @@
 //!
 //! **What the reader may not see is not sent.** An opponent's hand and library are counts, never
 //! cards; a card an opponent draws is "drew a card" with no name.
+//!
+//! **Every view is from one seat** (issue #1419): in a lobby's game each person at the table is
+//! sent the view from their own, so a guest is `you` in theirs and the host an opponent. The
+//! players are named from that seat, the others in turn order after it.
 
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +31,8 @@ pub enum PlaytestPlayer {
 }
 
 impl PlaytestPlayer {
-    /// Every player, the reader first: index `n` is the engine's `PlayerId(n)`.
+    /// Every player, the reader first: index `n` is `n` seats after the reader's, in turn order —
+    /// the engine's `PlayerId(n)` for the host, whose seat is `PlayerId(0)`.
     pub const ALL: [PlaytestPlayer; 4] = [
         PlaytestPlayer::You,
         PlaytestPlayer::Opponent,
@@ -35,7 +40,7 @@ impl PlaytestPlayer {
         PlaytestPlayer::Opponent3,
     ];
 
-    /// The engine's player number for this player.
+    /// How many seats after the reader's this player sits, in turn order.
     pub fn index(self) -> u8 {
         self as u8
     }
@@ -112,6 +117,11 @@ pub struct PlaytestView {
     pub can_undo: bool,
     /// An undone action can be taken again (`PlaytestAction::Redo`). Never in a replay frame.
     pub can_redo: bool,
+    /// A game with other people at the table, over a lobby (issue #1419): nothing is taken back
+    /// (`can_undo` and `can_redo` stay false) and the sandbox stays off.
+    pub lobby: bool,
+    /// In `Stage::Waiting`, the person the game waits on; `None` at every other stage.
+    pub deciding: Option<PlaytestPlayer>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +141,9 @@ pub enum PlaytestStage {
     Respond,
     /// The engine asks the reader something: a target, a mode, a "may", a card to discard.
     Prompt,
+    /// In a lobby's game: another person at the table is deciding (`deciding` says who). The board
+    /// shows the game and offers nothing; the stops may still be set.
+    Waiting,
     /// Only in a replay frame (`PlaytestFrame`): the game is moving on by itself — the
     /// opponent's turn, a spell resolving, combat damage — and the board watches.
     Watching,

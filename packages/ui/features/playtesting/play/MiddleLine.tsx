@@ -55,7 +55,8 @@ export function MiddleLine({
     <div className={cn("flex items-center gap-3 px-1", className)}>
       <TurnTracker view={view} />
       <StopsButton stops={view.stops} many={view.opponents.length > 1} onStops={onStops} />
-      <SandboxButton on={view.sandbox} onSandbox={onSandbox} />
+      {/* A lobby game has no sandbox (issue #1419): the host refuses it, so no switch. */}
+      {!view.lobby && <SandboxButton on={view.sandbox} onSandbox={onSandbox} />}
       {combat !== null && (
         <span className="flex-none text-xs whitespace-nowrap text-mana-r">{combat}</span>
       )}

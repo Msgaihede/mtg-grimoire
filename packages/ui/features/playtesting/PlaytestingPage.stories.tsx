@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
-import { ipc, type DeckSupport } from "@/lib/ipc";
+import { LOBBY_KEY } from "@/features/draft/lobby/useLobby";
+import { ipc, type DeckSupport, type LobbyState } from "@/lib/ipc";
 import { PlaytestingPage } from "./PlaytestingPage";
 import { supportKey } from "./support";
 
@@ -14,12 +15,18 @@ import { supportKey } from "./support";
  * three copies — and every other deck whole, which is the pair of marks the lobby draws. The
  * defaults make the seeded answers final, so the lobby never asks the fake and is refused.
  */
-function WithEngineAnswers() {
+function WithEngineAnswers({ lobby = null }: { lobby?: LobbyState | null }) {
   const client = useQueryClient();
   const staged = useQuery({
     queryKey: ["story", "playtest-support"],
     queryFn: async () => {
       client.setQueryDefaults(["decks", "playtestSupport"], { staleTime: Infinity, retry: false });
+      // **The fake holds no lobby** (`packages/fake/draft.ts`: no relay, no second app), so a
+      // story of a game lobby's room puts one in the cache the page reads, final like the rest.
+      if (lobby !== null) {
+        client.setQueryDefaults(LOBBY_KEY, { staleTime: Infinity, retry: false });
+        client.setQueryData(LOBBY_KEY, lobby);
+      }
       const decks = await ipc.deckList();
       decks.forEach((deck, i) => {
         const support: DeckSupport =
@@ -156,5 +163,78 @@ export const NoDecks: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText(/needs a deck to play/)).toBeVisible();
+  },
+};
+
+/** A game lobby's room as the fake cannot hold one: the host Ada, and the guests given. */
+function gameLobby(over: Partial<LobbyState> = {}): LobbyState {
+  return {
+    role: "host",
+    kind: "game",
+    code: "K7QX2M",
+    phase: "open",
+    name: "Ada",
+    hostName: "Ada",
+    hostOnline: true,
+    peers: [],
+    label: "",
+    closedReason: null,
+    ...over,
+  };
+}
+
+/**
+ * Hosting a game with friends (issue #1419): the code to share, Bea seated after the host with
+ * the deck she sent, Cy (offline) still picking, and a four-player table's last seat for the AI —
+ * Start waits on Cy's deck and on the host's own and the AI seat's picks.
+ */
+export const HostingAGame: Story = {
+  render: () => (
+    <WithEngineAnswers
+      lobby={gameLobby({
+        peers: [
+          { peer: "p1", name: "Bea", online: true, deck: "Mono Red Burn" },
+          { peer: "p2", name: "Cy", online: false, deck: null },
+        ],
+      })}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByRole("status", { name: "Lobby code" })).toHaveTextContent(
+      "K7QX2M",
+    );
+    const table = canvas.getByRole("group", { name: "Table" });
+    await userEvent.click(within(table).getByRole("button", { name: /^Four-player/ }));
+    await expect(canvas.getByText("Mono Red Burn")).toBeVisible();
+    await expect(canvas.getByText("Picking a deck…")).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Start game" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  },
+};
+
+/** A guest's room: whose lobby it is, the one seat to pick a deck into, and the wait. */
+export const JoinedAGame: Story = {
+  render: () => (
+    <WithEngineAnswers
+      lobby={gameLobby({
+        role: "guest",
+        name: "Bea",
+        peers: [
+          { peer: "p1", name: "Bea", online: true, deck: null },
+          { peer: "p2", name: "Cy", online: true, deck: "Selesnya Tokens" },
+        ],
+      })}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByRole("heading", { name: "Lobby K7QX2M — hosted by Ada" }),
+    ).toBeVisible();
+    await expect(canvas.getByText("Waiting for Ada to start the game.")).toBeVisible();
+    await expect(canvas.getByText("Pick the deck you bring to the table.")).toBeVisible();
   },
 };

@@ -174,6 +174,18 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
     ),
     (
+        "lobby_deck",
+        "Playtesting is desktop-only: a game's lobby seats phase.rs's rules engine, which this host alone links",
+    ),
+    (
+        "lobby_act",
+        "Playtesting is desktop-only: a game's lobby seats phase.rs's rules engine, which this host alone links",
+    ),
+    (
+        "lobby_game_start",
+        "Playtesting is desktop-only: a game's lobby seats phase.rs's rules engine, which this host alone links",
+    ),
+    (
         "packs_booster_set",
         "MTGJSON booster data feeds only the desktop's Draft & Packs page",
     ),

@@ -33,14 +33,15 @@ const TEST_SET: SetSummary = {
 
 const HOSTING: LobbyState = {
   role: "host",
+  kind: "draft",
   code: "K7QX2M",
   phase: "open",
   name: "Ada",
   hostName: "Ada",
   hostOnline: true,
   peers: [
-    { peer: "p1", name: "Bea", online: true },
-    { peer: "p2", name: "Cy", online: false },
+    { peer: "p1", name: "Bea", online: true, deck: null },
+    { peer: "p2", name: "Cy", online: false, deck: null },
   ],
   label: "",
   closedReason: null,
@@ -131,7 +132,12 @@ describe("the host's room", () => {
   it("keeps a Winston pod from starting with more people than it seats", async () => {
     ipcMock.lobbyState.mockResolvedValue({
       ...HOSTING,
-      peers: ["Bea", "Cy", "Dee", "Eve"].map((name, i) => ({ peer: `p${i}`, name, online: true })),
+      peers: ["Bea", "Cy", "Dee", "Eve"].map((name, i) => ({
+        peer: `p${i}`,
+        name,
+        online: true,
+        deck: null,
+      })),
     });
     setup();
     await userEvent.click(await screen.findByRole("button", { name: "Winston" }));

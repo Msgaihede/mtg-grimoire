@@ -1,7 +1,6 @@
 import { useEffect, useId, useState, type JSX } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Bot, Check, Copy, Crown, LogIn, LogOut, Play, Users, X } from "lucide-react";
-import { copyText } from "@/lib/clipboard";
+import { Bot, Crown, LogIn, LogOut, Play, Users, X } from "lucide-react";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -41,17 +40,17 @@ import {
   Segmented,
 } from "../setup/parts";
 import { useDealDraft } from "../setup/useDealDraft";
+import { CodePlate, OnlineDot } from "./LobbyParts";
 import {
   LOBBY_ALPHABET,
   LOBBY_CODE_LENGTH,
   LOBBY_KEY,
+  lobbyFor,
+  lobbyNameMemory as nameMemory,
   normalizeCode,
   useLobbyState,
   useMayHostPod,
 } from "./useLobby";
-
-/** The name the reader goes by in a lobby, for the window's life. */
-const nameMemory = viewMemory<string>("draft.lobbyName");
 /** What the host has chosen: the packs, the bots' skill, what the pod drafts and how many seats
  *  each format's table has. */
 interface HostHeld {
@@ -100,7 +99,8 @@ export function LobbyScreen({
   /** The pod has started: the pick screen, from this seat. */
   onDraft: (draft: number | null, view: DraftView | null, role: DraftRole) => void;
 }): JSX.Element {
-  const lobby = useLobbyState();
+  // A game's lobby is the Playtesting page's (issue #1419): this screen opens on its door.
+  const lobby = lobbyFor(useLobbyState(), "draft");
   const role = lobby?.role ?? null;
   const phase = lobby?.phase ?? null;
 
@@ -175,7 +175,7 @@ function LobbyDoor({ closed }: { closed: LobbyState | null }): JSX.Element {
     try {
       const state =
         which === "create"
-          ? await ipc.lobbyCreate(name.trim())
+          ? await ipc.lobbyCreate(name.trim(), "draft")
           : await ipc.lobbyJoin(code, name.trim());
       client.setQueryData(LOBBY_KEY, state);
     } catch (e) {
@@ -271,51 +271,6 @@ function LobbyDoor({ closed }: { closed: LobbyState | null }): JSX.Element {
   );
 }
 
-/** The code, large, and the way to copy it. */
-function CodePlate({ code }: { code: string }): JSX.Element {
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (!copied) return;
-    const t = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(t);
-  }, [copied]);
-  return (
-    <div className={cn(PANEL, "flex flex-col gap-3 p-5")}>
-      <h3 className={LABEL}>Lobby code</h3>
-      <div className="flex flex-wrap items-center gap-4">
-        <output
-          aria-label="Lobby code"
-          className="font-mono text-5xl font-semibold tracking-[0.25em] text-accent select-all"
-        >
-          {code}
-        </output>
-        <button
-          type="button"
-          onClick={() => {
-            copyText(code).then(
-              () => setCopied(true),
-              (e: unknown) => setError(ipcError(e)),
-            );
-          }}
-          className={QUIET_BUTTON}
-        >
-          {copied ? (
-            <Check className="size-4 text-ok" aria-hidden="true" />
-          ) : (
-            <Copy className="size-4" aria-hidden="true" />
-          )}
-          {copied ? "Copied" : "Copy"}
-        </button>
-      </div>
-      <p className="m-0 text-xs text-dim">
-        Anyone with the code can join — no membership needed. The lobby lasts six hours.
-      </p>
-      <InlineError message={error} />
-    </div>
-  );
-}
-
 /** Who is in the room: the host, each guest (online or dropped), and how many bots fill in. */
 function People({
   lobby,
@@ -381,16 +336,6 @@ function People({
         )}
       </ul>
     </div>
-  );
-}
-
-function OnlineDot({ online }: { online: boolean }): JSX.Element {
-  return (
-    <span
-      role="img"
-      aria-label={online ? "Online" : "Offline"}
-      className={cn("size-2 shrink-0 rounded-full", online ? "bg-ok" : "bg-dim/50")}
-    />
   );
 }
 

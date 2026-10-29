@@ -136,6 +136,13 @@ The webview reaches no host but its own (the desktop CSP), so the socket is the 
 lobby in `apps/desktop/src-tauri/src/draft/lobby.rs` that applies a guest's pick to the draft and
 sends every seat its view, and tells the page through `lobby:state` and `draft:view`.
 
+**A lobby seats a draft or a game** (`LobbyKind`, issue #1419): the Playtesting page opens the same
+lobby for a game, and the host's room tells its guests which (`LobbyRoom.kind`; a guest's
+`LobbyState.kind` is `null` until it does). A game's lobby carries each guest's deck name beside
+its seat (`LobbyPeer.deck`) and is `playing` once started where a draft's is `drafting`. Each page
+draws only its own kind; [playtest.md](playtest.md#lobbies-playing-with-people-issue-1419) has the
+game's half.
+
 ## What is not there yet
 
 - Playing the drafted deck against the bots' decks; the deck can be goldfished or playtested

@@ -36,6 +36,8 @@ use grimoire_play::{
 
 use crate::sync::AppState;
 
+pub mod lobby;
+
 /// The one game, or none. `Busy` while a call has it on the engine's stack.
 #[derive(Default)]
 pub struct PlaytestSlot(Mutex<Slot<Playtest>>);
@@ -209,6 +211,7 @@ async fn deal(
         .map(|(cards, tokens)| OpponentDeck {
             cards: cards.into_iter().map(facts).collect(),
             tokens: tokens.into_iter().map(token_facts).collect(),
+            person: false,
         })
         .collect();
     if yours.iter().all(|c| c.commander) {
@@ -237,10 +240,12 @@ async fn deal(
 
 /// One action on `game`, and everything the opponents do after it until the reader next decides.
 /// A refusal is one sentence and leaves the game as it was; an action on a game that has since
-/// been replaced is refused.
+/// been replaced is refused. In a lobby's game (issue #1419) every guest is sent its own step of
+/// what the action did.
 #[tauri::command]
 pub async fn playtest_act(
     slot: tauri::State<'_, PlaytestSlot>,
+    lobby: tauri::State<'_, crate::draft::lobby::LobbySlot>,
     game: u64,
     action: PlaytestAction,
 ) -> Result<PlaytestStep, String> {
@@ -248,15 +253,22 @@ pub async fn playtest_act(
     let answer = tauri::async_runtime::spawn_blocking(move || {
         on_engine_stack(move || {
             let step = held.act(action);
-            (held, step)
+            let guests = if step.is_ok() {
+                held.guest_steps()
+            } else {
+                Vec::new()
+            };
+            (held, step, guests)
         })
     })
     .await
     .map_err(|e| e.to_string());
     let mut slot = slot.0.lock().map_err(|_| NO_GAME)?;
     match answer {
-        Ok(Ok((held, step))) => {
+        Ok(Ok((held, step, guests))) => {
             slot.put_back(game, Some(held));
+            drop(slot);
+            crate::draft::lobby::send_game_steps(&lobby, game, &guests);
             step
         }
         // The engine (or the AI) panicked, and took the game with it: the board starts again.
@@ -277,7 +289,7 @@ pub fn playtest_end(slot: tauri::State<'_, PlaytestSlot>, game: u64) {
 }
 
 /// The core's token as the engine crate takes it.
-fn token_facts(token: grimoire_core::play::PlayToken) -> TokenFacts {
+pub(crate) fn token_facts(token: grimoire_core::play::PlayToken) -> TokenFacts {
     TokenFacts {
         oracle_id: token.oracle_id,
         name: token.name,

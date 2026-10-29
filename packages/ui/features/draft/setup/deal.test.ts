@@ -29,9 +29,9 @@ describe("the table", () => {
 
   it("seats a pod's host, the guests who are online, then bots", () => {
     const seats = podSeats("Host", [
-      { peer: "p1", name: "Ada", online: true },
-      { peer: "p2", name: "Gone", online: false },
-      { peer: "p3", name: "Bea", online: true },
+      { peer: "p1", name: "Ada", online: true, deck: null },
+      { peer: "p2", name: "Gone", online: false, deck: null },
+      { peer: "p3", name: "Bea", online: true, deck: null },
     ]);
     expect(seats.map((s) => s.name)).toEqual([
       "Host",
@@ -51,7 +51,7 @@ describe("the table", () => {
     expect(POD_SEATS.booster).toEqual({ min: 2, max: 8, start: 8 });
     expect(POD_SEATS.commander).toEqual({ min: 3, max: 8, start: 4 });
     expect(POD_SEATS.winston).toEqual({ min: 2, max: 4, start: 2 });
-    const seats = podSeats("Host", [{ peer: "p1", name: "Ada", online: true }], 3);
+    const seats = podSeats("Host", [{ peer: "p1", name: "Ada", online: true, deck: null }], 3);
     expect(seats.map((s) => s.name)).toEqual(["Host", "Ada", "Bot 1"]);
   });
 

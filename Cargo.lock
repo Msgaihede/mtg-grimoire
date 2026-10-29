@@ -2993,6 +2993,7 @@ dependencies = [
 name = "mtg-grimoire"
 version = "0.62.0"
 dependencies = [
+ "base64 0.22.1",
  "card-neural",
  "card-scanner",
  "flate2",

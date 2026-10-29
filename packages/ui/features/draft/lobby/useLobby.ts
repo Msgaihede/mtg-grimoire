@@ -1,11 +1,18 @@
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc, type LobbyState } from "@/lib/ipc";
+import { ipc, type LobbyKind, type LobbyState } from "@/lib/ipc";
 import { SUPPORTER_KEY, supporterState } from "@/lib/query";
+import { viewMemory } from "@/lib/viewMemory";
 
-/** The cache entry the lobby lives in — read by the hub's *Draft in progress* and the lobby
- *  screen alike, and written by every `lobby:state` push. */
+/** The cache entry the lobby lives in — read by the hub's *Draft in progress*, the lobby screen
+ *  and the Playtesting setup alike, and written by every `lobby:state` push. */
 export const LOBBY_KEY = ["draft", "lobby"] as const;
+
+/**
+ * The name the reader goes by in a lobby, for the window's life — one name for both kinds, so a
+ * reader who drafted with their friends sits down to play them under the same one.
+ */
+export const lobbyNameMemory = viewMemory<string>("draft.lobbyName");
 
 /** The six-character alphabet the relay draws a code from (spec §6): no `0`/`O`, no `1`/`I`. */
 export const LOBBY_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -39,9 +46,19 @@ export function useLobbyState(): LobbyState | null {
   return query.data ?? null;
 }
 
-/** A lobby still worth returning to: open, or drafting. */
+/** A lobby still worth returning to: open, drafting, or playing. */
 export function isLive(lobby: LobbyState | null): lobby is LobbyState {
   return lobby !== null && lobby.phase !== "closed";
+}
+
+/**
+ * The lobby as a page of `kind` sees it: `null` for a lobby of the other kind (issue #1419) — the
+ * Draft & Packs page leaves a game's lobby to Playtesting, and Playtesting a pod's to Draft &
+ * Packs. **A guest's lobby whose kind is not known yet is either page's**: the room that says it
+ * arrives a moment after the join, and the page that joined is the one drawing it then.
+ */
+export function lobbyFor(lobby: LobbyState | null, kind: LobbyKind): LobbyState | null {
+  return lobby !== null && lobby.kind !== null && lobby.kind !== kind ? null : lobby;
 }
 
 /**

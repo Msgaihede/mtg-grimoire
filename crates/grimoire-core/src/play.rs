@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use rusqlite::{Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::deck::{get_deck, DeckCardRow};
 use crate::sorting::Marketplace;
@@ -51,8 +51,9 @@ pub struct PlayCard {
     pub faces: Option<String>,
 }
 
-/// One token the deck's list keeps, in the printing a game draws it by.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// One token the deck's list keeps, in the printing a game draws it by. A lobby game's guest
+/// sends its deck's to the host (`Deserialize`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayToken {
     /// What a game matches the token by — phase's presets name the same Scryfall oracle id.

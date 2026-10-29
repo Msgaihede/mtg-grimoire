@@ -235,6 +235,10 @@ describe("lobbies", () => {
     expect(() => h.lobby_create()).toThrow(LOBBIES_OFF);
     expect(() => h.lobby_join()).toThrow(LOBBIES_OFF);
     expect(() => h.lobby_winston()).toThrow(LOBBIES_OFF);
+    // A game's lobby is the same lobby (issue #1419), and refuses alike.
+    expect(() => h.lobby_deck()).toThrow(LOBBIES_OFF);
+    expect(() => h.lobby_game_start()).toThrow(LOBBIES_OFF);
+    expect(() => h.lobby_act()).toThrow(LOBBIES_OFF);
     expect(h.lobby_leave()).toBeUndefined();
   });
 });

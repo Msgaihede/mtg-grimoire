@@ -97,6 +97,10 @@ import tableViewRs from "../../../crates/grimoire-play/src/view.rs?raw";
 // and facts of its wire.
 import playtestRs from "../../../apps/desktop/src-tauri/src/playtest/mod.rs?raw";
 import playtestViewRs from "../../../crates/grimoire-play/src/playtest/view.rs?raw";
+// The lobby a pod drafts in and a game is played over (issue #1419): its commands, the game's
+// among them, and the events a game's lobby pushes.
+import draftLobbyRs from "../../../apps/desktop/src-tauri/src/draft/lobby.rs?raw";
+import playtestLobbyRs from "../../../apps/desktop/src-tauri/src/playtest/lobby.rs?raw";
 import startupRs from "../../../apps/desktop/src-tauri/src/startup.rs?raw";
 import startviewRsCore from "../../../crates/grimoire-core/src/startview.rs?raw";
 import startviewRsDesktop from "../../../apps/desktop/src-tauri/src/startview/mod.rs?raw";
@@ -1028,6 +1032,65 @@ describe("ipc argument names match the Rust command signatures", () => {
       const words = [...union.slice(0, union.indexOf(";\n")).matchAll(/"(\w+)"/g)].map((m) => m[1]);
       expect(words, ts).toEqual(rustVariants(tableViewRs, rust));
     }
+  });
+
+  /**
+   * A game over a lobby (issue #1419): the lobby is created for its kind, a guest sends its deck
+   * and its actions, and the host deals from seats. The commands are the draft lobby's file's;
+   * the events are emitted under the names `ipc.ts` listens on.
+   */
+  it("sends a lobby game's commands under the names their commands declare", async () => {
+    expect(draftLobbyRs.length, "draft/lobby.rs was not read").toBeGreaterThan(1_000);
+    expect(playtestLobbyRs.length, "playtest/lobby.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue({});
+    await ipc.lobbyCreate("Ada", "game");
+    expect(invoke).toHaveBeenLastCalledWith("lobby_create", { name: "Ada", kind: "game" });
+    invoke.mockResolvedValue("Mono Red");
+    await ipc.lobbyDeck(4, "theory");
+    expect(invoke).toHaveBeenLastCalledWith("lobby_deck", { deckId: 4, variant: "theory" });
+    invoke.mockResolvedValue(undefined);
+    await ipc.lobbyAct({ type: "pass" });
+    expect(invoke).toHaveBeenLastCalledWith("lobby_act", { action: { type: "pass" } });
+    const seats = [
+      { peer: "p1", deckId: null, variant: null },
+      { peer: null, deckId: 9, variant: "live" as const },
+    ];
+    invoke.mockResolvedValue({});
+    await ipc.lobbyGameStart(21, 4, "live", seats, "hard", 99);
+    expect(invoke).toHaveBeenLastCalledWith("lobby_game_start", {
+      game: 21,
+      deckId: 4,
+      variant: "live",
+      seats,
+      difficulty: "hard",
+      seed: 99,
+    });
+
+    const declares = (command: string, param: string) =>
+      expect(draftLobbyRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares("lobby_create", "name");
+    declares("lobby_create", "kind");
+    declares("lobby_deck", "deck_id");
+    declares("lobby_deck", "variant");
+    declares("lobby_act", "action");
+    for (const param of ["game", "deck_id", "variant", "seats", "difficulty", "seed"]) {
+      declares("lobby_game_start", param);
+    }
+    for (const registered of [
+      "draft::lobby::lobby_create,",
+      "draft::lobby::lobby_deck,",
+      "draft::lobby::lobby_act,",
+      "draft::lobby::lobby_game_start,",
+    ]) {
+      expect(desktopRs).toContain(registered);
+    }
+    // The events `onLobbyGame`, `onLobbyRefused` and `onPlaytestStep` listen on.
+    expect(draftLobbyRs).toContain('emit("lobby:game"');
+    expect(draftLobbyRs).toContain('emit("lobby:refused"');
+    expect(playtestLobbyRs).toContain('emit("playtest:step"');
   });
 
   /**

@@ -4,7 +4,8 @@ The one place the app touches a rules engine: [phase.rs](https://github.com/phas
 `phase-engine` (library `engine`) and its AI, `phase-ai`, taken from git at one pinned `rev`. It
 holds **one game** (`playtest/session.rs`' `Playtest`): the reader's deck against the goldfish (an
 opponent that takes no actions), or against one other deck or three, each opponent played by
-phase's AI. Goldfishing and playtesting are that one game (the owner's decision of 2026-10-17).
+phase's AI — or by a person at the reader's lobby (issue #1419). Goldfishing and playtesting are
+that one game (the owner's decision of 2026-10-17).
 `table.rs` reads the table off the engine's state (a card, a zone's place, a seat's mana), `view.rs`
 is the table's shared wire types, and `playtest/view.rs` the game's; `support.rs` says what the
 engine plays of a deck before a game. It also holds **one draft** (`draft/mod.rs`' `Draft`) over
@@ -51,11 +52,24 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   holds each struct field for field, and every `PlaytestAction` / `PlaytestHappened` variant and
   field. A change to either side is one commit with the other.
 - **A game never sends what the reader may not see.** Each opponent's hand and library are counts
-  in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`).
+  in `PlaytestSeat`, and their draws are `Drew` with no name (`playtest/session.rs`' `tell`). In a
+  lobby's game that holds for every person: each guest is sent the view from its own seat
+  (`guest_steps`, `view_of`), never the host's.
 - **A duel is a four-player game with one opponent.** `Playtest::new` takes a list of
   `OpponentDeck`s (none to three), and every seat is a `PlaytestPlayer`. Never add a code path for
   one player count alone: what the session does for `opponent` it does for `opponent2` and
   `opponent3`.
+- **A person in an opponent's seat is a chair, not a second game** (issue #1419, a lobby's game).
+  `OpponentDeck::person` seats a guest; the session keeps one `you` — the chair — and every
+  "reader's" field (stage, prompt, stops, `pending`, `choice`, `ending`, `stopped_at`, mulligans,
+  tokens) is the chair's, each other person's waiting in their `Chair` (`sit`). The chair is the
+  host's (`PlayerId(0)`) at rest; `act_by` sits the acting guest, `advance` sits whoever the rules
+  wait on. Never read `PlayerId(0)` for "the reader" outside `new`, the goldfish's `dead_on` and
+  the host's replay frames — read `self.you`, and name players through `Eyes` (`seat_of`,
+  `concealed`), so each person's view and facts are from their own seat. Facts go through `Log`,
+  one line per person (`tell` with that person's `Eyes`); a fact of the chair's own doing is
+  `own`, the table's `all`. A game with people takes no undo and no sandbox, a guest's step never
+  carries frames, and a refusal puts back every chair (`Moment::chairs`).
 - **The game plays on by itself until the reader decides** (`advance`): the AI takes its own
   decisions through phase's `run_ai_actions`, the goldfish its own through `fish_answer`, and the
   reader's priority is passed for them except where `stops_here` stops them (their main phase, a
@@ -144,6 +158,6 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
 
 | Command                                                      | Action                                                                                                      |
 | ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `cargo test -p grimoire-play`                                | The game end to end on the engine's stack, against the goldfish and against a `VeryEasy` AI; the drafts too |
+| `cargo test -p grimoire-play`                                | The game end to end on the engine's stack, against the goldfish, a `VeryEasy` AI and a person (`lobby_tests.rs`); the drafts too |
 | `cargo clippy -p grimoire-play --all-targets -- -D warnings` | Lints                                                                                                       |
 | `cargo fmt -p grimoire-play`                                 | Format (never `--all`)                                                                                      |

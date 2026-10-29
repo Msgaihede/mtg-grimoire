@@ -189,12 +189,13 @@ describe("DraftPage", () => {
   it("returns to a live lobby", async () => {
     const lobby: LobbyState = {
       role: "guest",
+      kind: "draft",
       code: "K7QX2M",
       phase: "open",
       name: "Bea",
       hostName: "Ada",
       hostOnline: true,
-      peers: [{ peer: "p1", name: "Bea", online: true }],
+      peers: [{ peer: "p1", name: "Bea", online: true, deck: null }],
       label: "The Hobbit",
       closedReason: null,
     };

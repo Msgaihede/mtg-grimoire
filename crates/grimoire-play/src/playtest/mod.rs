@@ -1,6 +1,7 @@
 //! The game: the reader's deck against the goldfish — an opponent that does nothing and never
 //! loses — or against one other deck or three, each opponent's seat played by phase.rs's AI.
-//! Goldfishing is this game with the goldfish across the table and the sandbox on.
+//! Goldfishing is this game with the goldfish across the table and the sandbox on, and a lobby's
+//! game (issue #1419) is this game with a person in an opponent's seat.
 //! `session.rs` is the game, `view.rs` the wire; `docs/reference/playtest.md` has the design.
 
 pub mod session;
@@ -11,5 +12,7 @@ pub use view::{Difficulty, PlaytestAction, PlaytestPlayer, PlaytestStep, Playtes
 
 #[cfg(test)]
 mod goldfish_tests;
+#[cfg(test)]
+mod lobby_tests;
 #[cfg(test)]
 mod tests;
