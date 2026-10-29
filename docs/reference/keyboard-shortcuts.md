@@ -13,21 +13,21 @@ reader is actually on**.
 ## Why one object and not two
 
 A shortcut is otherwise two facts: a comparison buried in a `keydown` handler, and a sentence
-somewhere describing it. Those drift, and they drift *silently* — this repo's own rule is that a
+somewhere describing it. Those drift, and they drift _silently_ — this repo's own rule is that a
 prose-only edit routes to neither CI job, so a documented chord whose handler moved goes wrong with
 nothing red. The whole of what the catalogue buys is one sentence:
 
 > **The map cannot advertise a keyboard chord that nothing binds, because the binding matches
 > against the same object the panel draws.**
 
-That is a *fence*, not a convention, and it is worth being precise about which rows stand behind
+That is a _fence_, not a convention, and it is worth being precise about which rows stand behind
 it. Of the entries in `SHORTCUTS`:
 
-| Rows | Fenced how |
-| --- | --- |
-| `switchView`, `keyMap`, `newWindow` (`AppShell`); `quickSearch` (`features/quickSearch/QuickSearch.tsx`, `Ctrl+K`, issue #1098); `selectAll` (`selectAllSurface.ts`); `undo`, `redo`, `remove` (`DeckEditor`); `undo`, `redo` on the game boards (`features/playtesting/undo.ts`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
-| `dismiss` (`Escape`), `contextMenu` (`Shift+F10`, `Menu`) | **Prose.** The bindings live in `useDismissOnEscape` and `menu/useContextMenu`, and neither reads the catalogue. |
-| `zoom` (`Ctrl+wheel`), `select` (`Ctrl`/`Shift`-click) | **Unmatchable by construction.** A pointer chord carries no `key`, so `matchesChord` answers `false` from its shape rather than from a guard a caller could forget. `useCardZoomGesture` and `multiSelect.ts` keep their own logic; the fence there is only that the label sits next to the code it describes. |
+| Rows                                                                                                                                                                                                                                                                              | Fenced how                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `switchView`, `keyMap`, `newWindow` (`AppShell`); `quickSearch` (`features/quickSearch/QuickSearch.tsx`, `Ctrl+K`, issue #1098); `selectAll` (`selectAllSurface.ts`); `undo`, `redo`, `remove` (`DeckEditor`); `undo`, `redo` on the game boards (`features/playtesting/undo.ts`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it.                                                                                                                                            |
+| `dismiss` (`Escape`), `contextMenu` (`Shift+F10`, `Menu`)                                                                                                                                                                                                                         | **Prose.** The bindings live in `useDismissOnEscape` and `menu/useContextMenu`, and neither reads the catalogue.                                                                                                                                                                                               |
+| `zoom` (`Ctrl+wheel`), `select` (`Ctrl`/`Shift`-click)                                                                                                                                                                                                                            | **Unmatchable by construction.** A pointer chord carries no `key`, so `matchesChord` answers `false` from its shape rather than from a guard a caller could forget. `useCardZoomGesture` and `multiSelect.ts` keep their own logic; the fence there is only that the label sits next to the code it describes. |
 
 **The two prose rows are a ruling, not an oversight.** Threading a shared matcher through
 `e.key === "Escape"` is more machinery than the fence buys, and both are platform conventions that
@@ -38,18 +38,18 @@ what was bound. That is the harmless direction, and it is still the direction a 
 caught rather than a reviewer. The row carries both chords since 2026-09-03 and the panel draws
 `Shift` `F10` **or** `Menu`, universal spelling first because not every keyboard has the dedicated
 key; `Menu` is the cap because `ContextMenu` is the DOM's name for it and nobody's word for the
-thing under their thumb. Nothing stops the pair drifting again — that is what *prose* means here —
+thing under their thumb. Nothing stops the pair drifting again — that is what _prose_ means here —
 so a change to `menuKey` is a change to this row.
 
 ## `matchesChord` is exact in both directions
 
 Four rules, each with a failure behind it:
 
-- **`ctrl: true` matches `ctrlKey` *or* `metaKey`.** Not hedging about macOS — it is the rule
+- **`ctrl: true` matches `ctrlKey` _or_ `metaKey`.** Not hedging about macOS — it is the rule
   `multiSelect.ts:61` already states and tests, and a second, stricter spelling of it here is the
   drift this module exists to stop.
 - **Every modifier the chord does not name must be absent.** `{ key: "z", ctrl: true }` matches
-  neither `Ctrl+Alt+Z` nor `Ctrl+Shift+Z`. Without it one press would fire undo *and* redo, which
+  neither `Ctrl+Alt+Z` nor `Ctrl+Shift+Z`. Without it one press would fire undo _and_ redo, which
   is the bug the hand-rolled `key === "z" && !e.shiftKey` comparisons were written to avoid.
   Exactness is what lets the catalogue stop writing those by hand.
 - **A single-character key compares case-insensitively.** `e.key` is `"Z"` while Shift is held, so
@@ -66,20 +66,20 @@ Four rules, each with a failure behind it:
 
 ### The two chords that narrowed away
 
-Exactness is a *narrowing*, and two presses that used to work no longer do. Both were accepted
+Exactness is a _narrowing_, and two presses that used to work no longer do. Both were accepted
 deliberately on 2026-09-03; the reviewer re-derived the old-vs-new truth table for all three deck
 editor handlers independently and found these two differences and no others — undo is identical for
 every input, and nothing widened.
 
-| Chord | Was | Is |
-| --- | --- | --- |
+| Chord          | Was                                                                                         | Is      |
+| -------------- | ------------------------------------------------------------------------------------------- | ------- |
 | `Ctrl+Shift+Y` | redid, because the old guard tested `ctrlKey`, `altKey` and the letter but never `shiftKey` | nothing |
-| `Shift+Delete` | removed the picked cards, for the same reason | nothing |
+| `Shift+Delete` | removed the picked cards, for the same reason                                               | nothing |
 
 **Neither is a convention anyone designed.** They worked as a side effect of a guard that did not
 look at Shift, and restoring either means writing it into `SHORTCUTS` — where it becomes a row in
 the panel, advertised to every reader as a second way to do the thing. That is worse than losing
-it, and `Shift+Delete` is the clearer case: in Explorer it means *permanent, no undo*, which is
+it, and `Shift+Delete` is the clearer case: in Explorer it means _permanent, no undo_, which is
 exactly the wrong promise for a removal `Ctrl+Z` takes straight back. A reader whose hands know it
 presses it and nothing happens; that is the cost, it is one line in `SHORTCUTS.deckEditor` to
 reverse, and it is smaller than teaching a wrong meaning.
@@ -87,7 +87,7 @@ reverse, and it is smaller than teaching a wrong meaning.
 ## The text-field yield lives at the call site
 
 `matchesChord` deliberately does **not** yield inside a text field, because that is a fact about a
-*binding* rather than about matching a chord, and the two bindings disagree:
+_binding_ rather than about matching a chord, and the two bindings disagree:
 
 - **`Ctrl+Z` in the deck editor yields**, and that is the whole of what keeps the quick-add box, the
   deck name and the notes usable — they get the browser's own undo, which this app cannot replace
@@ -109,7 +109,7 @@ keystroke typed into the quick-add box for the two presses in a session that are
 `Ctrl+1…9` carries a different guard instead: `document.querySelector('[aria-modal="true"]')`.
 `Dialog.tsx` is the one modal chrome in this app and always sets the attribute, so asking the
 document is asking the thing that knows, with nothing to register and nothing to keep in step. **`F1`
-passes that guard on purpose** — the map is *more* use with a dialog up, not less.
+passes that guard on purpose** — the map is _more_ use with a dialog up, not less.
 
 ## Scope: the editor replaces `Decks`, it does not nest under it
 
@@ -122,7 +122,7 @@ mount would be a second source of truth about what is drawn, and the store alrea
 question. `"global"` is first and always present.
 
 **The replacement is `App.tsx:44`'s shape, read back**: `openDeckId === null ? <DecksPage /> :
-<DeckEditor … />`. The editor is rendered *in place of* the decks page, so a `Decks` section under
+<DeckEditor … />`. The editor is rendered _in place of_ the decks page, so a `Decks` section under
 an open editor would list chords for a page that is not on screen. `deckEditor` is therefore not a
 `ViewId` and never will be.
 
@@ -134,7 +134,7 @@ making the emptiness explicit is what stops a scope being forgotten when a view 
 something.
 (**"Five of the six" was written down four times and corrected twice**, which is worth keeping as
 the shape of the mistake rather than as a state anything is still in: it counts `decks` as carrying
-the editor's chords, and `deckEditor` *replaces* `decks` rather than nesting under it — the
+the editor's chords, and `deckEditor` _replaces_ `decks` rather than nesting under it — the
 paragraph above. The design and `KeyMap.tsx`'s comment were corrected first, `KeyMap.stories.tsx`
 and `KeyMap.test.tsx` on the review pass that found them still saying it. Six, not five, in all
 four — a count this page has since carried to seven for `scanner`, to **nine** for `trade` and
@@ -152,7 +152,7 @@ to name. A reader whose hands knew `Ctrl+6` for Settings has to relearn it; that
 of keeping Settings the rail's last row rather than the price of a bug.
 
 **Trade and Playtesting joined the same way later on 2026-09-08, and moved Settings again — to
-`Ctrl+9`.** Both are placeholders: a rail entry, a glyph, and a page that says *Work in progress*
+`Ctrl+9`.** Both are placeholders: a rail entry, a glyph, and a page that says _Work in progress_
 and nothing more. That they are not built yet changes nothing about the renumbering, because the
 binding is an index into `NAV` and `NAV` is the rail, not a list of finished pages — a destination
 withheld from the column until its page existed would be a second, invisible ordering to keep in
@@ -176,17 +176,17 @@ not move, and `shared` is the one row the rail does not always draw — its row 
 reader has opened a link (the collection-sharing spec's decision 6). A digit bound to it would
 either shift every digit after it depending on something the reader did last week, or point at a
 row half the readers do not have. That is the same argument that made these chords bind against a
-*list* rather than against what is on screen; here it picks which list.
+_list_ rather than against what is on screen; here it picks which list.
 
 ⚠️ **This reverses the `Ctrl+6` the shared view shipped with earlier on 2026-09-08.** That chord
-existed for one reason, stated at the time: *before the cabinet grows its own Share control that
-is the only way in*. The cabinet has it — `features/collection/ShareFolderMenu.tsx` draws **Open a
+existed for one reason, stated at the time: _before the cabinet grows its own Share control that
+is the only way in_. The cabinet has it — `features/collection/ShareFolderMenu.tsx` draws **Open a
 shared collection** beside the Share control, so the view is reached by a signpost rather than by
 a key nobody was told about. What the reversal costs is a keyboard route to one view; what it
 buys is that no other view's digit moved.
 
-⚠️ **The signpost is gone too** (2026-10-14, issue #1028): the owner removed *Open a shared
-collection* from the cabinet and gave the view no other way in, so the conditional rail row is the
+⚠️ **The signpost is gone too** (2026-10-14, issue #1028): the owner removed _Open a shared
+collection_ from the cabinet and gave the view no other way in, so the conditional rail row is the
 only route to it — and it appears only once a share is open.
 
 `AppShell`'s floor moved with it: `i >= CHORD_NAV.length`, still guarding the direction that
@@ -200,18 +200,18 @@ than as a bare number so a second exclusion would have to be written down.
 [issue #448](https://github.com/Msgaihede/mtg-grimoire/issues/448) — is `NAV`'s _first_ entry**,
 and `CHORD_NAV` is still `NAV` minus `shared`, so inserting at the head shifted the whole run:
 
-| chord | before | after |
-| --- | --- | --- |
-| `Ctrl+1` | Search | **Home** |
-| `Ctrl+2` | Tagger | Search |
-| `Ctrl+3` | Decks | Tagger |
-| `Ctrl+4` | Collection | Decks |
-| `Ctrl+5` | Wishlist | Collection |
-| `Ctrl+6` | Scanner | Wishlist |
-| `Ctrl+7` | Trade | Scanner |
-| `Ctrl+8` | Playtesting | Trade |
-| `Ctrl+9` | **Settings** | Playtesting |
-| — | Shared | Shared, **Settings** |
+| chord    | before       | after                |
+| -------- | ------------ | -------------------- |
+| `Ctrl+1` | Search       | **Home**             |
+| `Ctrl+2` | Tagger       | Search               |
+| `Ctrl+3` | Decks        | Tagger               |
+| `Ctrl+4` | Collection   | Decks                |
+| `Ctrl+5` | Wishlist     | Collection           |
+| `Ctrl+6` | Scanner      | Wishlist             |
+| `Ctrl+7` | Trade        | Scanner              |
+| `Ctrl+8` | Playtesting  | Trade                |
+| `Ctrl+9` | **Settings** | Playtesting          |
+| —        | Shared       | Shared, **Settings** |
 
 ⚠️ **`Ctrl+9` no longer opens Settings**, and this is the third renumbering in three days —
 Scanner moved it to `Ctrl+7`, Trade and Playtesting to `Ctrl+9`, and Home has now taken it off the
@@ -222,11 +222,11 @@ and it belongs in the release note as one rather than being discovered.
 this section says there is one; it says so about a rail of ten, and reading the two as one rule is
 how a later edit puts the wrong one back:
 
-* **`shared` goes without because its row is _conditional_** — the argument two paragraphs up,
+- **`shared` goes without because its row is _conditional_** — the argument two paragraphs up,
   unchanged. It is a reason no amount of room would fix: a twelfth digit would still not buy this
   entry a chord.
-* **`settings` goes without because the run ends before it.** Eleven rows against nine digits is
-  pure arithmetic, and what decides *which* two fall off is reading order: Home is the page the app
+- **`settings` goes without because the run ends before it.** Eleven rows against nine digits is
+  pure arithmetic, and what decides _which_ two fall off is reading order: Home is the page the app
   opens on, a reader reads a column downward, and a landing page anywhere but the first row is a
   page the reader is standing on and cannot find. Settings is the row that costs least — it is
   drawn on every screen at a fixed place, where `shared` can be absent altogether. **Give this run
@@ -243,18 +243,18 @@ matched on **id** rather than counted. [home-page.md](home-page.md) is the rest 
 rail row are gone. `CHORD_NAV` is `NAV` minus `shared` — nine rows now — so every digit after
 Search moved one row up and the run ends exactly at the rail's end:
 
-| chord | before | after |
-| --- | --- | --- |
-| `Ctrl+1` | Home | Home |
-| `Ctrl+2` | Search | Search |
-| `Ctrl+3` | Tagger | **Decks** |
-| `Ctrl+4` | Decks | Collection |
-| `Ctrl+5` | Collection | Wishlist |
-| `Ctrl+6` | Wishlist | Scanner |
-| `Ctrl+7` | Scanner | Trade |
-| `Ctrl+8` | Trade | Playtesting |
-| `Ctrl+9` | Playtesting | **Settings** |
-| — | Shared, Settings | Shared |
+| chord    | before           | after        |
+| -------- | ---------------- | ------------ |
+| `Ctrl+1` | Home             | Home         |
+| `Ctrl+2` | Search           | Search       |
+| `Ctrl+3` | Tagger           | **Decks**    |
+| `Ctrl+4` | Decks            | Collection   |
+| `Ctrl+5` | Collection       | Wishlist     |
+| `Ctrl+6` | Wishlist         | Scanner      |
+| `Ctrl+7` | Scanner          | Trade        |
+| `Ctrl+8` | Trade            | Playtesting  |
+| `Ctrl+9` | Playtesting      | **Settings** |
+| —        | Shared, Settings | Shared       |
 
 The prediction in the section above held: given back a ninth slot, Settings took it, and `shared`
 is again the one destination without a chord, for its own reason. `nav.test.ts` now pins the ninth
@@ -279,7 +279,7 @@ spellings, so a reader's hands learn undo once; the argument for the pair stays 
 playtesting are one game on one board ([playtest.md](playtest.md)), and both scopes hold the same
 list (`BOARD` in `lib/shortcuts.ts`). Opened from the Playtesting page's setup, the board is the
 Playtesting view, so its rows are `playtesting`'s — the first view scope to bind anything. Opened
-from the deck editor's "Goldfish this deck", it is drawn *in place of* the editor (`App.tsx`), the
+from the deck editor's "Goldfish this deck", it is drawn _in place of_ the editor (`App.tsx`), the
 way the editor is drawn in place of the decks page, so it is a scope of its own, `goldfish`:
 `activeScopes` swaps `deckEditor` for it while the store's board is open over the open deck, and
 the panel lists **Goldfish** instead of chords for an editor that is not on screen. The board picks
@@ -300,7 +300,7 @@ which is the browser's Back.
 ## `newWindow`
 
 **`Ctrl+Shift+N` opens another window onto the same app** (2026-09-20). VS Code's chord, and
-**`Ctrl+N` is deliberately left unbound** — it is the obvious spelling of "a new *thing*", which a
+**`Ctrl+N` is deliberately left unbound** — it is the obvious spelling of "a new _thing_", which a
 view may yet want for a deck or a folder, and spending it on a window would take that away for a
 gesture the reader already has: **relaunching the app does the same**, which is what Windows'
 middle-click on the taskbar icon is. [multi-window.md](multi-window.md) is the record.
@@ -326,7 +326,7 @@ Four things about it are decisions rather than plumbing.
 or a wishlist, 60 in the deck editor's collection tab), so the tiles in hand at the press are a
 scroll position — the argument `features/transfer/export/scope.ts` makes about exporting. A set of
 them would be the first hundred cards of three thousand, ringed as if it were all of them. So the
-press writes an *instruction* rather than a list (`Selection.allOf`, `lib/multiSelect.ts`): the set
+press writes an _instruction_ rather than a list (`Selection.allOf`, `lib/multiSelect.ts`): the set
 is the whole of the wall's order every time it is read, a page that lands later is picked as it is
 drawn, and while the instruction stands the wall asks for the next page as each one arrives. It is
 about one list — the wall's `listKey` — so a filter or a sort that changes ends it and leaves what
@@ -370,7 +370,7 @@ the whole set.
   picked set.
 - Among the walls a press can reach, **the one sharing the nearest ancestor with the caret** — or,
   when the caret is on `<body>`, where a click on anything unfocusable leaves it, with the last
-  thing the reader pressed or focused. The wall is decided *at that touch* and remembered, because
+  thing the reader pressed or focused. The wall is decided _at that touch_ and remembered, because
   the element does not last: the walls are virtualised, and a tile scrolled out of the window is
   gone.
 - **A wall that is not drawn takes nothing** — a column railed for want of room keeps its wall
@@ -405,26 +405,26 @@ Two stories, the keys pressed for real in a Chromium pane. **Not the WebView2 wi
 real database**: a dev app could not be launched that day, so this is the browser's half and the
 fake's timings. Two things only the shipped window can say are still owed a pass — that WebView2
 hands `Ctrl+A` to the page, and what twenty real `search_cards` round trips cost. The pane was not
-on screen, so a *press on an element* below is a dispatched `pointerdown` followed by the focus
+on screen, so a _press on an element_ below is a dispatched `pointerdown` followed by the focus
 move a browser makes; the chords themselves were real key events.
 
 `Search/Page › Large` (the `large` seed):
 
-| Press | Result |
-| --- | --- |
+| Press                                                    | Result                                                                                                                                               |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Ctrl+A`, caret on a filter chip, caption `5,000+ cards` | 50 tiles picked at the press, **1 000** after 1.2 s in twenty writes, and no fetch in the 4 s after — the limit holds. No text selected on the page. |
-| `Escape` | The set is gone and no tile is ringed. |
-| **All printings** off (caption `687 cards`), `Ctrl+A` | **687** picked in 0.9 s, the caption's own number, then quiet. |
-| `Ctrl+A` in the search box, `Ancient` typed | The seven characters selected; the picked set untouched. |
+| `Escape`                                                 | The set is gone and no tile is ringed.                                                                                                               |
+| **All printings** off (caption `687 cards`), `Ctrl+A`    | **687** picked in 0.9 s, the caption's own number, then quiet.                                                                                       |
+| `Ctrl+A` in the search box, `Ancient` typed              | The seven characters selected; the picked set untouched.                                                                                             |
 
 `Decks/Editor › Modern60`, the column docked on its collection tab, six tiles:
 
-| Press | Result |
-| --- | --- |
-| `Ctrl+A`, nothing touched, caret on the editor's root | Nothing picked. |
-| A deck card pressed, then `Ctrl+A` | Nothing picked. (Since issue #938: that card's whole stack.) |
-| The column's wall pressed — the caret lands on the editor's root, **outside** the column — then `Ctrl+A` | `deck-collection`, 6 of 6 ringed. |
-| `Escape` | The set is gone and the deck is still open. |
+| Press                                                                                                    | Result                                                       |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `Ctrl+A`, nothing touched, caret on the editor's root                                                    | Nothing picked.                                              |
+| A deck card pressed, then `Ctrl+A`                                                                       | Nothing picked. (Since issue #938: that card's whole stack.) |
+| The column's wall pressed — the caret lands on the editor's root, **outside** the column — then `Ctrl+A` | `deck-collection`, 6 of 6 ringed.                            |
+| `Escape`                                                                                                 | The set is gone and the deck is still open.                  |
 
 **The third row failed on the first build**, and it is why a touch outranks the caret: the press
 was in the column, the caret it left behind was on the editor, and a rule that asked the caret
@@ -454,7 +454,7 @@ shortcut from `1 to 6`.
 of `<kbd>`s separated only by `gap-1` flattens to `Ctrl1toCtrl6` when a text alternative is
 computed — the `Missing2` failure this repo already has a rule about, one surface over — so the
 word `to` is not enough on its own. A whitespace text node fixes it at no visual cost: a sequence
-of child text runs that is *only* white space is not rendered by a flex container and becomes no
+of child text runs that is _only_ white space is not rendered by a flex container and becomes no
 flex item (CSS Flexbox §4), so the drawn row does not move. The alternative was an `aria-label` on
 the `<dd>`, refused twice over — `<dd>` maps to `definition`, a role browsers do not agree takes an
 author's name, and the label would be a second spelling of the caps, free to drift from the ones
@@ -467,11 +467,11 @@ Both landed on the review pass, 2026-09-03, and neither is visible in the shippe
 looking for it.
 
 **`F1` swallows auto-repeat, and `Ctrl+1…9` deliberately does not.** Holding a key fires `keydown`
-at the OS repeat rate, so a *toggle* on that press strobes the panel through its own fade for as
+at the OS repeat rate, so a _toggle_ on that press strobes the panel through its own fade for as
 long as the finger is down and lands on whichever side the reader let go on. The guard is on the
 `F1` branch: re-selecting the view you are already on is idempotent, so a guard there would
 be a rule with no failure behind it, and one hoisted to the top of the handler would answer the
-question for every chord the shell ever binds — including a stepping chord, where repeating *is*
+question for every chord the shell ever binds — including a stepping chord, where repeating _is_
 the binding. **`Ctrl+Shift+N` carries the same guard on its own branch since 2026-09-20, with a
 different failure behind it**: a held chord would open a window per repeat. Which is the argument
 for keeping the guard per branch rather than at the top — the shell now has two chords that swallow
@@ -482,7 +482,7 @@ carries `repeat: false`), so that case is the one press in `AppShell.test.tsx` f
 **Escape hands the caret back when the caret has nowhere to go — never merely when the panel is
 open.** That is the whole of the rule, and getting it wrong is possible in both directions. The
 panel has two ways in and they leave the caret in two places: a press on the trigger puts it inside
-the box, while `F1` opens the panel and moves *nothing*. So a reader typing in the deck editor's
+the box, while `F1` opens the panel and moves _nothing_. So a reader typing in the deck editor's
 quick-add box who presses `F1` and then Escape was never anywhere but that field, and an
 unconditional `focus()` carried them off to the caption row — a layer handing back a caret it never
 took. **But `contains(document.activeElement)` alone trades that bug for the one the hand-back
@@ -522,12 +522,12 @@ raw CDP where that harness could not reach.
 
 1. **`F1` reaches the page in WebView2 and opens the panel.** This was the design's biggest open
    question and it was a prediction until it was driven: Chrome reserves `F1` for its own help,
-   WebView2 has no help page, so it *should* arrive. It does.
+   WebView2 has no help page, so it _should_ arrive. It does.
 2. **`Ctrl+3` → Decks and `Ctrl+5` → Wishlist. `Ctrl+2` under an open `Dialog` did not switch** —
    `activeView` stayed `decks` and the dialog stayed open. The `[aria-modal="true"]` guard works
    live, not just in jsdom.
 3. **Paint order, the design's central claim.** With a real `Dialog` open, `elementFromPoint` over
-   the panel returned an element *inside the panel*, not the scrim. Then a `fixed inset-0` div was
+   the panel returned an element _inside the panel_, not the scrim. Then a `fixed inset-0` div was
    injected at `z-50` — `SyncProgress`'s gate rung, and the exact shape of the bug `LAYER.caption`
    was added to fix — and `elementFromPoint` still returned the panel, and still returned the
    caption buttons. The panel's own computed `zIndex` is `auto` and its `position` is `absolute`
@@ -559,10 +559,10 @@ raw CDP where that harness could not reach.
    the middle is the word `to`, which is a real element and meant to be there.
 8. **The scope swap.** On Search the panel drew **one** heading, `Everywhere` — the `search` scope
    binds nothing and drew nothing at all, no empty heading. In the deck editor it drew `Everywhere`
-   + `Deck editor` and **no** `Decks` section.
+   - `Deck editor` and **no** `Decks` section.
 9. **Both chord shapes render correctly**: `Ctrl 1 to Ctrl 6`, and `Ctrl Click or Shift Click`.
 10. **The trigger's tooltip is hidden behind the open panel, and that is confirmed harmless.** See
-   below.
+    below.
 
 ## Two things for whoever drives this next
 
@@ -581,13 +581,13 @@ single-character keys **case-insensitively**: `e.key` is the shifted `"N"` and t
 `"n"`. That rule is three sections up; this is what it looks like from the harness side.
 
 **The trigger's tooltip is invisible while the panel is open, and it is not a stuck ghost.** The
-hint is drawn by the app's one tooltip host at `LAYER.tooltip` (`z-46`), which is *outside* the
+hint is drawn by the app's one tooltip host at `LAYER.tooltip` (`z-46`), which is _outside_ the
 caption's `z-60` stacking context — and `TitleBar`'s own comment records that this row's hints are
 the ones `placeTooltip` always flips **downward** rather than off the top of the window, i.e.
 straight into the rectangle the open panel occupies. Measured on 2026-09-03: the hint sits at
 (801, 41), inside the open panel's rect, on a host at `z-index: 46`, so the panel covers it; and it
 clears when the pointer leaves (0 stale nodes remained). **The ruling is to leave it.** It costs
-nothing a reader needs — the open panel *is* the answer the hint points at — and fixing it means a
+nothing a reader needs — the open panel _is_ the answer the hint points at — and fixing it means a
 second prop on `CaptionButton`, whose whole shape is that it has almost none.
 
 **Superseded 2026-10-14 (issue #976): the hint is now drawn over the open panel.** `LAYER.tooltip`

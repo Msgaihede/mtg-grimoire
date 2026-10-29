@@ -398,7 +398,7 @@ describe("the Shared row", () => {
     expect(railButtons()).toEqual([
       "Home",
       "Search",
-        "Decks",
+      "Decks",
       "Collection",
       "Wishlist",
       "Shared",
@@ -865,7 +865,7 @@ describe("collapsing the sidebar", () => {
 
     for (const label of [
       "Search",
-        "Decks",
+      "Decks",
       "Collection",
       "Wishlist",
       "Scanner",
