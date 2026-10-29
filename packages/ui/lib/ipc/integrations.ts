@@ -80,6 +80,72 @@ export interface IntegrationsStatus {
   pending: boolean;
 }
 
+/**
+ * One intent this device parks for the reader's review — `grimoire_core::integration::review::
+ * ParkedIntent` (issue #1396, plan `2026-10-29-integrations-intents.md` §3.5).
+ *
+ * **What an integration proposed, read through this device's own card data**: `name` is this
+ * device's name for the printing where it knows it, else the integration's hint, else the id —
+ * the hint is never trusted for anything but drawing (plan §2). `folder` is the folder's name
+ * *here*, `null` for the wishlist's root.
+ *
+ * `source` and `kind` are plain strings rather than closed unions: the panel only labels them,
+ * with a fallback for a word it does not know, and the device — not this page — owns the list of
+ * kinds it will apply (`integration::intents`' allow-list).
+ */
+export interface ParkedIntent {
+  /** The intent's id in the store — what Apply and Decline name. */
+  id: string;
+  /** Which integration wrote it: `discord`, `mcp` or `trade`. */
+  source: string;
+  /** What it asks for: `collection.add` or `wishlist.add`. */
+  kind: string;
+  /** The card, by this device's name for it where it knows one. */
+  name: string;
+  /** The printing's set code, or `null` for an any-printing wish. */
+  set: string | null;
+  /** The printing's collector number. */
+  cn: string | null;
+  /** `nonfoil`, `foil` or `etched`; `null` for a wish with no preferred finish. */
+  finish: string | null;
+  /** How many copies — 1 to 99, the allow-list's bounds. */
+  quantity: number;
+  /** The folder's name on this device, or `null` for the wishlist's root. */
+  folder: string | null;
+  /** When the integration wrote it, Unix **milliseconds** — the Worker's clock. */
+  createdAt: number;
+  /** Who confirmed it there — `discord:123` — or `null`. */
+  confirmedBy: string | null;
+}
+
+/**
+ * One `(source, kind)` pair and whether this device applies it without asking —
+ * `grimoire_core::integration::review::IntentAutomatic`.
+ *
+ * **The policy is this device's** (plan §2: a store that could flip it could make a device apply
+ * what the reader never approved). Discord's two adds are `fixed` on — the reader pressed Confirm
+ * in Discord — and every other pair is the reader's switch.
+ */
+export interface IntentAutomatic {
+  source: string;
+  kind: string;
+  /** Applied without asking. */
+  on: boolean;
+  /** Not the reader's to change — Discord's two adds. */
+  fixed: boolean;
+}
+
+/**
+ * The review list — `grimoire_core::integration::review::IntentReview`. Every review command
+ * answers one, so a press draws its outcome without a second read.
+ */
+export interface IntentReview {
+  /** The intents this device parks, oldest first. Empty when the store cannot be asked. */
+  intents: ParkedIntent[];
+  /** The four `(source, kind)` rows of the policy. */
+  automatic: IntentAutomatic[];
+}
+
 export const integrationCommands = {
   /**
    * The panel's state — `integrations_status`. **Asks the store when it can and answers the
@@ -108,4 +174,29 @@ export const integrationCommands = {
    * this one: the store is the group's, and a device that hears it is gone stops sending.
    */
   integrationsDisable: () => invoke<IntegrationsStatus>("integrations_disable"),
+  /**
+   * The parked intents and the policy — `integrations_review`. **Asks the store**, and answers an
+   * empty list with no request where it cannot be asked (no address, no membership, off).
+   */
+  integrationsReview: () => invoke<IntentReview>("integrations_review"),
+  /**
+   * Apply one parked intent now, whatever the policy says — `integrations_review_apply`: claimed,
+   * checked against this device's allow-list, applied as the reader's own add, and acked. A
+   * refusal by the allow-list rejects with its reason, after acking the intent refused.
+   */
+  integrationsReviewApply: (id: string) =>
+    invoke<IntentReview>("integrations_review_apply", { id }),
+  /** Decline one parked intent — `integrations_review_decline`: acked refused, nothing written. */
+  integrationsReviewDecline: (id: string) =>
+    invoke<IntentReview>("integrations_review_decline", { id }),
+  /**
+   * Whether this device applies `(source, kind)` without asking — `integrations_set_automatic`.
+   * A `fixed` row refuses. Switching one on asks for a publish round, which applies what was
+   * parked of that kind within one poll.
+   *
+   * Three arguments under their Rust names: `invoke` drops a misspelt key rather than refusing it,
+   * and a dropped `on` would deserialise to nothing at all.
+   */
+  integrationsSetAutomatic: (source: string, kind: string, on: boolean) =>
+    invoke<IntentReview>("integrations_set_automatic", { source, kind, on }),
 };
