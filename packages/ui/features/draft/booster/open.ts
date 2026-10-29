@@ -34,7 +34,7 @@ export type ColorsOf = (cardId: string) => string | null;
 const BALANCE = ["W", "U", "B", "R", "G"] as const;
 
 /** The least slot `balanceColors` is applied to — MTGJSON's own threshold. */
-const BALANCE_MIN = 5;
+export const BALANCE_MIN = 5;
 
 /**
  * A sheet made ready for thousands of draws: the weights' running sums for a binary search, and

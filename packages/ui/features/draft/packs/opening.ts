@@ -73,14 +73,15 @@ export function openOne(set: BoosterSet, openable: Openable, seed: number): Open
  * ten thousand packs {@link figuresOf} simulates.
  */
 export function theoreticalValue(set: BoosterSet, openable: Openable, priceOf: PriceOf): number {
+  const colorsOf = colorLookup(set);
   if (openable.kind === "booster") {
     const product = set.products.find((p) => p.key === openable.id);
-    return product === undefined ? 0 : expectedValue(product, priceOf);
+    return product === undefined ? 0 : expectedValue(product, priceOf, colorsOf);
   }
   let ev = 0;
   walkSealed(set, openable.id, {
     booster: (product) => {
-      ev += expectedValue(product, priceOf);
+      ev += expectedValue(product, priceOf, colorsOf);
     },
     card: (card) => {
       ev += priceOf(card.cardId, card.foil) ?? 0;
@@ -115,8 +116,8 @@ export function figuresOf(
   if (openable.kind === "booster") {
     const product = set.products.find((p) => p.key === openable.id);
     if (product !== undefined) {
-      ev = expectedValue(product, priceOf);
-      sd = Math.sqrt(variance(product, priceOf));
+      ev = expectedValue(product, priceOf, colorsOf);
+      sd = Math.sqrt(variance(product, priceOf, colorsOf));
       simulated = simulate(product, priceOf, n, rng, colorsOf);
     }
   } else {

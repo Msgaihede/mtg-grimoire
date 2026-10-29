@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BoosterProduct } from "@/lib/ipc";
 import { colorsOf, PRODUCT, priceOf, SET } from "./fixture";
 import { mulberry32 } from "./rng";
 import {
@@ -100,6 +101,46 @@ describe("simulate", () => {
     expect(Math.abs(v - VAR) / VAR).toBeLessThan(0.08);
     // The cheapest pack is variant A with the rare: 0.5 + 1 + 0.5.
     expect(values[0]).toBeCloseTo(2, 10);
+  });
+});
+
+describe("a colour-balanced slot", () => {
+  /*
+   * A real-sized sheet of commons at 10¢: forty each of white, blue, black and green, and one red
+   * card at $10. A slot of seven draws one card of each colour first, so the red card is always in
+   * it — about $10.60 a pack, where drawing by weight alone would figure 7 · (10 + 160·0.1) / 161
+   * ≈ $1.13. (The theory draws the slot's other two with replacement; on a sheet this size that
+   * costs about 1 %.)
+   */
+  const ids = [..."WUBG"]
+    .flatMap((c) => Array.from({ length: 40 }, (_, n) => `${c}${n}`))
+    .concat("R0");
+  const product: BoosterProduct = {
+    key: "play",
+    name: "Balanced",
+    totalWeight: 1,
+    variants: [{ weight: 1, slots: [{ sheet: "common", count: 7 }] }],
+    sheets: [
+      {
+        name: "common",
+        foil: false,
+        fixed: false,
+        allowDuplicates: false,
+        balanceColors: true,
+        totalWeight: ids.length,
+        cards: ids.map((cardId) => ({ cardId, weight: 1 })),
+      },
+    ],
+  };
+  const price = (cardId: string) => (cardId === "R0" ? 10 : 0.1);
+  const colours = (cardId: string) => cardId[0];
+
+  it("is figured as it is opened, so the theory and the simulation agree", () => {
+    const ev = expectedValue(product, price, colours);
+    expect(ev).toBeGreaterThan(10);
+    const values = simulate(product, price, 20000, mulberry32(11), colours);
+    const mean = values.reduce((s, v) => s + v, 0) / values.length;
+    expect(Math.abs(mean - ev) / ev).toBeLessThan(0.03);
   });
 });
 

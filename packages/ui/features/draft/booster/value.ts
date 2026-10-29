@@ -9,6 +9,7 @@
  */
 import type { BoosterProduct, BoosterSet, FinishPrices } from "@/lib/ipc";
 import {
+  BALANCE_MIN,
   drawSlot,
   drawVariant,
   prepareProduct,
@@ -76,12 +77,39 @@ function sheetMoments(product: BoosterProduct, priceOf: PriceOf): Map<string, Sh
   return out;
 }
 
-/** Each variant's probability, mean and variance. */
+/** The weighted mean and variance of one draw among `among` (indices into `sheet.cards`). */
+function amongMoments(
+  sheet: BoosterProduct["sheets"][number],
+  among: readonly number[],
+  priceOf: PriceOf,
+): { mean: number; variance: number } {
+  let total = 0;
+  let first = 0;
+  let second = 0;
+  for (const i of among) {
+    const c = sheet.cards[i];
+    if (c.weight <= 0) continue;
+    const p = counted(priceOf, c.cardId, sheet.foil);
+    total += c.weight;
+    first += c.weight * p;
+    second += c.weight * p * p;
+  }
+  const mean = total > 0 ? first / total : 0;
+  return { mean, variance: total > 0 ? Math.max(0, second / total - mean * mean) : 0 };
+}
+
+/**
+ * Each variant's probability, mean and variance. A `balanceColors` slot is figured as
+ * {@link drawSlot} opens it: one card of each colour the sheet has, from that colour's cards, then
+ * the rest from the whole sheet — without `colorsOf`, by weight alone, as `drawSlot` does too.
+ */
 function variantMoments(
   product: BoosterProduct,
   priceOf: PriceOf,
+  colorsOf?: ColorsOf,
 ): { p: number; mean: number; variance: number }[] {
   const sheets = sheetMoments(product, priceOf);
+  const prepared = colorsOf === undefined ? null : prepareProduct(product, colorsOf);
   const total = product.variants.reduce((s, v) => s + Math.max(0, v.weight), 0);
   if (total <= 0) return [];
   return product.variants.map((v) => {
@@ -92,10 +120,22 @@ function variantMoments(
       if (m === undefined) continue;
       if (m.fixedSum !== null) {
         mean += m.fixedSum;
-      } else {
-        mean += slot.count * m.mean;
-        variance += slot.count * m.variance;
+        continue;
       }
+      let rest = slot.count;
+      const balanced = prepared?.sheets.get(slot.sheet);
+      if (balanced?.byColor && slot.count >= BALANCE_MIN) {
+        for (const among of balanced.byColor) {
+          if (rest === 0) break;
+          if (among.length === 0) continue;
+          const c = amongMoments(balanced.sheet, among, priceOf);
+          mean += c.mean;
+          variance += c.variance;
+          rest--;
+        }
+      }
+      mean += rest * m.mean;
+      variance += rest * m.variance;
     }
     return { p: Math.max(0, v.weight) / total, mean, variance };
   });
@@ -104,11 +144,15 @@ function variantMoments(
 /**
  * The average value of one booster: per sheet the weighted mean price, times the slot's count,
  * summed per variant, and the variants weighted by how often they are opened. A fixed sheet adds
- * every card `weight` times. `balanceColors` is not in the figure — it moves which commons are
- * opened, and the simulation, which honours it, is the check.
+ * every card `weight` times. With `colorsOf`, a `balanceColors` slot counts its one card of each
+ * colour from that colour's cards — the simulation opens it so, and the two agree.
  */
-export function expectedValue(product: BoosterProduct, priceOf: PriceOf): number {
-  return variantMoments(product, priceOf).reduce((s, v) => s + v.p * v.mean, 0);
+export function expectedValue(
+  product: BoosterProduct,
+  priceOf: PriceOf,
+  colorsOf?: ColorsOf,
+): number {
+  return variantMoments(product, priceOf, colorsOf).reduce((s, v) => s + v.p * v.mean, 0);
 }
 
 /**
@@ -117,8 +161,8 @@ export function expectedValue(product: BoosterProduct, priceOf: PriceOf): number
  * (the law of total variance). Drawing without replacement makes the true figure a little smaller;
  * the simulation does not make that approximation.
  */
-export function variance(product: BoosterProduct, priceOf: PriceOf): number {
-  const vs = variantMoments(product, priceOf);
+export function variance(product: BoosterProduct, priceOf: PriceOf, colorsOf?: ColorsOf): number {
+  const vs = variantMoments(product, priceOf, colorsOf);
   const ev = vs.reduce((s, v) => s + v.p * v.mean, 0);
   return vs.reduce((s, v) => s + v.p * (v.variance + (v.mean - ev) ** 2), 0);
 }
@@ -278,8 +322,8 @@ export function sealedFigures(
   let v = 0;
   const pools: { values: Float64Array; count: number }[] = [];
   for (const [product, count] of counts) {
-    ev += count * expectedValue(product, priceOf);
-    v += count * variance(product, priceOf);
+    ev += count * expectedValue(product, priceOf, colorsOf);
+    v += count * variance(product, priceOf, colorsOf);
     pools.push({ values: simulate(product, priceOf, n, rng, colorsOf), count });
   }
   const simulated = new Float64Array(Math.max(0, n));
