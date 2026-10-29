@@ -496,12 +496,9 @@ pub async fn step(state: &Arc<State>, seen: &mut Seen, now: u64) -> Stepped {
 /// on and no round is due. The round's own gates: nothing on a device that is not entitled, and a
 /// door that cannot be had is nothing done (its failures are already rows). `db` is the lane.
 pub async fn intents_round(db: &impl Store) -> IntentsReport {
-    let Ok((entitled, current)) = db.reading(|conn| {
-        Ok((
-            store::entitled(conn),
-            readable::corpus_current(conn),
-        ))
-    }) else {
+    let Ok((entitled, current)) =
+        db.reading(|conn| Ok((store::entitled(conn), readable::corpus_current(conn))))
+    else {
         return IntentsReport::default();
     };
     if !entitled {
@@ -1339,6 +1336,14 @@ mod tests {
         let server = httpmock::MockServer::start_async().await;
         let conn = open_db();
         entitled(&conn, &server.base_url());
+        // Capture, so the add gets the `sync_uid` a projected row needs, as a paired device's does.
+        crate::sync_engine::capture::install(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'dev-a', x'00', x'01', 'dev-a', 0)",
+            [],
+        )
+        .unwrap();
         folder(&conn, "Binder");
         no_shares(&server).await;
         store_holds(&server, digests_body(IntegrationFields::default(), &[])).await;
@@ -1359,8 +1364,8 @@ mod tests {
                 then.status(200).body(inbox);
             })
             .await;
-        let claimed = serde_json::json!({ "id": id, "lease": "L".repeat(22), "leaseUntil": 1 })
-            .to_string();
+        let claimed =
+            serde_json::json!({ "id": id, "lease": "L".repeat(22), "leaseUntil": 1 }).to_string();
         server
             .mock_async(|when, then| {
                 when.method(httpmock::Method::POST)
@@ -1454,7 +1459,8 @@ mod tests {
     /// This device is not entitled, so each asks nobody: what is held here is the timing.
     #[tokio::test]
     async fn an_idle_device_reads_its_inbox_every_five_minutes_while_the_store_is_on() {
-        let (state, _dir) = crate::state::fixtures::on_files("publish-step-intents", "http://127.0.0.1:1");
+        let (state, _dir) =
+            crate::state::fixtures::on_files("publish-step-intents", "http://127.0.0.1:1");
         {
             let conn = state.lock_db();
             crate::schema::fixtures::seed_card(&conn, "c-seed", "lea", "1");
@@ -1466,8 +1472,13 @@ mod tests {
         let mut seen = Seen::default();
         let intents = |stepped: &Stepped| matches!(stepped, Stepped::Intents { .. });
         assert!(intents(&step(&state, &mut seen, T0).await));
-        assert_eq!(step(&state, &mut seen, T0 + POLL.as_millis() as u64).await, Stepped::Idle);
-        assert!(intents(&step(&state, &mut seen, T0 + INTENTS_POLL_MS).await));
+        assert_eq!(
+            step(&state, &mut seen, T0 + POLL.as_millis() as u64).await,
+            Stepped::Idle
+        );
+        assert!(intents(
+            &step(&state, &mut seen, T0 + INTENTS_POLL_MS).await
+        ));
         // Switched off: no more reads.
         {
             let conn = state.lock_db();

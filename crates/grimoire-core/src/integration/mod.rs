@@ -31,6 +31,7 @@ pub mod review;
 /// `IntegrationsStatus`, the switch's `app_meta` cache, and `integrations_status`,
 /// `integrations_enable`, `integrations_set_fields` and `integrations_disable`.
 pub mod settings;
-/// The integrations Worker's four requests (plan §3.2), its address — a placeholder until the
+/// The integrations Worker's requests — the projection's, the inbox's and the consumer tokens' —
+/// its address — a placeholder until the
 /// first deploy — and the sentences its refusals become.
 pub mod store;

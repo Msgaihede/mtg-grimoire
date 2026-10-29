@@ -232,7 +232,10 @@ function query(url: URL, name: string): string | null | Response {
  * is not JSON, which the parser it goes to refuses in its own words — or the size that put it over.
  * A declared `content-length` over the cap is believed, and refused unread.
  */
-async function readJson(request: Request, cap: number): Promise<{ value: unknown } | { over: number }> {
+async function readJson(
+  request: Request,
+  cap: number,
+): Promise<{ value: unknown } | { over: number }> {
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > cap) return { over: declared };
   if (request.body === null) return { value: undefined };
@@ -388,7 +391,9 @@ async function handleIntents(request: Request, env: Env, group: string): Promise
   const since = raw === null ? null : counter(raw);
   if (raw !== null && since === null) return badQuery("since is Unix milliseconds");
   const pending = await storeOf(env, group).pendingIntents(group, since);
-  return pending === null ? refuse(404, "integrations are off for this group", NO_STORE) : json(pending);
+  return pending === null
+    ? refuse(404, "integrations are off for this group", NO_STORE)
+    : json(pending);
 }
 
 /** A device's small JSON body — an ack, a mint — under this many bytes. */

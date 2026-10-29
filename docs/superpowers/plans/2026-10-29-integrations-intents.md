@@ -137,7 +137,10 @@ one (or a table never published), and matches the read's `q` (by its `name` hint
 `{ "uid": null, "intentId", "state", "scryfallId", "oracleId"?, "name", "set"?, "cn"?, "finish", "quantity", "folderUid" }`.
 A refused intent is never overlaid.
 
-`/c/*` answers no `Origin`: consumers are servers. `q` is at most 100 characters.
+`/c/*` answers no `Origin`: consumers are servers. `q` is at most 100 characters; a longer one, a
+`folder` that is not a uid, an autocomplete `kind` outside its four or a `since` that is not a
+count is `400 bad_query`. A refusal that needs no store (`400 bad_query`, `413`) is answered once
+the token's claims parse and before its MAC is checked, so neither wakes an object.
 
 ### 3.4 At rest
 

@@ -100,7 +100,9 @@ describe("GET /g/{group}/intents", () => {
     const listed = (await (await pending(h)).json()) as { intents: { createdAt: number }[] };
     const createdAt = listed.intents[0].createdAt;
     expect(((await (await pending(h, createdAt)).json()) as { intents: [] }).intents).toEqual([]);
-    expect(((await (await pending(h, createdAt - 1)).json()) as { intents: [] }).intents).toHaveLength(1);
+    expect(
+      ((await (await pending(h, createdAt - 1)).json()) as { intents: [] }).intents,
+    ).toHaveLength(1);
     expect((await ack(h, id, refused())).status).toBe(200);
     expect(((await (await pending(h)).json()) as { intents: [] }).intents).toEqual([]);
     expect((await pending(h, -1)).status).toBe(400);
@@ -186,8 +188,11 @@ describe("POST /g/{group}/intents/{id}/ack", () => {
     const mine = await ack(h, id, applied(lease));
     expect(mine.status).toBe(200);
     expect(await mine.json()).toEqual({ id, state: "applied" });
-    const row = h.stores.objectOf("g1").storage.db
-      .prepare("SELECT state, ack_hlc_ms, ack_hlc_ctr, acked_at FROM intents WHERE id = ?")
+    const row = h.stores
+      .objectOf("g1")
+      .storage.db.prepare(
+        "SELECT state, ack_hlc_ms, ack_hlc_ctr, acked_at FROM intents WHERE id = ?",
+      )
       .get(id)!;
     expect(row).toMatchObject({ state: "applied", ack_hlc_ms: 2_000, ack_hlc_ctr: 0 });
   });
@@ -200,8 +205,9 @@ describe("POST /g/{group}/intents/{id}/ack", () => {
     const { lease } = (await (await claim(h, held)).json()) as { lease: string };
     expect((await ack(h, held, refused())).status).toBe(409);
     expect((await ack(h, held, refused(lease))).status).toBe(200);
-    const row = h.stores.objectOf("g1").storage.db
-      .prepare("SELECT reason FROM intents WHERE id = ?")
+    const row = h.stores
+      .objectOf("g1")
+      .storage.db.prepare("SELECT reason FROM intents WHERE id = ?")
       .get(held)!;
     expect(row.reason).toBe("That folder no longer exists.");
   });
@@ -220,9 +226,18 @@ describe("POST /g/{group}/intents/{id}/ack", () => {
 
   it.each([
     ["no body", undefined],
-    ["applied with a reason", { state: "applied", reason: "x", lease: "A".repeat(22), hlcMs: 1, hlcCtr: 0 }],
-    ["refused with no reason", { state: "refused", reason: null, lease: null, hlcMs: null, hlcCtr: null }],
-    ["a state of its own", { state: "pending", reason: null, lease: null, hlcMs: null, hlcCtr: null }],
+    [
+      "applied with a reason",
+      { state: "applied", reason: "x", lease: "A".repeat(22), hlcMs: 1, hlcCtr: 0 },
+    ],
+    [
+      "refused with no reason",
+      { state: "refused", reason: null, lease: null, hlcMs: null, hlcCtr: null },
+    ],
+    [
+      "a state of its own",
+      { state: "pending", reason: null, lease: null, hlcMs: null, hlcCtr: null },
+    ],
   ])("refuses %s as bad_ack", async (_label, body) => {
     const { h, bearer } = await ready();
     const id = await post(h, bearer);
@@ -241,8 +256,9 @@ describe("POST /g/{group}/intents/{id}/ack", () => {
     const later = t0 + KEEP_ACKED_MS + 1;
     const posted = await store.consumer("g1", bearer, { op: "post", body: collectionAdd() }, later);
     expect(posted.status).toBe(200);
-    const ids = h.stores.objectOf("g1").storage.db
-      .prepare("SELECT id FROM intents")
+    const ids = h.stores
+      .objectOf("g1")
+      .storage.db.prepare("SELECT id FROM intents")
       .all()
       .map((row) => row.id);
     expect(ids).not.toContain(old);
@@ -258,14 +274,23 @@ describe("the consumer tokens a device mints", () => {
     const res = await mintConsumer(h.fetch, "discord", ["collection:remove"]);
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ code: "bad_consumer" });
-    expect((await mintConsumer(h.fetch, "discord", ["decks:read"], { days: 366 })).status).toBe(400);
+    expect((await mintConsumer(h.fetch, "discord", ["decks:read"], { days: 366 })).status).toBe(
+      400,
+    );
   });
 
   it("answers the token, its scopes in canonical order, and exp in seconds", async () => {
     const { h } = await ready();
-    const res = await mintConsumer(h.fetch, "mcp", ["wishlist:add", "collection:read"], { days: 2 });
+    const res = await mintConsumer(h.fetch, "mcp", ["wishlist:add", "collection:read"], {
+      days: 2,
+    });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { integration: string; token: string; scopes: string[]; exp: number };
+    const body = (await res.json()) as {
+      integration: string;
+      token: string;
+      scopes: string[];
+      exp: number;
+    };
     expect(body.integration).toBe("mcp");
     expect(body.token.startsWith("gct1.")).toBe(true);
     expect(body.scopes).toEqual(["collection:read", "wishlist:add"]);
@@ -294,14 +319,18 @@ describe("the consumer tokens a device mints", () => {
     const res = await h.fetch(await deviceRequest("DELETE", "/g/g1/consumers/discord"));
     expect(res.status).toBe(204);
     // Twice is the same answer.
-    expect((await h.fetch(await deviceRequest("DELETE", "/g/g1/consumers/discord"))).status).toBe(204);
+    expect((await h.fetch(await deviceRequest("DELETE", "/g/g1/consumers/discord"))).status).toBe(
+      204,
+    );
     expect((await postIntent(h.fetch, bearer, collectionAdd())).status).toBe(401);
     expect((await postIntent(h.fetch, mcp, collectionAdd())).status).toBe(200);
   });
 
   it("is a route for discord and mcp only, POST and DELETE, behind the gate", async () => {
     const { h } = await ready();
-    expect((await h.fetch(await deviceRequest("POST", "/g/g1/consumers/trade", {}))).status).toBe(404);
+    expect((await h.fetch(await deviceRequest("POST", "/g/g1/consumers/trade", {}))).status).toBe(
+      404,
+    );
     const get = await h.fetch(await deviceRequest("GET", "/g/g1/consumers/discord"));
     expect(get.status).toBe(405);
     expect(get.headers.get("allow")).toBe("POST, DELETE");

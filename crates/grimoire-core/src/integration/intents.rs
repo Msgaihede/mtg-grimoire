@@ -194,7 +194,11 @@ const WISHLIST_HINTS: [&str; 2] = ["set", "cn"];
 
 /// The payload as an object holding every required key, and no key that is neither required nor
 /// a hint.
-fn shaped<'a>(payload: &'a Value, required: &[&str], hints: &[&str]) -> Option<&'a Map<String, Value>> {
+fn shaped<'a>(
+    payload: &'a Value,
+    required: &[&str],
+    hints: &[&str],
+) -> Option<&'a Map<String, Value>> {
     let object = payload.as_object()?;
     let every = required.iter().all(|key| object.contains_key(*key));
     let nothing_else = object
@@ -297,7 +301,11 @@ pub fn check(conn: &Connection, intent: &Intent, corpus_current: bool) -> Result
 /// `collection.add`: a printing this device knows, one of the three finishes, 1–99 copies, and a
 /// `kind = 'user'` collection folder named by its `sync_uid` — never the root, never a deck's
 /// folder or the removed drawer (the Discord branch's §14.2: an add files into the reader's own).
-fn check_collection(conn: &Connection, payload: &Value, corpus_current: bool) -> Result<Verdict, String> {
+fn check_collection(
+    conn: &Connection,
+    payload: &Value,
+    corpus_current: bool,
+) -> Result<Verdict, String> {
     let Some(object) = shaped(payload, &COLLECTION_REQUIRED, &COLLECTION_HINTS) else {
         return Ok(Verdict::Refuse(BAD_PAYLOAD));
     };
@@ -345,11 +353,16 @@ fn check_collection(conn: &Connection, payload: &Value, corpus_current: bool) ->
 /// three or none, 1–99 copies, and a wishlist folder no deck manages — or `null`, the root. The
 /// `name` is required for the store's overlay and **not read here**: the wish is named from this
 /// device's card data, as a press in the app names it.
-fn check_wishlist(conn: &Connection, payload: &Value, corpus_current: bool) -> Result<Verdict, String> {
+fn check_wishlist(
+    conn: &Connection,
+    payload: &Value,
+    corpus_current: bool,
+) -> Result<Verdict, String> {
     let Some(object) = shaped(payload, &WISHLIST_REQUIRED, &WISHLIST_HINTS) else {
         return Ok(Verdict::Refuse(BAD_PAYLOAD));
     };
-    if !hints_ok(object, &WISHLIST_HINTS) || bounded_str(&object["name"], MAX_HINT_CHARS).is_none() {
+    if !hints_ok(object, &WISHLIST_HINTS) || bounded_str(&object["name"], MAX_HINT_CHARS).is_none()
+    {
         return Ok(Verdict::Refuse(BAD_PAYLOAD));
     }
     let (Ok(card_id), Ok(oracle_id), Ok(folder_uid)) = (
@@ -563,7 +576,14 @@ pub enum Outcome {
 /// One error-log row for the inbox — `Source::Relay`, as the store's own requests are.
 fn note(db: &impl Store, kind: Kind, message: &str) {
     let _ = db.with(|conn| {
-        errors::record(conn, Source::Relay, "integrations_intents", kind, message, None);
+        errors::record(
+            conn,
+            Source::Relay,
+            "integrations_intents",
+            kind,
+            message,
+            None,
+        );
         Ok(())
     });
 }
@@ -671,7 +691,12 @@ async fn refuse(
 }
 
 /// Ack `id` refused with `reason`, holding no lease — the review list's Decline.
-pub async fn decline(db: &impl Store, door: &Door, id: &str, reason: &str) -> Result<Acked, String> {
+pub async fn decline(
+    db: &impl Store,
+    door: &Door,
+    id: &str,
+    reason: &str,
+) -> Result<Acked, String> {
     let ack = Ack {
         state: "refused".to_owned(),
         reason: Some(reason.to_owned()),
@@ -695,7 +720,11 @@ pub async fn pending(db: &impl Store, door: &Door) -> Result<Option<Vec<Intent>>
                 intents.push(intent);
             }
             Ok(_) => {}
-            Err(e) => note(db, Kind::Parse, &format!("an intent this device cannot read: {e}")),
+            Err(e) => note(
+                db,
+                Kind::Parse,
+                &format!("an intent this device cannot read: {e}"),
+            ),
         }
     }
     Ok(Some(intents))
@@ -750,7 +779,8 @@ pub async fn half(db: &impl Store, door: &Door, corpus_current: bool) -> Intents
             .unwrap_or(false);
         // A kind or a source this device does not know is refused, not parked: no reader's press
         // could make it applicable, and a refusal tells the integration so.
-        let known = SOURCES.contains(&intent.source.as_str()) && KINDS.contains(&intent.kind.as_str());
+        let known =
+            SOURCES.contains(&intent.source.as_str()) && KINDS.contains(&intent.kind.as_str());
         if !auto && known {
             report.parked.push(intent.id.clone());
             continue;
@@ -816,22 +846,24 @@ mod tests {
     /// A collection folder of `kind`, with its `sync_uid` (capture would mint one; a fixed one is
     /// what a payload names).
     fn collection_folder(conn: &Connection, uid: &str, kind: &str) -> i64 {
-        conn.query_row(
-            "INSERT INTO collection_folders
-               (parent_id, name, kind, sort_order, created_at, updated_at, locked)
-             VALUES (NULL, ?1, ?2, 0, 0, 0, 0) RETURNING id",
-            params![format!("Folder {uid}"), kind],
-            |r| r.get::<_, i64>(0),
-        )
-        .map(|id| {
-            conn.execute(
-                "UPDATE collection_folders SET sync_uid = ?1 WHERE id = ?2",
-                params![uid, id],
+        // A deck's folder names its deck; no other kind may.
+        let deck =
+            (kind == "deck").then(|| crate::schema::fixtures::deck(conn, &format!("Deck {uid}")));
+        let id: i64 = conn
+            .query_row(
+                "INSERT INTO collection_folders
+                   (parent_id, name, kind, sort_order, created_at, updated_at, locked, deck_id)
+                 VALUES (NULL, ?1, ?2, 0, 0, 0, 0, ?3) RETURNING id",
+                params![format!("Folder {uid}"), kind, deck],
+                |r| r.get(0),
             )
             .unwrap();
-            id
-        })
-        .unwrap()
+        conn.execute(
+            "UPDATE collection_folders SET sync_uid = ?1 WHERE id = ?2",
+            params![uid, id],
+        )
+        .unwrap();
+        id
     }
 
     fn wishlist_folder(conn: &Connection, uid: &str, managed: Option<i64>) -> i64 {
@@ -890,7 +922,12 @@ mod tests {
         let conn = device("http://127.0.0.1:1");
         collection_folder(&conn, "f-user", "user");
         collection_folder(&conn, "f-deck", "deck");
-        collection_folder(&conn, "f-removed", "removed");
+        // The removed drawer is one per database, made with it.
+        conn.execute(
+            "UPDATE collection_folders SET sync_uid = 'f-removed' WHERE kind = 'removed'",
+            [],
+        )
+        .unwrap();
         let deck = crate::schema::fixtures::deck(&conn, "Burn");
         wishlist_folder(&conn, "w-managed", Some(deck));
 
@@ -936,18 +973,24 @@ mod tests {
                 NOT_ALLOWED,
             ),
             (
-                wish(json!({ "scryfallId": "c-bolt", "oracleId": null, "finish": null,
-                             "quantity": 1, "folderUid": "w-managed", "name": "Lightning Bolt" })),
+                wish(
+                    json!({ "scryfallId": "c-bolt", "oracleId": null, "finish": null,
+                             "quantity": 1, "folderUid": "w-managed", "name": "Lightning Bolt" }),
+                ),
                 MANAGED_FOLDER,
             ),
             (
-                wish(json!({ "scryfallId": null, "oracleId": null, "finish": null,
-                             "quantity": 1, "folderUid": null, "name": "Nothing" })),
+                wish(
+                    json!({ "scryfallId": null, "oracleId": null, "finish": null,
+                             "quantity": 1, "folderUid": null, "name": "Nothing" }),
+                ),
                 BAD_PAYLOAD,
             ),
             (
-                wish(json!({ "scryfallId": "c-bolt", "oracleId": null, "finish": null,
-                             "quantity": 1, "folderUid": null })),
+                wish(
+                    json!({ "scryfallId": "c-bolt", "oracleId": null, "finish": null,
+                             "quantity": 1, "folderUid": null }),
+                ),
                 BAD_PAYLOAD,
             ),
         ];
@@ -1002,8 +1045,10 @@ mod tests {
         assert_eq!(
             verdict(
                 &conn,
-                &wish(json!({ "scryfallId": "c-bolt", "oracleId": "o-other", "finish": "etched",
-                              "quantity": 3, "folderUid": "w-user", "name": "Lightning Bolt" }))
+                &wish(
+                    json!({ "scryfallId": "c-bolt", "oracleId": "o-other", "finish": "etched",
+                              "quantity": 3, "folderUid": "w-user", "name": "Lightning Bolt" })
+                )
             ),
             Verdict::Apply(Plan::Wishlist {
                 card_id: Some("c-bolt".to_owned()),
@@ -1017,8 +1062,10 @@ mod tests {
         assert_eq!(
             verdict(
                 &conn,
-                &wish(json!({ "scryfallId": null, "oracleId": "o-c-bolt", "finish": null,
-                              "quantity": 1, "folderUid": null, "name": "Lightning Bolt" }))
+                &wish(
+                    json!({ "scryfallId": null, "oracleId": "o-c-bolt", "finish": null,
+                              "quantity": 1, "folderUid": null, "name": "Lightning Bolt" })
+                )
             ),
             Verdict::Apply(Plan::Wishlist {
                 card_id: None,
@@ -1070,7 +1117,10 @@ mod tests {
         })
     }
 
-    async fn inbox<'a>(server: &'a httpmock::MockServer, intents: &[&Intent]) -> httpmock::Mock<'a> {
+    async fn inbox<'a>(
+        server: &'a httpmock::MockServer,
+        intents: &[&Intent],
+    ) -> httpmock::Mock<'a> {
         let body = json!({
             "intents": intents.iter().map(|i| intent_json(i)).collect::<Vec<_>>(),
             "more": false,
@@ -1191,10 +1241,12 @@ mod tests {
         let path = format!("/g/g1/intents/{}/ack", into_a_deck.id);
         let ack = server
             .mock_async(|when, then| {
-                when.method(httpmock::Method::POST).path(path).json_body(json!({
-                    "state": "refused", "reason": NOT_A_USER_FOLDER, "lease": null,
-                    "hlcMs": null, "hlcCtr": null,
-                }));
+                when.method(httpmock::Method::POST)
+                    .path(path)
+                    .json_body(json!({
+                        "state": "refused", "reason": NOT_A_USER_FOLDER, "lease": null,
+                        "hlcMs": null, "hlcCtr": null,
+                    }));
                 then.status(200).body("{}");
             })
             .await;
@@ -1283,7 +1335,10 @@ mod tests {
         assert_eq!(rows, 1);
         let all = owed(&conn);
         assert_eq!(all[&bolt.id].state, "applied");
-        assert_eq!(all[&bolt.id].lease.as_deref(), Some("L".repeat(22).as_str()));
+        assert_eq!(
+            all[&bolt.id].lease.as_deref(),
+            Some("L".repeat(22).as_str())
+        );
     }
 
     /// A wish lands at the root it names, through the wishlist's own add, as this device's op.
@@ -1291,8 +1346,10 @@ mod tests {
     async fn a_wish_lands_as_this_devices_op() {
         let server = httpmock::MockServer::start_async().await;
         let conn = device(&server.base_url());
-        let any = wish(json!({ "scryfallId": null, "oracleId": "o-c-bolt", "finish": null,
-                               "quantity": 1, "folderUid": null, "name": "Lightning Bolt" }));
+        let any = wish(
+            json!({ "scryfallId": null, "oracleId": "o-c-bolt", "finish": null,
+                               "quantity": 1, "folderUid": null, "name": "Lightning Bolt" }),
+        );
         inbox(&server, &[&any]).await;
         claims(&server, &any.id).await;
         acks(&server, &any.id).await;
@@ -1305,7 +1362,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!((oracle.as_str(), name.as_str()), ("o-c-bolt", "Lightning Bolt"));
+        assert_eq!(
+            (oracle.as_str(), name.as_str()),
+            ("o-c-bolt", "Lightning Bolt")
+        );
         assert_eq!(ops(&conn, "wishlist_entries").len(), 1);
     }
 }

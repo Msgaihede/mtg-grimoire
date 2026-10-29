@@ -224,7 +224,10 @@ export function validatePayload(kind: Kind, payload: unknown): Record<string, un
       )
     )
       return "a wishlist.add is { scryfallId, oracleId, finish, quantity, folderUid, name } with set and cn optional";
-    if (!textOrNull(payload.scryfallId, MAX_ID_CHARS) || !textOrNull(payload.oracleId, MAX_ID_CHARS))
+    if (
+      !textOrNull(payload.scryfallId, MAX_ID_CHARS) ||
+      !textOrNull(payload.oracleId, MAX_ID_CHARS)
+    )
       return "a wishlist.add's ids are strings or null";
     if (payload.scryfallId === null && payload.oracleId === null)
       return "a wishlist.add names a card or an oracle id";
@@ -233,7 +236,11 @@ export function validatePayload(kind: Kind, payload: unknown): Record<string, un
     if (!text(payload.name, MAX_HINT_CHARS)) return "a wishlist.add names its card";
     if (!hintsOk(payload, ["set", "cn"])) return "a hint is a string of at most 200";
   }
-  if (kind === "collection.add" ? !finish(payload.finish) : !(payload.finish === null || finish(payload.finish)))
+  if (
+    kind === "collection.add"
+      ? !finish(payload.finish)
+      : !(payload.finish === null || finish(payload.finish))
+  )
     return "an intent's finish is nonfoil, foil or etched";
   if (!quantity(payload.quantity)) return "an intent's quantity is a whole number from 1 to 99";
   return payload;

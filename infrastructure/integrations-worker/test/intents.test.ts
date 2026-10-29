@@ -18,12 +18,19 @@ import { collectionAdd, wishlistAdd } from "./fake";
  * suite is about the write.
  */
 
+/** `object` with `keys` left out. */
+function without<T extends object>(object: T, ...keys: string[]): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(object).filter(([key]) => !keys.includes(key)),
+  ) as Partial<T>;
+}
+
 describe("a collection.add's payload", () => {
   const ok = collectionAdd().payload;
 
   it("is taken with its hints, and without them", () => {
     expect(validatePayload("collection.add", ok)).toEqual(ok);
-    const { name: _n, set: _s, cn: _c, ...bare } = ok;
+    const bare = without(ok, "name", "set", "cn");
     expect(validatePayload("collection.add", bare)).toEqual(bare);
   });
 
@@ -44,7 +51,8 @@ describe("a collection.add's payload", () => {
     ["an array", [ok]],
     ["null", null],
   ])("refuses %s", (_label, payload) => {
-    const clean = Array.isArray(payload) || payload === null ? payload : JSON.parse(JSON.stringify(payload));
+    const clean =
+      Array.isArray(payload) || payload === null ? payload : JSON.parse(JSON.stringify(payload));
     expect(typeof validatePayload("collection.add", clean)).toBe("string");
   });
 });
@@ -69,7 +77,7 @@ describe("a wishlist.add's payload", () => {
   it.each([
     ["neither id", { ...ok, oracleId: null }],
     ["no name", { ...ok, name: null }],
-    ["a missing key", (({ folderUid: _f, ...rest }) => rest)(ok)],
+    ["a missing key", without(ok, "folderUid")],
     ["a deck's uid as a key", { ...ok, deckUid: "d-1" }],
     ["a quantity of 100", { ...ok, quantity: 100 }],
     ["an unknown finish", { ...ok, finish: "galaxy" }],
@@ -91,7 +99,7 @@ describe("an intent's shape", () => {
     ["a change", { ...collectionAdd(), kind: "collection.update" }],
     ["an id the consumer chose", { ...collectionAdd(), id: "AAAAAAAAAAAAAAAAAAAAAA" }],
     ["a state the consumer chose", { ...collectionAdd(), state: "applied" }],
-    ["no confirmedBy", (({ confirmedBy: _c, ...rest }) => rest)(collectionAdd())],
+    ["no confirmedBy", without(collectionAdd(), "confirmedBy")],
     ["a confirmedBy past 128", { ...collectionAdd(), confirmedBy: "x".repeat(129) }],
     ["a list", [collectionAdd()]],
     ["nothing", undefined],
@@ -115,18 +123,36 @@ describe("an ack", () => {
 
   it("refused carries a reason, and may come with no lease or watermark", () => {
     expect(
-      parseAck({ state: "refused", reason: "That folder no longer exists.", lease: null, hlcMs: null, hlcCtr: null }),
+      parseAck({
+        state: "refused",
+        reason: "That folder no longer exists.",
+        lease: null,
+        hlcMs: null,
+        hlcCtr: null,
+      }),
     ).toMatchObject({ state: "refused", lease: null });
   });
 
   it.each([
     ["applied with no lease", { state: "applied", reason: null, lease: null, hlcMs: 1, hlcCtr: 0 }],
-    ["applied with no watermark", { state: "applied", reason: null, lease, hlcMs: null, hlcCtr: 0 }],
+    [
+      "applied with no watermark",
+      { state: "applied", reason: null, lease, hlcMs: null, hlcCtr: 0 },
+    ],
     ["applied with a reason", { state: "applied", reason: "x", lease, hlcMs: 1, hlcCtr: 0 }],
-    ["refused with no reason", { state: "refused", reason: null, lease: null, hlcMs: null, hlcCtr: null }],
-    ["refused past 300", { state: "refused", reason: "x".repeat(301), lease: null, hlcMs: null, hlcCtr: null }],
+    [
+      "refused with no reason",
+      { state: "refused", reason: null, lease: null, hlcMs: null, hlcCtr: null },
+    ],
+    [
+      "refused past 300",
+      { state: "refused", reason: "x".repeat(301), lease: null, hlcMs: null, hlcCtr: null },
+    ],
     ["pending", { state: "pending", reason: null, lease: null, hlcMs: null, hlcCtr: null }],
-    ["a lease of another shape", { state: "applied", reason: null, lease: "short", hlcMs: 1, hlcCtr: 0 }],
+    [
+      "a lease of another shape",
+      { state: "applied", reason: null, lease: "short", hlcMs: 1, hlcCtr: 0 },
+    ],
     ["a negative clock", { state: "applied", reason: null, lease, hlcMs: -1, hlcCtr: 0 }],
     ["a missing key", { state: "applied", reason: null, lease, hlcMs: 1 }],
     ["an extra key", { state: "applied", reason: null, lease, hlcMs: 1, hlcCtr: 0, row: "u" }],
@@ -137,7 +163,9 @@ describe("an ack", () => {
 
 describe("a mint's body", () => {
   it("is known scopes, put in canonical order, and 1 to 365 days", () => {
-    expect(parseConsumerRequest({ scopes: ["wishlist:add", "collection:read"], days: 365 })).toEqual({
+    expect(
+      parseConsumerRequest({ scopes: ["wishlist:add", "collection:read"], days: 365 }),
+    ).toEqual({
       scopes: ["collection:read", "wishlist:add"],
       days: 365,
     });

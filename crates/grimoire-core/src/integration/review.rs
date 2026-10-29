@@ -66,7 +66,8 @@ pub struct IntentAutomatic {
 
 /// The review list's Apply on an intent that is no longer waiting — another device applied it, or
 /// the reader declined it elsewhere.
-pub const GONE: &str = "That change is no longer waiting. Another of your devices may have applied it.";
+pub const GONE: &str =
+    "That change is no longer waiting. Another of your devices may have applied it.";
 
 /// Apply on an intent another device is applying right now.
 pub const TAKEN: &str = "Another of your devices is applying that change.";
@@ -368,10 +369,12 @@ mod tests {
         let path = format!("/g/g1/intents/{id}/ack");
         let ack = server
             .mock_async(|when, then| {
-                when.method(httpmock::Method::POST).path(path).json_body(json!({
-                    "state": "refused", "reason": intents::DECLINED, "lease": null,
-                    "hlcMs": null, "hlcCtr": null,
-                }));
+                when.method(httpmock::Method::POST)
+                    .path(path)
+                    .json_body(json!({
+                        "state": "refused", "reason": intents::DECLINED, "lease": null,
+                        "hlcMs": null, "hlcCtr": null,
+                    }));
                 then.status(200).body("{}");
             })
             .await;

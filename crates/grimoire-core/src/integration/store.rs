@@ -1,5 +1,7 @@
 //! **The integrations Worker's client** (`infrastructure/integrations-worker/`, plan §3.2): the
-//! four requests a device makes of its group's store, and the refusals they answer.
+//! requests a device makes of its group's store, and the refusals they answer — the projection's
+//! four (PR 2), and the inbox's and the consumer tokens' (PR 3, plan
+//! `2026-10-29-integrations-intents.md` §3.2).
 //!
 //! | Request | Answers |
 //! | --- | --- |
@@ -7,6 +9,10 @@
 //! | [`put_settings`] — `PUT /g/{group}/settings` | the settings as stored, and whether that made the store; `None` for no store when asked not to make one |
 //! | [`put_table`] — `PUT /g/{group}/projection/{table}` | a [`Put`]: stored, stale, other settings, no store, or refused |
 //! | [`delete_group`] — `DELETE /g/{group}` | nothing; a 404 is as good as a 204 |
+//! | [`pending_intents`] — `GET /g/{group}/intents` | the pending intents, or `None` for no store |
+//! | [`claim_intent`] — `POST …/intents/{id}/claim` | a [`Claim`]: held with a lease, taken, acked, gone |
+//! | [`ack_intent`] — `POST …/intents/{id}/ack` | an [`Acked`]: done, taken, settled, gone |
+//! | [`mint_consumer`], [`consumers`], [`revoke_consumer`] — `…/consumers/{integration}` | a token, the live list, nothing |
 //!
 //! **`share::publish`'s conventions, for its reasons**: [`http`] and never a fresh client, the URL
 //! from a `format!` over [`base`], the body written by hand with an explicit `content-type`, the
@@ -714,7 +720,20 @@ pub async fn pending_intents(db: &impl Store, door: &Door) -> Result<Option<Inbo
     if status == 404 && Refusal::of(&body).is(NO_STORE) {
         return Ok(None);
     }
-    Err(refused(db, OPERATION, &url, status, &body, "a look at the inbox"))
+    // **Any other 404 is a Worker with no inbox** — one deployed before intents, whose router
+    // answers an unknown path `404 not_found`. Nothing waits there, and an app updated before its
+    // Worker is not a failure on every round.
+    if status == 404 {
+        return Ok(Some(Inbox::default()));
+    }
+    Err(refused(
+        db,
+        OPERATION,
+        &url,
+        status,
+        &body,
+        "a look at the inbox",
+    ))
 }
 
 /// `POST /g/{group}/intents/{id}/claim` — **hold an intent before applying it** (plan §2): two
@@ -749,7 +768,12 @@ pub async fn claim_intent(db: &impl Store, door: &Door, id: &str) -> Result<Clai
 /// `POST /g/{group}/intents/{id}/ack` — the outcome, for the integration to show and every other
 /// device to see. An ack repeating the state the store holds is [`Acked::Done`]: a round that
 /// sends an owed ack the store already took is told it is done.
-pub async fn ack_intent(db: &impl Store, door: &Door, id: &str, ack: &Ack) -> Result<Acked, String> {
+pub async fn ack_intent(
+    db: &impl Store,
+    door: &Door,
+    id: &str,
+    ack: &Ack,
+) -> Result<Acked, String> {
     const OPERATION: &str = "integrations_ack";
     let url = door.url(&format!("/intents/{id}/ack"));
     let json = serde_json::to_string(ack).map_err(|e| e.to_string())?;
@@ -833,7 +857,14 @@ pub async fn mint_consumer(
     if status == 404 && Refusal::of(&text).is(NO_STORE) {
         return Ok(None);
     }
-    Err(refused(db, OPERATION, &url, status, &text, "a new integration token"))
+    Err(refused(
+        db,
+        OPERATION,
+        &url,
+        status,
+        &text,
+        "a new integration token",
+    ))
 }
 
 /// `GET /g/{group}/consumers` — the integrations holding a live token, or `None` with no store.
@@ -858,12 +889,23 @@ pub async fn consumers(db: &impl Store, door: &Door) -> Result<Option<Vec<Consum
     if status == 404 && Refusal::of(&body).is(NO_STORE) {
         return Ok(None);
     }
-    Err(refused(db, OPERATION, &url, status, &body, "a list of integration tokens"))
+    Err(refused(
+        db,
+        OPERATION,
+        &url,
+        status,
+        &body,
+        "a list of integration tokens",
+    ))
 }
 
 /// `DELETE /g/{group}/consumers/{integration}` — that integration's token revoked. **A 404 is
 /// success**, [`delete_group`]'s rule: there is no token, which is what was asked.
-pub async fn revoke_consumer(db: &impl Store, door: &Door, integration: &str) -> Result<(), String> {
+pub async fn revoke_consumer(
+    db: &impl Store,
+    door: &Door,
+    integration: &str,
+) -> Result<(), String> {
     const OPERATION: &str = "integrations_revoke";
     let url = door.url(&format!("/consumers/{integration}"));
     let (status, body) = send(
@@ -876,7 +918,14 @@ pub async fn revoke_consumer(db: &impl Store, door: &Door, integration: &str) ->
     if status == 404 || (200..300).contains(&status) {
         return Ok(());
     }
-    Err(refused(db, OPERATION, &url, status, &body, "a revoked integration token"))
+    Err(refused(
+        db,
+        OPERATION,
+        &url,
+        status,
+        &body,
+        "a revoked integration token",
+    ))
 }
 
 #[cfg(test)]
@@ -1070,6 +1119,51 @@ mod tests {
         };
         assert_eq!(MAX_GZIP_BYTES, read("MAX_GZIP_BYTES"));
         assert_eq!(MAX_INFLATED_BYTES, read("MAX_INFLATED_BYTES"));
+    }
+
+    /// ⚠️ **The inbox's code words, its caps and its lease are the Worker's own**, read from
+    /// `intents.ts` — a code spelled differently here is a claim taken read as a failure, and the
+    /// device's bounds are the Worker's so neither refuses what the other took.
+    #[test]
+    fn the_inbox_codes_and_caps_are_the_workers_own() {
+        let source = include_str!("../../../../infrastructure/integrations-worker/src/intents.ts");
+        for (name, value) in [
+            ("NO_INTENT", NO_INTENT),
+            ("CLAIMED", CLAIMED),
+            ("ALREADY_ACKED", ALREADY_ACKED),
+        ] {
+            assert!(
+                source.contains(&format!("export const {name} = \"{value}\";")),
+                "{name}"
+            );
+        }
+        let number = |name: &str| -> i64 {
+            let marker = format!("export const {name} =");
+            let at = source
+                .find(&marker)
+                .unwrap_or_else(|| panic!("intents.ts has no {name}"));
+            let rest = &source[at + marker.len()..];
+            let expression = &rest[..rest.find(';').expect("no `;`")];
+            expression
+                .split('*')
+                .map(|f| f.trim().replace('_', "").parse::<i64>().expect(expression))
+                .product()
+        };
+        assert_eq!(LEASE_MS, number("LEASE_MS"));
+        assert_eq!(super::super::intents::MAX_QUANTITY, 99);
+        assert_eq!(
+            super::super::intents::MAX_ID_CHARS as i64,
+            number("MAX_ID_CHARS")
+        );
+        assert_eq!(
+            super::super::intents::MAX_HINT_CHARS as i64,
+            number("MAX_HINT_CHARS")
+        );
+        // The kinds and sources, word for word.
+        for kind in super::super::intents::KINDS {
+            assert!(source.contains(&format!("\"{kind}\"")), "{kind}");
+        }
+        assert!(source.contains(r#"export const SOURCES = ["discord", "mcp", "trade"] as const;"#));
     }
 
     /// The watermark is the clock's row, and a database without one is the floor.

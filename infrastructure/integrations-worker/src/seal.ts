@@ -238,7 +238,7 @@ export async function rowMac(key: CryptoKey, table: string, row: unknown): Promi
   );
 }
 
-/** A sealed row opened — for the queries of PR 3 and 4, and for this Worker's suite today. */
+/** A sealed row opened — what a consumer route answers with (`store.ts`'s reads). */
 export async function openRow(
   key: CryptoKey,
   table: string,

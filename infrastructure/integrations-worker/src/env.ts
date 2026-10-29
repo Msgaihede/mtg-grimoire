@@ -13,7 +13,9 @@ import type { KekEnv, StoreRpc } from "./store";
  *
  * **What it holds**: per group that switched integrations on, a store — the projection of the
  * group's collection, wishlist and decks its devices publish, the policy of which opt-in fields
- * it carries, and a data key the rows are sealed under (`store.ts`, `seal.ts`). **What it never
+ * it carries, the intents its integrations propose and its devices ack, one consumer token's id
+ * per integration, and a data key the rows, the intents and the tokens' key all come from
+ * (`store.ts`, `seal.ts`). **What it never
  * holds**: the group key, a relay token past the request that carried it, or a device's
  * identity. A storage dump of it is the index columns `projection.ts` names and sealed bodies.
  */

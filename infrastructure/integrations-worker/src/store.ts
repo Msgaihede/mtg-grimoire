@@ -351,7 +351,8 @@ function intentRowOf(row: Record<string, unknown>): IntentRow {
     state: String(row.state) as State,
     created_at: Number(row.created_at),
     reason: row.reason === null || row.reason === undefined ? null : String(row.reason),
-    ack_hlc_ms: row.ack_hlc_ms === null || row.ack_hlc_ms === undefined ? null : Number(row.ack_hlc_ms),
+    ack_hlc_ms:
+      row.ack_hlc_ms === null || row.ack_hlc_ms === undefined ? null : Number(row.ack_hlc_ms),
     ack_hlc_ctr:
       row.ack_hlc_ctr === null || row.ack_hlc_ctr === undefined ? null : Number(row.ack_hlc_ctr),
     sealed: bytesOf(row.sealed),
@@ -958,10 +959,7 @@ export class Store implements StoreRpc {
     return this.#storage.transactionSync(() => {
       if (!this.#exists()) return NO_STORE_ANSWER;
       this.#inbox();
-      const row = this.#sql(
-        "SELECT state, lease, lease_until FROM intents WHERE id = ?",
-        id,
-      )[0];
+      const row = this.#sql("SELECT state, lease, lease_until FROM intents WHERE id = ?", id)[0];
       if (row === undefined) return answer(404, "no such intent in this store", NO_INTENT);
       if (row.state !== "pending") {
         return answer(409, "that intent has been acked already", ALREADY_ACKED, {
@@ -973,7 +971,12 @@ export class Store implements StoreRpc {
       }
       const lease = randomId();
       const leaseUntil = now + LEASE_MS;
-      this.#sql("UPDATE intents SET lease = ?, lease_until = ? WHERE id = ?", lease, leaseUntil, id);
+      this.#sql(
+        "UPDATE intents SET lease = ?, lease_until = ? WHERE id = ?",
+        lease,
+        leaseUntil,
+        id,
+      );
       return { status: 200, body: { id, lease, leaseUntil } };
     });
   }
@@ -993,10 +996,7 @@ export class Store implements StoreRpc {
     return this.#storage.transactionSync(() => {
       if (!this.#exists()) return NO_STORE_ANSWER;
       this.#inbox();
-      const row = this.#sql(
-        "SELECT state, lease, lease_until FROM intents WHERE id = ?",
-        id,
-      )[0];
+      const row = this.#sql("SELECT state, lease, lease_until FROM intents WHERE id = ?", id)[0];
       if (row === undefined) return answer(404, "no such intent in this store", NO_INTENT);
       if (row.state !== "pending") {
         if (row.state === ack.state) return { status: 200, body: { id, state: ack.state } };
@@ -1154,7 +1154,11 @@ export class Store implements StoreRpc {
   }
 
   /** Stored rows, opened — each under its generation's key, derived once a generation. */
-  async #open(table: Table, rows: SealedRow[], dataKey: Uint8Array): Promise<Record<string, unknown>[]> {
+  async #open(
+    table: Table,
+    rows: SealedRow[],
+    dataKey: Uint8Array,
+  ): Promise<Record<string, unknown>[]> {
     const keys = new Map<number, Promise<CryptoKey>>();
     return Promise.all(
       rows.map(async (row) => {
@@ -1223,7 +1227,9 @@ export class Store implements StoreRpc {
     const { rows, more } = this.#matching(table, like, folder, MAX_ENTRIES);
 
     const where = ["kind = ?", "state IN ('pending', 'applied')"];
-    const bindings: unknown[] = [table === "collection_entries" ? "collection.add" : "wishlist.add"];
+    const bindings: unknown[] = [
+      table === "collection_entries" ? "collection.add" : "wishlist.add",
+    ];
     if (like !== null) {
       where.push("name_norm LIKE ? ESCAPE '\\'");
       bindings.push(like);
@@ -1247,7 +1253,9 @@ export class Store implements StoreRpc {
 
     const opened = await this.#open(table, rows, keys.data);
     const overlay = await Promise.all(
-      unreflected.slice(0, MAX_ENTRIES).map(async (row) => overlayRow(await this.#intentOf(keys.intent, row))),
+      unreflected
+        .slice(0, MAX_ENTRIES)
+        .map(async (row) => overlayRow(await this.#intentOf(keys.intent, row))),
     );
     return {
       status: 200,

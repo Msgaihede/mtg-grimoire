@@ -242,9 +242,26 @@ need `nodejs_compat`. The first ingest's fixture documents are 307 KiB, 3 081 Ki
 JSON — smaller than the device's own figures in 5.1, whose rows are fuller; it is the row count that
 the costs follow.
 
-### 5.3 What this PR could not measure
+### 5.3 A consumer's read (PR 3)
 
-- **The cold answer time against Discord's three seconds** needs a consumer route, which is PR 3.
+`GET /c/collection?q=` through the router, every field on, Node 24, this container, 2026-10-29
+(`MEASURE=1`, `test/measure.test.ts`). *First* is the first read after the ingest, before the
+store has derived its row keys; *narrow* matches one row; *broad* matches the 50-row cap. The match
+is a scan of the clear `name_norm` column (no index — §4), and only the matched rows are opened.
+
+| Rows | First | Narrow (1 row) | Broad (50 rows) |
+| --- | --- | --- | --- |
+| 1 000 | 6.0 ms | 3.1 ms | 4.4 ms |
+| 10 000 | 10.9 ms | 4.4 ms | 7.0 ms |
+| 50 000 | 16.0 ms | 13.8 ms | 18.1 ms |
+
+**Two orders of magnitude under Discord's three seconds** before the network. What it leaves out is
+workerd's cold start of a `GroupStore` and the round trip from Discord's edge, which only a deploy
+measures. The same run's ingest, on this machine, was slower than §5.2's: 100 / 832 / 4 278 ms for a
+first publish of 1 000 / 10 000 / 50 000 rows, 44 / 459 / 2 032 ms with one row moved.
+
+### 5.4 What could not be measured here
+
 - **Anything on Cloudflare**: the deployed ingest time, the cold start of a `GroupStore`, the
   request and row-write figures — all after the owner's first deploy.
 
@@ -281,3 +298,57 @@ the costs follow.
 4. In the app: set `INTEGRATIONS_BASE` to the address, add it to the web host's `connect-src` and
    to the privacy page's host table (both are held by tests), and ship a release.
 5. Set `INTEGRATIONS_DEPLOY` to `true` so later releases deploy it with the others.
+
+## 8. Intents, consumer tokens and the overlay (PR 3)
+
+[The PR 3 plan](../superpowers/plans/2026-10-29-integrations-intents.md) is the contract; this is
+what each piece is and why.
+
+**An intent is a proposal, never a write.** An integration posts one (`POST /c/intents`): a
+`collection.add` or a `wishlist.add` — the closed list of v1 — with a payload of card identity, a
+finish, a quantity of 1–99 and a folder, and who confirmed it. The Worker holds it to the schema
+(`src/intents.ts`), to the token's scopes, to 64 KiB (`413 intent_too_large`) and to 64 a UTC day
+per integration (`429 intent_quota`), seals it under a key drawn from the group's data key, and
+keeps it `pending`. **Nothing reaches sync until a device of the group decides**:
+
+1. **Its own allow-list first** (`grimoire_core::integration::intents`), whatever the Worker took —
+   the branch's §14.2 list moved out of sync's apply path. The kind is one of the two; the payload
+   has exactly its keys; the card is in this device's card data (a card it lacks waits, unless its
+   card data is current, when the intent is refused); a collection add's folder is a `kind = 'user'`
+   folder named by `sync_uid` and never the root; a wish's folder is one no deck manages, or the
+   root. There is no kind for a change, a move or a removal.
+2. **Its policy**: Discord's two adds apply unasked (the reader pressed Confirm in Discord); every
+   other `(source, kind)` **parks** — stays pending in the store — until the reader switches it to
+   automatic in Settings → Integrations, on that device, or applies or declines it from the review
+   list there. The policy is the device's (`app_meta`), never the store's: a store that could flip
+   it could have a device apply what the reader never allowed.
+3. **A claim, then the apply, then the ack.** The claim is a ten-minute lease, so two devices that
+   read one pending add cannot both apply it (an add is a quantity; it is not idempotent). The apply
+   is `collection::add_entry` or `wishlist::add_wish` on the lane's write connection — the reader's
+   own add, its activity row, and the capture triggers' op, which syncs to every device as this
+   device's write. The apply and a row naming the ack it owes are one savepoint, so a device that
+   dies before acking sends the ack first on its next round. A refusal needs no claim: every device
+   refuses the same intent for the same reason, and the integration shows it.
+
+**When**: in the publish round, between the shares and the projection, so the projection that
+round sends already carries the add; and every five minutes while the store is on, so a device
+that is open and idle applies a Discord add without waiting for the reader to edit something.
+
+**The overlay** makes an add visible at once. A consumer's collection or wishlist read appends the
+intents of its kind that are pending, or applied but not yet in a published table — the ack carries
+the applying device's `sync_clock` after the write, and the intent stays overlaid while the table's
+held watermark is older. Dropping it at the ack would leave a gap with the card in neither: the
+round acks before its own projection half publishes, and a device whose card data cannot publish
+the table whole leaves it to another. A refused intent is never overlaid. Acked intents are purged
+30 days after their ack.
+
+**Consumer tokens** are the store's own: `gct1.<claims>.<mac>`, claims `{ grp, int, scp, exp, tid }`,
+minted on a device's request (`POST /g/{group}/consumers/{integration}`), one live token per
+integration — a re-mint revokes the last, `DELETE …/consumers/{integration}` revokes it, and
+`DELETE /g/{group}` revokes all of them by taking the data key their MAC key is drawn from. **A
+consumer never holds a relay token**, so a compromised one cannot publish a share, post to the scan
+inbox or touch sync (the branch's F8 cannot arise); and the key is not `INTEGRATIONS_KEK`'s, so
+rotating the KEK moves no token. Nothing in the app mints one yet: Discord's comes with PR 4,
+remote MCP's with PR 5 (`integration::store::mint_consumer`, `consumers`, `revoke_consumer` are the
+core's door for both).
+
