@@ -56,6 +56,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
   - Checked via `tracksCollection(deck)`. Required prop across deck components.
   - Virtual decks hide shortfall indicators, collection shortfall buttons, `Owned` columns in tables, and `Collection ▸` card actions.
   - Changing deck kinds always updates both flags simultaneously via `deckKindPatch`.
+- **Draft decks (Draft & Packs, 2026-10-29)**: a virtual `limited` deck a draft made, on `app_meta` `draft_decks` until saved (`features/draft/useDraftDecks.ts`' `useIsDraftDeck`). `DeckEditor`'s `draft` flag mounts no `DeckSearchPanel` (neither tab), no Quick Add (toolbar or undocked bar — `DeckHeaderBar`'s `onQuickAdd: null`), strips `Add to ▸ Collection/Wishlist` from the card menu (`withoutCollectionAdds`), and draws `features/draft/deck/DraftDeckBar` (basics, Save, Export, Discard) in the notices slot. The collection surfaces are already gone by `tracksCollection`.
 
 ---
 

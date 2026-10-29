@@ -6,6 +6,7 @@ import {
   cubeCards,
   dealCube,
   dealSetPacks,
+  playable,
   podSeats,
   readCubeList,
   setsLabel,
@@ -56,6 +57,21 @@ describe("dealSetPacks", () => {
       for (const pack of seat) expect(pack).toHaveLength(7);
     }
     expect(dealSetPacks([SET, SET, SET], 8, mulberry32(7))).toEqual(packs);
+  });
+
+  it("never deals a card this corpus lacks", () => {
+    const missing = SET.cards[0].cardId;
+    const set = {
+      ...SET,
+      cards: SET.cards.map((c) => (c.cardId === missing ? { ...c, inCorpus: false } : c)),
+    };
+    const packs = dealSetPacks([set, set, set], 8, mulberry32(3));
+    expect(packs.flat(2)).not.toContain(missing);
+    const product = playable(set.products[0], set);
+    for (const sheet of product.sheets) {
+      expect(sheet.cards.map((c) => c.cardId)).not.toContain(missing);
+      expect(sheet.totalWeight).toBe(sheet.cards.reduce((sum, c) => sum + c.weight, 0));
+    }
   });
 
   it("refuses a set with nothing to draft from", () => {

@@ -2,6 +2,7 @@ import { draftProduct, openBooster } from "@/features/draft/booster/open";
 import type { Rng } from "@/features/draft/booster/rng";
 import { parseDecklist } from "@/features/transfer/import/parse";
 import type {
+  BoosterProduct,
   BoosterSet,
   DraftSeatSetup,
   ImportResolveLine,
@@ -96,7 +97,10 @@ export function dealSetPacks(rounds: readonly BoosterSet[], seats: number, rng: 
     const product = draftProduct(set);
     if (product === null) throw new Error(`${set.name} has no booster to draft from.`);
     const colors = new Map(set.cards.map((c) => [c.cardId, c.colors]));
-    return { product, colorsOf: (cardId: string) => colors.get(cardId) ?? null };
+    return {
+      product: playable(product, set),
+      colorsOf: (cardId: string) => colors.get(cardId) ?? null,
+    };
   });
   const packs: string[][][] = Array.from({ length: seats }, () => []);
   // Round by round, seat by seat — the order a table opens them in, so one seed always deals one
@@ -107,6 +111,23 @@ export function dealSetPacks(rounds: readonly BoosterSet[], seats: number, rng: 
     }
   }
   return packs;
+}
+
+/**
+ * `product` without the cards this corpus lacks (`inCorpus: false`). The draft is played on the
+ * corpus's facts — the engine refuses a printing it cannot read — so a card MTGJSON knows and this
+ * corpus does not yet is left off its sheet, and its weight with it, rather than failing the deal.
+ */
+export function playable(product: BoosterProduct, set: BoosterSet): BoosterProduct {
+  const unknown = new Set(set.cards.filter((c) => !c.inCorpus).map((c) => c.cardId));
+  if (unknown.size === 0) return product;
+  const sheets = product.sheets.map((sheet) => {
+    const cards = sheet.cards.filter((c) => !unknown.has(c.cardId));
+    return cards.length === sheet.cards.length
+      ? sheet
+      : { ...sheet, cards, totalWeight: cards.reduce((sum, c) => sum + c.weight, 0) };
+  });
+  return { ...product, sheets };
 }
 
 /** Fisher–Yates over a copy, on `rng`. */
