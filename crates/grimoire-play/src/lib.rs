@@ -16,7 +16,7 @@ pub mod view;
 pub use cards::{CardFacts, FaceFacts};
 pub use draft::{
     Draft, DraftCard, DraftCardFacts, DraftMode, DraftSaved, DraftSeatSetup, DraftSeatView,
-    DraftSetup, DraftStatus, DraftView,
+    DraftSetup, DraftStatus, DraftView, PodFormat, WinstonPile, WinstonView,
 };
 pub use playtest::{
     Difficulty, OpponentDeck, Playtest, PlaytestAction, PlaytestPlayer, PlaytestStep, PlaytestView,
