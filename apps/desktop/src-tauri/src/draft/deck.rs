@@ -11,16 +11,20 @@ use grimoire_core::draft_deck::{self, BasicLand};
 use crate::sync::{lock_db_read, with_write, AppState};
 
 /// The pool as a virtual Limited deck named `name`, on the unsaved list. A repeated id is that
-/// many copies.
+/// many copies. With `commander` — a Commander draft's pool — the deck is Casual and has an empty
+/// Commander pile beside Deck and Pool.
 #[tauri::command]
 pub async fn draft_deck_create(
     state: tauri::State<'_, Arc<AppState>>,
     name: String,
     card_ids: Vec<String>,
+    commander: bool,
 ) -> Result<DeckRow, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |conn| draft_deck::create(conn, &name, &card_ids))
+        with_write(&state, |conn| {
+            draft_deck::create(conn, &name, &card_ids, commander)
+        })
     })
     .await
     .map_err(|e| format!("The draft deck could not be made: {e}"))?

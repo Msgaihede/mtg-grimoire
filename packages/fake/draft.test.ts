@@ -7,7 +7,15 @@
 import { describe, expect, it } from "vitest";
 import type { DraftSetup } from "@grimoire/ui/lib/ipc";
 import { allHandlers, makeDb, writeHandlers } from "./db";
-import { createDraftDeck, DRAFT_REPLACED, LOBBIES_OFF, NOT_IN_PACK } from "./draft";
+import {
+  createDraftDeck,
+  DRAFT_REPLACED,
+  LOBBIES_OFF,
+  NOT_IN_PACK,
+  NOT_YOUR_PILE,
+  WINSTON_NO_PICK,
+  WRONG_COUNT,
+} from "./draft";
 
 function world() {
   const db = makeDb();
@@ -31,7 +39,8 @@ function setup(db: ReturnType<typeof makeDb>, mode: DraftSetup["mode"] = "quick"
       [ids.slice(6, 9), ids.slice(9, 12)],
     ],
     packSets: ["", ""],
-    minDeckSize: 40,
+    minDeckSize: mode === "commander" ? 60 : 40,
+    podFormat: "booster",
   };
 }
 
@@ -101,6 +110,49 @@ describe("the draft", () => {
     expect(view.pool).toHaveLength(6);
   });
 
+  it("takes two cards a pick in a Commander draft, the bots two as well", () => {
+    const { db, h } = world();
+    let view = h.draft_start({ setup: setup(db, "commander"), draft: 1 });
+    expect(view).toMatchObject({ picksPerStep: 2, commanders: 1, stack: null, minDeckSize: 60 });
+    expect(() => h.draft_pick({ draft: 1, cardInstanceIds: [view.pack[0].instanceId] })).toThrow(
+      WRONG_COUNT(2),
+    );
+    view = h.draft_pick({ draft: 1, cardInstanceIds: view.pack.slice(0, 2).map((c) => c.instanceId) });
+    expect(view.pool).toHaveLength(2);
+    expect(view.seats.map((s) => s.poolCount)).toEqual([2, 2]);
+    // One card left in the pack: the pick takes what there is.
+    expect(view.pack).toHaveLength(1);
+    view = h.draft_auto_pick({ draft: 1 });
+    expect(view.pool).toHaveLength(3);
+    expect(view.packNumber).toBe(1);
+  });
+
+  it("plays a Winston draft: take, decline, and a bot that takes the first pile", () => {
+    const { db, h } = world();
+    let view = h.draft_start({ setup: setup(db, "winston"), draft: 1 });
+    expect(view.stack).toMatchObject({ mainCount: 9, turnSeat: 0, yourTurn: true, activePile: 0 });
+    expect(view.stack?.piles.map((p) => p.count)).toEqual([1, 1, 1]);
+    expect(view.stack?.piles[0].cards).toHaveLength(1);
+    expect(view.stack?.piles[1].cards).toEqual([]);
+    expect(() => h.draft_pick({ draft: 1, cardInstanceIds: ["x"] })).toThrow(WINSTON_NO_PICK);
+    expect(() => h.draft_winston({ draft: 1, pile: 1, take: true })).toThrow(NOT_YOUR_PILE);
+
+    // Decline pile 1: it grows by the stack's top card and pile 2 is looked at.
+    view = h.draft_winston({ draft: 1, pile: 0, take: false });
+    expect(view.stack).toMatchObject({ mainCount: 8, activePile: 1, yourTurn: true });
+    expect(view.stack?.piles.map((p) => p.count)).toEqual([2, 1, 1]);
+
+    // Take pile 2: it is refilled, and the bot takes pile 1 (both its cards) before the answer.
+    view = h.draft_winston({ draft: 1, pile: 1, take: true });
+    expect(view.pool).toHaveLength(1);
+    expect(view.seats[1].poolCount).toBe(2);
+    expect(view.stack).toMatchObject({ turnSeat: 0, yourTurn: true, activePile: 0, mainCount: 6 });
+
+    while (view.status === "drafting") view = h.draft_auto_pick({ draft: 1 });
+    expect(view.stack?.activePile).toBeNull();
+    expect(view.pool.length + view.seats[1].poolCount).toBe(12);
+  });
+
   it("puts a draft away with draft_end", () => {
     const { db, h } = world();
     h.draft_start({ setup: setup(db), draft: 1 });
@@ -125,6 +177,22 @@ describe("the draft deck", () => {
     const pool = detail?.categories.find((c) => c.name === "Pool");
     expect(detail?.cards.every((c) => c.categoryId === pool?.id)).toBe(true);
     expect(detail?.cards.reduce((n, c) => n + c.quantity, 0)).toBe(3);
+  });
+
+  it("is a Casual deck with a Commander pile for a Commander draft", () => {
+    const { db, h } = world();
+    const row = h.draft_deck_create({
+      name: "Commander Draft",
+      cardIds: [db.cards[0].id],
+      commander: true,
+    });
+    expect(row).toMatchObject({ formatKey: "casual", virtualOnly: true });
+    const detail = h.deck_get({ id: row.id, variant: "live" });
+    expect(detail?.categories.map((c) => [c.name, c.kind])).toEqual([
+      ["Deck", "main"],
+      ["Pool", "side"],
+      ["Commander", "commander"],
+    ]);
   });
 
   it("leaves the list on a keep, and is deleted on a discard", () => {
@@ -153,6 +221,7 @@ describe("lobbies", () => {
     expect(h.lobby_state()).toBeNull();
     expect(() => h.lobby_create()).toThrow(LOBBIES_OFF);
     expect(() => h.lobby_join()).toThrow(LOBBIES_OFF);
+    expect(() => h.lobby_winston()).toThrow(LOBBIES_OFF);
     expect(h.lobby_leave()).toBeUndefined();
   });
 });

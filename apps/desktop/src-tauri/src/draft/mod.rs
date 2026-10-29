@@ -1,8 +1,10 @@
 //! **The Draft & Packs page's draft**: one draft at a time over phase.rs's draft module
-//! (`grimoire_play::Draft`) — boosters the page made, passed round a table of bots, six straight
-//! into a sealed pool, or a pod of people met in a lobby ([`lobby`]) — and the deck its pool
-//! becomes ([`deck`]). This host's alone: `command_table`'s `DESKTOP_ONLY` says why, and
-//! `docs/superpowers/specs/2026-10-29-draft-and-packs-design.md` §4–§6 has the design.
+//! (`grimoire_play::Draft`) — boosters the page made, passed round a table of bots (a card a pick,
+//! two in a Commander draft), six straight into a sealed pool, a Winston draft's shared stack
+//! against a bot, or a pod of people met in a lobby ([`lobby`]) drafting boosters, Commander or
+//! Winston — and the deck its pool becomes ([`deck`]). This host's alone: `command_table`'s
+//! `DESKTOP_ONLY` says why, and `docs/superpowers/specs/2026-10-29-draft-and-packs-design.md`
+//! §4–§6 (and §4a) has the design.
 //!
 //! **One draft at a time, held here** ([`DraftSlot`]), modelled on the playtest board's slot:
 //! the page names each draft (`draft`, a fresh number per deal) and every call names the draft
@@ -392,9 +394,9 @@ async fn deal_off_the_slot(
     .map_err(|e| e.to_string())??
 }
 
-/// Deal a new draft — quick, sealed or cube; a pod is dealt by `lobby_start` — and answer seat
-/// 0's view. `draft` is the page's name for it, which every later call carries; the draft it
-/// replaces is gone at once.
+/// Deal a new draft — quick, sealed, cube, commander or winston; a pod is dealt by `lobby_start`
+/// — and answer seat 0's view. `draft` is the page's name for it, which every later call carries;
+/// the draft it replaces is gone at once.
 #[tauri::command]
 pub async fn draft_start(
     state: tauri::State<'_, Arc<AppState>>,
@@ -423,8 +425,9 @@ pub fn draft_view(
     }
 }
 
-/// This reader picks `card_instance_ids` (one card) from their pack; then the bots pick. In a
-/// pod, every guest is sent their own view. A refused pick changes nothing.
+/// This reader picks `card_instance_ids` (one card, two in a Commander draft) from their pack;
+/// then the bots pick. In a pod, every guest is sent their own view. A refused pick changes
+/// nothing.
 #[tauri::command]
 pub async fn draft_pick(
     state: tauri::State<'_, Arc<AppState>>,
@@ -441,7 +444,28 @@ pub async fn draft_pick(
     Ok(outcome.view)
 }
 
-/// "Pick for me": the bots' choice for this reader, at the draft's difficulty.
+/// This reader's Winston turn: take (`take`) the pile `pile` (0-based, the pile in play) or
+/// decline it; then every bot whose turn it is decides. In a pod — the host's own turn — every
+/// guest is sent their own view. A refused decision changes nothing.
+#[tauri::command]
+pub async fn draft_winston(
+    state: tauri::State<'_, Arc<AppState>>,
+    slot: tauri::State<'_, DraftSlot>,
+    lobby: tauri::State<'_, lobby::LobbySlot>,
+    draft: u64,
+    pile: u8,
+    take: bool,
+) -> Result<DraftView, String> {
+    let outcome = change(state.inner(), &slot.0, draft, false, move |d| {
+        d.winston(0, pile, take)
+    })
+    .await?;
+    lobby::send_views(&lobby, &outcome.guests);
+    Ok(outcome.view)
+}
+
+/// "Pick for me": the bots' choice for this reader, at the draft's difficulty — in a Winston
+/// draft, the bot's decision for this reader's turn.
 #[tauri::command]
 pub async fn draft_auto_pick(
     state: tauri::State<'_, Arc<AppState>>,
