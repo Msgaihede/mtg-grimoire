@@ -12,8 +12,7 @@ use crate::cards::CardFacts;
 use crate::{on_engine_stack, Difficulty};
 
 use super::{
-    Draft, DraftCardFacts, DraftMode, DraftSeatSetup, DraftSetup, DraftStatus, DraftView,
-    PodFormat,
+    Draft, DraftCardFacts, DraftMode, DraftSeatSetup, DraftSetup, DraftStatus, DraftView, PodFormat,
 };
 
 fn engine<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
@@ -596,7 +595,10 @@ fn a_commander_draft_picks_two_at_a_time_to_deckbuilding() {
         assert_eq!((view.picks_per_step, view.commanders), (2, 1));
         assert_eq!(view.pack_size, 20);
         assert!(view.stack.is_none());
-        assert!(view.seats[1..].iter().all(|s| s.picked), "the bots picked two each");
+        assert!(
+            view.seats[1..].iter().all(|s| s.picked),
+            "the bots picked two each"
+        );
         assert!(draft.pool(1).len() == 2);
 
         let before = draft.snapshot();
@@ -608,7 +610,10 @@ fn a_commander_draft_picks_two_at_a_time_to_deckbuilding() {
         while draft.status() == DraftStatus::Drafting {
             let view = draft.view(0);
             assert!(!view.waiting);
-            let ids: Vec<String> = view.pack[..2].iter().map(|c| c.instance_id.clone()).collect();
+            let ids: Vec<String> = view.pack[..2]
+                .iter()
+                .map(|c| c.instance_id.clone())
+                .collect();
             draft.pick(0, ids).expect("two cards are a pick");
             steps += 1;
             assert!(steps <= 30);
@@ -678,7 +683,10 @@ fn sees_only_its_pile(view: &DraftView) {
     assert!(view.pack.is_empty());
     let stack = view.stack.as_ref().expect("a Winston view has its table");
     assert_eq!(stack.piles.len(), 3);
-    assert_eq!(view.waiting, view.status == DraftStatus::Drafting && !stack.your_turn);
+    assert_eq!(
+        view.waiting,
+        view.status == DraftStatus::Drafting && !stack.your_turn
+    );
     for (i, pile) in stack.piles.iter().enumerate() {
         assert_eq!(pile.active, stack.active_pile == Some(i as u8));
         if stack.your_turn && pile.active {
@@ -698,7 +706,10 @@ fn a_winston_draft_against_a_bot_runs_to_the_end() {
         let mut draft = start(setup);
         let view = draft.view(0);
         assert_eq!(view.mode, DraftMode::Winston);
-        assert_eq!((view.pack_number, view.pick_number, view.pack_size), (0, 0, 0));
+        assert_eq!(
+            (view.pack_number, view.pick_number, view.pack_size),
+            (0, 0, 0)
+        );
         assert_eq!((view.picks_per_step, view.commanders), (1, 0));
         let stack = view.stack.clone().unwrap();
         assert!(stack.your_turn, "the bot took its turns before the view");
@@ -710,7 +721,10 @@ fn a_winston_draft_against_a_bot_runs_to_the_end() {
         // No pick in a Winston draft, no other pile, no turn for a bot's seat.
         let before = draft.snapshot();
         assert!(draft.pick(0, vec!["x".into()]).is_err());
-        assert_eq!(draft.winston(0, 1, true).unwrap_err(), "That is not the pile in play.");
+        assert_eq!(
+            draft.winston(0, 1, true).unwrap_err(),
+            "That is not the pile in play."
+        );
         assert!(draft.winston(1, 0, true).is_err());
         assert_eq!(draft.snapshot(), before);
 
@@ -727,7 +741,9 @@ fn a_winston_draft_against_a_bot_runs_to_the_end() {
             let before = draft.snapshot();
             if draft.winston(0, pile, false).is_err() {
                 assert_eq!(draft.snapshot(), before);
-                draft.winston(0, pile, true).expect("a take is always there");
+                draft
+                    .winston(0, pile, true)
+                    .expect("a take is always there");
                 takes += 1;
             }
             decisions += 1;
@@ -740,7 +756,10 @@ fn a_winston_draft_against_a_bot_runs_to_the_end() {
         let stack = view.stack.unwrap();
         assert_eq!(stack.active_pile, None);
         assert!(!stack.your_turn && stack.main_count == 0);
-        assert!(stack.piles.iter().all(|p| p.count == 0 && p.cards.is_empty()));
+        assert!(stack
+            .piles
+            .iter()
+            .all(|p| p.count == 0 && p.cards.is_empty()));
         assert!(!view.waiting);
         assert_eq!(
             view.pool.len() + draft.pool(1).len(),
@@ -787,7 +806,9 @@ fn a_pod_winston_between_two_people_takes_turns() {
             let stack = mine.stack.unwrap();
             let pile = stack.active_pile.unwrap();
             if stack.piles[usize::from(pile)].count > 0 {
-                draft.winston(turn, pile, true).expect("a pile with cards is taken");
+                draft
+                    .winston(turn, pile, true)
+                    .expect("a pile with cards is taken");
                 takes += 1;
                 if draft.status() == DraftStatus::Drafting {
                     let next = draft.view(0).stack.unwrap();
@@ -795,7 +816,9 @@ fn a_pod_winston_between_two_people_takes_turns() {
                     assert_eq!(next.active_pile, Some(0));
                 }
             } else {
-                draft.auto_pick(turn).expect("the first legal decision is taken");
+                draft
+                    .auto_pick(turn)
+                    .expect("the first legal decision is taken");
             }
             decisions += 1;
             assert!(decisions < 500);
@@ -831,7 +854,11 @@ fn a_winston_snapshot_resumes_mid_turn() {
         while resumed.status() == DraftStatus::Drafting {
             resumed.auto_pick(0).unwrap();
         }
-        assert_eq!(resumed.snapshot(), draft.snapshot(), "the bot decides as it would have");
+        assert_eq!(
+            resumed.snapshot(),
+            draft.snapshot(),
+            "the bot decides as it would have"
+        );
     });
 }
 

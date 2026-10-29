@@ -419,7 +419,13 @@ mod tests {
             piles,
             vec![
                 ("Deck".into(), "main".into(), true, "user".into(), 0),
-                ("Commander".into(), "commander".into(), true, "user".into(), 0),
+                (
+                    "Commander".into(),
+                    "commander".into(),
+                    true,
+                    "user".into(),
+                    0
+                ),
                 ("Pool".into(), "side".into(), true, "user".into(), 2),
             ],
             "Deck first, the Commander pile empty and drawn while empty, the pool in Pool"

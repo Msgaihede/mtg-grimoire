@@ -1261,7 +1261,11 @@ pub fn lobby_pick(
 /// A guest's Winston turn — take (`take`) the pile `pile` or decline it — sent to the host; the
 /// view arrives as `draft:view`.
 #[tauri::command]
-pub fn lobby_winston(lobby: tauri::State<'_, LobbySlot>, pile: u8, take: bool) -> Result<(), String> {
+pub fn lobby_winston(
+    lobby: tauri::State<'_, LobbySlot>,
+    pile: u8,
+    take: bool,
+) -> Result<(), String> {
     let held = lock(&lobby.0);
     let live = held.as_ref().ok_or(NO_LOBBY)?;
     if live.state.role != LobbyRole::Guest {
@@ -1479,7 +1483,9 @@ mod tests {
             }
         );
         assert_eq!(
-            decode(r#"{"t":"msg","from":"p1","body":{"v":1,"kind":"winston","pile":1,"take":true}}"#),
+            decode(
+                r#"{"t":"msg","from":"p1","body":{"v":1,"kind":"winston","pile":1,"take":true}}"#
+            ),
             Heard::Msg {
                 from: Some("p1".into()),
                 body: Body::Winston {

@@ -76,7 +76,8 @@ pub use view::{
 };
 
 const NOT_WINSTON: &str = "Only a Winston draft takes or declines a pile.";
-const NO_PICK_IN_WINSTON: &str = "A Winston draft takes or declines a pile; there is no card to pick.";
+const NO_PICK_IN_WINSTON: &str =
+    "A Winston draft takes or declines a pile; there is no card to pick.";
 const NOT_YOUR_TURN: &str = "It is not that seat's turn.";
 const OVER: &str = "The draft is over.";
 
