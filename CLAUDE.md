@@ -37,7 +37,7 @@ Also supports a light app (Android via Tauri, distributed through Google Play, a
 - `pnpm tauri dev` — Run the desktop app (Vite HMR + Rust rebuild). Takes the `app` lock (see `running-the-app` skill).
 - `pnpm tauri:fast dev` / `pnpm cargo:fast <command>` — The same dev build on a dated nightly (parallel front end + `rust-lld`). Opt-in and never the gate: `pnpm verify` and CI stay on the pinned toolchain.
 - `pnpm test` / `test:run` — Run frontend tests via Vitest.
-- `cargo test --workspace` — Run Rust tests across all crates (`apps/desktop/src-tauri`, `crates/grimoire-core`, `apps/light/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`, `crates/grimoire-play`).
+- `cargo test --workspace` — Run Rust tests across all crates (`apps/desktop/src-tauri`, `crates/grimoire-core`, `apps/light/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`, `crates/grimoire-play`, `crates/grimoire-graph`).
 - `pnpm storybook` / `build-storybook` — Component development workbench (`.storybook/`).
 - `pnpm mobile:dev` / `mobile:tauri` — Run the light app in a browser fake or in a phone-sized Tauri window.
 - `pnpm web:wasm` / `web:build` / `web:preview` — Build and preview the WASM web target.

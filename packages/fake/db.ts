@@ -111,6 +111,7 @@ import {
   PRINTING_GROUP_BY_OPTIONS,
   isPrintingGroupBy,
 } from "@grimoire/ui/features/card/printings";
+import { graphHandlers } from "./graph";
 import { MAX_ZOOM, MIN_ZOOM } from "@grimoire/ui/lib/cardZoom";
 import { isSearchView } from "@grimoire/ui/lib/store";
 import { DEFAULT_GROUP_BY } from "@grimoire/ui/features/decks/grouping";
@@ -28208,6 +28209,9 @@ export function allHandlers(db: FakeDb) {
     ...draftHandlers(db, writeHandlers(db)),
     ...windowHandlers(),
     ...pluginHandlers(),
+    // The read graph (2026-10-29): the desktop answers from SQLite, this world from the page's
+    // own graph — see `./graph.ts`.
+    ...graphHandlers(),
   };
 }
 

@@ -104,6 +104,10 @@ const NOTES_OF_DECK: &str = "n.deck_id = ?1";
 /// the parent is still what scopes the row and the two filters read the same statement.
 const ONE_NOTE: &str = "nc.note_id = ?1";
 
+/// The same for many decks' notes at once: `?1` is a JSON array of deck ids, read by `json_each`
+/// so one statement answers any number of decks without a placeholder per id.
+const NOTES_OF_DECKS: &str = "n.deck_id IN (SELECT value FROM json_each(?1))";
+
 /// Every column of a [`DeckNoteRow`] but the attachments, which are a second statement.
 const NOTE_SELECT: &str =
     "SELECT id, deck_id, title, body, sort_order, created_at, updated_at FROM deck_notes";
@@ -257,7 +261,7 @@ fn require_note(conn: &Connection, deck_id: i64, id: i64) -> Result<String, Stri
 fn attachments_by_note(
     conn: &Connection,
     filter: &str,
-    id: i64,
+    id: impl rusqlite::ToSql,
 ) -> Result<HashMap<i64, Vec<DeckNoteCard>>, String> {
     let sql = format!(
         "SELECT nc.note_id,
@@ -347,6 +351,37 @@ pub fn list_notes(conn: &Connection, deck_id: i64) -> Result<Vec<DeckNoteRow>, S
 /// that statement now picks a representative printing as a row, because a history line wants a
 /// name and nothing else — every printing of an oracle card shares it — and `min()` always
 /// answers a row, so the `Option` here is the aggregate's `NULL` rather than a missing row.
+/// [`list_notes`] for many decks in two statements, whatever their number — each deck's notes in
+/// the same order `list_notes` answers, keyed by deck id. A deck with no notes is absent from
+/// the map rather than present with an empty list.
+///
+/// The read graph's batch (`crates/grimoire-graph`): a widget asking for every deck's notes is
+/// one round of this rather than one `list_notes` per deck.
+pub fn list_notes_of_decks(
+    conn: &Connection,
+    deck_ids: &[i64],
+) -> Result<HashMap<i64, Vec<DeckNoteRow>>, String> {
+    let ids = serde_json::to_string(deck_ids).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "{NOTE_SELECT} WHERE deck_id IN (SELECT value FROM json_each(?1))
+              ORDER BY deck_id, sort_order, id"
+        ))
+        .map_err(|e| e.to_string())?;
+    let notes = stmt
+        .query_map(params![ids], note_from)
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<DeckNoteRow>>>()
+        .map_err(|e| e.to_string())?;
+    let mut cards = attachments_by_note(conn, NOTES_OF_DECKS, &ids)?;
+    let mut out: HashMap<i64, Vec<DeckNoteRow>> = HashMap::new();
+    for mut note in notes {
+        note.cards = cards.remove(&note.id).unwrap_or_default();
+        out.entry(note.deck_id).or_default().push(note);
+    }
+    Ok(out)
+}
+
 fn card_name_for(conn: &Connection, oracle_id: &str) -> Result<String, String> {
     let name: Option<String> = conn
         .query_row(
@@ -926,6 +961,30 @@ mod tests {
         assert_eq!(all.len(), 1, "a note with a card is still a note");
         assert_eq!(all[0].id, note.id);
         assert_eq!(all[0].cards[0].oracle_id, "o-bolt");
+    }
+
+    /// The batch answers exactly what one `list_notes` per deck answers — same notes, same
+    /// order, same attachments — and leaves out a deck with none.
+    #[test]
+    fn the_batch_read_is_list_notes_per_deck() {
+        let (conn, burn, storm) = deck_db();
+        let empty = deck(&conn, "Empty");
+        create_note(&conn, burn, "Mana", "Fourteen sources.", &["o-bolt".into()]).unwrap();
+        create_note(&conn, burn, "Cuts", "", &[]).unwrap();
+        create_note(
+            &conn,
+            storm,
+            "Lines",
+            "Ritual, ritual.",
+            &["o-ritual".into()],
+        )
+        .unwrap();
+
+        let batch = list_notes_of_decks(&conn, &[burn, storm, empty]).unwrap();
+        assert_eq!(batch.get(&burn), Some(&list_notes(&conn, burn).unwrap()));
+        assert_eq!(batch.get(&storm), Some(&list_notes(&conn, storm).unwrap()));
+        assert!(!batch.contains_key(&empty));
+        assert!(list_notes_of_decks(&conn, &[]).unwrap().is_empty());
     }
 
     /// The grain folds it — `idx_deck_note_cards_grain` — and the command short-circuits before

@@ -18,7 +18,7 @@ The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 
   - Uses `git diff --name-only --no-renames` (`fetch-depth: 0`) and pipes changed paths to `scripts/ci-route.ts`.
   - Evaluated using strict `case` semantics: **first match wins**, and `*` crosses `/`.
   - `apps/desktop/src-tauri/**` routes to `frontend` and `rust` (frontend tests inspect Rust files as text).
-  - `crates/grimoire-web/**` and `crates/grimoire-scan/**` (the web host's two modules) route to `frontend`, `rust`, and `web`; `crates/grimoire-play/**` (desktop-only) to `frontend` and `rust`. All must sit above `crates/grimoire-core/*` and `crates/*`.
+  - `crates/grimoire-web/**` and `crates/grimoire-scan/**` (the web host's two modules) route to `frontend`, `rust`, and `web`; `crates/grimoire-play/**` and `crates/grimoire-graph/**` (desktop-only) to `frontend` and `rust`. All must sit above `crates/grimoire-core/*` and `crates/*`.
   - `crates/grimoire-core/**` routes to `frontend`, `rust`, `core`, and `web` (must stay above `crates/*`).
   - `crates/*` routes to `frontend`, `rust`, `core`, and `web` (covers `crates/card-scanner`).
   - `crates/card-neural/models/*` (the model files, and the README whose table pins them) routes to the same four, above the prose arm; `crates/card-neural/train/*` (the training's Python, which no job here runs) to none, above `crates/*`.

@@ -1,6 +1,11 @@
 /**
- * Read the graph from a component — `useQuery` over {@link runQuery}, kept as fresh as the
- * writes that change what the document reads.
+ * Read the graph from a component — `useQuery` over the `graphql_query` command, kept as fresh as
+ * the writes that change what the document reads.
+ *
+ * **The desktop answers from SQLite** (`crates/grimoire-graph`, through `ipc.graphqlQuery`); the
+ * fake answers from this folder's own graph, so every story and suite runs the same documents.
+ * The roots a document is stale under are still read off this folder's schema ({@link prepare}),
+ * which `parity.test.ts` holds to the Rust schema's `@invalidatedBy` roots field for field.
  *
  * **Under its own `["graphql"]` root, and refreshed by the roots its fields name.** A document can
  * read the collection and the decks at once, and a TanStack key sits under one prefix, so no key
@@ -24,9 +29,10 @@
  */
 import { useEffect, useMemo } from "react";
 import { useQueries, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
-import type { ExecutionResult } from "graphql";
+import type { FormattedExecutionResult } from "graphql";
+import { ipc } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { prepare, runQuery } from "./execute";
+import { prepare } from "./execute";
 
 /** The root every document's own cache entry sits under. Nothing outside this file invalidates
  *  it; the bridge below is what does. */
@@ -43,7 +49,7 @@ export interface UseGraphQLOptions {
   enabled?: boolean;
 }
 
-export type GraphQLResult<TData> = ExecutionResult<TData>;
+export type GraphQLResult<TData> = FormattedExecutionResult<TData>;
 
 export function useGraphQL<TData = Record<string, unknown>>(
   query: string,
@@ -90,9 +96,11 @@ export function useGraphQL<TData = Record<string, unknown>>(
     queryKey,
     enabled,
     queryFn: async (): Promise<GraphQLResult<TData>> => {
-      const result = (await runQuery(
-        { query, variables, operationName },
-        { marketplace: marketplace.id },
+      const result = (await ipc.graphqlQuery(
+        query,
+        variables ?? null,
+        operationName ?? null,
+        marketplace.id,
       )) as GraphQLResult<TData>;
       if (result.data == null && result.errors && result.errors.length > 0) {
         throw new Error(result.errors.map((e) => e.message).join("\n"));

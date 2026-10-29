@@ -6988,7 +6988,7 @@ pub fn decks_playing(conn: &Connection, keys: &[String]) -> Result<Vec<i64>, Str
 /// a caller can index the answer by `deck_id` with no missing-key branch and decide for itself
 /// what to draw. That is [`deck_values_for`]'s join shape rather than a promise made in prose:
 /// the read starts at `decks` and everything below it is a `LEFT JOIN`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckValue {
     pub deck_id: i64,

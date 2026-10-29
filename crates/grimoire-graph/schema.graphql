@@ -1,0 +1,212 @@
+type CollectionFolder {
+	"""
+	The deck a deck group belongs to.
+	"""
+	deckId: Int
+	id: Int!
+	"""
+	`user` for the reader's own folders; the app's own kinds otherwise (a deck's group).
+	"""
+	kind: String!
+	"""
+	Whether the folder's copies are kept out of every deck's reach.
+	"""
+	locked: Boolean!
+	name: String!
+	parentId: Int
+	"""
+	The folder's folder rules — advisory criteria its cards are checked against — as stored:
+	a JSON array of objects, each with a `kind`.
+	"""
+	rules: JSON!
+	sortOrder: Int!
+}
+
+type CollectionSummary {
+	"""
+	Stacks — rows of the collection, each one printing, finish and condition.
+	"""
+	entries: Int!
+	"""
+	Copies flagged for the reader to review.
+	"""
+	needsReview: Int!
+	"""
+	Every copy, counting quantities.
+	"""
+	totalCards: Int!
+	"""
+	Copies offered for trade.
+	"""
+	tradelistCards: Int!
+	"""
+	Distinct cards (oracle cards), however many printings and copies.
+	"""
+	uniqueCards: Int!
+	"""
+	Copies with no price at the marketplace, left out of `value`.
+	"""
+	unpriced: Int!
+	"""
+	Copies × unit price over the priced copies, in the marketplace's currency as a decimal.
+	"""
+	value: Float!
+}
+
+"""
+A deck — a named list of cards for a format, with its own folder, deck tags and settings.
+"""
+type Deck {
+	archived: Boolean!
+	"""
+	The reader's Commander bracket for the deck, 0 when none was set.
+	"""
+	bracket: Int!
+	"""
+	How many cards the deck's live list holds, counting copies.
+	"""
+	cardCount: Int!
+	coverArtist: String
+	"""
+	The printing whose art is the deck's cover; pass it to the CardImage component.
+	"""
+	coverCardId: String
+	description: String
+	folderId: Int
+	"""
+	The format's key, e.g. `commander`, `modern`, `casual`.
+	"""
+	formatKey: String!
+	"""
+	The format's display name, absent for a format this build does not know.
+	"""
+	formatName: String
+	id: Int!
+	name: String!
+	"""
+	The deck's deck notes, in the reader's order — batched across every deck in the answer.
+	"""
+	notes: [DeckNote!]!
+	notesOpen: Boolean!
+	"""
+	The deck's deck tags — the reader's own words about the whole deck (`Budget`, `Meme`).
+	"""
+	tags: [String!]!
+	theoryEnabled: Boolean!
+	todosOpen: Boolean!
+	"""
+	When the deck last changed, in Unix seconds.
+	"""
+	updatedAt: Float!
+	"""
+	What the deck's live list is worth — batched: one read per marketplace, whatever the
+	number of decks.
+	"""
+	value(marketplace: Marketplace): DeckValue
+	virtualOnly: Boolean!
+}
+
+type DeckNote {
+	"""
+	The note's text, as Markdown.
+	"""
+	body: String!
+	"""
+	The cards the note is attached to.
+	"""
+	cards: [DeckNoteCard!]!
+	"""
+	In Unix seconds.
+	"""
+	createdAt: Float!
+	deckId: Int!
+	id: Int!
+	sortOrder: Int!
+	title: String!
+	"""
+	In Unix seconds.
+	"""
+	updatedAt: Float!
+}
+
+type DeckNoteCard {
+	"""
+	A printing of the card to draw — one in the deck when there is one.
+	"""
+	cardId: String
+	name: String!
+	oracleId: String!
+}
+
+type DeckValue {
+	deckId: Int!
+	"""
+	How many copies have no price at the marketplace and are left out of `value`.
+	"""
+	unpriced: Int!
+	"""
+	Copies × unit price over the priced copies of the live list, in the marketplace's
+	currency as a decimal; absent when no copy is priced.
+	"""
+	value: Float
+}
+
+"""
+A scalar that can represent any JSON value.
+"""
+scalar JSON
+
+"""
+A marketplace prices are quoted at. Spelt as `MARKETPLACE_IDS` in `packages/ui/lib/
+marketplace.ts`, lower-case, because that is how the page's graph spells them.
+"""
+enum Marketplace {
+	cardkingdom
+	cardmarket
+	cardtrader
+	manapool
+	tcgplayer
+}
+
+type Query {
+	"""
+	Every folder of the collection's cabinet, parents before children.
+	"""
+	collectionFolders: [CollectionFolder!] @invalidatedBy(roots: ["collection"])
+	"""
+	Totals over the collection, or over one folder (`folderId`) or the root alone
+	(`rootOnly`).
+	"""
+	collectionSummary(excludeLocked: Boolean, folderId: Int, marketplace: Marketplace, needsReview: Boolean, rootOnly: Boolean, ruleBreaks: Boolean): CollectionSummary @invalidatedBy(roots: ["collection"])
+	"""
+	One deck's deck notes, in the reader's order.
+	"""
+	deckNotes(deckId: Int!): [DeckNote!] @invalidatedBy(roots: ["decks"])
+	"""
+	Every deck's worth at one marketplace.
+	"""
+	deckValues(marketplace: Marketplace): [DeckValue!] @invalidatedBy(roots: ["decks"])
+	"""
+	Every deck, in the gallery's order. `archived` narrows to the archived or the
+	unarchived ones; absent, both.
+	"""
+	decks(archived: Boolean): [Deck!] @invalidatedBy(roots: ["decks"])
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+The roots of the page's query cache a root field's answer is stale under — the first segment
+of the key the app's own reader of the same command uses. `useGraphQL` reads them off this
+schema's printout to know which invalidations re-ask a document.
+"""
+directive @invalidatedBy(roots: [String!]!) on FIELD_DEFINITION
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+}

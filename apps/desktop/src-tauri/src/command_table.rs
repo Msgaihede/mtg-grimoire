@@ -177,6 +177,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "packs_booster_set",
         "MTGJSON booster data feeds only the desktop's Draft & Packs page",
     ),
+    (
+        "graphql_query",
+        "The read graph (crates/grimoire-graph) is linked by the desktop alone — the owner's decision, 2026-10-29",
+    ),
 ];
 
 /// Commands the table has that this app does not register and never will, each with the

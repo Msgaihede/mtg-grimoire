@@ -28,6 +28,7 @@ import lightToml from "../apps/light/src-tauri/Cargo.toml?raw";
 import webToml from "../crates/grimoire-web/Cargo.toml?raw";
 import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
 import playToml from "../crates/grimoire-play/Cargo.toml?raw";
+import graphToml from "../crates/grimoire-graph/Cargo.toml?raw";
 import neuralToml from "../crates/card-neural/Cargo.toml?raw";
 import scannerLock from "../crates/card-scanner/Cargo.lock?raw";
 import desktopConf from "../apps/desktop/src-tauri/tauri.conf.json?raw";
@@ -72,6 +73,8 @@ const CRATES = [
   { name: "grimoire-scan", dir: "crates/grimoire-scan", toml: scanToml, conf: null },
   // The game board's rules engine (goldfish and playtest), linked by the desktop alone.
   { name: "grimoire-play", dir: "crates/grimoire-play", toml: playToml, conf: null },
+  // The read graph (a read-only GraphQL schema over SQLite), linked by the desktop alone.
+  { name: "grimoire-graph", dir: "crates/grimoire-graph", toml: graphToml, conf: null },
   // The Scanner's Neural mode: its recogniser and model files, linked by the core and both
   // native hosts, and into the browser's scanner module.
   { name: "card-neural", dir: "crates/card-neural", toml: neuralToml, conf: null },

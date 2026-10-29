@@ -1,38 +1,76 @@
-# The read graph (`packages/ui/lib/graphql/`)
+# The read graph (`crates/grimoire-graph/` and `packages/ui/lib/graphql/`)
 
-A read-only GraphQL schema over the reader's own data, executed in the page. It exists so a
-widget the reader generates — from this app's components, by a model that is handed the schema —
-can show anything a hand-written widget shows, through one typed, introspectable door instead of
-hundreds of `ipc` wrappers. Added 2026-10-29 as the prerequisite for generated home
+A read-only GraphQL schema over the reader's own data. It exists so a widget the reader generates
+— declaratively, with json-render, from this app's components, by a model that is handed the
+schema — can show anything a hand-written widget shows, through one typed, introspectable door
+instead of hundreds of `ipc` wrappers. Added 2026-10-29 as the prerequisite for generated home
 widgets; nothing in the app reads through it yet.
 
-The schema itself is [`packages/ui/lib/graphql/schema.graphql`](../../packages/ui/lib/graphql/schema.graphql),
-printed from the code and checked against it by `graphql.test.ts`, so it is always the graph as
-built. This page is the why.
+**There are two graphs while the port runs, and they are one schema.** The desktop answers from
+Rust ([`crates/grimoire-graph`](../../crates/grimoire-graph/), its printout
+[`schema.graphql`](../../crates/grimoire-graph/schema.graphql)); the page's graph
+([`packages/ui/lib/graphql/`](../../packages/ui/lib/graphql/), printout
+[`schema.graphql`](../../packages/ui/lib/graphql/schema.graphql)) is the complete one, answers every
+story and suite through the fake, and is what the Rust side is ported from. `parity.test.ts` holds
+every type, field, argument, default, enum value and cache root the Rust side has to the page's.
 
-## Where it runs, and why not in Rust
+## Why the graph moved to Rust (2026-10-29)
 
-**In the page, as a function call: `runQuery({ query, variables })`.** There is no server and no
-command. Every resolver answers through the typed `ipc` wrappers, which already reach every host
-— Tauri on the desktop and Android, the WASM Worker on the web, the fake in every test and story —
-so the graph reaches all of them with nothing added to any. A GraphQL client that takes a custom
-fetcher can sit on top of `runQuery` unchanged.
+It was first built in the page, over `ipc`, and the case for that was the boundary (Rust facts,
+TypeScript conclusions), four hosts on one graph, and no new mirror. Two things changed it:
 
-A schema in `grimoire-core` (async-graphql) was weighed and refused:
+- **The MCP server is Rust, in the desktop.** It serves the schema to a model, checks the model's
+  documents against it, and runs them for a preview — and a graph in the page can only be run
+  while a window is open. In Rust all three need nothing but the database.
+- **The owner's decision: desktop only** — no web or Android build needs the graph, so the WASM
+  size and the four-host argument fell away.
 
-- **The boundary.** Rust supplies facts and TypeScript draws conclusions. A field such as a deck's
-  legality is TypeScript's conclusion (`features/decks/validation/`); a Rust graph could not answer
-  it without a second copy of that logic.
-- **Four hosts, one graph.** A Rust schema would have to compile into the web host's WASM, and the
-  fake core would need a GraphQL implementation of its own to keep stories and tests on the same
-  graph.
-- **No new fence.** The graph's object types are the `ipc` interfaces (below), which `ipc.test.ts`
-  already holds to the Rust structs. One mirror stays the source of truth.
+What the move keeps from the first design: **the graph serves facts.** A conclusion TypeScript owns
+(a deck's legality, a card's treatments) is not a field; a generated widget draws it through
+json-render's `$computed`, whose functions the app registers in TypeScript. That is the boundary
+in the shape a declarative widget has.
 
-The cost is a round trip per root field rather than one per document. `GraphQLContext.once`
-shares a list command between every field of one execution that reaches it (a deck's `value` is
-picked out of one `deck_values`), and a field that still needs more is a batched read added in
-Rust, the way the widgets already ask for theirs.
+## The Rust graph (`crates/grimoire-graph`)
+
+[async-graphql](https://crates.io/crates/async-graphql) 7, linked by the desktop alone (a workspace
+member like `grimoire-play`, on `command_table::DESKTOP_ONLY`). **Three doors, all synchronous**,
+shared by the page's command and the MCP server:
+
+- **`Graph::sdl()`** — the printout, sorted, with `@invalidatedBy(roots: [...])` on every root
+  field. Held to the code by `the_printed_schema_is_the_reviewed_one`
+  (`GRAPH_SDL_WRITE=1 cargo test -p grimoire-graph` rewrites it).
+- **`Graph::validate(query)`** — a document checked without running it: apollo-compiler reads the
+  printout back and checks every rule of the specification, plus the graph's two (queries only;
+  `MAX_DEPTH`, counted through fragments, as the page counts). Each `Problem` has a line and a
+  column, which is what a model is told.
+- **`Graph::run(state, query, variables, operation, marketplace)`** — executed on the calling
+  thread. Every resolver takes the read connection's lock and drops it inside the call (a
+  `MutexGuard` is not `Send`, so holding one across an `.await` does not compile). The desktop's
+  `graphql_query` runs it on the blocking pool, as every read in this app runs.
+
+**Batching is async-graphql's `DataLoader`, one per execution** (nothing cached between two
+documents). A deck's `notes` collect every deck a level of the answer asked about and read them in
+two statements (`deck_notes::list_notes_of_decks`, `json_each` over the ids); a deck's `value`
+reads `deck_values_for` once per marketplace, whatever the number of decks.
+`a_list_of_decks_costs_one_notes_read` pins it. A loader's future runs on a thread of its own,
+driven to the end there: nothing in the crate has a runtime, and a thread is a fraction of the
+read it carries.
+
+**Ported in the spike:** `decks` (with `notes` and `value`), `deckValues`, `deckNotes`,
+`collectionSummary`, `collectionFolders`. **Left out until decided:** the `query: String` argument
+— a card search in Scryfall's syntax, which only TypeScript parses (`queryLanguage.ts`). The
+port's choice is a structured filter input built from the core's own `CardFilters` (validated by
+the schema, which suits a model) or a Rust port of the parser.
+
+## The page's graph — where it runs
+
+**In the page, as a function call: `runQuery({ query, variables })`.** Every resolver answers
+through the typed `ipc` wrappers. `useGraphQL` no longer calls it: it calls `ipc.graphqlQuery`, which
+the desktop answers from Rust and the fake answers by running this graph
+(`packages/fake/graph.ts`) — so every story and suite runs the same documents the desktop does.
+
+`GraphQLContext.once` shares a list command between every field of one execution that reaches it
+(a deck's `value` is picked out of one `deck_values`).
 
 ## Code-first, and the compiler is the parity fence
 
@@ -77,13 +115,15 @@ error naming it, never a filter quietly dropped.
 
 ## Freshness: roots, markers and one subscription
 
-`useGraphQL(query, { variables })` is `useQuery` over `runQuery`, under its own `["graphql"]`
+`useGraphQL(query, { variables })` is `useQuery` over `ipc.graphqlQuery`, under its own `["graphql"]`
 root. A document can read the collection and the decks at once, and a TanStack key sits under one
 prefix, so no key could be reached by both roots' invalidations. Instead:
 
 1. **Every root field names its roots** — `...invalidatedBy("collection")` — the first segment of
    the key the app's own reader of the same command uses. `graphql.test.ts` fails on a root field
-   without one. `rootsOf(document)` unions them for a document.
+   without one. `rootsOf(document)` unions them for a document. The Rust graph prints the same
+   roots as `@invalidatedBy(roots: [...])` on each root field, and `parity.test.ts` holds the
+   two lists equal — so the hook can read either side and get the same answer.
 2. **A marker query under each root** (`[root, "graphqlReadMarker"]`), because
    `invalidateQueries` dispatches nothing when it matches no cached query. A whole root, never a
    longer prefix: a marker under `["collection", "list"]` would sit where `useOptimisticEntries`

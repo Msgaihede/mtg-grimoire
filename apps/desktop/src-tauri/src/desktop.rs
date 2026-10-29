@@ -17,12 +17,12 @@ use crate::{
     activity, archive, camera, card, collection, collection_alloc, collection_folders, combos, db,
     deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, draft,
-    entry_tags, errors, export, home, images, import, index, integration, listview, markcolors,
-    marketplace, marketplace_feed, mirror, nav, new_printings, packs, panelwidth, paths, playtest,
-    price_history, recent_cards, reset, scan_history, scanner, scansounds, schema, scryfall,
-    search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide, startup,
-    startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets, update,
-    value_history, window, wishlist, wishlist_folders, wishlist_optimize, zoom,
+    entry_tags, errors, export, graph, home, images, import, index, integration, listview,
+    markcolors, marketplace, marketplace_feed, mirror, nav, new_printings, packs, panelwidth,
+    paths, playtest, price_history, recent_cards, reset, scan_history, scanner, scansounds, schema,
+    scryfall, search, searchopen, searchwidth, set_completion, share, shelffolds, stackhide,
+    startup, startview, sticky_notes, sync, sync_engine, sync_pair, tags, trade, upcoming_sets,
+    update, value_history, window, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -655,6 +655,8 @@ pub fn run() {
             draft::lobby::lobby_winston,
             draft::lobby::lobby_kick,
             packs::packs_booster_set,
+            // The read graph: one document in, one GraphQL response out.
+            graph::graphql_query,
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.
             stackhide::hidden_stacks,
             stackhide::set_stack_hidden,
@@ -877,6 +879,8 @@ pub fn run() {
             // The board's one game — the goldfish or the AI — empty until a reader starts one
             // from a deck's goldfish button or from Playtesting.
             app.manage(playtest::PlaytestSlot::default());
+            // The read graph's schema, built once for every window and the MCP server.
+            app.manage(grimoire_graph::Graph::new());
             // What the engine plays of each card the Playtesting setup has asked about.
             app.manage(playtest::PlaytestSupport::default());
             // The Draft & Packs page's one draft, and a pod's lobby — empty until a reader
