@@ -1,6 +1,6 @@
 import { memo, useState, type JSX, type MouseEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Save, SquareArrowRightExit, Trash2 } from "lucide-react";
+import { Check, Crown, Save, SquareArrowRightExit, Trash2 } from "lucide-react";
 import { FILTER_FOCUS } from "@/components/FilterChips";
 import { ManaText } from "@/components/ManaText";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { PLAIN_PRESS } from "@/features/decks/headerControls";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { returnToDraftPage } from "../navigation";
+import { COMMANDER_DECK_SIZE } from "../deckSize";
 import { useDiscardDraftDeck, useKeepDraftDeck } from "../useDraftDecks";
 
 /** How many copies a Shift-press adds — a reader building a 40-card deck adds lands in fives. */
@@ -20,6 +21,13 @@ export const BASICS_SHIFT_COPIES = 5;
  *  draft's sets, not about any deck, so no deck write needs to move it. */
 export const draftBasicsKey = (setCodes: readonly string[]) =>
   ["draftBasics", [...setCodes].sort().join(",")] as const;
+
+/** A Commander draft's deck as the bar checks it: the cards that count (Deck and Commander) and
+ *  the cards in its Commander pile. */
+export interface CommanderCheck {
+  cards: number;
+  commanders: number;
+}
 
 export interface DraftDeckBarProps {
   deckId: number;
@@ -41,6 +49,12 @@ export interface DraftDeckBarProps {
   onAddBasic: (cardId: string, quantity: number) => void;
   /** Open the editor's own export dialog on the whole deck; `trigger` takes the caret back. */
   onExport: (trigger: HTMLElement) => void;
+  /**
+   * A Commander draft's deck (it has a Commander pile, spec §4a): the bar says its count against
+   * 60 and whether a commander is chosen. `null` or absent for a Limited draft deck, whose size
+   * the editor's own ledger already checks against the format.
+   */
+  commander?: CommanderCheck | null;
 }
 
 /**
@@ -63,6 +77,7 @@ export const DraftDeckBar = memo(function DraftDeckBar({
   setCodes,
   onAddBasic,
   onExport,
+  commander = null,
 }: DraftDeckBarProps): JSX.Element {
   const tip = useTooltip();
   const keep = useKeepDraftDeck();
@@ -140,6 +155,8 @@ export const DraftDeckBar = memo(function DraftDeckBar({
           })}
         </div>
 
+        {commander !== null && <CommanderStatus check={commander} />}
+
         <div className="ml-auto flex items-center gap-2">
           <button
             type="button"
@@ -186,6 +203,27 @@ export const DraftDeckBar = memo(function DraftDeckBar({
     </section>
   );
 });
+
+/** A Commander draft deck's two checks: its count against 60, and its commander. */
+function CommanderStatus({ check }: { check: CommanderCheck }): JSX.Element {
+  const sized = check.cards >= COMMANDER_DECK_SIZE;
+  const chosen = check.commanders > 0;
+  return (
+    <div role="group" aria-label="Commander deck" className="flex items-center gap-3 text-xs">
+      <span className={cn("inline-flex items-center gap-1", sized ? "text-ok" : "text-dim")}>
+        {sized && <Check aria-hidden className="size-3.5" />}
+        <span className="font-mono tabular-nums">
+          {check.cards}/{COMMANDER_DECK_SIZE}
+        </span>{" "}
+        cards
+      </span>
+      <span className={cn("inline-flex items-center gap-1", chosen ? "text-ok" : "text-dim")}>
+        <Crown aria-hidden className="size-3.5" />
+        {chosen ? "Commander chosen" : "No commander yet — put one in the Commander pile"}
+      </span>
+    </div>
+  );
+}
 
 /** The question under the bar — the deck folder's own inline confirmation, not a dialog: the
  *  reader is already looking here, and the answer is one press. */

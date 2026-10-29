@@ -1,5 +1,6 @@
 import { draftProduct, openBooster } from "@/features/draft/booster/open";
 import type { Rng } from "@/features/draft/booster/rng";
+import { COMMANDER_DECK_SIZE, MIN_DECK_SIZE } from "@/features/draft/deckSize";
 import { parseDecklist } from "@/features/transfer/import/parse";
 import type {
   BoosterProduct,
@@ -25,15 +26,12 @@ import type {
 /** Every table a draft is dealt to has eight seats: the reader, and people or bots in the rest. */
 export const TABLE_SEATS = 8;
 
-/** The least a deck built from a drafted pool must hold — Limited's 40. */
-export const MIN_DECK_SIZE = 40;
+/** The least a deck built from a drafted pool must hold: Limited's 40, a Commander draft's 60. */
+export { COMMANDER_DECK_SIZE, MIN_DECK_SIZE };
 
 /** Boosters a draft opens per seat, and the sealed pool's six. */
 export const DRAFT_PACKS = 3;
 export const SEALED_PACKS = 6;
-
-/** A Commander draft's deck: 60 cards, one of them its commander (spec §4a). */
-export const COMMANDER_DECK_SIZE = 60;
 
 /** How many seats a table may have, and how many it starts with. */
 export interface SeatRange {

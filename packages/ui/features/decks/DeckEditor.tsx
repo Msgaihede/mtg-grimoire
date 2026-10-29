@@ -3071,6 +3071,23 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => (draftSetKey === "" ? [] : draftSetKey.split(",")),
     [draftSetKey],
   );
+  // A Commander draft's deck (a Commander pile beside Deck and Pool, spec §4a): the bar checks its
+  // size and its commander itself. Two numbers, memoised on themselves, for the memoised bar.
+  const draftCommanderPile = draft && categories.some((c) => c.kind === "commander");
+  let draftDeckCards = 0;
+  let draftCommanders = 0;
+  if (draftCommanderPile) {
+    for (const c of deck.cards) {
+      if (!c.categoryActive) continue;
+      if (c.categoryKind === "main" || c.categoryKind === "commander") draftDeckCards += c.quantity;
+      if (c.categoryKind === "commander") draftCommanders += c.quantity;
+    }
+  }
+  const draftCommanderCheck = useMemo(
+    () =>
+      draftCommanderPile ? { cards: draftDeckCards, commanders: draftCommanders } : null,
+    [draftCommanderPile, draftDeckCards, draftCommanders],
+  );
   // A basics press is the editor's own add, into the pile adds land in — the deck's `Deck` pile
   // on a draft deck. Exempt from the toast rule like a stepper; a refusal is the banner's.
   const writeBasic = deck.addCard.mutateAsync;
@@ -3708,6 +3725,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           deckId={deckId}
           name={row.name}
           setCodes={draftSetCodes}
+          commander={draftCommanderCheck}
           onAddBasic={addBasic}
           onExport={exportFromDraftBar}
         />
