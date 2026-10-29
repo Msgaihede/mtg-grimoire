@@ -16,7 +16,7 @@ pub use grimoire_core::integration::*;
 
 use crate::sync::{self, AppState};
 use grimoire_core::integration::projection::IntegrationFields;
-use grimoire_core::integration::review::{self, IntentReview};
+use grimoire_core::integration::review::IntentReview;
 use grimoire_core::integration::settings::IntegrationsStatus;
 use std::sync::Arc;
 
