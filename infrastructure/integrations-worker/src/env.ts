@@ -13,7 +13,9 @@ import type { KekEnv, StoreRpc } from "./store";
  *
  * **What it holds**: per group that switched integrations on, a store — the projection of the
  * group's collection, wishlist and decks its devices publish, the policy of which opt-in fields
- * it carries, and a data key the rows are sealed under (`store.ts`, `seal.ts`). **What it never
+ * it carries, the intents its integrations propose and its devices ack, one consumer token's id
+ * per integration, and a data key the rows, the intents and the tokens' key all come from
+ * (`store.ts`, `seal.ts`). **What it never
  * holds**: the group key, a relay token past the request that carried it, or a device's
  * identity. A storage dump of it is the index columns `projection.ts` names and sealed bodies.
  */
@@ -25,6 +27,18 @@ export interface Env extends GateEnv, KekEnv, CorsEnv {
    */
   STORE: DurableObjectNamespace;
 }
+
+/**
+ * The group segment of a path, and the group a consumer token names — the share Worker's
+ * `GROUP_SEGMENT`, spelled from the relay's character class rather than imported from `claim.ts`,
+ * for that Worker's reason: an unconstrained segment lets `%41` and `A` name two groups a reader
+ * would read as one. Here rather than in the router because a consumer token's group is held to
+ * it too (`consumer.ts`), before it is ever handed to `idFromName`.
+ */
+export const GROUP_SEGMENT = "[A-Za-z0-9_-]{1,128}";
+
+/** {@link GROUP_SEGMENT}, whole. */
+export const GROUP_PATTERN = new RegExp(`^${GROUP_SEGMENT}$`);
 
 /**
  * A JSON answer. `infrastructure/relay/src/rotate.ts`'s five lines, copied for the share Worker's

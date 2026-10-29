@@ -3,7 +3,19 @@ import { inflate, MAX_INFLATED_BYTES } from "../src/body";
 import { FIELD_NAMES } from "../src/projection";
 import { macKey, newDataKey, rowKey, rowMac, sealRow } from "../src/seal";
 import { Store } from "../src/store";
-import { ALL_ON, digestOf, documentOf, gzip, KEK, sqlStorage } from "./fake";
+import {
+  ALL_ON,
+  consumerRequest,
+  consumerToken,
+  digestOf,
+  documentOf,
+  gzip,
+  harness,
+  KEK,
+  putSettings,
+  putTable,
+  sqlStorage,
+} from "./fake";
 
 /**
  * **How long a store takes to ingest a `collection_entries` table**, at 1,000, 10,000 and 50,000
@@ -132,6 +144,41 @@ describe.skipIf(!process.env.MEASURE)("ingesting collection_entries (MEASURE=1)"
       `[measure] collection_entries ${count} rows (JSON ${kib(json.length)}, gzip ${kib(gz.length)}):\n` +
         `  first publish: ingest ${firstMs.toFixed(0)} ms; MAC ${macMs.toFixed(0)} ms, sealing ${sealAllMs.toFixed(0)} ms (${count} rows); written: ${delta(before, afterFirst)}\n` +
         `  one row moved: ingest ${againMs.toFixed(0)} ms; MAC ${macMs.toFixed(0)} ms, sealing ${sealOneMs.toFixed(1)} ms (1 row); written: ${delta(afterFirst, afterAgain)}`,
+    );
+  });
+});
+
+describe.skipIf(!process.env.MEASURE)("a consumer reading collection_entries (MEASURE=1)", () => {
+  /**
+   * **The cold answer, as far as Node can say it** (the issue's acceptance: the cold answer time
+   * against Discord's three seconds): `GET /c/collection?q=` through the router — the token's
+   * claims read, the object's KEK unwrap, the token's MAC, the scan of the clear `name_norm`
+   * column, and the matching rows opened — against a store holding 1,000, 10,000 and 50,000 rows,
+   * every field on. "First" is the first request after the ingest, on a store whose keys nothing
+   * has derived yet; a workerd object starting cold adds its own start, which only Cloudflare can
+   * measure.
+   */
+  it.each([1_000, 10_000, 50_000])("%i rows", async (count) => {
+    const h = harness();
+    await putSettings(h.fetch, ALL_ON);
+    const rows = Array.from({ length: count }, (_, i) => entry(i));
+    const doc = documentOf("collection_entries", rows, [...FIELD_NAMES]);
+    expect((await putTable(h.fetch, "collection_entries", doc)).status).toBe(200);
+    const bearer = await consumerToken(h.fetch);
+    const ask = async (q: string) => {
+      const [res, ms] = await timed(() =>
+        h.fetch(consumerRequest("GET", `/c/collection?q=${encodeURIComponent(q)}`, bearer)),
+      );
+      const body = (await res.json()) as { rows: unknown[] };
+      expect(res.status).toBe(200);
+      return { ms, rows: body.rows.length };
+    };
+    const first = await ask("card number 12");
+    const narrow = await ask(`card number ${count - 1}`);
+    const broad = await ask("card");
+    console.log(
+      `[measure] /c/collection over ${count} rows: first ${first.ms.toFixed(1)} ms (${first.rows} rows); ` +
+        `narrow ${narrow.ms.toFixed(1)} ms (${narrow.rows} rows); broad ${broad.ms.toFixed(1)} ms (${broad.rows} rows, the cap)`,
     );
   });
 });

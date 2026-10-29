@@ -1,8 +1,38 @@
 import { inflate, MAX_INFLATED_BYTES } from "./body";
+import { signToken, verifyToken, type Claims } from "./consumer";
+import {
+  ALREADY_ACKED,
+  CLAIMED,
+  hintName,
+  INTENT_QUOTA,
+  INTENTS_PER_DAY,
+  KEEP_ACKED_MS,
+  LEASE_MS,
+  MAX_PENDING_LISTED,
+  NO_DECK,
+  NO_INTENT,
+  overlayRow,
+  parseIntentShape,
+  randomId,
+  SCOPE,
+  scopeFor,
+  scopesOf,
+  utcDay,
+  validatePayload,
+  BAD_INTENT,
+  type Ack,
+  type Integration,
+  type Intent,
+  type Kind,
+  type Scope,
+  type Source,
+  type State,
+} from "./intents";
 import {
   clearColumns,
   enabledNames,
   isMarketplace,
+  normaliseName,
   parseFields,
   validateDocument,
   type Document,
@@ -12,13 +42,18 @@ import {
   type Table,
 } from "./projection";
 import {
+  consumerKey,
   importKek,
+  intentKey,
   kekFingerprint,
   macKey,
   newDataKey,
+  openIntent,
+  openRow,
   rewrap,
   rowKey,
   rowMac,
+  sealIntent,
   sealRow,
   toBase64url,
   unwrapDataKey,
@@ -37,7 +72,18 @@ import {
  *        rows INTEGER, published_at INTEGER)
  * rows(tbl, uid, scryfall_id, name_norm, set_code, cn, finish, quantity, folder_uid, kind,
  *      gen INTEGER, mac BLOB, sealed BLOB, PRIMARY KEY (tbl, uid))
+ * intents(id PRIMARY KEY, source, kind, state, created_at, acked_at, lease, lease_until,
+ *         ack_hlc_ms, ack_hlc_ctr, reason, name_norm, folder_uid, sealed BLOB)
+ * consumers(integration PRIMARY KEY, tid, scopes (JSON), issued_at, exp)
+ * intent_days(integration, day, count, PRIMARY KEY (integration, day))
  * ```
+ *
+ * **The inbox** (the PR 3 plan, `2026-10-29-integrations-intents.md`): intents an integration
+ * writes through a consumer token, a device of the group claims, applies as its own write and
+ * acks. Sealed like the rows — `{ payload, confirmedBy }` under a key of the inbox's own — beside
+ * the clear columns the overlay and the caps query. **The consumer tokens' rows** are what a
+ * revoke deletes and a re-mint replaces; the tokens' key is drawn from the data key, so
+ * `deleteAll` revokes every one of them by taking it.
  *
  * **The store's existence is the group's switch** (plan §2). `settings` makes one — a data key,
  * the policy, the three tables — and nothing else does: a projection `PUT` or a digests `GET` on
@@ -62,9 +108,12 @@ import {
  * publish changed in the meantime is sealed and the transaction asked again.
  *
  * **Only the index columns are in the clear** (`projection.ts`'s `clearColumns`), with the
- * row's generation and its MAC; every row whole is `sealed` (`seal.ts`). There is no index beyond the primary key yet, deliberately: a
- * Durable Object's SQLite bills each row written, an index's row included, and nothing queries
- * these columns until the intents and integrations of the issue's PR 3 and 4.
+ * row's generation and its MAC; every row whole is `sealed` (`seal.ts`). **There is no index
+ * beyond the primary key, deliberately**, now that the consumer routes query these columns too: a
+ * Durable Object's SQLite bills each row written, an index's row included, and a consumer's search
+ * is a substring of a name (`LIKE '%q%'`), which no B-tree serves — a scan of one table's clear
+ * columns, measured in `test/measure.test.ts` at 50,000 rows. Only the rows a read answers with
+ * are opened.
  */
 
 /** The part of `ctx.storage` a store uses — `DurableObjectStorage`'s, narrowed for the suite. */
@@ -134,7 +183,40 @@ export interface StoreRpc {
   ): Promise<Answer>;
   exists(): Promise<boolean>;
   deleteAll(): Promise<void>;
+  pendingIntents(group: string, since: number | null): Promise<PendingIntents | null>;
+  claimIntent(group: string, id: string, now: number): Promise<Answer>;
+  ackIntent(group: string, id: string, ack: Ack, now: number): Promise<Answer>;
+  mintConsumer(
+    group: string,
+    integration: Integration,
+    grant: { scopes: Scope[]; days: number },
+    now: number,
+  ): Promise<Answer>;
+  listConsumers(group: string): Promise<Answer>;
+  revokeConsumer(group: string, integration: Integration): Promise<void>;
+  consumer(group: string, token: string, call: ConsumerCall, now: number): Promise<Answer>;
 }
+
+/** `GET …/intents`' answer: the pending intents, oldest first, and whether there were more. */
+export interface PendingIntents {
+  intents: Intent[];
+  more: boolean;
+}
+
+/** A consumer route, as the router hands it to the group's object (plan §3.3). */
+export type ConsumerCall =
+  | {
+      op: "entries";
+      table: "collection_entries" | "wishlist_entries";
+      q: string | null;
+      folder: string | null;
+    }
+  | { op: "decks"; q: string | null }
+  | { op: "deck"; uid: string }
+  | { op: "folders" }
+  | { op: "autocomplete"; kind: "collection" | "wishlist" | "decks" | "folders"; q: string | null }
+  | { op: "post"; body: unknown }
+  | { op: "intent"; id: string };
 
 /** The machine-readable halves of a projection `PUT`'s refusals (plan §3.2). */
 export const NO_STORE = "no_store";
@@ -149,6 +231,43 @@ const NO_STORE_ANSWER: Answer = {
 };
 
 const bad = (error: string): Answer => ({ status: 400, body: { error, code: BAD_PROJECTION } });
+
+/** A refusal of the inbox's or a consumer route's, in the router's `{ error, code }` shape. */
+const answer = (status: number, error: string, code: string, extra: object = {}): Answer => ({
+  status,
+  body: { error, code, ...extra },
+});
+
+/**
+ * A consumer whose token does not hold, for any reason — a store that is gone, a MAC under another
+ * key, a token past its `exp`, a `tid` revoked or replaced. **One answer for all of them**, the
+ * relay's door's rule: which one it was is nothing a holder of a bad token needs to know.
+ */
+const UNAUTHORIZED: Answer = answer(401, "unauthorized", "unauthorized");
+
+/** How many rows a consumer's read of entries answers with, at most — and of the overlay. */
+const MAX_ENTRIES = 50;
+
+/** How many decks `GET /c/decks` answers with, at most. */
+const MAX_DECKS = 200;
+
+/** How many choices an autocomplete answers with — Discord's own limit. */
+const MAX_CHOICES = 25;
+
+/** How many folders of a kind `GET /c/folders` answers with, at most. */
+const MAX_FOLDERS = 1000;
+
+/**
+ * A search's text as a `LIKE` pattern on `name_norm`: normalised as the column is
+ * (`projection.ts`'s `normaliseName`), its `%`, `_` and `\` escaped, and wrapped for a substring.
+ * `null` for no search — every row.
+ */
+function likeOf(q: string | null): string | null {
+  if (q === null) return null;
+  const norm = normaliseName(q);
+  if (norm === "") return null;
+  return `%${norm.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+}
 
 /**
  * How many rows are sealed, or MACed, at once. WebCrypto's calls are async, and awaiting them one
@@ -177,6 +296,72 @@ const SCHEMA = [
      mac BLOB NOT NULL, sealed BLOB NOT NULL, PRIMARY KEY (tbl, uid)
    ) WITHOUT ROWID`,
 ];
+
+/**
+ * The inbox's three tables. **Apart from {@link SCHEMA} and made `IF NOT EXISTS` on every inbox
+ * request** (`#inbox`), so a store made before them — by `wrangler dev`, before PR 3 — gains them
+ * on first use rather than answering "no such table". A `CREATE … IF NOT EXISTS` over a table that
+ * is there writes nothing.
+ */
+const INBOX_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS intents (
+     id TEXT PRIMARY KEY, source TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL,
+     created_at INTEGER NOT NULL, acked_at INTEGER, lease TEXT, lease_until INTEGER,
+     ack_hlc_ms INTEGER, ack_hlc_ctr INTEGER, reason TEXT, name_norm TEXT, folder_uid TEXT,
+     sealed BLOB NOT NULL
+   ) WITHOUT ROWID`,
+  `CREATE TABLE IF NOT EXISTS consumers (
+     integration TEXT PRIMARY KEY, tid TEXT NOT NULL, scopes TEXT NOT NULL,
+     issued_at INTEGER NOT NULL, exp INTEGER NOT NULL
+   )`,
+  `CREATE TABLE IF NOT EXISTS intent_days (
+     integration TEXT NOT NULL, day INTEGER NOT NULL, count INTEGER NOT NULL,
+     PRIMARY KEY (integration, day)
+   ) WITHOUT ROWID`,
+];
+
+/** A stored row as a read selects it: what opening it needs. */
+interface SealedRow {
+  uid: string;
+  gen: number;
+  sealed: Uint8Array;
+}
+
+/** An intent's row as a read selects it. */
+interface IntentRow {
+  id: string;
+  source: Source;
+  kind: Kind;
+  state: State;
+  created_at: number;
+  reason: string | null;
+  ack_hlc_ms: number | null;
+  ack_hlc_ctr: number | null;
+  sealed: Uint8Array;
+}
+
+const INTENT_COLUMNS =
+  "id, source, kind, state, created_at, reason, ack_hlc_ms, ack_hlc_ctr, sealed";
+
+function intentRowOf(row: Record<string, unknown>): IntentRow {
+  return {
+    id: String(row.id),
+    source: String(row.source) as Source,
+    kind: String(row.kind) as Kind,
+    state: String(row.state) as State,
+    created_at: Number(row.created_at),
+    reason: row.reason === null || row.reason === undefined ? null : String(row.reason),
+    ack_hlc_ms:
+      row.ack_hlc_ms === null || row.ack_hlc_ms === undefined ? null : Number(row.ack_hlc_ms),
+    ack_hlc_ctr:
+      row.ack_hlc_ctr === null || row.ack_hlc_ctr === undefined ? null : Number(row.ack_hlc_ctr),
+    sealed: bytesOf(row.sealed),
+  };
+}
+
+function sealedRowOf(row: Record<string, unknown>): SealedRow {
+  return { uid: String(row.uid), gen: Number(row.gen), sealed: bytesOf(row.sealed) };
+}
 
 /** A blob as the binding takes it: an `ArrayBuffer` of exactly its bytes. */
 const bufferOf = (bytes: Uint8Array): ArrayBuffer =>
@@ -362,7 +547,7 @@ export class Store implements StoreRpc {
     return this.#storage.transactionSync(() => {
       // Made by another request while this one awaited: then this is a change of settings on it.
       if (this.#exists()) return this.#change(wanted);
-      for (const statement of SCHEMA) this.#sql(statement);
+      for (const statement of [...SCHEMA, ...INBOX_SCHEMA]) this.#sql(statement);
       this.#setMeta("group", group);
       // This store's own name, apart from every store this object held before it and will hold
       // after: what a replacement holds itself to across its awaits (`replace`). Not the data key,
@@ -682,5 +867,592 @@ export class Store implements StoreRpc {
    */
   async deleteAll(): Promise<void> {
     await this.#storage.deleteAll();
+  }
+
+  // -------------------------------------------------------------------------------------
+  // The inbox — device routes (plan §3.2)
+  // -------------------------------------------------------------------------------------
+
+  /**
+   * The inbox's tables, on a store that has them or gains them now ({@link INBOX_SCHEMA}). Asked
+   * after `#exists()` and before any inbox statement.
+   */
+  #inbox(): void {
+    for (const statement of INBOX_SCHEMA) this.#sql(statement);
+  }
+
+  /**
+   * One store's preamble for an inbox or consumer request: a store there, this group's, its key
+   * under the current KEK — and still there after rotating, which awaits.
+   */
+  async #ready(group: string): Promise<boolean> {
+    if (!this.#exists()) return false;
+    this.#own(group);
+    await this.#rotate(group);
+    if (!this.#exists()) return false;
+    this.#inbox();
+    return true;
+  }
+
+  /**
+   * **Acked intents past {@link KEEP_ACKED_MS}, forgotten**, and the day counters before
+   * yesterday — inside the transaction of a write to the inbox, so a store nobody writes to keeps
+   * what it has and pays no write for tidying. A delete that finds nothing writes nothing.
+   */
+  #tidy(now: number): void {
+    this.#sql("DELETE FROM intents WHERE state != 'pending' AND acked_at < ?", now - KEEP_ACKED_MS);
+    this.#sql("DELETE FROM intent_days WHERE day < ?", utcDay(now) - 1);
+  }
+
+  /** The intent `row`, opened, as the Worker answers one. */
+  async #intentOf(key: CryptoKey, row: IntentRow): Promise<Intent> {
+    const opened = (await openIntent(key, row.id, row.sealed)) as {
+      payload: Record<string, unknown>;
+      confirmedBy: string | null;
+    };
+    return {
+      id: row.id,
+      group: this.#meta("group") ?? "",
+      source: row.source,
+      kind: row.kind,
+      payload: opened.payload,
+      createdAt: row.created_at,
+      confirmedBy: opened.confirmedBy,
+      state: row.state,
+      reason: row.reason,
+    };
+  }
+
+  /**
+   * `GET /g/{group}/intents` — **the pending intents, oldest first**, at most
+   * {@link MAX_PENDING_LISTED}, those created after `since` (Unix ms) when it is given; `null` for
+   * no store. A claimed intent is still pending, and is listed: the device's claim is what learns
+   * that another holds it.
+   */
+  async pendingIntents(group: string, since: number | null): Promise<PendingIntents | null> {
+    if (!(await this.#ready(group))) return null;
+    const dataKey = await this.#dataKey(group);
+    const key = await intentKey(dataKey);
+    if (!this.#exists()) return null;
+    this.#inbox();
+    const rows = this.#sql(
+      `SELECT ${INTENT_COLUMNS} FROM intents WHERE state = 'pending' AND created_at > ?
+         ORDER BY created_at, id LIMIT ?`,
+      since ?? -1,
+      MAX_PENDING_LISTED + 1,
+    ).map(intentRowOf);
+    const more = rows.length > MAX_PENDING_LISTED;
+    const intents = await Promise.all(
+      rows.slice(0, MAX_PENDING_LISTED).map((row) => this.#intentOf(key, row)),
+    );
+    return { intents, more };
+  }
+
+  /**
+   * `POST /g/{group}/intents/{id}/claim` — **a lease of {@link LEASE_MS} on a pending intent**, so
+   * one device applies it (plan §2: an add is a quantity, and two devices applying one intent would
+   * add the card twice). Refused while another live lease holds it (`409 claimed`) and once it is
+   * acked (`409 already_acked`, with its state). An expired lease is anybody's.
+   */
+  async claimIntent(group: string, id: string, now: number): Promise<Answer> {
+    if (!(await this.#ready(group))) return NO_STORE_ANSWER;
+    return this.#storage.transactionSync(() => {
+      if (!this.#exists()) return NO_STORE_ANSWER;
+      this.#inbox();
+      const row = this.#sql("SELECT state, lease, lease_until FROM intents WHERE id = ?", id)[0];
+      if (row === undefined) return answer(404, "no such intent in this store", NO_INTENT);
+      if (row.state !== "pending") {
+        return answer(409, "that intent has been acked already", ALREADY_ACKED, {
+          state: String(row.state),
+        });
+      }
+      if (row.lease !== null && Number(row.lease_until) > now) {
+        return answer(409, "another device is applying that intent", CLAIMED);
+      }
+      const lease = randomId();
+      const leaseUntil = now + LEASE_MS;
+      this.#sql(
+        "UPDATE intents SET lease = ?, lease_until = ? WHERE id = ?",
+        lease,
+        leaseUntil,
+        id,
+      );
+      return { status: 200, body: { id, lease, leaseUntil } };
+    });
+  }
+
+  /**
+   * `POST /g/{group}/intents/{id}/ack` — **the outcome**: `applied` by the device holding the
+   * intent's lease, with its watermark after the write; or `refused`, with a reason, by any device
+   * no other live lease stands in front of (every device refuses an intent for the same reason).
+   * **An ack repeating the held state is a 200**, so a device sending an ack it owed after a crash
+   * is told it landed; another state is `409 already_acked`.
+   *
+   * The watermark is what keeps the overlay drawing an applied add until a published table
+   * reflects it ({@link consumer}).
+   */
+  async ackIntent(group: string, id: string, ack: Ack, now: number): Promise<Answer> {
+    if (!(await this.#ready(group))) return NO_STORE_ANSWER;
+    return this.#storage.transactionSync(() => {
+      if (!this.#exists()) return NO_STORE_ANSWER;
+      this.#inbox();
+      const row = this.#sql("SELECT state, lease, lease_until FROM intents WHERE id = ?", id)[0];
+      if (row === undefined) return answer(404, "no such intent in this store", NO_INTENT);
+      if (row.state !== "pending") {
+        if (row.state === ack.state) return { status: 200, body: { id, state: ack.state } };
+        return answer(409, "that intent has been acked already", ALREADY_ACKED, {
+          state: String(row.state),
+        });
+      }
+      const held = row.lease === null ? null : String(row.lease);
+      const live = held !== null && Number(row.lease_until) > now;
+      if (ack.state === "applied" ? ack.lease !== held : live && ack.lease !== held) {
+        return answer(409, "another device is applying that intent", CLAIMED);
+      }
+      this.#sql(
+        `UPDATE intents SET state = ?, acked_at = ?, reason = ?, ack_hlc_ms = ?, ack_hlc_ctr = ?
+           WHERE id = ?`,
+        ack.state,
+        now,
+        ack.reason,
+        ack.hlcMs,
+        ack.hlcCtr,
+        id,
+      );
+      this.#tidy(now);
+      return { status: 200, body: { id, state: ack.state } };
+    });
+  }
+
+  // -------------------------------------------------------------------------------------
+  // Consumer tokens — device routes (plan §3.2)
+  // -------------------------------------------------------------------------------------
+
+  /**
+   * `POST /g/{group}/consumers/{integration}` — **a token for an integration**, signed under the
+   * group's consumer key, **replacing any the integration held**: the row keeps one `tid` per
+   * integration, so the old token stops at the next request it makes. `exp` is Unix seconds,
+   * `days` from now.
+   *
+   * The token is signed before the transaction (WebCrypto is async), under the data key of the
+   * store as it stood; the transaction then holds itself to that store (`store_id`) — a store
+   * switched off and on in between has another key, and the token is signed again under it.
+   */
+  async mintConsumer(
+    group: string,
+    integration: Integration,
+    grant: { scopes: Scope[]; days: number },
+    now: number,
+  ): Promise<Answer> {
+    for (let round = 1; round <= MAX_ROUNDS; round += 1) {
+      if (!(await this.#ready(group))) return NO_STORE_ANSWER;
+      const storeId = this.#meta("store_id");
+      const key = await consumerKey(await this.#dataKey(group));
+      const claims: Claims = {
+        grp: group,
+        int: integration,
+        scp: grant.scopes,
+        exp: Math.floor(now / 1000) + grant.days * 86_400,
+        tid: randomId(),
+      };
+      const token = await signToken(key, claims);
+      const outcome = this.#storage.transactionSync((): Answer | null => {
+        if (!this.#exists()) return NO_STORE_ANSWER;
+        if (this.#meta("store_id") !== storeId) return null;
+        this.#inbox();
+        this.#sql(
+          `INSERT INTO consumers (integration, tid, scopes, issued_at, exp) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (integration) DO UPDATE SET tid = excluded.tid, scopes = excluded.scopes,
+               issued_at = excluded.issued_at, exp = excluded.exp`,
+          integration,
+          claims.tid,
+          JSON.stringify(claims.scp),
+          now,
+          claims.exp,
+        );
+        return {
+          status: 200,
+          body: { integration, token, scopes: claims.scp, exp: claims.exp },
+        };
+      });
+      if (outcome !== null) return outcome;
+    }
+    throw new Error("the store kept being switched off and on while a token was minted");
+  }
+
+  /** `GET /g/{group}/consumers` — the tokens live, one an integration, without the tokens. */
+  async listConsumers(group: string): Promise<Answer> {
+    if (!(await this.#ready(group))) return NO_STORE_ANSWER;
+    const consumers = this.#sql(
+      "SELECT integration, scopes, issued_at, exp FROM consumers ORDER BY integration",
+    ).map((row) => ({
+      integration: String(row.integration),
+      scopes: scopesOf(String(row.scopes)),
+      issuedAt: Number(row.issued_at),
+      exp: Number(row.exp),
+    }));
+    return { status: 200, body: { consumers } };
+  }
+
+  /**
+   * `DELETE /g/{group}/consumers/{integration}` — the integration's token, revoked: its row goes,
+   * and the next request it makes is a 401. Nothing to do on a store with none, or no store.
+   */
+  async revokeConsumer(group: string, integration: Integration): Promise<void> {
+    if (!(await this.#ready(group))) return;
+    this.#sql("DELETE FROM consumers WHERE integration = ?", integration);
+  }
+
+  // -------------------------------------------------------------------------------------
+  // Consumer routes (plan §3.3)
+  // -------------------------------------------------------------------------------------
+
+  /**
+   * The scopes a token's integration holds now, or `null` when its row no longer names this token
+   * (revoked, or replaced by a re-mint). Synchronous: asked inside the stretch that reads.
+   */
+  #live(claims: Claims): Scope[] | null {
+    const row = this.#sql("SELECT tid, scopes FROM consumers WHERE integration = ?", claims.int)[0];
+    if (row === undefined || String(row.tid) !== claims.tid) return null;
+    return scopesOf(String(row.scopes));
+  }
+
+  /**
+   * **Every consumer route's door, then the route.** A store; a token whose MAC holds under its
+   * consumer key; `exp` not passed; and its integration's row still holding its `tid` — asked after
+   * the awaits, in the same stretch as the read, so a revoke that landed while the MAC was checked
+   * is honoured. Then the scopes are the row's, and the route is {@link ConsumerCall}'s.
+   */
+  async consumer(group: string, token: string, call: ConsumerCall, now: number): Promise<Answer> {
+    if (!(await this.#ready(group))) return UNAUTHORIZED;
+    const storeId = this.#meta("store_id");
+    const dataKey = await this.#dataKey(group);
+    const claims = await verifyToken(await consumerKey(dataKey), token);
+    if (claims === null || claims.grp !== group || claims.exp * 1000 <= now) return UNAUTHORIZED;
+    const sealedWith = await intentKey(dataKey);
+    if (!this.#exists() || this.#meta("store_id") !== storeId) return UNAUTHORIZED;
+    this.#inbox();
+    const scopes = this.#live(claims);
+    if (scopes === null) return UNAUTHORIZED;
+    const keys = { data: dataKey, intent: sealedWith };
+    switch (call.op) {
+      case "entries":
+        return this.#entries(call.table, scopes, call.q, call.folder, keys);
+      case "decks":
+        return this.#decks(scopes, call.q, dataKey);
+      case "deck":
+        return this.#deck(scopes, call.uid, dataKey);
+      case "folders":
+        return this.#folders(scopes, dataKey);
+      case "autocomplete":
+        return this.#autocomplete(scopes, call.kind, call.q, dataKey);
+      case "post":
+        return this.#post(group, claims, scopes, call.body, sealedWith, storeId, now);
+      case "intent":
+        return this.#intent(claims, call.id, sealedWith);
+    }
+  }
+
+  /** Stored rows, opened — each under its generation's key, derived once a generation. */
+  async #open(
+    table: Table,
+    rows: SealedRow[],
+    dataKey: Uint8Array,
+  ): Promise<Record<string, unknown>[]> {
+    const keys = new Map<number, Promise<CryptoKey>>();
+    return Promise.all(
+      rows.map(async (row) => {
+        let key = keys.get(row.gen);
+        if (key === undefined) {
+          key = rowKey(dataKey, table, row.gen);
+          keys.set(row.gen, key);
+        }
+        return (await openRow(await key, table, row.uid, row.sealed)) as Record<string, unknown>;
+      }),
+    );
+  }
+
+  /**
+   * Rows of `table` whose name contains `q` (all when `null`), in container `folder` when given,
+   * by name then uid, at most `limit` — and whether there were more.
+   */
+  #matching(
+    table: Table,
+    like: string | null,
+    folder: string | null,
+    limit: number,
+  ): { rows: SealedRow[]; more: boolean } {
+    const where = ["tbl = ?"];
+    const bindings: unknown[] = [table];
+    if (like !== null) {
+      where.push("name_norm LIKE ? ESCAPE '\\'");
+      bindings.push(like);
+    }
+    if (folder !== null) {
+      where.push("folder_uid = ?");
+      bindings.push(folder);
+    }
+    const found = this.#sql(
+      `SELECT uid, gen, sealed FROM rows WHERE ${where.join(" AND ")}
+         ORDER BY name_norm, uid LIMIT ?`,
+      ...bindings,
+      limit + 1,
+    ).map(sealedRowOf);
+    return { rows: found.slice(0, limit), more: found.length > limit };
+  }
+
+  /**
+   * `GET /c/collection` and `/c/wishlist` — **the projection's rows, then the overlay** (plan §3.3):
+   * every intent of the table's kind that is pending, or applied with an ack watermark newer than
+   * the table's held one (or a table never published), matching the same search and folder,
+   * appended as a row with `uid: null`. **A refused intent is never drawn**; an applied one stays
+   * until a publish at or past its watermark reflects it, because the round acks before its own
+   * projection half publishes and a device that cannot publish the table leaves it to another.
+   */
+  async #entries(
+    table: "collection_entries" | "wishlist_entries",
+    scopes: Scope[],
+    q: string | null,
+    folder: string | null,
+    keys: { data: Uint8Array; intent: CryptoKey },
+  ): Promise<Answer> {
+    const needed: Scope = table === "collection_entries" ? "collection:read" : "wishlist:read";
+    if (!scopes.includes(needed)) return answer(403, `that token may not read ${table}`, SCOPE);
+    const like = likeOf(q);
+    const settings = this.#settings();
+    const held = this.#sql(
+      "SELECT hlc_ms, hlc_ctr, published_at FROM tables WHERE tbl = ?",
+      table,
+    )[0];
+    const { rows, more } = this.#matching(table, like, folder, MAX_ENTRIES);
+
+    const where = ["kind = ?", "state IN ('pending', 'applied')"];
+    const bindings: unknown[] = [
+      table === "collection_entries" ? "collection.add" : "wishlist.add",
+    ];
+    if (like !== null) {
+      where.push("name_norm LIKE ? ESCAPE '\\'");
+      bindings.push(like);
+    }
+    if (folder !== null) {
+      where.push("folder_uid = ?");
+      bindings.push(folder);
+    }
+    const candidates = this.#sql(
+      `SELECT ${INTENT_COLUMNS} FROM intents WHERE ${where.join(" AND ")}
+         ORDER BY created_at, id`,
+      ...bindings,
+    ).map(intentRowOf);
+    const unreflected = candidates.filter((intent) => {
+      if (intent.state === "pending" || held === undefined) return true;
+      const [ms, ctr] = [Number(held.hlc_ms), Number(held.hlc_ctr)];
+      const ackMs = intent.ack_hlc_ms ?? 0;
+      const ackCtr = intent.ack_hlc_ctr ?? 0;
+      return ackMs > ms || (ackMs === ms && ackCtr > ctr);
+    });
+
+    const opened = await this.#open(table, rows, keys.data);
+    const overlay = await Promise.all(
+      unreflected
+        .slice(0, MAX_ENTRIES)
+        .map(async (row) => overlayRow(await this.#intentOf(keys.intent, row))),
+    );
+    return {
+      status: 200,
+      body: {
+        rows: [...opened, ...overlay],
+        more: more || unreflected.length > MAX_ENTRIES,
+        publishedAt: held === undefined ? null : Number(held.published_at),
+        fields: settings.fields,
+        marketplace: settings.marketplace,
+      },
+    };
+  }
+
+  /** `GET /c/decks` — the decks whose name contains `q`, by name. */
+  async #decks(scopes: Scope[], q: string | null, dataKey: Uint8Array): Promise<Answer> {
+    if (!scopes.includes("decks:read")) return answer(403, "that token may not read decks", SCOPE);
+    const { rows, more } = this.#matching("decks", likeOf(q), null, MAX_DECKS);
+    return { status: 200, body: { decks: await this.#open("decks", rows, dataKey), more } };
+  }
+
+  /** `GET /c/decks/{uid}` — one deck and its cards (the deck cards whose container is it). */
+  async #deck(scopes: Scope[], uid: string, dataKey: Uint8Array): Promise<Answer> {
+    if (!scopes.includes("decks:read")) return answer(403, "that token may not read decks", SCOPE);
+    const deck = this.#sql(
+      "SELECT uid, gen, sealed FROM rows WHERE tbl = 'decks' AND uid = ?",
+      uid,
+    ).map(sealedRowOf);
+    if (deck.length === 0) return answer(404, "no deck of that uid", NO_DECK);
+    const cards = this.#sql(
+      "SELECT uid, gen, sealed FROM rows WHERE tbl = 'deck_cards' AND folder_uid = ? ORDER BY uid",
+      uid,
+    ).map(sealedRowOf);
+    const [opened] = await this.#open("decks", deck, dataKey);
+    return {
+      status: 200,
+      body: { deck: opened, cards: await this.#open("deck_cards", cards, dataKey) },
+    };
+  }
+
+  /** `GET /c/folders` — each folder list the token may read, by name: none is a 403. */
+  async #folders(scopes: Scope[], dataKey: Uint8Array): Promise<Answer> {
+    const body: Record<string, unknown> = {};
+    const lists: [Scope, Table, string][] = [
+      ["collection:read", "collection_folders", "collection"],
+      ["wishlist:read", "wishlist_folders", "wishlist"],
+    ];
+    for (const [scope, table, name] of lists) {
+      if (!scopes.includes(scope)) continue;
+      const { rows } = this.#matching(table, null, null, MAX_FOLDERS);
+      body[name] = await this.#open(table, rows, dataKey);
+    }
+    if (Object.keys(body).length === 0) {
+      return answer(403, "that token may read no folders", SCOPE);
+    }
+    return { status: 200, body };
+  }
+
+  /**
+   * `GET /c/autocomplete` — at most {@link MAX_CHOICES} `{ name, value }`: distinct card names
+   * (one row opened per name — its value is the name), deck names (value: the deck's uid), and
+   * `kind = 'user'` collection folder names (value: the folder's uid).
+   */
+  async #autocomplete(
+    scopes: Scope[],
+    kind: "collection" | "wishlist" | "decks" | "folders",
+    q: string | null,
+    dataKey: Uint8Array,
+  ): Promise<Answer> {
+    const needed: Scope =
+      kind === "wishlist" ? "wishlist:read" : kind === "decks" ? "decks:read" : "collection:read";
+    if (!scopes.includes(needed)) return answer(403, `that token may not read ${kind}`, SCOPE);
+    const like = likeOf(q);
+    const filter = like === null ? "" : " AND name_norm LIKE ? ESCAPE '\\'";
+    const bindings = like === null ? [] : [like];
+    let choices: { name: string; value: string }[];
+    if (kind === "collection" || kind === "wishlist") {
+      const table: Table = kind === "collection" ? "collection_entries" : "wishlist_entries";
+      const rows = this.#sql(
+        `SELECT uid, gen, sealed FROM rows WHERE tbl = ? AND uid IN (
+           SELECT min(uid) FROM rows WHERE tbl = ?${filter} AND name_norm IS NOT NULL
+             GROUP BY name_norm ORDER BY name_norm LIMIT ?)`,
+        table,
+        table,
+        ...bindings,
+        MAX_CHOICES,
+      ).map(sealedRowOf);
+      const names = (await this.#open(table, rows, dataKey)).map((row) => String(row.name));
+      choices = names
+        .sort((a, b) => (normaliseName(a) < normaliseName(b) ? -1 : 1))
+        .map((name) => ({ name, value: name }));
+    } else {
+      const table: Table = kind === "decks" ? "decks" : "collection_folders";
+      const rows = this.#sql(
+        `SELECT uid, gen, sealed FROM rows WHERE tbl = ?${kind === "folders" ? " AND kind = 'user'" : ""}${filter}
+           ORDER BY name_norm, uid LIMIT ?`,
+        table,
+        ...bindings,
+        MAX_CHOICES,
+      ).map(sealedRowOf);
+      choices = (await this.#open(table, rows, dataKey)).map((row) => ({
+        name: String(row.name),
+        value: String(row.uid),
+      }));
+    }
+    return { status: 200, body: { choices } };
+  }
+
+  /** The intents `integration` has written today (UTC) — what the daily cap counts. */
+  #written(integration: Integration, now: number): number {
+    const row = this.#sql(
+      "SELECT count FROM intent_days WHERE integration = ? AND day = ?",
+      integration,
+      utcDay(now),
+    )[0];
+    return Number(row?.count ?? 0);
+  }
+
+  /**
+   * `POST /c/intents` — **one intent into the inbox**: its shape (`400 bad_intent`), then the
+   * token's scope for its kind (`403 scope` — a token that may not add learns nothing of how to
+   * spell an add), then its payload (`400`), then the day's count (`429 intent_quota`). Sealed
+   * before the transaction, which then decides again: the same store, the token still live, the
+   * count still under the cap.
+   */
+  async #post(
+    group: string,
+    claims: Claims,
+    scopes: Scope[],
+    body: unknown,
+    key: CryptoKey,
+    storeId: string | null,
+    now: number,
+  ): Promise<Answer> {
+    const shape = parseIntentShape(body);
+    if (typeof shape === "string") return answer(400, shape, BAD_INTENT);
+    if (!scopes.includes(scopeFor(shape.kind))) {
+      return answer(403, `that token may not write ${shape.kind}`, SCOPE);
+    }
+    const payload = validatePayload(shape.kind, shape.payload);
+    if (typeof payload === "string") return answer(400, payload, BAD_INTENT);
+    const quota = () =>
+      answer(
+        429,
+        `${claims.int} has written ${INTENTS_PER_DAY} intents today; try again tomorrow`,
+        INTENT_QUOTA,
+      );
+    if (this.#written(claims.int, now) >= INTENTS_PER_DAY) return quota();
+
+    const id = randomId();
+    const sealed = await sealIntent(key, id, { payload, confirmedBy: shape.confirmedBy });
+    return this.#storage.transactionSync(() => {
+      if (!this.#exists() || this.#meta("store_id") !== storeId) return UNAUTHORIZED;
+      this.#inbox();
+      if (this.#live(claims) === null) return UNAUTHORIZED;
+      if (this.#written(claims.int, now) >= INTENTS_PER_DAY) return quota();
+      this.#tidy(now);
+      const folderUid = typeof payload.folderUid === "string" ? payload.folderUid : null;
+      this.#sql(
+        `INSERT INTO intents (id, source, kind, state, created_at, name_norm, folder_uid, sealed)
+           VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        id,
+        claims.int,
+        shape.kind,
+        now,
+        hintName(payload),
+        folderUid,
+        bufferOf(sealed),
+      );
+      this.#sql(
+        `INSERT INTO intent_days (integration, day, count) VALUES (?, ?, 1)
+           ON CONFLICT (integration, day) DO UPDATE SET count = count + 1`,
+        claims.int,
+        utcDay(now),
+      );
+      const intent: Intent = {
+        id,
+        group,
+        source: claims.int,
+        kind: shape.kind,
+        payload,
+        createdAt: now,
+        confirmedBy: shape.confirmedBy,
+        state: "pending",
+        reason: null,
+      };
+      return { status: 200, body: { intent } };
+    });
+  }
+
+  /** `GET /c/intents/{id}` — one of the token's integration's own intents, in whatever state. */
+  async #intent(claims: Claims, id: string, key: CryptoKey): Promise<Answer> {
+    const row = this.#sql(
+      `SELECT ${INTENT_COLUMNS} FROM intents WHERE id = ? AND source = ?`,
+      id,
+      claims.int,
+    )[0];
+    if (row === undefined) return answer(404, "no such intent of this integration's", NO_INTENT);
+    return { status: 200, body: { intent: await this.#intentOf(key, intentRowOf(row)) } };
   }
 }

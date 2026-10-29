@@ -4,12 +4,14 @@ The fifth Cloudflare Worker, `mtg-grimoire-integrations`, beside the relay, the 
 web app's hosting and the scan inbox. It holds, for each sync group that switched integrations
 on, a **projection** of the group's collection, wishlist and decks — six tables its devices
 publish after a sync trip — so that an integration (Discord first) can answer questions about a
-collection without being a device of the group. Issue #1396; the design is
-`docs/superpowers/specs/2026-10-24-integration-data-access-design.md` (option B, §6), and what
-this PR builds of it is `docs/superpowers/plans/2026-10-25-integrations-projection-store.md`.
+collection without being a device of the group, and propose additions to it that a device of the
+group applies. Issue #1396; the design is
+`docs/superpowers/specs/2026-10-24-integration-data-access-design.md` (option B, §6); the store
+is `docs/superpowers/plans/2026-10-25-integrations-projection-store.md` (PR 2) and the inbox and
+the consumer routes `docs/superpowers/plans/2026-10-29-integrations-intents.md` (PR 3).
 
-**Nothing reads the store yet.** This Worker takes the projection and answers its digests; the
-intents an integration writes are the issue's PR 3, and Discord is PR 4.
+**No integration holds a token yet.** A device can mint one (`POST /g/{group}/consumers/…`), and
+the suite does; Discord's front is the issue's PR 4 and remote MCP its PR 5.
 
 ## Why it is a Worker of its own
 
@@ -28,6 +30,13 @@ relay's, `src/token.ts`, to verify a token.
   of what holds it, and kind (`src/projection.ts`'s `clearColumns`) — and the generation it was
   sealed in and a keyed MAC of it, which is how a publish finds the rows that did not change;
 - each table's digest, the publisher's watermark (its `sync_clock` reading) and row count;
+- **the inbox**: the intents its integrations wrote — `collection.add` and `wishlist.add`, nothing
+  else — each **sealed** (`{ payload, confirmedBy }`) beside the clear columns the overlay and the
+  caps read: its id, source, kind, state, creation and ack times, the lease a device claimed it
+  under, the watermark it was applied at, a refusal's reason, its name hint normalised and its
+  folder's uid; and a count per integration per UTC day, for the cap;
+- **one consumer token's id per integration** (`discord`, `mcp`), its scopes, when it was issued and
+  when it ends — never the token, which is a MAC this object can make again and need not keep;
 - the group's settings — its field policy, which of `condition`, `lang`, `value`, `tags`,
   `notes` the projection carries, and its marketplace, which of `tcgplayer`, `cardmarket`,
   `cardkingdom`, `manapool` its prices come from — and the group's data key, wrapped under
@@ -41,7 +50,10 @@ And in the relay's D1, **one row per group that has a store** (`integration_grou
 **It never holds the group key**, nor anything it could derive one from: the key manifest the
 gate reads names devices, and the keys in it are sealed to them. **It never keeps a relay
 token** past the request that carried it, and **it has no device identity**: it is not a member
-of any group, and nothing here can read the sync log. The format leaves out, as absences and
+of any group, and nothing here can read the sync log. **An intent is a proposal and never a
+write**: nothing here reaches a device's database. A device of the group pulls the inbox, holds each
+intent to its own allow-list (`grimoire_core::integration::intents`) whatever this Worker said of
+it, applies what passes as its own write, and acks. The format leaves out, as absences and
 never as switches, purchase price and currency, acquired-at, acquisition source, `needs_review`,
 serial numbers, grading, deck descriptions, notes and tags, labels and to-dos.
 
@@ -63,12 +75,18 @@ relay token verified with `RELAY_HMAC_KEY`, `claims.grp` equal to the path's gro
 token's device still on the group's newest key manifest (issue #548). There is no public route.
 Refusals are `{ "error": "<sentence>", "code": "<code>" }`.
 
-| Route | Body | Answers |
-| --- | --- | --- |
-| `GET /g/{group}/projection/digests` | — | 200 `{ fields, marketplace, tables: { "<table>": { digest, hlcMs, hlcCtr, rows, publishedAt } } }`; 404 `no_store` |
-| `PUT /g/{group}/settings` | `{ "fields": { condition, lang, value, tags, notes }, "marketplace": "<id>", "create": bool }` | 200 `{ fields, marketplace, created }`; 404 `no_store` (`create: false` and no store: nothing made); 400 `bad_settings` |
-| `PUT /g/{group}/projection/{table}` | the gzipped document; `x-projection-hlc-ms`, `x-projection-hlc-ctr`, `x-projection-digest` | 200 `{ table, digest, rows, hlcMs, hlcCtr }`; 404 `no_store`; 409 `stale_projection` (with the held `hlcMs`/`hlcCtr`); 409 `settings_mismatch` (with the store's `fields` and `marketplace`); 413 `projection_limit`; 400 `bad_projection` |
-| `DELETE /g/{group}` | — | 204, whether or not there was a store |
+| Route                                       | Body                                                                                           | Answers                                                                                                                                                                                                                                    |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /g/{group}/projection/digests`         | —                                                                                              | 200 `{ fields, marketplace, tables: { "<table>": { digest, hlcMs, hlcCtr, rows, publishedAt } } }`; 404 `no_store`                                                                                                                         |
+| `PUT /g/{group}/settings`                   | `{ "fields": { condition, lang, value, tags, notes }, "marketplace": "<id>", "create": bool }` | 200 `{ fields, marketplace, created }`; 404 `no_store` (`create: false` and no store: nothing made); 400 `bad_settings`                                                                                                                    |
+| `PUT /g/{group}/projection/{table}`         | the gzipped document; `x-projection-hlc-ms`, `x-projection-hlc-ctr`, `x-projection-digest`     | 200 `{ table, digest, rows, hlcMs, hlcCtr }`; 404 `no_store`; 409 `stale_projection` (with the held `hlcMs`/`hlcCtr`); 409 `settings_mismatch` (with the store's `fields` and `marketplace`); 413 `projection_limit`; 400 `bad_projection` |
+| `DELETE /g/{group}`                         | —                                                                                              | 204, whether or not there was a store — and every consumer token of the group dead with it                                                                                                                                                 |
+| `GET /g/{group}/intents?since=<ms>`         | —                                                                                              | 200 `{ intents, more }` — pending, oldest first, at most 200; 404 `no_store`                                                                                                                                                               |
+| `POST /g/{group}/intents/{id}/claim`        | —                                                                                              | 200 `{ id, lease, leaseUntil }` (ten minutes); 409 `claimed`; 409 `already_acked` with `state`; 404 `no_intent`; 404 `no_store`                                                                                                            |
+| `POST /g/{group}/intents/{id}/ack`          | `{ "state": "applied" \| "refused", "reason", "lease", "hlcMs", "hlcCtr" }`                    | 200 `{ id, state }`; 409 `claimed`; 409 `already_acked` with `state`; 400 `bad_ack`; 404 `no_intent`; 404 `no_store`                                                                                                                       |
+| `GET /g/{group}/consumers`                  | —                                                                                              | 200 `{ consumers: [{ integration, scopes, issuedAt, exp }] }`; 404 `no_store`                                                                                                                                                              |
+| `POST /g/{group}/consumers/{integration}`   | `{ "scopes": [...], "days": 1–365 }`                                                           | 200 `{ integration, token, scopes, exp }`, replacing the token it held; 400 `bad_consumer`; 404 `no_store`                                                                                                                                 |
+| `DELETE /g/{group}/consumers/{integration}` | —                                                                                              | 204, whether or not it held one                                                                                                                                                                                                            |
 
 - `{table}` is one of `collection_folders`, `collection_entries`, `wishlist_folders`,
   `wishlist_entries`, `decks`, `deck_cards`; any other is a 404, as is any path not above.
@@ -101,6 +119,54 @@ Refusals are `{ "error": "<sentence>", "code": "<code>" }`.
   parsing, so a bomb under it reset the isolate rather than being refused. The text is decoded
   as it inflates and never held twice.
 - `publishedAt`, and `integration_groups.created_at`, are Unix milliseconds.
+- **A claim before an apply.** An add is a quantity: two devices that both applied one intent would
+  add the card twice. So a device claims an intent (a ten-minute lease, `LEASE_MS`), applies only
+  what it holds a lease on, and acks `applied` with the lease and its `sync_clock` after the write.
+  A `refused` ack needs no claim — every device refuses an intent for the same reason — unless
+  another device's lease is live. An ack repeating the held state is a 200 (an owed ack, sent
+  again after a crash); another state is `409 already_acked`. An acked intent is kept thirty days
+  for its integration to read, then forgotten at the next write to the inbox.
+- `{id}` is 22 characters of base64url; `{integration}` is `discord` or `mcp`. Scopes are
+  `collection:read`, `wishlist:read`, `decks:read`, `collection:add`, `wishlist:add`.
+
+### The consumer routes
+
+An integration's door is a **consumer token** this Worker minted on a device's request:
+`gct1.<base64url(claims)>.<base64url(HMAC-SHA-256)>`, claims `{ grp, int, scp, exp, tid }`,
+signed under a key HKDF draws from the group's data key (`src/consumer.ts`, `src/seal.ts`). The
+router reads the claims, unverified, for one thing — which group's object to ask — and a bearer
+whose claims do not parse, a relay token among them, is a 401 that reaches no object. The object
+then verifies the MAC, `exp`, and that its row for the integration still holds the `tid`: a revoke
+deletes the row, a re-mint replaces it, and `DELETE /g/{group}` takes the data key and with it the
+key every token was signed under. **A consumer token opens no `/g/` route, and a relay token no
+`/c/` route.** Any failure is the same `401 unauthorized`.
+
+| Route                                                              | Scope                                                | Answers                                                                                                                                                                    |
+| ------------------------------------------------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /c/collection?q=&folder=`                                     | `collection:read`                                    | 200 `{ rows, more, publishedAt, fields, marketplace }` — at most 50 rows by name, then the overlay                                                                         |
+| `GET /c/wishlist?q=&folder=`                                       | `wishlist:read`                                      | the same over the wishlist                                                                                                                                                 |
+| `GET /c/decks?q=`                                                  | `decks:read`                                         | 200 `{ decks, more }`, at most 200                                                                                                                                         |
+| `GET /c/decks/{uid}`                                               | `decks:read`                                         | 200 `{ deck, cards }`; 404 `no_deck`                                                                                                                                       |
+| `GET /c/folders`                                                   | either read scope                                    | 200 `{ collection?, wishlist? }` — each list only under its scope, locked folders included                                                                                 |
+| `GET /c/autocomplete?kind=collection\|wishlist\|decks\|folders&q=` | the kind's read scope (`folders`: `collection:read`) | 200 `{ choices: [{ name, value }] }`, at most 25                                                                                                                           |
+| `POST /c/intents`                                                  | `collection:add` / `wishlist:add` by kind            | 200 `{ intent }`; 400 `bad_intent`; 403 `scope`; 413 `intent_too_large` (64 KiB, `MAX_INTENT_BYTES`); 429 `intent_quota` (64 a UTC day per integration, `INTENTS_PER_DAY`) |
+| `GET /c/intents/{id}`                                              | any                                                  | 200 `{ intent }` — its own integration's only; 404 `no_intent`                                                                                                             |
+
+- **A search** is a substring of the row's normalised name (`projection.ts`'s `normaliseName`), its
+  `%` and `_` taken as text, at most 100 characters; `400 bad_query` past that, for a `folder` that
+  is no uid, and for an autocomplete `kind` outside its four.
+- **The overlay**: after the projection's rows, every intent of the read's kind (`collection.add`
+  on the collection, `wishlist.add` on the wishlist) that is pending — or applied, with an ack
+  watermark newer than the table's held one, or on a table never published — and matches the same
+  search (by its `name` hint) and folder, as `{ uid: null, intentId, state, scryfallId, oracleId?
+(a wish's), name, set?, cn?, finish, quantity, folderUid }`. **Not dropped at its ack**: the
+  device acks before its own round publishes the table, and a device that cannot publish it leaves
+  that to another — so an add is visible from the moment it is written until a published table
+  carries it. A refused intent is never drawn.
+- **An intent's body** is `{ kind, payload, confirmedBy }`, exactly; the scope for its kind is asked
+  before its payload is read; the payload is the plan's §3.1 key set exactly (`src/intents.ts`).
+  `source` is the token's integration, the id and the clock the Worker's.
+- `/c/*` is for servers; a page at `APP_ORIGINS` is answered as on any route, and nobody else's.
 
 **A browser** — the light app's web build at `https://mtg-grimoire.app`, which publishes too — is
 answered by `src/cors.ts`, the scan inbox's three functions: a pre-flight from an origin on
@@ -148,6 +214,11 @@ binding**, never a fallback key.
    is a 500 naming both bindings, and wipes nothing: put the old value back as the previous KEK
    and it rewraps. Then `… secret delete INTEGRATIONS_KEK_PREVIOUS`.
 
+**The inbox and the tokens are under the data key too**, each by HKDF with a salt and info of its
+own: intents sealed with AES-256-GCM under `intentKey` (associated data `intent \0 id`), and consumer
+tokens signed with HMAC-SHA-256 under `consumerKey`. So **a KEK rotation moves no token**, and
+`deleteAll` revokes every token of the group by taking the key.
+
 `seal.ts`'s `rewrap(wrapped, group, oldKek, newKek)` is the one step, and `test/object.test.ts`
 rotates a store end to end. **Losing the KEK loses every store's rows** — not the collections,
 which are the devices', and which they publish again into a store made afresh by switching
@@ -182,14 +253,14 @@ each would add a write per changed row.
 on 2026-10-25, on a machine under load — the ingest (inflate, parse, check, MAC, seal what
 changed, one transaction), with MAC and sealing also timed alone over the same rows:
 
-| `collection_entries` rows | case | ingest | MAC (all rows) | sealing | rows written |
-| --- | --- | --- | --- | --- | --- |
-| 1,000 | first publish | 71 ms | 19 ms | 40 ms (1,000) | 1,000 + table + generation |
-| 1,000 | one row moved | 31 ms | 19 ms | 0.2 ms (1) | 1 + table + generation |
-| 10,000 | first publish | 639 ms | 150 ms | 280 ms (10,000) | 10,000 + table + generation |
-| 10,000 | one row moved | 294 ms | 150 ms | 0.1 ms (1) | 1 + table + generation |
-| 50,000 | first publish | 3,718 ms | 1,037 ms | 1,958 ms (50,000) | 50,000 + table + generation |
-| 50,000 | one row moved | 1,522 ms | 1,037 ms | 0.1 ms (1) | 1 + table + generation |
+| `collection_entries` rows | case          | ingest   | MAC (all rows) | sealing           | rows written                |
+| ------------------------- | ------------- | -------- | -------------- | ----------------- | --------------------------- |
+| 1,000                     | first publish | 71 ms    | 19 ms          | 40 ms (1,000)     | 1,000 + table + generation  |
+| 1,000                     | one row moved | 31 ms    | 19 ms          | 0.2 ms (1)        | 1 + table + generation      |
+| 10,000                    | first publish | 639 ms   | 150 ms         | 280 ms (10,000)   | 10,000 + table + generation |
+| 10,000                    | one row moved | 294 ms   | 150 ms         | 0.1 ms (1)        | 1 + table + generation      |
+| 50,000                    | first publish | 3,718 ms | 1,037 ms       | 1,958 ms (50,000) | 50,000 + table + generation |
+| 50,000                    | one row moved | 1,522 ms | 1,037 ms       | 0.1 ms (1)        | 1 + table + generation      |
 
 The documents are 307 KiB, 3,081 KiB and 15,450 KiB of JSON (20, 201 and 1,003 KiB gzipped). An
 unchanged republish writes the table's row alone. **Under workerd** (`wrangler dev --local`, the
@@ -218,8 +289,8 @@ below, with the relay's deploy token, `CLOUDFLARE_INFRA_API_TOKEN`.
    `<set on first deploy>` until then, and every build refuses a store request before making it.
    Once the address is decided, it goes into both, byte for byte, in one commit.
 2. **Extend the deploy token**: `CLOUDFLARE_INFRA_API_TOKEN` is scoped per Worker and does not
-   reach one that does not exist. Add `mtg-grimoire-integrations` to it (*Workers Scripts →
-   Edit*), with *Zone → Workers Routes → Edit* on `mtg-grimoire.app` as the other three have,
+   reach one that does not exist. Add `mtg-grimoire-integrations` to it (_Workers Scripts →
+   Edit_), with _Zone → Workers Routes → Edit_ on `mtg-grimoire.app` as the other three have,
    **before** setting `INTEGRATIONS_DEPLOY` — or the first release after is a failed job and a
    draft.
 3. **Deploy once by hand**, from this folder, with the pinned tool — the migration first:
@@ -232,6 +303,7 @@ below, with the relay's deploy token, `CLOUDFLARE_INFRA_API_TOKEN`.
 
    Read what it prints: the route `integrations.mtg-grimoire.app (custom domain)`, the
    `GroupStore` migration `v1`, and no `workers.dev` address.
+
 4. **Then set the two secrets** — after the deploy, not before: on the share Worker a `secret put`
    against a Worker that did not exist yet did not stick.
 
@@ -248,7 +320,7 @@ below, with the relay's deploy token, `CLOUDFLARE_INFRA_API_TOKEN`.
    node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
    ```
 
-5. **Then set `INTEGRATIONS_DEPLOY` to `true`** (repository *Settings → Variables*), so releases
+5. **Then set `INTEGRATIONS_DEPLOY` to `true`** (repository _Settings → Variables_), so releases
    deploy it from then on.
 
 **Ask the host, rather than this file, what it does** — from the repository's root:
@@ -257,15 +329,15 @@ below, with the relay's deploy token, `CLOUDFLARE_INFRA_API_TOKEN`.
 node scripts/integrations-deploy-probe.ts
 ```
 
-| Request | Answer |
-| --- | --- |
-| `GET /g/abc/projection/digests` with no token | `401` — ⚠️ **`500` is `INTEGRATIONS_KEK` unset or not 32 bytes**: the Worker checks it before the door |
-| `GET /g/abc/projection/digests` with `authorization: Bearer nonsense` | `401` — ⚠️ **`500` here alone is `RELAY_HMAC_KEY` unset** |
-| `POST /g/abc/settings` | `405`, `method not allowed` |
-| `OPTIONS /g/abc/projection/digests` from `https://mtg-grimoire.app` | `204`, with that origin allowed |
-| `GET /g/abc/projection/digests` from `https://mtg-grimoire.app`, with no token | `401`, readable by the page |
-| `OPTIONS /g/abc/projection/digests` from another origin | `405`, with no origin allowed |
-| `GET /` | `404`, `not found` |
+| Request                                                                        | Answer                                                                                                 |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `GET /g/abc/projection/digests` with no token                                  | `401` — ⚠️ **`500` is `INTEGRATIONS_KEK` unset or not 32 bytes**: the Worker checks it before the door |
+| `GET /g/abc/projection/digests` with `authorization: Bearer nonsense`          | `401` — ⚠️ **`500` here alone is `RELAY_HMAC_KEY` unset**                                              |
+| `POST /g/abc/settings`                                                         | `405`, `method not allowed`                                                                            |
+| `OPTIONS /g/abc/projection/digests` from `https://mtg-grimoire.app`            | `204`, with that origin allowed                                                                        |
+| `GET /g/abc/projection/digests` from `https://mtg-grimoire.app`, with no token | `401`, readable by the page                                                                            |
+| `OPTIONS /g/abc/projection/digests` from another origin                        | `405`, with no origin allowed                                                                          |
+| `GET /`                                                                        | `404`, `not found`                                                                                     |
 
 None of them reaches an object and none holds a token, so two things are shown only by a real
 device switching integrations on: that the key is the relay's, and that the objects take a write.
@@ -284,6 +356,11 @@ pnpm exec tsc -p infrastructure/integrations-worker/tsconfig.json
 MEASURE=1 pnpm exec vitest run --project integrations-worker measure
 ```
 
+**A consumer's read** is measured too: `GET /c/collection?q=` through the router against a store
+of every field on, from the token's claims to the matching rows opened (the figures are in
+`docs/reference/integrations-store.md`). A workerd object starting cold adds its own start, which
+only Cloudflare can measure.
+
 **The suite is `test/`, beside `src/`**: `src/` is exactly the script a deploy bundles, so
 `grep -rn 'group_key\|RELAY_HMAC_KEY' src` finds the relay's key in `gate.ts` alone and no group
 key anywhere — `test/wrangler.test.ts` holds that, and the configuration's every binding.
@@ -293,6 +370,12 @@ deleted, rows of two generations open side by side, and a row another publish ch
 is sealed in another round — reading the rows written off `test/fake.ts`, which counts them as
 Cloudflare does. `test/golden.test.ts` ingests the Rust's own documents, `crates/grimoire-core/src/__golden__/
 projection.json`, every table under every field on, and refuses each with one key too many.
+`test/intents.test.ts` holds the inbox's parsers and the token to plan §3.1 key for key;
+`test/inbox.test.ts` the device's side — the pending list, one lease per intent, the ack's rules,
+the thirty-day purge, the tokens minted, listed and revoked, the daily cap; and
+`test/consumer.test.ts` the integration's — every way a token stops working (a forged MAC, another
+group, a re-mint, a revoke, `exp`, `DELETE /g/{group}`, a store made again), a KEK rotation that
+does not stop it, every scope refusal, the reads, the 413 and the overlay's three rules.
 
 **Under workerd, on 2026-10-25**, by `wrangler dev --local` over a local D1 built from the relay's
 `schema.sql` and `migrations/`: the door (401 to none and to nonsense), `no_store` before
