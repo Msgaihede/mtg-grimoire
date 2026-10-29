@@ -1,3 +1,403 @@
+"""
+Everything about one printing of a card, as the card detail pane shows it.
+"""
+type CardDetail {
+	"""
+	The illustrator. Scryfall's image policy asks for this credit wherever the art is shown.
+	"""
+	artist: String
+	"""
+	Mana value. A Float because a few joke cards have half-mana costs.
+	"""
+	cmc: Float
+	collectorNumber: String!
+	"""
+	Each physical side, front first. Empty for a single-faced card.
+	"""
+	faces: [CardFace!]!
+	"""
+	This printing's price per finish, at the marketplace `card` was asked at.
+	"""
+	finishPrices: FinishPrices!
+	"""
+	The finishes this printing is published in. Empty when the corpus does not say.
+	"""
+	finishes: [Finish!]!
+	"""
+	The printing's Scryfall id (a UUID). To draw its art, pass it to the app's `CardImage`
+	component (through `cardImageUrl(id, face, variant)`); never build an image URL by hand.
+	"""
+	id: String!
+	"""
+	Scryfall's id for the artwork. Two printings differ in art exactly when this does.
+	"""
+	illustrationId: String
+	"""
+	Scryfall's image quality word: `highres_scan`, `lowres`, `placeholder` or `missing`.
+	"""
+	imageStatus: String
+	"""
+	Scryfall's language code, e.g. `en`.
+	"""
+	lang: String!
+	"""
+	Scryfall's layout word.
+	"""
+	layout: String!
+	"""
+	The card's standing in every format Scryfall tracks.
+	"""
+	legalities: [CardLegality!]!
+	"""
+	In Scryfall's symbol notation, e.g. `{2}{R}{R}`.
+	"""
+	manaCost: String
+	name: String!
+	"""
+	The oracle card this printing is of — shared by every printing of the same card. Pass it
+	to `cardPrintings` or `cardHoldings`.
+	"""
+	oracleId: String
+	"""
+	The card's Scryfall Oracle tags — what the card does (`removal`, `ramp`,
+	`card-advantage`) — as slugs, sorted, with every ancestor tag included. Empty for an
+	untagged card and on a database that has never downloaded the Oracle tags (see
+	`Query.oracleTagsStatus`). Not deck labels, deck tags or keyword abilities.
+	"""
+	oracleTags: [String!]!
+	oracleText: String
+	rarity: String
+	"""
+	The printing's release date, `YYYY-MM-DD`.
+	"""
+	releasedAt: String
+	"""
+	Lowercase set code, e.g. `m21`.
+	"""
+	setCode: String!
+	setName: String
+	typeLine: String
+}
+
+"""
+One physical side of a multi-faced card (transform, modal double-faced, split…).
+"""
+type CardFace {
+	artist: String
+	"""
+	In Scryfall's symbol notation. Null or empty means no cost.
+	"""
+	manaCost: String
+	"""
+	Empty when the face carries no name.
+	"""
+	name: String!
+	oracleText: String
+	typeLine: String
+}
+
+"""
+Which cards to list. Every field narrows; absent fields do not. Tag slugs come from the
+`tagSearch` and `tagChildren` fields.
+"""
+input CardFilterInput {
+	"""
+	Art Tags (what the illustration shows), by slug.
+	"""
+	artTags: TagTermsInput
+	"""
+	With `artTags`: `strong` keeps only art the tag is central to.
+	"""
+	artWeightFloor: String
+	"""
+	Any of `regular`, `borderless`, `fullart`.
+	"""
+	borders: [String!]
+	"""
+	Colour identity letters from `WUBRGC`, e.g. `UR`: cards that fit in a deck of those
+	colours. `C` alone is the colourless cards.
+	"""
+	colors: String
+	"""
+	With `colors`: exactly that identity — `UR` answers the Izzet cards alone, not mono-blue,
+	mono-red or colourless.
+	"""
+	colorsStrict: Boolean
+	"""
+	Only cards legal in this format (its key, e.g. `commander`, `modern`).
+	"""
+	format: String
+	"""
+	Any of these mana values (0–255). X counts as 0, as Scryfall counts it.
+	"""
+	manaValues: [Int!]
+	"""
+	Also cards with `{X}` in their printed cost (joins the mana values as one more choice).
+	"""
+	manaX: Boolean
+	"""
+	One card, every printing (its oracle id).
+	"""
+	oracleId: String
+	"""
+	Oracle Tags (what the card does), by slug.
+	"""
+	oracleTags: TagTermsInput
+	"""
+	Only printings made on paper. Absent: true in a card search, false in the collection.
+	"""
+	paperOnly: Boolean
+	"""
+	Only printings legal in at least one format.
+	"""
+	playableOnly: Boolean
+	"""
+	Field-level conditions, every one of which must hold — the Search box's keywords.
+	"""
+	predicates: [PredicateInput!]
+	"""
+	Printings made in any of these finishes.
+	"""
+	printedFinishes: [Finish!]
+	"""
+	Any of these rarities.
+	"""
+	rarities: [String!]
+	"""
+	One rarity: `common`, `uncommon`, `rare`, `mythic`, `special`, `bonus`.
+	"""
+	rarity: String
+	"""
+	One set's code, e.g. `mh3`.
+	"""
+	setCode: String
+	"""
+	Any of these set codes.
+	"""
+	sets: [String!]
+	"""
+	Free text, prefix-matched against the card's name and rules text.
+	"""
+	text: String
+	"""
+	Any of these card types, capitalised: `Artifact`, `Battle`, `Creature`, `Enchantment`,
+	`Instant`, `Land`, `Planeswalker`, `Sorcery`.
+	"""
+	types: [String!]
+	"""
+	`beyond` (Universes Beyond) or `within` (Universes Within); absent, both.
+	"""
+	universe: String
+}
+
+"""
+What the reader holds of one card, counted across every printing of it (the oracle card, not
+one piece of cardboard).
+"""
+type CardHoldings {
+	"""
+	How many decks play the card (decks, not copies; built lists only).
+	"""
+	decks: Int!
+	"""
+	Copies in the collection — every printing, finish and folder together.
+	"""
+	owned: Int!
+	"""
+	Copies the wishlist asks for, every wishlist entry for the card together.
+	"""
+	wished: Int!
+}
+
+"""
+Whether a card may be played in one format.
+"""
+type CardLegality {
+	"""
+	Scryfall's format key: `standard`, `modern`, `commander`, `vintage`, …
+	"""
+	format: String!
+	"""
+	`legal`, `not_legal`, `restricted` or `banned`.
+	"""
+	status: String!
+}
+
+"""
+One card's Oracle Tags, keyed by its oracle id.
+"""
+type CardOracleTags {
+	oracleId: String!
+	"""
+	Oracle tag slugs (`removal`, `ramp`), sorted, with every ancestor tag included. Empty for
+	an untagged card, an unknown id, and a database that has never downloaded the Oracle
+	tags — check `oracleTagsStatus` to tell them apart.
+	"""
+	slugs: [String!]!
+}
+
+"""
+One page of a card search, and how many cards matched in all.
+"""
+type CardSearchResult {
+	items: [CardSummary!]!
+	"""
+	How many matched, counted no further than 5000 — read with `totalIsCapped`. With
+	`onePerCard`, counts cards; otherwise printings.
+	"""
+	total: Int!
+	"""
+	The count stopped at its ceiling: there are `total` matches or more.
+	"""
+	totalIsCapped: Boolean!
+}
+
+"""
+One ordering column of a card search.
+"""
+input CardSearchSort {
+	"""
+	Largest, latest or last-in-the-alphabet first.
+	"""
+	descending: Boolean = false
+	"""
+	The column.
+	"""
+	key: CardSearchSortKey!
+}
+
+"""
+What a card search can be ordered by. `price` is at the marketplace the search was asked at;
+`released` is the printing's release date; `imageUpdated` when Scryfall last replaced its
+images.
+"""
+enum CardSearchSortKey {
+	imageUpdated
+	manaValue
+	name
+	price
+	rarity
+	released
+	set
+	type
+}
+
+"""
+One Magic set in the card corpus.
+"""
+type CardSet {
+	"""
+	Paper printings of this set in the local corpus. 0 for a digital-only set.
+	"""
+	cardCount: Int!
+	"""
+	Lowercase set code, e.g. `m21` — what `s:` takes in a search query.
+	"""
+	code: String!
+	name: String!
+	"""
+	The set's release date, `YYYY-MM-DD`.
+	"""
+	releasedAt: String
+	"""
+	Scryfall's set type: `expansion`, `core`, `masters`, `commander`, …
+	"""
+	setType: String
+}
+
+"""
+One card search result: a printing (or, with `onePerCard`, a card represented by its newest
+matching printing) with the columns a card grid needs.
+"""
+type CardSummary {
+	collectorNumber: String!
+	"""
+	The finishes this printing is published in. Empty when the corpus does not say.
+	"""
+	finishes: [Finish!]!
+	"""
+	One of the cards the Commander bracket system counts as a game changer.
+	"""
+	gameChanger: Boolean!
+	"""
+	The printing's Scryfall id (a UUID). To draw its art, pass it to the app's `CardImage`
+	component (through `cardImageUrl(id, face, variant)`); never build an image URL by hand.
+	"""
+	id: String!
+	"""
+	When Scryfall last replaced this printing's images, as an ISO 8601 timestamp.
+	"""
+	imageUpdatedAt: String
+	"""
+	Scryfall's layout word: `normal`, `transform`, `modal_dfc`, `split`, `meld`, …
+	"""
+	layout: String!
+	"""
+	In Scryfall's symbol notation, e.g. `{2}{R}{R}`.
+	"""
+	manaCost: String
+	name: String!
+	"""
+	The oracle card this printing is of — shared by every printing of the same card.
+	"""
+	oracleId: String
+	"""
+	The card's Scryfall Oracle tags — what the card does (`removal`, `ramp`,
+	`card-advantage`) — as slugs, sorted, with every ancestor tag included. Empty for an
+	untagged card and on a database that has never downloaded the Oracle tags (see
+	`Query.oracleTagsStatus`). Not deck labels, deck tags or keyword abilities.
+	"""
+	oracleTags: [String!]!
+	"""
+	Copies of this printing in the reader's collection, every finish and condition
+	together. 0 when none.
+	"""
+	ownedQuantity: Int!
+	"""
+	This printing's price — nonfoil, falling back to foil, then etched. In the marketplace's
+	own currency, in whole units (2.18 is $2.18 or €2.18) — see `Query.marketplace` for which
+	currency. Null when that marketplace quotes no price; never filled in from another
+	marketplace.
+	"""
+	price: Float
+	"""
+	With `onePerCard`, the dearest `price` among the printings this row stands for;
+	otherwise equal to `price`. In the marketplace's own currency, in whole units. Null when
+	that marketplace quotes no price; never filled in from another marketplace.
+	"""
+	priceHigh: Float
+	"""
+	With `onePerCard`, the cheapest `price` among the printings this row stands for;
+	otherwise equal to `price`. In the marketplace's own currency, in whole units. Null when
+	that marketplace quotes no price; never filled in from another marketplace.
+	"""
+	priceLow: Float
+	"""
+	How many matching printings this row stands for: 1 unless the search was asked with
+	`onePerCard`.
+	"""
+	printings: Int!
+	"""
+	`common`, `uncommon`, `rare`, `mythic`, `special` or `bonus`.
+	"""
+	rarity: String
+	"""
+	The printing's release date, `YYYY-MM-DD`. A date after today is a card not out yet.
+	"""
+	releasedAt: String
+	"""
+	Lowercase set code, e.g. `m21`.
+	"""
+	setCode: String!
+	setName: String
+	typeLine: String
+	"""
+	Whether a wishlist entry covers this printing — pinned to it, or wishing for any
+	printing of the card.
+	"""
+	wishlisted: Boolean!
+}
+
 type CollectionFolder {
 	"""
 	The deck a deck group belongs to.
@@ -152,6 +552,27 @@ type DeckValue {
 }
 
 """
+A printing's finish.
+"""
+enum Finish {
+	etched
+	foil
+	nonfoil
+}
+
+"""
+What one printing costs per finish (Near Mint), at one marketplace. In the marketplace's own
+currency, in whole units (2.18 is $2.18 or €2.18) — see `Query.marketplace` for which
+currency. Null when that marketplace quotes no price; never filled in from another
+marketplace.
+"""
+type FinishPrices {
+	etched: Float
+	foil: Float
+	nonfoil: Float
+}
+
+"""
 A scalar that can represent any JSON value.
 """
 scalar JSON
@@ -168,7 +589,259 @@ enum Marketplace {
 	tcgplayer
 }
 
+"""
+Another card a meld card is part of: the card two halves meld into, or one of the halves a
+melded card is made from.
+"""
+type MeldRelation {
+	artist: String
+	"""
+	`meld_part` (a half) or `meld_result` (the melded card).
+	"""
+	component: String!
+	"""
+	The printing's Scryfall id (a UUID). To draw its art, pass it to the app's `CardImage`
+	component (through `cardImageUrl(id, face, variant)`); never build an image URL by hand.
+	"""
+	id: String!
+	name: String!
+}
+
+"""
+A Scryfall tag the reader has hidden from the tag search and the tag tree. Muting hides the
+tag, never a card.
+"""
+type MutedTag {
+	"""
+	When it was muted, in Unix seconds.
+	"""
+	mutedAt: Float!
+	namespace: TagNamespace!
+	"""
+	The slug as it read when the tag was muted. May be out of date.
+	"""
+	slug: String!
+	"""
+	Scryfall's stable id for the tag.
+	"""
+	tagId: String!
+}
+
+"""
+The field a condition is about.
+"""
+enum PredicateField {
+	allOf
+	anyOf
+	artTag
+	artist
+	cmc
+	colorIdentity
+	colors
+	flavor
+	format
+	keyword
+	manaCost
+	name
+	oracleTag
+	oracleText
+	power
+	rarity
+	setCode
+	text
+	toughness
+	typeLine
+	watermark
+}
+
+"""
+One condition on one field — `type contains goblin`, `mana value ≥ 3` — or a group of them.
+"""
+input PredicateInput {
+	field: PredicateField!
+	"""
+	Rules the condition out instead of requiring it.
+	"""
+	negated: Boolean! = false
+	op: PredicateOp!
+	"""
+	With `field: anyOf` or `allOf`: the conditions grouped.
+	"""
+	terms: [PredicateInput!]! = []
+	"""
+	What the field is compared with, as text: `goblin`, `3`, `ur`.
+	"""
+	value: String! = ""
+}
+
+"""
+How a condition compares: `colon` is the field's own sense (contains, includes, legal in).
+"""
+enum PredicateOp {
+	colon
+	eq
+	gt
+	gte
+	lt
+	lte
+	ne
+}
+
+"""
+One paper printing of a card, as the all-printings list shows it.
+"""
+type Printing {
+	artist: String
+	"""
+	`black`, `white`, `borderless`, `silver` or `gold`.
+	"""
+	borderColor: String
+	collectorNumber: String!
+	"""
+	This printing's price per finish, at the marketplace `cardPrintings` was asked at.
+	"""
+	finishPrices: FinishPrices!
+	"""
+	The finishes this printing is published in. Empty when the corpus does not say.
+	"""
+	finishes: [Finish!]!
+	"""
+	Scryfall's frame effects: `showcase`, `extendedart`, `legendary`, …
+	"""
+	frameEffects: [String!]!
+	fullArt: Boolean!
+	"""
+	The printing's Scryfall id (a UUID). To draw its art, pass it to the app's `CardImage`
+	component (through `cardImageUrl(id, face, variant)`); never build an image URL by hand.
+	"""
+	id: String!
+	"""
+	Scryfall's id for the artwork. Two printings differ in art exactly when this does.
+	"""
+	illustrationId: String
+	"""
+	Scryfall's language code, e.g. `en`.
+	"""
+	lang: String!
+	"""
+	Scryfall's layout word.
+	"""
+	layout: String!
+	"""
+	Scryfall marks this printing a promo.
+	"""
+	promo: Boolean!
+	rarity: String
+	"""
+	The printing's release date, `YYYY-MM-DD`.
+	"""
+	releasedAt: String
+	"""
+	Lowercase set code, e.g. `m21`.
+	"""
+	setCode: String!
+	setName: String
+}
+
+"""
+One printing's Oracle Tags (the card's, since every printing shares them), keyed by the
+printing id.
+"""
+type PrintingOracleTags {
+	"""
+	The printing's Scryfall id.
+	"""
+	cardId: String!
+	"""
+	Oracle tag slugs (`removal`, `ramp`), sorted, with every ancestor tag included. Empty for
+	an untagged card, an unknown id, and a database that has never downloaded the Oracle
+	tags — check `oracleTagsStatus` to tell them apart.
+	"""
+	slugs: [String!]!
+}
+
+"""
+One printing's prices per finish, keyed by its id.
+"""
+type PrintingPrices {
+	"""
+	The printing's Scryfall id.
+	"""
+	cardId: String!
+	finishPrices: FinishPrices!
+}
+
+"""
+Every paper printing of one card, newest first, up to a limit.
+"""
+type PrintingsPage {
+	items: [Printing!]!
+	"""
+	How many paper printings the card has in all. More than `items` holds when the list was
+	cut at its limit.
+	"""
+	total: Int!
+}
+
 type Query {
+	"""
+	How fresh the Art Tags dataset (what an illustration shows) is on this machine. Never
+	fails — a dataset never downloaded answers nulls with `stale: true`.
+	"""
+	artTagsStatus: TagStatus @invalidatedBy(roots: ["artTags"])
+	"""
+	One printing of a card in full — text, faces, legalities and prices per finish. Null when
+	no printing has that id.
+	"""
+	card(
+		"""
+		The printing's Scryfall id.
+		"""
+		id: String!,		marketplace: Marketplace
+	): CardDetail @invalidatedBy(roots: ["card"])
+	"""
+	How many copies of a card the reader owns, wants, and how many decks play it — every
+	printing of the card together.
+	"""
+	cardHoldings(
+		"""
+		The oracle card — `oracleId` on `CardSummary` or `CardDetail`.
+		"""
+		oracleId: String!
+	): CardHoldings @invalidatedBy(roots: ["card", "collection", "wishlist", "decks"])
+	"""
+	The cards a meld printing is part of. Empty for every card that is not a meld card.
+	"""
+	cardMeldParts(
+		"""
+		The printing's Scryfall id.
+		"""
+		id: String!
+	): [MeldRelation!] @invalidatedBy(roots: ["card"])
+	"""
+	Every paper printing of one card (by its oracle id), newest first, each priced per
+	finish.
+	"""
+	cardPrintings(
+		"""
+		At most this many printings (default 400, at most 1000).
+		"""
+		limit: Int,		marketplace: Marketplace,
+		"""
+		The oracle card — `oracleId` on `CardSummary` or `CardDetail`.
+		"""
+		oracleId: String!
+	): PrintingsPage @invalidatedBy(roots: ["card"])
+	"""
+	TCGplayer's product ids for one printing, for a link to its product page. Both null when
+	TCGplayer does not sell it.
+	"""
+	cardTcgplayerIds(
+		"""
+		The printing's Scryfall id.
+		"""
+		id: String!
+	): TcgplayerIds @invalidatedBy(roots: ["card"])
 	"""
 	Every folder of the collection's cabinet, parents before children.
 	"""
@@ -191,6 +864,247 @@ type Query {
 	unarchived ones; absent, both.
 	"""
 	decks(archived: Boolean): [Deck!] @invalidatedBy(roots: ["decks"])
+	"""
+	The Scryfall tags the reader has muted, by dataset and then by slug. A muted tag is
+	hidden from tag search and the tag tree; its cards are not hidden.
+	"""
+	mutedTags: [MutedTag!] @invalidatedBy(roots: ["tags-muted"])
+	"""
+	The Oracle Tags (what a card does) of a set of cards, by oracle id. One entry per
+	distinct id — match rows by `oracleId`, never by position. A single card's are also on
+	`CardSummary.oracleTags` and `CardDetail.oracleTags`.
+	"""
+	oracleTagsForCards(
+		"""
+		Oracle ids.
+		"""
+		oracleIds: [String!]!
+	): [CardOracleTags!] @invalidatedBy(roots: ["tags", "oracleTags"])
+	"""
+	The Oracle Tags (what a card does) of a set of printings, by printing id. One entry per
+	distinct id — match rows by `cardId`, never by position.
+	"""
+	oracleTagsForPrintings(
+		"""
+		Printing ids.
+		"""
+		cardIds: [String!]!
+	): [PrintingOracleTags!] @invalidatedBy(roots: ["tags", "oracleTags"])
+	"""
+	How fresh the Oracle Tags dataset (what a card does) is on this machine. Never fails — a
+	dataset never downloaded answers nulls with `stale: true`.
+	"""
+	oracleTagsStatus: TagStatus @invalidatedBy(roots: ["tags", "oracleTags"])
+	"""
+	Prices per finish for a set of printings, in one read. A printing id the corpus does not
+	hold is left out of the answer; match rows by `cardId`.
+	"""
+	printingPrices(
+		"""
+		Printing ids.
+		"""
+		cardIds: [String!]!,		marketplace: Marketplace
+	): [PrintingPrices!] @invalidatedBy(roots: ["cards"])
+	"""
+	Search every Magic card in the corpus (not only the reader's) — the same search the app's
+	Search page runs. Each row also says how many copies the reader owns and whether it is
+	wishlisted.
+	"""
+	searchCards(
+		"""
+		Which cards to list. Absent matches every card.
+		"""
+		filters: CardFilterInput,
+		"""
+		Rows per page, at most 200.
+		"""
+		limit: Int = 50,		marketplace: Marketplace,
+		"""
+		Only printings priced at most this much at the marketplace.
+		"""
+		maxPrice: Float,
+		"""
+		Only printings priced at least this much at the marketplace, in its currency's whole units. Unpriced printings never match a bound.
+		"""
+		minPrice: Float,
+		"""
+		Rows to skip.
+		"""
+		offset: Int = 0,
+		"""
+		Fold every printing of a card into one row (its newest matching printing stands for it); `printings`, `priceLow` and `priceHigh` then span them.
+		"""
+		onePerCard: Boolean = false,
+		"""
+		True: only printings in the reader's collection. False: only printings not in it. Absent: both.
+		"""
+		owned: Boolean,
+		"""
+		Hide digital-only (Arena, MTGO) printings.
+		"""
+		paperOnly: Boolean = true,
+		"""
+		Columns to order by, the first deciding and the rest breaking ties. Absent: relevance when there is free text, otherwise name.
+		"""
+		sort: [CardSearchSort!]
+	): CardSearchResult @invalidatedBy(roots: ["cards"])
+	"""
+	Every Magic set in the card corpus, newest first.
+	"""
+	sets: [CardSet!] @invalidatedBy(roots: ["sets"])
+	"""
+	One level of the Scryfall tag tree: the direct children of a tag, or the top-level tags
+	when no parent is named. Every child is listed, unlimited. Muted tags (and so their
+	subtrees) are left out.
+	"""
+	tagChildren(
+		"""
+		Which dataset: `oracle` (what a card does) or `art` (what an illustration shows). Absent asks both, Art Tags ranked first.
+		"""
+		namespace: TagNamespace,
+		"""
+		The parent tag's slug. Absent: the top-level tags.
+		"""
+		parent: String
+	): [TagHit!] @invalidatedBy(roots: ["tag-children"])
+	"""
+	Find Scryfall tags (Oracle Tags and Art Tags) by name: the exact match first, then names
+	starting with the text, then names containing it. Empty text lists the tags with the
+	widest reach. Muted tags are left out.
+	"""
+	tagSearch(
+		"""
+		At most this many tags.
+		"""
+		limit: Int = 50,
+		"""
+		Which dataset: `oracle` (what a card does) or `art` (what an illustration shows). Absent asks both, Art Tags ranked first.
+		"""
+		namespace: TagNamespace,
+		"""
+		Part of a tag's name, e.g. `remov` or `dragon`.
+		"""
+		text: String = ""
+	): [TagHit!] @invalidatedBy(roots: ["tag-search"])
+}
+
+"""
+One Scryfall tag (an Oracle Tag or an Art Tag) with its reach and its place in the tag tree.
+Muted tags never appear.
+"""
+type TagHit {
+	"""
+	How many subjects the tag reaches, its descendants included: oracle cards for an Oracle
+	Tag, illustrations for an Art Tag. Not a count of printings.
+	"""
+	cardCount: Int!
+	"""
+	How many direct child tags it has (muted ones not counted).
+	"""
+	childCount: Int!
+	"""
+	Scryfall's own description of the tag.
+	"""
+	description: String
+	"""
+	Scryfall's stable id for the tag. May be empty on a database not refreshed lately.
+	"""
+	id: String!
+	"""
+	The tag's name for display.
+	"""
+	label: String!
+	namespace: TagNamespace!
+	"""
+	Every parent tag — a tag can sit under several.
+	"""
+	parents: [TagRef!]!
+	"""
+	The tag's slug — what `otag:` (Oracle) or `atag:` (Art) take in a search query.
+	"""
+	slug: String!
+}
+
+"""
+One of Scryfall's two Tagger datasets: `oracle` tags say what a card does, `art` tags what its
+illustration shows.
+"""
+enum TagNamespace {
+	art
+	oracle
+}
+
+"""
+A Scryfall tag named from somewhere else — enough to show it and ask about it again.
+"""
+type TagRef {
+	"""
+	The tag's name for display.
+	"""
+	label: String!
+	namespace: TagNamespace!
+	"""
+	The tag's slug, e.g. `spot-removal` — what `otag:`/`atag:` take in a search query.
+	"""
+	slug: String!
+}
+
+"""
+How fresh one of Scryfall's tag datasets is on this machine. Every nullable field is null
+when the dataset has never been downloaded.
+"""
+type TagStatus {
+	"""
+	When Scryfall was last asked whether a newer file exists, in Unix seconds.
+	"""
+	checkedAt: Float
+	"""
+	When the dataset was last loaded, in Unix seconds. Null: never downloaded.
+	"""
+	ingestedAt: Float
+	"""
+	A refresh is running right now.
+	"""
+	refreshing: Boolean!
+	"""
+	A refresh is due.
+	"""
+	stale: Boolean!
+	"""
+	Tags in the dataset.
+	"""
+	tagCount: Int
+	"""
+	Tag-to-subject assignments in the dataset.
+	"""
+	taggingCount: Int
+	"""
+	Scryfall's own timestamp for the file these tags came from.
+	"""
+	updatedAt: String
+}
+
+"""
+Tag slugs to require and to rule out.
+"""
+input TagTermsInput {
+	exclude: [String!]! = []
+	include: [String!]! = []
+}
+
+"""
+TCGplayer's product ids for one printing. Both are null for a printing TCGplayer does not
+sell.
+"""
+type TcgplayerIds {
+	"""
+	The etched-foil product, which TCGplayer lists separately.
+	"""
+	etchedProductId: Int
+	"""
+	The ordinary product, sold as Normal and Foil.
+	"""
+	productId: Int
 }
 
 """
