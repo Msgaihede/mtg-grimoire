@@ -150,7 +150,7 @@ deck's).
 Modes → draft-core kinds: **quick** (you + 7 bots, boosters from sets) and **cube** (you + 7 bots,
 boosters dealt from a cube list) → `DraftKind::Quick`; **sealed** (six boosters straight into your
 pool) → `DraftKind::Sealed`; **pod** (people from a lobby, bots filling the empty seats) →
-`DraftKind::Premier` with bot seats. Commander and Winston drafts are not offered yet.
+`DraftKind::Premier` with bot seats. Commander and Winston drafts: §4a.
 
 ### Wire (`crates/grimoire-play/src/draft/view.rs`, mirrored in `packages/ui/lib/ipc/draft.ts`)
 
