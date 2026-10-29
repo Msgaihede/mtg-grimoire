@@ -1,7 +1,7 @@
 {
   "name": "mtg-grimoire",
   "private": true,
-  "version": "0.62.0",
+  "version": "0.63.0",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "types": ".design-sync/dist/.design-sync/entry.d.ts",
@@ -40,6 +40,7 @@
     "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan -p grimoire-play -p grimoire-graph --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire -p grimoire-light --locked",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:durations": "vitest run --reporter=default --reporter=./scripts/vitest-durations.ts",
     "test:coverage": "vitest run --coverage --testTimeout=30000",
     "test:coverage:rust": "node scripts/coverage-rust.ts",
     "golden": "node scripts/golden.ts",

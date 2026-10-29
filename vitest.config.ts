@@ -1,5 +1,6 @@
-import { defineConfig, mergeConfig } from "vitest/config";
+import { configDefaults, defineConfig, mergeConfig } from "vitest/config";
 import base from "./vite.base.ts";
+import DurationSequencer from "./scripts/vitest-shard.ts";
 
 // The one test program: every package's tests, as one project per package, from the repository
 // root, over the plugins and the alias the apps build with. It lived in `vite.config.ts` until
@@ -11,10 +12,28 @@ import base from "./vite.base.ts";
  * root is not negotiable: thirty-eight `import.meta.glob` calls in the suite start their pattern
  * at `/`, which is the repository only while a project's root is.
  */
-const project = (name: string, include: string[]) => ({
+const project = (name: string, include: string[], exclude: string[] = []) => ({
   extends: true as const,
-  test: { name, include },
+  test: { name, include, exclude: [...configDefaults.exclude, ...exclude] },
 });
+
+/**
+ * **`packages/ui/stories.test.tsx`, collected four times** (2026-10-29), once per project, each
+ * told by `STORIES_PART` which quarter of the plays is its own. One file of ~1100 plays was 304 s
+ * of the suite's ~2450 s of file time, and a file is the smallest thing Vitest hands a worker or a
+ * `--shard`: every other shard could finish and CI still waited ~5.5 min on the one that held it.
+ * Four projects are four test files to the scheduler, so they run on four workers or four shards.
+ * The file keeps its name and its place, which twenty comments across the repository cite.
+ */
+const STORY_PARTS = 4;
+const storyParts = Array.from({ length: STORY_PARTS }, (_, i) => ({
+  extends: true as const,
+  test: {
+    name: `stories-${i + 1}`,
+    include: ["packages/ui/stories.test.tsx"],
+    env: { STORIES_PART: `${i + 1}/${STORY_PARTS}` },
+  },
+}));
 
 export default mergeConfig(
   base,
@@ -40,13 +59,8 @@ export default mergeConfig(
       // cost is the only thing this trades away: a test that genuinely hangs now reports in 15s
       // rather than 5s.
       testTimeout: 15_000,
-      // **One graphql-js, or none works.** graphql publishes a `development` build beside its
-      // production one and refuses a type made by the other ("Cannot use GraphQLObjectType …
-      // from another module or realm"). The suite's own files are resolved by Vite, which picks
-      // `development`; a dependency left external is resolved by Node, which does not — so
-      // `@pothos/core`, which builds the types `packages/ui/lib/graphql/` hands graphql, would
-      // load the other copy. Inlined, it is resolved by Vite like the code that calls it.
-      server: { deps: { inline: ["@pothos/core"] } },
+      // `--shard` packs by recorded duration, not by count — `scripts/vitest-shard.ts`.
+      sequence: { sequencer: DurationSequencer },
       // ⚠️ A folder no project's glob names is collected by **nothing**, and `vitest run <that
       // folder>` answers `No test files found` — which prints on stdout and is easy to read as a
       // pass.
@@ -63,7 +77,10 @@ export default mergeConfig(
         // shape — one collected file that owns the Storybook wiring (project annotations, the
         // fake-backend module mocks), rather than every story file inheriting a test runner's
         // environment.
-        project("ui", ["packages/ui/**/*.test.{ts,tsx}"]),
+        //
+        // Less `stories.test.tsx` itself, which `storyParts` collects in quarters.
+        project("ui", ["packages/ui/**/*.test.{ts,tsx}"], ["packages/ui/stories.test.tsx"]),
+        ...storyParts,
         // The Storybook fake, in scope so the fake backend is covered by the one suite `verify`
         // runs. It was `.storybook/fake/` until 2026-10-08, and the workbench's own glob below
         // is what collected it. What the narrower `.test.ts` rules out is a

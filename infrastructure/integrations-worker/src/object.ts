@@ -1,10 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./env";
+import type { Ack, Integration, Scope } from "./intents";
 import type { GroupSettings, Table } from "./projection";
 import {
   Store,
   type Answer,
+  type ConsumerCall,
   type Digests,
+  type PendingIntents,
   type SettingsAnswer,
   type StoreRpc,
   type Watermark,
@@ -17,7 +20,8 @@ import {
  * the Worker the suite cannot import (`cloudflare:workers` is the runtime's).
  *
  * **Reached over Workers RPC from this Worker's router and from nothing else**: no route names
- * an object, and no other script binds the namespace. Each method takes the group the router
+ * an object, and no other script binds the namespace — a consumer route reaches it with the
+ * consumer's token, which the object verifies itself (`store.ts`'s `consumer`). Each method takes the group the router
  * matched, which the store holds itself to (`#own`).
  */
 export class GroupStore extends DurableObject<Env> implements StoreRpc {
@@ -58,5 +62,38 @@ export class GroupStore extends DurableObject<Env> implements StoreRpc {
 
   deleteAll(): Promise<void> {
     return this.#store.deleteAll();
+  }
+
+  pendingIntents(group: string, since: number | null): Promise<PendingIntents | null> {
+    return this.#store.pendingIntents(group, since);
+  }
+
+  claimIntent(group: string, id: string, now: number): Promise<Answer> {
+    return this.#store.claimIntent(group, id, now);
+  }
+
+  ackIntent(group: string, id: string, ack: Ack, now: number): Promise<Answer> {
+    return this.#store.ackIntent(group, id, ack, now);
+  }
+
+  mintConsumer(
+    group: string,
+    integration: Integration,
+    grant: { scopes: Scope[]; days: number },
+    now: number,
+  ): Promise<Answer> {
+    return this.#store.mintConsumer(group, integration, grant, now);
+  }
+
+  listConsumers(group: string): Promise<Answer> {
+    return this.#store.listConsumers(group);
+  }
+
+  revokeConsumer(group: string, integration: Integration): Promise<void> {
+    return this.#store.revokeConsumer(group, integration);
+  }
+
+  consumer(group: string, token: string, call: ConsumerCall, now: number): Promise<Answer> {
+    return this.#store.consumer(group, token, call, now);
   }
 }

@@ -16,18 +16,27 @@
  * **What the reader may not see is not sent**: an opponent's hand and library are counts.
  *
  * **A web or phone host refuses all four** — they are on the desktop's `DESKTOP_ONLY` list, and
- * the light app draws no Playtesting.
+ * the light app draws no Playtesting — and so does every lobby game command below.
+ *
+ * **A lobby game** (issue #1419) is played on the host's app, in its one playtest slot: the host
+ * deals it (`lobbyGameStart`) and acts on it with the ordinary `playtestAct`, and each guest is
+ * sent only its own seat's step over the lobby the Draft & Packs pod meets in
+ * (`apps/desktop/src-tauri/src/playtest/lobby.rs`) and sends its actions back (`lobbyAct`).
  */
+import { core } from "@/lib/core";
+import type { DeckVariant } from "./decks";
 import type { GameCard, GamePlace, GameSeat, ManaTable, MulliganView, TokenOffer } from "./table";
-import { invoke } from "./invoke";
+import { invoke, type Unlisten } from "./invoke";
 
 /**
  * What the game waits on the reader for — the board's mode. `respond` is priority with something
  * to answer (the opponent's spell, combat after blocks, a step the reader asked to stop at);
- * `watching` appears only in a replay frame, while the game moves on by itself.
+ * `watching` appears only in a replay frame, while the game moves on by itself. `waiting` is a
+ * lobby game's (issue #1419): another person at the table is deciding, and the board shows the
+ * game — settled, not a replay — and offers nothing but the stops until they have.
  */
 export type PlaytestStage =
-  "mulligan" | "main" | "attack" | "block" | "respond" | "prompt" | "watching" | "over";
+  "mulligan" | "main" | "attack" | "block" | "respond" | "prompt" | "waiting" | "watching" | "over";
 
 /** Where the turn is, coarse. */
 export type PlaytestPhase = "beginning" | "main1" | "combat" | "main2" | "ending";
@@ -128,6 +137,17 @@ export interface PlaytestView {
   canUndo: boolean;
   /** An undone action can be taken again (`redo`). Never in a replay frame. */
   canRedo: boolean;
+  /**
+   * A game with other people at the table, over a lobby (issue #1419): the host's app plays it,
+   * and each person is sent their own seat's view. No undo, no redo and no sandbox — a step
+   * taken back would take back somebody else's turn too.
+   */
+  lobby: boolean;
+  /**
+   * In the `waiting` stage, the seat the game waits on — in this view's own naming, so a guest's
+   * `opponent` is whoever sits next after them. `null` in every other stage.
+   */
+  deciding: PlaytestPlayer | null;
 }
 
 /** A step to stop at, on whose turn: the reader's, or any opponent's. */
@@ -498,6 +518,39 @@ export interface UnsupportedCard {
   gaps: string[];
 }
 
+/**
+ * One opponent seat of a lobby game, in turn order after the host: a guest of the lobby (`peer`,
+ * the others `null`), who plays the deck they sent with `lobbyDeck`, or one of the host's own
+ * decks played by the AI (`deckId` and `variant`, `peer` `null`).
+ */
+export interface LobbyGameSeat {
+  peer: string | null;
+  deckId: number | null;
+  variant: DeckVariant | null;
+}
+
+/** What a guest of a lobby game is sent (`lobby:game`): its own seat's step, and the table. */
+export interface GuestGame {
+  /** From the guest's own seat: it is `you`, the others are its opponents in turn order after
+   *  it. `frames` is always empty — a replay is the host's board's alone. */
+  step: PlaytestStep;
+  /** The opponents' names in the order of the step's `view.opponents`: a person's lobby name,
+   *  or an AI seat's deck name. */
+  names: string[];
+  /** The guest's own deck's name. */
+  deck: string;
+  /** The first step of a deal (a fresh log); `false` for every later step, and a resend. */
+  dealt: boolean;
+}
+
+/** A step of the host's game that a guest's action moved (or the AI, in a guest's seat handed
+ *  to it), pushed to the host's board as `playtest:step`. `game` is the name the host dealt it
+ *  under. */
+export interface HostStep {
+  game: number;
+  step: PlaytestStep;
+}
+
 /** The playtest commands — spread into `ipc` by `../ipc.ts`. */
 export const playtestCommands = {
   /**
@@ -540,4 +593,37 @@ export const playtestCommands = {
    */
   playtestSupport: (deckId: number, variant: string) =>
     invoke<DeckSupport>("playtest_support", { deckId, variant }),
+
+  /**
+   * A guest's deck for the lobby game, sent to the host — again on every new pick. Answers the
+   * deck's name, which the host's room shows beside the guest (`LobbyPeer.deck`).
+   */
+  lobbyDeck: (deckId: number, variant: DeckVariant) =>
+    invoke<string>("lobby_deck", { deckId, variant }),
+  /**
+   * The host deals a lobby game: its own deck against `seats`, the opponents in turn order after
+   * it — one for a duel, three for a four-player game, at least one of them a guest who has sent a
+   * deck. Answers the host's step, as `playtestStart` does; the host then acts with `playtestAct`
+   * on `game` and puts it away with `playtestEnd`. `difficulty` is the AI seats'.
+   */
+  lobbyGameStart: (
+    game: number,
+    deckId: number,
+    variant: DeckVariant,
+    seats: LobbyGameSeat[],
+    difficulty: PlaytestDifficulty,
+    seed: number,
+  ) => invoke<PlaytestStep>("lobby_game_start", { game, deckId, variant, seats, difficulty, seed }),
+  /** A guest's action, sent to the host. The answer arrives as `lobby:game`; a refusal as
+   *  `lobby:refused`, in the engine's sentence. */
+  lobbyAct: (action: PlaytestAction) => invoke<void>("lobby_act", { action }),
+  /** A guest's step of the lobby game. */
+  onLobbyGame: (cb: (game: GuestGame) => void): Unlisten =>
+    core.listen<GuestGame>("lobby:game", cb),
+  /** The host refused a guest's action: one sentence. */
+  onLobbyRefused: (cb: (reason: string) => void): Unlisten =>
+    core.listen<string>("lobby:refused", cb),
+  /** The host's own game moved on a guest's action (or the AI's, in a guest's seat). */
+  onPlaytestStep: (cb: (step: HostStep) => void): Unlisten =>
+    core.listen<HostStep>("playtest:step", cb),
 };

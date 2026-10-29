@@ -339,7 +339,18 @@ describe("visiblePanels", () => {
    * label is in the haystack too, so "integration" lands with no keyword saying so.
    */
   it("finds the integrations switch by the words a reader would type", () => {
-    for (const query of ["discord", "mcp", "claude", "bot", "integration", "cloud server"]) {
+    for (const query of [
+      "discord",
+      "mcp",
+      "claude",
+      "bot",
+      "integration",
+      "cloud server",
+      // The local MCP server's part (issue #1395): the agents a reader sets up, and its address.
+      "ai agent",
+      "cursor",
+      "localhost",
+    ]) {
       expect(visiblePanels("updates", query)).toEqual(["integrations"]);
     }
   });

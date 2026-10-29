@@ -21,6 +21,7 @@ import {
   goldfishDead,
   goldfishOpeningHand,
   goldfishTurn,
+  lobbyWaiting,
   openingHand,
   respondStep,
   targetPrompt,
@@ -30,7 +31,7 @@ import {
 } from "./fixtures";
 import { useTableSoundsMuted } from "../sound/muted";
 import { useTableSoundsVolume } from "../sound/volume";
-import { PlaytestBoard, zoneSize } from "./PlaytestBoard";
+import { PlaytestBoard, zoneSize, type PlaytestBoardProps } from "./PlaytestBoard";
 
 // Spied, not replaced: the board's cards still register as they would, and the test can ask
 // which ones did.
@@ -53,6 +54,8 @@ function board(
     opponentNames = ["Boros Aggro"] as readonly string[],
     returnTo = undefined as "setup" | "deck" | undefined,
     initialPlaymat = undefined as Playmat | undefined,
+    handOver = undefined as PlaytestBoardProps["handOver"],
+    notice = undefined as string | null | undefined,
   } = {},
 ) {
   return (
@@ -71,6 +74,8 @@ function board(
         onSkip={handlers.onSkip}
         returnTo={returnTo}
         initialPlaymat={initialPlaymat}
+        handOver={handOver}
+        notice={notice}
       />
     </ContextMenuProvider>
   );
@@ -891,5 +896,61 @@ describe("PlaytestBoard's zone columns", () => {
     } finally {
       height.mockRestore();
     }
+  });
+});
+
+describe("PlaytestBoard in a lobby game", () => {
+  /** The opponent's turn of a lobby game, settled on the reader's priority: nothing waits. */
+  const lobbyTurn = (): PlaytestView => ({ ...turnFive().view, lobby: true });
+
+  it("says who the game waits on, offers nothing but the stops, and is no replay", () => {
+    const { onAct } = setup(lobbyWaiting().view, { opponentNames: ["Bea"] });
+    expect(screen.getByText("Waiting for Bea…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /To combat/ })).toBeNull();
+    expect(screen.queryByTestId("replay-shield")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Let the AI play/ })).toBeNull();
+    // A card in hand is not played, and Space presses nothing.
+    fireEvent.doubleClick(screen.getByRole("button", { name: /^Counterspell\. Drag to play/ }));
+    fireEvent.keyDown(window, { key: " " });
+    expect(onAct).not.toHaveBeenCalled();
+    // The stops are still the reader's to set.
+    fireEvent.click(screen.getByRole("button", { name: "Stops" }));
+    const theirsRow = screen.getByRole("group", { name: "Opponent's turn" });
+    fireEvent.click(within(theirsRow).getByRole("button", { name: "End" }));
+    expect(onAct).toHaveBeenLastCalledWith(expect.objectContaining({ type: "setStops" }));
+  });
+
+  it("offers the AI an offline guest's seat, on the host's board", () => {
+    const handOff = vi.fn();
+    const handOver = vi.fn((player: string) => (player === "opponent" ? handOff : null));
+    setup(lobbyWaiting().view, { opponentNames: ["Bea"], handOver });
+    fireEvent.click(screen.getByRole("button", { name: "Let the AI play Bea" }));
+    expect(handOver).toHaveBeenCalledWith("opponent");
+    expect(handOff).toHaveBeenCalled();
+  });
+
+  it("draws no sandbox chip, no undo, and no New game", async () => {
+    const { onAct } = setup(lobbyTurn());
+    expect(screen.queryByRole("button", { name: "Sandbox" })).toBeNull();
+    fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(onAct).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Game menu" }));
+    await screen.findByRole("menu");
+    const rows = screen.getAllByRole("menuitem").map((r) => r.textContent);
+    expect(rows).not.toContain("Undo");
+    expect(rows).not.toContain("New game");
+    expect(screen.queryByRole("menuitemradio", { name: "Sandbox" })).toBeNull();
+  });
+
+  it("ends with the way back and no new deal", () => {
+    setup({ ...gameOver().view, lobby: true });
+    const over = screen.getByRole("region", { name: "Game over" });
+    expect(within(over).queryByRole("button", { name: "New game" })).toBeNull();
+    expect(within(over).getByRole("button", { name: "Back to setup" })).toBeInTheDocument();
+  });
+
+  it("says what became of the lobby over the game", () => {
+    setup(lobbyTurn(), { notice: "The lobby closed: the host left." });
+    expect(screen.getByText("The lobby closed: the host left.")).toBeInTheDocument();
   });
 });

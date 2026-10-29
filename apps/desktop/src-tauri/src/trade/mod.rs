@@ -12,6 +12,8 @@
 
 pub use grimoire_core::trade::*;
 
+pub mod lobby;
+
 use crate::sync::{with_write, AppState};
 use std::sync::Arc;
 

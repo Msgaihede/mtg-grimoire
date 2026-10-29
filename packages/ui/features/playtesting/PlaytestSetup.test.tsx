@@ -2,12 +2,21 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeckFolder, DeckRow, DeckSupport } from "@/lib/ipc";
+import type { DeckFolder, DeckRow, DeckSupport, LobbyPeer, LobbyState } from "@/lib/ipc";
 
 const playtestSupport = vi.hoisted(() => vi.fn());
+// The lobby's commands (issue #1419), for the game lobby's panels.
+const lobbyIpc = vi.hoisted(() => ({
+  lobbyCreate: vi.fn(),
+  lobbyJoin: vi.fn(),
+  lobbyLeave: vi.fn(),
+  lobbyKick: vi.fn(),
+  lobbyDeck: vi.fn(),
+  syncSupporterStatus: vi.fn(),
+}));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { playtestSupport },
+  ipc: { playtestSupport, ...lobbyIpc },
 }));
 
 import { PlaytestSetup } from "./PlaytestSetup";
@@ -92,15 +101,16 @@ beforeEach(() => {
     .mockImplementation((deckId: number) => Promise.resolve(deckId === 1 ? PARTLY : WHOLE));
 });
 
-function setup(decks = DECKS, folders = FOLDERS) {
+function setup(decks = DECKS, folders = FOLDERS, lobby?: LobbyState | null) {
   const onStart = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  const ui = (state: LobbyState | null | undefined) => (
     <QueryClientProvider client={client}>
-      <PlaytestSetup decks={decks} folders={folders} onStart={onStart} />
-    </QueryClientProvider>,
+      <PlaytestSetup decks={decks} folders={folders} onStart={onStart} lobby={state} />
+    </QueryClientProvider>
   );
-  return { onStart };
+  const { rerender } = render(ui(lobby));
+  return { onStart, client, rerender: (state: LobbyState | null) => rerender(ui(state)) };
 }
 
 /** A deck's tile on the wall — named for its deck, where a seat is named for the seat. */
@@ -387,5 +397,176 @@ describe("PlaytestSetup", () => {
   it("asks for a deck when there is none", () => {
     setup([]);
     expect(screen.getByText(/needs a deck to play/)).toBeInTheDocument();
+  });
+});
+
+const guestPeer = (name: string, over: Partial<LobbyPeer> = {}): LobbyPeer => ({
+  peer: `p-${name}`,
+  name,
+  online: true,
+  deck: null,
+  ...over,
+});
+
+const hosting = (over: Partial<LobbyState> = {}): LobbyState => ({
+  role: "host",
+  kind: "game",
+  code: "K7QX2M",
+  phase: "open",
+  name: "Ada",
+  hostName: "Ada",
+  hostOnline: true,
+  peers: [],
+  label: "",
+  closedReason: null,
+  trade: null,
+  ...over,
+});
+
+const joined = (over: Partial<LobbyState> = {}): LobbyState =>
+  hosting({ role: "guest", name: "Bea", peers: [guestPeer("Bea")], ...over });
+
+describe("PlaytestSetup with friends", () => {
+  beforeEach(() => {
+    for (const fn of Object.values(lobbyIpc)) fn.mockReset();
+    lobbyIpc.syncSupporterStatus.mockResolvedValue({
+      entitled: true,
+      status: "active",
+      groupBound: false,
+    });
+    lobbyIpc.lobbyDeck.mockImplementation((deckId: number) =>
+      Promise.resolve(DECKS.find((d) => d.id === deckId)?.name ?? "Deck"),
+    );
+  });
+
+  it("offers a game lobby to a supporter, named, and opens it for a game", async () => {
+    lobbyIpc.lobbyCreate.mockResolvedValue(hosting());
+    const { client } = setup(DECKS, FOLDERS, null);
+    const friends = screen.getByRole("region", { name: "Play with friends" });
+    const create = within(friends).getByRole("button", { name: "Create lobby" });
+    expect(create).toHaveAttribute("aria-disabled", "true");
+    await userEvent.type(within(friends).getByLabelText("Your name at the table"), "Ada");
+    await waitFor(() => expect(create).toHaveAttribute("aria-disabled", "false"));
+    await userEvent.click(create);
+    expect(lobbyIpc.lobbyCreate).toHaveBeenCalledWith("Ada", "game");
+    await waitFor(() => expect(client.getQueryData(["draft", "lobby"])).toEqual(hosting()));
+  });
+
+  it("says hosting is a supporter's, and still joins with a code typed any way", async () => {
+    lobbyIpc.syncSupporterStatus.mockResolvedValue({
+      entitled: false,
+      status: "dead",
+      groupBound: false,
+    });
+    lobbyIpc.lobbyJoin.mockResolvedValue(joined());
+    setup(DECKS, FOLDERS, null);
+    const friends = screen.getByRole("region", { name: "Play with friends" });
+    expect(
+      await within(friends).findByText("Hosting a game is for supporters; anybody can join one."),
+    ).toBeInTheDocument();
+    await userEvent.type(within(friends).getByLabelText("Your name at the table"), "Bea");
+    await userEvent.type(within(friends).getByLabelText("Join with a code"), "k7q x2m");
+    await userEvent.click(within(friends).getByRole("button", { name: "Join" }));
+    expect(lobbyIpc.lobbyJoin).toHaveBeenCalledWith("K7QX2M", "Bea");
+  });
+
+  it("seats a guest after the host, and starts once both have a deck", async () => {
+    const { onStart, rerender } = setup(DECKS, FOLDERS, hosting());
+    expect(screen.getByRole("complementary", { name: "Game lobby" })).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "Lobby code" })).toHaveTextContent("K7QX2M");
+    expect(
+      screen.getByText("Share the code: a game needs someone to join it."),
+    ).toBeInTheDocument();
+    await userEvent.click(tile("Simic Tempo"));
+    rerender(hosting({ peers: [guestPeer("Bea")] }));
+    expect(screen.getByText("Picking a deck…")).toBeInTheDocument();
+    expect(screen.getByText("Waiting for Bea to pick a deck.")).toBeInTheDocument();
+    expect(start()).toHaveAttribute("aria-disabled", "true");
+    rerender(hosting({ peers: [guestPeer("Bea", { deck: "Mono Red" })] }));
+    expect(screen.getByText("Mono Red")).toBeInTheDocument();
+    expect(start()).toHaveAttribute("aria-disabled", "false");
+    fireEvent.click(start());
+    expect(onStart).toHaveBeenCalledWith({
+      deckId: 1,
+      variant: "theory",
+      opponents: [],
+      difficulty: "medium",
+      lobby: {
+        seats: [{ peer: "p-Bea", deckId: null, variant: null }],
+        names: ["Bea"],
+      },
+    });
+  });
+
+  it("fills a four-player table's empty seats with the AI's decks from the wall", async () => {
+    const { onStart } = setup(
+      DECKS,
+      FOLDERS,
+      hosting({ peers: [guestPeer("Bea", { deck: "Mono Red" })] }),
+    );
+    const table = screen.getByRole("group", { name: "Table" });
+    expect(within(table).queryByRole("button", { name: /^Goldfish/ })).toBeNull();
+    await userEvent.click(within(table).getByRole("button", { name: /^Four-player/ }));
+    await userEvent.click(tile("Simic Tempo"));
+    expect(pickingFor()).toBe("Picking for Opponent 2 · AI");
+    await userEvent.click(tile("Boros Aggro"));
+    expect(screen.getByText("Pick a deck for Opponent 3 to start.")).toBeInTheDocument();
+    await userEvent.click(tile("Boros Aggro"));
+    expect(screen.getByRole("group", { name: "AI skill" })).toBeInTheDocument();
+    fireEvent.click(start());
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lobby: {
+          seats: [
+            { peer: "p-Bea", deckId: null, variant: null },
+            { peer: null, deckId: 2, variant: "live" },
+            { peer: null, deckId: 2, variant: "live" },
+          ],
+          names: ["Bea", "Boros Aggro", "Boros Aggro"],
+        },
+      }),
+    );
+  });
+
+  it("kicks a guest from their seat", async () => {
+    lobbyIpc.lobbyKick.mockResolvedValue(undefined);
+    setup(DECKS, FOLDERS, hosting({ peers: [guestPeer("Bea")] }));
+    await userEvent.click(screen.getByRole("button", { name: "Kick Bea" }));
+    expect(lobbyIpc.lobbyKick).toHaveBeenCalledWith("p-Bea");
+  });
+
+  it("sends a guest's deck to the host on each pick, and waits for the host's Start", async () => {
+    setup(DECKS, FOLDERS, joined());
+    expect(
+      screen.getByRole("heading", { name: "Lobby K7QX2M — hosted by Ada" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Waiting for Ada to start the game.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start game" })).toBeNull();
+    expect(screen.getByText("Pick the deck you bring to the table.")).toBeInTheDocument();
+    await userEvent.click(tile("Boros Aggro"));
+    expect(lobbyIpc.lobbyDeck).toHaveBeenLastCalledWith(2, "live");
+    expect(await screen.findByText("Ada has your deck: Boros Aggro.")).toBeInTheDocument();
+    await userEvent.click(seat("You"));
+    await userEvent.click(tile("Simic Tempo"));
+    expect(lobbyIpc.lobbyDeck).toHaveBeenLastCalledWith(1, "theory");
+    expect(await screen.findByText("Ada has your deck: Simic Tempo.")).toBeInTheDocument();
+  });
+
+  it("sends nothing while connecting, and names a draft's lobby as Draft & Packs'", async () => {
+    const { rerender } = setup(DECKS, FOLDERS, joined({ phase: "connecting", kind: null }));
+    expect(screen.getByText("Connecting to the lobby…")).toBeInTheDocument();
+    await userEvent.click(tile("Boros Aggro"));
+    expect(lobbyIpc.lobbyDeck).not.toHaveBeenCalled();
+    rerender(joined({ kind: "draft" }));
+    expect(
+      screen.getByText("That code is a draft’s lobby — join it from Draft & Packs."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Leave lobby" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Game setup" })).toBeInTheDocument();
+  });
+
+  it("says why the last game lobby closed", () => {
+    setup(DECKS, FOLDERS, hosting({ phase: "closed", closedReason: "The lobby expired." }));
+    expect(screen.getByText("The lobby K7QX2M closed: The lobby expired.")).toBeInTheDocument();
   });
 });

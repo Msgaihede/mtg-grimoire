@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { Plus } from "lucide-react";
+import { Globe, Plus } from "lucide-react";
 import { PageBar } from "@/components/PageBar";
+import { isLive, useLobbyState } from "@/features/draft/lobby/useLobby";
 import { ipcError } from "@/lib/ipc";
 import type { Trade, TradeSummary } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { NewTradeDialog } from "./NewTradeDialog";
-import { TRADE_BUTTON_ACCENT } from "./tradeControls";
+import { MisplacedLobby, TradeLobbyBand } from "./lobby/TradeLobbyBand";
+import { TradeLobbyDialog } from "./lobby/TradeLobbyDialog";
+import { useLobbiesHere, useSendOffer, useTradeLobby } from "./lobby/useTradeLobby";
+import { TRADE_BUTTON, TRADE_BUTTON_ACCENT } from "./tradeControls";
 import { TradesPane } from "./TradesPane";
 import { TradeView } from "./TradeView";
 import { defaultTradeId, nextTradeName } from "./tradeWords";
@@ -79,6 +83,15 @@ interface Departed {
  * button for the pane's. **A delete** lands on New trade, whichever of the two is drawn
  * afterwards: `newRef` is on both, so it is read after the render that decided, never in the
  * handler.
+ *
+ * ## Trading online
+ *
+ * Where this window has lobbies (`useLobbiesHere`), **Trade online** opens one for a trade with
+ * another reader (`lobby/`): a new trade of the reader's own is its copy of the one they build
+ * together, the page shows it, and the lobby's band sits above whichever trade is on screen. This
+ * page sends the reader's side whenever it may have moved (`useSendOffer`), and opens Finish trade
+ * on the lobby's trade the moment both readers have accepted — once, on the change to agreed, so a
+ * reader who closed it is not asked again on every visit.
  */
 export function TradePage(): JSX.Element {
   const list = useTradeList();
@@ -96,6 +109,22 @@ export function TradePage(): JSX.Element {
   const [newFocus, setNewFocus] = useState(0);
   /** Whichever New trade button is drawn — the pane's, or the empty state's. */
   const newRef = useRef<HTMLButtonElement>(null);
+  /** The Trade online dialog. */
+  const [online, setOnline] = useState(false);
+  const lobbiesHere = useLobbiesHere();
+  const anyLobby = useLobbyState();
+  const tradeLobby = useTradeLobby();
+  const lobbyTradeId = tradeLobby?.trade.tradeId ?? null;
+  /** Finish trade is owed to the lobby's trade (`TradeView`'s `askFinish`), until it opens. */
+  const [finishAsked, setFinishAsked] = useState(false);
+  /** A code joined from here that turned out to be a pod's or a game's lobby. */
+  const misplaced =
+    isLive(anyLobby) &&
+    anyLobby.trade !== null &&
+    anyLobby.kind !== null &&
+    anyLobby.kind !== "trade"
+      ? anyLobby.kind
+      : null;
 
   const trades = useMemo(() => {
     const all = list.data ?? NO_TRADES;
@@ -143,6 +172,21 @@ export function TradePage(): JSX.Element {
         : trade.data;
   if (answered !== undefined && answered !== held) setHeld(answered);
   const shown = answered === undefined ? held : answered;
+
+  const sendFailure = useSendOffer(tradeLobby, shown);
+
+  // Both readers have accepted: the lobby's trade, shown, with Finish trade open on it — once, on
+  // the change, and not for a lobby that was already agreed when the page was drawn.
+  const phase = tradeLobby?.phase ?? null;
+  const lastPhase = useRef(phase);
+  useEffect(() => {
+    const was = lastPhase.current;
+    lastPhase.current = phase;
+    if (phase === "agreed" && was !== null && was !== "agreed" && lobbyTradeId !== null) {
+      setPicked(lobbyTradeId);
+      setFinishAsked(true);
+    }
+  }, [phase, lobbyTradeId]);
 
   // After the render that decided which New trade button there is: the last trade's delete takes
   // the pane's away and puts the empty state's up, and a caret handed to the first in the handler
@@ -194,6 +238,22 @@ export function TradePage(): JSX.Element {
       ) : (
         <PageBar title="Trade" titleAs="div" />
       )}
+      {tradeLobby !== null && (
+        <TradeLobbyBand
+          lobby={tradeLobby}
+          showing={shown !== null && shown.id === lobbyTradeId}
+          onShow={() => {
+            if (lobbyTradeId !== null) setPicked(lobbyTradeId);
+          }}
+          onFinish={() => {
+            if (lobbyTradeId === null) return;
+            setPicked(lobbyTradeId);
+            setFinishAsked(true);
+          }}
+          sendFailure={sendFailure}
+        />
+      )}
+      {misplaced !== null && <MisplacedLobby kind={misplaced} />}
       <div className="flex min-h-0 flex-1 gap-5">
         {trades.length > 0 && (
           <TradesPane
@@ -207,6 +267,7 @@ export function TradePage(): JSX.Element {
             }}
             onNew={() => setCreating(true)}
             newRef={newRef}
+            onOnline={lobbiesHere ? () => setOnline(true) : undefined}
           />
         )}
         {shown !== null && (
@@ -224,6 +285,8 @@ export function TradePage(): JSX.Element {
             }}
             barSlot={barSlot}
             landOn={pageRef}
+            askFinish={finishAsked && shown.id === lobbyTradeId}
+            onFinishAsked={() => setFinishAsked(false)}
           />
         )}
         {/* **Always mounted, and swapped into**: a live region that arrived together with its own
@@ -242,8 +305,8 @@ export function TradePage(): JSX.Element {
               <>
                 <p className="font-heading text-xl font-semibold">No trades yet</p>
                 <p className="text-sm leading-relaxed text-dim">
-                  A trade is two piles of cards and the difference between them. Put what you give on
-                  one side and what they give on the other, and the page keeps the balance in the
+                  A trade is two piles of cards and the difference between them. Put what you give
+                  on one side and what they give on the other, and the page keeps the balance in the
                   prices you choose.
                 </p>
                 <button
@@ -255,6 +318,12 @@ export function TradePage(): JSX.Element {
                   <Plus className="size-4" aria-hidden="true" />
                   New trade
                 </button>
+                {lobbiesHere && (
+                  <button type="button" onClick={() => setOnline(true)} className={TRADE_BUTTON}>
+                    <Globe className="size-4" aria-hidden="true" />
+                    Trade online
+                  </button>
+                )}
               </>
             )}
           </div>
@@ -273,6 +342,17 @@ export function TradePage(): JSX.Element {
         }}
         onClose={() => setCreating(false)}
       />
+      {lobbiesHere && (
+        <TradeLobbyDialog
+          open={online}
+          onOpened={(id) => {
+            open(id);
+            setOnline(false);
+          }}
+          onDismiss={() => setOnline(false)}
+          onClose={() => setOnline(false)}
+        />
+      )}
     </section>
   );
 }

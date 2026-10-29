@@ -83,6 +83,12 @@ import shareRsDesktop from "../../../apps/desktop/src-tauri/src/share/commands.r
 // that obeys it, and the panel's status beside the switch's commands.
 import integrationProjectionRs from "../../../crates/grimoire-core/src/integration/projection.rs?raw";
 import integrationSettingsRs from "../../../crates/grimoire-core/src/integration/settings.rs?raw";
+// The local MCP server (issues #1395 and #1396, PR 1): the desktop's own module — a socket on the
+// reader's computer, not the engine's, so it is in `src-tauri` alone.
+import mcpRs from "../../../apps/desktop/src-tauri/src/mcp/mod.rs?raw";
+// PR 3's review list (plan `2026-10-29-integrations-intents.md` §3.5): the parked intents and the
+// device's policy, beside the four commands that answer them.
+import integrationReviewRs from "../../../crates/grimoire-core/src/integration/review.rs?raw";
 import panelwidthRsCore from "../../../crates/grimoire-core/src/panelwidth.rs?raw";
 import panelwidthRsDesktop from "../../../apps/desktop/src-tauri/src/panelwidth/mod.rs?raw";
 import shelffoldsRsCore from "../../../crates/grimoire-core/src/shelffolds.rs?raw";
@@ -97,6 +103,10 @@ import tableViewRs from "../../../crates/grimoire-play/src/view.rs?raw";
 // and facts of its wire.
 import playtestRs from "../../../apps/desktop/src-tauri/src/playtest/mod.rs?raw";
 import playtestViewRs from "../../../crates/grimoire-play/src/playtest/view.rs?raw";
+// The lobby a pod drafts in and a game is played over (issue #1419): its commands, the game's
+// among them, and the events a game's lobby pushes.
+import draftLobbyRs from "../../../apps/desktop/src-tauri/src/draft/lobby.rs?raw";
+import playtestLobbyRs from "../../../apps/desktop/src-tauri/src/playtest/lobby.rs?raw";
 import startupRs from "../../../apps/desktop/src-tauri/src/startup.rs?raw";
 import startviewRsCore from "../../../crates/grimoire-core/src/startview.rs?raw";
 import startviewRsDesktop from "../../../apps/desktop/src-tauri/src/startview/mod.rs?raw";
@@ -161,6 +171,7 @@ import {
   type DeckTokenRow,
   type FeedProgressEvent,
   type FolderRule,
+  type McpStatus,
   type OracleTagProgressEvent,
   type RelayOutcome,
   type ScannerSubmission,
@@ -1027,6 +1038,106 @@ describe("ipc argument names match the Rust command signatures", () => {
       const union = ipcSource.slice(ipcSource.indexOf(`export type ${ts} =`));
       const words = [...union.slice(0, union.indexOf(";\n")).matchAll(/"(\w+)"/g)].map((m) => m[1]);
       expect(words, ts).toEqual(rustVariants(tableViewRs, rust));
+    }
+  });
+
+  /**
+   * A game over a lobby (issue #1419): the lobby is created for its kind, a guest sends its deck
+   * and its actions, and the host deals from seats. The commands are the draft lobby's file's;
+   * the events are emitted under the names `ipc.ts` listens on.
+   */
+  it("sends a lobby game's commands under the names their commands declare", async () => {
+    expect(draftLobbyRs.length, "draft/lobby.rs was not read").toBeGreaterThan(1_000);
+    expect(playtestLobbyRs.length, "playtest/lobby.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue({});
+    await ipc.lobbyCreate("Ada", "game");
+    expect(invoke).toHaveBeenLastCalledWith("lobby_create", { name: "Ada", kind: "game" });
+    invoke.mockResolvedValue("Mono Red");
+    await ipc.lobbyDeck(4, "theory");
+    expect(invoke).toHaveBeenLastCalledWith("lobby_deck", { deckId: 4, variant: "theory" });
+    invoke.mockResolvedValue(undefined);
+    await ipc.lobbyAct({ type: "pass" });
+    expect(invoke).toHaveBeenLastCalledWith("lobby_act", { action: { type: "pass" } });
+    const seats = [
+      { peer: "p1", deckId: null, variant: null },
+      { peer: null, deckId: 9, variant: "live" as const },
+    ];
+    invoke.mockResolvedValue({});
+    await ipc.lobbyGameStart(21, 4, "live", seats, "hard", 99);
+    expect(invoke).toHaveBeenLastCalledWith("lobby_game_start", {
+      game: 21,
+      deckId: 4,
+      variant: "live",
+      seats,
+      difficulty: "hard",
+      seed: 99,
+    });
+
+    const declares = (command: string, param: string) =>
+      expect(draftLobbyRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares("lobby_create", "name");
+    declares("lobby_create", "kind");
+    declares("lobby_deck", "deck_id");
+    declares("lobby_deck", "variant");
+    declares("lobby_act", "action");
+    for (const param of ["game", "deck_id", "variant", "seats", "difficulty", "seed"]) {
+      declares("lobby_game_start", param);
+    }
+    for (const registered of [
+      "draft::lobby::lobby_create,",
+      "draft::lobby::lobby_deck,",
+      "draft::lobby::lobby_act,",
+      "draft::lobby::lobby_game_start,",
+    ]) {
+      expect(desktopRs).toContain(registered);
+    }
+    // The events `onLobbyGame`, `onLobbyRefused` and `onPlaytestStep` listen on.
+    expect(draftLobbyRs).toContain('emit("lobby:game"');
+    expect(draftLobbyRs).toContain('emit("lobby:refused"');
+    expect(playtestLobbyRs).toContain('emit("playtest:step"');
+  });
+
+  /**
+   * A trade over a lobby: the lobby is created and joined with the reader's own copy of the
+   * trade, and the offer and the acceptance are the draft lobby's file's two trade commands.
+   */
+  it("sends a trade lobby's commands under the names their commands declare", async () => {
+    invoke.mockResolvedValue({});
+    await ipc.lobbyCreate("Ada", "trade", 7);
+    expect(invoke).toHaveBeenLastCalledWith("lobby_create", {
+      name: "Ada",
+      kind: "trade",
+      trade: 7,
+    });
+    await ipc.lobbyJoin("K7QX2M", "Bo", 8);
+    expect(invoke).toHaveBeenLastCalledWith("lobby_join", { code: "K7QX2M", name: "Bo", trade: 8 });
+    await ipc.lobbyJoin("K7QX2M", "Bo");
+    expect(invoke).toHaveBeenLastCalledWith("lobby_join", { code: "K7QX2M", name: "Bo" });
+    invoke.mockResolvedValue(undefined);
+    await ipc.lobbyTradeOffer();
+    expect(invoke).toHaveBeenLastCalledWith("lobby_trade_offer");
+    await ipc.lobbyTradeAccept(3, true);
+    expect(invoke).toHaveBeenLastCalledWith("lobby_trade_accept", { rev: 3, accept: true });
+
+    const declares = (command: string, param: string) =>
+      expect(draftLobbyRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares("lobby_create", "trade");
+    declares("lobby_join", "code");
+    declares("lobby_join", "name");
+    declares("lobby_join", "trade");
+    declares("lobby_trade_accept", "rev");
+    declares("lobby_trade_accept", "accept");
+    for (const registered of [
+      "draft::lobby::lobby_join,",
+      "draft::lobby::lobby_trade_offer,",
+      "draft::lobby::lobby_trade_accept,",
+    ]) {
+      expect(desktopRs).toContain(registered);
     }
   });
 
@@ -5614,6 +5725,170 @@ describe("the integrations wrappers name the commands plan §3.3 declares", () =
 });
 
 /**
+ * The local MCP server's five commands (issues #1395 and #1396, PR 1) — desktop-only, and every
+ * one answers a fresh {@link McpStatus}.
+ *
+ * Four take no arguments, `sticky_notes`' trap: an argument object sent to a command that
+ * declares none is a deserialisation error and not a type error. `mcp_set_port` takes one, and
+ * `port` under that name is the case worth writing down — `invoke` matches by name, and a wrapper
+ * that sent `{ value }` would type-check and be refused with a sentence about a missing field.
+ *
+ * **The parameters are read off the crate, found by search** (the entry tags' way): whichever
+ * file under `src-tauri/src/mcp/` declares a command, it must be declared exactly once and with
+ * exactly the parameters the wrapper sends — the managed state and the app handle aside, which
+ * Tauri injects and no caller names. `port` is held to `u16` too, because that is what the panel's
+ * 1024–65535 check is the lower half of: a wider type would accept a port the panel refuses.
+ */
+describe("the local MCP server's wrappers name the commands mcp/mod.rs declares", () => {
+  const status: McpStatus = {
+    enabled: true,
+    running: true,
+    port: 39147,
+    url: "http://127.0.0.1:39147/mcp",
+    token: "ab".repeat(32),
+    error: null,
+  };
+
+  it.each([
+    ["mcpStatus", "mcp_status"],
+    ["mcpEnable", "mcp_enable"],
+    ["mcpDisable", "mcp_disable"],
+    ["mcpRotateToken", "mcp_rotate_token"],
+  ] as const)("%s takes no arguments", async (method, command) => {
+    invoke.mockResolvedValue(status);
+
+    // The answer is handed back whole: the panel writes it straight into its cache.
+    expect(await ipc[method]()).toEqual(status);
+    expect(invoke).toHaveBeenCalledWith(command);
+  });
+
+  it("mcpSetPort sends the port under `port`", async () => {
+    invoke.mockResolvedValue({ ...status, port: 40000, url: "http://127.0.0.1:40000/mcp" });
+
+    await ipc.mcpSetPort(40000);
+
+    expect(invoke).toHaveBeenCalledWith("mcp_set_port", { port: 40000 });
+  });
+
+  const MCP_SOURCES = import.meta.glob<string>(
+    ["/apps/desktop/src-tauri/src/mcp/**/*.rs", "!/apps/desktop/src-tauri/src/mcp/**/*tests.rs"],
+    { query: "?raw", import: "default", eager: true },
+  );
+
+  /**
+   * `name: type` for each parameter of the one `#[tauri::command]` called `command` under `mcp/`,
+   * less what Tauri injects. Depth-counted from the `(` to its match, so a `State<'_, Mutex<…>>`
+   * with commas of its own is one parameter.
+   */
+  const declared = (command: string): [name: string, type: string][] => {
+    const commandAt = new RegExp(`#\\[tauri::command[^\\]]*\\]\\s*pub (?:async )?fn ${command}\\(`);
+    const homes = Object.entries(MCP_SOURCES).flatMap(([path, src]) => {
+      const m = commandAt.exec(src);
+      return m === null ? [] : [[path, src.slice(m.index + m[0].length)] as const];
+    });
+    expect(
+      homes.map(([path]) => path),
+      `\`${command}\` should be one \`#[tauri::command]\` under src-tauri/src/mcp/`,
+    ).toHaveLength(1);
+    const rest = homes[0][1];
+    const params: string[] = [];
+    let depth = 0;
+    let from = 0;
+    for (let i = 0; i < rest.length; i += 1) {
+      const c = rest[i];
+      if (c === "(" || c === "<" || c === "[") depth += 1;
+      else if ((c === ">" && rest[i - 1] !== "-") || c === "]") depth -= 1;
+      else if (c === ")") {
+        if (depth === 0) {
+          params.push(rest.slice(from, i));
+          break;
+        }
+        depth -= 1;
+      } else if (c === "," && depth === 0) {
+        params.push(rest.slice(from, i));
+        from = i + 1;
+      }
+    }
+    return (
+      params
+        .map((p) => p.trim())
+        .filter((p) => p !== "")
+        .map((p) => {
+          const at = p.search(/:(?!:)/);
+          return [
+            p
+              .slice(0, at)
+              .replace(/^mut\s+/, "")
+              .trim(),
+            p.slice(at + 1).trim(),
+          ] as [string, string];
+        })
+        // `State` at the end of a name, not a word: the module's `SlotState<'_>` is an alias of
+        // `tauri::State`, injected like it.
+        .filter(([, type]) => !/(State|AppHandle|Window|Webview)\b/.test(type))
+    );
+  };
+
+  it.each(["mcp_status", "mcp_enable", "mcp_disable", "mcp_rotate_token"])(
+    "%s declares no parameter a caller names",
+    (command) => {
+      expect(
+        Object.keys(MCP_SOURCES).length,
+        "nothing read under src-tauri/src/mcp/",
+      ).toBeGreaterThan(0);
+      expect(declared(command)).toEqual([]);
+    },
+  );
+
+  it("mcp_set_port declares `port: u16` and nothing else a caller names", () => {
+    expect(
+      Object.keys(MCP_SOURCES).length,
+      "nothing read under src-tauri/src/mcp/",
+    ).toBeGreaterThan(0);
+    expect(declared("mcp_set_port")).toEqual([["port", "u16"]]);
+  });
+});
+
+/**
+ * The review list's four commands (issue #1396, plan `2026-10-29-integrations-intents.md` §3.5).
+ *
+ * Arguments by their Rust names, for the switch's reason above: `invoke` drops a misspelt key,
+ * and `integrations_set_automatic` with its `on` dropped would be refused as a missing argument at
+ * best. `source` and `kind` are sent **different**, so two passed through each other's names show.
+ */
+describe("the review wrappers name the commands plan §3.5 declares", () => {
+  const review = {
+    intents: [],
+    automatic: [{ source: "mcp", kind: "wishlist.add", on: false, fixed: false }],
+  };
+
+  it("integrationsReview takes no arguments", async () => {
+    invoke.mockResolvedValue(review);
+    expect(await ipc.integrationsReview()).toEqual(review);
+    expect(invoke).toHaveBeenCalledWith("integrations_review");
+  });
+
+  it.each([
+    ["integrationsReviewApply", "integrations_review_apply"],
+    ["integrationsReviewDecline", "integrations_review_decline"],
+  ] as const)("%s sends the intent under `id`", async (method, command) => {
+    invoke.mockResolvedValue(review);
+    expect(await ipc[method]("AAAAAAAAAAAAAAAAAAAAAA")).toEqual(review);
+    expect(invoke).toHaveBeenCalledWith(command, { id: "AAAAAAAAAAAAAAAAAAAAAA" });
+  });
+
+  it("integrationsSetAutomatic sends `source`, `kind` and `on`", async () => {
+    invoke.mockResolvedValue(review);
+    await ipc.integrationsSetAutomatic("mcp", "wishlist.add", true);
+    expect(invoke).toHaveBeenCalledWith("integrations_set_automatic", {
+      source: "mcp",
+      kind: "wishlist.add",
+      on: true,
+    });
+  });
+});
+
+/**
  * Pairing's commands — spec §7.5 and §7.6.
  *
  * **The number is deliberately not written down.** This line said *eight* while `desktop.rs`
@@ -6388,6 +6663,21 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // already there. A renamed `available` or `entitled` disables the switch for every reader.
     ["IntegrationFields", integrationProjectionRs, "IntegrationFields"],
     ["IntegrationsStatus", integrationSettingsRs, "IntegrationsStatus"],
+    // **The local MCP server's one** (issues #1395 and #1396, PR 1), pinned to its module for the
+    // pair above's reason. Every field is a control or the thing a reader copies: a renamed
+    // `enabled` draws the switch Off over a server that is listening, and the press that follows
+    // asks to start one already started; a renamed `running` is falsy, so a healthy server reads
+    // as enabled-but-not-running and its line goes blank; and a renamed `url` or `token` puts
+    // `undefined` into every client snippet the panel offers — copied, pasted into an agent's
+    // config, and refused there with nothing in this app to say why.
+    ["McpStatus", mcpRs, "McpStatus"],
+    // **The review list's three** (plan `2026-10-29-integrations-intents.md` §3.5). A renamed
+    // `intents` reads `undefined` and the list draws *nothing waiting* over intents the store
+    // holds; a renamed `fixed` is falsy, and Discord's rows draw as switches the reader can turn
+    // off, whose press the engine then refuses; a renamed `createdAt` is `NaN` in every row's age.
+    ["IntentReview", integrationReviewRs, "IntentReview"],
+    ["ParkedIntent", integrationReviewRs, "ParkedIntent"],
+    ["IntentAutomatic", integrationReviewRs, "IntentAutomatic"],
     // Added 2026-09-08 by a rename that this table would have caught and nothing else could.
     // `missing` became `copies` on both sides by hand when the wishlist stopped subtracting the
     // collection, and a rename reaching only one of them is the quiet kind: every folder card

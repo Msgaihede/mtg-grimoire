@@ -37,6 +37,9 @@ const ENTRY = {
 
 type H = ReturnType<typeof harness>;
 
+/** What a store's object holds once made: the projection's three tables and the inbox's three. */
+const STORE_TABLES = ["consumers", "intent_days", "intents", "meta", "rows", "tables"];
+
 /** The object's tables and rows, read past the store. */
 function objectOf(h: H, group = "g1") {
   const db = h.stores.objectOf(group).storage.db;
@@ -93,7 +96,7 @@ describe("PUT /g/{group}/settings", () => {
       marketplace: "cardmarket",
       created: true,
     });
-    expect(objectOf(h).tables()).toEqual(["meta", "rows", "tables"]);
+    expect(objectOf(h).tables()).toEqual(STORE_TABLES);
     expect(groupRows(h)).toEqual([{ group_id: "g1" }]);
 
     const listed = await digests(h);
@@ -867,7 +870,7 @@ describe("DELETE /g/{group}", () => {
     await putSettings(h.fetch, ALL_OFF, "g1");
     await putSettings(h.fetch, ALL_OFF, "g2");
     await h.fetch(request("DELETE", "/g/g1", { bearer: await token() }));
-    expect(objectOf(h, "g2").tables()).toEqual(["meta", "rows", "tables"]);
+    expect(objectOf(h, "g2").tables()).toEqual(STORE_TABLES);
     expect(groupRows(h)).toEqual([{ group_id: "g2" }]);
   });
 
@@ -905,7 +908,7 @@ describe("DELETE /g/{group}", () => {
     ]);
     expect([on.status, off.status]).toEqual([200, 204]);
     expect(((await on.json()) as { created: boolean }).created).toBe(true);
-    expect(objectOf(h).tables()).toEqual(["meta", "rows", "tables"]);
+    expect(objectOf(h).tables()).toEqual(STORE_TABLES);
     expect(groupRows(h)).toEqual([{ group_id: "g1" }]);
 
     // And so the store is the lapse pass's to empty, once the membership ends.

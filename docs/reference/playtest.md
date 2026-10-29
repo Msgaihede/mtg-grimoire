@@ -17,6 +17,7 @@ folded in 2026-10-17. The owner's choices that shape it:
 | The sandbox              | A setting (2026-10-17): off by default against the AI, on against the goldfish. On, it edits every card the table shows, in the main phase |
 | Where a game starts      | The Playtesting page: your deck, who it plays (any of your own decks, or the goldfish), a difficulty; or the deck editor's goldfish button |
 | How many opponents       | The goldfish, one, or three for a four-player game (issue #994): one player against three AI seats                                         |
+| Playing with people      | A supporter's lobby, joined by code (issue #1419): guests bring their own decks and take opponents' seats; the host's app runs the game    |
 | Priority                 | Arena-style auto-pass: the reader decides only in their main phases, in combat, and when the engine asks                                   |
 
 The engine, the nightly pin, the 16 MiB stack, the hybrid model of rules and sandbox, the goldfish
@@ -35,6 +36,7 @@ as an opponent (its emblems, its library, `deadOn`), the table's shared pieces a
 - [The commands and the wire](#the-commands-and-the-wire)
 - [The setup page](#the-setup-page)
 - [The board](#the-board)
+- [Lobbies: playing with people (issue #1419)](#lobbies-playing-with-people-issue-1419)
 - [What is not there yet](#what-is-not-there-yet)
 
 ## The AI
@@ -910,6 +912,74 @@ it; moving the slider while muted unmutes. The synth plays it as one gain after 
 the level's square (loudness as heard), eased over 15 ms so a drag never clicks. The speaker shows
 a low-volume glyph under 50 and is crossed out at 0.
 
+## Lobbies: playing with people (issue #1419)
+
+Built 2026-10-29: a host creates a lobby on the Playtesting page and reads out its code; others
+join with the code, each picks a deck of their own, and the host starts a game they all play. It is
+**the draft's pod lobby, reused whole** (`apps/desktop/src-tauri/src/draft/lobby.rs`, the relay's
+`Lobby` object, [draft-and-packs.md](draft-and-packs.md#pods-and-lobby-codes)): the same code
+alphabet, socket, roster, rejoin and close codes. What a lobby seats is its `LobbyKind` — `draft`
+or `game` — told to the guests in the room. **Creating one is a supporter's, joining is anybody's**,
+by the same check `lobby_create` makes for a pod (`entitled`, then the relay's token).
+
+**The host's app runs the one game**, in the playtest slot, exactly as it runs a game against the
+AI. phase.rs's engine is multiplayer by construction — every action names its player
+(`apply(state, player, action)`) and `authorized_submitters` says who may act — so the session
+needed no second game, only **a chair** (`Playtest::you`, `sit`): the seat the session decides for
+and reads the table as. It is the reader's at rest; a guest's while their action is made, and while
+`advance` plays on to their decision with their own stops. Everything that was "the reader's" —
+the stage, the prompt, the stops, a cast half made, the board's question, the mulligans, the
+deck's tokens — is the chair's, and each other person's waits in their `Chair` until they sit.
+
+- **Seats.** An opponent may be a person (`OpponentDeck::person`). The host is `PlayerId(0)`, the
+  opponents in turn order after it, as in any game; an AI seat is still phase-ai's and an empty
+  list still the goldfish (a lobby's game never is).
+- **Eyes.** Each view is from one seat (`Eyes`): the person it is for is `you`, the others are
+  `opponent`, `opponent2`, `opponent3` in turn order after them, and what that seat may not see
+  is left out (`Eyes::concealed`, the hand and library counts). The host's eyes are the engine's
+  own numbering, so a game of one person reads exactly as before.
+- **Facts per person.** An action's facts are a `Log`: one line per person, each told by `tell`
+  from that person's seat, so a draw is named to the one who drew it alone. A fact of one person's
+  own doing (a mulligan, a choice) goes to their line alone; the table's (`turnBegan` at the deal,
+  `eliminated`, `gameOver`) to every line in its own words.
+- **`waiting`**, a stage of its own: another person decides (`deciding` names them, from the
+  viewer's seat). The board offers nothing but the stops. `act_by(seat, …)` refuses a person who
+  is waiting, with the game unchanged for everyone (the `Moment` keeps every chair).
+- **No undo, no sandbox.** `lobby` on the view; undo and redo are refused and the sandbox stays
+  off, since a turn taken back would take back other people's.
+- **Replay frames are the host's alone**, from the host's seat whoever is in the chair. A guest's
+  step is the settled view and its own facts (`guest_steps`), never frames.
+- **A guest who goes.** A guest who leaves stays on the relay's roster, offline, and may rejoin;
+  the game waits on them. The host can kick them (`lobby_kick`), which hands their seat to the AI
+  at the game's difficulty (`hand_to_ai`) and plays on.
+
+**The wire.** A guest sends its deck as printings and counts (`lobby_deck`, body `deck`); the host
+reads them in its own card data (`play::cards_by_ids`), as a pod's boosters are read, and refuses
+to deal a printing it does not know. `lobby_game_start(game, deckId, variant, seats, difficulty,
+seed)` deals — `seats` one or three `LobbyGameSeat`s, each a guest or an AI deck of the host's —
+locks the lobby and sends each guest its first step; the host then plays with `playtest_act` as
+ever, and every guest is sent its step after each change. A guest's action is `lobby_act` (body
+`act`), applied by the host on the engine's stack behind any action of its own board's; its answer
+goes to the host's board as `playtest:step` (`HostStep`) and to each guest as `lobby:game`
+(`GuestGame`: the step, the others' names from its seat, its deck's name, `dealt` for a deal's first
+step). A refusal goes back to that guest alone, as `lobby:refused`. A guest's step crosses packed
+(body `game`, gzip in base64): a Commander board with the guest's own library is well past the
+relay's 64 KiB frame as JSON and a tenth of that packed; one that still would not fit is sent
+without the library, which only the sandbox draws.
+
+**The page.** The setup's aside has a _Play with friends_ block (`features/playtesting/lobby/`):
+**Create lobby** for a supporter (`useMayHostPod`, the draft's own reading of the membership) and
+**Join with a code** for anyone. While a `game` lobby is held the aside is its panel. The host sees
+the code, Duel or Four-player, their own seat and any AI seats picked from the wall, the guests in
+join order with the deck each sent (`table.ts`' `lobbySeats`, `lobbyReadiness`), the AI's skill
+and Start. A guest picks one deck from the wall, which is sent at once (`useSendDeck`), and
+waits. The host's game is an ordinary held game dealt by `lobbyGameStart`, which also shows each
+`playtest:step` of its own `game`. A guest's is `holdGuestGame` (`play/guestGame.ts`), fed by
+`lobby:game` and `lobby:refused`, acting through `lobbyAct`. Both draw the one board, which reads
+`waiting` as "Waiting for {name}…" and, on the host's, offers "Let the AI play {name}" for a guest
+who is offline or gone (`lobbyKick`). Back puts the game away and leaves the lobby: the host's
+closes it for everyone.
+
 ## What is not there yet
 
 - **Holding priority over your own spell.** The reader's own spell on top never stops them, so
@@ -925,4 +995,9 @@ a low-volume glyph under 50 and is crossed out at 0.
 - **A difficulty per opponent.** Every AI seat plays at the one difficulty.
 - **Two opponents, five or six.** phase seats up to six; the setup page offers the goldfish, a duel
   or four players. `Playtest::new` takes none to three.
-- **Watching the AIs play on** after the reader is out.
+- **Watching the AIs play on** after the reader is out — or, in a lobby's game, after every
+  person is.
+- **A lobby's game after the host leaves.** The host's app is the table; when it leaves, the game
+  is over for everyone. A guest's own app cannot take it over.
+- **Two or three people with no AI.** A lobby's game is a duel or a four-player game, so two
+  guests sit beside one AI deck of the host's.

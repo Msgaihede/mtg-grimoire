@@ -85,7 +85,7 @@ This file contains only global instructions. **The binding rules for any specifi
 | [`.github/CLAUDE.md`](.github/CLAUDE.md)                                             | CI workflows, path routers, and release-please configuration                                                |
 | [`infrastructure/app-worker/README.md`](infrastructure/app-worker/README.md)         | Web app Cloudflare Worker hosting, headers, and deploy runbook                                              |
 | [`infrastructure/scan-worker/README.md`](infrastructure/scan-worker/README.md)       | Scan inbox Worker — the route the scanner's Send posts a run of frames to, its bounds, and deploy runbook   |
-| [`infrastructure/integrations-worker/README.md`](infrastructure/integrations-worker/README.md) | Integrations store Worker — the per-group object devices publish `Projection v1` to, its gate, sealing, lapse cron, and deploy runbook |
+| [`infrastructure/integrations-worker/README.md`](infrastructure/integrations-worker/README.md) | Integrations store Worker — the per-group object devices publish `Projection v1` to and integrations read and write intents through, its gates, sealing, lapse cron, and deploy runbook |
 
 ---
 

@@ -16,14 +16,14 @@ use crate::cards::CardFacts;
 use crate::on_engine_stack;
 use crate::view::{GameCard, Lane, Place, Seat};
 
-use super::session::{stack_targets, tell, OpponentDeck, Playtest};
+use super::session::{stack_targets, tell, Eyes, OpponentDeck, Playtest};
 use super::view::{
     Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestBlockPair, PlaytestHappened as H,
     PlaytestPhase, PlaytestPickPurpose, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep,
     PlaytestStop, PlaytestStopStep, PlaytestView,
 };
 
-fn card(
+pub(super) fn card(
     name: &str,
     cost: Option<&str>,
     type_line: &str,
@@ -54,7 +54,7 @@ fn card(
 }
 
 /// The reader's: lands, two creatures and a pump spell.
-fn green() -> Vec<CardFacts> {
+pub(super) fn green() -> Vec<CardFacts> {
     vec![
         card(
             "Forest",
@@ -96,7 +96,7 @@ fn green() -> Vec<CardFacts> {
 }
 
 /// The AI's, and the reader's burn when a test needs a spell with a choice of target.
-fn red() -> Vec<CardFacts> {
+pub(super) fn red() -> Vec<CardFacts> {
     vec![
         card(
             "Mountain",
@@ -145,10 +145,11 @@ fn against(cards: Vec<CardFacts>) -> Vec<OpponentDeck> {
     vec![OpponentDeck {
         cards,
         tokens: Vec::new(),
+        person: false,
     }]
 }
 
-fn engine<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
+pub(super) fn engine<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     on_engine_stack(work).expect("the engine ran")
 }
 
@@ -250,6 +251,7 @@ fn to_main(game: &mut Playtest) -> PlaytestStep {
             Stage::Block => A::Block { blocks: vec![] },
             Stage::Respond => A::Pass,
             Stage::Watching => panic!("a step's own view is never a frame's"),
+            Stage::Waiting => panic!("a game of one person never waits on another"),
             Stage::Prompt => A::Auto,
             Stage::Mulligan => A::Keep { bottom: vec![] },
         };
@@ -525,8 +527,8 @@ fn a_stack_item_names_the_targets_the_table_shows() {
             },
         };
         (
-            (goblin.0, stack_targets(&state, &spell)),
-            stack_targets(&state, &equip),
+            (goblin.0, stack_targets(&state, &spell, Eyes::host(2))),
+            stack_targets(&state, &equip, Eyes::host(2)),
         )
     });
     let (goblin, (cards, players)) = spell;
@@ -763,6 +765,7 @@ fn to_main_or_block(game: &mut Playtest) -> PlaytestStep {
             Stage::Attack => A::Attack { attacks: vec![] },
             Stage::Respond => A::Pass,
             Stage::Watching => panic!("a step's own view is never a frame's"),
+            Stage::Waiting => panic!("a game of one person never waits on another"),
             Stage::Prompt => A::Auto,
             Stage::Mulligan => A::Keep { bottom: vec![] },
         };
@@ -1259,6 +1262,7 @@ fn four_against(deck: Vec<CardFacts>, seed: u64) -> (Playtest, PlaytestStep) {
         OpponentDeck {
             cards: deck,
             tokens: Vec::new(),
+            person: false,
         };
         3
     ];
@@ -1829,7 +1833,7 @@ fn an_opponents_card_exiled_face_down_is_told_without_its_name() {
             },
         ];
         let mut out = Vec::new();
-        tell(&state, &events, &mut out);
+        tell(&state, &events, Eyes::host(state.players.len()), &mut out);
         out
     });
     let exiled = |seat, name: Option<&str>| H::Moved {
@@ -1883,6 +1887,7 @@ fn twenty_one_commander_damage_puts_a_player_out_with_life_left() {
             OpponentDeck {
                 cards: mountains,
                 tokens: Vec::new(),
+                person: false,
             };
             3
         ];

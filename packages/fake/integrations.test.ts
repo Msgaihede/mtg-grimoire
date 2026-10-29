@@ -13,7 +13,11 @@ import { describe, expect, it } from "vitest";
 import type { IntegrationFields } from "@grimoire/ui/lib/ipc";
 import integrationStoreRs from "../../crates/grimoire-core/src/integration/store.rs?raw";
 import integrationSettingsRs from "../../crates/grimoire-core/src/integration/settings.rs?raw";
+import integrationIntentsRs from "../../crates/grimoire-core/src/integration/intents.rs?raw";
+import integrationReviewRs from "../../crates/grimoire-core/src/integration/review.rs?raw";
 import {
+  INTEGRATIONS_AUTOMATIC_FIXED,
+  INTEGRATIONS_INTENT_GONE,
   INTEGRATIONS_NOT_CONNECTED,
   INTEGRATIONS_NOT_DEPLOYED,
   INTEGRATIONS_OFF,
@@ -59,6 +63,8 @@ describe("the fake's integrations sentences are the engine's", () => {
     [INTEGRATIONS_NOT_CONNECTED, integrationStoreRs, "store.rs", "NOT_CONNECTED"],
     [INTEGRATIONS_OFF, integrationSettingsRs, "settings.rs", "OFF"],
     [INTEGRATIONS_ROUND_FAILED, integrationSettingsRs, "settings.rs", "ROUND_FAILED"],
+    [INTEGRATIONS_AUTOMATIC_FIXED, integrationIntentsRs, "intents.rs", "FIXED"],
+    [INTEGRATIONS_INTENT_GONE, integrationReviewRs, "review.rs", "GONE"],
   ])("%s", (fake, source, file, name) => {
     expect(fake).toBe(rustSentence(source, file, name));
   });
@@ -222,5 +228,99 @@ describe("the integrations switch, as the fake answers it", () => {
     const db = entitled();
     applyIntegrationsFault(db);
     expect(db.integrations.enabled).toBe(false);
+  });
+});
+
+/**
+ * The review list's four commands (plan `2026-10-29-integrations-intents.md` §3.5) — what the
+ * panel's review section leans on: nothing parked and nothing asked while off, two proposals in
+ * every store the fake holds, Apply and Decline taking one off, Discord's rows fixed, and an MCP
+ * kind switched on applying what was parked of it.
+ */
+describe("the review list, as the fake answers it", () => {
+  it("parks nothing while off, and draws the four policy rows", () => {
+    const review = integrationHandlers(entitled()).integrations_review();
+
+    expect(review.intents).toEqual([]);
+    expect(review.automatic).toEqual([
+      { source: "discord", kind: "collection.add", on: true, fixed: true },
+      { source: "discord", kind: "wishlist.add", on: true, fixed: true },
+      { source: "mcp", kind: "collection.add", on: false, fixed: false },
+      { source: "mcp", kind: "wishlist.add", on: false, fixed: false },
+    ]);
+  });
+
+  it("holds two MCP proposals in a store the switch made, and loses them with the store", () => {
+    const db = entitled();
+    const commands = integrationHandlers(db);
+    commands.integrations_enable({ fields: SOME });
+
+    const parked = commands.integrations_review().intents;
+    expect(parked.map((intent) => [intent.source, intent.kind])).toEqual([
+      ["mcp", "collection.add"],
+      ["mcp", "wishlist.add"],
+    ]);
+    // Oldest first, in milliseconds.
+    expect(parked[0].createdAt).toBeLessThan(parked[1].createdAt);
+
+    commands.integrations_disable();
+    expect(commands.integrations_review().intents).toEqual([]);
+  });
+
+  it("takes one off the list on Apply and on Decline, and refuses one already gone", () => {
+    const db = entitled();
+    const commands = integrationHandlers(db);
+    commands.integrations_enable({ fields: SOME });
+    const [first, second] = commands.integrations_review().intents;
+
+    expect(commands.integrations_review_apply({ id: first.id }).intents).toEqual([second]);
+    expect(commands.integrations_review_decline({ id: second.id }).intents).toEqual([]);
+    expect(() => commands.integrations_review_apply({ id: first.id })).toThrow(
+      INTEGRATIONS_INTENT_GONE,
+    );
+  });
+
+  it("refuses a Discord row, and applies what was parked of an MCP kind switched on", () => {
+    const db = entitled();
+    const commands = integrationHandlers(db);
+    commands.integrations_enable({ fields: SOME });
+
+    expect(() =>
+      commands.integrations_set_automatic({ source: "discord", kind: "wishlist.add", on: false }),
+    ).toThrow(INTEGRATIONS_AUTOMATIC_FIXED);
+
+    const review = commands.integrations_set_automatic({
+      source: "mcp",
+      kind: "collection.add",
+      on: true,
+    });
+    expect(review.intents.map((intent) => intent.kind)).toEqual(["wishlist.add"]);
+    expect(review.automatic[2]).toEqual({
+      source: "mcp",
+      kind: "collection.add",
+      on: true,
+      fixed: false,
+    });
+  });
+
+  it("refuses the presses while the lane is held, and answers the list from what it holds", () => {
+    const db = entitled();
+    const commands = integrationHandlers(db);
+    commands.integrations_enable({ fields: SOME });
+    db.fault = "busy";
+    const [first] = commands.integrations_review().intents;
+
+    expect(() => commands.integrations_review_apply({ id: first.id })).toThrow(/busy/i);
+    expect(() => commands.integrations_review_decline({ id: first.id })).toThrow(/busy/i);
+    expect(() =>
+      commands.integrations_set_automatic({ source: "mcp", kind: "wishlist.add", on: true }),
+    ).toThrow(/busy/i);
+    expect(commands.integrations_review().intents).toHaveLength(2);
+  });
+
+  it("stands two proposals up in the `integrationsError` world, which is on", () => {
+    const db = entitled("integrationsError");
+    applyIntegrationsFault(db);
+    expect(integrationHandlers(db).integrations_review().intents).toHaveLength(2);
   });
 });

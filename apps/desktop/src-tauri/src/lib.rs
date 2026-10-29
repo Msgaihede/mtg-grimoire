@@ -142,7 +142,7 @@ pub mod index;
 /// **`grimoire-core`'s bulk-file ingest**, and the one test of it that builds its database with
 /// [`split`].
 pub mod ingest;
-/// **The integrations store** (issue #1396) — `grimoire-core`'s module, re-exported, and the four
+/// **The integrations store** (issue #1396) — `grimoire-core`'s module, re-exported, and the eight
 /// `#[tauri::command]` wrappers behind Settings → Integrations. The publish round the module also
 /// holds is spawned by `desktop::start`, beside live sync.
 pub mod integration;
@@ -155,6 +155,11 @@ pub use grimoire_core::legalities;
 /// than in this run; the run is a place in the alphabet, not the list of view-state modules.
 pub mod listview;
 pub mod maintenance;
+/// **The local MCP server** (issue #1395): a streamable-HTTP endpoint on `127.0.0.1` that an AI
+/// agent on this computer reads and adds to the collection, the wishlist and the decks through,
+/// served by this process while Settings → Integrations has it on. Its tools answer through the
+/// core's command table; `desktop::start` resumes it at launch.
+pub mod mcp;
 /// **A theory deck's managed wishlist** (user schema v48, issue #512) — a wishlist folder each
 /// device derives from its own copy of the deck and rewrites after every write, and the guard
 /// that refuses a hand-made edit to it.

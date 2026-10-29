@@ -4,7 +4,8 @@
 [#1396](https://github.com/Msgaihede/mtg-grimoire/issues/1396), its plan's second PR. The design is
 [`2026-10-24-integration-data-access-design.md`](../specs/2026-10-24-integration-data-access-design.md)
 (option B, §6, §7.5); this file is what PR 2 builds of it, the contracts between its pieces, and the
-choices the spec left open. Nothing consumes the store yet: intents are PR 3, Discord PR 4.
+choices the spec left open. Nothing consumes the store yet: intents are PR 3
+([its plan](2026-10-29-integrations-intents.md)), Discord PR 4.
 
 ## 1. What this PR ships
 

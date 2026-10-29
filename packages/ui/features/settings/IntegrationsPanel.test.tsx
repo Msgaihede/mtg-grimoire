@@ -3,21 +3,51 @@ import userEvent from "@testing-library/user-event";
 import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { IntegrationFields, IntegrationsStatus } from "@/lib/ipc";
+import type {
+  IntegrationFields,
+  IntegrationsStatus,
+  IntentReview,
+  McpStatus,
+  ParkedIntent,
+} from "@/lib/ipc";
+import { useNotifications } from "@/lib/notifications";
 
 const integrationsStatus = vi.hoisted(() => vi.fn());
 const integrationsEnable = vi.hoisted(() => vi.fn());
 const integrationsSetFields = vi.hoisted(() => vi.fn());
 const integrationsDisable = vi.hoisted(() => vi.fn());
+// The local MCP server's read, which the panel's first part makes on mount. Its own suite is
+// `LocalMcpSection.test.tsx`; here it answers Off so the cloud part's assertions stand alone.
+const mcpStatus = vi.hoisted(() => vi.fn());
+const integrationsReview = vi.hoisted(() => vi.fn());
+const integrationsReviewApply = vi.hoisted(() => vi.fn());
+const integrationsReviewDecline = vi.hoisted(() => vi.fn());
+const integrationsSetAutomatic = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { integrationsStatus, integrationsEnable, integrationsSetFields, integrationsDisable },
+  ipc: {
+    integrationsStatus,
+    integrationsEnable,
+    integrationsSetFields,
+    integrationsDisable,
+    mcpStatus,
+    integrationsReview,
+    integrationsReviewApply,
+    integrationsReviewDecline,
+    integrationsSetAutomatic,
+  },
 }));
 
 import {
   checkedLine,
+  CLOUD_HEADING,
+  DISCORD_FIXED,
+  intentLine,
   IntegrationsPanel,
+  NONE_CONNECTED,
   NOT_AVAILABLE,
+  NOTHING_WAITING,
+  originLine,
   NOT_ENTITLED,
   PRIVACY_SENTENCE,
   PUBLISH_POLL_MS,
@@ -25,6 +55,7 @@ import {
   sentLine,
   STRANDED,
 } from "./IntegrationsPanel";
+import { MCP_HEADING } from "./LocalMcpSection";
 
 /** A fixed instant every "2 hours ago" below is read against. */
 const NOW = Math.floor(Date.now() / 1000);
@@ -94,11 +125,58 @@ const theSwitch = () => screen.findByRole("switch", { name: /^Keep a copy for in
 const box = (name: string) => screen.getByRole("checkbox", { name });
 const theQuestion = () => screen.getByRole("dialog", { name: "Turn off integrations" });
 
+/** The local server off — typed, for `status`'s reason. */
+const MCP_OFF: McpStatus = {
+  enabled: false,
+  running: false,
+  port: 39147,
+  url: "http://127.0.0.1:39147/mcp",
+  token: "0123456789abcdef".repeat(4),
+  error: null,
+};
+
+/** The four policy rows as the engine answers them: Discord's two fixed on, MCP's two the
+ *  reader's — one of them on, so a press that sent the row's state rather than its opposite
+ *  cannot pass. */
+const AUTOMATIC: IntentReview["automatic"] = [
+  { source: "discord", kind: "collection.add", on: true, fixed: true },
+  { source: "discord", kind: "wishlist.add", on: true, fixed: true },
+  { source: "mcp", kind: "collection.add", on: false, fixed: false },
+  { source: "mcp", kind: "wishlist.add", on: true, fixed: false },
+];
+
+/** A parked intent, typed — the status helper's reason. */
+function parked(over: Partial<ParkedIntent> = {}): ParkedIntent {
+  return {
+    id: "AAAAAAAAAAAAAAAAAAAAAA",
+    source: "mcp",
+    kind: "collection.add",
+    name: "Lightning Bolt",
+    set: "2x2",
+    cn: "117",
+    finish: "foil",
+    quantity: 2,
+    folder: "Binder",
+    createdAt: NOW * 1000 - 300_000,
+    confirmedBy: null,
+    ...over,
+  };
+}
+
+function review(intents: ParkedIntent[] = []): IntentReview {
+  return { intents, automatic: AUTOMATIC };
+}
+
 beforeEach(() => {
+  mcpStatus.mockReset().mockResolvedValue(MCP_OFF);
   integrationsStatus.mockReset().mockResolvedValue(status());
   integrationsEnable.mockReset();
   integrationsSetFields.mockReset();
   integrationsDisable.mockReset();
+  integrationsReview.mockReset().mockResolvedValue(review());
+  integrationsReviewApply.mockReset();
+  integrationsReviewDecline.mockReset();
+  integrationsSetAutomatic.mockReset();
 });
 
 afterEach(() => {
@@ -117,7 +195,8 @@ describe("IntegrationsPanel", () => {
     expect(
       screen.getByText(/^If you enable an integration, our servers hold a copy of the parts/),
     ).toBeInTheDocument();
-    expect(screen.getByText("No integration reads this copy yet.")).toBeInTheDocument();
+    expect(screen.getByText(NONE_CONNECTED)).toBeInTheDocument();
+    expect(screen.getByText("No integration is connected to this copy yet.")).toBeInTheDocument();
     expect(
       screen.getByText(
         "Purchase price, purchase currency, acquired date and acquisition source are never included.",
@@ -134,6 +213,26 @@ describe("IntegrationsPanel", () => {
         "Changing these while the copy is on deletes it from the server, and your devices send it again under the new choice.",
       ),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * **Two switches in one panel that must not read as one** — the local MCP server above, the
+   * cloud copy below, each under its own heading, and the cloud copy's sentences inside its own
+   * part: the local server reads the database, never the copy.
+   */
+  it("draws the local server and the cloud copy as two named parts, the local one first", async () => {
+    setup();
+    await theSwitch();
+
+    const local = screen.getByRole("group", { name: MCP_HEADING });
+    const cloud = screen.getByRole("group", { name: CLOUD_HEADING });
+    expect(local.compareDocumentPosition(cloud) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(cloud).getByText(PRIVACY_SENTENCE)).toBeInTheDocument();
+    expect(within(cloud).getByRole("switch")).toHaveAccessibleName(/^Keep a copy for integrations/);
+    expect(within(local).queryByText(PRIVACY_SENTENCE)).toBeNull();
+    expect(
+      await within(local).findByRole("switch", { name: /^Let agents on this computer connect/ }),
+    ).toHaveAttribute("aria-checked", "false");
   });
 
   it("opens off, with all five boxes clear and pressable", async () => {
@@ -545,6 +644,177 @@ describe("IntegrationsPanel", () => {
     await userEvent.dblClick(await theSwitch());
 
     expect(integrationsEnable).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the review list", () => {
+  const theList = () => screen.findByRole("list", { name: "Waiting for your review" });
+
+  it("is not drawn, and not asked for, while the copy is off", async () => {
+    setup();
+    await theSwitch();
+
+    expect(screen.queryByText("Waiting for your review")).not.toBeInTheDocument();
+    expect(integrationsReview).not.toHaveBeenCalled();
+  });
+
+  it("says nothing is waiting, and draws the policy, while on with nothing parked", async () => {
+    integrationsStatus.mockResolvedValue(ON);
+    setup();
+
+    expect(await screen.findByText(NOTHING_WAITING)).toBeInTheDocument();
+    const discord = screen.getByRole("checkbox", { name: "Discord — add to your collection" });
+    expect(discord).toBeChecked();
+    expect(discord).toHaveAttribute("aria-disabled", "true");
+    expect(discord).toHaveAccessibleDescription(DISCORD_FIXED);
+    const mcp = screen.getByRole("checkbox", { name: "MCP — add to your collection" });
+    expect(mcp).not.toBeChecked();
+    expect(mcp).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("draws each parked intent: what, where, from whom and when", async () => {
+    integrationsStatus.mockResolvedValue(ON);
+    integrationsReview.mockResolvedValue(
+      review([
+        parked(),
+        parked({
+          id: "BBBBBBBBBBBBBBBBBBBBBB",
+          kind: "wishlist.add",
+          name: "Counterspell",
+          set: null,
+          cn: null,
+          finish: null,
+          quantity: 1,
+          folder: null,
+          source: "discord",
+          confirmedBy: "discord:123",
+        }),
+      ]),
+    );
+    setup();
+
+    const list = await theList();
+    expect(within(list).getByText("2× Lightning Bolt (2X2 #117), foil → “Binder”")).toBeVisible();
+    expect(within(list).getByText("From MCP, 5 minutes ago.")).toBeVisible();
+    expect(within(list).getByText("1× Counterspell → your wishlist")).toBeVisible();
+    expect(within(list).getByText("From Discord (discord:123), 5 minutes ago.")).toBeVisible();
+  });
+
+  it("applies one, writes the answer back and toasts what went where", async () => {
+    integrationsStatus.mockResolvedValue(ON);
+    integrationsReview.mockResolvedValue(review([parked()]));
+    integrationsReviewApply.mockResolvedValue(review());
+    setup();
+    await theList();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Apply: 2× Lightning Bolt/ }));
+
+    expect(await screen.findByText(NOTHING_WAITING)).toBeInTheDocument();
+    expect(integrationsReviewApply).toHaveBeenCalledWith("AAAAAAAAAAAAAAAAAAAAAA");
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Added 2× Lightning Bolt to “Binder”",
+      tone: "success",
+    });
+    // Written back, not re-read.
+    expect(integrationsReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("toasts a refused apply once, draws no banner for it, and re-reads the list", async () => {
+    integrationsStatus.mockResolvedValue(ON);
+    integrationsReview.mockResolvedValue(review([parked()]));
+    integrationsReviewApply.mockRejectedValue("That folder no longer exists.");
+    setup();
+    await theList();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Apply: / }));
+
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Couldn't add Lightning Bolt",
+        body: "That folder no longer exists.",
+        tone: "error",
+      }),
+    );
+    await waitFor(() => expect(integrationsReview).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("declines one without a toast, and a refused decline is the banner's", async () => {
+    integrationsStatus.mockResolvedValue(ON);
+    integrationsReview.mockResolvedValue(review([parked()]));
+    integrationsReviewDecline.mockResolvedValueOnce(review());
+    setup();
+    await theList();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Decline: / }));
+    expect(await screen.findByText(NOTHING_WAITING)).toBeInTheDocument();
+    expect(integrationsReviewDecline).toHaveBeenCalledWith("AAAAAAAAAAAAAAAAAAAAAA");
+    expect(useNotifications.getState().notices).toHaveLength(0);
+  });
+
+  it("draws a refused decline in the backend's words", async () => {
+    integrationsStatus.mockResolvedValue(ON);
+    integrationsReview.mockResolvedValue(review([parked()]));
+    integrationsReviewDecline.mockRejectedValue("Another device already applied it.");
+    setup();
+    await theList();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Decline: / }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Another device already applied it.",
+    );
+  });
+
+  it("switches an MCP row to its opposite, and never a Discord row", async () => {
+    integrationsStatus.mockResolvedValue(ON);
+    integrationsSetAutomatic.mockResolvedValue(review());
+    setup();
+    await screen.findByText(NOTHING_WAITING);
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Discord — add to your wishlist" }));
+    expect(integrationsSetAutomatic).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "MCP — add to your wishlist" }));
+    expect(integrationsSetAutomatic).toHaveBeenCalledWith("mcp", "wishlist.add", false);
+  });
+
+  it("holds every row still while a press is out", async () => {
+    integrationsStatus.mockResolvedValue(ON);
+    integrationsReview.mockResolvedValue(review([parked()]));
+    const out = deferred<IntentReview>();
+    integrationsReviewApply.mockReturnValue(out.promise);
+    setup();
+    await theList();
+
+    const applyButton = screen.getByRole("button", { name: /^Apply: / });
+    await userEvent.click(applyButton);
+    await waitFor(() => expect(applyButton).toHaveAttribute("aria-busy", "true"));
+    expect(applyButton).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(screen.getByRole("button", { name: /^Decline: / }));
+    expect(integrationsReviewDecline).not.toHaveBeenCalled();
+
+    await act(async () => out.resolve(review()));
+  });
+});
+
+describe("the review lines", () => {
+  const nowMs = NOW * 1000;
+
+  it("leaves out a printing an any-printing wish does not name, and the ordinary finish", () => {
+    expect(
+      intentLine(
+        parked({ set: null, cn: null, finish: "nonfoil", kind: "wishlist.add", folder: "Wants" }),
+      ),
+    ).toBe("2× Lightning Bolt → “Wants”");
+    expect(intentLine(parked({ finish: "etched", cn: null }))).toBe(
+      "2× Lightning Bolt (2X2), etched → “Binder”",
+    );
+  });
+
+  it("draws a source it does not know as it came", () => {
+    expect(originLine(parked({ source: "smoke-signal" }), nowMs)).toBe(
+      "From smoke-signal, 5 minutes ago.",
+    );
   });
 });
 

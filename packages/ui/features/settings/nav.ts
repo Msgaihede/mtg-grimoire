@@ -111,7 +111,9 @@ export const PANELS: Record<PanelId, PanelMeta> = {
   /**
    * **The one panel under `Integrations`, and the reason the entry exists** (issue #1396): the
    * group's switch for a copy of the collection held on a server, so an integration can answer
-   * while the reader's devices are off.
+   * while the reader's devices are off — **and above it, the local MCP server** (issue #1395), a
+   * part of the same panel rather than a panel of its own: an endpoint on this computer that an
+   * AI agent here connects to, free and with nothing leaving the machine.
    *
    * Not under `Sync`, though it needs a membership and a sync group: that entry is the reader's
    * own devices, and this is a copy for something that is not one of them. A Discord bot and a
@@ -119,7 +121,9 @@ export const PANELS: Record<PanelId, PanelMeta> = {
    * what the entry's name is for.
    *
    * **The keyword line is the names of what will read the copy, and what the copy is** — `discord`,
-   * `mcp`, `claude`, `bot`, `server`, `cloud` — since nobody types this app's word for it.
+   * `mcp`, `claude`, `bot`, `server`, `cloud` — since nobody types this app's word for it; and,
+   * for the local server, the names of the agents a reader would set up (`agent`, `cursor`) and
+   * what its part asks for (`localhost`, `port`, `token`).
    * `sync`, `patreon` and `membership` are deliberately absent: they are the `Sync` entry's words,
    * and a reader who types them is looking for their devices. So is `tags`, which is the `Tags`
    * entry's and Scryfall's — the copy's *Entry tags* column is the collection's free text, and a
@@ -130,7 +134,7 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     group: "integrations",
     keywords:
       "discord mcp claude ai assistant chatbot bot api cloud server copy online remote " +
-      "publish private privacy offline",
+      "publish private privacy offline agent agents cursor localhost port token",
   },
   "hidden-tags": {
     title: "Hidden tags",

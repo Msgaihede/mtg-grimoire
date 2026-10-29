@@ -219,8 +219,8 @@ const PASSING: StageButton = {
  * - **Declare attackers**: attack with the creatures picked, or with none.
  * - **Declare blockers**: the blocks picked, or none.
  *
- * Nothing in the opening hand, a prompt (its panel answers it), a replay frame or a game that is
- * over. While the reader is ending the turn (`endingTurn`) the second button says so.
+ * Nothing in the opening hand, a prompt (its panel answers it), a replay frame, a lobby game
+ * waiting on another person, or a game that is over. While the reader is ending the turn (`endingTurn`) the second button says so.
  */
 export function stageButtons(
   view: PlaytestView,
@@ -269,6 +269,7 @@ export function stageButtons(
     case "mulligan":
     case "prompt":
     case "watching":
+    case "waiting":
     case "over":
       return { primary: null, secondary: null };
   }

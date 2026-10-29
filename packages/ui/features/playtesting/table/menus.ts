@@ -291,11 +291,15 @@ export type GameMenuView = Pick<PlaytestSeat, "graveyard" | "exile"> &
  * **Undo and redo head it** (issue #1022), greyed when the view has nothing to go back or forward
  * to — the menu's way to the same two actions `Ctrl+Z` and `Ctrl+Y` send, for a reader who does
  * not know the chords. Not greyed by the opening hand: a mulligan is an action to take back.
+ *
+ * **A lobby game's menu has none of undo, redo, the sandbox or New game** (`lobby`, issue #1419):
+ * the host refuses the first three in a game with people, and the table sat down to this game.
  */
 export function gameMenu({
   view,
   playing,
   sandbox,
+  lobby = false,
   backLabel,
   playmat,
   commanderName,
@@ -310,6 +314,8 @@ export function gameMenu({
   playing: boolean;
   /** The sandbox's moves work now: on, the reader's main phase, nothing with the engine. */
   sandbox: boolean;
+  /** A game with people at the table, over a lobby: no undo, no sandbox, no New game. */
+  lobby?: boolean;
   /** The way back's row: "Back to setup", "Back to the deck". */
   backLabel: string;
   playmat: Playmat;
@@ -353,11 +359,20 @@ export function gameMenu({
           onSelect: () => onAct({ type: "setSandbox", on: !view.sandbox }),
         };
 
+  const undoRows: MenuItem[] = lobby
+    ? []
+    : [
+        action("undo", "Undo", () => onAct({ type: "undo" }), !(view?.canUndo ?? false)),
+        action("redo", "Redo", () => onAct({ type: "redo" }), !(view?.canRedo ?? false)),
+        { kind: "separator", id: "sepUndo" },
+        sandboxRow,
+      ];
+  const newGameRows: MenuItem[] = lobby
+    ? []
+    : [action("new", "New game", onNewGame), { kind: "separator", id: "sep2" }];
+
   return [
-    action("undo", "Undo", () => onAct({ type: "undo" }), !(view?.canUndo ?? false)),
-    action("redo", "Redo", () => onAct({ type: "redo" }), !(view?.canRedo ?? false)),
-    { kind: "separator", id: "sepUndo" },
-    sandboxRow,
+    ...undoRows,
     action("untap", "Untap everything", () => onAct({ type: "untapAll" }), !edits),
     submenu(
       "token",
@@ -398,8 +413,7 @@ export function gameMenu({
     ),
     submenu("playmat", "Playmat", mats),
     { kind: "separator", id: "sep" },
-    action("new", "New game", onNewGame),
-    { kind: "separator", id: "sep2" },
+    ...newGameRows,
     action("back", backLabel, onBack),
   ];
 }

@@ -16,6 +16,16 @@ const ROUTES = [
   ["PUT", "/g/g1/settings"],
   ["PUT", "/g/g1/projection/collection_entries"],
   ["DELETE", "/g/g1"],
+  ["GET", "/g/g1/intents"],
+  ["POST", `/g/g1/intents/${"A".repeat(22)}/claim`],
+  ["POST", `/g/g1/intents/${"A".repeat(22)}/ack`],
+  ["GET", "/g/g1/consumers"],
+] as const;
+
+/** The one device route that takes two methods: a mint and a revoke, at one integration's path. */
+const TWO_METHODS = [
+  ["POST", "/g/g1/consumers/discord"],
+  ["DELETE", "/g/g1/consumers/mcp"],
 ] as const;
 
 describe("a path that is no route", () => {
@@ -30,6 +40,15 @@ describe("a path that is no route", () => {
     "/g/a.b/settings",
     `/g/${"a".repeat(129)}/settings`,
     "/g//settings",
+    "/g/g1/intents/short/claim",
+    `/g/g1/intents/${"A".repeat(22)}`,
+    `/g/g1/intents/${"A".repeat(22)}/apply`,
+    "/g/g1/consumers/trade",
+    "/g/g1/consumers/discord/x",
+    "/c",
+    "/c/trades",
+    "/c/decks/a/b",
+    "/c/intents/short",
   ])("%s is a JSON 404 that reaches no object", async (path) => {
     const h = harness();
     const res = await h.fetch(request("PUT", path, { bearer: await token() }));
@@ -64,6 +83,13 @@ describe("the method", () => {
     ["DELETE", "/g/g1/projection/decks", "PUT"],
     ["GET", "/g/g1", "DELETE"],
     ["PUT", "/g/g1", "DELETE"],
+    ["POST", "/g/g1/intents", "GET"],
+    ["GET", `/g/g1/intents/${"A".repeat(22)}/claim`, "POST"],
+    ["PUT", `/g/g1/intents/${"A".repeat(22)}/ack`, "POST"],
+    ["DELETE", "/g/g1/consumers", "GET"],
+    ["GET", "/g/g1/consumers/discord", "POST, DELETE"],
+    ["PUT", "/c/wishlist", "GET"],
+    ["DELETE", "/c/intents", "POST"],
   ])("%s %s is a 405 naming %s, before the door is asked", async (method, path, allow) => {
     const h = harness();
     // No bearer at all: a 401 here would mean the door was asked first.
@@ -105,6 +131,13 @@ describe("the door", () => {
    */
   it.each(ROUTES)("%s %s is a 401 to a valid token for another group", async (method, path) => {
     const h = harness();
+    expect((await h.fetch(request(method, path, { bearer: await token("g2") }))).status).toBe(401);
+    expect(h.stores.objects.size).toBe(0);
+  });
+
+  it.each(TWO_METHODS)("%s %s is behind the door too", async (method, path) => {
+    const h = harness();
+    expect((await h.fetch(request(method, path, { bearer: null }))).status).toBe(401);
     expect((await h.fetch(request(method, path, { bearer: await token("g2") }))).status).toBe(401);
     expect(h.stores.objects.size).toBe(0);
   });
@@ -207,6 +240,13 @@ describe("a page at the web app's origin", () => {
     );
     expect(res.headers.get("vary")).toBe("Origin");
     expect(h.stores.objects.size).toBe(0);
+  });
+
+  it("is told both methods of the route that takes two", async () => {
+    const h = harness();
+    const res = await h.fetch(preflight("/g/g1/consumers/discord", "DELETE"));
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-methods")).toBe("POST, DELETE");
   });
 
   it("can read every refusal, and every answer", async () => {
