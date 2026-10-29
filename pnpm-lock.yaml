@@ -418,6 +418,9 @@ importers:
       "@fontsource/cinzel":
         specifier: "catalog:"
         version: 5.3.0
+      "@pothos/core":
+        specifier: 4.15.1
+        version: 4.15.1(graphql@17.0.2)
       "@tanstack/react-query":
         specifier: "catalog:"
         version: 5.101.4(react@19.2.8)
@@ -457,6 +460,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      graphql:
+        specifier: ^17.0.2
+        version: 17.0.2
       jsqr:
         specifier: "catalog:"
         version: 1.4.0
@@ -1795,6 +1801,14 @@ packages:
       }
     cpu: [x64]
     os: [win32]
+
+  "@pothos/core@4.15.1":
+    resolution:
+      {
+        integrity: sha512-G0riOIbF6zer2SU7V1MmivkSdoKk+gYRf+Ru8JVcy3p9GhyJ8OzQj92RgCfCpEvkTgl6EdH8VueLe1Lm7lY4aA==,
+      }
+    peerDependencies:
+      graphql: ^16.10.0 || ^17.0.0
 
   "@preact/signals-core@1.14.4":
     resolution:
@@ -4117,6 +4131,13 @@ packages:
       {
         integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==,
       }
+
+  graphql@17.0.2:
+    resolution:
+      {
+        integrity: sha512-FRWbddMxfkjiB7z+aQDWIR+E34xo9I8c9mtK2RPv8PmMzKRvrdsreHL/Ui/TmwHJfhHChEtsFPyMHKI+xuarQQ==,
+      }
+    engines: { node: ^22.0.0 || ^24.0.0 || ^25.0.0 || >=26.0.0 }
 
   has-symbols@1.1.0:
     resolution:
@@ -7170,6 +7191,10 @@ snapshots:
   "@oxc-resolver/binding-win32-x64-msvc@11.21.2":
     optional: true
 
+  "@pothos/core@4.15.1(graphql@17.0.2)":
+    dependencies:
+      graphql: 17.0.2
+
   "@preact/signals-core@1.14.4": {}
 
   "@rolldown/binding-android-arm-eabi@1.2.11":
@@ -8591,6 +8616,8 @@ snapshots:
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
+
+  graphql@17.0.2: {}
 
   has-symbols@1.1.0: {}
 

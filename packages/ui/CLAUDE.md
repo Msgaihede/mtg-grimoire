@@ -27,6 +27,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **IPC dispatch (`Core.call`)**: Abstraction layer below `@/lib/core` routing calls to desktop Tauri invoke, Android `core_call`, or WebAssembly Worker dispatch.
 - **ASCII JSON headers**: Serializing JSON for IPC headers (e.g. the scanner capture's `x-scanner-capture` sidecar) must use `asciiJson` (escapes non-ASCII) to satisfy header byte constraints.
 - **One rejection shape**: every `ipc.*` wrapper rejects with the backend's sentence as a plain `string` on every host (`invoke` runs the rejection through `ipcError`). Never branch on `instanceof Error` for an IPC failure; render it with `ipcError(e)`.
+- **The read graph (`lib/graphql/`)**: a read-only GraphQL schema over `ipc`, run in the page (`runQuery`, `useGraphQL`) — the data door for generated widgets. Built with Pothos on the `ipc` interfaces, so a field that does not match its interface fails `tsc`. A root field goes in the domain file named after its wrapper's `ipc` file and must spread `invalidatedBy(<root>)`; there is no `Mutation` type, and adding one is the owner's decision. `schema.graphql` is printed from the code (`vitest -u` after an intended change), and `graphql.test.ts` holds every read the home widgets make to a field. See [graphql.md](../../docs/reference/graphql.md).
 
 ---
 

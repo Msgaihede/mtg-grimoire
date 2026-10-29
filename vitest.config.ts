@@ -40,6 +40,13 @@ export default mergeConfig(
       // cost is the only thing this trades away: a test that genuinely hangs now reports in 15s
       // rather than 5s.
       testTimeout: 15_000,
+      // **One graphql-js, or none works.** graphql publishes a `development` build beside its
+      // production one and refuses a type made by the other ("Cannot use GraphQLObjectType …
+      // from another module or realm"). The suite's own files are resolved by Vite, which picks
+      // `development`; a dependency left external is resolved by Node, which does not — so
+      // `@pothos/core`, which builds the types `packages/ui/lib/graphql/` hands graphql, would
+      // load the other copy. Inlined, it is resolved by Vite like the code that calls it.
+      server: { deps: { inline: ["@pothos/core"] } },
       // ⚠️ A folder no project's glob names is collected by **nothing**, and `vitest run <that
       // folder>` answers `No test files found` — which prints on stdout and is easy to read as a
       // pass.
