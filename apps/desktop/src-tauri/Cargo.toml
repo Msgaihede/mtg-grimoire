@@ -112,6 +112,9 @@ grimoire-core = { path = "../../../crates/grimoire-core" }
 # the light app leaves Playtesting out — the crate's manifest has why, and the 16 MiB stack every
 # call into it needs.
 grimoire-play = { path = "../../../crates/grimoire-play" }
+# The read graph — a read-only GraphQL schema over the reader's data, for the page's widgets
+# and the MCP server: this host's alone (the owner's decision, 2026-10-29).
+grimoire-graph = { path = "../../../crates/grimoire-graph" }
 tauri = { version = "2", features = [] }
 # Opening a link in the reader's browser, and nothing else: `capabilities/desktop.json` grants
 # `opener:allow-open-url` and its scope `opener:allow-default-urls`, never `opener:default`, whose

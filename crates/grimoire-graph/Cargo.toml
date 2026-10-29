@@ -1,0 +1,26 @@
+[package]
+name = "grimoire-graph"
+version.workspace = true
+description = "MTG Grimoire: the read graph — a read-only GraphQL schema over the reader's data, answered from SQLite"
+authors = ["Markus Seerup"]
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+async-graphql = { version = "7.2.1", default-features = false, features = ["dataloader"] }
+grimoire-core = { path = "../grimoire-core" }
+# The workspace's one copy — the core's and the desktop's version and features, so cargo
+# unifies them.
+rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Drives one execution to the end on the calling thread: every caller is already on a thread
+# that may block (the blocking pool, a test), and nothing here needs a runtime of its own.
+futures-executor = "0.3"
+# Checks a document against the printed schema without running it, with line and column —
+# what the MCP server tells a model. async-graphql validates only as part of executing.
+apollo-compiler = "=1.33.0"
+
+[dev-dependencies]
+grimoire-core = { path = "../grimoire-core", features = ["testing"] }

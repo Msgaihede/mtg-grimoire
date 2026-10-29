@@ -9,7 +9,11 @@
 //! have to wade through (image URIs, legality masks, sort keys).
 //!
 //! **Reads**: `find_cards` and `get_card` over the card database, `search_collection`,
-//! `search_wishlist`, `list_folders`, `list_decks` and `get_deck` over the reader's own.
+//! `search_wishlist`, `list_folders`, `list_decks` and `get_deck` over the reader's own — and the
+//! read graph's three, `graph_schema`, `graph_validate` and `graph_query`, which hand an agent the
+//! whole of the reader's data as one GraphQL schema (`crates/grimoire-graph`): the schema to write
+//! a home widget's query against, a check of a draft with each problem's line and column, and the
+//! answer, exactly as the page's `graphql_query` would get it.
 //! **Writes**: `add_to_collection`, `add_to_wishlist` and `add_card_to_deck` — the three adds issue
 //! #1396 names, each the press of the same name in the app. Nothing here changes or removes a row:
 //! an agent proposing a deletion asks the reader, who has the app open.
@@ -96,7 +100,46 @@ pub fn list() -> Vec<Value> {
         "type": "string", "enum": ["live", "theory"],
         "description": "The deck's actual list (live, the default) or its theory list.",
     });
+    let document = json!({
+        "type": "string",
+        "description": "A GraphQL query document over the schema graph_schema answers.",
+    });
     vec![
+        tool(
+            "graph_schema",
+            "Read the data schema",
+            "The whole of the reader's data — collection, wishlist, decks, the card database, \
+             Scryfall tags, prices and the home page — as one read-only GraphQL schema (SDL), \
+             with a description on every type and field. Write a home widget's data query \
+             against it; check it with graph_validate and run it with graph_query.",
+            json!({}),
+            &[],
+            &read,
+        ),
+        tool(
+            "graph_validate",
+            "Check a data query",
+            "Check a GraphQL query against the schema without running it. Answers valid, and \
+             every problem with its line and column. Only queries are accepted (the schema is \
+             read-only), nested at most eight selection sets deep.",
+            json!({ "query": document }),
+            &["query"],
+            &read,
+        ),
+        tool(
+            "graph_query",
+            "Run a data query",
+            "Run a GraphQL query against the reader's data and answer it as the app's widgets \
+             get it: data, errors (a field that failed is null beside the rest) and \
+             extensions.invalidatedBy, the parts of the app whose changes make the answer stale.",
+            json!({
+                "query": document,
+                "variables": { "type": "object", "description": "The query's variables." },
+                "operationName": { "type": "string", "description": "Which operation to run, when the document holds several." },
+            }),
+            &["query"],
+            &read,
+        ),
         tool(
             "find_cards",
             "Find cards",
@@ -263,6 +306,9 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         _ => Map::new(),
     });
     let answered = match name {
+        "graph_schema" => Ok(json!({ "schema": crate::graph::graph().sdl() })),
+        "graph_validate" => graph_validate(&args),
+        "graph_query" => graph_query(state, &args).await,
         "find_cards" => find_cards(state, &args).await,
         "get_card" => get_card(state, &args).await,
         "search_collection" => search_collection(state, &args).await,
@@ -279,6 +325,33 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         Ok(answer) => Called::Done(answer),
         Err(why) => Called::Refused(why),
     }
+}
+
+/// `graph_validate`: the document checked, never run.
+fn graph_validate(args: &Args) -> Result<Value, String> {
+    let query = args.required_text("query")?;
+    let problems = crate::graph::graph().validate(&query);
+    Ok(json!({ "valid": problems.is_empty(), "problems": problems }))
+}
+
+/// `graph_query`: the document run on the read connection, on the blocking pool — the page's
+/// `graphql_query` exactly, so an agent sees what a widget would.
+async fn graph_query(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let query = args.required_text("query")?;
+    let variables = match args.0.get("variables") {
+        None | Some(Value::Null) => None,
+        Some(v @ Value::Object(_)) => Some(v.clone()),
+        Some(_) => return Err("variables must be an object.".to_owned()),
+    };
+    let operation = args.text("operationName")?;
+    let core = state.core.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let response =
+            crate::graph::graph().run(&core, &query, variables, operation.as_deref(), None);
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("the graph could not be read: {e}"))?
 }
 
 /// A tool's arguments, read with the refusal a wrong one deserves.
@@ -891,10 +964,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 10);
+        assert_eq!(names.len(), 13);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 10, "names are unique");
+        assert_eq!(names.len(), 13, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -943,6 +1016,50 @@ mod tests {
         assert!(matches_words("Bolt Tribal", Some("tribal bolt")));
         assert!(!matches_words("Bolt Tribal", Some("bolt elves")));
         assert!(matches_words("Bolt Tribal", None));
+    }
+
+    /// The three graph tools: the schema an agent writes against, a draft checked with where its
+    /// problem is, and the answer a widget would get — the deck the add tool made included.
+    #[tokio::test]
+    async fn the_graph_tools_serve_check_and_run_a_query() {
+        let state = state("graph-tools");
+        let schema = done(&state, "graph_schema", json!({})).await;
+        assert!(schema["schema"].as_str().unwrap().contains("type Query"));
+
+        let checked = done(
+            &state,
+            "graph_validate",
+            json!({ "query": "{\n  decks { nmae }\n}" }),
+        )
+        .await;
+        assert_eq!(checked["valid"], false);
+        assert_eq!(checked["problems"][0]["line"], 2);
+        let fine = done(
+            &state,
+            "graph_validate",
+            json!({ "query": "{ decks { id } }" }),
+        )
+        .await;
+        assert_eq!(fine, json!({ "valid": true, "problems": [] }));
+
+        seed(&state, |c| {
+            grimoire_core::schema::fixtures::deck(c, "Burn");
+        });
+        let answer = done(
+            &state,
+            "graph_query",
+            json!({ "query": "{ decks { name } }" }),
+        )
+        .await;
+        assert_eq!(answer["data"]["decks"], json!([{ "name": "Burn" }]));
+        assert_eq!(answer["extensions"]["invalidatedBy"], json!(["decks"]));
+        let why = refused(
+            &state,
+            "graph_query",
+            json!({ "query": "{ decks { id } }", "variables": 3 }),
+        )
+        .await;
+        assert!(why.contains("variables"), "{why}");
     }
 
     #[tokio::test]

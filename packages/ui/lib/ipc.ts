@@ -220,6 +220,7 @@ export type * from "./ipc/table";
 export type * from "./ipc/playtest";
 export type * from "./ipc/packs";
 export type * from "./ipc/draft";
+export type * from "./ipc/graph";
 export { AUTO_BRACKET } from "./ipc/decks";
 
 import { cardCommands } from "./ipc/cards";
@@ -243,6 +244,7 @@ import { appCommands } from "./ipc/app";
 import { playtestCommands } from "./ipc/playtest";
 import { packCommands } from "./ipc/packs";
 import { draftCommands } from "./ipc/draft";
+import { graphCommands } from "./ipc/graph";
 
 /**
  * Every command, as one object — the domains' objects spread together. **The order is not
@@ -271,4 +273,5 @@ export const ipc = {
   ...playtestCommands,
   ...packCommands,
   ...draftCommands,
+  ...graphCommands,
 };

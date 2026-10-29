@@ -286,9 +286,13 @@ export const ARMS = [
   // `apps/light/public/` — the web manifest, its icons, the favicon — is copied into it as it stands.
   { match: ["apps/light/*"], jobs: PAGE_SIDE },
   // shadcn's config (a root file until 2026-10-08, when it moved into `packages/ui/`) and the
-  // formatter's. **Above `packages/ui/*`**, which would take the first and add `web`: neither
-  // reaches a bundle the light entry builds, and only `storybook` and `frontend` read them.
-  { match: ["packages/ui/components.json", ".prettierrc"], jobs: ["frontend", "storybook"] },
+  // formatter's two files. **Above `packages/ui/*`**, which would take the first and add `web`:
+  // none of them reaches a bundle the light entry builds, and only `storybook` and `frontend`
+  // read them.
+  {
+    match: ["packages/ui/components.json", ".prettierrc", ".prettierignore"],
+    jobs: ["frontend", "storybook"],
+  },
   // The desktop's document, `apps/desktop/index.html` (at the root until 2026-10-08). **Not
   // `web`**, whose document is `apps/light/index.html`: the light config names that one as its
   // only input, so this file reaches no `apps/light/dist-web/`. **Above `apps/desktop/*`**, which
@@ -489,6 +493,13 @@ export const ARMS = [
   // depends on it — the crate's manifest says why it must stay that way. Above `crates/*`, which
   // would send it to both.
   { match: ["crates/grimoire-play/*"], jobs: RUST_SIDE },
+
+  // **The read graph's crate** (2026-10-29): `grimoire-graph`, a read-only GraphQL schema over
+  // the core's reads. **Only the desktop links it**, so `rust` formats, lints and tests it, and
+  // `frontend` because `packages/ui/features/home/graphCoverage.test.ts` reads its printed
+  // `schema.graphql` as text and holds every home widget's read to a root field of it. Not `core`
+  // and not `web`, for `grimoire-play`'s reason. Above `crates/*`, which would send it to both.
+  { match: ["crates/grimoire-graph/*"], jobs: RUST_SIDE },
 
   // The engine: `grimoire-core`, a workspace member three hosts link. `rust` compiles it for
   // the desktop and runs its tests, `core` compiles it for the two targets `rust` never builds,

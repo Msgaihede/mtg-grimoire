@@ -330,7 +330,7 @@ jobs:
       # **So a new member is a new `-p` here**, and in `pnpm lint:rust`, or nothing formats it.
       - name: cargo fmt
         if: matrix.part == 'lint'
-        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan -p grimoire-play --check
+        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan -p grimoire-play -p grimoire-graph --check
 
       - name: cargo clippy
         if: matrix.part == 'lint'

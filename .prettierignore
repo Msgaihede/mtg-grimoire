@@ -1,0 +1,5 @@
+# Printed by async-graphql and held byte for byte to the code by `crates/grimoire-graph`'s
+# `the_printed_schema_is_the_reviewed_one` — write it with
+# `GRAPH_SDL_WRITE=1 cargo test -p grimoire-graph`, never with Prettier, which reflows its
+# descriptions and turns that test red.
+crates/grimoire-graph/schema.graphql

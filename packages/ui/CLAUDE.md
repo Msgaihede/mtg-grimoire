@@ -27,6 +27,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **IPC dispatch (`Core.call`)**: Abstraction layer below `@/lib/core` routing calls to desktop Tauri invoke, Android `core_call`, or WebAssembly Worker dispatch.
 - **ASCII JSON headers**: Serializing JSON for IPC headers (e.g. the scanner capture's `x-scanner-capture` sidecar) must use `asciiJson` (escapes non-ASCII) to satisfy header byte constraints.
 - **One rejection shape**: every `ipc.*` wrapper rejects with the backend's sentence as a plain `string` on every host (`invoke` runs the rejection through `ipcError`). Never branch on `instanceof Error` for an IPC failure; render it with `ipcError(e)`.
+- **The read graph (`lib/graphql/`)**: the page holds no GraphQL schema and no GraphQL library. The graph is the desktop's (`crates/grimoire-graph`, answered from SQLite); `useGraphQL` sends a document to `graphql_query` as a string and keeps it fresh by the roots each answer names (`extensions.invalidatedBy`). Never add `graphql` or a schema builder back to the page. `features/home/graphCoverage.test.ts` holds every read the home widgets make to a root field of the printed schema. See [graphql.md](../../docs/reference/graphql.md).
 
 ---
 

@@ -63,7 +63,7 @@ resolver = "2"
 # `phase-engine`, from its git repository, behind a crate only the desktop links. That git
 # dependency is why `rust-toolchain.toml` is a dated nightly — its repository's root manifest has a
 # nightly-only `cargo-features` line — and `docs/reference/goldfish.md` has the rest.
-members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan", "crates/grimoire-play", "crates/card-neural"]
+members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan", "crates/grimoire-play", "crates/grimoire-graph", "crates/card-neural"]
 exclude = ["crates/card-scanner"]
 
 # One version, edition and license for the six members, which inherit each with
