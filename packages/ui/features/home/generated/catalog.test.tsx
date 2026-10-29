@@ -10,8 +10,8 @@ import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 
-import { catalog } from "./catalog";
-import { SpecView } from "./SpecView";
+import { catalog, catalogContract, catalogPrompt, CATALOG_RULES } from "./catalog";
+import { SpecView, type SpecHost } from "./SpecView";
 import {
   DECKS_EXAMPLE,
   EXAMPLES,
@@ -28,8 +28,8 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-function draw(spec: Spec, state?: Record<string, unknown>) {
-  return render(<SpecView spec={spec} state={state} />, { wrapper });
+function draw(spec: Spec, state?: Record<string, unknown>, host?: SpecHost) {
+  return render(<SpecView spec={spec} state={state} host={host} />, { wrapper });
 }
 
 const money = (value: number) => formatPrice(value, MARKETPLACES[DEFAULT_MARKETPLACE].currency);
@@ -66,6 +66,24 @@ describe("the catalogue and the registry", () => {
     for (const name of ["formatPrice", "formatNumber", "formatPercent", "formatDate"]) {
       expect(prompt).toContain(name);
     }
+  });
+
+  it("adds this app's rules to json-render's prompt", () => {
+    const prompt = catalogPrompt();
+    for (const rule of CATALOG_RULES) expect(prompt).toContain(rule);
+  });
+
+  /**
+   * **The prompt and the contract, as files** — what the desktop's MCP server will hand a model
+   * and check a spec against, read by Rust with no TypeScript running. Held to the catalogue here
+   * as `crates/grimoire-graph/schema.graphql` is to the graph; `pnpm vitest run -u` rewrites them
+   * after an intended change, and the diff is the review.
+   */
+  it("matches the committed prompt and contract", async () => {
+    await expect(catalogPrompt() + "\n").toMatchFileSnapshot("./catalog.prompt.md");
+    await expect(JSON.stringify(catalogContract(), null, 2) + "\n").toMatchFileSnapshot(
+      "./catalog.contract.json",
+    );
   });
 
   it.each(Object.entries(EXAMPLES))("validates the %s example", (_, spec) => {
@@ -193,6 +211,28 @@ describe("drawing a spec", () => {
     expect(screen.getByLabelText("Cards to follow")).toBeInTheDocument();
   });
 
+  it("hands the host its settings and its refresh", async () => {
+    const saved: unknown[] = [];
+    let refreshed = 0;
+    draw(SETTINGS_EXAMPLE, undefined, {
+      saveSettings: (settings) => saved.push(settings),
+      refresh: () => (refreshed += 1),
+    });
+
+    await userEvent.click(screen.getByRole("checkbox", { name: "Prices" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await expect.poll(() => saved.length).toBe(1);
+    expect(saved[0]).toMatchObject({ w: 4, prices: true, deckIds: ["9"] });
+    expect(refreshed).toBe(0);
+  });
+
+  it("asks the host to refresh", async () => {
+    let refreshed = 0;
+    draw(DECKS_EXAMPLE, undefined, { refresh: () => (refreshed += 1) });
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await expect.poll(() => refreshed).toBe(1);
+  });
+
   it("picks a radio", async () => {
     draw(GALLERY_EXAMPLE);
     const cards = screen.getByRole("radio", { name: "Cards" });
@@ -227,6 +267,64 @@ describe("the actions", () => {
   it("reads a param that arrives as a state path — a `$item` in a repeat", async () => {
     await executeAction("openDeck", { deckId: "/decks/1/id" }, () => {}, DECKS_EXAMPLE.state);
     expect(useAppStore.getState().openDeckId).toBe(9);
+  });
+
+  it("opens a card's printings", async () => {
+    await run("openPrintings", { cardId: "bolt-lea", oracleId: "o-bolt", name: "Lightning Bolt" });
+    expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "bolt-lea",
+      oracleId: "o-bolt",
+      name: "Lightning Bolt",
+      deck: null,
+      wish: null,
+    });
+  });
+
+  it("searches for text", async () => {
+    await run("searchText", { text: "t:creature otag:ramp" });
+    expect(useAppStore.getState().activeView).toBe("search");
+    expect(useAppStore.getState().pendingSearchText).toBe("t:creature otag:ramp");
+  });
+
+  it("shows a query in the collection", async () => {
+    await run("showInCollection", { query: "e:lea" });
+    expect(useAppStore.getState().activeView).toBe("collection");
+    expect(useAppStore.getState().pendingCollectionQuery).toBe("e:lea");
+  });
+
+  it("reveals a card in its folder", async () => {
+    await run("revealCard", { scope: "wishlist", folderId: null, query: '!"Sol Ring"' });
+    expect(useAppStore.getState().activeView).toBe("wishlist");
+    expect(useAppStore.getState().pendingReveal).toEqual({
+      scope: "wishlist",
+      folderId: null,
+      query: '!"Sol Ring"',
+    });
+  });
+
+  it("opens a deck folder", async () => {
+    await run("openDeckFolder", { folderId: 3 });
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(useAppStore.getState().pendingDeckFolder).toBe(3);
+  });
+
+  it("opens a list's flagged rows, view first", async () => {
+    await run("openReview", { scope: "collection" });
+    expect(useAppStore.getState().activeView).toBe("collection");
+    expect(useAppStore.getState().pendingReviewFilter).toEqual({ scope: "collection" });
+  });
+
+  it("opens a Settings panel, view first", async () => {
+    await run("openSettings", { panel: "prices" });
+    expect(useAppStore.getState().activeView).toBe("settings");
+    expect(useAppStore.getState().pendingSettingsPanel).toBe("prices");
+  });
+
+  it("deals a goldfish game on the open deck", async () => {
+    await run("goldfish", { deckId: 7 });
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(useAppStore.getState().openDeckId).toBe(7);
+    expect(useAppStore.getState().goldfish).toEqual({ deckId: 7, variant: "live" });
   });
 
   it("opens a folder on its page", async () => {

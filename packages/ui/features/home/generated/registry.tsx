@@ -741,6 +741,59 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
         window: "30d",
       });
     },
+    openPrintings: async (params, _, state) => {
+      if (!params) return;
+      useAppStore.getState().openAllPrintings({
+        cardId: valueOf(params.cardId, state),
+        oracleId: valueOf(params.oracleId, state),
+        name: valueOf(params.name, state),
+        deck: null,
+        wish: null,
+      });
+    },
+    searchText: async (params, _, state) => {
+      if (params) useAppStore.getState().showTextInSearch(valueOf(params.text, state));
+    },
+    showInCollection: async (params, _, state) => {
+      if (params) useAppStore.getState().showInCollection(valueOf(params.query, state));
+    },
+    revealCard: async (params, _, state) => {
+      if (!params) return;
+      useAppStore.getState().revealCard({
+        scope: valueOf(params.scope, state),
+        folderId: valueOf(params.folderId, state),
+        query: valueOf(params.query, state),
+      });
+    },
+    openDeckFolder: async (params, _, state) => {
+      if (params) useAppStore.getState().showDeckFolder(valueOf(params.folderId, state));
+    },
+    openReview: async (params, _, state) => {
+      if (!params) return;
+      const scope = valueOf(params.scope, state);
+      const store = useAppStore.getState();
+      store.setActiveView(scope);
+      store.setPendingReviewFilter({ scope });
+    },
+    openSettings: async (params, _, state) => {
+      if (!params) return;
+      const store = useAppStore.getState();
+      store.setActiveView("settings");
+      store.setPendingSettingsPanel(valueOf(params.panel, state));
+    },
+    goldfish: async (params, _, state) => {
+      if (!params) return;
+      const deckId = valueOf(params.deckId, state);
+      const store = useAppStore.getState();
+      store.setActiveView("decks");
+      // After the deck opens, which clears any game: the board is the open deck's third state.
+      store.setOpenDeckId(deckId);
+      store.setGoldfish({ deckId, variant: "live" });
+    },
+    // The host's two: what the widget's own data and stored config are is the custom widget's
+    // to answer, so `SpecView` replaces these with its `host`'s. Drawn without one, they do nothing.
+    refresh: async () => {},
+    saveSettings: async () => {},
   },
 });
 

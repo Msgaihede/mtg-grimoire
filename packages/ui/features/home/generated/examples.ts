@@ -1,7 +1,9 @@
 /**
  * **Example specs over the catalogue** — what a generated widget looks like, each with the state a
  * GraphQL answer would hand it. The stories draw them, `catalog.test.tsx` validates and renders
- * them, and they are the worked examples a model can be shown beside `catalog.prompt()`.
+ * them, and they are the worked examples a model can be shown beside `catalogPrompt()` — so they
+ * keep its rules: the answer at the state root, the widget's own inputs under `/ui`, its settings
+ * under `/settings`.
  */
 import type { Spec } from "@json-render/core";
 
@@ -12,7 +14,13 @@ export const DECKS_EXAMPLE: Spec = {
     body: {
       type: "Stack",
       props: { direction: null, gap: "md", align: null, justify: null, wrap: null },
-      children: ["figures", "list", "footer"],
+      children: ["figures", "list", "footer", "refresh"],
+    },
+    refresh: {
+      type: "Button",
+      props: { label: "Refresh", variant: "quiet" },
+      on: { press: { action: "refresh", params: {} } },
+      children: [],
     },
     figures: {
       type: "Figures",
@@ -82,7 +90,7 @@ export const RARITY_EXAMPLE: Spec = {
     toggle: {
       type: "Switch",
       children: [],
-      props: { label: "Show breakdown", checked: { $bindState: "/show" } },
+      props: { label: "Show breakdown", checked: { $bindState: "/ui/show" } },
     },
     bars: {
       type: "Bars",
@@ -97,7 +105,7 @@ export const RARITY_EXAMPLE: Spec = {
         money: true,
         fill: null,
       },
-      visible: { $state: "/show", eq: true },
+      visible: { $state: "/ui/show", eq: true },
     },
     total: {
       type: "Text",
@@ -112,7 +120,7 @@ export const RARITY_EXAMPLE: Spec = {
     },
   },
   state: {
-    show: true,
+    ui: { show: true },
     total: 1534.2,
     byRarity: { mythic: 820, rare: 540.2, uncommon: 120, common: 54 },
   },
@@ -190,12 +198,12 @@ export const FILTER_EXAMPLE: Spec = {
     },
     foil: {
       type: "ToggleChip",
-      props: { label: "Foil", pressed: { $bindState: "/foilOnly" }, hint: null },
+      props: { label: "Foil", pressed: { $bindState: "/ui/foilOnly" }, hint: null },
       children: [],
     },
     range: {
       type: "PriceRange",
-      props: { min: { $bindState: "/min" }, max: { $bindState: "/max" } },
+      props: { min: { $bindState: "/ui/min" }, max: { $bindState: "/ui/max" } },
       children: [],
     },
     list: {
@@ -218,10 +226,10 @@ export const FILTER_EXAMPLE: Spec = {
       },
       visible: {
         $and: [
-          { $item: "price", lte: { $state: "/max" } },
+          { $item: "price", lte: { $state: "/ui/max" } },
           {
             $or: [
-              { $state: "/foilOnly", not: true },
+              { $state: "/ui/foilOnly", not: true },
               { $item: "foil", eq: true },
             ],
           },
@@ -231,9 +239,7 @@ export const FILTER_EXAMPLE: Spec = {
     },
   },
   state: {
-    foilOnly: false,
-    min: null,
-    max: 100,
+    ui: { foilOnly: false, min: null, max: 100 },
     cards: [
       {
         id: "a",
@@ -256,7 +262,7 @@ export const SETTINGS_EXAMPLE: Spec = {
     body: {
       type: "Stack",
       props: { direction: null, gap: "md", align: null, justify: null, wrap: null },
-      children: ["size", "sort", "show", "figures", "decks", "cards"],
+      children: ["size", "sort", "show", "figures", "decks", "cards", "save"],
     },
     size: { type: "FieldGroup", props: { label: "Size" }, children: ["sizes"] },
     sizes: {
@@ -266,19 +272,19 @@ export const SETTINGS_EXAMPLE: Spec = {
     },
     wide: {
       type: "CompactStepper",
-      props: { label: "Wide", value: { $bindState: "/w" }, min: 2, max: 12 },
+      props: { label: "Wide", value: { $bindState: "/settings/w" }, min: 2, max: 12 },
       children: [],
     },
     tall: {
       type: "CompactStepper",
-      props: { label: "Tall", value: { $bindState: "/h" }, min: 2, max: 8 },
+      props: { label: "Tall", value: { $bindState: "/settings/h" }, min: 2, max: 8 },
       children: [],
     },
     sort: {
       type: "ChoiceChips",
       props: {
         label: "Sort",
-        value: { $bindState: "/sort" },
+        value: { $bindState: "/settings/sort" },
         options: [
           { value: "recent", label: "Most recent" },
           { value: "value", label: "Value" },
@@ -290,12 +296,12 @@ export const SETTINGS_EXAMPLE: Spec = {
     show: { type: "FieldGroup", props: { label: "Show" }, children: ["art", "prices"] },
     art: {
       type: "Checkbox",
-      props: { label: "Card art", checked: { $bindState: "/art" } },
+      props: { label: "Card art", checked: { $bindState: "/settings/art" } },
       children: [],
     },
     prices: {
       type: "Checkbox",
-      props: { label: "Prices", checked: { $bindState: "/prices" } },
+      props: { label: "Prices", checked: { $bindState: "/settings/prices" } },
       children: [],
     },
     figures: {
@@ -307,7 +313,7 @@ export const SETTINGS_EXAMPLE: Spec = {
           { value: "cards", label: "Cards" },
           { value: "decks", label: "Decks" },
         ],
-        selected: { $bindState: "/figures" },
+        selected: { $bindState: "/settings/figures" },
       },
       children: [],
     },
@@ -320,27 +326,34 @@ export const SETTINGS_EXAMPLE: Spec = {
           { value: "9", label: "Mono-Red Burn", hint: "Modern" },
           { value: "12", label: "Elves", hint: null },
         ],
-        selected: { $bindState: "/deckIds" },
-        triggerLabel: { $template: "${/deckCount}" },
+        selected: { $bindState: "/settings/deckIds" },
+        triggerLabel: "Decks",
       },
       children: [],
     },
     cards: {
       type: "CardSearch",
-      props: { label: "Cards to follow", cards: { $bindState: "/cards" }, max: 10 },
+      props: { label: "Cards to follow", cards: { $bindState: "/settings/cards" }, max: 10 },
+      children: [],
+    },
+    save: {
+      type: "Button",
+      props: { label: "Save", variant: "primary" },
+      on: { press: { action: "saveSettings", params: { path: "/settings" } } },
       children: [],
     },
   },
   state: {
-    w: 4,
-    h: 3,
-    sort: "recent",
-    art: true,
-    prices: false,
-    figures: ["value", "cards"],
-    deckIds: ["9"],
-    deckCount: "1 deck",
-    cards: [],
+    settings: {
+      w: 4,
+      h: 3,
+      sort: "recent",
+      art: true,
+      prices: false,
+      figures: ["value", "cards"],
+      deckIds: ["9"],
+      cards: [],
+    },
   },
 };
 
@@ -482,14 +495,14 @@ export const GALLERY_EXAMPLE: Spec = {
     },
     search: {
       type: "TextInput",
-      props: { label: "Filter", value: { $bindState: "/filter" }, placeholder: "Filter rows" },
+      props: { label: "Filter", value: { $bindState: "/ui/filter" }, placeholder: "Filter rows" },
       children: [],
     },
     sort: {
       type: "Select",
       props: {
         label: "Sort",
-        value: { $bindState: "/sort" },
+        value: { $bindState: "/ui/sort" },
         options: [
           { value: "value", label: "By value" },
           { value: "name", label: "By name" },
@@ -499,7 +512,7 @@ export const GALLERY_EXAMPLE: Spec = {
     },
     switch: {
       type: "Switch",
-      props: { label: "Foils only", checked: { $bindState: "/foils" } },
+      props: { label: "Foils only", checked: { $bindState: "/ui/foils" } },
       children: [],
     },
     button: {
@@ -519,7 +532,7 @@ export const GALLERY_EXAMPLE: Spec = {
       type: "Combobox",
       props: {
         label: "Set",
-        value: { $bindState: "/set" },
+        value: { $bindState: "/ui/set" },
         options: [
           { value: "mh3", label: "Modern Horizons 3" },
           { value: "lea", label: "Limited Edition Alpha" },
@@ -533,7 +546,7 @@ export const GALLERY_EXAMPLE: Spec = {
       type: "MultiSelect",
       props: {
         label: "Colours",
-        selected: { $bindState: "/colors" },
+        selected: { $bindState: "/ui/colors" },
         options: [
           { value: "W", label: "White" },
           { value: "U", label: "Blue" },
@@ -549,7 +562,7 @@ export const GALLERY_EXAMPLE: Spec = {
       type: "Segmented",
       props: {
         label: "Window",
-        value: { $bindState: "/window" },
+        value: { $bindState: "/ui/window" },
         options: [
           { value: "7d", label: "Week" },
           { value: "30d", label: "Month" },
@@ -562,7 +575,7 @@ export const GALLERY_EXAMPLE: Spec = {
       type: "RadioGroup",
       props: {
         label: "Count",
-        value: { $bindState: "/count" },
+        value: { $bindState: "/ui/count" },
         options: [
           { value: "copies", label: "Copies", hint: "Every copy, foils and all" },
           { value: "cards", label: "Cards", hint: null },
@@ -572,34 +585,36 @@ export const GALLERY_EXAMPLE: Spec = {
     },
     chip: {
       type: "ToggleChip",
-      props: { label: "NM", pressed: { $bindState: "/nearMint" }, hint: "Near mint" },
+      props: { label: "NM", pressed: { $bindState: "/ui/nearMint" }, hint: "Near mint" },
       children: [],
     },
     stepper: {
       type: "NumberStepper",
-      props: { label: "Rows", value: { $bindState: "/rows" }, min: 1, max: 20 },
+      props: { label: "Rows", value: { $bindState: "/ui/rows" }, min: 1, max: 20 },
       children: [],
     },
     range: {
       type: "PriceRange",
-      props: { min: { $bindState: "/min" }, max: { $bindState: "/max" } },
+      props: { min: { $bindState: "/ui/min" }, max: { $bindState: "/ui/max" } },
       children: [],
     },
     message: { type: "Message", props: { text: "No decks yet.", tone: null }, children: [] },
   },
   state: {
     cardId: "",
-    filter: "",
-    sort: "value",
-    foils: false,
-    set: "",
-    colors: ["R"],
-    window: "30d",
-    count: "copies",
-    nearMint: false,
-    rows: 5,
-    min: null,
-    max: null,
+    ui: {
+      filter: "",
+      sort: "value",
+      foils: false,
+      set: "",
+      colors: ["R"],
+      window: "30d",
+      count: "copies",
+      nearMint: false,
+      rows: 5,
+      min: null,
+      max: null,
+    },
     prices: Array.from({ length: 40 }, (_, i) => Math.round(0.1 * 1.2 ** i * 100) / 100),
     history: Array.from({ length: 30 }, (_, i) => ({
       day: 1_790_000_000 + i * 86_400,

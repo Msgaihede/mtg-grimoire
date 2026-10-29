@@ -12,13 +12,22 @@ widget kind from.
 
 ## The files
 
-| File               | What                                                                                                                                                                                   |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `catalog.ts`       | `defineCatalog` — every component, action and function a spec may name, with zod props and a description written for the model. `catalog.prompt()`, `.validate(spec)`, `.jsonSchema()` |
-| `registry.tsx`     | `defineRegistry` — each name drawn with the app's own part; the actions as store hand-offs; `useCatalogFunctions()`, the `$computed` functions at the reader's marketplace             |
-| `SpecView.tsx`     | One spec drawn: the store, the providers, the registry, the handlers and the functions in one place, so a widget body, a story and a test draw a spec the same way                     |
-| `examples.ts`      | Worked specs with the state an answer would hand them — the stories draw them, the suite validates and renders them                                                                    |
-| `catalog.test.tsx` | Catalogue and registry name the same components; the prompt names everything; every example validates; drawing, binding, visibility, `$computed`; each action's hand-off               |
+| File                    | What                                                                                                                                                                                   |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `catalog.ts`            | `defineCatalog` — every component, action and function a spec may name, with zod props and a description written for the model. `catalog.prompt()`, `.validate(spec)`, `.jsonSchema()` |
+| `registry.tsx`          | `defineRegistry` — each name drawn with the app's own part; the actions as store hand-offs; `useCatalogFunctions()`, the `$computed` functions at the reader's marketplace             |
+| `SpecView.tsx`          | One spec drawn: the store, the providers, the registry, the handlers and the functions in one place, so a widget body, a story and a test draw a spec the same way                     |
+| `examples.ts`           | Worked specs with the state an answer would hand them — the stories draw them, the suite validates and renders them                                                                    |
+| `catalog.test.tsx`      | Catalogue and registry name the same components; the prompt names everything; every example validates; drawing, binding, visibility, `$computed`; each action's hand-off               |
+| `catalog.prompt.md`     | `catalogPrompt()` — json-render's prompt with this app's rules (`CATALOG_RULES`). A committed snapshot                                                                                 |
+| `catalog.contract.json` | `catalogContract()` — every component's props and every action's params as JSON Schema, with slots and descriptions. A committed snapshot                                              |
+
+**The two snapshots are for the desktop's MCP server**, which hands a model the vocabulary and
+checks its spec with no TypeScript running — the read graph's `schema.graphql`, for the picture
+half. `catalog.test.tsx` holds both to the catalogue byte for byte (`toMatchFileSnapshot`);
+`pnpm vitest run -u` rewrites them after an intended change, and `.prettierignore` keeps Prettier
+off them. json-render's own `jsonSchema()` is not enough for that job: it describes the spec's
+envelope, with every component's props an open object.
 
 json-render is pinned exact (`@json-render/core` and `@json-render/react` 0.21.1, with `zod` 4 as
 its peer): it is young and its minor versions move.
@@ -76,11 +85,40 @@ card search aside.
   compile error on the other, and the suite fails on a name on one side only.
 - **Colours are words from the palette** (`accent`, `up`, `down`, `dim`, the five mana colours and
   colourless), never a free colour: `catalog.validate` refuses `#ff00ff`.
-- **Inputs write only the widget's own state** (`$bindState`). The graph is read-only and so is a
-  widget: an input filters, sorts or switches what it draws, never the reader's data.
-- **Actions navigate** — `openCard`, `openDeck`, `openFolder`, `openView`, `showSet`,
-  `openPriceHistory` — through the store hand-offs the hand-written widgets use, in their order
-  (`setActiveView` before a one-shot like `setOpenDeckId`).
+- **State has three parts.** The widget's GraphQL answer is the state root (`/decks/0/name` is
+  the query's `decks` field); `/ui` is the widget's own inputs (a filter, a sort, a switch); and
+  `/settings` is what the reader configures and keeps. A model seeds only `/ui` and `/settings`,
+  never sample data for the query's fields — `CATALOG_RULES` overrides json-render's own rule,
+  written for pages that invent their data. The examples keep the same layout.
+- **Inputs write only the widget's own state** (`$bindState` under `/ui` or `/settings`). The
+  graph is read-only and so is a widget: an input filters, sorts or switches what it draws, never
+  the reader's data.
+- **Actions navigate**, through the store hand-offs the hand-written widgets use and in their
+  order (`setActiveView` before a one-shot like `setOpenDeckId`):
+
+  | Action             | Goes to                                                    |
+  | ------------------ | ---------------------------------------------------------- |
+  | `openCard`         | a printing's card details                                  |
+  | `openDeck`         | a deck in the editor                                       |
+  | `openFolder`       | a collection or wishlist folder                            |
+  | `openView`         | one of the app's pages                                     |
+  | `showSet`          | Search, showing one set                                    |
+  | `searchText`       | Search, showing what a text or query finds                 |
+  | `showInCollection` | the Collection, filtered by a query                        |
+  | `revealCard`       | the folder a card is filed in, filtered to it              |
+  | `openDeckFolder`   | the Decks gallery, standing in one deck folder             |
+  | `openReview`       | the Collection or Wishlist, its flagged rows only          |
+  | `openSettings`     | Settings, one panel in view (Settings' own list, `nav.ts`) |
+  | `openPriceHistory` | a printing's price history for one finish                  |
+  | `openPrintings`    | the dialog of every printing of a card                     |
+  | `goldfish`         | a deck's solo practice game (desktop only)                 |
+
+  No action writes the reader's data; adding one is the owner's decision.
+
+- **Two actions are the host's**: `refresh` (ask the widget's document again) and `saveSettings`
+  (keep the state under a path — `/settings` — in the widget's stored config). `SpecView` answers
+  them through its `host` prop; drawn without one (a story, a preview) they do nothing. The custom
+  widget kind will be that host.
 - **A `$item` in an action's params arrives as a state path.** json-render resolves it to the
   item's path (`/decks/1/id`), the shape its own `setState` needs, and its prompt tells a model so.
   The actions read such a param back from the spec's state (`valueOf` in `registry.tsx`); no value
@@ -97,6 +135,7 @@ card search aside.
 
 `Home/Generated/SpecView`: Decks (figures, a `repeat` of rows that open their deck, a `$template`
 footer), Rarity (bars, a switch hiding them), Filter (rows narrowed by a chip and a price range
-through `visible`), Settings (the widgets' settings controls), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
+through `visible`), Settings (the widgets' settings controls, saved
+through `saveSettings`), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
 component). Each spec sits in a box a widget of its footprint covers, with
 that box's fit.

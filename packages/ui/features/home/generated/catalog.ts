@@ -31,6 +31,7 @@
 import { defineCatalog } from "@json-render/core";
 import { schema } from "@json-render/react/schema";
 import { z } from "zod";
+import { PANELS, type PanelId } from "@/features/settings/nav";
 
 /** The gap scale every layout component shares. */
 const GAP = z.enum(["none", "sm", "md", "lg"]).nullable();
@@ -56,6 +57,12 @@ export const VIEWS = [
   "playtesting",
   "draft",
 ] as const;
+
+/** The Settings panels `openSettings` can bring into view — Settings' own list, so a renamed
+ *  panel is a new word here too. */
+const PANEL_IDS = Object.keys(PANELS) as [PanelId, ...PanelId[]];
+
+const SCOPE = z.enum(["collection", "wishlist"]);
 
 export const catalog = defineCatalog(schema, {
   components: {
@@ -486,7 +493,7 @@ export const catalog = defineCatalog(schema, {
     },
     openFolder: {
       params: z.object({
-        scope: z.enum(["collection", "wishlist"]),
+        scope: SCOPE,
         folderId: z.number().int(),
       }),
       description: "Open a collection or wishlist folder, by its id.",
@@ -505,6 +512,53 @@ export const catalog = defineCatalog(schema, {
         finish: FINISH,
       }),
       description: "Open a printing's price history chart for one finish.",
+    },
+    openPrintings: {
+      params: z.object({ cardId: z.string(), oracleId: z.string(), name: z.string() }),
+      description:
+        "Open the dialog of every printing of a card, marking the one `cardId` names. `oracleId` is the card's Oracle id; `name` captions the dialog.",
+    },
+    searchText: {
+      params: z.object({ text: z.string() }),
+      description:
+        "Go to the Search page showing what `text` finds — a card's name, or the search box's own syntax (`t:creature otag:ramp`).",
+    },
+    showInCollection: {
+      params: z.object({ query: z.string() }),
+      description:
+        'Go to the Collection page filtered by `query`, in the search box\'s syntax (`!"Lightning Bolt" e:lea`).',
+    },
+    revealCard: {
+      params: z.object({ scope: SCOPE, folderId: z.number().int().nullable(), query: z.string() }),
+      description:
+        "Go to the Collection or Wishlist folder a card is filed in (`folderId` null: the cards filed in no folder), filtered by a `query` naming it.",
+    },
+    openDeckFolder: {
+      params: z.object({ folderId: z.number().int() }),
+      description: "Go to the Decks page standing in one deck folder.",
+    },
+    openReview: {
+      params: z.object({ scope: SCOPE }),
+      description: "Go to the Collection or Wishlist showing only the rows flagged for review.",
+    },
+    openSettings: {
+      params: z.object({ panel: z.enum(PANEL_IDS) }),
+      description: "Go to Settings with one of its panels in view.",
+    },
+    goldfish: {
+      params: z.object({ deckId: z.number().int() }),
+      description:
+        "Open a deck and deal a solo practice game of it (goldfishing), on the deck as built. Desktop only.",
+    },
+    refresh: {
+      params: z.object({}),
+      description:
+        "Read the widget's data again now. It already refreshes whenever the reader's data changes, so this is for an explicit Refresh button.",
+    },
+    saveSettings: {
+      params: z.object({ path: z.string() }),
+      description:
+        "Keep the widget's settings: the state under `path` (`/settings`) is stored with the widget and is that path's state when it is drawn again. Bind settings inputs under that path and give the settings face a Save button pressing this.",
     },
   },
 
@@ -527,3 +581,59 @@ export const catalog = defineCatalog(schema, {
 });
 
 export type Catalog = typeof catalog;
+
+/**
+ * **The rules this app adds to json-render's prompt.** Its own rules are written for a page that
+ * invents its data; a widget reads the reader's, so the first three replace that half, and the
+ * rest are this catalogue's conventions a model would otherwise only meet as a failed validation.
+ */
+export const CATALOG_RULES: readonly string[] = [
+  "This spec draws a widget on the home page of a Magic: The Gathering collection app. A widget is a small tile, a few hundred pixels each way: show one idea, and prefer Figures, Bars and a RowList over long text.",
+  "The widget's data is the answer to a GraphQL query written alongside the spec: the answer's `data` object is the state root, so `{ \"$state\": \"/decks/0/name\" }` reads the query's `decks` field. Never write sample data into state for the query's fields — the answer supplies them — and never hardcode a value the query answers.",
+  "Seed state only for the widget's own inputs, under `/ui` (what the reader filters, sorts or switches now) and `/settings` (what they configure and keep with `saveSettings`). Inputs bind only those paths, never a query field: the reader's data is read-only.",
+  "Actions only navigate. There is no action that adds, edits or removes the reader's cards, decks, folders or wishlists.",
+  'Inside a repeat, `{ "$item": "id" }` in an action\'s params passes the item\'s state path; the navigation actions read it back as the value.',
+  "Colours are palette words (`accent`, `up`, `down`, `dim`, `W`, `U`, `B`, `R`, `G`, `C`), never CSS colours or class names.",
+  'Money: a numeric value with `money: true`, a Price, or `{ "$computed": "formatPrice", "args": { "value": ... } }` — never a currency symbol written into text. A missing price is null, never 0.',
+  "Timestamps are Unix seconds unless a field's description says milliseconds; write them with the `formatDate` function.",
+  "Text holding mana or tap symbols (`{2}{R}`, `{T}`) is a ManaText, which draws them as icons.",
+  "Optional props take null when not used — never omit them.",
+];
+
+/** The prompt a model writes a widget's spec from: json-render's, with {@link CATALOG_RULES}. */
+export function catalogPrompt(): string {
+  return catalog.prompt({ customRules: [...CATALOG_RULES] });
+}
+
+/**
+ * **The catalogue as data**, for a reader with no TypeScript — the desktop's MCP server, which hands
+ * a model the vocabulary and checks a spec against it. json-render's own `jsonSchema()` is the
+ * spec's envelope only (props an open object); this is every component's props and every action's
+ * params as JSON Schema, with the slots and the descriptions. **Any prop or param value may instead
+ * be an expression object** (`$state`, `$item`, `$index`, `$bindState`, `$bindItem`, `$template`,
+ * `$computed`, `$cond`) — a checker accepts one wherever a value goes.
+ */
+export function catalogContract(): object {
+  const { components, actions, functions } = catalog.data;
+  return {
+    components: Object.fromEntries(
+      Object.entries(components).map(([name, def]) => [
+        name,
+        {
+          description: def.description,
+          slots: "slots" in def ? def.slots : [],
+          props: z.toJSONSchema(def.props),
+        },
+      ]),
+    ),
+    actions: Object.fromEntries(
+      Object.entries(actions).map(([name, def]) => [
+        name,
+        { description: def.description, params: z.toJSONSchema(def.params) },
+      ]),
+    ),
+    functions: Object.fromEntries(
+      Object.entries(functions).map(([name, def]) => [name, { description: def.description }]),
+    ),
+  };
+}
