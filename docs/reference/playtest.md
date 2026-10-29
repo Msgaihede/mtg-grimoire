@@ -247,20 +247,28 @@ The answer is `SelectCards`, `SelectTargets` for `ChooseObjectsSelection`, or th
 (`ChooseKeptCreatures`, `ChooseKeptPermanents`) for a keep. The meaning of the picked cards is
 phase's:
 
-| Question                                         | `purpose` | The picked cards                                            | Count                                               |
-| ------------------------------------------------ | --------- | ----------------------------------------------------------- | --------------------------------------------------- |
-| `ScryChoice`                                     | `scry`    | Stay on top, first picked on top; the rest go to the bottom | 0 to all, ordered                                   |
-| `SurveilChoice`                                  | `surveil` | Stay on top, in order; the rest go to the graveyard         | 0 to all, ordered                                   |
-| `DiscardChoice`, `DiscardToHandSize`             | `discard` | Are discarded                                               | `count`, or up to it                                |
-| `SearchChoice`                                   | `search`  | Are found                                                   | `count`, or up to it when a partial find is allowed |
-| `DigChoice`                                      | `dig`     | Are kept, from `selectable_cards`                           | `keep_count`, or up to it                           |
-| `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`  | Are chosen                                                  | as the question says                                |
-| `RevealChoice`                                   | `reveal`  | Is revealed                                                 | one, or none when optional                          |
-| `MultiTargetSelection`                           | `targets` | Are the targets                                             | `min_targets` to `max_targets`                      |
-| `KeepWithinTotalPowerChoice`                     | `keep`    | Are kept; the rest are sacrificed                           | any, their total power at most `powerCap`           |
-| `KeepExactPermanentsChoice`                      | `keep`    | Are kept; the rest are sacrificed                           | `required_count`                                    |
-| `EffectZoneChoice` of `CastFromZone`             | `cast`    | Is cast                                                     | `min_count` to `count`, or `count`                  |
-| `CastOffer`'s `FreeCastWindow`                   | `cast`    | Is cast; none closes the window                             | one, or none                                        |
+| Question                                         | `purpose`   | The picked cards                                                 | Count                                               |
+| ------------------------------------------------ | ----------- | ---------------------------------------------------------------- | --------------------------------------------------- |
+| `ScryChoice`                                     | `scry`      | Stay on top, first picked on top; the rest go to the bottom      | 0 to all, ordered                                   |
+| `SurveilChoice`                                  | `surveil`   | Stay on top, in order; the rest go to the graveyard              | 0 to all, ordered                                   |
+| `DiscardChoice`, `DiscardToHandSize`             | `discard`   | Are discarded                                                    | `count`, or up to it                                |
+| `SearchChoice`                                   | `search`    | Are found                                                        | `count`, or up to it when a partial find is allowed |
+| `DigChoice`                                      | `dig`       | Are kept, from `selectable_cards`                                | `keep_count`, or up to it                           |
+| `ChooseFromZoneChoice`, `ChooseObjectsSelection` | `choose`    | Are chosen                                                       | as the question says                                |
+| `RevealChoice`                                   | `reveal`    | Is revealed                                                      | one, or none when optional                          |
+| `MultiTargetSelection`                           | `targets`   | Are the targets                                                  | `min_targets` to `max_targets`                      |
+| `KeepWithinTotalPowerChoice`                     | `keep`      | Are kept; the rest are sacrificed                                | any, their total power at most `powerCap`           |
+| `KeepExactPermanentsChoice`                      | `keep`      | Are kept; the rest are sacrificed                                | `required_count`                                    |
+| `EffectZoneChoice` of `Sacrifice`                | `sacrifice` | Are sacrificed                                                   | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of `CastFromZone`             | `cast`      | Is cast                                                          | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of `Discard`                  | `discard`   | Are discarded                                                    | `min_count` to `count`, or `count`                  |
+| `EffectZoneChoice` of any other kind             | `choose`    | Are what the effect acts on; into a library, in the order picked | `min_count` to `count`, or `count`                  |
+| `CastOffer`'s `FreeCastWindow`                   | `cast`      | Is cast; none closes the window                                  | one, or none                                        |
+
+Every `EffectZoneChoice` asked of the reader is a pick, whatever its effect (issue #1416): its
+fields give the count, and its kind only what the picked cards are for. Before, only a cast was;
+"each player sacrifices six creatures" (Necrotic Hex) fell to `legal_actions`, which offers a few
+sampled sets of six, with no way to say which six.
 
 A keep within a total power (Slaughter the Strong, Destined Confrontation — issue #1079) is bounded
 by power as well as count: `powerCap` is the cap, each creature counts its current power

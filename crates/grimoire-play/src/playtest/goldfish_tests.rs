@@ -557,6 +557,76 @@ fn a_keep_within_total_power_asks_which_creatures_to_keep() {
     assert_eq!(buried, 2, "the bears left out were sacrificed");
 }
 
+/// "Each player sacrifices six creatures" is the reader's to choose (issue #1416): the engine's
+/// `EffectZoneChoice` is a pick of exactly six of the reader's seven creatures, not its handful of
+/// sampled sets. Five is refused, and the six picked are the six sacrificed.
+#[test]
+fn sacrificing_several_creatures_asks_which_ones() {
+    let (asked, short, done, spared) = engine(|| {
+        let mut cards = deck();
+        cards.push(card(
+            "Necrotic Hex",
+            Some("{G}"),
+            "Sorcery",
+            "Each player sacrifices six creatures. You create six tapped 2/2 black Zombie creature tokens.",
+            None,
+            10,
+        ));
+        let (mut game, _) = fish(&cards, 7);
+        game.act(A::Keep { bottom: vec![] }).unwrap();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        let mut creatures: Vec<u64> = (0..4)
+            .map(|_| put_down(&mut game, "Grizzly Bears"))
+            .collect();
+        creatures.extend((0..3).map(|_| put_down(&mut game, "Llanowar Elves")));
+        let spell = in_hand(&mut game, "Necrotic Hex");
+        let asked = game.act(A::Play { id: spell }).unwrap();
+        let short = game
+            .act(A::PickCards {
+                ids: creatures[..5].to_vec(),
+            })
+            .unwrap_err();
+        assert_eq!(game.view(), asked.view, "a refusal changed nothing");
+        let spared = creatures[6];
+        let done = game
+            .act(A::PickCards {
+                ids: creatures[..6].to_vec(),
+            })
+            .unwrap();
+        (asked, short, done, spared)
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt, "{:?}", asked.happened);
+    let prompt = asked.view.prompt.as_ref().unwrap();
+    assert_eq!(prompt.kind, "EffectZoneChoice");
+    let pick = prompt.pick.as_ref().expect("asked as a pick");
+    assert_eq!(pick.purpose, PlaytestPickPurpose::Sacrifice);
+    assert_eq!((pick.min, pick.max), (6, 6));
+    assert_eq!(pick.eligible.len(), 7, "every creature the reader controls");
+    assert!(!pick.ordered);
+    assert_eq!(pick.zone, Some(Place::Battlefield));
+    assert_eq!(short, "Pick 6 cards.");
+
+    assert_eq!(done.view.stage, Stage::Main, "{:?}", done.happened);
+    let left: Vec<&GameCard> = done
+        .view
+        .you
+        .battlefield
+        .iter()
+        .filter(|c| c.power.is_some() && !c.is_token)
+        .collect();
+    assert_eq!(left.len(), 1, "one creature spared: {left:?}");
+    assert_eq!(left[0].id, spared, "the one the reader left out");
+    let zombies = done
+        .view
+        .you
+        .battlefield
+        .iter()
+        .filter(|c| c.is_token && c.tapped)
+        .count();
+    assert_eq!(zombies, 6, "the spell went on to make its Zombies");
+}
+
 /// Neither seat loses: the goldfish at 0 life is "dead on your turn 1", and the game goes on.
 #[test]
 fn a_life_total_at_zero_does_not_end_the_game() {

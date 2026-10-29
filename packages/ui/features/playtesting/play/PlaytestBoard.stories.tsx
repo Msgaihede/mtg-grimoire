@@ -25,6 +25,7 @@ import {
   goldfishTurn,
   castPick,
   keepPick,
+  sacrificePick,
   openingHand,
   optionalEffectPrompt,
   playLocally,
@@ -521,6 +522,19 @@ export const DiscardPick: Story = {
 /** Keep creatures with total power 4 or less; one that would pass the cap is drawn dim. */
 export const KeepPick: Story = {
   args: { view: keepPick().view },
+};
+
+/**
+ * "Each player sacrifices two creatures" (issue #1416): the reader picks which two, and confirm
+ * waits until two are picked.
+ */
+export const SacrificePick: Story = {
+  args: { view: sacrificePick().view },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("heading", { name: "Sacrifice 2" })).toBeVisible();
+    await expect(canvas.getByText("0 of 2")).toBeVisible();
+  },
 };
 
 /**
