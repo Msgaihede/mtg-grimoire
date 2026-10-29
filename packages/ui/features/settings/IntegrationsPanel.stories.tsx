@@ -2,7 +2,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { registerCommands } from "@grimoire/fake/core";
-import { INTEGRATIONS_ROUND_FAILED } from "@grimoire/fake/db";
+import {
+  FAKE_MCP_TOKEN,
+  INTEGRATIONS_ROUND_FAILED,
+  MCP_DEFAULT_PORT,
+  mcpPortTaken,
+} from "@grimoire/fake/db";
 import { activeScope } from "@grimoire/fake/scope";
 import type { IntegrationsStatus } from "@/lib/ipc";
 import {
@@ -15,6 +20,7 @@ import {
   SENDING,
   STRANDED,
 } from "./IntegrationsPanel";
+import { listeningLine, MCP_HEADING, MCP_OFF } from "./LocalMcpSection";
 
 const meta = {
   title: "Settings/IntegrationsPanel",
@@ -35,7 +41,14 @@ const meta = {
     docs: {
       description: {
         component:
-          "The group's switch for a copy of the collection held on a server, so integrations " +
+          "**Two parts, two switches.** First the local MCP server (issue #1395): an endpoint " +
+          "this app serves on `127.0.0.1` while it is open, so an AI agent on the same computer " +
+          "— Claude Desktop, Claude Code, Cursor — can read and add to the collection, wishlist " +
+          "and decks. Free, desktop-only, nothing leaves the computer; gated by a bearer token " +
+          "the part masks until asked, copies, and replaces only after a question. The port is " +
+          "the reader's to move, which is the way out when a launch finds it taken. The " +
+          "`Local server` stories below are that part.\n\n" +
+          "Then the group's switch for a copy of the collection held on a server, so integrations " +
           "can answer while the reader's devices are off (issue #1396). No integration is " +
           "connected yet: Discord and a remote MCP server come later.\n\n" +
           "**The switch and the five boxes are the group's, not the device's** — two devices " +
@@ -254,6 +267,73 @@ export const Pending: Story = {
       "aria-disabled",
       "true",
     );
+  },
+};
+
+/** The local server's switch, by the line beside it and its own word. */
+const theLocalSwitch = (canvas: ReturnType<typeof within>) =>
+  canvas.findByRole("switch", { name: /^Let agents on this computer connect/ });
+
+/**
+ * The local MCP server as every install opens it: off, under its own heading and above the cloud
+ * copy's, with nothing to configure until it is on — only the port, which a reader may move first.
+ */
+export const LocalServerOff: Story = {
+  name: "Local server: off",
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const local = canvas.getByRole("group", { name: MCP_HEADING });
+    const toggle = await theLocalSwitch(canvas);
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(toggle).toHaveAccessibleDescription(MCP_OFF);
+    await expect(within(local).queryByText("Token")).not.toBeInTheDocument();
+    await expect(canvas.getByRole("textbox", { name: "Port" })).toHaveValue(
+      String(MCP_DEFAULT_PORT),
+    );
+  },
+};
+
+/**
+ * Switched on: listening at its address, the token masked until *Show*, and a configuration for
+ * the chosen client — Claude Code's command first — with the token masked in it too. Copy hands
+ * over the real one.
+ */
+export const LocalServerOn: Story = {
+  name: "Local server: on",
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const toggle = await theLocalSwitch(canvas);
+    await userEvent.click(toggle);
+
+    await waitFor(async () => {
+      await expect(toggle).toHaveAttribute("aria-checked", "true");
+    });
+    await expect(toggle).toHaveAccessibleDescription(
+      listeningLine(`http://127.0.0.1:${MCP_DEFAULT_PORT}/mcp`),
+    );
+    await expect(canvas.queryByText(FAKE_MCP_TOKEN)).not.toBeInTheDocument();
+    await expect(canvas.getByRole("radio", { name: "Claude Code" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await userEvent.click(canvas.getByRole("button", { name: "Show the token" }));
+    await expect(canvas.getByText(FAKE_MCP_TOKEN)).toBeInTheDocument();
+  },
+};
+
+/**
+ * A launch that found the port taken by another program: switched on, not listening, and the
+ * desktop's sentence beside the switch. The way out is a port of the reader's own, below, which
+ * starts the server there — the fake's `mcpPortTaken` world.
+ */
+export const LocalServerPortTaken: Story = {
+  name: "Local server: port taken",
+  parameters: { fake: { seed: "shared", fault: "mcpPortTaken" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const toggle = await theLocalSwitch(canvas);
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    await expect(toggle).toHaveAccessibleDescription(mcpPortTaken(MCP_DEFAULT_PORT));
   },
 };
 

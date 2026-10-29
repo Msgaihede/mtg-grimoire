@@ -19,7 +19,7 @@
  * with a different writer, and a second answer kept beside it would drift from the first.
  */
 import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
-import { OWNED_WRITE_KEYS, RELAY_KEY, REVIEW_KEY, SYNC_KEY } from "./query";
+import { MCP_KEY, OWNED_WRITE_KEYS, RELAY_KEY, REVIEW_KEY, SYNC_KEY } from "./query";
 import SYNCED_TABLE_NAMES from "./syncedTables.json";
 
 /**
@@ -47,6 +47,12 @@ export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
   // The scanner's sounds (`features/scanner/sounds/useScanSoundSettings.ts`' `SCAN_SOUNDS_KEY`,
   // spelled here for `trayCount`'s reason): set in Settings, heard in a Scanner another window has.
   ["scanSounds"],
+  // The local MCP server's switch, port and token (issue #1395): stored in `app_meta` and served
+  // by this one process, so a second window's Integrations panel would otherwise keep drawing a
+  // token the first has just replaced. Imported rather than spelled — `query.ts` is this folder's,
+  // so there is no `features` import to avoid. `mcp_status` writes only the first token an
+  // install ever has, so a refresh here answers no write of its own and starts no loop.
+  MCP_KEY,
 ];
 
 /**

@@ -37,6 +37,7 @@ import { QueryClient } from "@tanstack/react-query";
 import {
   allHandlers,
   applyIntegrationsFault,
+  applyMcpFault,
   applySupporterFault,
   errorLogSeed,
   mirrorFailedPass,
@@ -254,6 +255,8 @@ export function installWorld(
   // The integrations switch on with a failed round behind it — an On state, because the crate
   // clears a round's failure whenever it hears the store is off (`db.ts`, at `integrationsError`).
   applyIntegrationsFault(db);
+  // The local MCP server switched on over a port another program took — enabled, not running.
+  applyMcpFault(db);
 
   const scope = createScope(allHandlers(db));
   // The one fault that is about the *host*: a browser, which answers a name the desktop refuses —

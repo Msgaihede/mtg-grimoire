@@ -116,13 +116,21 @@ jobs:
             echo "$flags" | sed 's/^\([a-z]*\)=\(.*\)$/| \1 | `\2` |/'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # **Five legs in parallel, where this was one serial job of 8–12 minutes.** Vitest alone was
+  # **Legs in parallel, where this was one serial job of 8–12 minutes.** Vitest alone was
   # 345–415 s for ~390 files on one runner, behind `pnpm build` and `eslint .`, with
   # `build-storybook` after it — and branch protection is `strict`, so every merge into `main`
-  # re-queues every open PR behind that whole critical path. One leg builds and lints; four split
-  # the test files with vitest's `--shard`, which divides the collected files deterministically,
-  # so a leg runs the same files on every run and a failure names its shard. Storybook's build is
+  # re-queues every open PR behind that whole critical path. One leg builds and lints; the others
+  # split the test files with vitest's `--shard`, which divides the collected files
+  # deterministically, so a leg runs the same files on every run and a failure names its shard. Storybook's build is
   # a job of its own below.
+  #
+  # **Six test shards since 2026-10-29, packed by time** (`scripts/vitest-shard.ts`). Vitest's
+  # own `--shard` splits by file count, and the four count-equal shards measured that day took
+  # 382, 186, 311 and 136 s — the job waited on the first. The sequencer packs the files by the
+  # durations in `scripts/vitest-durations.json` instead; regenerate it with
+  # `pnpm test:durations` when one shard starts running long. The slowest of the four was slow
+  # for one file — `packages/ui/stories.test.tsx`, ~5.5 min alone — which `vitest.config.ts` now
+  # collects as four projects, because a file is the smallest thing a shard is handed.
   #
   # **The matrix is safe here because `ci-ok` reads `needs.frontend.result`**, which is
   # `failure` when any leg fails — the protected name is still `ci-ok`, never a leg's.
@@ -132,21 +140,25 @@ jobs:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-22.04
-    # Warm: the slowest shard ~6 min.
+    # Warm: the slowest shard ~4 min (it was ~7 at four count-split shards).
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - part: build + lint
-          - part: vitest 1/4
-            shard: 1/4
-          - part: vitest 2/4
-            shard: 2/4
-          - part: vitest 3/4
-            shard: 3/4
-          - part: vitest 4/4
-            shard: 4/4
+          - part: vitest 1/6
+            shard: 1/6
+          - part: vitest 2/6
+            shard: 2/6
+          - part: vitest 3/6
+            shard: 3/6
+          - part: vitest 4/6
+            shard: 4/6
+          - part: vitest 5/6
+            shard: 5/6
+          - part: vitest 6/6
+            shard: 6/6
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -219,24 +231,39 @@ jobs:
       - name: Build Storybook
         run: pnpm build-storybook
 
+  # **Three Linux legs in parallel, where this was one serial job per OS** (2026-10-29). The
+  # lints, the workspace's tests and `card-scanner`'s own suite share no build output a later
+  # step needs, so each leg runs one of them, and the slowest leg is what a pull request waits
+  # on. Each leg runs the very cargo commands the one job ran — `--workspace`, never a `-p` per
+  # crate — because the dependency graph's features are resolved over the packages a command
+  # names: a leg per crate would compile the shared dependencies once per crate, under
+  # features of its own, and no cache written by the others would fit it.
+  #
+  # **Windows is not a pull request's** (the owner's decision, 2026-10-29): it was the critical
+  # path at 12–29 minutes against Linux's 9–20, for one cfg-gated host. `rust-windows` below
+  # runs the whole workspace on Windows after the merge, on every push to `main` this router
+  # sends to `rust`; a Windows-only break is red there, on `main`, rather than on its PR.
   rust:
-    name: rust (${{ matrix.os }})
+    name: rust (${{ matrix.part }})
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    runs-on: ${{ matrix.os }}
-    # Warm: ~26 min on both legs; a cold Windows compile runs well past it.
-    timeout-minutes: 90
+    runs-on: ubuntu-22.04
+    # The parts, measured warm inside the one job (2026-10-29): lints ~1.5 min, the test build and
+    # run ~3.5–5, `card-scanner` ~1.5 (cold, always); each leg adds ~1 min of setup. Cold, the
+    # one job was 20 min, its `cargo test` step 10 of them.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-22.04]
+        part: [lint, test, card-scanner]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # The desktop host's crates link WebKitGTK and friends; `card-scanner` links none of them.
       - name: Install Linux system dependencies
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.part != 'card-scanner'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -259,6 +286,7 @@ jobs:
       # **Two bundles since the light app's Android host joined the workspace** (2026-10-03):
       # `apps/light/src-tauri` reads `frontendDist: "../dist-mobile"` (`apps/light/dist-mobile`) the same way.
       - name: Stub the frontend bundle
+        if: matrix.part != 'card-scanner'
         shell: bash
         run: |
           mkdir -p apps/desktop/dist apps/light/dist-mobile
@@ -271,30 +299,41 @@ jobs:
       # The cargo workspace is rooted at the repository since 2026-10-02 and still builds into
       # `target` — `.cargo/config.toml` pins it there — so the cache is told both
       # halves: where the lockfile is, and where the artifacts are.
+      #
+      # **A cache per leg, written by `main` alone** (2026-10-29). The repository has 10 GB of
+      # Actions cache and one full run of this workflow saved ~9.4 GB of it; with every pull
+      # request saving its own copy too, `main`'s entries were evicted within the hour: of three
+      # runs read that day (two pull requests and a merge), two logged `No cache found` on the
+      # Linux leg and compiled every dependency cold (20 min there, 29 on Windows). A pull request now only reads `main`'s, and
+      # skips the save, which was 30 s on Linux and 3.5 min on Windows. A pull request that
+      # moves `Cargo.lock` restores `main`'s older entry by its prefix and compiles the
+      # difference. `card-scanner`'s leg has no cache: its own target dir, ~1.5 min cold, is not
+      # worth a share of the 10 GB.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: matrix.part != 'card-scanner'
         with:
           workspaces: ". -> target"
+          key: linux-${{ matrix.part }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Formatting has no platform split, so it runs once. Lints do: the source has
-      # cfg-gated Windows paths that a Linux-only clippy pass never compiles.
-      #
-      # **All three run from the repository root, over every workspace member** (2026-10-02):
+      # **All of it runs from the repository root, over every workspace member** (2026-10-02):
       # the app in `apps/desktop/src-tauri`, the engine in `crates/grimoire-core`, the light app's Android
       # host in `apps/light/src-tauri`, its web host in `crates/grimoire-web`, the browser's
       # scanner in `crates/grimoire-scan` and the game board's rules engine (goldfish and
-      # playtest) in `crates/grimoire-play`. This is the only job that runs the core's tests, and
-      # the only one that compiles it for Windows — `core` below builds it for the other two
-      # targets and runs nothing.
+      # playtest) in `crates/grimoire-play`. This job and `rust-windows` are the only ones that
+      # run the core's tests, and `rust-windows` the only one that compiles it for Windows —
+      # `core` below builds it for the other two targets and runs nothing.
       #
       # **`fmt` names the members one by one and never `--all`**, which follows path
       # dependencies into `crates/card-scanner` — not a member, and not rustfmt-clean (below).
       # `--workspace` has no such reach: clippy and the tests see the members and nothing else.
       # **So a new member is a new `-p` here**, and in `pnpm lint:rust`, or nothing formats it.
       - name: cargo fmt
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.part == 'lint'
         run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan -p grimoire-play --check
 
       - name: cargo clippy
+        if: matrix.part == 'lint'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # **The host as it ships, which nothing else in this job compiles** (2026-10-02). The
@@ -309,7 +348,13 @@ jobs:
       # module, and the `web` job below is that build — `cargo build --lib` for
       # `wasm32-unknown-unknown`, with no dev-dependency in it. A native check of that crate
       # would compile the half of it nobody ships.
+      #
+      # **Linux only since 2026-10-29** (the owner's decision): what it asks — is the scaffolding
+      # in a shipped build — does not turn on the platform, and on Windows it cost 0.5–3.5 min.
+      # A `cfg(windows)` block that reaches for a `testing` item is the one thing it no longer
+      # sees before a release builds the installer.
       - name: cargo check (the shipped feature set)
+        if: matrix.part == 'lint'
         run: cargo check -p mtg-grimoire -p grimoire-light --locked
 
       # **And the resolver's own answer to "is `testing` on in that build"**, because one thing
@@ -328,6 +373,7 @@ jobs:
       # not a pass: the question was not asked, and the line needs a `--target`. (That reading
       # of cargo has not been driven on a run; if it errors instead, the step is red that way.)
       - name: The shipped build links the core without its test scaffolding
+        if: matrix.part == 'lint'
         shell: bash
         run: |
           set -euo pipefail
@@ -347,6 +393,7 @@ jobs:
           done
 
       - name: cargo test
+        if: matrix.part == 'test'
         run: cargo test --workspace --locked
 
       # **The `card-scanner` crate's own suite, which ran in no CI job until 2026-09-08.** It is
@@ -359,9 +406,10 @@ jobs:
       # warnings (`docs/reference/card-scanner.md` §8), so `fmt --check` and `clippy -D warnings`
       # would go red for something this step is not about. Tidying it is its own commit.
       #
-      # Linux only, like `cargo fmt` above: the crate's one platform gate (`host.rs`, since
+      # Linux only, and not in `rust-windows`: the crate's one platform gate (`host.rs`, since
       # 2026-10-07) tells a browser from everything else, so Windows and Linux compile the same
-      # paths and a second leg would compile `rten` again to prove the same thing.
+      # paths and a second OS would compile `rten` again to prove the same thing. **A leg of its
+      # own since 2026-10-29**, beside `test` rather than behind it: ~1.5 min of a serial job.
       #
       # **Two commands, because a feature decides what compiles**: with `cli` the replay and
       # the corpus's readers (`corpus`, behind it) are built and tested, and plain is the crate as
@@ -371,13 +419,58 @@ jobs:
       # **`--target-dir` on every line, since the workspace** (2026-10-02). Cargo reads its config
       # from the working directory, never from `--manifest-path`, so run from the repository
       # root these would follow `.cargo/config.toml` into `target` — the workspace's tree,
-      # and the one the cache above saves. The flag keeps this package building where it always
-      # has; `crates/card-scanner/.cargo/config.toml` says the same to a run started inside it.
+      # and the one the other legs' cache saves. The flag keeps this package building where it
+      # always has; `crates/card-scanner/.cargo/config.toml` says the same to a run started
+      # inside it.
       - name: cargo test (card-scanner)
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.part == 'card-scanner'
         run: |
           cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
           cargo test --locked --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
+
+  # **The whole workspace on Windows, after the merge** (2026-10-29). Not a pull request's job:
+  # the owner moved it off them, because at 12–29 minutes it was what every pull request waited
+  # on, for the one host with `cfg(windows)` code in it (all fourteen gates are in
+  # `apps/desktop/src-tauri`). It runs on a push to `main` that this router sends to `rust`, so
+  # `ci-ok` on `main` says whether Windows still lints and passes. Clippy is the reason it
+  # exists: the source has cfg-gated Windows paths that a Linux-only pass never compiles. The
+  # tests come with it because a Windows filesystem is not a Linux one.
+  #
+  # The shipped-feature check and `card-scanner`'s suite are Linux's alone — `rust` says why.
+  rust-windows:
+    name: rust (windows, main)
+    needs: changes
+    if: github.event_name == 'push' && needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    # Warm: ~12 min; a cold Windows compile runs well past it.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # As in `rust`: `tauri-build` needs a `frontendDist` to exist.
+      - name: Stub the frontend bundle
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/dist apps/light/dist-mobile
+          echo '<!doctype html><title>ci stub</title>' > apps/desktop/dist/index.html
+          echo '<!doctype html><title>ci stub</title>' > apps/light/dist-mobile/index.html
+
+      - uses: ./.github/actions/rust-toolchain
+
+      # Only `main` runs this job, so only `main` saves; the condition says so for the day a
+      # trigger is added.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace --locked
 
   # **`grimoire-core` on the two targets a desktop build never touches** (2026-10-02). The engine
   # is moving out of `src-tauri` into a crate three hosts link — this desktop, an Android shell
@@ -392,8 +485,8 @@ jobs:
   # triple and lints clean there. Nothing in this job runs — no test (a cross-compiled harness
   # needs a device, an emulator or a browser to run on, hence `--lib` and never
   # `--all-targets`), no APK, no bundle. Whether the core *works* on a phone or in a browser is
-  # still a hardware pass. **The Windows compile and the native test run are the `rust` job's**,
-  # which reaches this crate through `--workspace`.
+  # still a hardware pass. **The Windows compile and the native test run are `rust-windows`'s
+  # and `rust`'s**, which reach this crate through `--workspace`.
   #
   # Linux, and not as a preference: clang and the NDK are the same compilers on every host, MSVC
   # cannot emit WASM, and the Ubuntu images already ship an NDK. **No measured figure in this
@@ -472,12 +565,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: ". -> target"
-          # A key per target: neither leg's artifacts are any use to the other or to the host
-          # build, and one cache would thrash between them.
-          key: core-${{ matrix.target }}
+      # **No cache, since 2026-10-29.** Each leg's was 1.2 GB of the repository's 10 GB for a
+      # job that runs ~1.5 min warm and ~3–4 min cold, and never the longest one: the two were a
+      # quarter of what one run saved, and room the `rust`, `android` and `web` caches need more:
+      # a miss there was measured at 11, 6 and 2.5 extra minutes.
 
       - name: cargo build (${{ matrix.target }})
         run: cargo build --lib -p grimoire-core --locked --target ${{ matrix.target }}
@@ -551,6 +642,8 @@ jobs:
         with:
           workspaces: ". -> target"
           key: android-aarch64
+          # `main` writes it, a pull request reads it — `rust` says why.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # From `apps/light/`, so the CLI finds `apps/light/src-tauri/tauri.conf.json` — from the repository
       # root it finds the desktop's. `beforeBuildCommand` builds the light bundle into
@@ -680,6 +773,8 @@ jobs:
         with:
           workspaces: ". -> target"
           key: web-wasm32
+          # `main` writes it, a pull request reads it — `rust` says why.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # **The CLI's version is read from `Cargo.lock`, never typed here.** `wasm-bindgen` the
       # CLI rewrites what `wasm-bindgen` the crate emitted, and it refuses a module whose schema
@@ -916,7 +1011,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust, core, powershell, storybook, android, web]
+    needs: [changes, frontend, rust, rust-windows, core, powershell, storybook, android, web]
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -925,13 +1020,14 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           FRONTEND: ${{ needs.frontend.result }}
           RUST: ${{ needs.rust.result }}
+          RUST_WINDOWS: ${{ needs.rust-windows.result }}
           CORE: ${{ needs.core.result }}
           POWERSHELL: ${{ needs.powershell.result }}
           STORYBOOK: ${{ needs.storybook.result }}
           ANDROID: ${{ needs.android.result }}
           WEB: ${{ needs.web.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK android=$ANDROID web=$WEB"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST rust-windows=$RUST_WINDOWS core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK android=$ANDROID web=$WEB"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
@@ -941,7 +1037,7 @@ jobs:
           # A skip here is a deliberate answer from `changes`: that part of the repo did
           # not change, so it has nothing to prove. Every job gated on a `changes` output
           # belongs in this loop — one left out is a job whose failure the gate ignores.
-          for result in "$FRONTEND" "$RUST" "$CORE" "$POWERSHELL" "$STORYBOOK" "$ANDROID" "$WEB"; do
+          for result in "$FRONTEND" "$RUST" "$RUST_WINDOWS" "$CORE" "$POWERSHELL" "$STORYBOOK" "$ANDROID" "$WEB"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;

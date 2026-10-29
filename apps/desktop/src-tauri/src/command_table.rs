@@ -47,6 +47,26 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "Rust-owned native picker and destructive restore confirmation",
     ),
     ("window_new", "a second window is this host's"),
+    (
+        "mcp_status",
+        "the local MCP server is this process's listener on this computer's loopback",
+    ),
+    (
+        "mcp_enable",
+        "the local MCP server is this process's listener on this computer's loopback",
+    ),
+    (
+        "mcp_disable",
+        "the local MCP server is this process's listener on this computer's loopback",
+    ),
+    (
+        "mcp_rotate_token",
+        "the local MCP server is this process's listener on this computer's loopback",
+    ),
+    (
+        "mcp_set_port",
+        "the local MCP server is this process's listener on this computer's loopback",
+    ),
     ("window_count", "how many windows this host has open"),
     ("update_status", "the portable updater swaps this exe"),
     ("update_history", "the portable updater swaps this exe"),
