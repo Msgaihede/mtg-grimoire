@@ -33,7 +33,14 @@
 
 import type { HomeLayout, HomeWidget } from "@/lib/ipc";
 
-import { boundsOf, DEFAULT_LAYOUT, isWidgetKind, widgetMeta, type WidgetKind } from "./widgets";
+import {
+  boundsOf,
+  DEFAULT_LAYOUT,
+  isWidgetKind,
+  widgetMeta,
+  type Footprint,
+  type WidgetKind,
+} from "./widgets";
 
 /** The document version this build writes. `home::VERSION`. */
 export const LAYOUT_VERSION = 2;
@@ -294,8 +301,15 @@ export function toStored(layout: HomeLayout): HomeLayout {
  * two `decks` widgets — see {@link newWidgetId}. The config is `null`, which is what "this widget
  * has not been configured" is spelled as everywhere.
  */
-export function addWidget(layout: HomeLayout, kind: WidgetKind, cols: number): HomeLayout {
-  const { def } = widgetMeta(kind);
+export function addWidget(
+  layout: HomeLayout,
+  kind: WidgetKind,
+  cols: number,
+  { footprint, config = null }: { footprint?: Footprint; config?: unknown } = {},
+): HomeLayout {
+  // A custom widget arrives at its definition's footprint and with the config naming it; every
+  // other kind at its registry default and with no config.
+  const def = footprint ?? widgetMeta(kind).def;
   const [w, h] = bounded(kind, def[0], def[1], cols);
   const added: HomeWidget = {
     id: newWidgetId(kind, layout),
@@ -303,7 +317,7 @@ export function addWidget(layout: HomeLayout, kind: WidgetKind, cols: number): H
     w,
     h,
     ...firstFree(layout.widgets, w, h, cols),
-    config: null,
+    config,
   };
   return { ...layout, widgets: [...layout.widgets.map((entry) => ({ ...entry })), added] };
 }

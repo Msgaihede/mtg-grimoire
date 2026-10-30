@@ -214,6 +214,73 @@ export const CatalogueOpen: Story = {
 };
 
 /**
+ * **The reader's own widgets** (`starter` seeds two: a deck shelf and a glance at the collection).
+ * Customize brings **Custom widgets** up beside Add widget — only because there is one — and its
+ * dialog draws each the way the catalogue draws a kind: live at its footprint, over the answer the
+ * fake's graph holds for its query. Add places a copy at the definition's own footprint, called
+ * what the definition is called.
+ */
+export const CustomWidgetsOpen: Story = {
+  args: { layout: JUST_SUMMARY },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Customize" }));
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Custom widgets" }, MOUNT_TIMEOUT),
+    );
+    const dialog = within(
+      await canvas.findByRole("dialog", { name: "Custom widgets" }, MOUNT_TIMEOUT),
+    );
+    await expect(dialog.getByRole("button", { name: "Add At a glance" })).toBeInTheDocument();
+    await userEvent.click(dialog.getByRole("button", { name: "Add Deck shelf" }));
+
+    const shelf = within(await canvas.findByRole("region", { name: "Deck shelf" }, MOUNT_TIMEOUT));
+    await expect(await shelf.findByText("Kenrith Two-Drops", {}, MOUNT_TIMEOUT)).toBeInTheDocument();
+  },
+};
+
+/** A custom widget already on the page: its query answered, its spec drawn in the card. */
+export const WithACustomWidget: Story = {
+  args: {
+    layout: {
+      version: 2,
+      widgets: [
+        { id: "summary", kind: "summary", x: 0, y: 0, w: 4, h: 2, span: 1, config: null },
+        {
+          id: "custom",
+          kind: "custom",
+          x: 4,
+          y: 0,
+          w: 4,
+          h: 2,
+          span: 1,
+          config: { widgetId: 2, name: "At a glance" },
+        },
+      ],
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const glance = within(
+      await canvas.findByRole("region", { name: "At a glance" }, MOUNT_TIMEOUT),
+    );
+    await expect(await glance.findByText("Unique", {}, MOUNT_TIMEOUT)).toBeInTheDocument();
+  },
+};
+
+/** A world with no custom widgets: Customize brings Add widget and no Custom widgets button. */
+export const NoCustomWidgets: Story = {
+  args: { layout: JUST_SUMMARY },
+  parameters: { fake: { seed: "empty" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Customize" }));
+    await expect(canvas.getByRole("button", { name: "Add widget" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Custom widgets" })).not.toBeInTheDocument();
+  },
+};
+
+/**
  * A reader who has taken every widget off the page.
  *
  * **An empty widget list is a layout, not a missing document** — `home.rs` keeps it rather than
