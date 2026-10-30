@@ -129,7 +129,10 @@ card search aside.
   leaves out. Every element carries `children`, `[]` for a leaf — `validate` requires it.
 - **Content security**: json-render renders React elements only — no `eval`, no `innerHTML`, no
   injected styles — so a spec stays inside `script-src 'self'` and `style-src 'self'`. `Grid`'s
-  column count is an inline `style` attribute, which the policy allows.
+  column count is an inline `style` attribute, which the policy allows. **zod runs jitless**
+  (`zodConfig.ts`, imported first by `catalog.ts`): zod 4 probes for `new Function` on its first
+  parse, and the browser reports the refused probe as a `script-src eval` violation even though zod
+  catches it — which `pnpm web:scanner-smoke` fails the web app on. `csp.test.ts` holds it.
 
 ## Stories
 
