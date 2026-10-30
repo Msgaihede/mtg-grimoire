@@ -315,6 +315,45 @@ export interface StickyNotePatch {
 }
 
 /**
+ * One of the reader's own widgets — `custom_widgets.rs`'s `CustomWidget`: a GraphQL document over
+ * the read graph for its data and a json-render spec for its picture (`features/home/generated/`).
+ *
+ * **Device-local** (the owner's decision, 2026-10-30): the table is the reader's and is in the full
+ * export, but it is not synced — the read graph that answers `query` is the desktop's, so a
+ * definition is drawn where it was made. A placed copy is a `custom` entry in the home layout whose
+ * `config.widgetId` names one of these.
+ *
+ * `spec` is `unknown` here as `config` is on {@link HomeWidget}: Rust checks its shape (an object
+ * with a `root` and `elements`) and never its vocabulary, which is `generated/catalog.ts`'s, so the
+ * page validates it before drawing.
+ */
+export interface CustomWidget {
+  id: number;
+  name: string;
+  description: string;
+  /** The GraphQL document, as written. */
+  query: string;
+  /** The json-render spec — `{ root, elements, state? }`. */
+  spec: unknown;
+  /** The footprint a new copy is placed at, in cells: `2..=12` by `2..=8`. */
+  w: number;
+  h: number;
+  /** Unix seconds. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** What {@link ipc.customWidgetUpdate} changes — absent means leave it. */
+export interface CustomWidgetPatch {
+  name?: string;
+  description?: string;
+  query?: string;
+  spec?: unknown;
+  w?: number;
+  h?: number;
+}
+
+/**
  * One deck holding the card a {@link NewPrinting} is a reprint of — `new_printings.rs`'s
  * `NewPrintingDeck`.
  *
@@ -622,6 +661,28 @@ export const homeCommands = {
    * drew, and a note deleted in another window must not fail the drag the reader just made.
    */
   stickyNoteReorder: (ids: number[]): Promise<void> => invoke("sticky_note_reorder", { ids }),
+  /** Every custom widget, by name — see {@link CustomWidget}. */
+  customWidgets: (): Promise<CustomWidget[]> => invoke("custom_widgets"),
+  /**
+   * Store a new custom widget and answer it. Refused in a sentence for a blank name or query, a
+   * spec that is not `{ root, elements }`, or a footprint outside `2..=12` by `2..=8`. The desktop's
+   * MCP tool `widget_create` is the usual writer: it checks the query against the graph and the
+   * spec against the catalogue's contract first.
+   */
+  customWidgetCreate: (
+    name: string,
+    description: string,
+    query: string,
+    spec: unknown,
+    w: number,
+    h: number,
+  ): Promise<CustomWidget> =>
+    invoke("custom_widget_create", { name, description, query, spec, w, h }),
+  /** Change a custom widget — spread like {@link ipc.stickyNoteUpdate}, absent keys left alone. */
+  customWidgetUpdate: (id: number, patch: CustomWidgetPatch): Promise<CustomWidget> =>
+    invoke("custom_widget_update", { id, ...patch }),
+  /** Delete one. Its placed copies stay in the layout until the page removes them. */
+  customWidgetDelete: (id: number): Promise<void> => invoke("custom_widget_delete", { id }),
   /**
    * Reprints of cards the watched decks already hold, newest first — see {@link NewPrintings}.
    *

@@ -166,6 +166,9 @@ pub fn surface_of(table: &str) -> Option<Dirty> {
         // the tray put away, not anything a mirrored file quotes. What an Add files reaches the
         // mirror anyway, as the `collection_entries` rows it writes.
         "scan_batches" | "scan_batch_lines" => None,
+        // **`None`, for `sticky_notes`' reason** (user schema v68). A custom widget is a page
+        // the reader drew for the home page, not anything a mirrored file quotes.
+        "custom_widgets" => None,
         _ => None,
     }
 }
@@ -1145,6 +1148,10 @@ mod tests {
                 "combo_cards",
                 "combo_meta",
                 "combos",
+                // The reader's own home-page widgets (user schema v68): a name, a query and a
+                // spec each, which no mirrored file quotes. A rowid table the hook sees, so
+                // `surface_of` says `None` for it in an arm of its own.
+                "custom_widgets",
                 "deck_audit",
                 "deck_undo",
                 // What each device in the group is called (user schema v31). It describes a

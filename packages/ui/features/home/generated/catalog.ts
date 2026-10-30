@@ -28,6 +28,8 @@
  * **Optional props are `.nullable()`**, json-render's convention: a model sends `null` for a prop
  * it leaves out, and the prompt says so.
  */
+// First: zod is told it may not eval before json-render or any schema here meets it.
+import "./zodConfig";
 import { defineCatalog } from "@json-render/core";
 import { schema } from "@json-render/react/schema";
 import { z } from "zod";

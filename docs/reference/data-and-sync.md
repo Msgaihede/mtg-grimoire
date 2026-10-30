@@ -20,7 +20,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   and **25**, and again 2026-10-07 at v60: **34** and **25** (v59's `deck_todo_lists` and v60's
   `sync_orphans`), and 2026-10-11 at v61: **35** and **25** (`sync_heard`), and the same day at v63: **37** and **25**
   (`trades` and `trade_lines`), and 2026-10-14 at v65: **39** and **25** (`scan_batches` and
-  `scan_batch_lines`), and 2026-10-24 at v66: **40** and **25** (`wish_snapshots`); **a bare `grep -c 'Side::User'`
+  `scan_batch_lines`), and 2026-10-24 at v66: **40** and **25** (`wish_snapshots`), and 2026-10-30 at v68: **41** and **25** (`custom_widgets`); **a bare `grep -c 'Side::User'`
   over-counts** — 37 against 32 at v54 and 39 against 34 at v60, because `mod tests` matches the
   enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
@@ -1479,6 +1479,17 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `WRITTEN_BY_THE_APP`. The byte-identity figure went **99 → 101** (40 tables, 58 indexes, 3
   autoindexes), `UNDO_V66` heads every rewind chain, and the rung creates it empty.
   [home-page.md](home-page.md) §14 is the record.
+  **v68 adds `custom_widgets`, the reader's own home-page widgets** (2026-10-30) — one row per
+  widget: a name, a description, a GraphQL query over the read graph, a json-render spec as JSON
+  text (`CHECK (json_valid(spec))`, the one CHECK) and the footprint it is placed at, written by
+  `grimoire_core::custom_widgets` (four table commands, `custom_widgets` and
+  `custom_widget_create`/`_update`/`_delete`, with desktop wrappers) and by the desktop MCP
+  server's `widget_create`. **Device-local, the owner's decision**: not synced (absent from
+  `SYNCED_TABLES`, no `sync_uid`, no capture spec) **but in the full export**, since `archive`
+  carries every user table but sync's own. A rowid table with no index, on the mirror's ignored
+  list. The byte-identity figure went **101 → 102** (41 tables, 58 indexes, 3 autoindexes),
+  `UNDO_V68` heads every rewind chain, and the rung creates it empty.
+  [generated-widgets.md](generated-widgets.md)'s *Stored custom widgets (Rust)* is the record.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

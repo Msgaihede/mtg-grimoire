@@ -479,6 +479,20 @@ commands! {
         clear(&conn)
     };
 
+    // custom_widgets — the reader's own home-page widgets (user schema v68). The read is
+    // fallible, `deck_todos`' choice: a failed read answered as `[]` would draw every placed
+    // custom widget as deleted.
+    read custom_widgets in custom_widgets() = |conn| {
+        crate::custom_widgets::list(conn).map_err(|e| e.to_string())
+    };
+    write custom_widget_create in custom_widgets(name: String, description: String, query: String, spec: serde_json::Value, w: i64, h: i64) = |conn| {
+        crate::custom_widgets::create(conn, &name, &description, &query, &spec, w, h)
+    };
+    write custom_widget_update in custom_widgets(id: i64, name: Option<String>, description: Option<String>, query: Option<String>, spec: Option<serde_json::Value>, w: Option<i64>, h: Option<i64>) = |conn| {
+        crate::custom_widgets::update(conn, id, name, description, query, spec, w, h)
+    };
+    write custom_widget_delete in custom_widgets(id: i64) = |conn| crate::custom_widgets::delete(conn, id);
+
     // deck
     read deck_bracket_reads in deck(deck_ids: Vec<i64>) = |conn| bracket_reads(conn, &deck_ids);
     read deck_get in deck(id: i64, variant: String, marketplace: Option<String>) = |conn| {
