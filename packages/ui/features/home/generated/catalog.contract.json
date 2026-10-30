@@ -1,0 +1,2167 @@
+{
+  "components": {
+    "Stack": {
+      "description": "Lays its children out in a column (the default) or a row. The usual root of a widget.",
+      "slots": [
+        "default"
+      ],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "vertical",
+                  "horizontal"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gap": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sm",
+                  "md",
+                  "lg"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "align": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "start",
+                  "center",
+                  "end",
+                  "stretch"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "justify": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "start",
+                  "center",
+                  "end",
+                  "between"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wrap": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "direction",
+          "gap",
+          "align",
+          "justify",
+          "wrap"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Grid": {
+      "description": "Lays its children out in equal columns, wrapping onto new rows — a wall of card tiles.",
+      "slots": [
+        "default"
+      ],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "columns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6
+          },
+          "gap": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sm",
+                  "md",
+                  "lg"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "columns",
+          "gap"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Divider": {
+      "description": "A thin horizontal rule between two parts of a widget.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "Panel": {
+      "description": "A bordered section with a small title — groups a chart or a few rows under a heading, as the deck editor's stats band does.",
+      "slots": [
+        "default"
+      ],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Heading": {
+      "description": "A heading. Level 1 is the largest; widgets usually want 2 or 3.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "level"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Text": {
+      "description": "A line of text. `dim` for secondary words, `accent` for money, `up`/`down` for a rise or a fall, `mono` for figures.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "dim",
+                  "accent",
+                  "up",
+                  "down",
+                  "destructive"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "xs",
+                  "sm",
+                  "md",
+                  "lg"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mono": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "truncate": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "tone",
+          "size",
+          "mono",
+          "truncate"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ManaText": {
+      "description": "Text with Magic symbols drawn as icons: a mana cost (`{2}{R}{R}`) or rules text (`{T}: Add {G}.`).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Price": {
+      "description": "An amount of money in the reader's marketplace currency, written the app's way. `null` draws an em dash — a price nobody quotes is not zero.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "accent",
+                  "default",
+                  "dim"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "value",
+          "tone"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Hint": {
+      "description": "Shows `text` as the app's tooltip when its children are hovered or focused — an explanation that does not fit on the widget.",
+      "slots": [
+        "default"
+      ],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Figures": {
+      "description": "Big numbers with a label each — totals, counts, values. A numeric `value` with `money: true` is written in the reader's currency. `fill` spreads them over the whole widget at the largest size that fits.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "figures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": [
+                    "number",
+                    "string"
+                  ]
+                },
+                "money": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "note": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "value",
+                "money",
+                "note"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "fill": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "divided": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "figures",
+          "fill",
+          "divided"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Bars": {
+      "description": "Horizontal bars comparing values — a breakdown by rarity, colour or set. Each bar is drawn against the largest value. `money` writes values in the reader's currency.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "bars": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "number"
+                },
+                "color": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "accent",
+                        "up",
+                        "down",
+                        "dim",
+                        "W",
+                        "U",
+                        "B",
+                        "R",
+                        "G",
+                        "C"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "label",
+                "value",
+                "color"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "money": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "fill": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bars",
+          "money",
+          "fill"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "RowList": {
+      "description": "A list of Row children, laid out in as many columns as the widget is wide. Use `repeat` on it to draw one Row per item of a list in state.",
+      "slots": [
+        "default"
+      ],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Row": {
+      "description": "One line of a RowList: a name, a dim caption under it, a value on the right (`delta` tints it as a rise or a fall), an optional rarity gem or set symbol before it, and an optional progress track (0–1) under it. Pressable when its `press` event is bound.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "caption": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "type": [
+              "number",
+              "string",
+              "null"
+            ]
+          },
+          "money": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "up",
+                  "down"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rarity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "setCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "track": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "caption",
+          "value",
+          "money",
+          "delta",
+          "rarity",
+          "setCode",
+          "track"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Message": {
+      "description": "A sentence in place of the widget's content — an empty state (`No decks yet.`) or a failure.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "tone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "dim",
+                  "destructive"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "tone"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Footer": {
+      "description": "A one-line footer under the content: a summary (`3 decks · 2 complete`), with `said` as a quieter tail.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "line": {
+            "type": "string"
+          },
+          "said": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "line",
+          "said"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "PriceChart": {
+      "description": "A line of money over time — a card's price or a collection's value. `day` is Unix seconds, oldest first; `value` is in the reader's currency. `summary` describes the line in words for screen readers.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "day": {
+                  "type": "number"
+                },
+                "value": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "day",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ColumnChart": {
+      "description": "Vertical columns of card counts, each count on its column and its word under it — a mana curve, cards per type, per colour. A screen reader hears `<count> cards <said>` (`said`: `at mana value 2`). `mana: true` draws the words as circled numerals, the deck editor's curve. `height` in px (default 120).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "said": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "count",
+                "said"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "accent",
+                  "up",
+                  "down",
+                  "dim",
+                  "W",
+                  "U",
+                  "B",
+                  "R",
+                  "G",
+                  "C"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 40,
+                "maximum": 240
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mana": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "columns",
+          "color",
+          "height",
+          "mana"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "PriceHistogram": {
+      "description": "How a list of prices spreads, as a histogram in the reader's currency — the app bins them. `unit` names what one value is (`cards`). `marked` draws a line at one value with `markedLabel` over it. `summary` describes the spread in words for screen readers.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "unit": {
+            "type": "string"
+          },
+          "marked": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "markedLabel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "values",
+          "unit",
+          "marked",
+          "markedLabel",
+          "summary"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "CardArt": {
+      "description": "A card's picture, by its printing's Scryfall id (`cardId`). `face` 1 is a double-faced card's back. `finish: foil` draws the foil sheen.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "cardId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "face": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finish": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "nonfoil",
+                  "foil",
+                  "etched"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sm",
+                  "md",
+                  "lg"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "cardId",
+          "name",
+          "face",
+          "finish",
+          "size"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "CardTile": {
+      "description": "A card as the app's walls draw it: its picture, and its set, number and rarity under it, with an optional price. Pressable when its `press` event is bound — usually to `openCard`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "cardId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "setCode": {
+            "type": "string"
+          },
+          "collectorNumber": {
+            "type": "string"
+          },
+          "rarity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finish": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "nonfoil",
+                  "foil",
+                  "etched"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cardId",
+          "name",
+          "setCode",
+          "collectorNumber",
+          "rarity",
+          "finish",
+          "price"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "RarityGem": {
+      "description": "A printing's rarity as a coloured gem (`common`, `uncommon`, `rare`, `mythic`).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "rarity": {
+            "type": "string"
+          },
+          "withLabel": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "rarity",
+          "withLabel"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "FinishMark": {
+      "description": "A copy's finish as the app's glyph — sparkles for foil, a gem for etched.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "finish": {
+            "type": "string",
+            "enum": [
+              "nonfoil",
+              "foil",
+              "etched"
+            ]
+          }
+        },
+        "required": [
+          "finish"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "SetSymbol": {
+      "description": "A set's expansion symbol, by its code (`mh3`, `lea`).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "setCode": {
+            "type": "string"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "sm",
+                  "md",
+                  "lg"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "setCode",
+          "size"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "CountTag": {
+      "description": "A small count badge, as drawn over card art (`4`). `title` says the count in words (`4 copies`).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "title"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "OwnedBadge": {
+      "description": "Whether the reader owns a card — a check with the count when `owned` is above 0, a heart when `wishlisted`, nothing otherwise. Drawn over a card's art or beside its name.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "owned": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "wishlisted": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "owned",
+          "wishlisted"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "GameChangerMark": {
+      "description": "The Commander Game Changer mark, for a card on that list (it counts toward a deck's bracket).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "Button": {
+      "description": "A button. Bind its `press` event to an action (`openView`, `setState` to switch what the widget shows).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "variant": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "primary",
+                  "quiet"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "variant"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "TextInput": {
+      "description": "A one-line text box. Bind `value` with `$bindState` to a path of the widget's own state — e.g. a filter its rows' `visible` conditions read.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "placeholder": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "placeholder"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Select": {
+      "description": "A dropdown of options. Bind `value` with `$bindState` to the widget's own state.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Switch": {
+      "description": "An on/off switch. Bind `checked` with `$bindState` to the widget's own state.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "checked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "checked"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Combobox": {
+      "description": "A dropdown with a search box that narrows its options as the reader types — for a long list (sets, decks, tags). Bind `value` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "placeholder": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "options",
+          "placeholder"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "MultiSelect": {
+      "description": "A dropdown that stays open while the reader ticks several options. `triggerLabel` is what the closed box says (`Colours`). Bind `selected` (an array of values) with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "triggerLabel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "selected",
+          "options",
+          "triggerLabel"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Segmented": {
+      "description": "A row of two to five segments, exactly one pressed — a short choice always in view (`Week`, `Month`, `Year`). Bind `value` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "RadioGroup": {
+      "description": "Radio buttons, one per line, each with an optional dim `hint` under it — a choice that needs a sentence of explanation. Bind `value` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "value",
+                "label",
+                "hint"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ToggleChip": {
+      "description": "A filter chip that is on or off — the Search page's chips. Several in a horizontal Stack make a filter row. `hint` expands a short label (`NM` → `Near mint`). Bind `pressed` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "pressed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "pressed",
+          "hint"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "NumberStepper": {
+      "description": "A whole number with minus and plus buttons — how many rows to show, a threshold. Bind `value` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "min",
+          "max"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "FieldGroup": {
+      "description": "A small dim caption over a run of controls, named for a screen reader — how a widget's settings group theirs (`Size`, `Show`).",
+      "slots": [
+        "default"
+      ],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ChoiceChips": {
+      "description": "A captioned row of small chips, exactly one pressed — how a widget's settings offer a pick (`Comfortable`/`Compact`). Wraps onto more lines; quieter than Segmented. Bind `value` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "options"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Checkbox": {
+      "description": "One line of words with a checkbox at its far end, the words dim while it is off — a widget's `Show` settings. Bind `checked` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "checked": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "checked"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Checklist": {
+      "description": "A captioned list of Checkbox lines, one per option — which of several things to show. Bind `selected` (the ticked values) with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "value",
+                "label"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "options",
+          "selected"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "CompactStepper": {
+      "description": "A small bordered box: the label in capitals, `−`, the number, `+` — a widget's `Wide`/`Tall` settings. Smaller than NumberStepper and not typeable. Bind `value` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "min",
+          "max"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "Picker": {
+      "description": "A captioned, compact multi-select — how a widget's settings pick decks, folders or wishlists. Each option may carry a dim `hint` (a deck's format). `triggerLabel` says how many are ticked (`2 decks`, or `None chosen`); searchable past eight options. Bind `selected` with `$bindState`.",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "value",
+                "label",
+                "hint"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "selected": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "triggerLabel": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "options",
+          "selected",
+          "triggerLabel"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "CardSearch": {
+      "description": "A search box over the reader's card database that adds printings to a list, each removable — the Price movers widget's card picker. The one input that reads data of its own (the card search). Bind `cards` with `$bindState`; `max` caps the list (default 100).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cards": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "setCode": {
+                      "type": "string"
+                    },
+                    "collectorNumber": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "setCode",
+                    "collectorNumber"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "cards",
+          "max"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "PriceRange": {
+      "description": "Two price boxes and a slider bounding a price in the reader's currency — the Search page's price filter. `null` is open-ended. Bind `min` and `max` with `$bindState`, and read them in `visible` conditions (`lte`/`gte`).",
+      "slots": [],
+      "props": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "min",
+          "max"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "actions": {
+    "openCard": {
+      "description": "Open a printing's card details, by its Scryfall id.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "cardId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cardId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openDeck": {
+      "description": "Open a deck in the deck editor, by its id.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "deckId": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "deckId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openFolder": {
+      "description": "Open a collection or wishlist folder, by its id.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "collection",
+              "wishlist"
+            ]
+          },
+          "folderId": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "scope",
+          "folderId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openView": {
+      "description": "Go to one of the app's pages.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "view": {
+            "type": "string",
+            "enum": [
+              "home",
+              "search",
+              "collection",
+              "wishlist",
+              "decks",
+              "scanner",
+              "trade",
+              "playtesting",
+              "draft"
+            ]
+          }
+        },
+        "required": [
+          "view"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "showSet": {
+      "description": "Show every card of a set in the Search page, by the set's code.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "setCode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "setCode"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openPriceHistory": {
+      "description": "Open a printing's price history chart for one finish.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "cardId": {
+            "type": "string"
+          },
+          "finish": {
+            "type": "string",
+            "enum": [
+              "nonfoil",
+              "foil",
+              "etched"
+            ]
+          }
+        },
+        "required": [
+          "cardId",
+          "finish"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openPrintings": {
+      "description": "Open the dialog of every printing of a card, marking the one `cardId` names. `oracleId` is the card's Oracle id; `name` captions the dialog.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "cardId": {
+            "type": "string"
+          },
+          "oracleId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cardId",
+          "oracleId",
+          "name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "searchText": {
+      "description": "Go to the Search page showing what `text` finds — a card's name, or the search box's own syntax (`t:creature otag:ramp`).",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "showInCollection": {
+      "description": "Go to the Collection page filtered by `query`, in the search box's syntax (`!\"Lightning Bolt\" e:lea`).",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "revealCard": {
+      "description": "Go to the Collection or Wishlist folder a card is filed in (`folderId` null: the cards filed in no folder), filtered by a `query` naming it.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "collection",
+              "wishlist"
+            ]
+          },
+          "folderId": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "folderId",
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openDeckFolder": {
+      "description": "Go to the Decks page standing in one deck folder.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "folderId": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "folderId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openReview": {
+      "description": "Go to the Collection or Wishlist showing only the rows flagged for review.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "collection",
+              "wishlist"
+            ]
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "openSettings": {
+      "description": "Go to Settings with one of its panels in view.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "panel": {
+            "type": "string",
+            "enum": [
+              "updates",
+              "prices",
+              "sync",
+              "review",
+              "integrations",
+              "hidden-tags",
+              "start-view",
+              "theory-marks",
+              "labels",
+              "scan-sounds",
+              "data-folder",
+              "backup",
+              "cache",
+              "errors",
+              "danger"
+            ]
+          }
+        },
+        "required": [
+          "panel"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "goldfish": {
+      "description": "Open a deck and deal a solo practice game of it (goldfishing), on the deck as built. Desktop only.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "deckId": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "deckId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "refresh": {
+      "description": "Read the widget's data again now. It already refreshes whenever the reader's data changes, so this is for an explicit Refresh button.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "saveSettings": {
+      "description": "Keep the widget's settings: the state under `path` (`/settings`) is stored with the widget and is that path's state when it is drawn again. Bind settings inputs under that path and give the settings face a Save button pressing this.",
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "functions": {
+    "formatPrice": {
+      "description": "Money in the reader's marketplace currency: `{ value: number | null }` → `$2.18` / `2,18 €`; null → em dash."
+    },
+    "formatNumber": {
+      "description": "A count with thousands separators: `{ value: number }` → `12,480`."
+    },
+    "formatPercent": {
+      "description": "A ratio as a whole percentage: `{ value: number }` where 0.25 → `25%`; null → em dash."
+    },
+    "formatDate": {
+      "description": "A day in words: `{ seconds: number }` (Unix seconds) → `4 Jul 2026`."
+    }
+  }
+}

@@ -59,7 +59,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Plus, TrendingDown, TrendingUp, X } from "lucide-react";
 import { useEffect, useId, useState, type ReactElement } from "react";
 
-import { MultiDropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { DEBOUNCE_MS, searchTerms } from "@/features/search/useCardSearch";
@@ -101,6 +100,7 @@ import {
   WidgetRowList,
 } from "../WidgetParts";
 import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
+import { SettingsPicker } from "../WidgetSettingsPanel";
 import { widgetMeta } from "../widgets";
 import { pickOf } from "../widgetSettings";
 import { collectionFolderOption, wishlistFolderOption } from "./FoldersWidget";
@@ -442,17 +442,23 @@ export function PriceMoversWidgetSettings({ widget, onConfig }: WidgetSettingsPr
 
   return (
     <div className="flex flex-col gap-3">
-      <FolderPicker
+      <SettingsPicker
         label="Collection folders"
         options={collectionOptions}
-        selected={shownCollection}
+        selected={shownCollection.map(String)}
         onToggle={(value) => toggle("collectionFolderIds", value)}
+        triggerLabel={
+          shownCollection.length === 0 ? "None chosen" : plural(shownCollection.length, "folder")
+        }
       />
-      <FolderPicker
+      <SettingsPicker
         label="Wishlist folders"
         options={wishlistOptions}
-        selected={shownWishlist}
+        selected={shownWishlist.map(String)}
         onToggle={(value) => toggle("wishlistFolderIds", value)}
+        triggerLabel={
+          shownWishlist.length === 0 ? "None chosen" : plural(shownWishlist.length, "folder")
+        }
       />
       {loadError !== null && (
         <p className="m-0 text-xs text-destructive">
@@ -467,42 +473,7 @@ export function PriceMoversWidgetSettings({ widget, onConfig }: WidgetSettingsPr
           onConfig({ cards: [...config.cards, card] });
         }}
         onRemove={(id) => onConfig({ cards: config.cards.filter((each) => each.id !== id) })}
-      />
-    </div>
-  );
-}
-
-/** One cabinet's checklist — a visible label, and a trigger saying how many are chosen. */
-function FolderPicker({
-  label,
-  options,
-  selected,
-  onToggle,
-}: {
-  label: string;
-  options: readonly DropdownOption[];
-  selected: readonly number[];
-  onToggle: (value: string) => void;
-}): ReactElement {
-  const id = useId();
-  return (
-    <div className="grid gap-1">
-      {/* Both `id` and `labelledBy`, the Folders widget's `Picker` and its reason. */}
-      <label id={`${id}-label`} htmlFor={id} className="text-xs text-dim">
-        {label}
-      </label>
-      <MultiDropdown
-        id={id}
-        labelledBy={`${id}-label`}
-        fill
-        size="sm"
-        // `DecksWidgetSettings`' threshold, for its reason: a list for a few, a box for many.
-        searchable={options.length > 8}
-        searchLabel={`Search ${label.toLowerCase()}`}
-        options={options}
-        selected={selected.map(String)}
-        onToggle={onToggle}
-        triggerLabel={selected.length === 0 ? "None chosen" : plural(selected.length, "folder")}
+        note="Prices of cards you don't own are remembered from the day you choose them."
       />
     </div>
   );
@@ -529,14 +500,22 @@ const ROW_BUTTON = cn(
  * Debounced by the app's own 300ms, and an empty field asks nothing. A match already chosen is not
  * offered again. The chosen list is drawn from the words stored beside each id, so it needs no read.
  */
-function CardPicker({
+export function CardPicker({
   cards,
   onAdd,
   onRemove,
+  max = MAX_CHOSEN_CARDS,
+  note,
+  label = "Cards",
 }: {
   cards: readonly ChosenCard[];
   onAdd: (card: ChosenCard) => void;
   onRemove: (id: string) => void;
+  /** The most it holds; the search field greys at it. */
+  max?: number;
+  /** A closing line under the picker, for what choosing a card means to the widget. */
+  note?: string;
+  label?: string;
 }): ReactElement {
   const fieldId = useId();
   const [text, setText] = useState("");
@@ -562,7 +541,7 @@ function CardPicker({
     enabled: asked.length > 0,
   });
 
-  const full = cards.length >= MAX_CHOSEN_CARDS;
+  const full = cards.length >= max;
   const chosenIds = new Set(cards.map((card) => card.id));
   const matches =
     full || text.trim().length === 0
@@ -572,7 +551,7 @@ function CardPicker({
   return (
     <div className="grid gap-1">
       <label htmlFor={fieldId} className="text-xs text-dim">
-        Cards
+        {label}
       </label>
       {cards.length > 0 && (
         <ul aria-label="Chosen cards" className="m-0 grid list-none gap-0.5 p-0">
@@ -606,7 +585,7 @@ function CardPicker({
       />
       {full && (
         <p className="m-0 text-xs text-dim">
-          This widget follows {MAX_CHOSEN_CARDS} cards, its most. Remove one to add another.
+          This widget follows {max} cards, its most. Remove one to add another.
         </p>
       )}
       {search.isError && text.trim().length > 0 && (
@@ -639,9 +618,7 @@ function CardPicker({
           })}
         </ul>
       )}
-      <p className="m-0 text-xs text-dim">
-        Prices of cards you don't own are remembered from the day you choose them.
-      </p>
+      {note !== undefined && <p className="m-0 text-xs text-dim">{note}</p>}
     </div>
   );
 }

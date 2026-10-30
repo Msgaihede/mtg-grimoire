@@ -3,3 +3,8 @@
 # `GRAPH_SDL_WRITE=1 cargo test -p grimoire-graph`, never with Prettier, which reflows its
 # descriptions and turns that test red.
 crates/grimoire-graph/schema.graphql
+
+# Snapshots of the json-render catalogue — written by `vitest -u` from `catalog.test.tsx` and
+# held byte for byte; Prettier would turn that test red.
+packages/ui/features/home/generated/catalog.prompt.md
+packages/ui/features/home/generated/catalog.contract.json

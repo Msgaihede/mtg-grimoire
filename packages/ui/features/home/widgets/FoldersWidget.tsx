@@ -66,8 +66,6 @@
  */
 import type { ReactElement, ReactNode } from "react";
 import { Folder, Heart, Inbox, Layers } from "lucide-react";
-import { MultiDropdown } from "@/components/Dropdown/Dropdown";
-import type { DropdownOption } from "@/components/Dropdown/types";
 import {
   folderFace,
   type CollectionFolderTotals,
@@ -93,6 +91,7 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { widgetConfig } from "../layout";
 import { WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
 import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
+import { SettingsPicker } from "../WidgetSettingsPanel";
 import { pickOf, toggleOn } from "../widgetSettings";
 
 /** Which cabinets the widget draws — the registry's `cabinets` pick. */
@@ -664,43 +663,6 @@ function wishSummary(row: WishlistFolderSummary | undefined): WishTotals {
     : { wishes: row.wishes, copies: row.copies, cost: row.cost, unpriced: row.unpriced };
 }
 
-/** One cabinet's picker — a visible label, and a trigger saying how many are pinned rather than
- *  which, because a count is what fits and a list is not. */
-function Picker({
-  id,
-  label,
-  options,
-  selected,
-  onToggle,
-}: {
-  id: string;
-  label: string;
-  options: readonly DropdownOption[];
-  selected: readonly number[];
-  onToggle: (value: string) => void;
-}) {
-  return (
-    <div className="grid gap-1">
-      {/* Both `id` and `labelledBy`: the first keeps the pointer behaviour a `<label for>` has,
-          the second states the accessible name outright rather than leaving it to an
-          association a later edit could quietly break. */}
-      <label id={`${id}-label`} htmlFor={id} className="text-xs text-dim">
-        {label}
-      </label>
-      <MultiDropdown
-        id={id}
-        labelledBy={`${id}-label`}
-        size="sm"
-        fill
-        options={options}
-        selected={selected.map(String)}
-        onToggle={onToggle}
-        triggerLabel={selected.length === 0 ? "Automatic" : plural(selected.length, "folder")}
-      />
-    </div>
-  );
-}
-
 /**
  * The two pin pickers, moved out of the old card's popover.
  *
@@ -734,31 +696,38 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
         With nothing pinned, top-level folders are shown, yours first.
       </p>
       {cabinets !== "wishlist" && (
-        <Picker
-          id={`${widget.id}-collection-folders`}
+        <SettingsPicker
           label="Collection folders"
+          searchable={false}
           // Every folder there is, the app's own included and labelled — a shortcut may point
           // at a deck's group where a *destination* picker may not.
           options={collection.folders.map((each) => ({
             value: String(each.id),
             label: collectionFolderOption(each),
           }))}
-          selected={config.collectionFolderIds}
+          selected={config.collectionFolderIds.map(String)}
           onToggle={(value) => toggle("collectionFolderIds", value)}
+          triggerLabel={folderCount(config.collectionFolderIds)}
         />
       )}
       {cabinets !== "collection" && (
-        <Picker
-          id={`${widget.id}-wishlist-folders`}
+        <SettingsPicker
           label="Wishlist folders"
+          searchable={false}
           options={wishlist.folders.map((each) => ({
             value: String(each.id),
             label: wishlistFolderOption(each, wishlist.folders),
           }))}
-          selected={config.wishlistFolderIds}
+          selected={config.wishlistFolderIds.map(String)}
           onToggle={(value) => toggle("wishlistFolderIds", value)}
+          triggerLabel={folderCount(config.wishlistFolderIds)}
         />
       )}
     </div>
   );
+}
+
+/** A cabinet picker's trigger: how many are pinned rather than which, `Automatic` when none. */
+function folderCount(ids: readonly number[]): string {
+  return ids.length === 0 ? "Automatic" : plural(ids.length, "folder");
 }
