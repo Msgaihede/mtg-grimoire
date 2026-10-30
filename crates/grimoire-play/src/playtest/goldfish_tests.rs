@@ -1877,6 +1877,86 @@ fn foretelling_is_refused_saying_why_when_it_cannot_be_paid() {
     assert!(refused.contains("can't be foretold"), "{refused}");
 }
 
+/// A cycling deck (issue #1431): Islands and Hieroglyphic Illumination, which costs four to cast
+/// and {U} to cycle — so with one Island down, cycling is the only thing the card can do.
+fn cycling_deck() -> Vec<CardFacts> {
+    let mut deck = foretell_deck();
+    let mut illumination = card(
+        "Hieroglyphic Illumination",
+        Some("{3}{U}"),
+        "Instant",
+        "Draw two cards.\nCycling {U} ({U}, Discard this card: Draw a card.)",
+        None,
+        39,
+    );
+    illumination.keywords = vec!["Cycling".into()];
+    deck[2] = illumination;
+    deck
+}
+
+/// The cycling deck's game past its opening hand, at the reader's first main phase.
+fn cycling() -> Playtest {
+    let (mut game, _) = fish(&cycling_deck(), 7);
+    game.act(A::Keep { bottom: vec![] }).expect("keep seven");
+    game
+}
+
+#[test]
+fn a_hand_card_with_cycling_is_offered_and_cycled_from_the_hand() {
+    let (offered, hand_before, step, view) = engine(|| {
+        let mut game = cycling();
+        put_down(&mut game, "Island");
+        let illumination = in_hand(&mut game, "Hieroglyphic Illumination");
+        let before = game.view();
+        let offered = find(&before.you.hand, "Hieroglyphic Illumination")
+            .is_some_and(|c| c.id == illumination && c.can_activate);
+        let step = game
+            .act(A::Activate { id: illumination })
+            .expect("cycled from the hand");
+        (offered, before.you.hand.len(), step, settle(&mut game))
+    });
+    assert!(
+        offered,
+        "the hand card says one of its abilities can be activated"
+    );
+    assert!(
+        step.happened
+            .iter()
+            .any(|h| matches!(h, H::Activated { seat: YOU, .. })),
+        "{:?}",
+        step.happened
+    );
+    assert!(
+        find(&view.you.graveyard, "Hieroglyphic Illumination").is_some(),
+        "the cycled card is discarded"
+    );
+    assert_eq!(view.you.hand.len(), hand_before, "one discarded, one drawn");
+    assert!(
+        view.you
+            .battlefield
+            .iter()
+            .filter(|c| c.name == "Island")
+            .all(|c| c.tapped),
+        "the {{U}} was paid"
+    );
+}
+
+#[test]
+fn a_hand_card_with_cycling_is_not_offered_when_it_cannot_be_paid() {
+    let (offered, refused) = engine(|| {
+        let mut game = cycling();
+        let illumination = in_hand(&mut game, "Hieroglyphic Illumination");
+        let offered = find(&game.view().you.hand, "Hieroglyphic Illumination")
+            .unwrap()
+            .can_activate;
+        let refused = game.act(A::Activate { id: illumination }).unwrap_err();
+        assert!(find(&game.view().you.hand, "Hieroglyphic Illumination").is_some());
+        (offered, refused)
+    });
+    assert!(!offered, "not offered without {{U}}");
+    assert!(refused.contains("no ability"), "{refused}");
+}
+
 /// A modal double-faced card of two faces, each `(name, cost, type line, text)`.
 fn modal(
     card_id: &str,

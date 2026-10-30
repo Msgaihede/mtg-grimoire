@@ -223,6 +223,20 @@ describe("cardMenu", () => {
     ).toEqual(["Play"]);
   });
 
+  it("offers Activate ability on a hand card the rules let the reader cycle, sandbox or not", () => {
+    // Issue #1431: a cycling card in hand had no row that reached its cycling.
+    const onAct = vi.fn();
+    const illumination = gameCard("Hieroglyphic Illumination", { canActivate: true });
+    const menu = (sandbox: boolean, card = illumination) =>
+      cardMenu({ card, ids: [card.id], place: "hand", sandbox, onAct });
+    expect(labels(menu(false))).toEqual(["Play", "Activate ability"]);
+    act(menu(false), "Activate ability").onSelect();
+    expect(onAct).toHaveBeenCalledWith({ type: "activate", id: illumination.id });
+    expect(labels(menu(true))).toEqual(["Play", "Activate ability", "Move to"]);
+    // Not offered when the rules would refuse it.
+    expect(labels(menu(false, gameCard("Hieroglyphic Illumination")))).toEqual(["Play"]);
+  });
+
   it("casts a foretold card from exile, sandbox or not", () => {
     const onAct = vi.fn();
     const behold = gameCard("Behold the Multiverse", { foretold: true, castable: true });

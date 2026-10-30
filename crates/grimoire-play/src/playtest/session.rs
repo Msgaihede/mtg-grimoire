@@ -169,10 +169,12 @@ struct Printing {
 }
 
 /// The reader's cards the rules offer more than a hand card's play for (`offers`): the hand
-/// cards they can foretell, and the graveyard and exile cards they can cast or play.
+/// cards they can foretell or activate an ability of (cycling), the graveyard and exile cards
+/// they can cast or play, and the permanents they can tap for mana.
 #[derive(Default)]
 struct Offers {
     foretell: HashSet<ObjectId>,
+    activate: HashSet<ObjectId>,
     cast: HashSet<ObjectId>,
     mana: HashSet<ObjectId>,
 }
@@ -1142,9 +1144,10 @@ impl Playtest {
             .find(|p| *p != self.you && self.people.contains(p))
     }
 
-    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card,
-    /// casting a card from the graveyard or exile, and tapping a permanent for mana. Nothing in a
-    /// replay frame, or while the reader does not have priority.
+    /// What the rules offer the reader beyond a hand card's play: foretelling a hand card or
+    /// activating one of its abilities (cycling, issue #1431), casting a card from the graveyard
+    /// or exile, and tapping a permanent for mana. Nothing in a replay frame, or while the reader
+    /// does not have priority.
     fn offers(&self, watching: bool) -> Offers {
         let mut offers = Offers::default();
         if watching || !matches!(self.stage(), PlaytestStage::Main | PlaytestStage::Respond) {
@@ -1159,6 +1162,7 @@ impl Playtest {
                 | GameAction::PlayLand { object_id, .. } => {
                     offers.cast.insert(object_id);
                 }
+                ref ability if is_ability(ability) => offers.activate.extend(sources(ability)),
                 _ => {}
             }
         }
@@ -1182,7 +1186,10 @@ impl Playtest {
                 .map(|mut c| {
                     let id = ObjectId(c.id);
                     match s.objects.get(&id).map(|o| o.zone) {
-                        Some(Zone::Hand) => c.can_foretell = offers.foretell.contains(&id),
+                        Some(Zone::Hand) => {
+                            c.can_foretell = offers.foretell.contains(&id);
+                            c.can_activate = offers.activate.contains(&id);
+                        }
                         Some(Zone::Graveyard | Zone::Exile) => {
                             c.castable = offers.cast.contains(&id);
                         }
@@ -2725,15 +2732,7 @@ impl Playtest {
     fn abilities_of(&self, id: ObjectId) -> Vec<GameAction> {
         self.answers()
             .into_iter()
-            .filter(|a| {
-                !matches!(
-                    a,
-                    GameAction::PassPriority
-                        | GameAction::PlayLand { .. }
-                        | GameAction::CastSpell { .. }
-                        | GameAction::Foretell { .. }
-                ) && names_source(a, id)
-            })
+            .filter(|a| is_ability(a) && names_source(a, id))
             .collect()
     }
 
@@ -3741,14 +3740,32 @@ fn mana_of(value: &Value) -> Option<String> {
     }
 }
 
+/// Whether a legal action is an activation (`abilities_of`): anything but passing, a play, a
+/// cast or a foretelling, which the board offers rows of their own.
+fn is_ability(action: &GameAction) -> bool {
+    !matches!(
+        action,
+        GameAction::PassPriority
+            | GameAction::PlayLand { .. }
+            | GameAction::CastSpell { .. }
+            | GameAction::Foretell { .. }
+    )
+}
+
 /// Whether an action is something `id` does: its data names `id` as the source, the equipment,
 /// the vehicle or the object acted on.
 fn names_source(action: &GameAction, id: ObjectId) -> bool {
+    sources(action).contains(&id)
+}
+
+/// The objects an action is something of (`names_source`): whatever its data names as the
+/// source, the equipment, the vehicle or the object acted on.
+fn sources(action: &GameAction) -> Vec<ObjectId> {
     let Ok(json) = serde_json::to_value(action) else {
-        return false;
+        return Vec::new();
     };
     let Some(Value::Object(data)) = json.get("data") else {
-        return false;
+        return Vec::new();
     };
     [
         "source_id",
@@ -3759,7 +3776,8 @@ fn names_source(action: &GameAction, id: ObjectId) -> bool {
         "object_id",
     ]
     .iter()
-    .any(|key| data.get(*key).and_then(Value::as_u64) == Some(id.0))
+    .filter_map(|key| data.get(*key).and_then(Value::as_u64).map(ObjectId))
+    .collect()
 }
 
 /// What a run of the engine's events comes to, as the log's facts. `state` is the game after
