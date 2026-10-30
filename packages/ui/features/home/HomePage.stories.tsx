@@ -268,6 +268,46 @@ export const WithACustomWidget: Story = {
   },
 };
 
+/**
+ * A custom widget's settings, in its card's settings popover: the spec's `settingsRoot` face, drawn
+ * after the size and density rows every kind has. The Deck shelf's one switch keeps it to
+ * Commander decks — kept in the copy's config as it is pressed, and the card redraws at once.
+ */
+export const CustomWidgetSettingsOpen: Story = {
+  args: {
+    layout: {
+      version: 2,
+      widgets: [
+        {
+          id: "custom",
+          kind: "custom",
+          x: 0,
+          y: 0,
+          w: 4,
+          h: 3,
+          span: 1,
+          config: { widgetId: 1, name: "Deck shelf" },
+        },
+      ],
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const shelf = within(await canvas.findByRole("region", { name: "Deck shelf" }, MOUNT_TIMEOUT));
+    await expect(await shelf.findByText("Modern Goodstuff", {}, MOUNT_TIMEOUT)).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: "Customize" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Settings for Deck shelf" }));
+    await userEvent.click(
+      await canvas.findByRole("checkbox", { name: "Commander decks only" }, MOUNT_TIMEOUT),
+    );
+    await waitFor(async () => {
+      await expect(shelf.queryByText("Modern Goodstuff")).not.toBeInTheDocument();
+    }, MOUNT_TIMEOUT);
+    await expect(shelf.getByText("Kenrith Two-Drops")).toBeInTheDocument();
+  },
+};
+
 /** A world with no custom widgets: Customize brings Add widget and no Custom widgets button. */
 export const NoCustomWidgets: Story = {
   args: { layout: JUST_SUMMARY },

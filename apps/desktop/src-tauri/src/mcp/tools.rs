@@ -323,13 +323,16 @@ pub fn list() -> Vec<Value> {
              elements, and its on.<event> actions catalogue actions or json-render's setState, \
              pushState, removeState and validateForm. The spec's state root is the query \
              answer's data — {\"$state\": \"/decks\"} reads data.decks — with the widget's own \
-             inputs under /ui and its settings under /settings. A query or spec that does not fit \
-             is refused with every problem named. Answers the stored widget.",
+             inputs under /ui and its settings under /settings. Settings are drawn in the \
+             card's settings popover, never on the widget: name the element they start from in \
+             a top-level settingsRoot beside root, bind its inputs to /settings/..., and the app \
+             keeps every change (no Save button). A query or spec that does not fit is refused \
+             with every problem named. Answers the stored widget.",
             json!({
                 "name": { "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_NAME_CHARS, "description": "The widget's title." },
                 "description": { "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_DESCRIPTION_CHARS, "description": "What it shows, in a sentence (default empty)." },
                 "query": document,
-                "spec": { "type": "object", "description": "The json-render spec: root (an element key), elements (key → { type, props, children, on?, visible?, repeat? }) and an optional state." },
+                "spec": { "type": "object", "description": "The json-render spec: root (an element key), an optional settingsRoot (the element key of the settings popover's face), elements (key → { type, props, children, on?, visible?, repeat? }) and an optional state." },
                 "w": { "type": "integer", "minimum": grimoire_core::custom_widgets::W.start(), "maximum": grimoire_core::custom_widgets::W.end(), "description": "Width in grid cells (default 4)." },
                 "h": { "type": "integer", "minimum": grimoire_core::custom_widgets::H.start(), "maximum": grimoire_core::custom_widgets::H.end(), "description": "Height in grid cells (default 3)." },
             }),
@@ -1098,12 +1101,26 @@ fn spec_problems(spec: &Value) -> Vec<String> {
         problems.push("The spec needs its elements, as an object.".to_owned());
         return problems;
     };
-    match spec.get("root").and_then(Value::as_str) {
+    let root = spec.get("root").and_then(Value::as_str);
+    match root {
         None => problems.push("The spec needs a root naming one of its elements.".to_owned()),
         Some(root) if !elements.contains_key(root) => {
             problems.push(format!("The spec's root {root:?} names no element."))
         }
         Some(_) => {}
+    }
+    // The settings face — drawn in the card's settings popover — is a second root, or none.
+    match spec.get("settingsRoot") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(face)) if !elements.contains_key(face) => {
+            problems.push(format!("The spec's settingsRoot {face:?} names no element."))
+        }
+        Some(Value::String(face)) if Some(face.as_str()) == root => problems.push(
+            "The spec's settingsRoot is its root; settings go in the popover, apart from the widget."
+                .to_owned(),
+        ),
+        Some(Value::String(_)) => {}
+        Some(_) => problems.push("The spec's settingsRoot must be an element key.".to_owned()),
     }
     for (key, element) in elements {
         let Some(element) = element.as_object() else {
@@ -1475,6 +1492,34 @@ mod tests {
                 },
             },
         })
+    }
+
+    /// The settings face is a second root: an element key, never the widget's own root.
+    #[test]
+    fn a_settings_root_names_an_element_apart_from_the_root() {
+        let mut spec = widget_spec();
+        spec["settingsRoot"] = json!("again");
+        assert!(
+            spec_problems(&spec).is_empty(),
+            "{:?}",
+            spec_problems(&spec)
+        );
+
+        spec["settingsRoot"] = json!("nowhere");
+        let problems = spec_problems(&spec);
+        assert!(problems
+            .iter()
+            .any(|p| p.contains("settingsRoot") && p.contains("nowhere")));
+
+        spec["settingsRoot"] = json!("body");
+        assert!(spec_problems(&spec)
+            .iter()
+            .any(|p| p.contains("settingsRoot is its root")));
+
+        spec["settingsRoot"] = json!(3);
+        assert!(spec_problems(&spec)
+            .iter()
+            .any(|p| p.contains("must be an element key")));
     }
 
     #[test]

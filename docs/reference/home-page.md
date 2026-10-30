@@ -2415,7 +2415,10 @@ copies of it. The vocabulary, the state model and the stored table are
   of `CATALOGUE_WIDGETS`, which is what the Widget catalogue lists: a custom widget is nothing until
   a definition names it. A placed copy's `config` is `{ widgetId, name, settings? }`: the
   definition, the name it had when placed (`defaultTitle` reads it, so the card is called what the
-  widget is called and a rename still lays over it), and what `saveSettings` kept.
+  widget is called and a rename still lays over it), and the settings the reader set in the card's
+  settings popover (`CustomWidgetSettings`, the spec's `settingsRoot` face, after the size and
+  density rows). Renaming is the card's own title field, as for every kind: Customize, then the
+  name; a cleared name brings the widget's back.
 - **The Custom widgets button** sits beside Add widget, in the same tray (Customize, or an empty
   page), and **only while the reader has one** — an empty dialog behind a button is a promise kept
   by nobody. `useCustomWidgets` reads the list once (`["customWidgets"]`, the `custom_widgets`

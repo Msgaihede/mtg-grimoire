@@ -790,10 +790,9 @@ export const { registry, handlers, executeAction } = defineRegistry(catalog, {
       store.setOpenDeckId(deckId);
       store.setGoldfish({ deckId, variant: "live" });
     },
-    // The host's two: what the widget's own data and stored config are is the custom widget's
-    // to answer, so `SpecView` replaces these with its `host`'s. Drawn without one, they do nothing.
+    // The host's: what the widget's data is is the custom widget's to answer, so `SpecView`
+    // replaces this with its `host`'s. Drawn without one, it does nothing.
     refresh: async () => {},
-    saveSettings: async () => {},
   },
 });
 

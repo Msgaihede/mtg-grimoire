@@ -13,6 +13,7 @@ import {
   SETTINGS_EXAMPLE,
 } from "./examples";
 import { CatalogFitContext } from "./registry";
+import { settingsFace } from "./widgetState";
 
 /** The grid's target cell — the size the page aims its columns at. Not exported, for CSF. */
 const CELL = 104;
@@ -106,13 +107,13 @@ export const Filter: Story = {
   },
 };
 
-/** The widgets' own settings controls — the footprint steppers, choice chips, the `Show`
- *  checkboxes, a checklist, a deck picker and the card search — bound to the spec's state. */
+/** A widget's settings face — the spec's `settingsRoot`, drawn as the card's settings popover draws
+ *  it: every one of the widgets' own settings controls, bound to `/settings`. */
 export const Settings: Story = {
-  args: { spec: SETTINGS_EXAMPLE, w: 3, h: 6 },
+  args: { spec: settingsFace(SETTINGS_EXAMPLE, "face"), w: 3, h: 6 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(canvas.getByRole("button", { name: "More, Wide" }));
+    await userEvent.click(canvas.getByRole("button", { name: "More, Rows" }));
     await expect(canvas.getByText("5")).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("checkbox", { name: "Prices" }));
     await expect(canvas.getByRole("checkbox", { name: "Prices" })).toBeChecked();
