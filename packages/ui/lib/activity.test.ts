@@ -4,6 +4,7 @@ import {
   RANK,
   comboActivity,
   createActivityStore,
+  deviceSyncActivity,
   marketplaceFeedActivity,
   megabytes,
   oracleTagActivity,
@@ -422,6 +423,38 @@ describe("marketplaceFeedActivity", () => {
     expect(unsized?.detail).toBe("42 MB");
     expect(unsized?.value).toBeNull();
     expect(marketplaceFeedActivity("Card Kingdom", feed())?.detail).toBeNull();
+  });
+});
+
+describe("deviceSyncActivity", () => {
+  /** `connecting` is the launch catch-up — the manager's round trip before its socket — and the
+   *  only state that is a job. The other three are the marker's, beside Refresh. */
+  it("is a job only while the socket is connecting", () => {
+    expect(deviceSyncActivity("connecting")).toEqual({
+      key: "device-sync",
+      rank: RANK.deviceSync,
+      label: "Syncing with your other devices",
+      detail: null,
+      value: null,
+    });
+    expect(deviceSyncActivity("live")).toBeNull();
+    expect(deviceSyncActivity("offline")).toBeNull();
+    expect(deviceSyncActivity("off")).toBeNull();
+  });
+
+  /**
+   * A launch after a long absence runs the card sync and the catch-up together, and the card sync
+   * can hold the row for minutes: ranked below it, the one sentence that says the reader's own
+   * rows are not up to date yet would never be seen.
+   */
+  it("outranks every other job, the card sync included", () => {
+    const device = deviceSyncActivity("connecting")!;
+    const sync = syncActivity(null, true)!;
+    const update = updateActivity({ done: 1, total: 2 }, "0.3.0")!;
+
+    expect(topActivity([sync, device])).toBe(device);
+    expect(topActivity([update, device])).toBe(device);
+    expect(Math.min(...Object.values(RANK))).toBe(RANK.deviceSync);
   });
 });
 

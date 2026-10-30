@@ -38,7 +38,9 @@ import { ipc, type LiveState } from "@/lib/ipc";
  * being invoked more than once in the app's lifetime: `SyncPanel`'s subscription unmounts, and
  * takes its listener with it, the moment the reader leaves Settings — so it costs one listener
  * for as long as that page is open and nothing more. Do not "fix" a second call like that one by
- * deleting it; if you need this hook's state in a third place, ask whether *that* caller is
+ * deleting it. **The light app's phone face is the third caller** (`useCardDataWatch`, issue
+ * #1428): the face's half of `AppShell`'s, called once by `PhoneFace` for the face's life, so one listener
+ * there as here. If you need this hook's state in a fourth place, ask whether *that* caller is
  * bounded the same way before assuming it must thread through an existing one instead.
  */
 export function useDeviceSyncLive(): LiveState {
