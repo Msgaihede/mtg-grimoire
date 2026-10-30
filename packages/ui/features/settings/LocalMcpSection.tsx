@@ -24,9 +24,9 @@ export const MCP_HEADING = "AI agents on this computer (MCP)";
  * free**. Exported so the tests and the stories assert the sentence the panel draws.
  */
 export const MCP_SENTENCE =
-  "Lets an AI agent on this computer — Claude Code, Claude Desktop, Codex, Gemini CLI and others — read " +
-  "and add to your collection, wishlist and decks while this app is open. Nothing leaves this " +
-  "computer, and it's free.";
+  "Lets an AI agent on this computer — Claude Code, Claude Desktop, Codex, Gemini CLI and " +
+  "others — read and add to your collection, wishlist and decks while this app is open. " +
+  "Nothing leaves this computer, and it's free.";
 
 /** The note beside a switch that is off. */
 export const MCP_OFF = "Off.";
