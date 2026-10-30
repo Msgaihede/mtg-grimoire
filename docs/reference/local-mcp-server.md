@@ -126,11 +126,14 @@ streamable HTTP server, not `url`:
 }
 ```
 
-**ChatGPT** has no snippet. Its chats — custom MCP servers included — run on OpenAI's servers, which
-cannot reach `127.0.0.1`, and the only bridges (a tunnel, OpenAI's Secure MCP Tunnel) would put the
-collection on the internet, the opposite of this server's promise; its connector form also takes
-no bearer header, only OAuth or none. The panel says so and points at Codex, which runs on this
-computer and which the ChatGPT desktop app reads.
+**Only clients that run on this computer are offered.** The server listens on `127.0.0.1`, so a
+client whose agent runs on its vendor's servers cannot reach it: ChatGPT's chats (web and desktop —
+custom MCP servers are connected from OpenAI's side, and its connector form takes OAuth or nothing,
+no bearer header), the Gemini app, claude.ai, and — as far as is known — Claude Desktop's own
+_Connectors_ page, which is why Claude Desktop goes through its config file below. The only bridges
+(a tunnel, OpenAI's Secure MCP Tunnel) would put the collection on the internet, the opposite of
+this server's promise. ChatGPT's desktop app reaches the server through Codex, which reads the file
+above.
 
 **Cursor** (`~/.cursor/mcp.json`) and **VS Code** (`.vscode/mcp.json` uses `"servers"` and
 `"type": "http"` in place of `"mcpServers"`):

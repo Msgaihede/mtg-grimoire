@@ -188,24 +188,6 @@ describe("LocalMcpSection", () => {
     expect(copyText).toHaveBeenCalledWith(clientSnippet("claude-desktop", ON.url, TOKEN));
   });
 
-  /** ChatGPT's chats cannot reach `127.0.0.1`: no snippet, the reason, and a way to Codex. */
-  it("offers ChatGPT no snippet, and points at Codex", async () => {
-    mcpStatus.mockResolvedValue(ON);
-    setup();
-    await theSwitch();
-
-    await userEvent.click(await screen.findByRole("radio", { name: "ChatGPT" }));
-    expect(screen.getByText(/can't reach this computer/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Copy the ChatGPT/ })).toBeNull();
-
-    await userEvent.click(screen.getByRole("button", { name: "Set up Codex" }));
-    const codex = screen.getByRole("radio", { name: "Codex" });
-    expect(codex).toHaveAttribute("aria-checked", "true");
-    expect(codex).toHaveFocus();
-    await userEvent.click(screen.getByRole("button", { name: "Copy the Codex configuration" }));
-    expect(copyText).toHaveBeenCalledWith(clientSnippet("codex", ON.url, TOKEN));
-  });
-
   it("says a clipboard refusal rather than claiming a copy", async () => {
     mcpStatus.mockResolvedValue(ON);
     copyText.mockRejectedValue("The clipboard is not available.");
@@ -308,7 +290,7 @@ describe("clientSnippet", () => {
   const url = "http://127.0.0.1:39147/mcp";
 
   /** Parsed, for the clients whose snippet is a file rather than a command. */
-  const json = (client: McpClient) => JSON.parse(clientSnippet(client, url, TOKEN) ?? "null");
+  const json = (client: McpClient) => JSON.parse(clientSnippet(client, url, TOKEN));
 
   it("writes Claude Code's command, at user scope", () => {
     expect(clientSnippet("claude-code", url, TOKEN)).toBe(
@@ -339,10 +321,6 @@ describe("clientSnippet", () => {
         "mtg-grimoire": { serverUrl: url, headers: { Authorization: `Bearer ${TOKEN}` } },
       },
     });
-  });
-
-  it("writes nothing for ChatGPT, whose chats cannot reach this computer", () => {
-    expect(clientSnippet("chatgpt", url, TOKEN)).toBeNull();
   });
 
   it("writes the URL-and-headers JSON Cursor reads", () => {
