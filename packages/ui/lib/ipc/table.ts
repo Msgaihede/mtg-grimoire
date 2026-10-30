@@ -96,6 +96,9 @@ export interface GameCard {
   foretold: boolean;
   /** The rules let the reader foretell this hand card now (their turn, {2} to pay). */
   canForetell: boolean;
+  /** The rules let the reader activate one of this hand card's abilities now (CR 602.1):
+   *  cycling, typecycling, channel — an `activate` of it (issue #1431). */
+  canActivate: boolean;
   /** The rules let the reader cast or play this graveyard or exile card now (foretold,
    *  flashback). */
   castable: boolean;

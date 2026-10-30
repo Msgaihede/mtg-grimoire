@@ -87,6 +87,10 @@ pub struct GameCard {
     /// The rules let the reader foretell it now (CR 702.143a): a hand card with foretell, on their
     /// own turn, with {2} to pay. Set only in a view the reader can act in.
     pub can_foretell: bool,
+    /// The rules let the reader activate one of its abilities from the hand now (CR 602.1):
+    /// cycling (CR 702.29a), typecycling, channel and the like — an `Activate` of it. Only ever
+    /// set on a hand card, and only in a view the reader can act in (issue #1431).
+    pub can_activate: bool,
     /// The rules let the reader cast or play it from where it is now — a foretold card from
     /// exile, a flashback card from the graveyard. Only ever set on a graveyard or exile card,
     /// and only in a view the reader can act in.

@@ -76,6 +76,7 @@ pub(crate) fn game_card(
         foretold: o.zone == Zone::Exile && o.foretold,
         // What the rules offer is the session's to say: it knows whose view this is.
         can_foretell: false,
+        can_activate: false,
         castable: false,
         can_tap_for_mana: false,
         gaps,

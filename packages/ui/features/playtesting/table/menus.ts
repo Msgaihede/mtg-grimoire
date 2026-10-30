@@ -12,7 +12,8 @@
  * mill, a shuffle — are the reader's hand changing the game outside the rules, and the engine
  * takes them only while the sandbox is on and only in the reader's main phase. So each builder
  * takes `sandbox` as the board works it out (on, the main phase, nothing with the engine) and,
- * off, offers only what the rules do: a hand card's Play (and its Foretell), a commander's Cast, a
+ * off, offers only what the rules do: a hand card's Play (and its Foretell and Activate ability —
+ * cycling), a commander's Cast, a
  * foretold or flashback card's Cast, a permanent's Activate ability and its Tap for mana. A row
  * the engine would only refuse is not offered.
  */
@@ -52,7 +53,8 @@ function counted(card: GameCard, kind: string): number {
  * reader's own permanents. An opponent's card is handed no `onActivate`: only its controller
  * activates it.
  *
- * **`sandbox` off leaves only the rules' rows**: Play on a hand card, Cast on a commander, and
+ * **`sandbox` off leaves only the rules' rows**: Play on a hand card (and Foretell and Activate
+ * ability, {@link GameCard.canActivate}, when the rules offer them), Cast on a commander, and
  * Activate ability and Tap for mana ({@link GameCard.canTapForMana}) on a permanent — and on a
  * graveyard or exile card, or an opponent's permanent, nothing at all (an empty menu, which the
  * caller does not open). On, every hand move follows, on whichever seat's card it is: the engine
@@ -146,10 +148,14 @@ export function cardMenu({
       return items;
     }
     case "hand": {
-      // Foretell is the rules' own row, offered only when the engine would take it.
+      // Foretell and Activate ability (cycling, issue #1431) are the rules' own rows, offered
+      // only when the engine would take them.
       const rules = [action("play", "Play", () => onAct({ type: "play", id }))];
       if (card.canForetell) {
         rules.push(action("foretell", "Foretell", () => onAct({ type: "foretell", id })));
+      }
+      if (card.canActivate) {
+        rules.push(action("activate", "Activate ability", () => onAct({ type: "activate", id })));
       }
       if (!sandbox) return rules;
       return [

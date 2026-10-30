@@ -334,6 +334,7 @@ export function cardOfRef(
       attachedTo: null,
       foretold: false,
       canForetell: false,
+      canActivate: false,
       castable: false,
       canTapForMana: false,
       gaps: [],
