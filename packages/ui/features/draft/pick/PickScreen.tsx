@@ -1,12 +1,14 @@
 import { useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { Hourglass, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { FOCUS } from "@/lib/focus";
 import type { DraftCard, DraftView } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
+import { sortPack, type PackSort } from "./pool";
 import { PoolColumns } from "./PoolColumns";
 import { RoundStrip, SeatsStrip } from "./TableStrip";
 import { WinstonTable } from "./WinstonTable";
@@ -17,6 +19,15 @@ export const PACK_SCALE = { min: 130, max: 300, start: 190 } as const;
 /** The slider's place for the window's life (`lib/viewMemory.ts`): a reader who sized the pack
  *  for their screen should find it so on the next pick and the next draft. */
 const scaleMemory = viewMemory<number>("draft.packScale");
+
+const SORTS: { value: PackSort; label: string }[] = [
+  { value: "rarity", label: "Rarity" },
+  { value: "dealt", label: "As dealt" },
+];
+
+/** The pack's order for the window's life, as the slider's — rarity until the reader says
+ *  otherwise (issue #1432). */
+const sortMemory = viewMemory<PackSort>("draft.packSort");
 
 /** Cards one pick takes from `pack`: the view's `picksPerStep` (two in a Commander draft), or what
  *  is left when the pack holds fewer. */
@@ -36,6 +47,9 @@ export function picksNeeded(view: DraftView): number {
  *
  * **A pick of two** (a Commander draft, `picksPerStep: 2`) chooses two cards, each click toggling
  * one, and picks them together — with the Pick button, or Enter once both are chosen.
+ *
+ * **The pack is laid out by rarity, mythic first** (issue #1432), a rarity's cards in the order they
+ * were dealt; the Sort menu offers the dealt order instead, kept for the window's life.
  */
 export function PickScreen({
   view,
@@ -64,6 +78,11 @@ export function PickScreen({
     setScaleState(value);
   };
   const scaleId = useId();
+  const [sort, setSortState] = useState<PackSort>(() => sortMemory.recall() ?? "rarity");
+  const setSort = (value: PackSort) => {
+    sortMemory.keep(value);
+    setSortState(value);
+  };
   const waiting = view.waiting || view.pack.length === 0;
   const picked = view.seats.filter((s) => s.picked).length;
   const need = picksNeeded(view);
@@ -108,7 +127,18 @@ export function PickScreen({
               Choose {need}
             </span>
           )}
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex flex-wrap items-center gap-3">
+            <span id={`${scaleId}-sort-label`} className={LABEL}>
+              Sort
+            </span>
+            <Dropdown
+              id={`${scaleId}-sort`}
+              labelledBy={`${scaleId}-sort-label`}
+              size="sm"
+              value={sort}
+              onChange={(v) => setSort(v as PackSort)}
+              options={SORTS}
+            />
             <label htmlFor={scaleId} className={LABEL}>
               Card size
             </label>
@@ -153,7 +183,7 @@ export function PickScreen({
           <PackWall
             // A new pack is a new wall: the choice made in the last one does not carry over.
             key={`${view.packNumber}.${view.pickNumber}`}
-            pack={view.pack}
+            pack={sortPack(view.pack, sort)}
             need={need}
             scale={scale}
             busy={busy}
@@ -189,29 +219,34 @@ function PackWall({
   busy: boolean;
   onPick: (cards: DraftCard[]) => void;
 }): JSX.Element {
-  /** The chosen cards' places in the pack, oldest first. */
-  const [chosen, setChosen] = useState<number[]>([]);
+  /** The chosen cards' `instanceId`s, oldest first — not their places, so a new sort keeps the
+   *  choice. */
+  const [chosen, setChosen] = useState<string[]>([]);
   /** Where the arrows are, for a pick of more than one — the choice does not follow them. */
   const caret = useRef<number | null>(null);
   const wall = useRef<HTMLUListElement>(null);
   const tiles = useRef<(HTMLButtonElement | null)[]>([]);
-  const cards = chosen.flatMap((i) => (pack[i] === undefined ? [] : [pack[i]]));
+  const cardsOf = (ids: readonly string[]) =>
+    ids.flatMap((id) => pack.find((c) => c.instanceId === id) ?? []);
+  const cards = cardsOf(chosen);
   const full = cards.length === need;
 
-  const confirm = (indices: readonly number[]) => {
-    if (busy || indices.length !== need) return;
-    const picked = indices.flatMap((i) => (pack[i] === undefined ? [] : [pack[i]]));
+  const confirm = (ids: readonly string[]) => {
+    if (busy || ids.length !== need) return;
+    const picked = cardsOf(ids);
     if (picked.length === need) onPick(picked);
   };
 
   const press = (index: number) => {
+    const id = pack[index]?.instanceId;
+    if (id === undefined) return;
     if (need === 1) {
-      if (chosen[0] === index) confirm([index]);
-      else setChosen([index]);
+      if (chosen[0] === id) confirm([id]);
+      else setChosen([id]);
       return;
     }
     setChosen((cur) =>
-      cur.includes(index) ? cur.filter((i) => i !== index) : [...cur, index].slice(-need),
+      cur.includes(id) ? cur.filter((i) => i !== id) : [...cur, id].slice(-need),
     );
   };
 
@@ -236,10 +271,12 @@ function PackWall({
               : 0;
     if (step !== 0) {
       event.preventDefault();
-      const at = need === 1 ? (chosen[0] ?? null) : caret.current;
+      const held = need === 1 ? pack.findIndex((c) => c.instanceId === chosen[0]) : -1;
+      const at = need === 1 ? (held === -1 ? null : held) : caret.current;
       const from = at ?? (step > 0 ? -1 : pack.length);
       const next = Math.min(pack.length - 1, Math.max(0, from + step));
-      if (need === 1) setChosen([next]);
+      const nextId = pack[next]?.instanceId;
+      if (need === 1 && nextId !== undefined) setChosen([nextId]);
       caret.current = next;
       tiles.current[next]?.focus();
       return;
@@ -271,7 +308,7 @@ function PackWall({
         style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${scale}px, 1fr))` }}
       >
         {pack.map((c, index) => {
-          const selected = chosen.includes(index);
+          const selected = chosen.includes(c.instanceId);
           return (
             <li key={c.instanceId}>
               <button

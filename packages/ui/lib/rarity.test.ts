@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasRarityColor, rarityColor } from "@/lib/rarity";
+import { hasRarityColor, rarityColor, rarityRank } from "@/lib/rarity";
 
 describe("rarityColor", () => {
   it("maps the four rarities the direction names", () => {
@@ -31,5 +31,19 @@ describe("rarityColor", () => {
     // Not a rarity at all, and not an inherited `Object.prototype` key either — a record
     // read with `in` would answer `true` to this one.
     expect(hasRarityColor("toString")).toBe(false);
+  });
+});
+
+describe("rarityRank", () => {
+  it("ranks mythic first and common last of the four", () => {
+    const ranks = ["mythic", "rare", "uncommon", "common"].map(rarityRank);
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+    expect(new Set(ranks).size).toBe(4);
+  });
+
+  it("puts a rarity the four do not name, or none, after common", () => {
+    for (const r of ["special", "bonus", "toString", null, undefined]) {
+      expect(rarityRank(r)).toBeGreaterThan(rarityRank("common"));
+    }
   });
 });
