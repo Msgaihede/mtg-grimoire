@@ -2209,8 +2209,9 @@ const AT_A_GLANCE_QUERY = "query AtAGlance { collectionSummary { totalCards uniq
 /**
  * **The reader's own widgets** — two, written the way `CATALOG_RULES` asks a model to write them:
  * the answer at the state root, the widget's inputs under `/ui`, its settings under `/settings`.
- * The deck shelf is a `repeat` of rows that open their deck, with a switch that hides the empty
- * ones and a setting kept by `saveSettings`; the glance is two figures. Seeded only here, the
+ * The deck shelf is a `repeat` of rows that open their deck, with a settings face
+ * (`settingsRoot`, the card's settings popover) whose one switch keeps it to Commander decks; the
+ * glance is two figures and no settings. Seeded only here, the
  * table's rule ({@link FakeDb.customWidgets}).
  */
 function starterCustomWidgets(): CustomWidget[] {
@@ -2235,6 +2236,11 @@ function starterCustomWidgets(): CustomWidget[] {
             repeat: { statePath: "/decks", key: "id" },
             children: ["deck"],
           },
+          face: {
+            type: "Checkbox",
+            props: { label: "Commander decks only", checked: { $bindState: "/settings/commander" } },
+            children: [],
+          },
           deck: {
             type: "Row",
             props: {
@@ -2248,10 +2254,17 @@ function starterCustomWidgets(): CustomWidget[] {
               track: null,
             },
             on: { press: { action: "openDeck", params: { deckId: { $item: "id" } } } },
+            visible: {
+              $or: [
+                { $state: "/settings/commander", not: true },
+                { $item: "formatName", eq: "Commander" },
+              ],
+            },
             children: [],
           },
         },
-        state: { ui: {}, settings: {} },
+        settingsRoot: "face",
+        state: { ui: {}, settings: { commander: false } },
       },
       w: 4,
       h: 3,

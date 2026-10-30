@@ -115,10 +115,15 @@ card search aside.
 
   No action writes the reader's data; adding one is the owner's decision.
 
-- **Two actions are the host's**: `refresh` (ask the widget's document again) and `saveSettings`
-  (keep the state under a path — `/settings` — in the widget's stored config). `SpecView` answers
-  them through its `host` prop; drawn without one (a story, a preview) they do nothing. The custom
-  widget kind will be that host.
+- **One action is the host's**: `refresh`, ask the widget's document again. `SpecView` answers it
+  through its `host` prop; drawn without one (a story, a preview) it does nothing. The custom
+  widget's body is that host.
+- **Settings are a second root, drawn in the card's settings popover.** A spec may carry a
+  top-level `settingsRoot` beside `root` (json-render's own spec type has no such key, so
+  `checkSpec` and `widget_create` check it: an element of the spec, never `root` itself). That
+  subtree is the settings face; its inputs bind `/settings/...` and every change is kept as it is
+  made, so there is no Save button and no save action (there was a `saveSettings` until
+  2026-10-30).
 - **A `$item` in an action's params arrives as a state path.** json-render resolves it to the
   item's path (`/decks/1/id`), the shape its own `setState` needs, and its prompt tells a model so.
   The actions read such a param back from the spec's state (`valueOf` in `registry.tsx`); no value
@@ -138,8 +143,8 @@ card search aside.
 
 `Home/Generated/SpecView`: Decks (figures, a `repeat` of rows that open their deck, a `$template`
 footer), Rarity (bars, a switch hiding them), Filter (rows narrowed by a chip and a price range
-through `visible`), Settings (the widgets' settings controls, saved
-through `saveSettings`), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
+through `visible`), Settings (a settings face: every one of the widgets'
+settings controls), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
 component). Each spec sits in a box a widget of its footprint covers, with
 that box's fit.
 
@@ -186,9 +191,13 @@ copies and the header button that opens it are [home-page.md](home-page.md) §18
 - **A refreshed answer moves the data and nothing else.** `SpecView`'s `live` writes the answer's
   top-level keys into the store each time it changes, so a reader's filter survives the collection
   changing under it. A changed definition (`updatedAt`) remounts, from its own seeds.
-- **The body is the host** for `refresh` (`useGraphQL`'s `refetch`) and `saveSettings` (the state
-  under the path, written to the copy's `config.settings`), so two copies of one definition can be
-  set differently.
+- **The body is the host** for `refresh` (`useGraphQL`'s `refetch`).
+- **The settings face is the card's settings popover's** (`CustomWidgetSettings`, drawn after the
+  size and density rows as any kind's own settings are): the spec's `settingsRoot` subtree over the
+  same answer (one cached document between the two) and the same `/settings`. Each change is a
+  patch of the copy's `config.settings` — so two copies of one definition can be set differently —
+  and comes back to the card through `live`, which carries `/settings` beside the answer, so the
+  card redraws at once. The store's echo of a kept change is compared and writes nothing.
 - **Checked before it is drawn**: the spec through `catalog.validate` (`checkSpec`, the first issue
   in words), the query only by asking the graph. It says so instead of drawing when the definition
   is gone, the spec is refused, the document is refused or the graph is not on this host; a partial

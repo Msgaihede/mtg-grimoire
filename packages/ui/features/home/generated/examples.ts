@@ -6,6 +6,7 @@
  * under `/settings`.
  */
 import type { Spec } from "@json-render/core";
+import type { WidgetSpec } from "./widgetState";
 
 /** Deck values as figures and a list of decks, each opening its deck — `repeat` over state. */
 export const DECKS_EXAMPLE: Spec = {
@@ -255,16 +256,39 @@ export const FILTER_EXAMPLE: Spec = {
   },
 };
 
-/** The widgets' own settings controls, as a generated widget's settings face would draw them. */
-export const SETTINGS_EXAMPLE: Spec = {
+/**
+ * A widget with a settings face: the body reads `/settings`, and the controls are the spec's
+ * `settingsRoot`, drawn in the card's settings popover — every one of the widgets' own settings
+ * controls, kept as the reader changes them.
+ */
+export const SETTINGS_EXAMPLE: WidgetSpec = {
   root: "body",
+  settingsRoot: "face",
   elements: {
+    // The widget: what the reader's settings decide, read from `/settings`.
     body: {
       type: "Stack",
-      props: { direction: null, gap: "md", align: null, justify: null, wrap: null },
-      children: ["size", "sort", "show", "figures", "decks", "cards", "save"],
+      props: { direction: null, gap: "sm", align: null, justify: null, wrap: null },
+      children: ["summary"],
     },
-    size: { type: "FieldGroup", props: { label: "Size" }, children: ["sizes"] },
+    summary: {
+      type: "Text",
+      props: {
+        text: { $template: "Sorted by ${/settings/sort}, ${/settings/rows} rows" },
+        tone: "dim",
+        size: null,
+        mono: null,
+        truncate: null,
+      },
+      children: [],
+    },
+    // The settings face, drawn in the card's settings popover.
+    face: {
+      type: "Stack",
+      props: { direction: null, gap: "md", align: null, justify: null, wrap: null },
+      children: ["size", "sort", "show", "figures", "decks", "cards"],
+    },
+    size: { type: "FieldGroup", props: { label: "Layout" }, children: ["sizes"] },
     sizes: {
       type: "Stack",
       props: { direction: "horizontal", gap: "sm", align: null, justify: null, wrap: null },
@@ -272,12 +296,12 @@ export const SETTINGS_EXAMPLE: Spec = {
     },
     wide: {
       type: "CompactStepper",
-      props: { label: "Wide", value: { $bindState: "/settings/w" }, min: 2, max: 12 },
+      props: { label: "Rows", value: { $bindState: "/settings/rows" }, min: 1, max: 10 },
       children: [],
     },
     tall: {
       type: "CompactStepper",
-      props: { label: "Tall", value: { $bindState: "/settings/h" }, min: 2, max: 8 },
+      props: { label: "Columns", value: { $bindState: "/settings/columns" }, min: 1, max: 4 },
       children: [],
     },
     sort: {
@@ -336,17 +360,11 @@ export const SETTINGS_EXAMPLE: Spec = {
       props: { label: "Cards to follow", cards: { $bindState: "/settings/cards" }, max: 10 },
       children: [],
     },
-    save: {
-      type: "Button",
-      props: { label: "Save", variant: "primary" },
-      on: { press: { action: "saveSettings", params: { path: "/settings" } } },
-      children: [],
-    },
   },
   state: {
     settings: {
-      w: 4,
-      h: 3,
+      rows: 4,
+      columns: 1,
       sort: "recent",
       art: true,
       prices: false,

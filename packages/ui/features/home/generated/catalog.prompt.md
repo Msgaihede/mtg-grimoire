@@ -115,7 +115,6 @@ AVAILABLE ACTIONS:
 - openSettings: Go to Settings with one of its panels in view.
 - goldfish: Open a deck and deal a solo practice game of it (goldfishing), on the deck as built. Desktop only.
 - refresh: Read the widget's data again now. It already refreshes whenever the reader's data changes, so this is for an explicit Refresh button.
-- saveSettings: Keep the widget's settings: the state under `path` (`/settings`) is stored with the widget and is that path's state when it is drawn again. Bind settings inputs under that path and give the settings face a Save button pressing this.
 
 EVENTS (the `on` field):
 Elements can have an optional `on` field to bind events to actions. The `on` field is a top-level field on the element (sibling of type/props/children), NOT inside props.
@@ -205,11 +204,12 @@ RULES:
 19. Always include realistic, professional-looking sample data. For blogs include 3-4 posts with varied titles, authors, dates, categories. For products include names, prices, images. Never leave data empty.
 20. This spec draws a widget on the home page of a Magic: The Gathering collection app. A widget is a small tile, a few hundred pixels each way: show one idea, and prefer Figures, Bars and a RowList over long text.
 21. The widget's data is the answer to a GraphQL query written alongside the spec: the answer's `data` object is the state root, so `{ "$state": "/decks/0/name" }` reads the query's `decks` field. Never write sample data into state for the query's fields — the answer supplies them — and never hardcode a value the query answers.
-22. Seed state only for the widget's own inputs, under `/ui` (what the reader filters, sorts or switches now) and `/settings` (what they configure and keep with `saveSettings`). Inputs bind only those paths, never a query field: the reader's data is read-only.
-23. Actions only navigate. There is no action that adds, edits or removes the reader's cards, decks, folders or wishlists.
-24. Inside a repeat, `{ "$item": "id" }` in an action's params passes the item's state path; the navigation actions read it back as the value.
-25. Colours are palette words (`accent`, `up`, `down`, `dim`, `W`, `U`, `B`, `R`, `G`, `C`), never CSS colours or class names.
-26. Money: a numeric value with `money: true`, a Price, or `{ "$computed": "formatPrice", "args": { "value": ... } }` — never a currency symbol written into text. A missing price is null, never 0.
-27. Timestamps are Unix seconds unless a field's description says milliseconds; write them with the `formatDate` function.
-28. Text holding mana or tap symbols (`{2}{R}`, `{T}`) is a ManaText, which draws them as icons.
-29. Optional props take null when not used — never omit them.
+22. Seed state only for the widget's own inputs, under `/ui` (what the reader filters, sorts or switches now) and `/settings` (what they configure and keep). Inputs bind only those paths, never a query field: the reader's data is read-only.
+23. Settings go in the widget's settings popover, never on the widget: add a top-level `settingsRoot` to the spec, beside `root`, naming the element the settings face starts from (a Stack of FieldGroup, ChoiceChips, Checkbox, Checklist, CompactStepper, Picker and the like). Its inputs bind `/settings/...`; the app keeps every change as the reader makes it, so there is no Save button. The widget under `root` reads the same `/settings` paths, and no element under `root` is under `settingsRoot`.
+24. Actions only navigate. There is no action that adds, edits or removes the reader's cards, decks, folders or wishlists.
+25. Inside a repeat, `{ "$item": "id" }` in an action's params passes the item's state path; the navigation actions read it back as the value.
+26. Colours are palette words (`accent`, `up`, `down`, `dim`, `W`, `U`, `B`, `R`, `G`, `C`), never CSS colours or class names.
+27. Money: a numeric value with `money: true`, a Price, or `{ "$computed": "formatPrice", "args": { "value": ... } }` — never a currency symbol written into text. A missing price is null, never 0.
+28. Timestamps are Unix seconds unless a field's description says milliseconds; write them with the `formatDate` function.
+29. Text holding mana or tap symbols (`{2}{R}`, `{T}`) is a ManaText, which draws them as icons.
+30. Optional props take null when not used — never omit them.

@@ -118,7 +118,7 @@ import {
   type CellRect,
 } from "./layout";
 import { CustomWidgetsDialog, placedCopies } from "./CustomWidgetsDialog";
-import { CustomWidget as CustomWidgetBody } from "./generated/CustomWidget";
+import { CustomWidget as CustomWidgetBody, CustomWidgetSettings } from "./generated/CustomWidget";
 import { CUSTOM_WIDGETS_KEY, useCustomWidgets } from "./generated/useCustomWidgets";
 import { useHomeLayout } from "./useHomeLayout";
 import { WidgetCard } from "./WidgetCard";
@@ -302,6 +302,9 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
     // The folders and cards behind `Chosen` (issue #906).
     case "priceMovers":
       return <PriceMoversWidgetSettings widget={widget} onConfig={onConfig} />;
+    // The spec's own settings face (`settingsRoot`), kept in the copy's `config.settings`.
+    case "custom":
+      return <CustomWidgetSettings widget={widget} onConfig={onConfig} />;
     default:
       return undefined;
   }

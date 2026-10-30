@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,12 @@ import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { makeFit } from "../fit";
-import { CUSTOM_WIDGET_GONE, CUSTOM_WIDGET_PARTIAL, CustomWidget } from "./CustomWidget";
+import {
+  CUSTOM_WIDGET_GONE,
+  CUSTOM_WIDGET_PARTIAL,
+  CustomWidget,
+  CustomWidgetSettings,
+} from "./CustomWidget";
 
 const QUERY = "{ decks { id name } }";
 
@@ -34,11 +39,29 @@ function definition(over: Partial<Definition> = {}): Definition {
     updatedAt: 1,
     spec: {
       root: "body",
+      settingsRoot: "face",
       elements: {
         body: {
           type: "Stack",
           props: { direction: null, gap: null, align: null, justify: null, wrap: null },
-          children: ["toggle", "list", "rows", "save", "refresh"],
+          children: ["toggle", "list", "shown", "refresh"],
+        },
+        shown: {
+          type: "Text",
+          props: {
+            text: { $template: "${/settings/rows} rows" },
+            tone: null,
+            size: null,
+            mono: null,
+            truncate: null,
+          },
+          children: [],
+        },
+        // The settings face — the popover's, never the card's.
+        face: {
+          type: "Stack",
+          props: { direction: null, gap: null, align: null, justify: null, wrap: null },
+          children: ["rows"],
         },
         toggle: {
           type: "Switch",
@@ -72,12 +95,6 @@ function definition(over: Partial<Definition> = {}): Definition {
           props: { label: "Rows", value: { $bindState: "/settings/rows" }, min: 1, max: 9 },
           children: [],
         },
-        save: {
-          type: "Button",
-          props: { label: "Save", variant: null },
-          on: { press: { action: "saveSettings", params: { path: "/settings" } } },
-          children: [],
-        },
         refresh: {
           type: "Button",
           props: { label: "Refresh", variant: "quiet" },
@@ -97,17 +114,33 @@ function answer(decks: { id: number; name: string }[]): GraphResponse {
 
 let qc: QueryClient;
 
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+);
+
+function placed(config: unknown): HomeWidget {
+  return { id: "custom-1", kind: "custom", x: 0, y: 0, w: 4, h: 3, config };
+}
+
+const FIT = makeFit({ w: 4, h: 3, widthPx: 480, heightPx: 320, density: "comfortable" });
+
 function draw(config: unknown, onConfig = vi.fn()) {
-  const widget: HomeWidget = { id: "custom-1", kind: "custom", x: 0, y: 0, w: 4, h: 3, config };
-  const fit = makeFit({ w: 4, h: 3, widthPx: 480, heightPx: 320, density: "comfortable" });
-  render(
-    <CustomWidget widget={widget} fit={fit} editing={false} still={false} onConfig={onConfig} />,
-    {
-      wrapper: ({ children }: { children: ReactNode }) => (
-        <QueryClientProvider client={qc}>{children}</QueryClientProvider>
-      ),
-    },
+  const view = render(
+    <CustomWidget
+      widget={placed(config)}
+      fit={FIT}
+      editing={false}
+      still={false}
+      onConfig={onConfig}
+    />,
+    { wrapper },
   );
+  return Object.assign(onConfig, { view });
+}
+
+/** The card's settings popover's extra rows, alone. */
+function drawSettings(config: unknown, onConfig = vi.fn()) {
+  render(<CustomWidgetSettings widget={placed(config)} onConfig={onConfig} />, { wrapper });
   return onConfig;
 }
 
@@ -166,13 +199,42 @@ describe("CustomWidget", () => {
     expect(screen.getByText(CUSTOM_WIDGET_PARTIAL)).toBeInTheDocument();
   });
 
-  it("keeps its settings in the placed copy's config, over the spec's seeds", async () => {
-    const onConfig = draw({ widgetId: 5, settings: { rows: 6 } });
+  it("draws its settings face in the popover, never on the card", async () => {
+    draw({ widgetId: 5 });
+    expect(await screen.findByText("3 rows")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More, Rows" })).toBeNull();
+  });
+
+  it("keeps each settings change in the placed copy's config as it is made", async () => {
+    const onConfig = drawSettings({ widgetId: 5, settings: { rows: 6 } });
+    // The saved setting over the spec's seed of 3.
     expect(await screen.findByText("6")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "More, Rows" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await expect.poll(() => onConfig.mock.calls.length).toBe(1);
     expect(onConfig).toHaveBeenCalledWith({ settings: { rows: 7 } });
+  });
+
+  it("redraws the card from settings the popover kept", async () => {
+    const drawn = draw({ widgetId: 5, settings: { rows: 6 } });
+    expect(await screen.findByText("6 rows")).toBeInTheDocument();
+    drawn.view.rerender(
+      <CustomWidget
+        widget={placed({ widgetId: 5, settings: { rows: 8 } })}
+        fit={FIT}
+        editing={false}
+        still={false}
+        onConfig={drawn}
+      />,
+    );
+    expect(await screen.findByText("8 rows")).toBeInTheDocument();
+  });
+
+  it("draws no settings for a spec with no settings face", async () => {
+    const { settingsRoot: _, ...faceless } = definition().spec as Record<string, unknown>;
+    customWidgets.mockResolvedValue([definition({ spec: faceless })]);
+    drawSettings({ widgetId: 5 });
+    await waitFor(() => expect(customWidgets).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "More, Rows" })).toBeNull();
   });
 
   it("asks its document again on refresh, and keeps the reader's /ui state over the new answer", async () => {

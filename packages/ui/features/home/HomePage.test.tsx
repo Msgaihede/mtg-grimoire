@@ -531,6 +531,74 @@ describe("HomePage", () => {
     expect(screen.getByRole("region", { name: "Shelf" })).toBeInTheDocument();
   });
 
+  /** A placed copy of {@link definition}. */
+  const COPY = widget({
+    id: "custom",
+    kind: "custom",
+    x: 2,
+    y: 0,
+    w: 5,
+    h: 2,
+    config: { widgetId: 4, name: "Shelf" },
+  });
+
+  it("renames a custom widget's card, and a cleared name brings the widget's own back", async () => {
+    const user = userEvent.setup();
+    spyOnCustom([definition()]);
+    mount(layoutOf(A, COPY));
+    await customize(user);
+
+    const field = await screen.findByRole("textbox", { name: "Name for Shelf" });
+    await user.clear(field);
+    await user.type(field, "Burn decks{Enter}");
+    await waitFor(() =>
+      expect(storedWidget("custom")?.config).toEqual({
+        widgetId: 4,
+        name: "Shelf",
+        title: "Burn decks",
+      }),
+    );
+    expect(screen.getByRole("region", { name: "Burn decks" })).toBeInTheDocument();
+
+    const renamed = screen.getByRole("textbox", { name: "Name for Shelf" });
+    await user.clear(renamed);
+    await user.tab();
+    await waitFor(() => expect(storedWidget("custom")?.config).toEqual({ widgetId: 4, name: "Shelf" }));
+  });
+
+  it("draws a custom widget's settings face in its card's settings popover", async () => {
+    const user = userEvent.setup();
+    spyOnCustom([
+      definition({
+        spec: {
+          root: "a",
+          settingsRoot: "face",
+          elements: {
+            a: { type: "Divider", props: {}, children: [] },
+            face: {
+              type: "Checkbox",
+              props: { label: "Commander only", checked: { $bindState: "/settings/commander" } },
+              children: [],
+            },
+          },
+        },
+      }),
+    ]);
+    mount(layoutOf(A, COPY));
+    await customize(user);
+
+    await user.click(screen.getByRole("button", { name: "Settings for Shelf" }));
+    const check = await screen.findByRole("checkbox", { name: "Commander only" });
+    await user.click(check);
+    await waitFor(() =>
+      expect(storedWidget("custom")?.config).toEqual({
+        widgetId: 4,
+        name: "Shelf",
+        settings: { commander: true },
+      }),
+    );
+  });
+
   it("deletes a custom widget and the copies of it on the page", async () => {
     const user = userEvent.setup();
     spyOnCustom([definition()]);

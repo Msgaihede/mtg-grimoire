@@ -21,6 +21,7 @@ import {
   SETTINGS_EXAMPLE,
 } from "./examples";
 import { executeAction, registry } from "./registry";
+import { settingsFace } from "./widgetState";
 
 let qc: QueryClient;
 
@@ -182,14 +183,15 @@ describe("drawing a spec", () => {
   });
 
   it("draws the widgets' own settings controls, bound to state", async () => {
-    draw(SETTINGS_EXAMPLE);
+    draw(settingsFace(SETTINGS_EXAMPLE, "face"));
 
-    // The footprint stepper: the axis, `−`, the count, `+`, and a bound it will not cross.
+    // The compact stepper: the label, `−`, the count, `+`, and a bound it will not cross.
     expect(screen.getByText("4")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "More, Wide" }));
+    await userEvent.click(screen.getByRole("button", { name: "More, Rows" }));
     expect(screen.getByText("5")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Fewer, Tall" })).not.toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Fewer, Columns" })).toHaveAttribute(
       "aria-disabled",
+      "true",
     );
 
     const value = screen.getByRole("button", { name: "Value" });
@@ -207,23 +209,14 @@ describe("drawing a spec", () => {
     await userEvent.click(decks);
     expect(decks).toBeChecked();
 
-    expect(screen.getByRole("group", { name: "Size" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Layout" })).toBeInTheDocument();
     expect(screen.getByLabelText("Cards to follow")).toBeInTheDocument();
   });
 
-  it("hands the host its settings and its refresh", async () => {
-    const saved: unknown[] = [];
-    let refreshed = 0;
-    draw(SETTINGS_EXAMPLE, undefined, {
-      saveSettings: (settings) => saved.push(settings),
-      refresh: () => (refreshed += 1),
-    });
-
-    await userEvent.click(screen.getByRole("checkbox", { name: "Prices" }));
-    await userEvent.click(screen.getByRole("button", { name: "Save" }));
-    await expect.poll(() => saved.length).toBe(1);
-    expect(saved[0]).toMatchObject({ w: 4, prices: true, deckIds: ["9"] });
-    expect(refreshed).toBe(0);
+  it("draws a spec's widget without its settings face, which is the popover's", () => {
+    draw(SETTINGS_EXAMPLE);
+    expect(screen.getByText("Sorted by recent, 4 rows")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Prices" })).toBeNull();
   });
 
   it("asks the host to refresh", async () => {

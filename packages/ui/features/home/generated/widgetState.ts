@@ -10,8 +10,13 @@
  * - **`/ui` is the widget's own inputs** — a filter, a sort, a switch — seeded from the spec's
  *   `state.ui` and never stored: a widget opens on its defaults each time it is drawn.
  * - **`/settings` is what the reader configures and keeps**: the spec's `state.settings` seeds it,
- *   and what `saveSettings` stored in the placed copy's `config.settings` is laid over the seeds,
- *   key by key, so a setting a newer spec added still has its default.
+ *   and what the reader set in the widget's settings popover — kept in the placed copy's
+ *   `config.settings` — is laid over the seeds, key by key, so a setting a newer spec added still
+ *   has its default.
+ *
+ * **The settings face is the spec's second root**, `settingsRoot` (a top-level key beside `root`,
+ * which json-render's own spec type does not carry): the subtree drawn in the card's settings
+ * popover rather than on the card. {@link checkSpec} holds it to an element of the spec.
  *
  * **`ui` and `settings` are the widget's, whatever the answer says**: a document that names a root
  * field (or an alias) `ui` or `settings` is shadowed by them. Any other key the spec seeds in
@@ -23,7 +28,7 @@ import { catalog } from "./catalog";
 /** The widget's own inputs — never stored. */
 export const UI_KEY = "ui";
 
-/** What the reader configures and keeps with `saveSettings`. */
+/** What the reader configures in the settings popover, kept in the placed copy's config. */
 export const SETTINGS_KEY = "settings";
 
 /** The two keys the widget owns at the state root. */
@@ -60,6 +65,15 @@ export function answerState(data: unknown): Plain {
   return Object.fromEntries(Object.entries(data).filter(([key]) => !OWN_KEYS.has(key)));
 }
 
+/** `/settings`: the spec's seeds, with what the placed copy kept laid over them key by key. */
+export function settingsState(spec: Spec, saved: Plain | null): Plain {
+  const seeds = isPlain(spec.state) ? spec.state : {};
+  return {
+    ...(isPlain(seeds[SETTINGS_KEY]) ? structuredClone(seeds[SETTINGS_KEY]) : {}),
+    ...(saved ?? {}),
+  };
+}
+
 /**
  * The state a spec is first drawn with: the answer at the root, `/ui` from the spec's seeds,
  * `/settings` from the seeds with the saved settings laid over them.
@@ -69,22 +83,52 @@ export function widgetState(spec: Spec, data: unknown, saved: Plain | null): Pla
   return {
     ...answerState(data),
     [UI_KEY]: isPlain(seeds[UI_KEY]) ? structuredClone(seeds[UI_KEY]) : {},
-    [SETTINGS_KEY]: {
-      ...(isPlain(seeds[SETTINGS_KEY]) ? structuredClone(seeds[SETTINGS_KEY]) : {}),
-      ...(saved ?? {}),
-    },
+    [SETTINGS_KEY]: settingsState(spec, saved),
   };
 }
 
-/** A stored spec, checked against the catalogue — or the first thing wrong with it, in words. */
-export type CheckedSpec = { ok: true; spec: Spec } | { ok: false; problem: string };
+/** A custom widget's spec: json-render's, and the settings face's root beside its own. */
+export type WidgetSpec = Spec & { settingsRoot?: string };
+
+/** The top-level key naming a spec's settings face. */
+export const SETTINGS_ROOT_KEY = "settingsRoot";
+
+/**
+ * A stored spec, checked against the catalogue — or the first thing wrong with it, in words.
+ * `settingsRoot` is the element the settings popover draws, or `null` for a widget with none.
+ */
+export type CheckedSpec =
+  { ok: true; spec: Spec; settingsRoot: string | null } | { ok: false; problem: string };
 
 export function checkSpec(value: unknown): CheckedSpec {
   const result = catalog.validate(value);
-  // The stored value itself rather than zod's parse of it, which may drop keys json-render reads.
-  if (result.success) return { ok: true, spec: value as Spec };
-  const issue = result.error?.issues[0];
-  if (issue === undefined) return { ok: false, problem: "The spec is not one this app can draw." };
-  const where = issue.path.length > 0 ? ` (at ${issue.path.join(".")})` : "";
-  return { ok: false, problem: `${issue.message}${where}` };
+  if (!result.success) {
+    const issue = result.error?.issues[0];
+    if (issue === undefined)
+      return { ok: false, problem: "The spec is not one this app can draw." };
+    const where = issue.path.length > 0 ? ` (at ${issue.path.join(".")})` : "";
+    return { ok: false, problem: `${issue.message}${where}` };
+  }
+  // The stored value itself rather than zod's parse of it, which drops keys json-render's spec
+  // type does not declare — `settingsRoot` among them.
+  const spec = value as Spec;
+  const settingsRoot = (value as Plain)[SETTINGS_ROOT_KEY];
+  if (settingsRoot === undefined || settingsRoot === null) {
+    return { ok: true, spec, settingsRoot: null };
+  }
+  if (typeof settingsRoot !== "string" || !(settingsRoot in spec.elements)) {
+    return { ok: false, problem: "The spec's settingsRoot names no element of the spec." };
+  }
+  if (settingsRoot === spec.root) {
+    return {
+      ok: false,
+      problem: "The spec's settingsRoot is its root; settings go in the popover.",
+    };
+  }
+  return { ok: true, spec, settingsRoot };
+}
+
+/** A spec's settings face, as a spec of its own over the same elements. */
+export function settingsFace(spec: Spec, settingsRoot: string): Spec {
+  return { root: settingsRoot, elements: spec.elements, state: spec.state };
 }
