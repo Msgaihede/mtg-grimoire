@@ -28183,7 +28183,8 @@ export function applyMcpFault(db: FakeDb): void {
 }
 
 /**
- * The local MCP server's five commands (issue #1395) — the switch, the token and the port.
+ * The local MCP server's seven commands (issue #1395) — the switch, the token and the port, and
+ * Claude Desktop's extension.
  *
  * **A group of their own**, `integrationHandlers`' shape, and **none answers `busy`**: the server
  * takes no sync lane — its state is one `app_meta` row and a socket, and its agents' writes take
@@ -28230,8 +28231,24 @@ export function mcpHandlers(db: FakeDb) {
       db.mcp = { ...db.mcp, port, error: null, running: db.mcp.running || db.mcp.enabled };
       return mcpStatus(db);
     },
+    /**
+     * Claude Desktop's extension, opened — `mcp::claude_desktop`'s. Nothing to open in a story,
+     * so it only keeps the desktop's one refusal of its own: the switch must be on.
+     */
+    mcp_claude_desktop_install: (): null => {
+      if (!db.mcp.enabled) throw refuse(MCP_SWITCH_OFF);
+      return null;
+    },
+    /** The same, saved: no dialog to show, so the world's reader always saves. */
+    mcp_claude_desktop_save: (): boolean => {
+      if (!db.mcp.enabled) throw refuse(MCP_SWITCH_OFF);
+      return true;
+    },
   };
 }
+
+/** `mcp::claude_desktop::current_bundle`'s refusal, verbatim. */
+const MCP_SWITCH_OFF = "Switch the server on first.";
 
 /**
  * The scanner's commands. The panel stories are driven from fixtures directly; **a camera that

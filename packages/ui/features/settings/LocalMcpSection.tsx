@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Download } from "lucide-react";
 import { useEffect, useRef, useState, type JSX } from "react";
 import { copyText } from "@/lib/clipboard";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
@@ -91,7 +91,7 @@ export const CLIENT_META: Record<McpClient, { label: string; where: string }> = 
   "claude-desktop": {
     label: "Claude Desktop",
     where:
-      "Add this to Claude Desktop's config file (Settings → Developer → Edit Config), then " +
+      "Or add this to Claude Desktop's config file (Settings → Developer → Edit Config), then " +
       "restart Claude Desktop. It needs Node.js, for npx.",
   },
   codex: {
@@ -117,6 +117,20 @@ export const CLIENT_META: Record<McpClient, { label: string; where: string }> = 
       "same shape.",
   },
 };
+
+/** What the install says under its buttons, before a press. */
+export const EXTENSION_LINE =
+  "Installs MTG Grimoire as a Claude Desktop extension — Claude Desktop asks before it adds it. " +
+  "Install it again after a new token or a port change.";
+
+/** What a press on Install says once the desktop has handed the file over. */
+export const EXTENSION_OPENED =
+  "Opened in Claude Desktop — finish in its install dialog. If nothing opened, save the " +
+  "extension and open it from Claude Desktop's Settings → Extensions.";
+
+/** What Save says once the file is written. */
+export const EXTENSION_SAVED =
+  "Saved. Open it with Claude Desktop, or drag it onto Settings → Extensions there.";
 
 /** The name every snippet registers the server under — the one a reader sees in their agent. */
 const SERVER_NAME = "mtg-grimoire";
@@ -282,6 +296,11 @@ export function LocalMcpSection(): JSX.Element {
     onSuccess: settle,
     onError: reread,
   });
+  /** Claude Desktop's extension, opened or saved — no status answers either, so nothing to
+   *  settle; what happened is the {@link Extension} line's. Each press clears the other's answer,
+   *  so the line says the last press's. */
+  const install = useMutation({ mutationFn: () => ipc.mcpClaudeDesktopInstall() });
+  const save = useMutation({ mutationFn: () => ipc.mcpClaudeDesktopSave() });
   const busy = enable.isPending || disable.isPending || rotate.isPending || setPort.isPending;
   const pressable = status !== null && !busy;
   const on = status?.enabled === true;
@@ -321,7 +340,7 @@ export function LocalMcpSection(): JSX.Element {
   };
 
   const problem =
-    writeFailure([enable, disable, rotate, setPort, refusal]) ??
+    writeFailure([enable, disable, rotate, setPort, install, save, refusal]) ??
     (status === null && read.isError ? ipcError(read.error) : null);
 
   const note =
@@ -439,6 +458,24 @@ export function LocalMcpSection(): JSX.Element {
             target={target}
             onTarget={setTarget}
             onCopy={copy}
+            extension={
+              <Extension
+                pressable={pressable && !install.isPending && !save.isPending}
+                installing={install.isPending}
+                saving={save.isPending}
+                done={
+                  install.isSuccess ? EXTENSION_OPENED : save.data === true ? EXTENSION_SAVED : null
+                }
+                onInstall={() => {
+                  save.reset();
+                  install.mutate();
+                }}
+                onSave={() => {
+                  install.reset();
+                  save.mutate();
+                }}
+              />
+            }
           />
         </div>
       )}
@@ -520,7 +557,9 @@ function CopyButton({ subject, onCopy }: { subject: string; onCopy: () => Promis
  * **A radio group drawn as a segmented switch** — `PriceHistoryDialog`'s `RangeSwitch`: exactly
  * one client is drawn at a time, `aria-checked` says which, and the arrows choose
  * (`radioKeys`, every radio group's since #558). The snippet is drawn with the token masked while
- * the token is, and copied whole either way — {@link clientSnippet} writes both.
+ * the token is, and copied whole either way — {@link clientSnippet} writes both. Claude Desktop's
+ * choice draws its one-click install first and keeps the snippet under it, for a reader who would
+ * rather edit the file.
  */
 function Snippets({
   status,
@@ -528,12 +567,15 @@ function Snippets({
   target,
   onTarget,
   onCopy,
+  extension,
 }: {
   status: McpStatus;
   revealed: boolean;
   target: McpClient;
   onTarget: (next: McpClient) => void;
   onCopy: (text: string) => Promise<boolean>;
+  /** Claude Desktop's one-click install, drawn above its snippet. */
+  extension: JSX.Element;
 }) {
   return (
     <div className="space-y-2">
@@ -568,6 +610,7 @@ function Snippets({
           );
         })}
       </div>
+      {target === "claude-desktop" && extension}
       <p className="text-xs leading-snug text-dim">{CLIENT_META[target].where}</p>
       <div className="flex items-start gap-2">
         <pre className="min-w-0 flex-1 overflow-x-auto rounded-md border border-border bg-bg p-2 font-mono text-xs whitespace-pre-wrap break-all">
@@ -578,6 +621,67 @@ function Snippets({
           onCopy={() => onCopy(clientSnippet(target, status.url, status.token))}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Claude Desktop's one-click install: **Install in Claude Desktop**, which has the desktop build the
+ * extension (`.mcpb`) and open it, and **Save extension…** beside it for a Claude Desktop that did
+ * not take the file, or another account's.
+ *
+ * The line under them is a `status` region, so what a press did is said where the reader is
+ * looking; a refusal is the panel's problem line, like every press's. The extension carries the
+ * token and the address as they are at the press, which the line before a press says.
+ */
+function Extension({
+  pressable,
+  installing,
+  saving,
+  done,
+  onInstall,
+  onSave,
+}: {
+  pressable: boolean;
+  installing: boolean;
+  saving: boolean;
+  /** What the last press did, or `null` before one (and after a Cancel). */
+  done: string | null;
+  onInstall: () => void;
+  onSave: () => void;
+}) {
+  const idle = cn(PANEL_BUTTON, "h-8 px-2.5 text-xs");
+  const refused = !pressable && "cursor-not-allowed opacity-50 active:scale-100";
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          aria-disabled={!pressable || undefined}
+          aria-busy={installing || undefined}
+          onClick={() => {
+            if (pressable) onInstall();
+          }}
+          className={cn(idle, "border-accent font-medium text-accent", refused)}
+        >
+          <Download className="size-3.5" aria-hidden="true" />
+          Install in Claude Desktop
+        </button>
+        <button
+          type="button"
+          aria-disabled={!pressable || undefined}
+          aria-busy={saving || undefined}
+          onClick={() => {
+            if (pressable) onSave();
+          }}
+          className={cn(idle, "border-border", refused)}
+        >
+          Save extension…
+        </button>
+      </div>
+      <p role="status" className="text-xs leading-snug text-dim">
+        {done ?? EXTENSION_LINE}
+      </p>
     </div>
   );
 }
