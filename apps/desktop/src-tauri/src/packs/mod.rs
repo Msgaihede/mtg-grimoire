@@ -11,6 +11,15 @@
 //! those files too ([`grimoire_core::boosters::source_set_codes`]); one of them that cannot be had
 //! is left out, and only the cards it alone maps are dropped.
 //!
+//! **The sets there are boosters of are MTGJSON's too** ([`packs_booster_sets`]): its set list,
+//! `SetList.json.gz`, cached beside the set files as `boosters/SetList.json.gz` on the same terms.
+//! The name cannot be a set's — [`file_code`] takes six characters at most.
+//!
+//! **Fetched again with the card data** ([`spawn_refresh`]): a card sync that brought a new bulk
+//! file, or one the reader forced, also fetches the set list and every set file already cached, so
+//! MTGJSON's sheets move with Scryfall's printings rather than up to a week behind them. The page
+//! is told with [`REFRESHED_EVENT`] and asks again. A file that cannot be fetched keeps its copy.
+//!
 //! **A stale file is better than none**: when MTGJSON cannot be reached and a copy is on disk,
 //! that copy is used — unless the reader asked for a refresh, who is then told it failed.
 //!
@@ -19,10 +28,13 @@
 
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use grimoire_core::boosters::{booster_set, source_set_codes, BoosterSet, NO_BOOSTERS};
+use grimoire_core::boosters::{
+    booster_set, booster_set_list, source_set_codes, BoosterSet, BoosterSetSummary, NO_BOOSTERS,
+};
 use grimoire_core::platform::http;
 
 use crate::sync::AppState;
@@ -43,6 +55,13 @@ const MAX_JSON_BYTES: u64 = 512 * 1024 * 1024;
 pub const UNREACHABLE: &str = "MTGJSON could not be reached.";
 pub const NOT_A_SET: &str = "That is not a set code.";
 pub const UNREADABLE: &str = "MTGJSON's set file could not be read.";
+
+/// MTGJSON's list of every set, as its file is named (`SetList.json.gz`) and cached.
+const SET_LIST: &str = "SetList";
+
+/// What the page is told once [`spawn_refresh`] fetched MTGJSON's files again: no payload — it asks
+/// for the set list and any set it holds afresh.
+pub const REFRESHED_EVENT: &str = "packs:refreshed";
 
 /// The client MTGJSON is asked with: the app's `User-Agent`, a connect bound and a read bound.
 fn client() -> &'static http::Client {
@@ -96,6 +115,73 @@ pub async fn packs_booster_set(
     })
     .await
     .map_err(|_| UNREADABLE.to_owned())?
+}
+
+/// The sets MTGJSON sells booster packs of — the Draft & Packs page's set wall — from its set
+/// list, fetched the first time and cached for a week like a set's file.
+#[tauri::command]
+pub async fn packs_booster_sets(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<BoosterSetSummary>, String> {
+    let dir = state.data_dir.join("boosters");
+    // The list is always there: a 404 is MTGJSON misbehaving, not a set without boosters.
+    let (gz, _) = set_file(&dir, SET_LIST, false).await.map_err(|e| {
+        if e == NO_BOOSTERS {
+            UNREACHABLE.to_owned()
+        } else {
+            e
+        }
+    })?;
+    tauri::async_runtime::spawn_blocking(move || booster_set_list(&gunzip(&gz)?))
+        .await
+        .map_err(|_| UNREADABLE.to_owned())?
+}
+
+/// Fetch MTGJSON's files again beside a card sync — the set list, then every set file in the cache —
+/// on Tauri's runtime, and emit [`REFRESHED_EVENT`] when at least one came. One refresh at a time:
+/// a second asked while one runs is dropped, the first already fetching what it would.
+pub fn spawn_refresh(app: &tauri::AppHandle, data_dir: PathBuf) {
+    static REFRESHING: AtomicBool = AtomicBool::new(false);
+    if REFRESHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let dir = data_dir.join("boosters");
+        let mut codes = vec![SET_LIST.to_owned()];
+        if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+            let mut names = Vec::new();
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+            codes.extend(cached_set_codes(&names));
+        }
+        let mut fetched = 0;
+        for code in &codes {
+            match set_file(&dir, code, true).await {
+                Ok(_) => fetched += 1,
+                Err(e) => eprintln!("MTGJSON refresh of {code} failed: {e}"),
+            }
+        }
+        REFRESHING.store(false, Ordering::SeqCst);
+        if fetched > 0 {
+            use tauri::Emitter;
+            let _ = app.emit(REFRESHED_EVENT, ());
+        }
+    });
+}
+
+/// The set codes of the cached files among `names` (a directory's file names): each
+/// `{CODE}.json.gz` whose code [`file_code`] takes, sorted. The set list, a half-written `.part`
+/// and anything else are passed over.
+pub fn cached_set_codes(names: &[String]) -> Vec<String> {
+    let mut codes: Vec<String> = names
+        .iter()
+        .filter_map(|name| name.strip_suffix(".json.gz"))
+        .filter_map(|code| file_code(code).ok().filter(|c| c == code))
+        .collect();
+    codes.sort();
+    codes
 }
 
 /// A set code as MTGJSON names its file: 2 to 6 letters and digits, upper-cased. Anything else
@@ -277,6 +363,25 @@ mod tests {
     fn the_cache_is_one_file_per_set_under_boosters() {
         let dir = Path::new("data").join("boosters");
         assert_eq!(cache_path(&dir, "HOB"), dir.join("HOB.json.gz"));
+        // The set list sits beside them, under a name no set code can take.
+        assert_eq!(cache_path(&dir, SET_LIST), dir.join("SetList.json.gz"));
+        assert_eq!(file_code(SET_LIST).unwrap_err(), NOT_A_SET);
+    }
+
+    #[test]
+    fn a_refresh_fetches_the_cached_sets_and_nothing_else() {
+        let names: Vec<String> = [
+            "HOB.json.gz",
+            "FDN.json.gz",
+            "SetList.json.gz",
+            "MOM.json.gz.part",
+            "notes.txt",
+            "../x.json.gz",
+            "fdn.json.gz",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(cached_set_codes(&names), vec!["FDN", "HOB"]);
     }
 
     #[test]

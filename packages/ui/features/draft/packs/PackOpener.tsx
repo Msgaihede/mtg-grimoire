@@ -1,7 +1,7 @@
 import { useState, type JSX } from "react";
 import { RefreshCw } from "lucide-react";
 import { PageBar, type PageCrumb } from "@/components/PageBar";
-import type { SetSummary } from "@/lib/ipc";
+import type { BoosterSetSummary } from "@/lib/ipc";
 import { ago } from "@/lib/relativeTime";
 import { useBoosterSet, useBoosterSets } from "../sets";
 import { SetGrid } from "../SetGrid";
@@ -12,9 +12,10 @@ const TITLE = "Open Packs";
 const ROOT = "Draft & Packs";
 
 /**
- * **Open Packs** — the Draft & Packs page's pack opener (spec §7), botbox.dev's idea: pick a set,
- * pick a product (a booster, or a sealed product that holds boosters), open it, and compare what
- * came out with what that product is worth on average.
+ * **Open Packs** — the Draft & Packs page's pack opener (spec §7), botbox.dev's idea: pick a set
+ * (MTGJSON's — `useBoosterSets`, never the corpus's set list), pick a product (a booster, or a
+ * sealed product that holds boosters), open it, and compare what came out with what that product
+ * is worth on average.
  *
  * Two steps under one page bar: the set wall, then the set's products and what was opened. The
  * trail walks back up — `Draft & Packs` is `onBack`, `Open Packs` is the set wall again.
@@ -23,8 +24,8 @@ const ROOT = "Draft & Packs";
  * window memory.
  */
 export function PackOpener({ onBack }: { onBack: () => void }): JSX.Element {
-  const [picked, setPicked] = useState<SetSummary | null>(null);
-  const { sets, loading, error } = useBoosterSets();
+  const [picked, setPicked] = useState<BoosterSetSummary | null>(null);
+  const { sets, loading, error, retry } = useBoosterSets();
   const root: PageCrumb = { label: ROOT, name: `${ROOT}, back`, onOpen: onBack };
 
   if (picked === null) {
@@ -33,11 +34,18 @@ export function PackOpener({ onBack }: { onBack: () => void }): JSX.Element {
         <PageBar trail={[root]} title={TITLE} />
         <div className="min-h-0 flex-1 overflow-y-auto pb-6 pr-6 pt-3">
           {loading ? (
-            <p className="m-0 text-sm text-dim">Reading sets…</p>
-          ) : error !== null ? (
-            <p role="alert" className="m-0 text-sm text-destructive">
-              {error}
+            <p role="status" className="m-0 text-sm text-dim">
+              Fetching the sets from MTGJSON…
             </p>
+          ) : error !== null ? (
+            <div className="flex flex-col items-start gap-3">
+              <p role="alert" className="m-0 text-sm text-destructive">
+                {error}
+              </p>
+              <button type="button" onClick={retry} className={SECONDARY}>
+                Retry
+              </button>
+            </div>
           ) : (
             <SetGrid sets={sets} onPick={setPicked} label="Sets to open" />
           )}
@@ -66,7 +74,13 @@ export function fetchedLine(fetchedAtMs: number, nowMs: number = Date.now()): st
 }
 
 /** One set's page: fetching its boosters, the host's refusal, or its products. */
-function SetStage({ summary, trail }: { summary: SetSummary; trail: PageCrumb[] }): JSX.Element {
+function SetStage({
+  summary,
+  trail,
+}: {
+  summary: BoosterSetSummary;
+  trail: PageCrumb[];
+}): JSX.Element {
   const booster = useBoosterSet(summary.code);
   const set = booster.set;
   return (

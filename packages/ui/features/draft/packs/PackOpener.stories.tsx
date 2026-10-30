@@ -104,7 +104,7 @@ function WithBoosterData() {
   const staged = useQuery({
     queryKey: ["story", "booster-data"],
     queryFn: async () => {
-      for (const set of await ipc.listSets()) {
+      for (const set of await ipc.packsBoosterSets()) {
         client.setQueryData(boosterSetKey(set.code), boosterSetOf(set.code, set.name));
       }
       return true;
@@ -132,7 +132,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** The first step: every set the corpus has, as tiles. */
+/** The first step: every set MTGJSON sells boosters of (the fake's: its paper sets), as tiles. */
 export const ChooseSet: Story = {};
 
 /** A set picked and a booster opened: the cards by price, and the product's figures beside. */

@@ -3,39 +3,36 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SET } from "@/features/draft/booster/fixture";
-import type { DraftSetup, DraftView, ImportResolveLine, SetSummary } from "@/lib/ipc";
+import type { BoosterSetSummary, DraftSetup, DraftView, ImportResolveLine } from "@/lib/ipc";
 
-const listSets = vi.hoisted(() => vi.fn());
+const packsBoosterSets = vi.hoisted(() => vi.fn());
 const packsBoosterSet = vi.hoisted(() => vi.fn());
+const onPacksRefreshed = vi.hoisted(() => vi.fn());
 const draftStart = vi.hoisted(() => vi.fn());
 const importResolve = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { listSets, packsBoosterSet, draftStart, importResolve },
+  ipc: { packsBoosterSets, onPacksRefreshed, packsBoosterSet, draftStart, importResolve },
 }));
 
 import { SetupScreen, type SetupMode } from "./SetupScreen";
 
-const TEST_SET: SetSummary = {
+const TEST_SET: BoosterSetSummary = {
   code: "tst",
   name: "Test Set",
-  setType: "expansion",
-  releasedAt: "2026-01-01",
-  cardCount: 12,
+  releaseDate: "2026-01-01",
 };
 
-const CMR: SetSummary = {
+const CMR: BoosterSetSummary = {
   code: "cmr",
   name: "Commander Legends",
-  setType: "draft_innovation",
-  releasedAt: "2020-11-20",
-  cardCount: 361,
+  releaseDate: "2020-11-20",
 };
 
 const VIEW = { status: "drafting" } as DraftView;
 
 beforeEach(() => {
-  listSets.mockReset().mockResolvedValue([TEST_SET]);
+  packsBoosterSets.mockReset().mockResolvedValue([TEST_SET]);
   packsBoosterSet.mockReset().mockResolvedValue(SET);
   draftStart.mockReset().mockResolvedValue(VIEW);
   importResolve.mockReset();
@@ -149,7 +146,7 @@ describe("SetupScreen", () => {
   });
 
   it("deals a Commander draft to you and three bots, for a 60-card deck", async () => {
-    listSets.mockResolvedValue([TEST_SET, CMR]);
+    packsBoosterSets.mockResolvedValue([TEST_SET, CMR]);
     setup("commander");
     const wall = await screen.findByRole("list", { name: "Sets" });
     // Commander Legends is what the format is made for: first on the wall, and marked.

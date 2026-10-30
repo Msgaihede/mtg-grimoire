@@ -44,6 +44,19 @@ function setup(db: ReturnType<typeof makeDb>, mode: DraftSetup["mode"] = "quick"
   };
 }
 
+describe("packs_booster_sets", () => {
+  it("answers each set of the world's paper printings once, and every one opens", () => {
+    const { db, h } = world();
+    const sets = h.packs_booster_sets();
+    expect(sets.length).toBeGreaterThan(0);
+    expect(new Set(sets.map((s) => s.code)).size).toBe(sets.length);
+    for (const set of sets) {
+      expect(db.cards.some((c) => c.setCode === set.code && c.isPaper)).toBe(true);
+      expect(h.packs_booster_set({ setCode: set.code, refresh: false }).code).toBe(set.code);
+    }
+  });
+});
+
 describe("packs_booster_set", () => {
   it("answers a play and a collector product, and sealed products that hold boosters", () => {
     const { h } = world();
