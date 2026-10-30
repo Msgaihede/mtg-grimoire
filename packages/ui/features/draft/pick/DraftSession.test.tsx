@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DraftCard, DraftView, WinstonView } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
+import { pickOption } from "@/test-dropdown";
 import { boxed, pointerDrag } from "@/test-drag";
 
 const ipcMock = vi.hoisted(() => ({
@@ -180,6 +181,49 @@ describe("DraftSession", () => {
     expect(ipcMock.draftPick).toHaveBeenCalledOnce();
     await dragToPool("Opt");
     expect(ipcMock.draftPick).toHaveBeenCalledOnce();
+  });
+
+  describe("the pack's order", () => {
+    const dealt = () =>
+      view({
+        pack: [
+          card("Shock"),
+          card("Opt", { rarity: "uncommon" }),
+          card("Duress", { rarity: "mythic" }),
+          card("Ponder", { rarity: "rare" }),
+          card("Spark", { rarity: "special" }),
+          card("Bolt"),
+        ],
+      });
+    const names = () =>
+      within(pack())
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label"));
+
+    it("lays the pack out by rarity by default, a rarity's cards as dealt (issue #1432)", () => {
+      setup(dealt());
+      expect(names()).toEqual(["Duress", "Ponder", "Opt", "Shock", "Bolt", "Spark"]);
+    });
+
+    it("lays it out as dealt on request, and keeps the choice through a new sort", async () => {
+      const user = userEvent.setup();
+      setup(dealt());
+      await user.click(within(pack()).getByRole("button", { name: "Opt" }));
+      await pickOption(user, "Sort", "As dealt");
+      expect(names()).toEqual(["Shock", "Opt", "Duress", "Ponder", "Spark", "Bolt"]);
+      expect(within(pack()).getByRole("button", { name: "Opt" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(screen.getByRole("button", { name: "Pick Opt" })).toBeInTheDocument();
+    });
+
+    it("picks the card dragged, wherever the sort has put it", async () => {
+      ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+      setup(dealt());
+      await dragToPool("Ponder");
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Ponder#0.0.0"]);
+    });
   });
 
   it("walks the pack with the arrows and picks with Enter", async () => {

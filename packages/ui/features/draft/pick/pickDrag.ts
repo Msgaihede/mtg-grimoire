@@ -31,11 +31,11 @@ export function readPickDrag(data: Record<string, unknown>): PickDrag | null {
 }
 
 /**
- * The places in the pack a drag of the card at `index` picks: that card alone in a pick of one;
- * in a pick of more, the choice with it added last — the oldest choice letting go past `need`,
- * as a click past `need` does.
+ * The cards a drag of `card` picks: that card alone in a pick of one; in a pick of more, the
+ * choice with it added last — the oldest choice letting go past `need`, as a click past `need`
+ * does. Cards are whatever the wall names them by (its `instanceId`s).
  */
-export function carriedPick(chosen: readonly number[], index: number, need: number): number[] {
-  if (need === 1) return [index];
-  return [...chosen.filter((i) => i !== index), index].slice(-need);
+export function carriedPick<T>(chosen: readonly T[], card: T, need: number): T[] {
+  if (need === 1) return [card];
+  return [...chosen.filter((c) => c !== card), card].slice(-need);
 }
