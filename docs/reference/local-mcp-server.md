@@ -84,14 +84,53 @@ a write needs no answer read.
 
 ## 4. Configuring a client
 
-The panel shows the URL and the token, and a ready-to-copy snippet for each of these. Below,
+The panel shows the URL and the token, and a ready-to-copy snippet for each of these — a one-line
+command where the client has one (Claude Code, Gemini CLI), its config file's entry otherwise. Below,
 `<token>` is the token the panel shows; the port is the default.
 
-**Claude Code**
+**Claude Code** — one line, at user scope so the server is there in every project:
 
 ```bash
-claude mcp add --transport http mtg-grimoire http://127.0.0.1:39147/mcp --header "Authorization: Bearer <token>"
+claude mcp add --transport http --scope user mtg-grimoire http://127.0.0.1:39147/mcp --header "Authorization: Bearer <token>"
 ```
+
+**Gemini CLI** — one line, at user scope, options before the name (the order its own reference
+writes):
+
+```bash
+gemini mcp add --scope user --transport http --header "Authorization: Bearer <token>" mtg-grimoire http://127.0.0.1:39147/mcp
+```
+
+**Codex** (`~/.codex/config.toml`, which the Codex CLI, its IDE extension and the ChatGPT desktop
+app all read). `codex mcp add --url` takes no header, only `--bearer-token-env-var` — an environment
+variable the reader would have to set and every Codex process inherit — so the panel writes the
+table with the header inline:
+
+```toml
+[mcp_servers.mtg-grimoire]
+url = "http://127.0.0.1:39147/mcp"
+http_headers = { Authorization = "Bearer <token>" }
+```
+
+**Antigravity** (_Manage MCP Servers → View raw config_, `mcp_config.json`) reads `serverUrl` for a
+streamable HTTP server, not `url`:
+
+```json
+{
+  "mcpServers": {
+    "mtg-grimoire": {
+      "serverUrl": "http://127.0.0.1:39147/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+**ChatGPT** has no snippet. Its chats — custom MCP servers included — run on OpenAI's servers, which
+cannot reach `127.0.0.1`, and the only bridges (a tunnel, OpenAI's Secure MCP Tunnel) would put the
+collection on the internet, the opposite of this server's promise; its connector form also takes
+no bearer header, only OAuth or none. The panel says so and points at Codex, which runs on this
+computer and which the ChatGPT desktop app reads.
 
 **Cursor** (`~/.cursor/mcp.json`) and **VS Code** (`.vscode/mcp.json` uses `"servers"` and
 `"type": "http"` in place of `"mcpServers"`):

@@ -24,7 +24,7 @@ export const MCP_HEADING = "AI agents on this computer (MCP)";
  * free**. Exported so the tests and the stories assert the sentence the panel draws.
  */
 export const MCP_SENTENCE =
-  "Lets an AI agent on this computer — Claude Desktop, Claude Code, Cursor and others — read " +
+  "Lets an AI agent on this computer — Claude Code, Claude Desktop, Codex, Gemini and others — read " +
   "and add to your collection, wishlist and decks while this app is open. Nothing leaves this " +
   "computer, and it's free.";
 
@@ -64,15 +64,55 @@ export function parsePort(text: string): number | null {
   return port >= PORT_MIN && port <= PORT_MAX ? port : null;
 }
 
-/** The clients the panel writes a configuration for, in the order the choice draws them. */
-export const CLIENTS = ["claude-code", "cursor", "claude-desktop"] as const;
+/** The clients the panel says how to set up, in the order the choice draws them. */
+export const CLIENTS = [
+  "claude-code",
+  "claude-desktop",
+  "chatgpt",
+  "codex",
+  "gemini",
+  "antigravity",
+  "cursor",
+] as const;
 export type McpClient = (typeof CLIENTS)[number];
 
-/** Each client's name on the choice, and where its snippet goes. */
+/** Each client's name on the choice, and where its snippet goes — or, for a client that cannot
+ *  reach this computer, why not. */
 export const CLIENT_META: Record<McpClient, { label: string; where: string }> = {
   "claude-code": {
     label: "Claude Code",
-    where: "Run this in a terminal.",
+    where: "Run this in a terminal. It adds the server for every project, not only this folder.",
+  },
+  "claude-desktop": {
+    label: "Claude Desktop",
+    where:
+      "Add this to Claude Desktop's config file (Settings → Developer → Edit Config), then " +
+      "restart Claude Desktop. It needs Node.js, for npx.",
+  },
+  chatgpt: {
+    label: "ChatGPT",
+    where:
+      "ChatGPT's chats run on OpenAI's servers, which can't reach this computer — and opening it " +
+      "to them would mean your collection leaves it. Codex can: it runs here, and the ChatGPT " +
+      "desktop app's Codex reads the same setup.",
+  },
+  codex: {
+    label: "Codex",
+    where:
+      "Add this to .codex\\config.toml in your user folder — create it if it isn't there. The " +
+      "Codex CLI, its IDE extension and the ChatGPT desktop app all read it.",
+  },
+  gemini: {
+    label: "Gemini",
+    where:
+      "Run this in a terminal, for Gemini CLI. It adds the server for every project, not only " +
+      "this folder.",
+  },
+  antigravity: {
+    label: "Antigravity",
+    where:
+      "In Antigravity, open Manage MCP Servers, choose View raw config, add this to " +
+      "mcp_config.json, then Refresh.",
   },
   cursor: {
     label: "Cursor",
@@ -80,45 +120,42 @@ export const CLIENT_META: Record<McpClient, { label: string; where: string }> = 
       "Add this to Cursor's mcp.json. Other clients that connect by URL with headers take the " +
       "same shape.",
   },
-  "claude-desktop": {
-    label: "Claude Desktop",
-    where:
-      "Add this to Claude Desktop's config file (Settings → Developer → Edit Config). It needs " +
-      "Node.js, for npx.",
-  },
 };
 
 /** The name every snippet registers the server under — the one a reader sees in their agent. */
 const SERVER_NAME = "mtg-grimoire";
 
 /**
- * One client's configuration for the server at `url`, authenticated with `token`.
+ * One client's configuration for the server at `url`, authenticated with `token` — or `null` for
+ * a client that cannot reach this computer at all (ChatGPT), whose {@link CLIENT_META} line says
+ * so instead.
  *
  * Pure, and handed the token rather than reading it, so the panel draws the snippet with the
  * token masked and copies it with the real one — **one function for both**, so what is copied is
  * never a second spelling of what is shown.
  *
+ * **A one-line command wherever the client has one** — Claude Code's and Gemini CLI's `mcp add`,
+ * each at user scope, so the server is there in every project rather than the folder the terminal
+ * happened to be in. The others take a file: Codex's `codex mcp add` has no header flag, only an
+ * environment variable's name, so its TOML carries the header itself; Antigravity reads
+ * `serverUrl`, not `url`.
+ *
  * **Claude Desktop goes through `mcp-remote`**, because its config file starts local processes
  * rather than connecting to a URL. The header is passed as `Authorization:${AUTH}` with no space
  * and the value in `env`: on Windows, `npx` re-splits its arguments on spaces, and
  * `Authorization: Bearer …` arrives as three — the workaround `mcp-remote`'s own README gives.
+ *
+ * **ChatGPT has none**: its chats run on OpenAI's servers, which cannot reach `127.0.0.1`, and a
+ * tunnel that let them would undo *nothing leaves this computer*. The ChatGPT desktop app's Codex
+ * runs here and reads Codex's file, so the panel points there.
  */
-export function clientSnippet(client: McpClient, url: string, token: string): string {
+export function clientSnippet(client: McpClient, url: string, token: string): string | null {
+  const bearer = `Bearer ${token}`;
   switch (client) {
     case "claude-code":
       return (
-        `claude mcp add --transport http ${SERVER_NAME} ${url} ` +
-        `--header "Authorization: Bearer ${token}"`
-      );
-    case "cursor":
-      return JSON.stringify(
-        {
-          mcpServers: {
-            [SERVER_NAME]: { url, headers: { Authorization: `Bearer ${token}` } },
-          },
-        },
-        null,
-        2,
+        `claude mcp add --transport http --scope user ${SERVER_NAME} ${url} ` +
+        `--header "Authorization: ${bearer}"`
       );
     case "claude-desktop":
       return JSON.stringify(
@@ -127,8 +164,44 @@ export function clientSnippet(client: McpClient, url: string, token: string): st
             [SERVER_NAME]: {
               command: "npx",
               args: ["-y", "mcp-remote", url, "--header", "Authorization:${AUTH}"],
-              env: { AUTH: `Bearer ${token}` },
+              env: { AUTH: bearer },
             },
+          },
+        },
+        null,
+        2,
+      );
+    case "chatgpt":
+      return null;
+    case "codex":
+      // The URL is the desktop's `http://127.0.0.1:{port}/mcp` and the token hex, so neither
+      // needs a TOML escape.
+      return [
+        `[mcp_servers.${SERVER_NAME}]`,
+        `url = "${url}"`,
+        `http_headers = { Authorization = "${bearer}" }`,
+      ].join("\n");
+    case "gemini":
+      // Options before the name, the order Gemini CLI's own reference writes.
+      return (
+        `gemini mcp add --scope user --transport http ` +
+        `--header "Authorization: ${bearer}" ${SERVER_NAME} ${url}`
+      );
+    case "antigravity":
+      return JSON.stringify(
+        {
+          mcpServers: {
+            [SERVER_NAME]: { serverUrl: url, headers: { Authorization: bearer } },
+          },
+        },
+        null,
+        2,
+      );
+    case "cursor":
+      return JSON.stringify(
+        {
+          mcpServers: {
+            [SERVER_NAME]: { url, headers: { Authorization: bearer } },
           },
         },
         null,
@@ -459,7 +532,8 @@ function CopyButton({ subject, onCopy }: { subject: string; onCopy: () => Promis
  * **A radio group drawn as a segmented switch** — `PriceHistoryDialog`'s `RangeSwitch`: exactly
  * one client is drawn at a time, `aria-checked` says which, and the arrows choose
  * (`radioKeys`, every radio group's since #558). The snippet is drawn with the token masked while
- * the token is, and copied whole either way — {@link clientSnippet} writes both.
+ * the token is, and copied whole either way — {@link clientSnippet} writes both. A client with no
+ * snippet (ChatGPT) draws its reason and a way to the client that can connect instead.
  */
 function Snippets({
   status,
@@ -474,6 +548,8 @@ function Snippets({
   onTarget: (next: McpClient) => void;
   onCopy: (text: string) => Promise<boolean>;
 }) {
+  const shown = clientSnippet(target, status.url, revealed ? status.token : MASK);
+  const copied = clientSnippet(target, status.url, status.token);
   return (
     <div className="space-y-2">
       <p id={`${ID}-clients`} className="text-xs text-dim">
@@ -489,6 +565,7 @@ function Snippets({
           return (
             <button
               key={option}
+              id={`${ID}-client-${option}`}
               type="button"
               role="radio"
               aria-checked={chosen}
@@ -508,15 +585,30 @@ function Snippets({
         })}
       </div>
       <p className="text-xs leading-snug text-dim">{CLIENT_META[target].where}</p>
-      <div className="flex items-start gap-2">
-        <pre className="min-w-0 flex-1 overflow-x-auto rounded-md border border-border bg-bg p-2 font-mono text-xs whitespace-pre-wrap break-all">
-          {clientSnippet(target, status.url, revealed ? status.token : MASK)}
-        </pre>
-        <CopyButton
-          subject={`the ${CLIENT_META[target].label} configuration`}
-          onCopy={() => onCopy(clientSnippet(target, status.url, status.token))}
-        />
-      </div>
+      {shown === null || copied === null ? (
+        // A client with nothing to paste is pointed at the one that runs here. The button goes
+        // with the choice, so the caret goes to the radio it chose rather than to `<body>`.
+        <button
+          type="button"
+          onClick={() => {
+            onTarget("codex");
+            document.getElementById(`${ID}-client-codex`)?.focus();
+          }}
+          className={cn(PANEL_BUTTON, "h-8 border-border px-2.5 text-xs")}
+        >
+          Set up {CLIENT_META.codex.label}
+        </button>
+      ) : (
+        <div className="flex items-start gap-2">
+          <pre className="min-w-0 flex-1 overflow-x-auto rounded-md border border-border bg-bg p-2 font-mono text-xs whitespace-pre-wrap break-all">
+            {shown}
+          </pre>
+          <CopyButton
+            subject={`the ${CLIENT_META[target].label} configuration`}
+            onCopy={() => onCopy(copied)}
+          />
+        </div>
+      )}
     </div>
   );
 }
