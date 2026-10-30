@@ -230,7 +230,7 @@ describe("CustomWidget", () => {
   });
 
   it("draws no settings for a spec with no settings face", async () => {
-    const { settingsRoot: _, ...faceless } = definition().spec as Record<string, unknown>;
+    const faceless = { ...(definition().spec as Record<string, unknown>), settingsRoot: undefined };
     customWidgets.mockResolvedValue([definition({ spec: faceless })]);
     drawSettings({ widgetId: 5 });
     await waitFor(() => expect(customWidgets).toHaveBeenCalled());
