@@ -5,12 +5,12 @@ import { boosterSetKey } from "@/features/draft/sets";
 import {
   ipc,
   type BoosterSet,
+  type BoosterSetSummary,
   type DraftMode,
   type DraftSeatSetup,
   type DraftSetup,
   type PlaytestDifficulty,
   type PodFormat,
-  type SetSummary,
 } from "@/lib/ipc";
 import {
   dealCube,
@@ -28,7 +28,7 @@ import {
  */
 export interface SetDraftChoice {
   mode: Extract<DraftMode, "quick" | "sealed" | "pod" | "commander" | "winston">;
-  rounds: readonly SetSummary[];
+  rounds: readonly BoosterSetSummary[];
   difficulty: PlaytestDifficulty;
   seats?: DraftSeatSetup[];
   /** What a pod drafts; ignored (sent as `"booster"`) for every other mode. */

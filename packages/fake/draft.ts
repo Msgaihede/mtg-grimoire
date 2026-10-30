@@ -29,6 +29,7 @@ import type {
   BasicLand,
   BoosterCard,
   BoosterSet,
+  BoosterSetSummary,
   BoosterSheet,
   DeckInput,
   DeckRow,
@@ -192,6 +193,26 @@ function sheet(
     totalWeight: sheetCards.reduce((n, c) => n + c.weight, 0),
     cards: sheetCards,
   };
+}
+
+/**
+ * `packs_booster_sets` — MTGJSON's set list, which the fake has none of: every set a paper,
+ * booster-worthy printing of this world is in, once, with the newest of its rows' dates (the
+ * world's `list_sets` rule). Unsorted, as the host answers; the page sorts.
+ */
+export function fakeBoosterSets(db: FakeDb): BoosterSetSummary[] {
+  const sets = new Map<string, BoosterSetSummary>();
+  for (const c of boosterCards(db)) {
+    if (!c.isPaper) continue;
+    const row = sets.get(c.setCode) ?? {
+      code: c.setCode,
+      name: c.setName,
+      releaseDate: c.releasedAt,
+    };
+    if (row.releaseDate === null || c.releasedAt > row.releaseDate) row.releaseDate = c.releasedAt;
+    sets.set(c.setCode, row);
+  }
+  return [...sets.values()];
 }
 
 /**
@@ -620,6 +641,7 @@ function basicLands(db: FakeDb, setCodes: readonly string[]): BasicLand[] {
 /** Every `packs_*`, `draft_*`, `draft_deck_*` and `lobby_*` command, over one world. */
 export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
   return {
+    packs_booster_sets: (): BoosterSetSummary[] => fakeBoosterSets(db),
     packs_booster_set: (args: { setCode: string; refresh: boolean }): BoosterSet =>
       fakeBoosterSet(db, args.setCode),
 

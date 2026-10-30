@@ -32,13 +32,19 @@ use tauri::Manager;
 const SCRYFALL_API: &str = "https://api.scryfall.com";
 
 /// Run a sync now. `force` bypasses the 24 h throttle; a second concurrent call is
-/// refused rather than queued.
+/// refused rather than queued. MTGJSON's booster files follow the cards (`packs::spawn_refresh`)
+/// when the run brought new card data or was forced, in the background.
 #[tauri::command]
 async fn sync_run(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     force: bool,
 ) -> Result<sync::SyncOutcome, String> {
-    sync::run_sync(state.core.clone(), force).await
+    let outcome = sync::run_sync(state.core.clone(), force).await?;
+    if outcome.updated || force {
+        packs::spawn_refresh(&app, state.data_dir.clone());
+    }
+    Ok(outcome)
 }
 
 /// Open another window onto the same app — Ctrl+Shift+N. `caller` is the window that asked, so the
@@ -674,6 +680,7 @@ pub fn run() {
             draft::lobby::lobby_trade_offer,
             draft::lobby::lobby_trade_accept,
             packs::packs_booster_set,
+            packs::packs_booster_sets,
             // The read graph: one document in, one GraphQL response out.
             graph::graphql_query,
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.
@@ -1099,9 +1106,15 @@ fn start(app: &tauri::AppHandle) {
         !sync::has_cards(&conn)
     };
     let sync_state = state.clone();
+    let sync_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = sync::run_sync(sync_state.core.clone(), false).await {
-            eprintln!("initial sync failed: {e}");
+        // A new bulk file brings MTGJSON's booster files with it (`packs::spawn_refresh`).
+        match sync::run_sync(sync_state.core.clone(), false).await {
+            Ok(outcome) if outcome.updated => {
+                packs::spawn_refresh(&sync_app, sync_state.data_dir.clone());
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("initial sync failed: {e}"),
         }
         if first_run {
             spawn_optional_feeds(&sync_state);

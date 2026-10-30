@@ -1,12 +1,12 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { SetSummary } from "@/lib/ipc";
+import type { BoosterSetSummary } from "@/lib/ipc";
 import { SetGrid } from "./SetGrid";
 
-const SETS: SetSummary[] = [
-  { code: "hob", name: "The Hobbit", setType: "expansion", releasedAt: "2026-10-01", cardCount: 1 },
-  { code: "fdn", name: "Foundations", setType: "core", releasedAt: "2024-11-15", cardCount: 1 },
+const SETS: BoosterSetSummary[] = [
+  { code: "hob", name: "The Hobbit", releaseDate: "2026-10-01" },
+  { code: "fdn", name: "Foundations", releaseDate: "2024-11-15" },
 ];
 
 describe("SetGrid", () => {
