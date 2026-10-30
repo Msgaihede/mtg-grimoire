@@ -13640,7 +13640,10 @@ describe("the busy fault", () => {
     // 151 → 150 the same day with `share_auto_update` retired (issue #1396): the engine's
     // publish round after each sync trip refreshes shares now, and the page has no timer to ask.
     // The integrations switch's three writes are `integrationHandlers`', not this table's.
-    expect(names).toHaveLength(150);
+    // 150 → 153 on 2026-10-30 with the custom widgets' three writes, `custom_widget_create`,
+    // `custom_widget_update` and `custom_widget_delete`, each reaching `refuseIfBusy` first; the
+    // read, `custom_widgets`, sits in `readHandlers`. Count again after a merge.
+    expect(names).toHaveLength(153);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

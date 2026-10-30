@@ -286,6 +286,8 @@ mod tests {
                 "INSERT INTO app_meta (key,value) VALUES ('home_widgets','[\"stickyNotes\"]');
              INSERT INTO sticky_notes (id,title,body,color,pinned,sort_order,created_at,updated_at)
              VALUES (42,'Archive','Unicode: æ 🧙','slate',1,0,123,456);
+             INSERT INTO custom_widgets (id,name,description,query,spec,w,h,created_at,updated_at)
+             VALUES (7,'Deck values','','{ decks { id } }','{\"root\":\"a\",\"elements\":{}}',4,3,1,2);
              INSERT INTO sync_group (id,group_id,group_key,joined_at) VALUES (1,'old',x'0102',0);",
             )
             .unwrap();
@@ -305,6 +307,14 @@ mod tests {
             .as_object()
             .unwrap()
             .contains_key("sync_group"));
+        // Custom widgets are device-local and never synced (user schema v68), and the full
+        // export carries them all the same — the owner's decision.
+        assert_eq!(
+            snapshot["tables"]["custom_widgets"]["rows"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
         let target = database();
         target.execute_batch("INSERT INTO sync_group (id,group_id,group_key,joined_at) VALUES (1,'target',x'03',0);").unwrap();
         restore(&target, &snapshot).unwrap();

@@ -14510,12 +14510,13 @@ function nocase(a: string, b: string): number {
 }
 
 /** `custom_widgets.rs`' refusals, copied from the crate. */
-const CUSTOM_WIDGET_GONE = "That custom widget is not there any more.";
+const CUSTOM_WIDGET_GONE = "That widget is not there any more.";
 
 /**
- * `custom_widgets.rs`' shape checks, in its order: a name, a query, a spec that is
- * `{ root, elements }`, and a footprint inside `2..=12` by `2..=8`. The refusals are the crate's
- * sentences.
+ * `custom_widgets.rs`' shape checks, in its order and in its words: a name and a description
+ * (both stored trimmed), a query (stored as written, blank only after trimming), a spec that is a
+ * JSON object with a string `root` and an object `elements`, and a footprint inside `2..=12` by
+ * `2..=8`. Never the vocabulary — that is the page's catalogue.
  */
 function checkCustomWidget(args: {
   name: string;
@@ -14526,33 +14527,29 @@ function checkCustomWidget(args: {
   h: number;
 }): Pick<CustomWidget, "name" | "description" | "query" | "spec" | "w" | "h"> {
   const name = args.name.trim();
-  if (name === "") throw refuse("A custom widget needs a name.");
-  if ([...name].length > 80) throw refuse("A custom widget's name is at most 80 characters.");
-  if ([...args.description].length > 500)
-    throw refuse("A custom widget's description is at most 500 characters.");
-  const query = args.query.trim();
-  if (query === "") throw refuse("A custom widget needs a query.");
-  if (new TextEncoder().encode(query).length > 20_000)
-    throw refuse("A custom widget's query is at most 20,000 bytes.");
+  if (name === "") throw refuse("A widget needs a name.");
+  if ([...name].length > 80) throw refuse("A widget's name can be at most 80 characters.");
+  const description = args.description.trim();
+  if ([...description].length > 500)
+    throw refuse("A widget's description can be at most 500 characters.");
+  if (args.query.trim() === "") throw refuse("A widget needs a data query.");
+  if (new TextEncoder().encode(args.query).length > 20_000)
+    throw refuse("A widget's data query can be at most 20000 bytes.");
   const spec = args.spec;
-  if (
-    typeof spec !== "object" ||
-    spec === null ||
-    Array.isArray(spec) ||
-    typeof (spec as { root?: unknown }).root !== "string" ||
-    typeof (spec as { elements?: unknown }).elements !== "object" ||
-    (spec as { elements?: unknown }).elements === null ||
-    Array.isArray((spec as { elements?: unknown }).elements)
-  ) {
-    throw refuse("A custom widget's spec must be an object with a root and elements.");
-  }
+  if (typeof spec !== "object" || spec === null || Array.isArray(spec))
+    throw refuse("A widget's spec must be a JSON object.");
+  const { root, elements } = spec as { root?: unknown; elements?: unknown };
+  if (typeof root !== "string")
+    throw refuse("A widget's spec needs a root: the key of the element it starts from.");
+  if (typeof elements !== "object" || elements === null || Array.isArray(elements))
+    throw refuse("A widget's spec needs its elements, as an object.");
   if (new TextEncoder().encode(JSON.stringify(spec)).length > 200_000)
-    throw refuse("A custom widget's spec is at most 200,000 bytes.");
+    throw refuse("A widget's spec can be at most 200000 bytes.");
   if (!Number.isInteger(args.w) || args.w < 2 || args.w > 12)
-    throw refuse("A custom widget is 2 to 12 cells wide.");
+    throw refuse("A widget is 2 to 12 cells wide.");
   if (!Number.isInteger(args.h) || args.h < 2 || args.h > 8)
-    throw refuse("A custom widget is 2 to 8 cells tall.");
-  return { name, description: args.description, query, spec: structuredClone(spec), w: args.w, h: args.h };
+    throw refuse("A widget is 2 to 8 cells tall.");
+  return { name, description, query: args.query, spec: structuredClone(spec), w: args.w, h: args.h };
 }
 /**
  * `deck_todos::TODOS_CHANGED` (user schema v58, kept by v59) — what a **compare-and-set** write

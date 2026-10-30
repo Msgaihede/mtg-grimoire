@@ -54,6 +54,9 @@ pub mod combos;
 /// The fence between `grimoire-core`'s command table and `generate_handler!` — test-only.
 #[cfg(test)]
 mod command_table;
+/// **The reader's own home-page widgets** (user schema v68) — `grimoire-core`'s module and the
+/// four wrappers over it.
+pub mod custom_widgets;
 pub use grimoire_core::db;
 pub mod deck;
 pub mod deck_audit;

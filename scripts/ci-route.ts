@@ -245,12 +245,14 @@ export const ARMS = [
   // of its table registry and `syncedTables.json` is `schema::SYNCED_TABLES`. **Above `packages/ui/*`**,
   // so it owes whatever that arm sets — `web` since phase 5: `syncedTables.json` is a module the
   // page imports (`crossWindow.ts`), and the other two ride along rather than earning an arm
-  // each.
+  // each. The widget catalogue's `catalog.contract.json` joined them with user schema v68: the
+  // desktop's MCP tool `widget_create` checks a spec against it (`mcp::tools`, `include_str!`).
   {
     match: [
       "packages/ui/features/transfer/__golden__/*",
       "packages/ui/lib/userTables.json",
       "packages/ui/lib/syncedTables.json",
+      "packages/ui/features/home/generated/catalog.contract.json",
     ],
     jobs: ["rust", ...PAGE_SIDE],
   },
