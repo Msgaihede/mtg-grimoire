@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   comboActivity,
+  deviceSyncActivity,
   marketplaceFeedActivity,
   oracleTagActivity,
   syncActivity,
@@ -10,6 +11,7 @@ import {
 } from "@grimoire/ui/lib/activity";
 import { useComboProgress } from "@grimoire/ui/lib/useComboProgress";
 import { useDeviceSyncInvalidation } from "@grimoire/ui/lib/useDeviceSyncInvalidation";
+import { useDeviceSyncLive } from "@grimoire/ui/lib/useDeviceSyncLive";
 import { useMarketplace, useMarketplaceProgress } from "@grimoire/ui/lib/useMarketplace";
 import { useOracleTagProgress } from "@grimoire/ui/lib/useOracleTagProgress";
 import { useSync } from "@grimoire/ui/lib/useSync";
@@ -61,6 +63,10 @@ export function useCardData(): CardData {
  *   closed; unheard, the wall goes on drawing the rows as they were, which reads as the change
  *   having been lost. Handed this face's own client, as the card sync's listener is.
  *
+ * **And the relay socket's state** through `useDeviceSyncLive`, for the mana line alone: while it
+ * says `connecting` the face is catching up with the reader's other devices, and the rows on
+ * screen are this device's last copy until it ends (`deviceSyncActivity`, issue #1428).
+ *
  * **Plus one trigger the desktop does not have: the polled count leaving zero.** Tauri drops an
  * event emitted before the page listens, so a first run whose `done` was missed would otherwise
  * leave the wall empty until a relaunch. `sync_status` is polled each second while a sync runs,
@@ -78,6 +84,7 @@ export function useCardDataWatch(): { data: CardData; activity: Activity | null 
   useMarketplaceProgress();
   const oracleTags = useOracleTagProgress();
   const combos = useComboProgress();
+  const deviceSync = useDeviceSyncLive();
   const { refreshing: refreshingFeed, feeds, progress: feedProgress } = useMarketplace();
 
   const cardCount = status?.cardCount ?? null;
@@ -93,9 +100,10 @@ export function useCardDataWatch(): { data: CardData; activity: Activity | null 
   // `AppShell`'s rule: either this face started the sync or the launch did.
   const sync = syncActivity(progress, refreshing || status?.syncing === true);
   const feedLabel = feeds.find((f) => f.marketplace.id === refreshingFeed)?.marketplace.label;
-  // The ribbon's fold, without its registry: four jobs known in one place need no store.
+  // The ribbon's fold, without its registry: five jobs known in one place need no store.
   const activity = topActivity(
     [
+      deviceSyncActivity(deviceSync),
       sync,
       marketplaceFeedActivity(feedLabel ?? null, feedProgress),
       oracleTagActivity(oracleTags.refreshing, oracleTags.progress),

@@ -10,6 +10,7 @@ import { createStore } from "zustand/vanilla";
 import type {
   ComboProgress,
   FeedProgressEvent,
+  LiveState,
   OracleTagProgressEvent,
   SyncPhase,
   SyncProgressEvent,
@@ -50,6 +51,19 @@ export interface Activity extends ManaLineSync {
  * and has a panel of its own in Settings.
  */
 export const RANK = {
+  /**
+   * A round trip with the reader's other devices while the relay socket is coming up — **the
+   * loudest job there is, and the one rung below zero**.
+   *
+   * It is the job that answers the question a reader opening this device after a week actually
+   * has: *are my latest changes here yet?* Until it ends, the collection, the decks and the
+   * wishlists on screen are this device's last copy, and nothing else in the header says so. It
+   * is also short — seconds on an ordinary catch-up, against minutes for a card sync that is
+   * downloading — and a launch after a long absence is exactly the launch on which both run, so
+   * a rank below the card sync would hide it behind that sync for its whole life. A short job
+   * outranking a long one is what lets the row describe more than one thing (`combos`, below).
+   */
+  deviceSync: -10,
   sync: 0,
   /**
    * A price feed being downloaded. **Between** the two, which is what the gaps are for: it is
@@ -342,6 +356,33 @@ export function comboActivity(
       phase?.phase === "downloading" && phase.total > 0
         ? Math.min(1, phase.done / phase.total)
         : null,
+  };
+}
+
+/**
+ * Fold the relay socket's state into the job the header describes.
+ *
+ * **`connecting` is the catch-up, and it is the only state that is a job.** The connection
+ * manager's first act on every connection is a full round trip and then the socket
+ * (`sync_engine::live::run`, spec §6.4), and it says `connecting` before the trip and `live` once
+ * the socket is up — so the span between the two is the pull that brings this device up to date
+ * with the others, plus the dial after it. At launch that is the catch-up a device left closed for
+ * a week makes; after `offline` it is the same trip, on the next attempt. `live` is a socket
+ * doing its job, whose trips are the doorbell's and finish in a moment; `off` and `offline` run
+ * nothing. Those three are the device-sync marker's to draw (`ChromeStatus`), not a job's.
+ *
+ * Nothing in the state counts anything — the trip emits no progress, and its page count is only
+ * known after it — so the bar is indeterminate and there is no detail, rather than an invented
+ * fraction.
+ */
+export function deviceSyncActivity(state: LiveState): Activity | null {
+  if (state !== "connecting") return null;
+  return {
+    key: "device-sync",
+    rank: RANK.deviceSync,
+    label: "Syncing with your other devices",
+    detail: null,
+    value: null,
   };
 }
 
