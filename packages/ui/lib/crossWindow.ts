@@ -190,6 +190,9 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   // was a placeholder and is real since 2026-10-01, when the share Worker got an address. The
   // cost of `[]` is a second window's share list going stale until it remounts.
   collection_shares: [],
+  // The reader's own widgets: one list read (`useCustomWidgets`), so one key, `sticky_notes`'
+  // shape below. The read is a plain `SELECT`, so the refresh-loop rule has nothing to say.
+  custom_widgets: [["customWidgets"]],
   deck_audit: DECKS,
   deck_cards: [["decks"], HOLDINGS, ...REVIEWED],
   deck_categories: DECKS,

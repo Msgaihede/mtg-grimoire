@@ -28,7 +28,7 @@ over the integrations store. It is not this.
 
 ## 2. The tools
 
-Every tool but the read graph's three is a translation onto `grimoire_core::commands::dispatch`,
+Every tool but the read graph's three (and `widget_create`'s checks before its write) is a translation onto `grimoire_core::commands::dispatch`,
 the table the light app's hosts answer through; those three are `crates/grimoire-graph`'s doors,
 over the same read connection. Nothing in `mcp/tools.rs` reads or writes SQL of its own; a refusal is the
 core's own sentence, handed to the agent as a tool result with `isError: true`.
@@ -48,17 +48,34 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 | `graph_validate`    | `Graph::validate`                                                      | Whether a GraphQL query is valid, and every problem with its line and column, without running it                                                                                                                                         |
 | `graph_query`       | `Graph::run`                                                           | The query's answer as a widget gets it: `data`, `errors` (a failed field is `null` beside the rest) and `extensions.invalidatedBy`                                                                                                       |
 | `add_card_to_deck`  | `deck_category_list`, `deck_add_card`                                  | Copies into a named pile (made if missing) or the list's first main pile — `Main deck` when it has none yet (the editor's by-type pile choice is TypeScript's and is not repeated)                                                       |
+| `widget_list`       | `custom_widgets`                                                       | The reader's own home-page widgets: id (`widgetId`, what a placed widget's `config` names), name, description and footprint — not the query or the spec                                                                                  |
+| `widget_create`     | `Graph::validate`, then `custom_widget_create`                         | A custom widget stored, once its query passed the read graph and its spec the widget catalogue's contract (below); the stored widget as the table answers it                                                                             |
 
-**The three writes are adds, and only adds** — the issue's list. Nothing changes or removes a row;
-an agent proposing that asks the reader, whose app is open. A quantity is 1–99. Each add is a real
-write: `with_write`'s fence, the capture triggers, the activity feed, the plain-text mirror, and a
-sync op like any press, so it reaches the reader's other devices on the next trip.
+**The four writes are adds, and only adds** — the issue's three, and a custom widget. Nothing
+changes or removes a row; an agent proposing that asks the reader, whose app is open. A quantity is
+1–99. Each add is a real write: `with_write`'s fence, the capture triggers, the activity feed, the
+plain-text mirror, and a sync op like any press, so it reaches the reader's other devices on the
+next trip — except a custom widget, which is device-local (user schema v68: never synced, carried
+by the full export).
+
+**`widget_create` checks before it writes, and says everything at once.** The query goes through
+the read graph's `validate` (each problem with its line and column). The spec is held to the
+committed widget catalogue contract, `packages/ui/features/home/generated/catalog.contract.json`
+(compiled in with `include_str!`; [generated-widgets.md](generated-widgets.md)), structurally and
+with no new crate: the root names an element; every element's `type` is a contract component;
+every child key is an element; every prop is one its component declares and every `required` one is
+present (a value is never type-checked — any may be an expression like `{"$state": …}`); every
+`on.<event>` binding, one or a list, names a contract action or one of json-render's `setState`,
+`pushState`, `removeState`, `validateForm`. Every problem of both halves is one sentence naming its
+element, all in one refusal, and nothing is stored. Then the table's `custom_widget_create` writes
+it, and its own sentences (a blank name, a footprint outside 2–12 × 2–8) are the core's. `w` and
+`h` default to 4 and 3.
 
 **Every write tells every window.** `crate::changes` emits `db:changed` only while a second window
 is open, because the window that pressed already knows. An agent's write has no such window, so each
 write tool emits `db:changed` itself after its commit, naming the tables it can touch
-(`tools::COLLECTION_TABLES`, `WISHLIST_TABLES`, `DECK_TABLES`, held to the schema's user tables by a
-test). An open Collection page refreshes under the agent's add.
+(`tools::COLLECTION_TABLES`, `WISHLIST_TABLES`, `DECK_TABLES`, `CUSTOM_WIDGET_TABLES`, held to the
+schema's user tables by a test). An open Collection page refreshes under the agent's add.
 
 ## 3. Who can reach it
 
@@ -159,5 +176,6 @@ curl -s http://127.0.0.1:39147/mcp -H "Authorization: Bearer <token>" -H "Conten
   Claude Code or Cursor against a built app.
 - **No resources or prompts**, only tools. A deck as a resource, or a "build me a deck from my
   collection" prompt, would be additions on the same endpoint.
-- **No deck creation, no edits, no removals** — the issue named adds. Each would be one more
+- **No deck creation, no edits, no removals** — the issue named adds; a custom widget is
+  created and never changed or deleted here (the page's dialog does that). Each would be one more
   translation in `tools.rs` over a command already in the table.

@@ -1,9 +1,9 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import type { BoosterCard, BoosterSet, PrintingPrices, SetSummary } from "@/lib/ipc";
+import type { BoosterCard, BoosterSet, BoosterSetSummary, PrintingPrices } from "@/lib/ipc";
 import { PRICES, PRODUCT, SET as FIXTURE } from "../booster/fixture";
 import { formatPrice } from "@/lib/prices";
 import { pickOption } from "@/test-dropdown";
@@ -28,25 +28,38 @@ const CARDS: BoosterCard[] = [
 
 const SET: BoosterSet = { ...FIXTURE, cards: CARDS, fetchedAt: Date.now() };
 
-const SUMMARY: SetSummary = {
+const SUMMARY: BoosterSetSummary = {
   code: "tst",
   name: "Test Set",
-  setType: "expansion",
-  releasedAt: "2026-01-01",
-  cardCount: 30,
+  releaseDate: "2026-01-01",
 };
 
 const SEED = 1234;
 
-const listSets = vi.hoisted(() => vi.fn());
+const packsBoosterSets = vi.hoisted(() => vi.fn());
 const packsBoosterSet = vi.hoisted(() => vi.fn());
+// The host's `packs:refreshed`, held so a test can fire it.
+const refreshed = vi.hoisted(() => ({ fire: () => {} }));
+const onPacksRefreshed = vi.hoisted(() =>
+  vi.fn((cb: () => void) => {
+    refreshed.fire = cb;
+    return () => {};
+  }),
+);
 const printingPrices = vi.hoisted(() => vi.fn());
 const getMarketplace = vi.hoisted(() => vi.fn().mockResolvedValue("tcgplayer"));
 const marketplaceFeedStatus = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { listSets, packsBoosterSet, printingPrices, getMarketplace, marketplaceFeedStatus },
+  ipc: {
+    packsBoosterSets,
+    onPacksRefreshed,
+    packsBoosterSet,
+    printingPrices,
+    getMarketplace,
+    marketplaceFeedStatus,
+  },
 }));
 
 vi.mock("../booster/rng", async (importOriginal) => ({
@@ -59,7 +72,7 @@ import { openOne } from "./opening";
 import { PackOpener } from "./PackOpener";
 
 function setup() {
-  listSets.mockResolvedValue([SUMMARY]);
+  packsBoosterSets.mockResolvedValue([SUMMARY]);
   packsBoosterSet.mockResolvedValue(SET);
   printingPrices.mockImplementation(async (ids: string[]): Promise<PrintingPrices[]> =>
     ids.flatMap((cardId) => {
@@ -147,6 +160,29 @@ describe("PackOpener", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("MTGJSON could not be reached.");
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument());
+  });
+
+  it("draws MTGJSON's set list, says its refusal and retries", async () => {
+    // Queued before the first render's fetch; a `Once` answer outranks setup's default.
+    packsBoosterSets.mockClear().mockRejectedValueOnce("MTGJSON could not be reached.");
+    const { user } = setup();
+    expect(await screen.findByRole("alert")).toHaveTextContent("MTGJSON could not be reached.");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: /Test Set/ })).toBeInTheDocument();
+    expect(packsBoosterSets).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks MTGJSON's sets again when the host fetched them beside a card sync", async () => {
+    packsBoosterSets.mockClear();
+    setup();
+    expect(await screen.findByRole("button", { name: /Test Set/ })).toBeInTheDocument();
+    packsBoosterSets.mockResolvedValue([
+      SUMMARY,
+      { code: "nxt", name: "Next Set", releaseDate: "2026-02-01" },
+    ]);
+    act(() => refreshed.fire());
+    expect(await screen.findByRole("button", { name: /Next Set/ })).toBeInTheDocument();
+    expect(packsBoosterSets).toHaveBeenCalledTimes(2);
   });
 
   it("walks back up the trail", async () => {

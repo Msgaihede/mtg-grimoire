@@ -60,8 +60,11 @@ export const Drafting: Story = {
     const pack = await canvas.findByRole("list", { name: "Pack" }, { timeout: 5000 });
     const before = within(pack).getAllByRole("button").length;
     const card = within(pack).getAllByRole("button")[0];
+    // A click chooses; the Pick button picks (a second click on the card no longer does).
     await userEvent.click(card);
-    await userEvent.click(card);
+    await userEvent.click(
+      canvas.getByRole("button", { name: `Pick ${card.getAttribute("aria-label")}` }),
+    );
     // The bots have passed: the next pack is one card smaller.
     await waitFor(async () => {
       const next = await canvas.findByRole("list", { name: "Pack" });

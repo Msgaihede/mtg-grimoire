@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
-import { RANK } from "@/lib/activity";
+import { RANK, deviceSyncActivity } from "@/lib/activity";
 import type { SyncStatus } from "@/lib/ipc";
 import { statusLine } from "@/lib/useSync";
 import { ManaLine } from "./ManaLine";
@@ -353,6 +353,30 @@ export const SyncLive: Story = { args: { deviceSync: "live" } };
  * `offline` — a reconnect in progress is not yet the failure the marker exists to surface.
  */
 export const SyncConnecting: Story = { args: { deviceSync: "connecting" } };
+
+/**
+ * The launch catch-up with the reader's other devices (issue #1428) — `connecting`, which is the
+ * connection manager's round trip before its socket, as `AppShell` draws it: the marker spinning,
+ * and `deviceSyncActivity`'s job on the mana line and in the sentence. Until it ends the rows on
+ * screen are this device's last copy, and the row says so in words rather than in an icon alone.
+ */
+export const CatchingUpWithDevices: Story = {
+  args: {
+    deviceSync: "connecting",
+    activity: deviceSyncActivity("connecting"),
+    activityVisible: true,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("status")).toHaveTextContent("Syncing with your other devices");
+    // Nothing in the socket's state counts anything, so the line sweeps rather than fills.
+    await expect(
+      canvas.getByRole("progressbar", { name: "Syncing with your other devices" }),
+    ).not.toHaveAttribute("aria-valuenow");
+    // A device sync is not a card sync: Refresh stays the reader's.
+    await expect(canvas.getByRole("button", { name: "Refresh data" })).toBeEnabled();
+  },
+};
 
 /**
  * The one state this marker exists for. Automatic sync made a failure manual sync never had: a

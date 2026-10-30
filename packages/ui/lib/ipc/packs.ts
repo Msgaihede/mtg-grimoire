@@ -1,6 +1,7 @@
 /**
- * Booster data for the Draft & Packs page: one set's booster products and the sealed products that
- * hold them, as MTGJSON describes them, joined to this app's corpus
+ * Booster data for the Draft & Packs page: the sets MTGJSON sells booster packs of, and one set's
+ * booster products and the sealed products that hold them, as MTGJSON describes them, joined to
+ * this app's corpus
  * (`docs/superpowers/specs/2026-10-29-draft-and-packs-design.md` §2).
  *
  * **A domain of `../ipc.ts`**, read through `@/lib/ipc` only. The shapes are
@@ -14,7 +15,20 @@
  * **A web or phone host refuses it** — it is on the desktop's `DESKTOP_ONLY` list, and the light
  * app draws no Draft & Packs page.
  */
-import { invoke } from "./invoke";
+import { core } from "@/lib/core";
+import { invoke, type Unlisten } from "./invoke";
+
+/**
+ * A set MTGJSON sells booster packs of — a tile of the set wall. MTGJSON's set list, not the
+ * corpus's: Scryfall splits a release into sets a booster is not sold of.
+ */
+export interface BoosterSetSummary {
+  /** Lower-case, as the corpus spells a set code. */
+  code: string;
+  name: string;
+  /** `YYYY-MM-DD`, MTGJSON's. */
+  releaseDate: string | null;
+}
 
 /** One set's boosters and sealed products, and every card they can hold. */
 export interface BoosterSet {
@@ -120,6 +134,16 @@ export interface BoosterCard {
 }
 
 export const packCommands = {
+  /**
+   * The sets MTGJSON sells booster packs of, from its set list — fetched the first time and
+   * cached for a week. Rejects in one sentence when MTGJSON cannot be reached and no copy is kept.
+   */
+  packsBoosterSets: () => invoke<BoosterSetSummary[]>("packs_booster_sets"),
+  /**
+   * The host fetched MTGJSON's files again beside a card sync (`packs::spawn_refresh`): the set
+   * list and every set file it had cached. No payload — ask again.
+   */
+  onPacksRefreshed: (cb: () => void): Unlisten => core.listen<null>("packs:refreshed", () => cb()),
   /**
    * One set's booster data. Fetched from MTGJSON the first time and cached for a week; `refresh`
    * asks again now. Rejects in one sentence when the set has no boosters or MTGJSON cannot be

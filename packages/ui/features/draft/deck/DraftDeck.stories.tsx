@@ -15,7 +15,7 @@ function DraftDeck({ commander }: { commander: boolean }) {
   const made = useQuery({
     queryKey: ["story", "draft-deck", commander],
     queryFn: async () => {
-      const sets = await ipc.listSets();
+      const sets = await ipc.packsBoosterSets();
       const booster = await ipc.packsBoosterSet(sets[0].code, false);
       const pool = booster.cards.slice(0, commander ? 60 : 45).map((c) => c.cardId);
       return ipc.draftDeckCreate(commander ? "Commander Draft" : "Quick Draft", pool, commander);

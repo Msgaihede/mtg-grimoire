@@ -34,8 +34,22 @@ opens any of them.
   so those files are fetched too.
 - Parsed and joined to the corpus in `crates/grimoire-core/src/boosters.rs`; fetched and cached by
   the desktop host (`packs/`) under the data dir, `boosters/{CODE}.json.gz`, for 7 days.
-- **Optional by construction**: nothing is asked until a reader picks a set on the Packs page or for
-  a draft's pack. A failure is a sentence on that page and a Retry.
+- **The set walls are MTGJSON's too, never the corpus's** (Open Packs and a draft's pack order,
+  `useBoosterSets`). Scryfall splits a release into sets no booster is sold of (a bonus sheet like
+  `big`, the List, `tsb`, a commander's promos), so a wall built from `list_sets` and a list of set
+  types offered tiles MTGJSON had no booster for. The wall is `SetList.json.gz` (2.5 MB, cached as
+  `boosters/SetList.json.gz` on the same 7 days), kept to the sets a sealed product of category
+  `booster_pack` opens a booster of (`booster_set_list`), then to those out now or within a week.
+  Measured 2026-10-30: 190 sets; against 17 sampled per-set files the rule matched the `booster`
+  block every time, and the one set it leaves out that has pack references at all is `sld` (Secret
+  Lair's bonus sheets, sold in a box).
+- **Fetched again with the card data** (`packs::spawn_refresh`): a card sync that brought a new
+  bulk file (the launch's or Settings') or was forced also fetches the set list and every set file
+  already cached, in the background, then emits `packs:refreshed`; the walls (`usePacksRefreshed`)
+  ask every `["packs", …]` answer again. So MTGJSON's sheets follow Scryfall's printings instead of
+  trailing them by up to the 7 days; a file that cannot be fetched keeps its copy.
+- **Optional by construction**: nothing is asked until a reader opens the Packs page or a draft's
+  setup (the set list), or picks a set (its file). A failure is a sentence on that page and a Retry.
 - Checked against the real HOB + HOC files: 4 products (box topper, collector, play, prerelease),
   21 sealed products kept (kits and welcome decks with no booster dropped), 423 distinct cards.
 
@@ -87,14 +101,14 @@ over a `CardDatabase` of the draft's own cards. Their dice are seeded from the s
 cards picked so far and the seat, with nothing stored, so a restored draft picks exactly as the
 original would have.
 
-| Mode | draft-core | Seats it allows |
-| --- | --- | --- |
-| Quick (sets, you + 7 bots) | `Quick`, set source | 2–8 |
-| Cube (a pasted list, you + bots) | `Quick`, cube source | 1–255 |
-| Sealed (six boosters into your pool) | `Sealed` | exactly 6 boosters; a lone seat is padded with a hidden bot that opens six empty ones |
-| Pod (people from a lobby, bots in the empty seats) | `Premier` with bot seats; a pod drafts any of booster, Commander or Winston (`podFormat`) | 2–8 booster, 3–8 Commander, 2–4 Winston |
-| Commander (sets, you + 3 bots, two cards a pick, a 60-card deck with a commander) | `CommanderDraft` | 3–8 (the setup offers 3–8, default 4) |
-| Winston (sets, you + 1 bot, one shared stack in three piles) | `Winston`, `SharedStackPiles { pile_count: 3 }` | 2–4 (solo is 2) |
+| Mode                                                                              | draft-core                                                                                | Seats it allows                                                                       |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Quick (sets, you + 7 bots)                                                        | `Quick`, set source                                                                       | 2–8                                                                                   |
+| Cube (a pasted list, you + bots)                                                  | `Quick`, cube source                                                                      | 1–255                                                                                 |
+| Sealed (six boosters into your pool)                                              | `Sealed`                                                                                  | exactly 6 boosters; a lone seat is padded with a hidden bot that opens six empty ones |
+| Pod (people from a lobby, bots in the empty seats)                                | `Premier` with bot seats; a pod drafts any of booster, Commander or Winston (`podFormat`) | 2–8 booster, 3–8 Commander, 2–4 Winston                                               |
+| Commander (sets, you + 3 bots, two cards a pick, a 60-card deck with a commander) | `CommanderDraft`                                                                          | 3–8 (the setup offers 3–8, default 4)                                                 |
+| Winston (sets, you + 1 bot, one shared stack in three piles)                      | `Winston`, `SharedStackPiles { pile_count: 3 }`                                           | 2–4 (solo is 2)                                                                       |
 
 A Commander draft's set wall puts Commander Legends (`cmr`) and Battle for Baldur's Gate (`clb`)
 first, marked _Suggested_, where the corpus has them; any set's booster is allowed. Its pick

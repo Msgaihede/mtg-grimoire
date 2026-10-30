@@ -7,7 +7,13 @@ vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
 import { emitFake } from "@grimoire/fake/event";
 import type { CommandTable } from "@grimoire/fake/scope";
-import type { RelayOutcome, SearchResponse, SyncProgressEvent, SyncStatus } from "@grimoire/ui/lib/ipc";
+import type {
+  RelayOutcome,
+  SearchResponse,
+  SyncLiveEvent,
+  SyncProgressEvent,
+  SyncStatus,
+} from "@grimoire/ui/lib/ipc";
 import { PhoneFace } from "./PhoneApp";
 import { installLayout, renderPhone } from "./testing";
 
@@ -176,5 +182,29 @@ describe("the phone face over a device sync", () => {
     // And the same listener still refreshes on the trip that did change something.
     applied({ pulled: 1, applied: 1, changed: true });
     await waitFor(() => expect(solRing()).toBeNull(), SETTLE);
+  });
+});
+
+/**
+ * Issue #1428: the relay socket's `connecting` is the round trip that catches this phone up with
+ * the reader's other devices. The face's mana line is its only progress bar, so that is where it
+ * is said — and it gives the line back the moment the socket is up.
+ */
+describe("the phone face while it catches up with the other devices", () => {
+  const live = (state: SyncLiveEvent["state"]) =>
+    act(() => emitFake<SyncLiveEvent>("sync:live", { state }));
+
+  it("rides the mana line while the socket connects, and stands down once it is live", async () => {
+    renderPhone(<PhoneFace />, { path: "/search" });
+    await screen.findByRole("list", { name: "Search results" }, SETTLE);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+
+    live("connecting");
+    expect(
+      screen.getByRole("progressbar", { name: "Syncing with your other devices" }),
+    ).not.toHaveAttribute("aria-valuenow");
+
+    live("live");
+    expect(screen.queryByRole("progressbar")).toBeNull();
   });
 });

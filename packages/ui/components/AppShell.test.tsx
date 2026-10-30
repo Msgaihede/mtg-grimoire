@@ -607,6 +607,35 @@ describe("the status line", () => {
     expect(line).toHaveTextContent("Importing cards · 83,000 cards");
   });
 
+  /**
+   * Issue #1428: the relay socket's `connecting` is the round trip that catches this device up
+   * with the reader's others, and until it ends the rows on screen are this device's last copy.
+   * The marker beside Refresh said so in an icon alone; this is the mana line and the sentence.
+   */
+  it("says it is catching up with the other devices while the socket connects", async () => {
+    let emit: ((e: { state: "connecting" | "live" }) => void) | undefined;
+    onSyncLive.mockImplementation((cb: (e: { state: "connecting" | "live" }) => void) => {
+      emit = cb;
+      return () => {};
+    });
+    syncLiveState.mockResolvedValue("connecting");
+
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+
+    expect(
+      await screen.findByRole("progressbar", { name: "Syncing with your other devices" }),
+    ).toBeInTheDocument();
+    const line = await screen.findByText("Syncing with your other devices", {}, { timeout: 3000 });
+    expect(line).toHaveAttribute("role", "status");
+
+    // The socket comes up: the catch-up is over and the corpus summary has the row back.
+    act(() => emit!({ state: "live" }));
+    expect(
+      await screen.findByText("116,568 cards · data from 2026-08-03", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
   /** The corpus summary is not lost while it is hidden — it comes straight back, because it
    *  is a static fact about a database rather than an answer to one click. */
   it("gives the summary back when the sync stops", async () => {

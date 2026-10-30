@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils";
 import { makeFit, type WidgetFit } from "./fit";
 import { WidgetCard } from "./WidgetCard";
 import type { WidgetBodyProps } from "./widgetProps";
-import { WIDGETS, type WidgetKind, type WidgetMeta } from "./widgets";
+import { CATALOGUE_WIDGETS, type WidgetKind, type WidgetMeta } from "./widgets";
 
 /** The preview box's height, in pixels — the design's 212. */
 export const PREVIEW_HEIGHT = 212;
@@ -109,7 +109,7 @@ function placedLabel(count: number): string {
 }
 
 /**
- * The catalogue's list width, measured.
+ * The catalogue's list width, measured — the Custom widgets dialog's too.
  *
  * **A callback ref rather than an effect**, `HomePage`'s canvas measurement and its reason: the list
  * mounts with the dialog's panel rather than with this component, and a ref callback is called with
@@ -117,7 +117,7 @@ function placedLabel(count: number): string {
  * write lands in the commit rather than one paint later. React 19 runs the returned function as the
  * ref's cleanup, which is where the observer is given back.
  */
-function useListWidth(): [(el: HTMLElement | null) => (() => void) | undefined, number] {
+export function useListWidth(): [(el: HTMLElement | null) => (() => void) | undefined, number] {
   const [width, setWidth] = useState(0);
   const ref = useCallback((el: HTMLElement | null) => {
     if (el === null) return undefined;
@@ -217,8 +217,9 @@ function CatalogueEntry({
  * the `"inner"` Escape rung are that shell's, and a modal drawn beside it would be the fourth copy
  * of chrome this app has already folded back in once.
  *
- * Entries are in `WIDGETS` order, the registry's own: the catalogue is a *display* of the kinds,
- * arranged the way the design lays them out, rather than an option list a reader scans for a name.
+ * Entries are in `WIDGETS` order, the registry's own, less the custom kind (`CATALOGUE_WIDGETS`):
+ * the catalogue is a *display* of the kinds, arranged the way the design lays them out, rather
+ * than an option list a reader scans for a name.
  */
 export function WidgetCatalogue({
   open,
@@ -263,7 +264,7 @@ function CatalogueBody({
         // A template is an inline style, never an arbitrary class — see `packages/ui/CLAUDE.md`.
         style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${ENTRY_MIN_WIDTH}px, 1fr))` }}
       >
-        {WIDGETS.map((meta) => (
+        {CATALOGUE_WIDGETS.map((meta) => (
           <CatalogueEntry
             key={meta.kind}
             meta={meta}

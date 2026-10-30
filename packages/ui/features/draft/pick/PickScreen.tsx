@@ -1,13 +1,16 @@
-import { useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { Hourglass, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { FOCUS } from "@/lib/focus";
+import { dndDraggable, useDndDropTarget } from "@/lib/dndTarget";
+import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { DraftCard, DraftView } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
+import { carriedPick, pickDragData, readPickDrag, type PickDrag } from "./pickDrag";
 import { sortPack, type PackSort } from "./pool";
 import { PoolColumns } from "./PoolColumns";
 import { RoundStrip, SeatsStrip } from "./TableStrip";
@@ -40,13 +43,15 @@ export function picksNeeded(view: DraftView): number {
  * One pick: the round strip and the table, the pack as a wall of cards, and the pool below — or,
  * in a Winston draft (`view.stack`), the shared stack and its three piles in place of the pack.
  *
- * **A click chooses, a second click on the chosen card picks it** — so a double-click picks, and
- * so does the Pick button. The keyboard walks the pack with the arrows and picks with Enter
- * (said in the hint under the pack; no global chord is taken). While the table catches up the
- * pack is replaced by a sentence saying so.
+ * **A card is picked by dragging it onto the pool** (issue #1434, which replaced the second click
+ * on a chosen card — a double-click no longer picks). A click chooses, and the Pick button picks
+ * the chosen card. The keyboard walks the pack with the arrows and picks with Enter (said in the
+ * hint under the pack; no global chord is taken). While the table catches up the pack is replaced
+ * by a sentence saying so.
  *
  * **A pick of two** (a Commander draft, `picksPerStep: 2`) chooses two cards, each click toggling
- * one, and picks them together — with the Pick button, or Enter once both are chosen.
+ * one, and picks them together — with the Pick button, Enter once both are chosen, or by dragging
+ * one onto the pool while the other is chosen (`pickDrag.ts`' `carriedPick`).
  *
  * **The pack is laid out by rarity, mythic first** (issue #1432), a rarity's cards in the order they
  * were dealt; the Sort menu offers the dealt order instead, kept for the window's life.
@@ -86,6 +91,23 @@ export function PickScreen({
   const waiting = view.waiting || view.pack.length === 0;
   const picked = view.seats.filter((s) => s.picked).length;
   const need = picksNeeded(view);
+  // Held across renders: the wall registers its drag sources again whenever its pack changes.
+  const sorted = useMemo(() => sortPack(view.pack, sort), [view.pack, sort]);
+
+  /** The pack's cards a drag carries, or fewer when one has left the pack since it was lifted. */
+  const carried = (drag: PickDrag): DraftCard[] =>
+    drag.ids.flatMap((id) => view.pack.find((c) => c.instanceId === id) ?? []);
+  const poolRef = useRef<HTMLDivElement>(null);
+  const { armed, over } = useDndDropTarget({
+    ref: poolRef,
+    read: readPickDrag,
+    canDrop: (drag) =>
+      !busy && !waiting && drag.ids.length === need && carried(drag).length === need,
+    onDrop: (drag) => onPick(carried(drag)),
+    // A pick cannot be taken back, so it is the pointer's decision — never the carried card's
+    // corner overlapping the pool while the pointer is still over the pack.
+    pointerOnly: true,
+  });
 
   if (view.stack !== null) {
     return (
@@ -183,7 +205,7 @@ export function PickScreen({
           <PackWall
             // A new pack is a new wall: the choice made in the last one does not carry over.
             key={`${view.packNumber}.${view.pickNumber}`}
-            pack={sortPack(view.pack, sort)}
+            pack={sorted}
             need={need}
             scale={scale}
             busy={busy}
@@ -193,7 +215,13 @@ export function PickScreen({
         <InlineError message={error} />
       </section>
 
-      <PoolColumns pool={view.pool} />
+      {/* The pool is where a card from the pack is dropped to pick it. */}
+      <div
+        ref={poolRef}
+        className={cn("-m-1.5 rounded-xl p-1.5", armed && DROP_RING, over && DROP_OVER)}
+      >
+        <PoolColumns pool={view.pool} />
+      </div>
     </div>
   );
 }
@@ -201,10 +229,12 @@ export function PickScreen({
 /**
  * The pack's cards as a wall, the chosen ones ringed, and the Pick button and the hint under it.
  *
- * With `need` 1 a click chooses and a click on the chosen card picks it. With more, a click
- * toggles a card in or out of the choice — a click past `need` lets the oldest choice go — the
- * arrows only move the caret, and Enter picks once `need` are chosen (before then it is the
- * focused tile's own press, which toggles it).
+ * With `need` 1 a click chooses. With more, a click toggles a card in or out of the choice — a
+ * click past `need` lets the oldest choice go — the arrows only move the caret, and Enter picks
+ * once `need` are chosen (before then it is the focused tile's own press, which toggles it).
+ *
+ * Every tile is a drag source carrying the pick it would make (`carriedPick`); the pool,
+ * `PickScreen`'s, is where it is let go.
  */
 function PackWall({
   pack,
@@ -230,6 +260,32 @@ function PackWall({
     ids.flatMap((id) => pack.find((c) => c.instanceId === id) ?? []);
   const cards = cardsOf(chosen);
   const full = cards.length === need;
+  /** The choice as the drag source reads it — at the drag's start, not the tile's registration. */
+  const chosenNow = useRef(chosen);
+  useEffect(() => {
+    chosenNow.current = chosen;
+  });
+
+  useEffect(() => {
+    const stops = tiles.current.slice(0, pack.length).flatMap((element, index) =>
+      element === null
+        ? []
+        : [
+            dndDraggable({
+              element,
+              data: () => {
+                const id = pack[index]?.instanceId;
+                return pickDragData({
+                  ids: id === undefined ? [] : carriedPick(chosenNow.current, id, need),
+                });
+              },
+            }),
+          ],
+    );
+    return () => {
+      for (const stop of stops) stop();
+    };
+  }, [pack, need]);
 
   const confirm = (ids: readonly string[]) => {
     if (busy || ids.length !== need) return;
@@ -241,8 +297,7 @@ function PackWall({
     const id = pack[index]?.instanceId;
     if (id === undefined) return;
     if (need === 1) {
-      if (chosen[0] === id) confirm([id]);
-      else setChosen([id]);
+      setChosen([id]);
       return;
     }
     setChosen((cur) =>
@@ -341,8 +396,8 @@ function PackWall({
         )}
         <p className="m-0 text-xs text-dim">
           {need === 1
-            ? "Click a card to choose it and again to pick it · ← → ↑ ↓ move · Enter picks"
-            : `Click ${need} cards to choose them · ← → ↑ ↓ move · Enter picks once ${need} are chosen`}
+            ? "Drag a card onto your pool to pick it · Click to choose · ← → ↑ ↓ move · Enter picks"
+            : `Click ${need} cards to choose them, or drag the last onto your pool · ← → ↑ ↓ move · Enter picks once ${need} are chosen`}
         </p>
       </div>
     </div>

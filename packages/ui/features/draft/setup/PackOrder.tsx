@@ -4,7 +4,7 @@ import { SetGrid } from "@/features/draft/SetGrid";
 import { useBoosterSets } from "@/features/draft/sets";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
-import type { SetSummary } from "@/lib/ipc";
+import type { BoosterSetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -21,9 +21,9 @@ export function PackOrder({
   max,
   onChange,
 }: {
-  chosen: readonly SetSummary[];
+  chosen: readonly BoosterSetSummary[];
   max: number;
-  onChange: (next: SetSummary[]) => void;
+  onChange: (next: BoosterSetSummary[]) => void;
 }): JSX.Element {
   const last = chosen[chosen.length - 1];
   return (
@@ -90,7 +90,7 @@ export function PackOrder({
  * set as the next pack; once every pack is chosen the wall says so instead of adding.
  *
  * `suggested` names sets the draft is made for (a Commander draft's Commander Legends sets): those
- * the corpus has go first and are marked, and every other set follows as it would.
+ * MTGJSON lists go first and are marked, and every other set follows as it would.
  */
 export function AddPackWall({
   chosen,
@@ -98,12 +98,12 @@ export function AddPackWall({
   onChange,
   suggested,
 }: {
-  chosen: readonly SetSummary[];
+  chosen: readonly BoosterSetSummary[];
   max: number;
-  onChange: (next: SetSummary[]) => void;
+  onChange: (next: BoosterSetSummary[]) => void;
   suggested?: readonly string[];
 }): JSX.Element {
-  const { sets: all, loading, error } = useBoosterSets();
+  const { sets: all, loading, error, retry } = useBoosterSets();
   const sets = suggested === undefined ? all : suggestedFirst(all, suggested);
   const full = chosen.length >= max;
   return (
@@ -115,11 +115,18 @@ export function AddPackWall({
         )}
       </div>
       {loading ? (
-        <p className="m-0 text-sm text-dim">Reading the sets…</p>
-      ) : error !== null ? (
-        <p role="alert" className="m-0 text-sm text-destructive">
-          {error}
+        <p role="status" className="m-0 text-sm text-dim">
+          Fetching the sets from MTGJSON…
         </p>
+      ) : error !== null ? (
+        <div className="flex flex-col items-start gap-3">
+          <p role="alert" className="m-0 text-sm text-destructive">
+            {error}
+          </p>
+          <button type="button" onClick={retry} className={QUIET_BUTTON}>
+            Retry
+          </button>
+        </div>
       ) : (
         <SetGrid
           sets={sets}

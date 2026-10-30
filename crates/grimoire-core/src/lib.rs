@@ -78,6 +78,9 @@ pub use commands::dispatch;
 /// [`platform::http`] client, and the two questions asked of it — which combos a pile of
 /// printings holds, and which combos name one card.
 pub mod combos;
+/// **The reader's own home-page widgets** — a name, a GraphQL query and a json-render spec each.
+/// User schema v68; device-local, never synced, and in the full export.
+pub mod custom_widgets;
 /// **The connections**: the pair `user.db` + `corpus.db`, the pragmas each file needs, and the
 /// two ways of asking for the write connection — a bounded ask that answers `BUSY`, and a
 /// background batch that stands aside for one.

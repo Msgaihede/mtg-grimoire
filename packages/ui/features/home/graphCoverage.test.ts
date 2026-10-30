@@ -93,6 +93,9 @@ const WRITES: Readonly<Record<string, string>> = {
   collectionFolderSetRules: "write",
   collectionSetFolder: "write",
   collectionSetFolderMany: "write",
+  customWidgetDelete: "write",
+  customWidgets:
+    "the reader's own widget definitions — the page's furniture, which draws data rather than being data a widget shows",
   deckTodoListUpdate: "write",
   deckUpdate: "write",
   markNewPrintingsSeen: "write",

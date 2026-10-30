@@ -1,80 +1,86 @@
 /**
- * The sets the Draft & Packs page offers, and one set's booster data.
+ * The sets the Draft & Packs page offers, and one set's booster data — both MTGJSON's.
  *
- * **Two reads, two lifetimes.** The set list is the corpus's (`list_sets`, the Search page's set
- * picker's own cache entry, `["sets"]`), narrowed here to sets that can have boosters. A set's
- * boosters are MTGJSON's, fetched by the host the first time a set is picked and cached on disk for
- * a week (spec §2) — so this side keeps an answer for the window's life and asks again only on
- * Refresh.
+ * **Never the corpus's set list.** Scryfall splits a release into sets of its own (a bonus sheet,
+ * the List, a commander's promos) that no booster is sold of, so a wall built from `list_sets`
+ * offers sets MTGJSON has no booster for. The wall is MTGJSON's set list (`packs_booster_sets`,
+ * the sets a booster pack is sold of), fetched by the host and cached on disk for a week; a set's
+ * boosters are its own file, fetched the first time it is picked and cached the same (spec §2) — so
+ * this side keeps both answers for the window's life and asks again on Retry or Refresh, or when
+ * the host fetched MTGJSON's files again beside a card sync (`packs:refreshed`,
+ * {@link usePacksRefreshed}).
  */
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ipc, ipcError, type BoosterSet, type SetSummary } from "@/lib/ipc";
-
-/**
- * Scryfall's set types a booster is sold in. Left out: `alchemy` (Arena only), `masterpiece`,
- * `promo`, `token`, `memorabilia`, the preconstructed decks (`duel_deck`, `premium_deck`,
- * `planechase`, `archenemy`, `from_the_vault`, `spellbook`, `box`, …). `commander` is kept because
- * some of its sets are sold in collector boosters, and `eternal` for the Eternal-legal sets that
- * are. Whether a set really has boosters is MTGJSON's to say when it is picked; a set this keeps
- * that has none is refused in the host's sentence.
- */
-export const BOOSTER_SET_TYPES: ReadonlySet<string> = new Set([
-  "core",
-  "expansion",
-  "masters",
-  "draft_innovation",
-  "funny",
-  "starter",
-  "commander",
-  "eternal",
-]);
+import { ipc, ipcError, type BoosterSet, type BoosterSetSummary } from "@/lib/ipc";
 
 /** A set may be offered this long before its release date — prerelease week, when boxes open. */
 const LEAD_DAYS = 7;
 
-/** `YYYY-MM-DD` of `now` plus `days`, in UTC — how `releasedAt` is written. */
+/** `YYYY-MM-DD` of `now` plus `days`, in UTC — how `releaseDate` is written. */
 function isoDay(now: Date, days: number): string {
   return new Date(now.getTime() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
 /**
- * The sets worth offering for boosters, newest first: a booster set type (or none stated — a set
- * `sets` does not list still has a corpus, and MTGJSON decides), printings in the corpus, and out
- * now or within {@link LEAD_DAYS}. Pure and exported for its suite.
+ * The sets worth offering for boosters, newest first: out now or within {@link LEAD_DAYS}
+ * (MTGJSON lists a set's packs while it is still being previewed). Pure and exported for its suite.
  */
-export function boosterSets(sets: readonly SetSummary[], now: Date = new Date()): SetSummary[] {
+export function boosterSets(
+  sets: readonly BoosterSetSummary[],
+  now: Date = new Date(),
+): BoosterSetSummary[] {
   const latest = isoDay(now, LEAD_DAYS);
   return sets
-    .filter(
-      (s) =>
-        (s.setType === null || BOOSTER_SET_TYPES.has(s.setType)) &&
-        s.cardCount > 0 &&
-        s.releasedAt !== null &&
-        s.releasedAt <= latest,
-    )
+    .filter((s) => s.releaseDate !== null && s.releaseDate <= latest)
     .sort(
       (a, b) =>
-        (b.releasedAt ?? "").localeCompare(a.releasedAt ?? "") || a.name.localeCompare(b.name),
+        (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "") || a.name.localeCompare(b.name),
     );
 }
 
 /**
- * {@link boosterSets} over the corpus's set list. `["sets"]` and its `staleTime` are
- * `SetCombobox`'s, so the two share one read: kept for good once it has answered with rows, asked
- * again while it is empty (the first launch's sync may still be writing `sets`).
+ * Every MTGJSON answer this window holds (`["packs", …]`: the set list and each set's boosters)
+ * asked again once the host has fetched the files again beside a card sync. Mounted by the walls
+ * that hold one — an answer no page shows is only marked stale, and asked when one mounts.
  */
-export function useBoosterSets(): { sets: SetSummary[]; loading: boolean; error: string | null } {
+export function usePacksRefreshed(): void {
+  const client = useQueryClient();
+  useEffect(
+    () => ipc.onPacksRefreshed(() => void client.invalidateQueries({ queryKey: ["packs"] })),
+    [client],
+  );
+}
+
+/** The cache key of MTGJSON's booster sets — what a story seeds. */
+export const BOOSTER_SETS_KEY = ["packs", "boosterSets"];
+
+/**
+ * {@link boosterSets} over MTGJSON's set list, for the window's life (`staleTime: Infinity` — the
+ * host caches the file for a week). **No automatic retry**, as {@link useBoosterSet}: a refusal is
+ * the host's one sentence, and `retry` is the page's Retry button.
+ */
+export function useBoosterSets(): {
+  sets: BoosterSetSummary[];
+  loading: boolean;
+  error: string | null;
+  retry: () => void;
+} {
+  usePacksRefreshed();
   const query = useQuery({
-    queryKey: ["sets"],
-    queryFn: () => ipc.listSets(),
-    staleTime: (q) => (q.state.data?.length ? Infinity : 0),
-    select: (rows: SetSummary[]) => boosterSets(rows),
+    queryKey: BOOSTER_SETS_KEY,
+    queryFn: () => ipc.packsBoosterSets(),
+    staleTime: Infinity,
+    retry: false,
+    select: (rows: BoosterSetSummary[]) => boosterSets(rows),
   });
+  const { refetch } = query;
+  const retry = useCallback(() => void refetch(), [refetch]);
   return {
     sets: query.data ?? [],
-    loading: query.isPending,
-    error: query.error ? ipcError(query.error) : null,
+    loading: query.data === undefined && query.isFetching,
+    error: query.error && !query.isFetching ? ipcError(query.error) : null,
+    retry,
   };
 }
 

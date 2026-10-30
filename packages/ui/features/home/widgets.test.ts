@@ -13,6 +13,8 @@ import {
   UNKNOWN_BOUNDS,
   widgetMeta,
   WIDGETS,
+  CATALOGUE_WIDGETS,
+  CUSTOM_KIND,
   type BreakdownDimension,
   type WidgetKind,
   type WidgetPick,
@@ -46,6 +48,7 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   toReview: true,
   wishlistSavings: true,
   comingSoon: true,
+  custom: true,
 };
 
 const EVERY_DIMENSION: Record<BreakdownDimension, true> = {
@@ -314,6 +317,8 @@ describe("WIDGETS", () => {
         toggles: {},
         chip: "window",
       },
+      // The reader's own: its settings are the spec's to draw, so the registry has none.
+      custom: { picks: {}, toggles: {}, chip: undefined },
     });
   });
 
@@ -381,8 +386,10 @@ describe("WIDGETS", () => {
       ).toBe(false);
     }
     expect(DEFAULT_LAYOUT.widgets).toHaveLength(8);
-    // The record's insertion order is the catalogue's, and these four close it.
-    expect(WIDGETS.slice(-4).map((widget) => widget.kind)).toEqual([...kinds]);
+    // The record's insertion order is the catalogue's, and these four close it — the custom kind
+    // after them is no entry of the catalogue's.
+    expect(CATALOGUE_WIDGETS.slice(-4).map((widget) => widget.kind)).toEqual([...kinds]);
+    expect(WIDGETS[WIDGETS.length - 1].kind).toBe(CUSTOM_KIND);
   });
 
   /**

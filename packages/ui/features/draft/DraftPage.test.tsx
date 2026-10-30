@@ -15,7 +15,8 @@ const ipcMock = vi.hoisted(() => ({
   draftResume: vi.fn(),
   draftEnd: vi.fn(),
   syncSupporterStatus: vi.fn(),
-  listSets: vi.fn(),
+  packsBoosterSets: vi.fn(),
+  onPacksRefreshed: vi.fn(),
   lobbyCreate: vi.fn(),
 }));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -90,7 +91,7 @@ beforeEach(() => {
   ipcMock.onDraftView.mockReturnValue(() => {});
   ipcMock.draftView.mockResolvedValue(null);
   ipcMock.syncSupporterStatus.mockResolvedValue(NOT_SUPPORTER);
-  ipcMock.listSets.mockResolvedValue([]);
+  ipcMock.packsBoosterSets.mockResolvedValue([]);
   openDraftDeck.mockReset();
 });
 

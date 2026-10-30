@@ -278,7 +278,7 @@ mod tests {
     /// column's `CHECK` refuses text that is not JSON on the climbed file.
     #[test]
     fn v67_gives_every_existing_wish_an_empty_tag_list() {
-        use crate::schema::fixtures::UNDO_V67;
+        use crate::schema::fixtures::{UNDO_V67, UNDO_V68};
         let sql = |conn: &Connection| -> String {
             conn.query_row(
                 "SELECT sql FROM main.sqlite_master WHERE name = 'wishlist_entries'",
@@ -293,8 +293,10 @@ mod tests {
 
         let conn = Connection::open_in_memory().unwrap();
         crate::schema::create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V67} PRAGMA main.user_version = 66;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V68} {UNDO_V67} PRAGMA main.user_version = 66;"
+        ))
+        .unwrap();
         assert_eq!(
             sql(&conn),
             sql(&head).replacen(column, "", 1),
@@ -312,7 +314,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 67);
+        assert_eq!(version, 68);
         assert_eq!(sql(&conn), sql(&head), "climbed back to head's text");
         let rows: Vec<(String, i64, Option<String>)> = {
             let mut stmt = conn

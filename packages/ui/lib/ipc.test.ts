@@ -110,6 +110,8 @@ import playtestLobbyRs from "../../../apps/desktop/src-tauri/src/playtest/lobby.
 import startupRs from "../../../apps/desktop/src-tauri/src/startup.rs?raw";
 import startviewRsCore from "../../../crates/grimoire-core/src/startview.rs?raw";
 import startviewRsDesktop from "../../../apps/desktop/src-tauri/src/startview/mod.rs?raw";
+import customWidgetsRsCore from "../../../crates/grimoire-core/src/custom_widgets.rs?raw";
+import customWidgetsRsDesktop from "../../../apps/desktop/src-tauri/src/custom_widgets/mod.rs?raw";
 import stickyNotesRsCore from "../../../crates/grimoire-core/src/sticky_notes.rs?raw";
 import stickyNotesRsDesktop from "../../../apps/desktop/src-tauri/src/sticky_notes/mod.rs?raw";
 import syncClientRs from "../../../crates/grimoire-core/src/sync_engine/client.rs?raw";
@@ -236,6 +238,7 @@ const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
 const searchwidthRs = searchwidthRsCore + "\n" + searchwidthRsDesktop;
 const startviewRs = startviewRsCore + "\n" + startviewRsDesktop;
 const stickyNotesRs = stickyNotesRsCore + "\n" + stickyNotesRsDesktop;
+const customWidgetsRs = customWidgetsRsCore + "\n" + customWidgetsRsDesktop;
 const syncCommandsRs = syncCommandsRsCore + "\n" + syncCommandsRsDesktop;
 const tradeRs = tradeRsCore + "\n" + tradeRsDesktop;
 const upcomingSetsRs = upcomingSetsRsCore + "\n" + upcomingSetsRsDesktop;
@@ -4005,6 +4008,58 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **The custom widgets' four** (`custom_widgets.rs`) — `sticky_notes`' shape: a read that takes
+   * no arguments, and an update whose patch is spread, so the six optional columns are asserted
+   * against the crate by name.
+   */
+  it("sends every custom-widget command under the name its command declares", async () => {
+    expect(customWidgetsRs.length, "custom_widgets.rs was not read").toBeGreaterThan(1_000);
+    const declares = (command: string, param: string) =>
+      expect(customWidgetsRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    invoke.mockResolvedValue([]);
+    expect(await ipc.customWidgets()).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("custom_widgets");
+    expect(customWidgetsRs).toContain("fn custom_widgets(");
+
+    const spec = { root: "a", elements: { a: { type: "Divider", props: {}, children: [] } } };
+    invoke.mockResolvedValue({ id: 1 });
+    await ipc.customWidgetCreate("Burn", "", "{ decks { name } }", spec, 4, 3);
+    expect(invoke).toHaveBeenCalledWith("custom_widget_create", {
+      name: "Burn",
+      description: "",
+      query: "{ decks { name } }",
+      spec,
+      w: 4,
+      h: 3,
+    });
+
+    await ipc.customWidgetUpdate(1, { name: "Renamed" });
+    expect(invoke).toHaveBeenLastCalledWith("custom_widget_update", { id: 1, name: "Renamed" });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.customWidgetDelete(1);
+    expect(invoke).toHaveBeenLastCalledWith("custom_widget_delete", { id: 1 });
+
+    for (const command of ["custom_widget_create", "custom_widget_update", "custom_widget_delete"]) {
+      const sent = payloadKeys(ipcSource, command).map(snake);
+      const declared = commandParams(customWidgetsRs, command);
+      expect(sent, `nothing parsed out of ipc.ts for \`${command}\``).not.toHaveLength(0);
+      expect(declared, `\`${command}\` is not declared \`pub async fn\``).not.toHaveLength(0);
+      for (const key of sent) {
+        expect(declared, `\`${command}\` is sent \`${key}\` and does not declare it`).toContain(
+          key,
+        );
+      }
+    }
+    for (const param of ["id", "name", "description", "query", "spec", "w", "h"]) {
+      declares("custom_widget_update", param);
+    }
+  });
+
+  /**
    * **The entry tags' three** (user schema v67, issue #1398) — a stack's free-text tags on the
    * collection and the wishlist, and the one read across both tables.
    *
@@ -7281,6 +7336,8 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       "TS-only: `combos_for_card` takes six flat parameters, and this object is what the wrapper spreads",
     StickyNotePatch:
       "TS-only: `sticky_note_update` takes `title`, `body`, `color` and `pinned` as four parameters",
+    CustomWidgetPatch:
+      "TS-only: `custom_widget_update` takes `name`, `description`, `query`, `spec`, `w` and `h` as six parameters",
     SyncLiveEvent: 'Rust side is `json!({ "state": state })` in `sync_engine/live.rs`\'s `emit`',
     ReconciledEvent:
       "Rust side is a `json!` of three of `ReconcileStats`' four counts, in `sync.rs` — `skipped` stays home",
