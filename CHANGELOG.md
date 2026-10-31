@@ -30,6 +30,68 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.64.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.63.0...v0.64.0) (2026-10-31)
+
+
+### Features
+
+* cards and Scryfall tags in the read graph; whole-graph checks ([5890d81](https://github.com/Msgaihede/mtg-grimoire/commit/5890d8184f4c77fc84413985b353249533a82d5f))
+* collection, wishlist and entry-tag fields in the read graph (WIP) ([08a4a99](https://github.com/Msgaihede/mtg-grimoire/commit/08a4a99901a3eadfefb362c651ab5f0347675c93))
+* complete the catalogue — actions, host hooks, prompt rules, contract ([1e539e4](https://github.com/Msgaihede/mtg-grimoire/commit/1e539e4bea97dfab01217789141a2850d274a23f))
+* custom home widgets — stored definitions, the custom kind and the Custom widgets dialog ([32dd3cb](https://github.com/Msgaihede/mtg-grimoire/commit/32dd3cbee26828a3f0d94a0ec8439384e3159e0b))
+* custom home widgets — the page side ([84ac9c3](https://github.com/Msgaihede/mtg-grimoire/commit/84ac9c3c6b324253c8a7dd109d5a3170752e6a02))
+* custom home widgets — the stored table and the MCP tools ([88efee1](https://github.com/Msgaihede/mtg-grimoire/commit/88efee1a5255ce78f0afe5d65a151f8f26c80ba5))
+* custom widgets' settings fill their query's variables ([d6a38e7](https://github.com/Msgaihede/mtg-grimoire/commit/d6a38e7a97add8fc8a3b2d880ce240c3732a0e6e))
+* custom widgets' settings fill their query's variables ([22fd9c2](https://github.com/Msgaihede/mtg-grimoire/commit/22fd9c2196c3dc58cd3e9c0c51235d2b43a0aeac))
+* custom widgets' settings in the card's settings popover ([44f3868](https://github.com/Msgaihede/mtg-grimoire/commit/44f386837e5f40ab5d72dc166406076633654e77))
+* custom widgets' settings in the card's settings popover ([9560b01](https://github.com/Msgaihede/mtg-grimoire/commit/9560b01fb846b6040fa852efed2c3204c76a4d75))
+* deck fields in the read graph (WIP) ([c527e08](https://github.com/Msgaihede/mtg-grimoire/commit/c527e0834ac58bbd7d57e7fa6faf248419249358))
+* **draft:** pick a card by dragging it onto the pool ([e723cf3](https://github.com/Msgaihede/mtg-grimoire/commit/e723cf3867f52f7903ee262d6bbe72de58ecdcfb))
+* **draft:** pick a card by dragging it onto the pool ([6bfb455](https://github.com/Msgaihede/mtg-grimoire/commit/6bfb45549d74da2ff576392080a264d1788c58db)), closes [#1434](https://github.com/Msgaihede/mtg-grimoire/issues/1434)
+* **draft:** sort the pick screen's pack by rarity by default ([cef2e8a](https://github.com/Msgaihede/mtg-grimoire/commit/cef2e8af5684df745a3aafef16661b0c0a12a4e1))
+* **draft:** sort the pick screen's pack by rarity by default ([691294d](https://github.com/Msgaihede/mtg-grimoire/commit/691294d2de578cb1206abf396df5bd608dc3d1bf)), closes [#1432](https://github.com/Msgaihede/mtg-grimoire/issues/1432)
+* drive the Draft & Packs set walls from MTGJSON, refreshed with the card sync ([0c5c33a](https://github.com/Msgaihede/mtg-grimoire/commit/0c5c33a6101479ac3c28ae9a1891b5ecad907b4c))
+* drive the Draft & Packs set walls from MTGJSON, refreshed with the card sync ([0025a8f](https://github.com/Msgaihede/mtg-grimoire/commit/0025a8f44cd58cd2750915d2c08a7e90da046d25))
+* **graph:** a read-only GraphQL graph over the reader's data, in Rust, with MCP tools ([db2e83f](https://github.com/Msgaihede/mtg-grimoire/commit/db2e83ff5b39cf352c0eb0f97a1df6d71bc0e56c))
+* **graph:** groundwork for the full port — filters, enums, roots in answers ([1b72b71](https://github.com/Msgaihede/mtg-grimoire/commit/1b72b7127b42565d58c8956c81ca4ac05bc43344))
+* **graph:** port cards and Scryfall tags ([b306828](https://github.com/Msgaihede/mtg-grimoire/commit/b306828f2743ec70603237e135d7c4bb96d503ef))
+* **graph:** port collection, wishlist and entry tags ([409fa96](https://github.com/Msgaihede/mtg-grimoire/commit/409fa9615950e0dac15ca96163c90a7c143408ac))
+* **graph:** port home, app, prefs and scanner ([c15db36](https://github.com/Msgaihede/mtg-grimoire/commit/c15db368df28a0524b7858db92b9629e5a5ac3e3))
+* **graph:** port the decks domain ([3a308e3](https://github.com/Msgaihede/mtg-grimoire/commit/3a308e36c8f0ce19afeeeb7f46ea45bc4f5c7232))
+* **graph:** the whole graph in Rust; the page drops GraphQL; MCP graph tools ([99a2b20](https://github.com/Msgaihede/mtg-grimoire/commit/99a2b2058c05e376c8f9f225ce60657f790999dc))
+* home-page fields in the read graph (WIP) ([d4ae6d1](https://github.com/Msgaihede/mtg-grimoire/commit/d4ae6d174500351fc704b7abe50c66de0c5a2695))
+* **integrations:** intents — the inbox, consumer tokens, the read overlay and the device's applier ([#1422](https://github.com/Msgaihede/mtg-grimoire/issues/1422)) ([d78a20e](https://github.com/Msgaihede/mtg-grimoire/commit/d78a20eda6b07aad2a0b334f20e2d737c1d3e17c))
+* **integrations:** local MCP server in the desktop ([0d28c13](https://github.com/Msgaihede/mtg-grimoire/commit/0d28c132c84664e976ffb021063aabbb401a20f0))
+* **integrations:** local MCP server in the desktop ([29ac78b](https://github.com/Msgaihede/mtg-grimoire/commit/29ac78bab407e7e5e3b422b11953b6a18185ef9c))
+* json-render component catalogue for generated widgets ([b2e266b](https://github.com/Msgaihede/mtg-grimoire/commit/b2e266b43027a7b76f3aedaccd67206bd979cce4))
+* json-render component catalogue for generated widgets ([1336fa5](https://github.com/Msgaihede/mtg-grimoire/commit/1336fa58d96d3d7b26434975894136dd152ad39f))
+* map the app's other widget-worthy components into the catalogue ([083723a](https://github.com/Msgaihede/mtg-grimoire/commit/083723abba8d4273e1b3eb8477ed4e98d38dc35d))
+* map the widgets' own settings controls into the catalogue ([12a8ea7](https://github.com/Msgaihede/mtg-grimoire/commit/12a8ea7edd7a34e8281f2bf6929dec87e4b32a47))
+* MCP tools for writing custom widgets ([a650925](https://github.com/Msgaihede/mtg-grimoire/commit/a65092509a2088f3bf0961181f38e5cc659a9633))
+* MCP tools for writing custom widgets ([b917005](https://github.com/Msgaihede/mtg-grimoire/commit/b917005ce18518df5c965719c5fbaf74c9be8ae0))
+* **mcp:** one-click Claude Desktop install as an MCP Bundle ([91c4ea8](https://github.com/Msgaihede/mtg-grimoire/commit/91c4ea8cfa5d641d002609c3bf27dcd4abbea713))
+* **mcp:** set-up for more AI clients, and a one-click Claude Desktop install ([90b1ccf](https://github.com/Msgaihede/mtg-grimoire/commit/90b1ccfe681e367e1a0a1fe802802cbda97e8111))
+* **mcp:** ship skills as MCP prompts and retire the collection writes ([d96ebde](https://github.com/Msgaihede/mtg-grimoire/commit/d96ebde1c0551bb77f373d0e4eab5fb92d56b375))
+* **mcp:** ship skills as MCP prompts and retire the collection writes ([fda1c03](https://github.com/Msgaihede/mtg-grimoire/commit/fda1c03f8ff62aafcee68844ad19e0c8e6489dec))
+* read graph in Rust — grimoire-graph spike, desktop only ([8b9413b](https://github.com/Msgaihede/mtg-grimoire/commit/8b9413b2724d21c97e379ca83fd208faa6d726a0))
+* read-only GraphQL core over the ipc mirror (WIP) ([a8da83d](https://github.com/Msgaihede/mtg-grimoire/commit/a8da83dd382fb7f0738f291ef665d409ee2bda23))
+* **settings:** MCP setup for Codex, Gemini, Antigravity and ChatGPT ([edf015d](https://github.com/Msgaihede/mtg-grimoire/commit/edf015daba95562680ae01aaeb586415ad8b14c2))
+* show device sync's catch-up on the mana line and status line ([d99e9cd](https://github.com/Msgaihede/mtg-grimoire/commit/d99e9cddfe1edd6ce817f1670d001e978ec31b61))
+* show device sync's catch-up on the mana line and status line ([3b4927a](https://github.com/Msgaihede/mtg-grimoire/commit/3b4927adeed18a069cce6261000887831c853105)), closes [#1428](https://github.com/Msgaihede/mtg-grimoire/issues/1428)
+* **trade:** trade online with another reader over a lobby code ([84c0a5f](https://github.com/Msgaihede/mtg-grimoire/commit/84c0a5f0e34a549bee8d97bb0f2ff769a5a968a0))
+* **trade:** trade online with another reader over a lobby code ([b2b343e](https://github.com/Msgaihede/mtg-grimoire/commit/b2b343eadaf9c800626622c71586085153291b16))
+
+
+### Bug Fixes
+
+* **draft:** ctrl+wheel zooms the draft's cards like every other wall ([d832819](https://github.com/Msgaihede/mtg-grimoire/commit/d8328199023066d7bd1f2af5234e7bb8ee07c94e))
+* **draft:** ctrl+wheel zooms the draft's cards like every other wall ([4b7b7da](https://github.com/Msgaihede/mtg-grimoire/commit/4b7b7da421a025c90f4587d1ed884754e821d359)), closes [#1433](https://github.com/Msgaihede/mtg-grimoire/issues/1433)
+* keep Prettier off the generated GraphQL schema ([06dd3d3](https://github.com/Msgaihede/mtg-grimoire/commit/06dd3d3f9813127fa56c344cbcf492da8297b1e4))
+* offer a hand card's cycling in playtesting ([acb46aa](https://github.com/Msgaihede/mtg-grimoire/commit/acb46aa8ecfed8bbd95e8b2611b687397743c99f))
+* offer a hand card's cycling in playtesting ([fb8156e](https://github.com/Msgaihede/mtg-grimoire/commit/fb8156ef0798df8807a45afc421e96371e198976)), closes [#1431](https://github.com/Msgaihede/mtg-grimoire/issues/1431)
+* run zod jitless so the catalogue never probes for eval ([81a348a](https://github.com/Msgaihede/mtg-grimoire/commit/81a348ad86bf5e588c44ede826cc44d159dfbf73))
+* **settings:** offer only MCP clients that can reach 127.0.0.1 ([79662e7](https://github.com/Msgaihede/mtg-grimoire/commit/79662e7087fb3f2e2947855b3c2ee69b4b32ce41))
+
 ## [0.63.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.62.0...v0.63.0) (2026-10-29)
 
 
