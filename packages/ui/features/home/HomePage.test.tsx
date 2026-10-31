@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
-import { ipc, type HomeLayout, type HomeWidget } from "@/lib/ipc";
+import { ipc, type CustomWidget, type HomeLayout, type HomeWidget } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import type { WidgetFit } from "./fit";
 import { CUSTOMIZE_HINT, HOME_CANVAS_ATTR, HOME_WIDGET_ATTR, HomePage } from "./HomePage";
@@ -463,6 +463,170 @@ describe("HomePage", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     // The caret goes back to the control that opened the catalogue.
     expect(screen.getByRole("button", { name: "Add widget" })).toHaveFocus();
+  });
+
+  /* ------------------------------------------------------------- custom widgets ------- */
+
+  /** A stored definition, for the Custom widgets dialog. */
+  function definition(over: Partial<CustomWidget> = {}): CustomWidget {
+    return {
+      id: 4,
+      name: "Shelf",
+      description: "Every deck.",
+      query: "{ decks { name } }",
+      spec: { root: "a", elements: { a: { type: "Divider", props: {}, children: [] } } },
+      w: 5,
+      h: 2,
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    };
+  }
+
+  /** The two reads a custom widget makes: its definitions, and the graph its preview asks. */
+  function spyOnCustom(widgets: CustomWidget[]) {
+    vi.spyOn(ipc, "graphqlQuery").mockResolvedValue({ data: {}, extensions: {} });
+    return vi.spyOn(ipc, "customWidgets").mockResolvedValue(widgets);
+  }
+
+  it("keeps Custom widgets off the header until the reader has one", async () => {
+    const user = userEvent.setup();
+    const read = spyOnCustom([]);
+    mount(layoutOf(A));
+    await customize(user);
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "Add widget" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Custom widgets" })).toBeNull();
+  });
+
+  it("adds a custom widget from its dialog at its definition's footprint", async () => {
+    const user = userEvent.setup();
+    spyOnCustom([definition()]);
+    mount(layoutOf(widget({ id: "summary", kind: "summary", x: 0, y: 0, w: 4, h: 2 })));
+
+    await customize(user);
+    // Beside Add widget, and only in the same tray.
+    await user.click(await screen.findByRole("button", { name: "Custom widgets" }));
+    const dialog = await screen.findByRole("dialog", { name: "Custom widgets" });
+    expect(within(dialog).getByRole("heading", { name: "Shelf" })).toBeInTheDocument();
+    expect(within(dialog).getByText("Not on the page")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Add Shelf" }));
+
+    await waitFor(() => {
+      expect(stored()?.widgets).toContainEqual(
+        expect.objectContaining({
+          kind: "custom",
+          x: 4,
+          y: 0,
+          w: 5,
+          h: 2,
+          config: { widgetId: 4, name: "Shelf" },
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("button", { name: "Custom widgets" })).toHaveFocus();
+    // The card is called what the definition is called.
+    expect(screen.getByRole("region", { name: "Shelf" })).toBeInTheDocument();
+  });
+
+  /** A placed copy of {@link definition}. */
+  const COPY = widget({
+    id: "custom",
+    kind: "custom",
+    x: 2,
+    y: 0,
+    w: 5,
+    h: 2,
+    config: { widgetId: 4, name: "Shelf" },
+  });
+
+  it("renames a custom widget's card, and a cleared name brings the widget's own back", async () => {
+    const user = userEvent.setup();
+    spyOnCustom([definition()]);
+    mount(layoutOf(A, COPY));
+    await customize(user);
+
+    const field = await screen.findByRole("textbox", { name: "Name for Shelf" });
+    await user.clear(field);
+    await user.type(field, "Burn decks{Enter}");
+    await waitFor(() =>
+      expect(storedWidget("custom")?.config).toEqual({
+        widgetId: 4,
+        name: "Shelf",
+        title: "Burn decks",
+      }),
+    );
+    expect(screen.getByRole("region", { name: "Burn decks" })).toBeInTheDocument();
+
+    const renamed = screen.getByRole("textbox", { name: "Name for Shelf" });
+    await user.clear(renamed);
+    await user.tab();
+    await waitFor(() => expect(storedWidget("custom")?.config).toEqual({ widgetId: 4, name: "Shelf" }));
+  });
+
+  it("draws a custom widget's settings face in its card's settings popover", async () => {
+    const user = userEvent.setup();
+    spyOnCustom([
+      definition({
+        spec: {
+          root: "a",
+          settingsRoot: "face",
+          elements: {
+            a: { type: "Divider", props: {}, children: [] },
+            face: {
+              type: "Checkbox",
+              props: { label: "Commander only", checked: { $bindState: "/settings/commander" } },
+              children: [],
+            },
+          },
+        },
+      }),
+    ]);
+    mount(layoutOf(A, COPY));
+    await customize(user);
+
+    await user.click(screen.getByRole("button", { name: "Settings for Shelf" }));
+    const check = await screen.findByRole("checkbox", { name: "Commander only" });
+    await user.click(check);
+    await waitFor(() =>
+      expect(storedWidget("custom")?.config).toEqual({
+        widgetId: 4,
+        name: "Shelf",
+        settings: { commander: true },
+      }),
+    );
+  });
+
+  it("deletes a custom widget and the copies of it on the page", async () => {
+    const user = userEvent.setup();
+    spyOnCustom([definition()]);
+    const remove = vi.spyOn(ipc, "customWidgetDelete").mockResolvedValue(undefined);
+    const copy = widget({
+      id: "custom",
+      kind: "custom",
+      x: 2,
+      y: 0,
+      w: 5,
+      h: 2,
+      config: { widgetId: 4, name: "Shelf" },
+    });
+    mount(layoutOf(A, copy));
+
+    await customize(user);
+    await user.click(await screen.findByRole("button", { name: "Custom widgets" }));
+    const dialog = await screen.findByRole("dialog", { name: "Custom widgets" });
+    expect(within(dialog).getByText("On the page")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Delete Shelf" }));
+    // Asked once, in place, and it says the copy goes too.
+    expect(within(dialog).getByText(/It is also removed from the page/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(4));
+    await waitFor(() => expect(storedWidget("custom")).toBeUndefined());
+    expect(storedWidget("a")).toBeDefined();
   });
 
   /**

@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DraftCard, DraftView, WinstonView } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
+import { pickOption } from "@/test-dropdown";
+import { boxed, pointerDrag } from "@/test-drag";
 
 const ipcMock = vi.hoisted(() => ({
   draftPick: vi.fn(),
@@ -126,6 +128,20 @@ function setup(initial: DraftView, role: DraftRole = "solo", draft: number | nul
 
 const pack = () => screen.getByRole("list", { name: "Pack" });
 
+/** The box a card from the pack is let go over to pick it — the pool's drop target. */
+const poolTarget = () => screen.getByRole("region", { name: "Your pool" }).parentElement!;
+
+/**
+ * A card carried from the pack onto the pool, as a real pointer gesture. Both ends are boxed
+ * clear of each other: jsdom lays nothing out, and dnd-kit hit-tests by coordinate.
+ */
+async function dragToPool(name: string): Promise<void> {
+  const tile = within(pack()).getByRole("button", { name });
+  boxed(tile, 0, 100);
+  boxed(poolTarget(), 300, 200);
+  await act(() => pointerDrag(tile, poolTarget()));
+}
+
 describe("DraftSession", () => {
   it("draws the round, the pick and the pass", () => {
     setup(view({ packNumber: 1, pickNumber: 3 }));
@@ -137,18 +153,77 @@ describe("DraftSession", () => {
     expect(rounds[1]).toHaveAttribute("aria-current", "step");
   });
 
-  it("chooses with a click and picks with a second, through draft_pick", async () => {
+  it("picks a card dragged onto the pool, through draft_pick", async () => {
     const next = view({ pickNumber: 1, pack: [card("Opt")], pool: [card("Shock")] });
     ipcMock.draftPick.mockResolvedValue(next);
     setup(view());
-    const shock = within(pack()).getByRole("button", { name: "Shock" });
-    await userEvent.click(shock);
-    expect(shock).toHaveAttribute("aria-pressed", "true");
-    expect(ipcMock.draftPick).not.toHaveBeenCalled();
-    await userEvent.click(shock);
+    await dragToPool("Shock");
     expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
     expect(await screen.findByRole("heading", { name: "Pack 1 · Pick 2" })).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Mana value 1: 1 card" })).toBeInTheDocument();
+  });
+
+  it("chooses with a click and picks with the Pick button, never with a double-click", async () => {
+    ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+    setup(view());
+    const shock = within(pack()).getByRole("button", { name: "Shock" });
+    await userEvent.dblClick(shock);
+    expect(shock).toHaveAttribute("aria-pressed", "true");
+    expect(ipcMock.draftPick).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Pick Shock" }));
+    expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
+  });
+
+  it("takes no drop while a pick is on its way", async () => {
+    ipcMock.draftPick.mockReturnValue(new Promise(() => {}));
+    setup(view());
+    await dragToPool("Shock");
+    expect(ipcMock.draftPick).toHaveBeenCalledOnce();
+    await dragToPool("Opt");
+    expect(ipcMock.draftPick).toHaveBeenCalledOnce();
+  });
+
+  describe("the pack's order", () => {
+    const dealt = () =>
+      view({
+        pack: [
+          card("Shock"),
+          card("Opt", { rarity: "uncommon" }),
+          card("Duress", { rarity: "mythic" }),
+          card("Ponder", { rarity: "rare" }),
+          card("Spark", { rarity: "special" }),
+          card("Bolt"),
+        ],
+      });
+    const names = () =>
+      within(pack())
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label"));
+
+    it("lays the pack out by rarity by default, a rarity's cards as dealt (issue #1432)", () => {
+      setup(dealt());
+      expect(names()).toEqual(["Duress", "Ponder", "Opt", "Shock", "Bolt", "Spark"]);
+    });
+
+    it("lays it out as dealt on request, and keeps the choice through a new sort", async () => {
+      const user = userEvent.setup();
+      setup(dealt());
+      await user.click(within(pack()).getByRole("button", { name: "Opt" }));
+      await pickOption(user, "Sort", "As dealt");
+      expect(names()).toEqual(["Shock", "Opt", "Duress", "Ponder", "Spark", "Bolt"]);
+      expect(within(pack()).getByRole("button", { name: "Opt" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(screen.getByRole("button", { name: "Pick Opt" })).toBeInTheDocument();
+    });
+
+    it("picks the card dragged, wherever the sort has put it", async () => {
+      ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+      setup(dealt());
+      await dragToPool("Ponder");
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Ponder#0.0.0"]);
+    });
   });
 
   it("walks the pack with the arrows and picks with Enter", async () => {
@@ -185,7 +260,7 @@ describe("DraftSession", () => {
     ipcMock.lobbyPick.mockResolvedValue(undefined);
     setup(view({ mode: "pod" }), "guest", null);
     expect(screen.queryByRole("button", { name: "Pick for me" })).not.toBeInTheDocument();
-    await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
+    await dragToPool("Opt");
     expect(ipcMock.lobbyPick).toHaveBeenCalledExactlyOnceWith(["Opt#0.0.0"]);
     expect(await screen.findByText("Waiting for the table…")).toBeInTheDocument();
   });
@@ -292,6 +367,20 @@ describe("DraftSession", () => {
       expect(ipcMock.draftPick).not.toHaveBeenCalled();
       await userEvent.keyboard("{Enter}");
       expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0", "Opt#0.0.0"]);
+    });
+
+    it("picks the chosen card with the one dragged onto the pool", async () => {
+      ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+      setup(three());
+      // Dragged alone, a card is not a whole pick: the pool refuses it.
+      await dragToPool("Duress");
+      expect(ipcMock.draftPick).not.toHaveBeenCalled();
+      await userEvent.click(within(pack()).getByRole("button", { name: "Shock" }));
+      await dragToPool("Duress");
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, [
+        "Shock#0.0.0",
+        "Duress#0.0.0",
+      ]);
     });
 
     it("sends a guest's two cards to the host", async () => {

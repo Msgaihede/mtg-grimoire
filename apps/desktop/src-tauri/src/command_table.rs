@@ -226,6 +226,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "MTGJSON booster data feeds only the desktop's Draft & Packs page",
     ),
     (
+        "packs_booster_sets",
+        "MTGJSON booster data feeds only the desktop's Draft & Packs page",
+    ),
+    (
         "graphql_query",
         "The read graph (crates/grimoire-graph) is linked by the desktop alone — the owner's decision, 2026-10-29",
     ),

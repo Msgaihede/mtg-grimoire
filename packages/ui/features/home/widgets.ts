@@ -58,7 +58,8 @@ export type WidgetKind =
   | "deckCompletion"
   | "toReview"
   | "wishlistSavings"
-  | "comingSoon";
+  | "comingSoon"
+  | "custom";
 
 /**
  * Which column the two value widgets group their bars over.
@@ -750,6 +751,20 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     toggles: [],
     chip: "window",
   },
+  // **The reader's own** (`generated/CustomWidget.tsx`): one placed copy of a `custom_widgets`
+  // row, named by `config.widgetId`. Added from the Custom widgets dialog rather than the
+  // catalogue ({@link CATALOGUE_WIDGETS}), at the definition's own footprint. Its settings are
+  // the spec's to draw, so it has no rows here; the bounds are the table's `2..=12` by `2..=8`.
+  custom: {
+    label: "Custom widget",
+    description:
+      "One of your own widgets: a query over your data, drawn from the app's own parts.",
+    def: [4, 3],
+    min: [2, 2],
+    max: [12, 8],
+    picks: [],
+    toggles: [],
+  },
 };
 
 /**
@@ -763,6 +778,17 @@ export const WIDGETS: readonly WidgetMeta[] = Object.entries(WIDGET_META).map(([
   kind: kind as WidgetKind,
   ...meta,
 }));
+
+/** The kind a placed custom widget is stored as — see `generated/CustomWidget.tsx`. */
+export const CUSTOM_KIND = "custom" satisfies WidgetKind;
+
+/**
+ * The kinds the Add widget catalogue offers: every one but {@link CUSTOM_KIND}, whose copies come
+ * from the Custom widgets dialog — a custom widget is nothing until a definition names it.
+ */
+export const CATALOGUE_WIDGETS: readonly WidgetMeta[] = WIDGETS.filter(
+  (meta) => meta.kind !== CUSTOM_KIND,
+);
 
 /** The kinds this build knows, as a set, for {@link isWidgetKind}. */
 const KNOWN_KINDS = new Set<string>(Object.keys(WIDGET_META));

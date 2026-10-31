@@ -1,7 +1,13 @@
 import { useId, useState, type JSX } from "react";
 import { Play } from "lucide-react";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError, type DraftView, type PlaytestDifficulty, type SetSummary } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type BoosterSetSummary,
+  type DraftView,
+  type PlaytestDifficulty,
+} from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { MODE_TITLE } from "../pick/DraftSession";
@@ -42,10 +48,10 @@ const TABS: readonly { id: SetupMode; label: string }[] = [
 /** What the setup holds, for the window's life (`lib/viewMemory.ts`): a reader who drafts, builds,
  *  and comes back for another finds their packs and their cube list where they left them. */
 interface SetupHeld {
-  quick: SetSummary[];
-  sealed: SetSummary[];
-  commander: SetSummary[];
-  winston: SetSummary[];
+  quick: BoosterSetSummary[];
+  sealed: BoosterSetSummary[];
+  commander: BoosterSetSummary[];
+  winston: BoosterSetSummary[];
   /** A Commander draft's table: you and the bots, 3–8 seats. */
   commanderSeats: number;
   difficulty: PlaytestDifficulty;
@@ -118,7 +124,8 @@ export function SetupScreen({
   const packsFor = mode === "sealed" ? SEALED_PACKS : DRAFT_PACKS;
   const setMode: SetMode = mode === "cube" ? "quick" : mode;
   const chosen = held[setMode];
-  const setChosen = (next: SetSummary[]) => setHeld({ [setMode]: next } as Partial<SetupHeld>);
+  const setChosen = (next: BoosterSetSummary[]) =>
+    setHeld({ [setMode]: next } as Partial<SetupHeld>);
 
   const ready = mode === "cube" ? held.cube.list.trim() !== "" : chosen.length === packsFor;
 

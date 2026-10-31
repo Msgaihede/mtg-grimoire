@@ -2132,22 +2132,6 @@
         "properties": {},
         "additionalProperties": false
       }
-    },
-    "saveSettings": {
-      "description": "Keep the widget's settings: the state under `path` (`/settings`) is stored with the widget and is that path's state when it is drawn again. Bind settings inputs under that path and give the settings face a Save button pressing this.",
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "additionalProperties": false
-      }
     }
   },
   "functions": {

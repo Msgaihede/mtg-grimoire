@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SET } from "@/features/draft/booster/fixture";
 import { mulberry32 } from "@/features/draft/booster/rng";
-import type { BoosterCard, ImportResolveRow, SetSummary } from "@/lib/ipc";
+import type { BoosterCard, BoosterSetSummary, ImportResolveRow } from "@/lib/ipc";
 import {
   COMMANDER_SETS,
   cubeCards,
@@ -64,12 +64,10 @@ describe("the table", () => {
   });
 
   it("puts the sets a draft is made for first, when the corpus has them", () => {
-    const set = (code: string): SetSummary => ({
+    const set = (code: string): BoosterSetSummary => ({
       code,
       name: code,
-      setType: "expansion",
-      releasedAt: "2026-01-01",
-      cardCount: 1,
+      releaseDate: "2026-01-01",
     });
     const sets = [set("fdn"), set("clb"), set("dsk"), set("cmr")];
     expect(suggestedFirst(sets, COMMANDER_SETS).map((s) => s.code)).toEqual([

@@ -97,11 +97,13 @@ export function customTitle(widget: HomeWidget): string | null {
   return typeof title === "string" && title.trim().length > 0 ? title : null;
 }
 
-/** What the kind is called when nobody renamed it. A kind this build cannot draw says so. */
+/** What the kind is called when nobody renamed it. A kind this build cannot draw says so. A custom
+ *  widget is called what its definition was called when it was placed (`config.name`). */
 export function defaultTitle(widget: HomeWidget): string {
-  return isWidgetKind(widget.kind)
-    ? widgetMeta(widget.kind).label
-    : `Unknown widget (${widget.kind})`;
+  if (!isWidgetKind(widget.kind)) return `Unknown widget (${widget.kind})`;
+  const name = stored(widget).name;
+  if (widget.kind === "custom" && typeof name === "string" && name.trim().length > 0) return name;
+  return widgetMeta(widget.kind).label;
 }
 
 /** The card's title — the reader's name, or the kind's. It is also the card's accessible name. */

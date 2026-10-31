@@ -3,6 +3,7 @@
  * order the opened cards are laid out in. The components only draw these.
  */
 import type { BoosterCard, BoosterSet } from "@/lib/ipc";
+import { rarityRank } from "@/lib/rarity";
 import {
   openBooster,
   openSealed,
@@ -136,18 +137,6 @@ export function figuresOf(
 
 /** How the opened cards are laid out. */
 export type CardSort = "price" | "rarity" | "number";
-
-/** Mythic first; a rarity the four do not name (`special`, `bonus`) after common. */
-const RARITY_RANK = new Map([
-  ["mythic", 0],
-  ["rare", 1],
-  ["uncommon", 2],
-  ["common", 3],
-]);
-
-function rarityRank(rarity: string | null | undefined): number {
-  return (rarity == null ? undefined : RARITY_RANK.get(rarity)) ?? RARITY_RANK.size;
-}
 
 const NUMBER = new Intl.Collator("en", { numeric: true });
 

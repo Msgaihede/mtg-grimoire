@@ -5,6 +5,7 @@ import { parseDecklist } from "@/features/transfer/import/parse";
 import type {
   BoosterProduct,
   BoosterSet,
+  BoosterSetSummary,
   DraftSeatSetup,
   ImportResolveLine,
   ImportResolveRow,
@@ -12,7 +13,6 @@ import type {
   LobbyPeer,
   PlaytestDifficulty,
   PodFormat,
-  SetSummary,
 } from "@/lib/ipc";
 
 /**
@@ -70,12 +70,12 @@ export const COMMANDER_SETS: readonly string[] = ["cmr", "clb"];
 
 /**
  * `sets` with the ones `codes` names moved to the front, in `codes`' order, and the rest in theirs.
- * A code the list does not hold is passed over — an older corpus may lack it.
+ * A code the list does not hold is passed over — MTGJSON may not list it.
  */
 export function suggestedFirst(
-  sets: readonly SetSummary[],
+  sets: readonly BoosterSetSummary[],
   codes: readonly string[],
-): SetSummary[] {
+): BoosterSetSummary[] {
   const wanted = codes.map((c) => c.toLowerCase());
   const front = wanted.flatMap((code) => sets.filter((s) => s.code.toLowerCase() === code));
   return [...front, ...sets.filter((s) => !wanted.includes(s.code.toLowerCase()))];

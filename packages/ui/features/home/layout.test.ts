@@ -671,6 +671,27 @@ describe("addWidget", () => {
     expect(cellsOf(addWidget(doc(), "summary", 3).widgets)).toEqual([["summary", 0, 0, 3, 2]]);
   });
 
+  // A custom widget's copy: the definition's footprint and the config naming it.
+  it("places a widget at a footprint and with a config it is handed", () => {
+    const added = addWidget(doc(at("a", "summary", 0, 0, 2, 1)), "custom", 8, {
+      footprint: [5, 2],
+      config: { widgetId: 4, name: "Shelf" },
+    });
+    expect(added.widgets[1]).toEqual({
+      id: "custom",
+      kind: "custom",
+      x: 2,
+      y: 0,
+      w: 5,
+      h: 2,
+      config: { widgetId: 4, name: "Shelf" },
+    });
+    // Still held to the kind's bounds and the grid's width.
+    expect(cellsOf(addWidget(doc(), "custom", 3, { footprint: [12, 9] }).widgets)).toEqual([
+      ["custom", 0, 0, 3, 8],
+    ]);
+  });
+
   // A reader may pin two sets of decks in two `decks` widgets — the id identifies a widget, so a
   // second one of a kind is a layout to build rather than a case to refuse.
   it("mints an id that does not collide with one already placed", () => {

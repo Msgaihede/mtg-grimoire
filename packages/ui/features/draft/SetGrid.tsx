@@ -1,14 +1,14 @@
 import { useId, useState, type JSX } from "react";
 import { FILTER_FIELD, FILTER_FOCUS } from "@/components/FilterChips";
 import { FOCUS } from "@/lib/focus";
-import type { SetSummary } from "@/lib/ipc";
+import type { BoosterSetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
 import { PRESS } from "@/lib/motion";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
 /** Whether `set` answers the typed text: its name or its code, case aside. */
-export function setMatches(set: SetSummary, text: string): boolean {
+export function setMatches(set: BoosterSetSummary, text: string): boolean {
   const needle = text.trim().toLowerCase();
   if (needle === "") return true;
   return set.name.toLowerCase().includes(needle) || set.code.toLowerCase().includes(needle);
@@ -33,8 +33,8 @@ export function SetGrid({
   label = "Sets",
   className,
 }: {
-  sets: readonly SetSummary[];
-  onPick: (set: SetSummary) => void;
+  sets: readonly BoosterSetSummary[];
+  onPick: (set: BoosterSetSummary) => void;
   /** The filter text, held by the caller; absent, the grid holds its own. */
   filter?: string;
   onFilterChange?: (text: string) => void;
@@ -107,12 +107,12 @@ function SetTile({
   suggested,
   onPick,
 }: {
-  set: SetSummary;
+  set: BoosterSetSummary;
   picked: boolean;
   suggested: boolean;
   onPick: () => void;
 }): JSX.Element {
-  const year = set.releasedAt?.slice(0, 4);
+  const year = set.releaseDate?.slice(0, 4);
   return (
     <button
       type="button"

@@ -1,5 +1,6 @@
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import type { DraftCard, DraftView } from "@/lib/ipc";
+import { rarityRank } from "@/lib/rarity";
 
 /**
  * A drafted pool as the pick screen lays it out: one column per mana value (0 … 6+), the lands
@@ -28,6 +29,17 @@ export function poolColumns(pool: readonly DraftCard[]): Record<PoolColumn, Draf
     DraftCard[]
   >;
   for (const card of pool) out[columnOf(card)].push(card);
+  return out;
+}
+
+/** How the pack's cards are laid out: rarity high to low (the default, issue #1432), or as dealt. */
+export type PackSort = "rarity" | "dealt";
+
+/** The pack in `by` order. A rarity's cards keep the order they were dealt in, so the wall does
+ *  not shuffle between renders. */
+export function sortPack(pack: readonly DraftCard[], by: PackSort): DraftCard[] {
+  const out = [...pack];
+  if (by === "rarity") out.sort((a, b) => rarityRank(a.rarity) - rarityRank(b.rarity));
   return out;
 }
 

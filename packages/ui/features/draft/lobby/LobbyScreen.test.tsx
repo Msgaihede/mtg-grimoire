@@ -3,14 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SET } from "@/features/draft/booster/fixture";
-import type { DraftSetup, DraftView, LobbyState, SetSummary } from "@/lib/ipc";
+import type { BoosterSetSummary, DraftSetup, DraftView, LobbyState } from "@/lib/ipc";
 
 const ipcMock = vi.hoisted(() => ({
   lobbyState: vi.fn(),
   onLobbyState: vi.fn(),
   onDraftView: vi.fn(),
   syncSupporterStatus: vi.fn(),
-  listSets: vi.fn(),
+  packsBoosterSets: vi.fn(),
+  onPacksRefreshed: vi.fn(),
   packsBoosterSet: vi.fn(),
   lobbyStart: vi.fn(),
   lobbyKick: vi.fn(),
@@ -23,12 +24,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { LobbyScreen } from "./LobbyScreen";
 
-const TEST_SET: SetSummary = {
+const TEST_SET: BoosterSetSummary = {
   code: "tst",
   name: "Test Set",
-  setType: "expansion",
-  releasedAt: "2026-01-01",
-  cardCount: 12,
+  releaseDate: "2026-01-01",
 };
 
 const HOSTING: LobbyState = {
@@ -55,7 +54,7 @@ beforeEach(() => {
   ipcMock.lobbyState.mockResolvedValue(HOSTING);
   ipcMock.onLobbyState.mockReturnValue(() => {});
   ipcMock.onDraftView.mockReturnValue(() => {});
-  ipcMock.listSets.mockResolvedValue([TEST_SET]);
+  ipcMock.packsBoosterSets.mockResolvedValue([TEST_SET]);
   ipcMock.packsBoosterSet.mockResolvedValue(SET);
   ipcMock.lobbyStart.mockResolvedValue(VIEW);
 });

@@ -84,11 +84,13 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import { Pencil, Plus, RotateCcw } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Pencil, Plus, RotateCcw, Shapes } from "lucide-react";
 import { PageBar } from "@/components/PageBar";
 import { FOCUS } from "@/lib/focus";
-import type { HomeLayout, HomeWidget } from "@/lib/ipc";
+import { ipc, ipcError, type CustomWidget, type HomeLayout, type HomeWidget } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import { notify } from "@/lib/notifications";
 import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
@@ -115,12 +117,15 @@ import {
   sameGeometry,
   type CellRect,
 } from "./layout";
+import { CustomWidgetsDialog, placedCopies } from "./CustomWidgetsDialog";
+import { CustomWidget as CustomWidgetBody, CustomWidgetSettings } from "./generated/CustomWidget";
+import { CUSTOM_WIDGETS_KEY, useCustomWidgets } from "./generated/useCustomWidgets";
 import { useHomeLayout } from "./useHomeLayout";
 import { WidgetCard } from "./WidgetCard";
 import { WidgetCatalogue } from "./WidgetCatalogue";
 import type { ConfigPatch, WidgetBodyProps } from "./widgetProps";
 import { widgetDensity } from "./widgetSettings";
-import type { WidgetKind } from "./widgets";
+import { CUSTOM_KIND, type WidgetKind } from "./widgets";
 import { ActivityWidget } from "./widgets/ActivityWidget";
 import { ChangeNotesWidget } from "./widgets/ChangeNotesWidget";
 import { CollectionValueWidget } from "./widgets/CollectionValueWidget";
@@ -265,6 +270,9 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <WishlistSavingsWidget {...props} />;
     case "comingSoon":
       return <ComingSoonWidget {...props} />;
+    // The reader's own, drawn from the definition `config.widgetId` names (`generated/`).
+    case "custom":
+      return <CustomWidgetBody {...props} />;
     default:
       return <UnknownWidgetBody />;
   }
@@ -294,6 +302,9 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
     // The folders and cards behind `Chosen` (issue #906).
     case "priceMovers":
       return <PriceMoversWidgetSettings widget={widget} onConfig={onConfig} />;
+    // The spec's own settings face (`settingsRoot`), kept in the copy's `config.settings`.
+    case "custom":
+      return <CustomWidgetSettings widget={widget} onConfig={onConfig} />;
     default:
       return undefined;
   }
@@ -352,6 +363,9 @@ export function HomePage(): ReactElement {
   // Session state, all of it. A reader who left Customize on does not want to find it on tomorrow.
   const [editing, setEditing] = useState(false);
   const [catalogueOpen, setCatalogueOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
+  const custom = useCustomWidgets();
+  const client = useQueryClient();
   const [gesture, setGesture] = useState<Gesture | null>(null);
 
   /**
@@ -621,6 +635,7 @@ export function HomePage(): ReactElement {
   /* ------------------------------------------------------------------ the catalogue ------- */
 
   const addButton = useRef<HTMLButtonElement>(null);
+  const customButton = useRef<HTMLButtonElement>(null);
   const customizeButton = useRef<HTMLButtonElement>(null);
   /** Set by the two closes that owe the caret back (Escape, ✕, an Add) and read once the dialog has
    *  gone — `Dialog`'s rule: an outside click does not move focus, because the reader is already
@@ -640,6 +655,59 @@ export function HomePage(): ReactElement {
     returnCaret.current = true;
     setCatalogueOpen(false);
   }, []);
+
+  /* ------------------------------------------------------------- custom widgets ------- */
+
+  /** The Custom widgets dialog owes the caret back as the catalogue does, to its own opener. */
+  const returnCustomCaret = useRef(false);
+
+  useEffect(() => {
+    if (customOpen || !returnCustomCaret.current) return;
+    returnCustomCaret.current = false;
+    (customButton.current ?? addButton.current ?? customizeButton.current)?.focus();
+  }, [customOpen]);
+
+  const dismissCustom = useCallback(() => {
+    returnCustomCaret.current = true;
+    setCustomOpen(false);
+  }, []);
+
+  /** A custom widget's Add: a `custom` copy at the definition's footprint, its config naming it. */
+  const addCustom = useCallback(
+    (widget: CustomWidget) => {
+      update(
+        addWidget(arranged, CUSTOM_KIND, cols, {
+          footprint: [widget.w, widget.h],
+          config: { widgetId: widget.id, name: widget.name },
+        }),
+      );
+      returnCustomCaret.current = true;
+      setCustomOpen(false);
+    },
+    [arranged, cols, update],
+  );
+
+  /**
+   * A custom widget's Delete: the definition, then its placed copies — so no card is left saying
+   * its widget is gone. Not a collection edit, so no toast for success (`packages/ui/CLAUDE.md`'s
+   * rule is about cards); a refusal is one, because the dialog has nowhere else to say it.
+   */
+  const deleteCustom = useCallback(
+    async (widget: CustomWidget) => {
+      try {
+        await ipc.customWidgetDelete(widget.id);
+      } catch (e) {
+        notify.error(`Couldn't delete “${widget.name}”`, { body: ipcError(e) });
+        return;
+      }
+      const copies = new Set(placedCopies(arranged, widget.id).map((copy) => copy.id));
+      if (copies.size > 0) {
+        update({ ...arranged, widgets: arranged.widgets.filter((entry) => !copies.has(entry.id)) });
+      }
+      await client.invalidateQueries({ queryKey: CUSTOM_WIDGETS_KEY });
+    },
+    [arranged, client, update],
+  );
 
   /** An Add press: the kind at its own footprint, at the first free cell of the grid on screen. */
   const add = useCallback(
@@ -713,6 +781,19 @@ export function HomePage(): ReactElement {
                   <Plus className={HEADER_ICON} aria-hidden="true" />
                   Add widget
                 </button>
+                {/* Only while there is one: an empty dialog behind a button is a promise kept by
+                    nobody. The reader's agent makes them (the MCP server's `widget_create`). */}
+                {custom.widgets.length > 0 && (
+                  <button
+                    ref={customButton}
+                    type="button"
+                    onClick={() => setCustomOpen(true)}
+                    className={cn(HEADER_BUTTON, HEADER_RESTING)}
+                  >
+                    <Shapes className={HEADER_ICON} aria-hidden="true" />
+                    Custom widgets
+                  </button>
+                )}
                 <button type="button" onClick={reset} className={cn(HEADER_BUTTON, HEADER_RESTING)}>
                   <RotateCcw className={HEADER_ICON} aria-hidden="true" />
                   Reset
@@ -875,6 +956,17 @@ export function HomePage(): ReactElement {
         onAdd={add}
         onDismiss={dismissCatalogue}
         onClose={() => setCatalogueOpen(false)}
+        renderBody={renderBody}
+      />
+
+      <CustomWidgetsDialog
+        open={customOpen}
+        widgets={custom.widgets}
+        layout={layout}
+        onAdd={addCustom}
+        onDelete={(widget) => void deleteCustom(widget)}
+        onDismiss={dismissCustom}
+        onClose={() => setCustomOpen(false)}
         renderBody={renderBody}
       />
     </section>

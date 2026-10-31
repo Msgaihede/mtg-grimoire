@@ -115,10 +115,15 @@ card search aside.
 
   No action writes the reader's data; adding one is the owner's decision.
 
-- **Two actions are the host's**: `refresh` (ask the widget's document again) and `saveSettings`
-  (keep the state under a path — `/settings` — in the widget's stored config). `SpecView` answers
-  them through its `host` prop; drawn without one (a story, a preview) they do nothing. The custom
-  widget kind will be that host.
+- **One action is the host's**: `refresh`, ask the widget's document again. `SpecView` answers it
+  through its `host` prop; drawn without one (a story, a preview) it does nothing. The custom
+  widget's body is that host.
+- **Settings are a second root, drawn in the card's settings popover.** A spec may carry a
+  top-level `settingsRoot` beside `root` (json-render's own spec type has no such key, so
+  `checkSpec` and `widget_create` check it: an element of the spec, never `root` itself). That
+  subtree is the settings face; its inputs bind `/settings/...` and every change is kept as it is
+  made, so there is no Save button and no save action (there was a `saveSettings` until
+  2026-10-30).
 - **A `$item` in an action's params arrives as a state path.** json-render resolves it to the
   item's path (`/decks/1/id`), the shape its own `setState` needs, and its prompt tells a model so.
   The actions read such a param back from the spec's state (`valueOf` in `registry.tsx`); no value
@@ -129,13 +134,73 @@ card search aside.
   leaves out. Every element carries `children`, `[]` for a leaf — `validate` requires it.
 - **Content security**: json-render renders React elements only — no `eval`, no `innerHTML`, no
   injected styles — so a spec stays inside `script-src 'self'` and `style-src 'self'`. `Grid`'s
-  column count is an inline `style` attribute, which the policy allows.
+  column count is an inline `style` attribute, which the policy allows. **zod runs jitless**
+  (`zodConfig.ts`, imported first by `catalog.ts`): zod 4 probes for `new Function` on its first
+  parse, and the browser reports the refused probe as a `script-src eval` violation even though zod
+  catches it — which `pnpm web:scanner-smoke` fails the web app on. `csp.test.ts` holds it.
 
 ## Stories
 
 `Home/Generated/SpecView`: Decks (figures, a `repeat` of rows that open their deck, a `$template`
 footer), Rarity (bars, a switch hiding them), Filter (rows narrowed by a chip and a price range
-through `visible`), Settings (the widgets' settings controls, saved
-through `saveSettings`), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
+through `visible`), Settings (a settings face: every one of the widgets'
+settings controls), Cards (a wall of tiles over the fake's printings) and Gallery (one of every
 component). Each spec sits in a box a widget of its footprint covers, with
 that box's fit.
+
+## Stored custom widgets (Rust)
+
+A reader's own widget is stored as a **definition**: a name, a description, the GraphQL query (as
+written), the json-render spec and the footprint it is placed at. The table is `custom_widgets`
+(user schema v68, `crates/grimoire-core/src/custom_widgets.rs`); a placed one is a home layout
+entry of kind `custom` with `config: { widgetId, name, settings? }`, which `home.rs` stores like any
+other entry.
+
+- **Device-local, and in the full export** (the owner's decision): not on `SYNCED_TABLES`, no
+  `sync_uid`, no capture spec — but a user table, so `archive` exports and restores it with the
+  rest. The spec is JSON text under a `json_valid` CHECK.
+- **Four table commands**, each with a desktop wrapper (`apps/desktop/src-tauri/src/custom_widgets/`):
+  `custom_widgets` (every definition, by `name COLLATE NOCASE, id`; fallible),
+  `custom_widget_create(name, description, query, spec, w, h)`,
+  `custom_widget_update(id, name?, description?, query?, spec?, w?, h?)` (an absent field is left;
+  `updated_at` moves) and `custom_widget_delete(id)`. Both answer `CustomWidget`; an unknown id is
+  `That widget is not there any more.`
+- **The core checks the shape, never the vocabulary** — `home.rs`' rule. Refused in a sentence and
+  before the write: a name blank after trimming or over 80 characters, a description over 500, a
+  query blank or over 20 000 bytes, a spec that is not an object with a string `root` and an object
+  `elements` or is over 200 000 bytes serialized, a width outside 2–12 or a height outside 2–8.
+  Component names, props and the query's validity are not looked at.
+- **The desktop's MCP server** ([local-mcp-server.md](local-mcp-server.md)) adds `widget_list`
+  (id, name, description, footprint) and `widget_create`, which checks the query with the read
+  graph and the spec against `catalog.contract.json` — every element's type a component, its props
+  declared and the required ones present, its children real keys, its actions the catalogue's or
+  json-render's four built-ins — before it calls `custom_widget_create`. That is the contract
+  snapshot's first Rust reader.
+
+## Drawing a custom widget (the page)
+
+A placed copy is the `custom` kind's body, `generated/CustomWidget.tsx`; the dialog that places
+copies and the header button that opens it are [home-page.md](home-page.md) §18.
+
+- **The answer becomes the state in one module, `generated/widgetState.ts`.** The answer's `data`
+  is the state root, so a spec's paths are its query's field paths and nothing translates between
+  them. `/ui` is seeded from the spec's `state.ui` and never stored. `/settings` is seeded from the
+  spec's `state.settings`, with what the copy saved (`config.settings`) laid over it key by key, so
+  a setting a newer spec added keeps its default. `ui` and `settings` are the widget's whatever the
+  answer names; any other key the spec seeded is sample data, and the answer replaces it.
+- **A refreshed answer moves the data and nothing else.** `SpecView`'s `live` writes the answer's
+  top-level keys into the store each time it changes, so a reader's filter survives the collection
+  changing under it. A changed definition (`updatedAt`) remounts, from its own seeds.
+- **The body is the host** for `refresh` (`useGraphQL`'s `refetch`).
+- **The settings face is the card's settings popover's** (`CustomWidgetSettings`, drawn after the
+  size and density rows as any kind's own settings are): the spec's `settingsRoot` subtree over the
+  same answer (one cached document between the two) and the same `/settings`. Each change is a
+  patch of the copy's `config.settings` — so two copies of one definition can be set differently —
+  and comes back to the card through `live`, which carries `/settings` beside the answer, so the
+  card redraws at once. The store's echo of a kept change is compared and writes nothing.
+- **Checked before it is drawn**: the spec through `catalog.validate` (`checkSpec`, the first issue
+  in words), the query only by asking the graph. It says so instead of drawing when the definition
+  is gone, the spec is refused, the document is refused or the graph is not on this host; a partial
+  answer is drawn with one dim line under it.
+- **The fake answers what a world seeds** (`FakeDb.graphAnswers`, keyed by the trimmed document):
+  `starter` seeds two definitions and their answers, so the stories draw a custom widget end to end.

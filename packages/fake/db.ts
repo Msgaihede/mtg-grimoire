@@ -282,6 +282,7 @@ import type {
   ShelfFoldPage,
   ShelfFolds,
   StickyNote,
+  CustomWidget,
   SupporterStatus,
   SwapResult,
   SyncOutcome,
@@ -2370,6 +2371,20 @@ export interface FakeDb {
    */
   stickyNotes: StickyNote[];
   /**
+   * `custom_widgets` — the reader's own home widgets, a GraphQL document and a json-render spec
+   * each (`custom_widgets.rs`). Device-local: the table is the reader's and in the full export,
+   * but never synced. `CustomWidget` stored as the DTO for {@link FakeDb.stickyNotes}' reason:
+   * the read derives nothing. Seeded by `starter` alone, with {@link FakeDb.graphAnswers} so its
+   * widgets draw.
+   */
+  customWidgets: CustomWidget[];
+  /**
+   * **What the fake read graph answers, by document** — `graph.ts` answers a document listed here
+   * (trimmed) with its `data`, and every other one with its refusal. The page holds no schema, so
+   * a world that seeds a custom widget seeds the answer its query would get from the desktop.
+   */
+  graphAnswers: Record<string, Record<string, unknown>>;
+  /**
    * `price_history` — one row per day a price refresh saw a printing's finish at a marketplace.
    *
    * **The table the price movers are measured against**, and a table of facts rather than of
@@ -3879,6 +3894,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // where somebody typed one. So this is the state every world but `starter` opens in, and it
     // is the one the widget's empty card is for.
     stickyNotes: [],
+    // A reader's own widgets, and the graph's answers to their queries — written by a reader (or
+    // their agent), so empty everywhere but `starter`, `stickyNotes`' rule.
+    customWidgets: [],
+    graphAnswers: {},
     // The eleventh `app_meta` row and a `null` a third time: a reader who has never chosen a
     // landing view. `start_view` answers `home` for it, which is what the app opens on out of
     // the box and what every story that says nothing about the setting is standing in.
@@ -13182,6 +13201,12 @@ export function readHandlers(db: FakeDb) {
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
         .map((n) => ({ ...n })),
 
+    /** `custom_widgets::list` — every custom widget, `ORDER BY name COLLATE NOCASE, id`. */
+    custom_widgets: (): CustomWidget[] =>
+      [...db.customWidgets]
+        .sort((a, b) => nocase(a.name, b.name) || a.id - b.id)
+        .map((w) => structuredClone(w)),
+
     /**
      * `set_completion` — every set the collection holds a card from, and how much of it.
      *
@@ -14475,6 +14500,57 @@ const NOTE_WRONG_DECK = "That note belongs to a different deck.";
  * {@link writeHandlers.sticky_note_reorder} argues that one where it lives.
  */
 const STICKY_NOTE_GONE = "That note is not there any more.";
+
+/** SQLite's `COLLATE NOCASE`: ASCII letters folded, everything else compared by code unit. */
+function nocase(a: string, b: string): number {
+  const fold = (text: string) => text.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  const x = fold(a);
+  const y = fold(b);
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/** `custom_widgets.rs`' refusals, copied from the crate. */
+const CUSTOM_WIDGET_GONE = "That widget is not there any more.";
+
+/**
+ * `custom_widgets.rs`' shape checks, in its order and in its words: a name and a description
+ * (both stored trimmed), a query (stored as written, blank only after trimming), a spec that is a
+ * JSON object with a string `root` and an object `elements`, and a footprint inside `2..=12` by
+ * `2..=8`. Never the vocabulary — that is the page's catalogue.
+ */
+function checkCustomWidget(args: {
+  name: string;
+  description: string;
+  query: string;
+  spec: unknown;
+  w: number;
+  h: number;
+}): Pick<CustomWidget, "name" | "description" | "query" | "spec" | "w" | "h"> {
+  const name = args.name.trim();
+  if (name === "") throw refuse("A widget needs a name.");
+  if ([...name].length > 80) throw refuse("A widget's name can be at most 80 characters.");
+  const description = args.description.trim();
+  if ([...description].length > 500)
+    throw refuse("A widget's description can be at most 500 characters.");
+  if (args.query.trim() === "") throw refuse("A widget needs a data query.");
+  if (new TextEncoder().encode(args.query).length > 20_000)
+    throw refuse("A widget's data query can be at most 20000 bytes.");
+  const spec = args.spec;
+  if (typeof spec !== "object" || spec === null || Array.isArray(spec))
+    throw refuse("A widget's spec must be a JSON object.");
+  const { root, elements } = spec as { root?: unknown; elements?: unknown };
+  if (typeof root !== "string")
+    throw refuse("A widget's spec needs a root: the key of the element it starts from.");
+  if (typeof elements !== "object" || elements === null || Array.isArray(elements))
+    throw refuse("A widget's spec needs its elements, as an object.");
+  if (new TextEncoder().encode(JSON.stringify(spec)).length > 200_000)
+    throw refuse("A widget's spec can be at most 200000 bytes.");
+  if (!Number.isInteger(args.w) || args.w < 2 || args.w > 12)
+    throw refuse("A widget is 2 to 12 cells wide.");
+  if (!Number.isInteger(args.h) || args.h < 2 || args.h > 8)
+    throw refuse("A widget is 2 to 8 cells tall.");
+  return { name, description, query: args.query, spec: structuredClone(spec), w: args.w, h: args.h };
+}
 /**
  * `deck_todos::TODOS_CHANGED` (user schema v58, kept by v59) — what a **compare-and-set** write
  * of one to-do list's body answers when the stored body is no longer the one the caller read.
@@ -24401,6 +24477,65 @@ export function writeHandlers(db: FakeDb) {
       });
     },
 
+    /* ------------------------------------------------------------ custom widgets -- */
+
+    /**
+     * `custom_widgets::create` — a new definition, after the crate's shape checks
+     * ({@link checkCustomWidget}): never its vocabulary, which is the page's catalogue.
+     */
+    custom_widget_create: (args: {
+      name: string;
+      description: string;
+      query: string;
+      spec: unknown;
+      w: number;
+      h: number;
+    }): CustomWidget => {
+      refuseIfBusy(db);
+      const fields = checkCustomWidget(args);
+      const at = stamp(db) + 1;
+      const row: CustomWidget = {
+        id: nextId(db.customWidgets),
+        ...fields,
+        createdAt: at,
+        updatedAt: at,
+      };
+      db.customWidgets.push(row);
+      return structuredClone(row);
+    },
+
+    /** `custom_widgets::update` — absent means leave it; the result is checked whole. */
+    custom_widget_update: (args: {
+      id: number;
+      name?: string;
+      description?: string;
+      query?: string;
+      spec?: unknown;
+      w?: number;
+      h?: number;
+    }): CustomWidget => {
+      refuseIfBusy(db);
+      const row = db.customWidgets.find((w) => w.id === args.id);
+      if (!row) throw refuse(CUSTOM_WIDGET_GONE);
+      const fields = checkCustomWidget({
+        name: args.name ?? row.name,
+        description: args.description ?? row.description,
+        query: args.query ?? row.query,
+        spec: args.spec ?? row.spec,
+        w: args.w ?? row.w,
+        h: args.h ?? row.h,
+      });
+      Object.assign(row, fields, { updatedAt: stamp(db) + 1 });
+      return structuredClone(row);
+    },
+
+    /** `custom_widgets::delete` — one definition, gone. Placed copies are the page's to remove. */
+    custom_widget_delete: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      if (!db.customWidgets.some((w) => w.id === args.id)) throw refuse(CUSTOM_WIDGET_GONE);
+      db.customWidgets = db.customWidgets.filter((w) => w.id !== args.id);
+    },
+
     /**
      * `recent_cards::record_now` — remember that a card was opened.
      *
@@ -28539,7 +28674,7 @@ export function allHandlers(db: FakeDb) {
     ...pluginHandlers(),
     // The read graph (2026-10-29): the desktop answers from SQLite, this world from the page's
     // own graph — see `./graph.ts`.
-    ...graphHandlers(),
+    ...graphHandlers(db),
   };
 }
 

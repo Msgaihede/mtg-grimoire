@@ -46,3 +46,16 @@ export function rarityColor(rarity: string | null): string {
 export function hasRarityColor(rarity: string | null): boolean {
   return rarity !== null && RARITY_COLOR.has(rarity);
 }
+
+/** Mythic first; a rarity the four do not name (`special`, `bonus`) or none at all after common. */
+const RARITY_RANK = new Map([
+  ["mythic", 0],
+  ["rare", 1],
+  ["uncommon", 2],
+  ["common", 3],
+]);
+
+/** Where a rarity sorts, high to low — a smaller number is rarer. */
+export function rarityRank(rarity: string | null | undefined): number {
+  return (rarity == null ? undefined : RARITY_RANK.get(rarity)) ?? RARITY_RANK.size;
+}

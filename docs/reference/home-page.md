@@ -2402,3 +2402,32 @@ the constants is a change to every body's row arithmetic and its suite, outside 
 not WebView2. Geist is bundled, so the type metrics are the app's, but the next live pass should
 resize Summary, Recently viewed and a full list across a few footprints.
 
+
+## 18. Custom widgets — the reader's own (2026-10-30)
+
+A reader's agent writes a widget — a GraphQL document over the read graph and a json-render spec
+over the catalogue — and stores it with the local MCP server's `widget_create`; the page places
+copies of it. The vocabulary, the state model and the stored table are
+[generated-widgets.md](generated-widgets.md)'s; this is what the page does with them.
+
+- **One more kind, `custom`, outside the catalogue.** `widgets.ts`' `CUSTOM_KIND` has a meta row
+  (bounds `2..=12` by `2..=8`, no picks, no toggles — a spec draws its own settings) and is left out
+  of `CATALOGUE_WIDGETS`, which is what the Widget catalogue lists: a custom widget is nothing until
+  a definition names it. A placed copy's `config` is `{ widgetId, name, settings? }`: the
+  definition, the name it had when placed (`defaultTitle` reads it, so the card is called what the
+  widget is called and a rename still lays over it), and the settings the reader set in the card's
+  settings popover (`CustomWidgetSettings`, the spec's `settingsRoot` face, after the size and
+  density rows). Renaming is the card's own title field, as for every kind: Customize, then the
+  name; a cleared name brings the widget's back.
+- **The Custom widgets button** sits beside Add widget, in the same tray (Customize, or an empty
+  page), and **only while the reader has one** — an empty dialog behind a button is a promise kept
+  by nobody. `useCustomWidgets` reads the list once (`["customWidgets"]`, the `custom_widgets`
+  table's key in `crossWindow.ts`, so a definition an agent stores appears without a reload).
+- **The dialog is the catalogue's shape** (`CustomWidgetsDialog.tsx`, its preview box, fit and
+  measured list): each definition drawn live at its footprint, an Add that places a copy at the
+  definition's own footprint (`addWidget`'s `footprint` and `config`), and a Delete that asks once
+  in place and takes the definition's placed copies off the page with it.
+- **The body** (`generated/CustomWidget.tsx`) finds its definition, checks the spec against the
+  catalogue, runs the query through `useGraphQL` and draws the spec in the card's fit. It says so
+  instead when the definition is gone, the spec is refused, the document is refused, or the graph is
+  not on this host (the light app). A partial answer is drawn with one dim line under it.

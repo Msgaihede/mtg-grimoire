@@ -23,6 +23,7 @@ import { ipc, ipcError } from "@/lib/ipc";
 import {
   ACTIVITY_DELAY_MS,
   comboActivity,
+  deviceSyncActivity,
   marketplaceFeedActivity,
   oracleTagActivity,
   syncActivity,
@@ -384,7 +385,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // startup, most often). A second `sync_run` would only be refused.
   const busy = refreshing || status?.syncing === true;
 
-  // The five long jobs this window can be running. All are registered from here — the sync by
+  // The six long jobs this window can be running. All are registered from here — the sync by
   // this component, the update by `App`, which hands it down — and the registry is what lets
   // the header describe any of them without knowing which.
   //
@@ -396,6 +397,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const { refreshing: refreshingFeed, feeds, progress: feedProgress } = useMarketplace();
   const refreshingLabel = feeds.find((f) => f.marketplace.id === refreshingFeed)?.marketplace.label;
   useRegisterActivity(syncActivity(progress, busy));
+  // **The round trip with the reader's other devices**, while the relay socket comes up — the
+  // catch-up a device left closed for a while makes at launch, until which the rows on screen
+  // are this device's last copy. The marker beside Refresh says `connecting` with an icon; this
+  // is what puts it on the mana line and in words (issue #1428).
+  useRegisterActivity(deviceSyncActivity(deviceSync));
   useRegisterActivity(marketplaceFeedActivity(refreshingLabel ?? null, feedProgress));
   // **Started somewhere else again, and usually by nobody**: `tags::oracle::refresh_if_due`
   // and `combos::refresh_if_due` both run at launch when their file is a week old, so the

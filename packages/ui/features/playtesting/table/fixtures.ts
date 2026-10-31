@@ -68,6 +68,7 @@ export function gameCard(name: string, over: Partial<GameCard> = {}): GameCard {
     attachedTo: null,
     foretold: false,
     canForetell: false,
+    canActivate: false,
     castable: false,
     canTapForMana: false,
     gaps: [],

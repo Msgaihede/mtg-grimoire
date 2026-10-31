@@ -15,8 +15,11 @@
 //! a home widget's query against, a check of a draft with each problem's line and column, and the
 //! answer, exactly as the page's `graphql_query` would get it.
 //! **Writes**: `add_to_collection`, `add_to_wishlist` and `add_card_to_deck` — the three adds issue
-//! #1396 names, each the press of the same name in the app. Nothing here changes or removes a row:
-//! an agent proposing a deletion asks the reader, who has the app open.
+//! #1396 names, each the press of the same name in the app — and `widget_create`, which stores a
+//! custom home widget (`grimoire_core::custom_widgets`, user schema v68) once its query has passed
+//! the read graph and its spec the widget catalogue's contract ([`spec_problems`]); `widget_list`
+//! reads the stored ones back. Nothing here changes or removes a row: an agent proposing a
+//! deletion asks the reader, who has the app open.
 //!
 //! **A write tells every window** ([`announce`]). `crate::changes` emits `db:changed` only while a
 //! second window is open, since the window that pressed already knows; a write no window made has
@@ -67,6 +70,33 @@ const DECK_TABLES: &[&str] = &[
     "wishlist_folders",
     "activity",
 ];
+
+/// A custom widget's write touches its own table and nothing else.
+const CUSTOM_WIDGET_TABLES: &[&str] = &["custom_widgets"];
+
+/// The footprint a created widget gets when the agent names none, in grid cells.
+const DEFAULT_WIDGET_W: i64 = 4;
+const DEFAULT_WIDGET_H: i64 = 3;
+
+/// **The widget catalogue's contract** — every component's props and every action's params as
+/// JSON Schema, the committed snapshot `catalog.test.tsx` holds to `catalog.ts` byte for byte
+/// ([generated-widgets.md](../../../../../docs/reference/generated-widgets.md)). It is what lets
+/// this server check a spec with no TypeScript running.
+const CATALOG_CONTRACT: &str =
+    include_str!("../../../../../packages/ui/features/home/generated/catalog.contract.json");
+
+/// The actions json-render answers itself, on the widget's own state, whatever the catalogue
+/// declares.
+const BUILT_IN_ACTIONS: [&str; 4] = ["setState", "pushState", "removeState", "validateForm"];
+
+/// [`CATALOG_CONTRACT`], parsed once. A snapshot that does not parse is a broken build, which
+/// `the_catalogue_contract_parses_and_names_components_and_actions` catches before any agent can.
+fn contract() -> &'static Value {
+    static CONTRACT: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    CONTRACT.get_or_init(|| {
+        serde_json::from_str(CATALOG_CONTRACT).expect("the committed catalogue contract is JSON")
+    })
+}
 
 /// Every tool, as `tools/list` answers it.
 pub fn list() -> Vec<Value> {
@@ -272,6 +302,43 @@ pub fn list() -> Vec<Value> {
             &["deckId", "cardId"],
             &add,
         ),
+        tool(
+            "widget_list",
+            "List custom widgets",
+            "The reader's own home-page widgets, each with the id the home page places it by, its \
+             name, description and footprint in grid cells. The query and the spec are left out.",
+            json!({}),
+            &[],
+            &read,
+        ),
+        tool(
+            "widget_create",
+            "Create a custom widget",
+            "Store a custom widget the reader can then place on their home page from its Custom \
+             widgets dialog. A widget is a GraphQL data query over the schema graph_schema \
+             answers — check it with graph_validate first, and try it with graph_query — and a \
+             json-render spec ({ root, elements, state? }) built from the app's widget catalogue: \
+             every element's type a catalogue component, its props that component's (every \
+             required prop present; a nullable one may be null), its children keys of other \
+             elements, and its on.<event> actions catalogue actions or json-render's setState, \
+             pushState, removeState and validateForm. The spec's state root is the query \
+             answer's data — {\"$state\": \"/decks\"} reads data.decks — with the widget's own \
+             inputs under /ui and its settings under /settings. Settings are drawn in the \
+             card's settings popover, never on the widget: name the element they start from in \
+             a top-level settingsRoot beside root, bind its inputs to /settings/..., and the app \
+             keeps every change (no Save button). A query or spec that does not fit is refused \
+             with every problem named. Answers the stored widget.",
+            json!({
+                "name": { "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_NAME_CHARS, "description": "The widget's title." },
+                "description": { "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_DESCRIPTION_CHARS, "description": "What it shows, in a sentence (default empty)." },
+                "query": document,
+                "spec": { "type": "object", "description": "The json-render spec: root (an element key), an optional settingsRoot (the element key of the settings popover's face), elements (key → { type, props, children, on?, visible?, repeat? }) and an optional state." },
+                "w": { "type": "integer", "minimum": grimoire_core::custom_widgets::W.start(), "maximum": grimoire_core::custom_widgets::W.end(), "description": "Width in grid cells (default 4)." },
+                "h": { "type": "integer", "minimum": grimoire_core::custom_widgets::H.start(), "maximum": grimoire_core::custom_widgets::H.end(), "description": "Height in grid cells (default 3)." },
+            }),
+            &["name", "query", "spec"],
+            &add,
+        ),
     ]
 }
 
@@ -319,6 +386,8 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "add_to_collection" => add_to_collection(state, &args).await,
         "add_to_wishlist" => add_to_wishlist(state, &args).await,
         "add_card_to_deck" => add_card_to_deck(state, &args).await,
+        "widget_list" => widget_list(state).await,
+        "widget_create" => widget_create(state, &args).await,
         _ => return Called::NoSuchTool,
     };
     match answered {
@@ -934,6 +1003,215 @@ async fn add_card_to_deck(state: &Arc<AppState>, args: &Args) -> Result<Value, S
     }))
 }
 
+async fn widget_list(state: &Arc<AppState>) -> Result<Value, String> {
+    let widgets = run(state, "custom_widgets", json!({})).await?;
+    let widgets: Vec<Value> = widgets
+        .as_array()
+        .map(|all| {
+            all.iter()
+                .map(|w| {
+                    pick(
+                        w,
+                        &[
+                            ("widgetId", "id"),
+                            ("name", "name"),
+                            ("description", "description"),
+                            ("w", "w"),
+                            ("h", "h"),
+                        ],
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(json!({ "widgets": widgets }))
+}
+
+/// `widget_create`: the query checked by the read graph and the spec by the catalogue's
+/// contract — every problem of both in one refusal — and only then the table's
+/// `custom_widget_create`, whose own refusals (a blank name, a footprint out of bounds) are the
+/// core's sentences.
+async fn widget_create(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let name = args.required_text("name")?;
+    let description = args.text("description")?.unwrap_or_default();
+    // As written, unlike every other text here: the document is stored as the agent sent it.
+    let query = match args.0.get("query") {
+        Some(Value::String(q)) if !q.trim().is_empty() => q.clone(),
+        None | Some(Value::Null) | Some(Value::String(_)) => {
+            return Err("query is required.".to_owned())
+        }
+        Some(_) => return Err("query must be a string.".to_owned()),
+    };
+    let spec = match args.0.get("spec") {
+        Some(spec @ Value::Object(_)) => spec.clone(),
+        None | Some(Value::Null) => return Err("spec is required.".to_owned()),
+        Some(_) => return Err("spec must be a JSON object.".to_owned()),
+    };
+    let (w_bounds, h_bounds) = (
+        grimoire_core::custom_widgets::W,
+        grimoire_core::custom_widgets::H,
+    );
+    let w = args.bounded("w", DEFAULT_WIDGET_W, *w_bounds.start(), *w_bounds.end())?;
+    let h = args.bounded("h", DEFAULT_WIDGET_H, *h_bounds.start(), *h_bounds.end())?;
+
+    let mut problems: Vec<String> = crate::graph::graph()
+        .validate(&query)
+        .into_iter()
+        .map(|p| match (p.line, p.column) {
+            (Some(line), Some(column)) => {
+                format!("The query, line {line}, column {column}: {}", p.message)
+            }
+            _ => format!("The query: {}", p.message),
+        })
+        .collect();
+    problems.extend(spec_problems(&spec));
+    if !problems.is_empty() {
+        return Err(format!("The widget was not stored. {}", problems.join(" ")));
+    }
+    write(
+        state,
+        "custom_widget_create",
+        json!({
+            "name": name,
+            "description": description,
+            "query": query,
+            "spec": spec,
+            "w": w,
+            "h": h,
+        }),
+        CUSTOM_WIDGET_TABLES,
+    )
+    .await
+}
+
+/// Every way `spec` does not fit the catalogue's contract, one sentence each naming the element.
+///
+/// **Structure only**: the root names an element, every element's `type` is a contract
+/// component, every child key is an element, every prop is one its component declares and every
+/// required one is there, and every `on.<event>` binding names a contract action or one of
+/// [`BUILT_IN_ACTIONS`]. A prop's *value* is never checked — any of them may be an expression
+/// (`{"$state": …}`, `{"$item": …}`, `{"$computed": …}`) that only the page can resolve — and
+/// `visible`, `repeat` and `watch` are json-render's to read.
+fn spec_problems(spec: &Value) -> Vec<String> {
+    let contract = contract();
+    let components = contract["components"].as_object();
+    let actions = contract["actions"].as_object();
+    let mut problems = Vec::new();
+    let Some(elements) = spec.get("elements").and_then(Value::as_object) else {
+        problems.push("The spec needs its elements, as an object.".to_owned());
+        return problems;
+    };
+    let root = spec.get("root").and_then(Value::as_str);
+    match root {
+        None => problems.push("The spec needs a root naming one of its elements.".to_owned()),
+        Some(root) if !elements.contains_key(root) => {
+            problems.push(format!("The spec's root {root:?} names no element."))
+        }
+        Some(_) => {}
+    }
+    // The settings face — drawn in the card's settings popover — is a second root, or none.
+    match spec.get("settingsRoot") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(face)) if !elements.contains_key(face) => {
+            problems.push(format!("The spec's settingsRoot {face:?} names no element."))
+        }
+        Some(Value::String(face)) if Some(face.as_str()) == root => problems.push(
+            "The spec's settingsRoot is its root; settings go in the popover, apart from the widget."
+                .to_owned(),
+        ),
+        Some(Value::String(_)) => {}
+        Some(_) => problems.push("The spec's settingsRoot must be an element key.".to_owned()),
+    }
+    for (key, element) in elements {
+        let Some(element) = element.as_object() else {
+            problems.push(format!("Element {key:?} is not an object."));
+            continue;
+        };
+        let props = element.get("props").and_then(Value::as_object);
+        if element
+            .get("props")
+            .is_some_and(|p| !p.is_object() && !p.is_null())
+        {
+            problems.push(format!("Element {key:?}'s props are not an object."));
+        }
+        match element.get("type").and_then(Value::as_str) {
+            None => problems.push(format!("Element {key:?} has no type.")),
+            Some(ty) => match components.and_then(|c| c.get(ty)) {
+                None => problems.push(format!(
+                    "Element {key:?} has the type {ty:?}, which is not a catalogue component."
+                )),
+                Some(component) => {
+                    let schema = &component["props"];
+                    let declared = schema["properties"].as_object();
+                    for prop in props.into_iter().flat_map(|p| p.keys()) {
+                        if !declared.is_some_and(|d| d.contains_key(prop)) {
+                            problems.push(format!(
+                                "Element {key:?} gives {ty} the prop {prop:?}, which it does not take."
+                            ));
+                        }
+                    }
+                    for required in schema["required"].as_array().into_iter().flatten() {
+                        let Some(required) = required.as_str() else {
+                            continue;
+                        };
+                        if !props.is_some_and(|p| p.contains_key(required)) {
+                            problems.push(format!(
+                                "Element {key:?} is missing {ty}'s required prop {required:?}."
+                            ));
+                        }
+                    }
+                }
+            },
+        }
+        match element.get("children") {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(children)) => {
+                for child in children {
+                    match child.as_str() {
+                        Some(child) if elements.contains_key(child) => {}
+                        Some(child) => problems.push(format!(
+                            "Element {key:?} has the child {child:?}, which is not an element."
+                        )),
+                        None => problems.push(format!(
+                            "Element {key:?} has a child that is not an element key."
+                        )),
+                    }
+                }
+            }
+            Some(_) => problems.push(format!(
+                "Element {key:?}'s children are not a list of element keys."
+            )),
+        }
+        match element.get("on") {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(events)) => {
+                for (event, bound) in events {
+                    let bindings: Vec<&Value> = match bound {
+                        Value::Array(all) => all.iter().collect(),
+                        one => vec![one],
+                    };
+                    for binding in bindings {
+                        match binding.get("action").and_then(Value::as_str) {
+                            Some(action)
+                                if BUILT_IN_ACTIONS.contains(&action)
+                                    || actions.is_some_and(|a| a.contains_key(action)) => {}
+                            Some(action) => problems.push(format!(
+                                "Element {key:?}'s {event} event names the action {action:?}, \
+                                 which is neither a catalogue action nor one of json-render's own."
+                            )),
+                            None => problems.push(format!(
+                                "Element {key:?}'s {event} event has a binding with no action."
+                            )),
+                        }
+                    }
+                }
+            }
+            Some(_) => problems.push(format!("Element {key:?}'s on is not an object of events.")),
+        }
+    }
+    problems
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -964,10 +1242,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 15);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 13, "names are unique");
+        assert_eq!(names.len(), 15, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -982,8 +1260,9 @@ mod tests {
         }
     }
 
+    /// The three adds and the one widget the reader can place — each a new row, never a change.
     #[test]
-    fn only_the_three_adds_say_they_write() {
+    fn only_the_adds_say_they_write() {
         let writes: Vec<String> = list()
             .iter()
             .filter(|t| t["annotations"]["readOnlyHint"] == false)
@@ -991,7 +1270,12 @@ mod tests {
             .collect();
         assert_eq!(
             writes,
-            ["add_to_collection", "add_to_wishlist", "add_card_to_deck"]
+            [
+                "add_to_collection",
+                "add_to_wishlist",
+                "add_card_to_deck",
+                "widget_create"
+            ]
         );
     }
 
@@ -1006,6 +1290,7 @@ mod tests {
             .iter()
             .chain(WISHLIST_TABLES)
             .chain(DECK_TABLES)
+            .chain(CUSTOM_WIDGET_TABLES)
         {
             assert!(user.contains(table), "{table} is not a user table");
         }
@@ -1176,6 +1461,181 @@ mod tests {
             5,
             "{holding:?}"
         );
+    }
+
+    /// A spec the catalogue draws: a Stack of a Text reading the answer and a refresh Button.
+    fn widget_spec() -> Value {
+        json!({
+            "root": "body",
+            "elements": {
+                "body": {
+                    "type": "Stack",
+                    "props": { "direction": null, "gap": "md", "align": null, "justify": null, "wrap": null },
+                    "children": ["count", "again"],
+                },
+                "count": {
+                    "type": "Text",
+                    "props": {
+                        "text": { "$template": "${/decks/length} decks" },
+                        "tone": null, "size": null, "mono": null, "truncate": null,
+                    },
+                    "children": [],
+                },
+                "again": {
+                    "type": "Button",
+                    "props": { "label": "Refresh", "variant": "quiet" },
+                    "on": { "press": [
+                        { "action": "refresh", "params": {} },
+                        { "action": "setState", "params": { "statePath": "/ui/pressed", "value": true } },
+                    ] },
+                    "children": [],
+                },
+            },
+        })
+    }
+
+    /// The settings face is a second root: an element key, never the widget's own root.
+    #[test]
+    fn a_settings_root_names_an_element_apart_from_the_root() {
+        let mut spec = widget_spec();
+        spec["settingsRoot"] = json!("again");
+        assert!(
+            spec_problems(&spec).is_empty(),
+            "{:?}",
+            spec_problems(&spec)
+        );
+
+        spec["settingsRoot"] = json!("nowhere");
+        let problems = spec_problems(&spec);
+        assert!(problems
+            .iter()
+            .any(|p| p.contains("settingsRoot") && p.contains("nowhere")));
+
+        spec["settingsRoot"] = json!("body");
+        assert!(spec_problems(&spec)
+            .iter()
+            .any(|p| p.contains("settingsRoot is its root")));
+
+        spec["settingsRoot"] = json!(3);
+        assert!(spec_problems(&spec)
+            .iter()
+            .any(|p| p.contains("must be an element key")));
+    }
+
+    #[test]
+    fn the_catalogue_contract_parses_and_names_components_and_actions() {
+        assert!(contract()["components"]["Stack"]["props"]["properties"].is_object());
+        assert!(contract()["actions"]["refresh"].is_object());
+        assert!(
+            spec_problems(&widget_spec()).is_empty(),
+            "{:?}",
+            spec_problems(&widget_spec())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_widget_is_created_and_listed() {
+        let state = state("widget-create");
+        let made = done(
+            &state,
+            "widget_create",
+            json!({
+                "name": "Deck count",
+                "query": "{ decks { id } }",
+                "spec": widget_spec(),
+                "w": 3,
+            }),
+        )
+        .await;
+        assert_eq!(made["name"], "Deck count");
+        assert_eq!(made["description"], "");
+        assert_eq!(made["query"], "{ decks { id } }");
+        assert_eq!(made["spec"], widget_spec());
+        assert_eq!((made["w"].as_i64(), made["h"].as_i64()), (Some(3), Some(3)));
+        let listed = done(&state, "widget_list", json!({})).await;
+        assert_eq!(
+            listed["widgets"],
+            json!([{ "widgetId": made["id"], "name": "Deck count", "description": "", "w": 3, "h": 3 }])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_invalid_query_is_refused_with_where_it_went_wrong() {
+        let state = state("widget-bad-query");
+        let why = refused(
+            &state,
+            "widget_create",
+            json!({ "name": "W", "query": "{\n  decks { nmae }\n}", "spec": widget_spec() }),
+        )
+        .await;
+        assert!(why.contains("line 2"), "{why}");
+        assert!(why.contains("nmae"), "{why}");
+        let listed = done(&state, "widget_list", json!({})).await;
+        assert_eq!(listed["widgets"], json!([]), "nothing refused was stored");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_component_is_refused_by_its_element() {
+        let state = state("widget-bad-type");
+        let mut spec = widget_spec();
+        spec["elements"]["count"]["type"] = json!("Hologram");
+        let why = refused(
+            &state,
+            "widget_create",
+            json!({ "name": "W", "query": "{ decks { id } }", "spec": spec }),
+        )
+        .await;
+        assert!(
+            why.contains("\"count\"") && why.contains("Hologram"),
+            "{why}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_child_and_a_wrong_prop_are_refused_by_their_element() {
+        let state = state("widget-bad-child");
+        let mut spec = widget_spec();
+        spec["elements"]["body"]["children"] = json!(["count", "nowhere"]);
+        spec["elements"]["again"]["props"] = json!({ "label": "Go", "colour": "red" });
+        let why = refused(
+            &state,
+            "widget_create",
+            json!({ "name": "W", "query": "{ decks { id } }", "spec": spec }),
+        )
+        .await;
+        assert!(
+            why.contains("\"body\"") && why.contains("\"nowhere\""),
+            "{why}"
+        );
+        assert!(why.contains("\"colour\""), "an undeclared prop: {why}");
+        assert!(
+            why.contains("\"variant\""),
+            "a required prop left out: {why}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_action_is_refused_by_its_element() {
+        let state = state("widget-bad-action");
+        let mut spec = widget_spec();
+        spec["elements"]["again"]["on"] = json!({ "press": { "action": "deleteEverything" } });
+        let why = refused(
+            &state,
+            "widget_create",
+            json!({ "name": "W", "query": "{ decks { id } }", "spec": spec }),
+        )
+        .await;
+        assert!(
+            why.contains("\"again\"") && why.contains("deleteEverything"),
+            "{why}"
+        );
+        let why = refused(
+            &state,
+            "widget_create",
+            json!({ "name": "W", "query": "{ decks { id } }", "spec": widget_spec(), "w": 40 }),
+        )
+        .await;
+        assert!(why.contains('w'), "{why}");
     }
 
     #[tokio::test]

@@ -28,6 +28,8 @@
  * **Optional props are `.nullable()`**, json-render's convention: a model sends `null` for a prop
  * it leaves out, and the prompt says so.
  */
+// First: zod is told it may not eval before json-render or any schema here meets it.
+import "./zodConfig";
 import { defineCatalog } from "@json-render/core";
 import { schema } from "@json-render/react/schema";
 import { z } from "zod";
@@ -555,11 +557,6 @@ export const catalog = defineCatalog(schema, {
       description:
         "Read the widget's data again now. It already refreshes whenever the reader's data changes, so this is for an explicit Refresh button.",
     },
-    saveSettings: {
-      params: z.object({ path: z.string() }),
-      description:
-        "Keep the widget's settings: the state under `path` (`/settings`) is stored with the widget and is that path's state when it is drawn again. Bind settings inputs under that path and give the settings face a Save button pressing this.",
-    },
   },
 
   functions: {
@@ -590,7 +587,8 @@ export type Catalog = typeof catalog;
 export const CATALOG_RULES: readonly string[] = [
   "This spec draws a widget on the home page of a Magic: The Gathering collection app. A widget is a small tile, a few hundred pixels each way: show one idea, and prefer Figures, Bars and a RowList over long text.",
   "The widget's data is the answer to a GraphQL query written alongside the spec: the answer's `data` object is the state root, so `{ \"$state\": \"/decks/0/name\" }` reads the query's `decks` field. Never write sample data into state for the query's fields — the answer supplies them — and never hardcode a value the query answers.",
-  "Seed state only for the widget's own inputs, under `/ui` (what the reader filters, sorts or switches now) and `/settings` (what they configure and keep with `saveSettings`). Inputs bind only those paths, never a query field: the reader's data is read-only.",
+  "Seed state only for the widget's own inputs, under `/ui` (what the reader filters, sorts or switches now) and `/settings` (what they configure and keep). Inputs bind only those paths, never a query field: the reader's data is read-only.",
+  "Settings go in the widget's settings popover, never on the widget: add a top-level `settingsRoot` to the spec, beside `root`, naming the element the settings face starts from (a Stack of FieldGroup, ChoiceChips, Checkbox, Checklist, CompactStepper, Picker and the like). Its inputs bind `/settings/...`; the app keeps every change as the reader makes it, so there is no Save button. The widget under `root` reads the same `/settings` paths, and no element under `root` is under `settingsRoot`.",
   "Actions only navigate. There is no action that adds, edits or removes the reader's cards, decks, folders or wishlists.",
   'Inside a repeat, `{ "$item": "id" }` in an action\'s params passes the item\'s state path; the navigation actions read it back as the value.',
   "Colours are palette words (`accent`, `up`, `down`, `dim`, `W`, `U`, `B`, `R`, `G`, `C`), never CSS colours or class names.",

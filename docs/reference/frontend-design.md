@@ -157,6 +157,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **declarative**: pass the job or `null` every render, and a job cannot outlive the component
   describing it. `put` is identity-in-identity-out when nothing moved, which is what lets the
   register-every-render form cost nothing.
+- **Device sync's catch-up is a job too (issue #1428), and the loudest one.** The relay socket's
+  `connecting` is the connection manager's round trip before its socket (`sync_engine::live::run`,
+  spec §6.4) — at launch, the pull that brings a device left closed for a while up to date with the
+  reader's others — so `deviceSyncActivity` turns it into *Syncing with your other devices*,
+  indeterminate, at `RANK.deviceSync` (−10). Louder than the card sync on purpose: a launch after a
+  long absence runs both, the card sync can hold the row for minutes, and this is the only sentence
+  that says the rows on screen are not up to date yet. `live`, `offline` and `off` stay the
+  marker's. `AppShell` registers it; the phone face folds it into its mana line
+  (`useCardDataWatch`). **Not on the startup screen**: every host spawns the loop after its launch
+  settles, so nothing about device sync is true while that screen is up.
 - **The mana line reacts instantly and the sentence waits `ACTIVITY_DELAY_MS` (400 ms).**
   Measured in the shipped window 2026-08-11, sampling the row every 40 ms across a forced
   Refresh: **bar at 121 ms, sentence at 523 ms** — the gate, to 2 ms. The gate is on the

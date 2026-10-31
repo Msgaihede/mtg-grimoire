@@ -365,7 +365,7 @@ Draft, Sealed, Cube Draft, Pod Draft, Open Packs. A flow has a stepper: Choose �
 - **Choose**: bot difficulty; pack order (a set per booster; three for a draft, six for sealed) from
   a grid of set tiles (keyrune icon and name, newest first, filterable); for a cube, a pasted list
   (`1 Lightning Bolt` per line), seats, packs, pack size.
-- **Draft**: the pack (card images, click to pick, double-click or a Pick button to confirm), the
+- **Draft**: the pack (card images, click to choose; drag onto the pool, the Pick button or Enter to pick — issue #1434 replaced the double-click), the
   round strip (P1 FRA · P2 HOB · P3 HOB, pick n / size), the pool below by mana value, Pick for me.
 - **Build**: `draft_deck_create` → the deck editor in draft mode (§5).
 - **Pod**: Create lobby (supporters) shows the code to share and the people who joined; Join lobby

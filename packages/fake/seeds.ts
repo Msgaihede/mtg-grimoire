@@ -116,6 +116,7 @@ import type {
   DeckAuditKind,
   DeckVariant,
   StickyNote,
+  CustomWidget,
 } from "@grimoire/ui/lib/ipc";
 
 export type SeedName =
@@ -2192,7 +2193,140 @@ function starterSeed(): FakeDb {
     // The one table in this seed that is about the reader rather than about their cards — and
     // the only world that has any. See {@link starterStickyNotes}.
     stickyNotes: starterStickyNotes(),
+    // Two of the reader's own widgets, and what the desktop's graph would answer their queries —
+    // see {@link starterCustomWidgets}.
+    customWidgets: starterCustomWidgets(),
+    graphAnswers: starterGraphAnswers(),
   });
+}
+
+/** The deck shelf's document, as stored and as {@link starterGraphAnswers} keys it. */
+const DECK_SHELF_QUERY = "query DeckShelf { decks { id name formatName cardCount } }";
+
+/** The collection's figures. */
+const AT_A_GLANCE_QUERY = "query AtAGlance { collectionSummary { totalCards uniqueCards } }";
+
+/**
+ * **The reader's own widgets** — two, written the way `CATALOG_RULES` asks a model to write them:
+ * the answer at the state root, the widget's inputs under `/ui`, its settings under `/settings`.
+ * The deck shelf is a `repeat` of rows that open their deck, with a settings face
+ * (`settingsRoot`, the card's settings popover) whose one switch keeps it to Commander decks; the
+ * glance is two figures and no settings. Seeded only here, the
+ * table's rule ({@link FakeDb.customWidgets}).
+ */
+function starterCustomWidgets(): CustomWidget[] {
+  const at = 1_798_000_000;
+  return [
+    {
+      id: 1,
+      name: "Deck shelf",
+      description: "Every deck with its card count; a press opens it.",
+      query: DECK_SHELF_QUERY,
+      spec: {
+        root: "body",
+        elements: {
+          body: {
+            type: "Stack",
+            props: { direction: null, gap: "sm", align: null, justify: null, wrap: null },
+            children: ["list"],
+          },
+          list: {
+            type: "RowList",
+            props: { label: null },
+            repeat: { statePath: "/decks", key: "id" },
+            children: ["deck"],
+          },
+          face: {
+            type: "Checkbox",
+            props: { label: "Commander decks only", checked: { $bindState: "/settings/commander" } },
+            children: [],
+          },
+          deck: {
+            type: "Row",
+            props: {
+              name: { $item: "name" },
+              caption: { $item: "formatName" },
+              value: { $item: "cardCount" },
+              money: null,
+              delta: null,
+              rarity: null,
+              setCode: null,
+              track: null,
+            },
+            on: { press: { action: "openDeck", params: { deckId: { $item: "id" } } } },
+            visible: {
+              $or: [
+                { $state: "/settings/commander", not: true },
+                { $item: "formatName", eq: "Commander" },
+              ],
+            },
+            children: [],
+          },
+        },
+        settingsRoot: "face",
+        state: { ui: {}, settings: { commander: false } },
+      },
+      w: 4,
+      h: 3,
+      createdAt: at,
+      updatedAt: at,
+    },
+    {
+      id: 2,
+      name: "At a glance",
+      description: "How many cards, and how many different ones.",
+      query: AT_A_GLANCE_QUERY,
+      spec: {
+        root: "figures",
+        elements: {
+          figures: {
+            type: "Figures",
+            props: {
+              figures: [
+                {
+                  label: "Cards",
+                  value: { $state: "/collectionSummary/totalCards" },
+                  money: null,
+                  note: null,
+                },
+                {
+                  label: "Unique",
+                  value: { $state: "/collectionSummary/uniqueCards" },
+                  money: null,
+                  note: null,
+                },
+              ],
+              fill: true,
+              divided: true,
+            },
+            children: [],
+          },
+        },
+      },
+      w: 4,
+      h: 2,
+      createdAt: at + 60,
+      updatedAt: at + 60,
+    },
+  ];
+}
+
+/**
+ * What the desktop's graph would answer the starter widgets' queries — the starter decks and a
+ * collection's counts, written down because the fake holds no graph (`graph.ts`).
+ */
+function starterGraphAnswers(): Record<string, Record<string, unknown>> {
+  return {
+    [DECK_SHELF_QUERY]: {
+      decks: [
+        { id: 1, name: "Modern Goodstuff", formatName: "Modern", cardCount: 60 },
+        { id: 2, name: "Kenrith Two-Drops", formatName: "Commander", cardCount: 100 },
+        { id: 3, name: "Old School 93/94", formatName: "Old School", cardCount: 60 },
+        { id: 4, name: "Rhystic Testbed", formatName: "Commander", cardCount: 100 },
+      ],
+    },
+    [AT_A_GLANCE_QUERY]: { collectionSummary: { totalCards: 1284, uniqueCards: 812 } },
+  };
 }
 
 /* ------------------------------------------------------------------ needsReview -------- */

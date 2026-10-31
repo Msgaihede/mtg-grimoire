@@ -848,6 +848,7 @@ export function emblemCard(emblem: PlaytestEmblem): GameCard {
     attachedTo: null,
     foretold: false,
     canForetell: false,
+    canActivate: false,
     castable: false,
     canTapForMana: false,
     gaps: [],

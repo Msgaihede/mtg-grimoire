@@ -6,12 +6,12 @@ import { FOCUS } from "@/lib/focus";
 import {
   ipc,
   ipcError,
+  type BoosterSetSummary,
   type DraftView,
   type LobbyPeer,
   type LobbyState,
   type PlaytestDifficulty,
   type PodFormat,
-  type SetSummary,
 } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -54,7 +54,7 @@ import {
 /** What the host has chosen: the packs, the bots' skill, what the pod drafts and how many seats
  *  each format's table has. */
 interface HostHeld {
-  rounds: SetSummary[];
+  rounds: BoosterSetSummary[];
   difficulty: PlaytestDifficulty;
   format: PodFormat;
   seats: Record<PodFormat, number>;

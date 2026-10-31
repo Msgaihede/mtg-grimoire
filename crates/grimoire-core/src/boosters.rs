@@ -1,5 +1,6 @@
 //! **One set's boosters, as MTGJSON describes them, joined to the corpus** — the Draft & Packs
-//! page's facts (`docs/superpowers/specs/2026-10-29-draft-and-packs-design.md` §2).
+//! page's facts (`docs/superpowers/specs/2026-10-29-draft-and-packs-design.md` §2) — and **the
+//! sets there are boosters of**, from MTGJSON's set list ([`booster_set_list`]).
 //!
 //! **Pure.** No request and no file: the desktop host fetches MTGJSON's per-set file
 //! (`https://mtgjson.com/api/v5/{CODE}.json.gz`, gunzipped) and hands the text here. A set's
@@ -15,6 +16,14 @@
 //! product is kept only when it holds a booster of this set, directly or through what it holds;
 //! `deck`, `other` and `variable` contents are not read. A pack of another set's product, and a
 //! sealed product of another set, are not followed — this set's file does not describe them.
+//!
+//! **Which sets have boosters is MTGJSON's to say, never the corpus's.** Scryfall splits a release
+//! into sets of its own (a bonus sheet, the List, a commander's promos), each with a set type a
+//! booster set might have; MTGJSON describes the booster where it is sold. So the page's set wall
+//! is [`booster_set_list`] over `SetList.json`: a set is on it when a sealed product of category
+//! `booster_pack` opens one of its boosters — which, measured against the per-set files on
+//! 2026-10-30, is exactly the sets whose file has a `booster` block, less Secret Lair's bonus
+//! sheets (sold in a box, never a pack).
 //!
 //! **Facts only**: no price (the page asks `printing_prices`), and nothing about how a booster is
 //! opened — that is `features/draft/booster/`'s.
@@ -147,6 +156,16 @@ pub struct BoosterCard {
     pub colors: Option<String>,
     /// `false`: the facts are MTGJSON's alone — this corpus has no such printing.
     pub in_corpus: bool,
+}
+
+/// A set MTGJSON sells booster packs of — one tile of the Draft & Packs page's set wall.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoosterSetSummary {
+    /// Lower-case, as the corpus spells a set code.
+    pub code: String,
+    pub name: String,
+    pub release_date: Option<String>,
 }
 
 // ---------------------------------------------------------------------------------------
@@ -322,13 +341,95 @@ struct SourcesProduct {
     source_set_codes: Vec<String>,
 }
 
+/// `SetList.json`: every set, each with the sealed products sold under it.
+#[derive(Deserialize)]
+struct ListFile {
+    data: Vec<ListSet>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListSet {
+    code: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    release_date: Option<String>,
+    #[serde(default)]
+    sealed_product: Vec<ListSealed>,
+}
+
+#[derive(Deserialize)]
+struct ListSealed {
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    contents: Option<ListContents>,
+}
+
+/// A sealed product's contents as far as boosters go: its packs, and the packs of each of its
+/// `variable` configurations (a pack that holds one of several boosters).
+#[derive(Deserialize)]
+struct ListContents {
+    #[serde(default)]
+    pack: Vec<MjPack>,
+    #[serde(default)]
+    variable: Vec<ListVariable>,
+}
+
+#[derive(Deserialize)]
+struct ListVariable {
+    #[serde(default)]
+    configs: Vec<ListContents>,
+}
+
 fn unreadable(e: serde_json::Error) -> String {
     format!("MTGJSON's set file could not be read: {e}.")
 }
 
 // ---------------------------------------------------------------------------------------
-// The two calls
+// The three calls
 // ---------------------------------------------------------------------------------------
+
+/// The sets of MTGJSON's `SetList.json` (`list_json`, gunzipped) that it sells booster packs of:
+/// those a sealed product of category `booster_pack` — under any set — opens a booster of,
+/// directly or as one of its `variable` configurations. In the list's order, each once; the page
+/// sorts. A set the list names a pack of but does not itself list is left out: there is no name
+/// to show.
+pub fn booster_set_list(list_json: &str) -> Result<Vec<BoosterSetSummary>, String> {
+    fn packs(contents: &ListContents, into: &mut HashSet<String>) {
+        into.extend(contents.pack.iter().map(|p| p.set.to_lowercase()));
+        for variable in &contents.variable {
+            for config in &variable.configs {
+                packs(config, into);
+            }
+        }
+    }
+
+    let file: ListFile = serde_json::from_str(list_json)
+        .map_err(|e| format!("MTGJSON's set list could not be read: {e}."))?;
+    let mut sold = HashSet::new();
+    for sealed in file.data.iter().flat_map(|s| &s.sealed_product) {
+        if sealed.category.as_deref() == Some("booster_pack") {
+            if let Some(contents) = &sealed.contents {
+                packs(contents, &mut sold);
+            }
+        }
+    }
+    let mut seen = HashSet::new();
+    Ok(file
+        .data
+        .into_iter()
+        .filter_map(|s| {
+            let code = s.code.to_lowercase();
+            (sold.contains(&code) && seen.insert(code.clone())).then_some(BoosterSetSummary {
+                code,
+                name: s.name,
+                release_date: s.release_date,
+            })
+        })
+        .collect())
+}
 
 /// The other sets whose files [`booster_set`] needs beside `main_json`: every product's
 /// `sourceSetCodes` less the set itself, upper-cased (MTGJSON's spelling, and its file names),
@@ -860,6 +961,57 @@ mod tests {
             NO_BOOSTERS
         );
         assert!(booster_set(&corpus(), "not json", &[], 0).is_err());
+    }
+
+    /// A set list: `AAA` sells a pack of its own; `BBB`'s pack is sold only under `AAA`'s box of
+    /// assorted packs (a `variable` configuration); `CCC` has boosters only inside a box set (a
+    /// Secret Lair's bonus sheet); `DDD` sells decks; `EEE` is named by a pack but not listed.
+    const LIST: &str = r#"{"meta":{"version":"5"},"data":[
+      {"code":"AAA","name":"Alpha Set","releaseDate":"2026-01-02","type":"expansion",
+        "sealedProduct":[
+          {"category":"booster_pack","subtype":"play","contents":{"pack":[{"code":"play","set":"aaa"}]}},
+          {"category":"booster_pack","subtype":"other","contents":{"variable":[{"configs":[
+            {"pack":[{"code":"draft","set":"bbb"}]},{"pack":[{"code":"draft","set":"eee"}]}]}]}},
+          {"category":"booster_box","contents":{"pack":[{"code":"set","set":"ddd"}]}},
+          {"category":"booster_pack","contents":null}]},
+      {"code":"BBB","name":"Beta Set","type":"masters"},
+      {"code":"CCC","name":"Gamma Drop","releaseDate":"2025-05-05","type":"box",
+        "sealedProduct":[{"category":"box_set","contents":{"pack":[{"code":"bonus","set":"ccc"}]}}]},
+      {"code":"DDD","name":"Delta Decks","type":"commander",
+        "sealedProduct":[{"category":"deck","contents":{"deck":[{"name":"A","set":"ddd"}]}}]},
+      {"code":"AAA","name":"Alpha Set again"}
+    ]}"#;
+
+    #[test]
+    fn the_set_list_is_the_sets_a_booster_pack_is_sold_of() {
+        let sets = booster_set_list(LIST).unwrap();
+        assert_eq!(
+            sets,
+            vec![
+                BoosterSetSummary {
+                    code: "aaa".into(),
+                    name: "Alpha Set".into(),
+                    release_date: Some("2026-01-02".into()),
+                },
+                BoosterSetSummary {
+                    code: "bbb".into(),
+                    name: "Beta Set".into(),
+                    release_date: None,
+                },
+            ]
+        );
+        let json = serde_json::to_value(&sets[0]).unwrap();
+        assert!(json.get("releaseDate").is_some());
+    }
+
+    #[test]
+    fn a_set_list_that_is_not_one_is_refused_in_one_sentence() {
+        let err = booster_set_list(r#"{"data":{}}"#).unwrap_err();
+        assert!(
+            err.starts_with("MTGJSON's set list could not be read"),
+            "{err}"
+        );
+        assert_eq!(booster_set_list(r#"{"data":[]}"#).unwrap(), vec![]);
     }
 
     #[test]
