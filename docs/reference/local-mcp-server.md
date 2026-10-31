@@ -122,14 +122,56 @@ a write needs no answer read.
 
 ## 4. Configuring a client
 
-The panel shows the URL and the token, and a ready-to-copy snippet for each of these. Below,
+The panel shows the URL and the token, and a ready-to-copy snippet for each of these — a one-line
+command where the client has one (Claude Code, Gemini CLI), its config file's entry otherwise. Below,
 `<token>` is the token the panel shows; the port is the default.
 
-**Claude Code**
+**Claude Code** — one line, at user scope so the server is there in every project:
 
 ```bash
-claude mcp add --transport http mtg-grimoire http://127.0.0.1:39147/mcp --header "Authorization: Bearer <token>"
+claude mcp add --transport http --scope user mtg-grimoire http://127.0.0.1:39147/mcp --header "Authorization: Bearer <token>"
 ```
+
+**Gemini CLI** — one line, at user scope, options before the name (the order its own reference
+writes):
+
+```bash
+gemini mcp add --scope user --transport http --header "Authorization: Bearer <token>" mtg-grimoire http://127.0.0.1:39147/mcp
+```
+
+**Codex** (`~/.codex/config.toml`, which the Codex CLI, its IDE extension and the ChatGPT desktop
+app all read). `codex mcp add --url` takes no header, only `--bearer-token-env-var` — an environment
+variable the reader would have to set and every Codex process inherit — so the panel writes the
+table with the header inline:
+
+```toml
+[mcp_servers.mtg-grimoire]
+url = "http://127.0.0.1:39147/mcp"
+http_headers = { Authorization = "Bearer <token>" }
+```
+
+**Antigravity** (_Manage MCP Servers → View raw config_, `mcp_config.json`) reads `serverUrl` for a
+streamable HTTP server, not `url`:
+
+```json
+{
+  "mcpServers": {
+    "mtg-grimoire": {
+      "serverUrl": "http://127.0.0.1:39147/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+**Only clients that run on this computer are offered.** The server listens on `127.0.0.1`, so a
+client whose agent runs on its vendor's servers cannot reach it: ChatGPT's chats (web and desktop —
+custom MCP servers are connected from OpenAI's side, and its connector form takes OAuth or nothing,
+no bearer header), the Gemini app, claude.ai, and — as far as is known — Claude Desktop's own
+_Connectors_ page, which is why Claude Desktop goes through an extension or its config file below. The only bridges
+(a tunnel, OpenAI's Secure MCP Tunnel) would put the collection on the internet, the opposite of
+this server's promise. ChatGPT's desktop app reaches the server through Codex, which reads the file
+above.
 
 **Cursor** (`~/.cursor/mcp.json`) and **VS Code** (`.vscode/mcp.json` uses `"servers"` and
 `"type": "http"` in place of `"mcpServers"`):
@@ -145,7 +187,36 @@ claude mcp add --transport http mtg-grimoire http://127.0.0.1:39147/mcp --header
 }
 ```
 
-**Claude Desktop** (`claude_desktop_config.json`) runs local servers as commands, so it reaches an
+**Claude Desktop, in one click: an extension** (`src/mcp/claude_desktop.rs`). Claude Desktop runs
+local servers as commands; it does not connect to a URL. The panel's _Install in Claude Desktop_ has
+the desktop build an [MCP Bundle](https://github.com/modelcontextprotocol/mcpb) — a zip Claude
+Desktop calls an extension — write it to `<data dir>/mcp/mtg-grimoire.mcpb` and open it, and Claude
+Desktop answers with its own install dialog. _Save extension…_ writes the same file through the
+desktop's save dialog, for a Claude Desktop that did not take it (it installs from Settings →
+Extensions there too). No path crosses IPC either way.
+
+- **Three files**: `manifest.json` (manifest `0.3`, `name` `mtg-grimoire`, `version` the app's),
+  `server/index.js` and `icon.png` (the app's 128 px icon).
+- **The server is a bridge with no dependencies** (`src/mcp/claude_desktop/server.js`): JSON-RPC
+  lines on stdin, each `POST`ed to the app, every answer — JSON or an event stream's `data:` lines —
+  written back a line at a time; the revision `initialize` agreed is sent as
+  `MCP-Protocol-Version` after it. It runs on the Node.js Claude Desktop ships with (`fetch`,
+  Node ≥ 18, the manifest's `compatibility`), so the reader installs nothing. A request the app
+  cannot answer — closed, switched off, a replaced token — is answered with a JSON-RPC error in
+  words, never silence.
+- **The address and the token are in the manifest** (`mcp_config.env`: `MTG_GRIMOIRE_URL`,
+  `MTG_GRIMOIRE_TOKEN`), not asked for by the install dialog (`user_config`), which would have the
+  reader paste the token — the step the bundle replaces. So the token is in Claude Desktop's
+  extension folder in plain text, as it is in the config file below, and _New token_ or a moved
+  port means installing it again; the panel says so under the buttons.
+- **Refused while the switch is off**: an extension installed then would fail on its first request.
+- **Tested** by `claude_desktop::tests`: the archive's three entries and the manifest's fields, and
+  the bridge run on `node` as Claude Desktop runs it, against the real listener — the handshake,
+  a notification, the tool list, then a stale token and a closed port each answered in words. The
+  test says so and passes where no `node` is on the `PATH`. **Not yet installed into a real Claude
+  Desktop**; how it treats a second install of the same `version` (after _New token_) is unseen.
+
+**Claude Desktop, by hand** (`claude_desktop_config.json`) runs local servers as commands, so it reaches an
 HTTP one through [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), which needs Node.js. The
 header is passed through an environment variable with no space after the colon — `mcp-remote`'s own
 advice, because Windows splits an argument containing a space:

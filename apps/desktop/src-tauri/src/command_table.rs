@@ -67,6 +67,14 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "mcp_set_port",
         "the local MCP server is this process's listener on this computer's loopback",
     ),
+    (
+        "mcp_claude_desktop_install",
+        "Claude Desktop's extension for this computer's MCP server, opened by this process",
+    ),
+    (
+        "mcp_claude_desktop_save",
+        "Rust-owned native save dialog for Claude Desktop's extension",
+    ),
     ("window_count", "how many windows this host has open"),
     ("update_status", "the portable updater swaps this exe"),
     ("update_history", "the portable updater swaps this exe"),

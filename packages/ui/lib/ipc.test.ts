@@ -5780,10 +5780,10 @@ describe("the integrations wrappers name the commands plan §3.3 declares", () =
 });
 
 /**
- * The local MCP server's five commands (issues #1395 and #1396, PR 1) — desktop-only, and every
- * one answers a fresh {@link McpStatus}.
+ * The local MCP server's seven commands (issues #1395 and #1396, PR 1) — desktop-only; the first
+ * five answer a fresh {@link McpStatus}, the last two build Claude Desktop's extension.
  *
- * Four take no arguments, `sticky_notes`' trap: an argument object sent to a command that
+ * Six take no arguments, `sticky_notes`' trap: an argument object sent to a command that
  * declares none is a deserialisation error and not a type error. `mcp_set_port` takes one, and
  * `port` under that name is the case worth writing down — `invoke` matches by name, and a wrapper
  * that sent `{ value }` would type-check and be refused with a sentence about a missing field.
@@ -5815,6 +5815,16 @@ describe("the local MCP server's wrappers name the commands mcp/mod.rs declares"
     // The answer is handed back whole: the panel writes it straight into its cache.
     expect(await ipc[method]()).toEqual(status);
     expect(invoke).toHaveBeenCalledWith(command);
+  });
+
+  it("mcpClaudeDesktopInstall and mcpClaudeDesktopSave take no arguments", async () => {
+    invoke.mockResolvedValue(null);
+    await ipc.mcpClaudeDesktopInstall();
+    expect(invoke).toHaveBeenCalledWith("mcp_claude_desktop_install");
+
+    invoke.mockResolvedValue(true);
+    expect(await ipc.mcpClaudeDesktopSave()).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("mcp_claude_desktop_save");
   });
 
   it("mcpSetPort sends the port under `port`", async () => {
@@ -5884,16 +5894,20 @@ describe("the local MCP server's wrappers name the commands mcp/mod.rs declares"
     );
   };
 
-  it.each(["mcp_status", "mcp_enable", "mcp_disable", "mcp_rotate_token"])(
-    "%s declares no parameter a caller names",
-    (command) => {
-      expect(
-        Object.keys(MCP_SOURCES).length,
-        "nothing read under src-tauri/src/mcp/",
-      ).toBeGreaterThan(0);
-      expect(declared(command)).toEqual([]);
-    },
-  );
+  it.each([
+    "mcp_status",
+    "mcp_enable",
+    "mcp_disable",
+    "mcp_rotate_token",
+    "mcp_claude_desktop_install",
+    "mcp_claude_desktop_save",
+  ])("%s declares no parameter a caller names", (command) => {
+    expect(
+      Object.keys(MCP_SOURCES).length,
+      "nothing read under src-tauri/src/mcp/",
+    ).toBeGreaterThan(0);
+    expect(declared(command)).toEqual([]);
+  });
 
   it("mcp_set_port declares `port: u16` and nothing else a caller names", () => {
     expect(

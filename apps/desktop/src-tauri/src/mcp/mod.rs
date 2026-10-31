@@ -12,14 +12,16 @@
 //! own op. Nothing leaves the computer, and nothing is gated on a membership: it costs the service
 //! nothing (issue #1396, knob 5).
 //!
-//! Four files:
+//! Five files:
 //!
 //! - this one: the setting (`app_meta` `mcp_server`), the [`McpSlot`] holding the one listener, the
 //!   five `#[tauri::command]`s behind the panel, and [`resume`] at launch;
 //! - [`http`]: the listener and the gates a request passes before it is read — the host, the
 //!   origin, the method, the token, the size;
 //! - [`rpc`]: JSON-RPC 2.0 and MCP's lifecycle — `initialize`, `ping`, `tools/list`, `tools/call`;
-//! - [`tools`]: the ten tools, each a short translation into one or two table commands.
+//! - [`tools`]: the ten tools, each a short translation into one or two table commands;
+//! - [`claude_desktop`]: Claude Desktop's one-click install — an MCP Bundle naming this server,
+//!   opened or saved by the panel's two buttons.
 //!
 //! **Who can reach it.** A listener on the loopback is reachable by every process on the computer
 //! and by any web page the reader opens, so it answers nobody who does not carry the token, and it
@@ -28,6 +30,7 @@
 //! ([`http::gate`]). The token is 32 random bytes, kept in `app_meta` beside the switch — a row
 //! no sync spec names, so it never leaves this installation — and compared in constant time.
 
+pub mod claude_desktop;
 pub mod http;
 pub mod rpc;
 pub mod tools;

@@ -20,7 +20,13 @@ import {
   SENDING,
   STRANDED,
 } from "./IntegrationsPanel";
-import { listeningLine, MCP_HEADING, MCP_OFF } from "./LocalMcpSection";
+import {
+  EXTENSION_LINE,
+  EXTENSION_OPENED,
+  listeningLine,
+  MCP_HEADING,
+  MCP_OFF,
+} from "./LocalMcpSection";
 
 const meta = {
   title: "Settings/IntegrationsPanel",
@@ -43,7 +49,7 @@ const meta = {
         component:
           "**Two parts, two switches.** First the local MCP server (issue #1395): an endpoint " +
           "this app serves on `127.0.0.1` while it is open, so an AI agent on the same computer " +
-          "— Claude Desktop, Claude Code, Cursor — can read and add to the collection, wishlist " +
+          "— Claude Code, Claude Desktop, Codex, Gemini CLI, Antigravity, Cursor — can read and add to the collection, wishlist " +
           "and decks. Free, desktop-only, nothing leaves the computer; gated by a bearer token " +
           "the part masks until asked, copies, and replaces only after a question. The port is " +
           "the reader's to move, which is the way out when a launch finds it taken. The " +
@@ -318,6 +324,31 @@ export const LocalServerOn: Story = {
     );
     await userEvent.click(canvas.getByRole("button", { name: "Show the token" }));
     await expect(canvas.getByText(FAKE_MCP_TOKEN)).toBeInTheDocument();
+  },
+};
+
+/**
+ * Claude Desktop's one-click install: its choice draws **Install in Claude Desktop** and **Save
+ * extension…** above the config file's snippet. Over the fake there is no Claude Desktop to open,
+ * so the press answers as the desktop does once it has handed the file over.
+ */
+export const LocalServerClaudeDesktop: Story = {
+  name: "Local server: Claude Desktop extension",
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(await theLocalSwitch(canvas));
+    // The cloud part below has lines of its own; this one's is inside the local group.
+    const local = within(canvas.getByRole("group", { name: MCP_HEADING }));
+    await userEvent.click(await local.findByRole("radio", { name: "Claude Desktop" }));
+    await expect(local.getByRole("status")).toHaveTextContent(EXTENSION_LINE);
+
+    await userEvent.click(local.getByRole("button", { name: "Install in Claude Desktop" }));
+    await waitFor(async () => {
+      await expect(local.getByRole("status")).toHaveTextContent(EXTENSION_OPENED);
+    });
+    await expect(
+      local.getByRole("button", { name: "Copy the Claude Desktop configuration" }),
+    ).toBeInTheDocument();
   },
 };
 

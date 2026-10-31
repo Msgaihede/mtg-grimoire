@@ -10,15 +10,28 @@ const mcpEnable = vi.hoisted(() => vi.fn());
 const mcpDisable = vi.hoisted(() => vi.fn());
 const mcpRotateToken = vi.hoisted(() => vi.fn());
 const mcpSetPort = vi.hoisted(() => vi.fn());
+const mcpClaudeDesktopInstall = vi.hoisted(() => vi.fn());
+const mcpClaudeDesktopSave = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { mcpStatus, mcpEnable, mcpDisable, mcpRotateToken, mcpSetPort },
+  ipc: {
+    mcpStatus,
+    mcpEnable,
+    mcpDisable,
+    mcpRotateToken,
+    mcpSetPort,
+    mcpClaudeDesktopInstall,
+    mcpClaudeDesktopSave,
+  },
 }));
 const copyText = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/clipboard", () => ({ copyText }));
 
 import {
   clientSnippet,
+  EXTENSION_LINE,
+  EXTENSION_OPENED,
+  EXTENSION_SAVED,
   listeningLine,
   LocalMcpSection,
   MCP_OFF,
@@ -26,6 +39,7 @@ import {
   NOT_RUNNING,
   parsePort,
   PORT_RANGE,
+  type McpClient,
 } from "./LocalMcpSection";
 
 const TOKEN = "0123456789abcdef".repeat(4);
@@ -71,6 +85,8 @@ beforeEach(() => {
   mcpDisable.mockReset();
   mcpRotateToken.mockReset();
   mcpSetPort.mockReset();
+  mcpClaudeDesktopInstall.mockReset();
+  mcpClaudeDesktopSave.mockReset();
   copyText.mockReset().mockResolvedValue(undefined);
 });
 
@@ -187,6 +203,61 @@ describe("LocalMcpSection", () => {
     expect(copyText).toHaveBeenCalledWith(clientSnippet("claude-desktop", ON.url, TOKEN));
   });
 
+  /** Claude Desktop's one-click install: drawn on its choice alone, above the snippet it replaces. */
+  it("installs in Claude Desktop, and says to finish in its dialog", async () => {
+    mcpStatus.mockResolvedValue(ON);
+    mcpClaudeDesktopInstall.mockResolvedValue(undefined);
+    setup();
+    await theSwitch();
+
+    expect(await screen.findByRole("radio", { name: "Claude Code" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Install in Claude Desktop/ })).toBeNull();
+
+    await userEvent.click(screen.getByRole("radio", { name: "Claude Desktop" }));
+    expect(screen.getByRole("status")).toHaveTextContent(EXTENSION_LINE);
+    await userEvent.click(screen.getByRole("button", { name: "Install in Claude Desktop" }));
+
+    expect(mcpClaudeDesktopInstall).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(EXTENSION_OPENED));
+    // The file's snippet stays, for a reader who would rather edit the config.
+    expect(
+      screen.getByRole("button", { name: "Copy the Claude Desktop configuration" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says the desktop's refusal to open the extension on the panel's line", async () => {
+    mcpStatus.mockResolvedValue(ON);
+    mcpClaudeDesktopInstall.mockRejectedValue(
+      "The extension could not be opened — is Claude Desktop installed?",
+    );
+    setup();
+    await theSwitch();
+
+    await userEvent.click(await screen.findByRole("radio", { name: "Claude Desktop" }));
+    await userEvent.click(screen.getByRole("button", { name: "Install in Claude Desktop" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/is Claude Desktop installed\?/);
+    expect(screen.getByRole("status")).toHaveTextContent(EXTENSION_LINE);
+  });
+
+  it("saves the extension, and a Cancel says nothing", async () => {
+    mcpStatus.mockResolvedValue(ON);
+    mcpClaudeDesktopSave.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    setup();
+    await theSwitch();
+
+    await userEvent.click(await screen.findByRole("radio", { name: "Claude Desktop" }));
+    const saveButton = screen.getByRole("button", { name: "Save extension…" });
+
+    await userEvent.click(saveButton);
+    await waitFor(() => expect(saveButton).not.toHaveAttribute("aria-busy"));
+    expect(mcpClaudeDesktopSave).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent(EXTENSION_LINE);
+
+    await userEvent.click(saveButton);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(EXTENSION_SAVED));
+  });
+
   it("says a clipboard refusal rather than claiming a copy", async () => {
     mcpStatus.mockResolvedValue(ON);
     copyText.mockRejectedValue("The clipboard is not available.");
@@ -288,14 +359,42 @@ describe("parsePort", () => {
 describe("clientSnippet", () => {
   const url = "http://127.0.0.1:39147/mcp";
 
-  it("writes Claude Code's command", () => {
+  /** Parsed, for the clients whose snippet is a file rather than a command. */
+  const json = (client: McpClient) => JSON.parse(clientSnippet(client, url, TOKEN));
+
+  it("writes Claude Code's command, at user scope", () => {
     expect(clientSnippet("claude-code", url, TOKEN)).toBe(
-      `claude mcp add --transport http mtg-grimoire ${url} --header "Authorization: Bearer ${TOKEN}"`,
+      `claude mcp add --transport http --scope user mtg-grimoire ${url} --header "Authorization: Bearer ${TOKEN}"`,
     );
   });
 
+  it("writes Gemini CLI's command, at user scope, options before the name", () => {
+    expect(clientSnippet("gemini", url, TOKEN)).toBe(
+      `gemini mcp add --scope user --transport http --header "Authorization: Bearer ${TOKEN}" mtg-grimoire ${url}`,
+    );
+  });
+
+  /** `codex mcp add` takes no header, only an environment variable's name — so a table. */
+  it("writes Codex's config.toml table, the header inline", () => {
+    expect(clientSnippet("codex", url, TOKEN)).toBe(
+      [
+        "[mcp_servers.mtg-grimoire]",
+        `url = "${url}"`,
+        `http_headers = { Authorization = "Bearer ${TOKEN}" }`,
+      ].join("\n"),
+    );
+  });
+
+  it("writes Antigravity's serverUrl, not url", () => {
+    expect(json("antigravity")).toEqual({
+      mcpServers: {
+        "mtg-grimoire": { serverUrl: url, headers: { Authorization: `Bearer ${TOKEN}` } },
+      },
+    });
+  });
+
   it("writes the URL-and-headers JSON Cursor reads", () => {
-    expect(JSON.parse(clientSnippet("cursor", url, TOKEN))).toEqual({
+    expect(json("cursor")).toEqual({
       mcpServers: {
         "mtg-grimoire": { url, headers: { Authorization: `Bearer ${TOKEN}` } },
       },
@@ -307,7 +406,7 @@ describe("clientSnippet", () => {
    * for `npx` re-splitting arguments on spaces on Windows. A space here is three arguments there.
    */
   it("writes Claude Desktop's mcp-remote bridge, header without a space", () => {
-    expect(JSON.parse(clientSnippet("claude-desktop", url, TOKEN))).toEqual({
+    expect(json("claude-desktop")).toEqual({
       mcpServers: {
         "mtg-grimoire": {
           command: "npx",

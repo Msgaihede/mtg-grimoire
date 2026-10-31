@@ -13,7 +13,8 @@
  * with no membership, no relay and nothing leaving the computer. The two share a Settings panel and
  * nothing else — the server reads the database directly, never the copy.
  *
- * **Desktop only.** The commands are registered by `desktop.rs` alone; the light app's hosts have
+ * **Desktop only.** The commands are registered by `desktop.rs` alone (the last two in
+ * `mcp/claude_desktop.rs`); the light app's hosts have
  * no socket to open, and its Settings leaves the panel out (`LIGHT_SETTINGS`).
  */
 import { invoke } from "./invoke";
@@ -77,4 +78,18 @@ export const mcpCommands = {
    * field is not one the reader can act on. `ipc.test.ts` pins it.
    */
   mcpSetPort: (port: number) => invoke<McpStatus>("mcp_set_port", { port }),
+  /**
+   * **Claude Desktop's one-click install** — `mcp_claude_desktop_install`: the desktop builds an
+   * MCP Bundle (`.mcpb`) naming the server's address and token, writes it into its data folder and
+   * opens it, and Claude Desktop answers with its own install dialog. Refused while the switch is
+   * off, and — with a sentence that says to Save instead — when nothing on the computer opens the
+   * file. The bundle carries the token as it is now: *New token* and a moved port mean installing
+   * it again.
+   */
+  mcpClaudeDesktopInstall: () => invoke<void>("mcp_claude_desktop_install"),
+  /**
+   * The same bundle, saved where the reader chooses — `mcp_claude_desktop_save`, through the
+   * desktop's own save dialog, so no path crosses IPC. `false` for Cancel.
+   */
+  mcpClaudeDesktopSave: () => invoke<boolean>("mcp_claude_desktop_save"),
 };
