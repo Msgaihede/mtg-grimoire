@@ -1,0 +1,32 @@
+[
+  {
+    "name": "a document that declares no variable is asked with none",
+    "query": "{ decks { name } }",
+    "settings": { "archived": true },
+    "variables": null
+  },
+  {
+    "name": "a declared variable is filled from the setting of its name",
+    "query": "query Shelf($archived: Boolean) { decks(archived: $archived) { name } }",
+    "settings": { "archived": true, "rows": 4 },
+    "variables": { "archived": true }
+  },
+  {
+    "name": "a declared variable with no setting is left out, for the document's default",
+    "query": "query Movers($days: Int = 30, $limit: Int) { priceMovers(days: $days, limit: $limit) { cardId } }",
+    "settings": { "limit": 5 },
+    "variables": { "limit": 5 }
+  },
+  {
+    "name": "a null setting is sent as null",
+    "query": "query ($archived: Boolean) { decks(archived: $archived) { name } }",
+    "settings": { "archived": null },
+    "variables": { "archived": null }
+  },
+  {
+    "name": "a string or a comment declares nothing, and a variable declared once is sent once",
+    "query": "# $comment: not a declaration\nquery ($a: Int, $a: Int) { search(text: \"$text: no\") { id } }",
+    "settings": { "a": 1, "comment": 2, "text": 3 },
+    "variables": { "a": 1 }
+  }
+]

@@ -270,8 +270,9 @@ export const WithACustomWidget: Story = {
 
 /**
  * A custom widget's settings, in its card's settings popover: the spec's `settingsRoot` face, drawn
- * after the size and density rows every kind has. The Deck shelf's one switch keeps it to
- * Commander decks — kept in the copy's config as it is pressed, and the card redraws at once.
+ * after the size and density rows every kind has. The Deck shelf's first switch keeps it to
+ * Commander decks — kept in the copy's config as it is pressed, and the card redraws at once — and
+ * its second is a query variable: `$archived` asks the graph again, for the archived decks.
  */
 export const CustomWidgetSettingsOpen: Story = {
   args: {
@@ -305,6 +306,12 @@ export const CustomWidgetSettingsOpen: Story = {
       await expect(shelf.queryByText("Modern Goodstuff")).not.toBeInTheDocument();
     }, MOUNT_TIMEOUT);
     await expect(shelf.getByText("Kenrith Two-Drops")).toBeInTheDocument();
+
+    // A setting the query reads: `$archived` asks the graph again, for the archived decks.
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Commander decks only" }));
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Archived decks" }));
+    await expect(await shelf.findByText("Pauper Elves", {}, MOUNT_TIMEOUT)).toBeInTheDocument();
+    await expect(shelf.queryByText("Kenrith Two-Drops")).not.toBeInTheDocument();
   },
 };
 

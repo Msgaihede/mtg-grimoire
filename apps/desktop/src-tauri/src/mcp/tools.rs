@@ -372,8 +372,10 @@ pub fn list() -> Vec<Value> {
             "Run a widget's data query and answer the state its spec will be drawn over, built as \
              the home page builds it: the answer's data at the state root, /ui from the spec's \
              state.ui, /settings from the spec's state.settings with any settings given laid \
-             over them. Use it to check the spec's $state, $item and repeat paths before storing. \
-             The graph's own errors and the spec's problems, if any, are answered beside it.",
+             over them. The query is asked as the page asks it: every variable it declares is \
+             filled from the setting of the same name (answered as variables). Use it to check \
+             the spec's $state, $item and repeat paths before storing. The graph's own errors and \
+             the spec's problems, if any, are answered beside it.",
             json!({
                 "query": document,
                 "spec": widget_spec_arg.clone(),
@@ -417,8 +419,11 @@ pub fn list() -> Vec<Value> {
              settings under /settings. Settings are drawn in the card's settings popover, never \
              on the widget: name the element they start from in a top-level settingsRoot beside \
              root, bind its inputs to /settings/..., and the app keeps every change (no Save \
-             button). A query or spec that does not fit is refused with every problem named. \
-             Answers the stored widget.",
+             button). A setting can change what the query asks: declare a variable named after \
+             it ($archived for settings.archived) and seed the setting in the spec's \
+             state.settings — the app fills it and asks again when the reader changes it. A query \
+             or spec that does not fit is refused with every problem named. Answers the stored \
+             widget.",
             json!({
                 "name": widget_name.clone(),
                 "description": widget_description.clone(),
@@ -1201,6 +1206,10 @@ fn widget_problems(query: Option<&str>, spec: Option<&Value>) -> Vec<String> {
     if let Some(spec) = spec {
         problems.extend(spec_problems(spec));
     }
+    // The pair: a required variable needs a setting to be filled from.
+    if let (Some(query), Some(spec)) = (query, spec) {
+        problems.extend(variable_problems(query, spec));
+    }
     problems
 }
 
@@ -1213,6 +1222,133 @@ fn widget_check(args: &Args) -> Result<Value, String> {
     }
     let problems = widget_problems(query.as_deref(), spec.as_ref());
     Ok(json!({ "valid": problems.is_empty(), "problems": problems }))
+}
+
+/// A variable a document declares: its name, its type as written, and whether it has a default.
+struct Declared {
+    name: String,
+    ty: String,
+    default: bool,
+}
+
+/// **The variables a document declares**, in order, each once — `queryVariables.ts`'
+/// `declaredVariables`: a declaration is `$name:` (a use has no colon after it), read with strings,
+/// block strings and comments taken out first.
+fn declared_variables(query: &str) -> Vec<Declared> {
+    // The document with every string and comment blanked, so nothing inside one is read as code.
+    let mut code = String::with_capacity(query.len());
+    let mut chars = query.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '#' => {
+                while chars.peek().is_some_and(|&n| n != '\n') {
+                    chars.next();
+                }
+                code.push(' ');
+            }
+            '"' => {
+                let mut look = chars.clone();
+                if look.next() == Some('"') && look.next() == Some('"') {
+                    // A block string, to its closing three quotes.
+                    chars.next();
+                    chars.next();
+                    let mut quotes = 0;
+                    for n in chars.by_ref() {
+                        quotes = if n == '"' { quotes + 1 } else { 0 };
+                        if quotes == 3 {
+                            break;
+                        }
+                    }
+                } else {
+                    while let Some(n) = chars.next() {
+                        match n {
+                            '\\' => {
+                                chars.next();
+                            }
+                            '"' | '\n' => break,
+                            _ => {}
+                        }
+                    }
+                }
+                code.push(' ');
+            }
+            c => code.push(c),
+        }
+    }
+
+    let is_start = |c: char| c == '_' || c.is_ascii_alphabetic();
+    let is_part = |c: char| c == '_' || c.is_ascii_alphanumeric();
+    let mut declared: Vec<Declared> = Vec::new();
+    let mut at = 0;
+    while let Some(dollar) = code[at..].find('$') {
+        let start = at + dollar + 1;
+        at = start;
+        let name: String = code[start..].chars().take_while(|&c| is_part(c)).collect();
+        if !name.chars().next().is_some_and(is_start) {
+            continue;
+        }
+        let after = code[start + name.len()..].trim_start();
+        let Some(ty) = after.strip_prefix(':') else {
+            continue;
+        };
+        let ty_end = ty.find(['=', ',', ')', '$']).unwrap_or(ty.len());
+        let default = ty[ty_end..].starts_with('=');
+        if !declared.iter().any(|d| d.name == name) {
+            declared.push(Declared {
+                name,
+                ty: ty[..ty_end].trim().to_owned(),
+                default,
+            });
+        }
+    }
+    declared
+}
+
+/// **A widget's query variables, from its settings** — `queryVariables.ts`' `queryVariables`: each
+/// declared variable the settings hold, by name, and `None` for a document that declares none. Both
+/// sides hold to `generated/__golden__/query-variables.json`.
+fn query_variables(query: &str, settings: &Map<String, Value>) -> Option<Map<String, Value>> {
+    let declared = declared_variables(query);
+    if declared.is_empty() {
+        return None;
+    }
+    Some(
+        declared
+            .into_iter()
+            .filter_map(|d| settings.get(&d.name).map(|v| (d.name, v.clone())))
+            .collect(),
+    )
+}
+
+/// The spec's `/settings` seeds, with `saved` laid over them — the settings a widget is asked with.
+fn widget_settings(spec: Option<&Value>, saved: Option<&Map<String, Value>>) -> Map<String, Value> {
+    let mut settings = spec
+        .and_then(|s| s.pointer("/state/settings"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (key, value) in saved.into_iter().flatten() {
+        settings.insert(key.clone(), value.clone());
+    }
+    settings
+}
+
+/// Every required variable (`!`, no default) the spec seeds no setting for — a widget that would be
+/// refused by the graph the first time it is drawn.
+fn variable_problems(query: &str, spec: &Value) -> Vec<String> {
+    let seeded = widget_settings(Some(spec), None);
+    declared_variables(query)
+        .into_iter()
+        .filter(|d| d.ty.ends_with('!') && !d.default && !seeded.contains_key(&d.name))
+        .map(|d| {
+            format!(
+                "The query's ${name} is required ({ty}), and the spec seeds no settings.{name} to \
+                 fill it: add it to the spec's state.settings.",
+                name = d.name,
+                ty = d.ty
+            )
+        })
+        .collect()
 }
 
 /// **The state a spec is drawn over, from an answer** — `widgetState.ts`' `widgetState`, which the
@@ -1235,14 +1371,7 @@ fn widget_state(spec: Option<&Value>, data: &Value, saved: Option<&Map<String, V
         .filter(|ui| ui.is_object())
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let mut settings = seeds
-        .and_then(|s| s.get("settings"))
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    for (key, value) in saved.into_iter().flatten() {
-        settings.insert(key.clone(), value.clone());
-    }
+    let settings = widget_settings(spec, saved);
     state.insert("ui".to_owned(), ui);
     state.insert("settings".to_owned(), Value::Object(settings));
     Value::Object(state)
@@ -1257,9 +1386,13 @@ async fn widget_preview(state: &Arc<AppState>, args: &Args) -> Result<Value, Str
         Some(Value::Object(saved)) => Some(saved.clone()),
         Some(_) => return Err("settings must be an object.".to_owned()),
     };
+    // Asked as the page asks it: each declared variable from the setting of its name.
+    let variables =
+        query_variables(&query, &widget_settings(spec.as_ref(), saved.as_ref())).map(Value::Object);
     let core = state.core.clone();
+    let asked = variables.clone();
     let response = tauri::async_runtime::spawn_blocking(move || {
-        let response = crate::graph::graph().run(&core, &query, None, None, None);
+        let response = crate::graph::graph().run(&core, &query, asked, None, None);
         serde_json::to_value(response).map_err(|e| e.to_string())
     })
     .await
@@ -1268,6 +1401,9 @@ async fn widget_preview(state: &Arc<AppState>, args: &Args) -> Result<Value, Str
     let mut answer = json!({
         "state": widget_state(spec.as_ref(), &data, saved.as_ref()),
     });
+    if let Some(variables) = variables {
+        answer["variables"] = variables;
+    }
     if let Some(errors) = response
         .get("errors")
         .filter(|e| e.as_array().is_some_and(|e| !e.is_empty()))
@@ -1337,7 +1473,17 @@ async fn widget_update(state: &Arc<AppState>, args: &Args) -> Result<Value, Stri
     let id = args.required_int("widgetId")?;
     let query = query_arg(args)?;
     let spec = spec_arg(args)?;
-    let problems = widget_problems(query.as_deref(), spec.as_ref());
+    let mut problems = widget_problems(query.as_deref(), spec.as_ref());
+    // One half given: it is paired with the stored other half, so a new query's required variable
+    // is held to the stored spec's settings, and a new spec's settings to the stored query.
+    if query.is_some() != spec.is_some() {
+        let stored = widget_get(state, args).await?;
+        let stored_query = stored["query"].as_str().unwrap_or_default();
+        problems.extend(variable_problems(
+            query.as_deref().unwrap_or(stored_query),
+            spec.as_ref().unwrap_or(&stored["spec"]),
+        ));
+    }
     if !problems.is_empty() {
         return Err(format!(
             "The widget was not changed. {}",
@@ -1870,6 +2016,110 @@ mod tests {
                 case["name"]
             );
         }
+    }
+
+    /// `queryVariables.ts` and [`query_variables`] hold to one golden, so a preview asks what the
+    /// page asks.
+    #[test]
+    fn the_query_variables_are_the_page_s() {
+        let golden: Value = serde_json::from_str(include_str!(
+            "../../../../../packages/ui/features/home/generated/__golden__/query-variables.json"
+        ))
+        .unwrap();
+        let cases = golden.as_array().unwrap();
+        assert!(cases.len() >= 5, "the golden was read");
+        for case in cases {
+            let settings = case["settings"].as_object().unwrap();
+            let asked = query_variables(case["query"].as_str().unwrap(), settings);
+            assert_eq!(
+                asked.map(Value::Object).unwrap_or(Value::Null),
+                case["variables"],
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn a_declaration_has_its_type_and_its_default() {
+        let declared =
+            declared_variables("query ($deck: Int!, $tags: [String!]! = [], $limit: Int) { x }");
+        let got: Vec<(&str, &str, bool)> = declared
+            .iter()
+            .map(|d| (d.name.as_str(), d.ty.as_str(), d.default))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("deck", "Int!", false),
+                ("tags", "[String!]!", true),
+                ("limit", "Int", false)
+            ]
+        );
+        assert!(declared_variables("{ x(t: \"\"\"$a: no\"\"\", u: \"$b: no\") }").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_required_variable_needs_a_seeded_setting() {
+        let state = state("widget-variables");
+        let query = "query ($archived: Boolean!) { decks(archived: $archived) { id } }";
+        let unseeded = done(
+            &state,
+            "widget_check",
+            json!({ "query": query, "spec": widget_spec() }),
+        )
+        .await;
+        assert_eq!(unseeded["valid"], false);
+        assert!(unseeded["problems"][0]
+            .as_str()
+            .unwrap()
+            .contains("$archived is required (Boolean!)"));
+
+        let mut seeded = widget_spec();
+        seeded["state"] = json!({ "settings": { "archived": false } });
+        let fine = done(
+            &state,
+            "widget_check",
+            json!({ "query": query, "spec": seeded }),
+        )
+        .await;
+        assert_eq!(fine["valid"], true, "{fine}");
+
+        // An update that sends one half is held to the stored other half.
+        let made = done(
+            &state,
+            "widget_create",
+            json!({ "name": "Decks", "query": "{ decks { id } }", "spec": widget_spec() }),
+        )
+        .await;
+        let why = refused(
+            &state,
+            "widget_update",
+            json!({ "widgetId": made["id"], "query": query }),
+        )
+        .await;
+        assert!(why.contains("$archived is required"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn a_preview_asks_with_the_variables_its_settings_fill() {
+        let state = state("widget-preview-variables");
+        let mut spec = widget_spec();
+        spec["state"] = json!({ "settings": { "archived": true, "rows": 3 } });
+        let preview = done(
+            &state,
+            "widget_preview",
+            json!({
+                "query": "query ($archived: Boolean) { decks(archived: $archived) { id } }",
+                "spec": spec,
+                "settings": { "archived": false },
+            }),
+        )
+        .await;
+        // The setting laid over the seed is the one asked with; a setting no variable names is not.
+        assert_eq!(preview["variables"], json!({ "archived": false }));
+        assert_eq!(preview["state"]["decks"], json!([]));
+        assert!(preview.get("errors").is_none(), "{preview}");
     }
 
     #[tokio::test]

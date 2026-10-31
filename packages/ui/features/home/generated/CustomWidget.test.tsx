@@ -237,6 +237,43 @@ describe("CustomWidget", () => {
     expect(screen.queryByRole("button", { name: "More, Rows" })).toBeNull();
   });
 
+  it("fills the query's variables from its settings, and asks again when one changes", async () => {
+    const VARIABLE_QUERY = "query ($archived: Boolean) { decks(archived: $archived) { id name } }";
+    const spec = definition().spec as Record<string, unknown>;
+    customWidgets.mockResolvedValue([
+      definition({
+        query: VARIABLE_QUERY,
+        spec: { ...spec, state: { ui: { hide: false }, settings: { rows: 3, archived: false } } },
+      }),
+    ]);
+    const drawn = draw({ widgetId: 5 });
+    expect(await screen.findByText("Burn")).toBeInTheDocument();
+    expect(graphqlQuery).toHaveBeenLastCalledWith(
+      VARIABLE_QUERY,
+      { archived: false },
+      null,
+      DEFAULT_MARKETPLACE,
+    );
+
+    // The reader hides the list (`/ui`), then a setting changes what the query asks.
+    await userEvent.click(screen.getByRole("switch", { name: "Hide list" }));
+    graphqlQuery.mockResolvedValue(answer([{ id: 9, name: "Old Elves" }]));
+    drawn.view.rerender(
+      <CustomWidget
+        widget={placed({ widgetId: 5, settings: { archived: true } })}
+        fit={FIT}
+        editing={false}
+        still={false}
+        onConfig={drawn}
+      />,
+    );
+    await expect.poll(() => graphqlQuery.mock.lastCall?.[1]).toEqual({ archived: true });
+    // Asked over the previous answer: the card stayed up, and the reader's switch with it.
+    expect(screen.getByRole("switch", { name: "Hide list" })).toBeChecked();
+    await userEvent.click(screen.getByRole("switch", { name: "Hide list" }));
+    expect(await screen.findByText("Old Elves")).toBeInTheDocument();
+  });
+
   it("asks its document again on refresh, and keeps the reader's /ui state over the new answer", async () => {
     draw({ widgetId: 5 });
     expect(await screen.findByText("Burn")).toBeInTheDocument();
