@@ -118,6 +118,7 @@ import type {
   StickyNote,
   CustomWidget,
 } from "@grimoire/ui/lib/ipc";
+import { graphAnswerKey } from "./graph";
 
 export type SeedName =
   | "empty"
@@ -2200,8 +2201,9 @@ function starterSeed(): FakeDb {
   });
 }
 
-/** The deck shelf's document, as stored and as {@link starterGraphAnswers} keys it. */
-const DECK_SHELF_QUERY = "query DeckShelf { decks { id name formatName cardCount } }";
+/** The deck shelf's document, as stored: its `$archived` is filled from the setting of that name. */
+const DECK_SHELF_QUERY =
+  "query DeckShelf($archived: Boolean) { decks(archived: $archived) { id name formatName cardCount } }";
 
 /** The collection's figures. */
 const AT_A_GLANCE_QUERY = "query AtAGlance { collectionSummary { totalCards uniqueCards } }";
@@ -2210,8 +2212,9 @@ const AT_A_GLANCE_QUERY = "query AtAGlance { collectionSummary { totalCards uniq
  * **The reader's own widgets** — two, written the way `CATALOG_RULES` asks a model to write them:
  * the answer at the state root, the widget's inputs under `/ui`, its settings under `/settings`.
  * The deck shelf is a `repeat` of rows that open their deck, with a settings face
- * (`settingsRoot`, the card's settings popover) whose one switch keeps it to Commander decks; the
- * glance is two figures and no settings. Seeded only here, the
+ * (`settingsRoot`, the card's settings popover): one switch keeps it to Commander decks on the
+ * page, and the other is a query variable — `$archived` asks the graph for the archived decks
+ * instead. The glance is two figures and no settings. Seeded only here, the
  * table's rule ({@link FakeDb.customWidgets}).
  */
 function starterCustomWidgets(): CustomWidget[] {
@@ -2237,8 +2240,19 @@ function starterCustomWidgets(): CustomWidget[] {
             children: ["deck"],
           },
           face: {
+            type: "Stack",
+            props: { direction: null, gap: "sm", align: null, justify: null, wrap: null },
+            children: ["commander", "archived"],
+          },
+          commander: {
             type: "Checkbox",
             props: { label: "Commander decks only", checked: { $bindState: "/settings/commander" } },
+            children: [],
+          },
+          // A setting the query reads: `$archived` asks again for the other half of the gallery.
+          archived: {
+            type: "Checkbox",
+            props: { label: "Archived decks", checked: { $bindState: "/settings/archived" } },
             children: [],
           },
           deck: {
@@ -2264,7 +2278,7 @@ function starterCustomWidgets(): CustomWidget[] {
           },
         },
         settingsRoot: "face",
-        state: { ui: {}, settings: { commander: false } },
+        state: { ui: {}, settings: { commander: false, archived: false } },
       },
       w: 4,
       h: 3,
@@ -2317,7 +2331,10 @@ function starterCustomWidgets(): CustomWidget[] {
  */
 function starterGraphAnswers(): Record<string, Record<string, unknown>> {
   return {
-    [DECK_SHELF_QUERY]: {
+    [graphAnswerKey(DECK_SHELF_QUERY, { archived: true })]: {
+      decks: [{ id: 5, name: "Pauper Elves", formatName: "Pauper", cardCount: 60 }],
+    },
+    [graphAnswerKey(DECK_SHELF_QUERY, { archived: false })]: {
       decks: [
         { id: 1, name: "Modern Goodstuff", formatName: "Modern", cardCount: 60 },
         { id: 2, name: "Kenrith Two-Drops", formatName: "Commander", cardCount: 100 },

@@ -29,7 +29,13 @@
  * did arrive.
  */
 import { useEffect, useMemo } from "react";
-import { useQueries, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useQueries,
+  useQuery,
+  useQueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
 import { ipc, type GraphResponse } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 
@@ -49,11 +55,17 @@ export interface UseGraphQLOptions {
   operationName?: string;
   /** `false` holds the read — and its bridge — until it is turned on. */
   enabled?: boolean;
+  /**
+   * Keep the previous answer while new variables are asked (`keepPreviousData`) — a custom widget
+   * whose setting changed draws what it had until the new answer lands, rather than unmounting
+   * into a loading line and dropping the reader's own state with it.
+   */
+  keepPrevious?: boolean;
 }
 
 export function useGraphQL<TData = Record<string, unknown>>(
   query: string,
-  { variables, operationName, enabled = true }: UseGraphQLOptions = {},
+  { variables, operationName, enabled = true, keepPrevious = false }: UseGraphQLOptions = {},
 ) {
   const client = useQueryClient();
   const { marketplace } = useMarketplace();
@@ -67,6 +79,7 @@ export function useGraphQL<TData = Record<string, unknown>>(
   const result = useQuery({
     queryKey,
     enabled,
+    placeholderData: keepPrevious ? keepPreviousData : undefined,
     queryFn: async (): Promise<GraphResponse<TData>> => {
       const answer = await ipc.graphqlQuery<TData>(
         query,

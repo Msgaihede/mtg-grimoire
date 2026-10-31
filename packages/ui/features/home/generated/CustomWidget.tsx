@@ -3,7 +3,9 @@
  * placed copy's `config.widgetId`, drawn from its two declarative halves.
  *
  * 1. The **query** runs through `useGraphQL`, so it stays fresh by the cache roots its answer names,
- *    exactly as any widget over the graph would.
+ *    exactly as any widget over the graph would — asked with the variables its settings fill
+ *    (`queryVariables.ts`: each declared variable from the setting of its name), and asked again,
+ *    over the previous answer, when the reader changes one.
  * 2. The **spec** is checked against the catalogue (`checkSpec`) and drawn by `SpecView`, inside
  *    the card's `WidgetFit` (`CatalogFitContext`), over the state `widgetState.ts` makes of the
  *    answer: the answer's `data` at the root, `/ui` from the spec's seeds, `/settings` from the
@@ -33,6 +35,7 @@ import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
 import { WidgetMessage } from "../WidgetParts";
 import { CatalogFitContext } from "./registry";
 import { SpecView, type SpecHost } from "./SpecView";
+import { queryVariables } from "./queryVariables";
 import { useCustomWidgets } from "./useCustomWidgets";
 import {
   answerState,
@@ -69,6 +72,24 @@ export function CustomWidget({ widget, fit }: WidgetBodyProps): ReactElement {
   );
 }
 
+/**
+ * The query's variables: each one the document declares, from the setting of its name
+ * (`queryVariables.ts`) — so a setting changed in the popover asks the document again. Keyed on the
+ * settings' text, so a config write that changed no setting asks nothing.
+ */
+function useVariables(
+  checked: ReturnType<typeof checkSpec>,
+  query: string,
+  saved: Record<string, unknown> | null,
+): Record<string, unknown> | undefined {
+  const settings = checked.ok ? settingsState(checked.spec, saved) : {};
+  const text = JSON.stringify(settings);
+  return useMemo(
+    () => queryVariables(query, JSON.parse(text) as Record<string, unknown>),
+    [query, text],
+  );
+}
+
 /** The live half of a widget's state: the answer's data, and the settings the copy keeps. */
 function useLive(
   checked: ReturnType<typeof checkSpec>,
@@ -94,7 +115,8 @@ function Drawn({
   saved: Record<string, unknown> | null;
 }): ReactElement {
   const checked = useMemo(() => checkSpec(storedSpec), [storedSpec]);
-  const answer = useGraphQL(query, { enabled: checked.ok });
+  const variables = useVariables(checked, query, saved);
+  const answer = useGraphQL(query, { enabled: checked.ok, variables, keepPrevious: true });
   const { refetch } = answer;
 
   const refresh = useCallback(() => void refetch(), [refetch]);
@@ -174,7 +196,9 @@ function SettingsFace({
 }): ReactElement | null {
   const checked = useMemo(() => checkSpec(storedSpec), [storedSpec]);
   const hasFace = checked.ok && checked.settingsRoot !== null;
-  const answer = useGraphQL(query, { enabled: hasFace });
+  // The card's own variables, so the face reads the card's cached answer rather than a second one.
+  const variables = useVariables(checked, query, saved);
+  const answer = useGraphQL(query, { enabled: hasFace, variables, keepPrevious: true });
   const data = answer.data?.data;
   const live = useLive(checked, data, saved);
 

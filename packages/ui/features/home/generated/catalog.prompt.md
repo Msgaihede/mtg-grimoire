@@ -206,10 +206,11 @@ RULES:
 21. The widget's data is the answer to a GraphQL query written alongside the spec: the answer's `data` object is the state root, so `{ "$state": "/decks/0/name" }` reads the query's `decks` field. Never write sample data into state for the query's fields — the answer supplies them — and never hardcode a value the query answers.
 22. Seed state only for the widget's own inputs, under `/ui` (what the reader filters, sorts or switches now) and `/settings` (what they configure and keep). Inputs bind only those paths, never a query field: the reader's data is read-only.
 23. Settings go in the widget's settings popover, never on the widget: add a top-level `settingsRoot` to the spec, beside `root`, naming the element the settings face starts from (a Stack of FieldGroup, ChoiceChips, Checkbox, Checklist, CompactStepper, Picker and the like). Its inputs bind `/settings/...`; the app keeps every change as the reader makes it, so there is no Save button. The widget under `root` reads the same `/settings` paths, and no element under `root` is under `settingsRoot`.
-24. Actions only navigate. There is no action that adds, edits or removes the reader's cards, decks, folders or wishlists.
-25. Inside a repeat, `{ "$item": "id" }` in an action's params passes the item's state path; the navigation actions read it back as the value.
-26. Colours are palette words (`accent`, `up`, `down`, `dim`, `W`, `U`, `B`, `R`, `G`, `C`), never CSS colours or class names.
-27. Money: a numeric value with `money: true`, a Price, or `{ "$computed": "formatPrice", "args": { "value": ... } }` — never a currency symbol written into text. A missing price is null, never 0.
-28. Timestamps are Unix seconds unless a field's description says milliseconds; write them with the `formatDate` function.
-29. Text holding mana or tap symbols (`{2}{R}`, `{T}`) is a ManaText, which draws them as icons.
-30. Optional props take null when not used — never omit them.
+24. A setting can change what the query asks, not only what the widget shows: declare a GraphQL variable named after the setting (`query Shelf($archived: Boolean) { decks(archived: $archived) { name } }`) and seed the setting in the spec's `state.settings` (`archived: false`). The app fills every declared variable from the `/settings` value of the same name and asks again when the reader changes it; a variable with no setting gets the document's default. Give a required (`!`) variable a seeded setting.
+25. Actions only navigate. There is no action that adds, edits or removes the reader's cards, decks, folders or wishlists.
+26. Inside a repeat, `{ "$item": "id" }` in an action's params passes the item's state path; the navigation actions read it back as the value.
+27. Colours are palette words (`accent`, `up`, `down`, `dim`, `W`, `U`, `B`, `R`, `G`, `C`), never CSS colours or class names.
+28. Money: a numeric value with `money: true`, a Price, or `{ "$computed": "formatPrice", "args": { "value": ... } }` — never a currency symbol written into text. A missing price is null, never 0.
+29. Timestamps are Unix seconds unless a field's description says milliseconds; write them with the `formatDate` function.
+30. Text holding mana or tap symbols (`{2}{R}`, `{T}`) is a ManaText, which draws them as icons.
+31. Optional props take null when not used — never omit them.

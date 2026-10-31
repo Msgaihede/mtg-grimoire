@@ -192,6 +192,15 @@ copies and the header button that opens it are [home-page.md](home-page.md) §18
   spec's `state.settings`, with what the copy saved (`config.settings`) laid over it key by key, so
   a setting a newer spec added keeps its default. `ui` and `settings` are the widget's whatever the
   answer names; any other key the spec seeded is sample data, and the answer replaces it.
+- **A setting can change what the query asks** (`generated/queryVariables.ts`): every variable
+  the document declares is filled from the `/settings` value of the same name —
+  `query Shelf($archived: Boolean) { decks(archived: $archived) … }` is asked with
+  `settings.archived` — and a change in the settings popover asks again, over the previous answer
+  (`useGraphQL`'s `keepPrevious`), so the card stays up and the reader's `/ui` state with it. A
+  declared variable with no setting is left out for the document's default; a setting no variable
+  names is never sent. Rust's `query_variables` (`widget_preview`) holds to the same golden,
+  `__golden__/query-variables.json`, and `widget_check` refuses a required (`!`, no default)
+  variable the spec seeds no setting for.
 - **A refreshed answer moves the data and nothing else.** `SpecView`'s `live` writes the answer's
   top-level keys into the store each time it changes, so a reader's filter survives the collection
   changing under it. A changed definition (`updatedAt`) remounts, from its own seeds.
