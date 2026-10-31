@@ -1,11 +1,13 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { BoosterCard, BoosterSet, BoosterSetSummary, PrintingPrices } from "@/lib/ipc";
 import { PRICES, PRODUCT, SET as FIXTURE } from "../booster/fixture";
+import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { formatPrice } from "@/lib/prices";
+import { useAppStore } from "@/lib/store";
 import { pickOption } from "@/test-dropdown";
 
 /** Every card the fixture's sheets name, in the corpus, but for one MTGJSON alone knows. */
@@ -92,7 +94,29 @@ function setup() {
   return { user: userEvent.setup(), onBack };
 }
 
+beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
+
 describe("PackOpener", () => {
+  /** Issue #1433: ctrl+wheel over a set's stage steps the opened wall's own section. */
+  it("zooms the opened wall on a ctrl+wheel, and no other wall", async () => {
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+    await screen.findByText(/^Expected value/);
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    const wall = screen.getByRole("list", { name: "Opened cards" });
+    expect(wall.style.gridTemplateColumns).toBe("repeat(auto-fill, minmax(152px, 1fr))");
+
+    fireEvent.wheel(wall.closest(".overflow-y-auto")!, { deltaY: -100, ctrlKey: true });
+
+    const { cardZoom, zoomSection } = useAppStore.getState();
+    expect(cardZoom.packs).toBe(1.1);
+    for (const section of ZOOM_SECTIONS.filter((s) => s !== "packs")) {
+      expect(cardZoom[section]).toBe(DEFAULT_ZOOM);
+    }
+    expect(zoomSection).toBe("packs");
+    expect(wall.style.gridTemplateColumns).toBe("repeat(auto-fill, minmax(167px, 1fr))");
+  });
+
   it("opens a booster: its cards, its total and the product's figures", async () => {
     const { user } = setup();
     await user.click(await screen.findByRole("button", { name: /Test Set/ }));

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 import { LogOut, Trash2 } from "lucide-react";
 import { ipc, ipcError, type DraftCard, type DraftMode, type DraftView } from "@/lib/ipc";
+import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import { BuildPanel, type DraftRole } from "../build/BuildPanel";
 import { FlowBar, QUIET_BUTTON } from "../setup/parts";
@@ -64,6 +65,11 @@ export function DraftSession({
   notice?: string | null;
 }): JSX.Element {
   const [view, setView] = useState<DraftView | null>(initial);
+  // Ctrl+wheel anywhere over the draft steps its cards (issue #1433) — the pack, a Winston pile and
+  // the pool, which all read `cardZoom.draft`. The scroll container rather than one wall, so a
+  // gesture over the gaps between them is caught too and is never WebView2's page zoom.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useCardZoomGesture(scrollRef, "draft");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // A ref as well as the state: a fast second click lands before the re-render that greys the
@@ -202,7 +208,7 @@ export function DraftSession({
           </button>
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto pb-8 pt-3 pr-1">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pb-8 pt-3 pr-1">
         {notice !== null && (
           <p
             role="status"

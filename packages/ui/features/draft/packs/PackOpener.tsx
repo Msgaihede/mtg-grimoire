@@ -1,8 +1,9 @@
-import { useState, type JSX } from "react";
+import { useRef, useState, type JSX } from "react";
 import { RefreshCw } from "lucide-react";
 import { PageBar, type PageCrumb } from "@/components/PageBar";
 import type { BoosterSetSummary } from "@/lib/ipc";
 import { ago } from "@/lib/relativeTime";
+import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useBoosterSet, useBoosterSets } from "../sets";
 import { SetGrid } from "../SetGrid";
 import { ProductStage, SECONDARY } from "./ProductStage";
@@ -83,6 +84,10 @@ function SetStage({
 }): JSX.Element {
   const booster = useBoosterSet(summary.code);
   const set = booster.set;
+  // Ctrl+wheel over the stage steps the opened wall's cards (`cardZoom.packs`, issue #1433) — the
+  // whole scroll box, so a gesture over the figures beside the wall is not WebView2's page zoom.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useCardZoomGesture(scrollRef, "packs");
   return (
     <section className="flex h-full min-h-0 flex-col">
       <PageBar
@@ -108,7 +113,7 @@ function SetStage({
           )
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto pb-6 pr-6 pt-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pb-6 pr-6 pt-3">
         {booster.loading ? (
           <p role="status" className="m-0 text-sm text-dim">
             Fetching booster data from MTGJSON…

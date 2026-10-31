@@ -1,9 +1,11 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import type { DraftCard, DraftView, WinstonView } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
+import { useAppStore } from "@/lib/store";
 import { pickOption } from "@/test-dropdown";
 import { boxed, pointerDrag } from "@/test-drag";
 
@@ -115,6 +117,7 @@ beforeEach(() => {
     return () => {};
   });
   openDraftDeck.mockReset();
+  useAppStore.setState(useAppStore.getInitialState());
 });
 
 function setup(initial: DraftView, role: DraftRole = "solo", draft: number | null = 42) {
@@ -466,6 +469,64 @@ describe("DraftSession", () => {
         ),
       );
       expect(screen.getByText("Waiting for Bea")).toBeInTheDocument();
+    });
+  });
+  /**
+   * Ctrl+wheel steps the draft's cards (issue #1433): the pack, a Winston pile and the pool all
+   * read `cardZoom.draft`, and the gesture is caught on the session's scroll box, so a wheel over
+   * any of them — or the gaps between — steps that section and no other.
+   */
+  describe("the zoom", () => {
+    const scroller = () => screen.getByRole("list", { name: "Pack" }).closest(".overflow-y-auto")!;
+    const tileWidth = (list: HTMLElement) => list.style.gridTemplateColumns;
+
+    it("steps only the draft's section on a ctrl+wheel, and sizes the pack and the pool by it", () => {
+      setup(view({ pool: [card("Bolt")] }));
+      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(190px, 1fr))");
+      const pool = () =>
+        screen.getByRole("list", { name: "Mana value 1: 1 card" }).parentElement!
+          .parentElement as HTMLElement;
+      expect(tileWidth(pool())).toBe("repeat(8, minmax(0, 190px))");
+
+      fireEvent.wheel(scroller(), { deltaY: -100, ctrlKey: true });
+
+      const { cardZoom, zoomSection } = useAppStore.getState();
+      expect(cardZoom.draft).toBe(1.1);
+      for (const section of ZOOM_SECTIONS.filter((s) => s !== "draft")) {
+        expect(cardZoom[section]).toBe(DEFAULT_ZOOM);
+      }
+      expect(zoomSection).toBe("draft");
+      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(209px, 1fr))");
+      expect(tileWidth(pool())).toBe("repeat(8, minmax(0, 209px))");
+    });
+
+    it("leaves a wheel without ctrl to the scroll", () => {
+      setup(view());
+      fireEvent.wheel(scroller(), { deltaY: -100 });
+      expect(useAppStore.getState().cardZoom.draft).toBe(DEFAULT_ZOOM);
+    });
+
+    it("moves the Card size slider with the gesture, and the slider steps the same ladder", () => {
+      setup(view());
+      const slider = screen.getByRole("slider", { name: "Card size" });
+      expect(slider).toHaveAttribute("aria-valuetext", "100%");
+
+      fireEvent.wheel(scroller(), { deltaY: 100, ctrlKey: true });
+      expect(slider).toHaveAttribute("aria-valuetext", "90%");
+
+      // Three stops up from 90% in one move — walked through `zoomCards`, so it lands on a stop.
+      fireEvent.change(slider, { target: { value: "7" } });
+      expect(useAppStore.getState().cardZoom.draft).toBe(1.2);
+      expect(slider).toHaveAttribute("aria-valuetext", "120%");
+      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(228px, 1fr))");
+    });
+
+    it("sizes a Winston pile turned face up by the same zoom", () => {
+      useAppStore.setState((s) => ({ cardZoom: { ...s.cardZoom, draft: 0.5 } }));
+      setup(winston());
+      expect(tileWidth(screen.getByRole("list", { name: "Pile 1" }))).toBe(
+        "repeat(auto-fill, minmax(75px, 1fr))",
+      );
     });
   });
 });
