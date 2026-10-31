@@ -170,12 +170,16 @@ other entry.
   query blank or over 20 000 bytes, a spec that is not an object with a string `root` and an object
   `elements` or is over 200 000 bytes serialized, a width outside 2–12 or a height outside 2–8.
   Component names, props and the query's validity are not looked at.
-- **The desktop's MCP server** ([local-mcp-server.md](local-mcp-server.md)) adds `widget_list`
-  (id, name, description, footprint) and `widget_create`, which checks the query with the read
-  graph and the spec against `catalog.contract.json` — every element's type a component, its props
-  declared and the required ones present, its children real keys, its actions the catalogue's or
-  json-render's four built-ins — before it calls `custom_widget_create`. That is the contract
-  snapshot's first Rust reader.
+- **The desktop's MCP server** ([local-mcp-server.md](local-mcp-server.md)) is how an agent writes
+  one: `widget_vocabulary` (the committed prompt, and on request the contract) and the MCP prompt
+  `custom_widget`; `widget_check` (the query by the read graph, the spec against
+  `catalog.contract.json` — every element's type a component, its props declared and the required
+  ones present, its children real keys, its actions the catalogue's or json-render's four built-ins,
+  its `settingsRoot` an element apart from the root) and `widget_preview` (the state the page would
+  draw, Rust's `widget_state` held to this page's golden `__golden__/widget-state.json`);
+  `widget_list` and `widget_get`; and `widget_create`, `widget_update` and `widget_delete`, the only
+  tools that change or remove a row (the owner's decision, 2026-10-31). A deleted widget's placed
+  copies are taken off by the page (`HomePage`, once the layout and the list have both been read).
 
 ## Drawing a custom widget (the page)
 

@@ -1,0 +1,43 @@
+[
+  {
+    "name": "the answer's data is the state root, with an empty /ui and /settings",
+    "spec": { "root": "a", "elements": {} },
+    "data": { "decks": [{ "id": 7, "name": "Burn" }], "collectionSummary": { "totalCards": 12 } },
+    "saved": null,
+    "state": {
+      "decks": [{ "id": 7, "name": "Burn" }],
+      "collectionSummary": { "totalCards": 12 },
+      "ui": {},
+      "settings": {}
+    }
+  },
+  {
+    "name": "/ui and /settings are seeded from the spec; saved settings lie over the seeds key by key",
+    "spec": {
+      "root": "a",
+      "elements": {},
+      "state": { "ui": { "filter": "" }, "settings": { "rows": 5, "sort": "value" } }
+    },
+    "data": { "decks": [] },
+    "saved": { "rows": 9 },
+    "state": { "decks": [], "ui": { "filter": "" }, "settings": { "rows": 9, "sort": "value" } }
+  },
+  {
+    "name": "ui and settings are the widget's, whatever the answer names; sample data in the seeds is replaced",
+    "spec": {
+      "root": "a",
+      "elements": {},
+      "state": { "decks": [{ "name": "a model's sample" }], "settings": { "rows": 3 } }
+    },
+    "data": { "decks": [{ "name": "Elves" }], "ui": { "x": 1 }, "settings": { "rows": 1 } },
+    "saved": null,
+    "state": { "decks": [{ "name": "Elves" }], "ui": {}, "settings": { "rows": 3 } }
+  },
+  {
+    "name": "an answer with no data is a state of the widget's own parts alone",
+    "spec": { "root": "a", "elements": {}, "state": { "ui": { "open": true } } },
+    "data": null,
+    "saved": null,
+    "state": { "ui": { "open": true }, "settings": {} }
+  }
+]

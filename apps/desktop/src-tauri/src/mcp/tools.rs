@@ -15,11 +15,19 @@
 //! a home widget's query against, a check of a draft with each problem's line and column, and the
 //! answer, exactly as the page's `graphql_query` would get it.
 //! **Writes**: `add_to_collection`, `add_to_wishlist` and `add_card_to_deck` — the three adds issue
-//! #1396 names, each the press of the same name in the app — and `widget_create`, which stores a
-//! custom home widget (`grimoire_core::custom_widgets`, user schema v68) once its query has passed
-//! the read graph and its spec the widget catalogue's contract ([`spec_problems`]); `widget_list`
-//! reads the stored ones back. Nothing here changes or removes a row: an agent proposing a
-//! deletion asks the reader, who has the app open.
+//! #1396 names, each the press of the same name in the app. Nothing here changes or removes a row
+//! of the reader's collection, wishlist or decks: an agent proposing a deletion asks the reader,
+//! who has the app open.
+//!
+//! **Custom widgets are the one exception, and only for the widgets themselves** (the owner's
+//! decision, 2026-10-31): a widget is something an agent writes for the reader, so it may write it
+//! again. `widget_vocabulary` hands an agent the catalogue (the committed prompt and contract);
+//! `widget_check` runs `widget_create`'s checks — the query by the read graph, the spec by the
+//! catalogue's contract ([`spec_problems`]) — and stores nothing; `widget_preview` runs the query
+//! and answers the state the page would draw the spec over ([`widget_state`]); `widget_list` and
+//! `widget_get` read the stored ones (`grimoire_core::custom_widgets`, user schema v68); and
+//! `widget_create`, `widget_update` and `widget_delete` write them, checked first. A deleted
+//! widget's placed copies are taken off the home page by the page itself.
 //!
 //! **A write tells every window** ([`announce`]). `crate::changes` emits `db:changed` only while a
 //! second window is open, since the window that pressed already knows; a write no window made has
@@ -85,6 +93,12 @@ const DEFAULT_WIDGET_H: i64 = 3;
 const CATALOG_CONTRACT: &str =
     include_str!("../../../../../packages/ui/features/home/generated/catalog.contract.json");
 
+/// **The prompt a model writes a widget's spec from** — json-render's, with the app's
+/// `CATALOG_RULES`, the second committed snapshot `catalog.test.tsx` holds to `catalog.ts`.
+/// `widget_vocabulary` answers it, and so does the MCP prompt `custom_widget` (`rpc.rs`).
+pub const CATALOG_PROMPT: &str =
+    include_str!("../../../../../packages/ui/features/home/generated/catalog.prompt.md");
+
 /// The actions json-render answers itself, on the widget's own state, whatever the catalogue
 /// declares.
 const BUILT_IN_ACTIONS: [&str; 4] = ["setState", "pushState", "removeState", "validateForm"];
@@ -107,6 +121,25 @@ pub fn list() -> Vec<Value> {
         "idempotentHint": false,
         "openWorldHint": false,
     });
+    // A widget's own rewrite and removal: the only tools that change or remove a row.
+    let edit = json!({
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+    });
+    let remove = json!({
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+    });
+    let widget_id = json!({ "type": "integer", "description": "From widget_list." });
+    let widget_name = json!({ "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_NAME_CHARS, "description": "The widget's title." });
+    let widget_description = json!({ "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_DESCRIPTION_CHARS, "description": "What it shows, in a sentence (default empty)." });
+    let widget_spec_arg = json!({ "type": "object", "description": "The json-render spec: root (an element key), an optional settingsRoot (the element key of the settings popover's face), elements (key → { type, props, children, on?, visible?, repeat? }) and an optional state." });
+    let widget_w = json!({ "type": "integer", "minimum": grimoire_core::custom_widgets::W.start(), "maximum": grimoire_core::custom_widgets::W.end(), "description": "Width in grid cells (default 4)." });
+    let widget_h = json!({ "type": "integer", "minimum": grimoire_core::custom_widgets::H.start(), "maximum": grimoire_core::custom_widgets::H.end(), "description": "Height in grid cells (default 3)." });
     let limit = json!({
         "type": "integer", "minimum": 1, "maximum": MAX_LIMIT,
         "description": "How many rows to answer (default 50).",
@@ -303,12 +336,69 @@ pub fn list() -> Vec<Value> {
             &add,
         ),
         tool(
+            "widget_vocabulary",
+            "Read the widget catalogue",
+            "Everything a custom home widget may be built from, for writing one: the prompt — the \
+             json-render spec format, every catalogue component with its props, the actions and \
+             functions, and this app's rules (the query answer's data is the state root, the \
+             widget's own inputs under /ui, settings under /settings in a settingsRoot face drawn \
+             in the card's settings popover, palette colours, money through formatPrice) — and, \
+             with includeContract, the same catalogue as JSON Schema: every component's props and \
+             every action's params, what widget_check checks a spec against. Read it before \
+             writing a spec.",
+            json!({
+                "includeContract": { "type": "boolean", "description": "Also answer the contract — every component's props and action's params as JSON Schema (about 56 KB)." },
+            }),
+            &[],
+            &read,
+        ),
+        tool(
+            "widget_check",
+            "Check a custom widget",
+            "Check a widget's data query and spec exactly as widget_create and widget_update do — \
+             the query against the read graph, the spec against the catalogue's contract — and \
+             store nothing. Either may be left out to check the other alone. Answers whether it \
+             would be stored, and every problem named by element.",
+            json!({
+                "query": document,
+                "spec": widget_spec_arg.clone(),
+            }),
+            &[],
+            &read,
+        ),
+        tool(
+            "widget_preview",
+            "Preview a custom widget's state",
+            "Run a widget's data query and answer the state its spec will be drawn over, built as \
+             the home page builds it: the answer's data at the state root, /ui from the spec's \
+             state.ui, /settings from the spec's state.settings with any settings given laid \
+             over them. Use it to check the spec's $state, $item and repeat paths before storing. \
+             The graph's own errors and the spec's problems, if any, are answered beside it.",
+            json!({
+                "query": document,
+                "spec": widget_spec_arg.clone(),
+                "settings": { "type": "object", "description": "Settings as a reader might have kept them, laid over the spec's own (default none)." },
+            }),
+            &["query"],
+            &read,
+        ),
+        tool(
             "widget_list",
             "List custom widgets",
             "The reader's own home-page widgets, each with the id the home page places it by, its \
-             name, description and footprint in grid cells. The query and the spec are left out.",
+             name, description and footprint in grid cells. The query and the spec are left out — \
+             widget_get answers them.",
             json!({}),
             &[],
+            &read,
+        ),
+        tool(
+            "widget_get",
+            "Get a custom widget",
+            "One custom widget whole: its name, description, data query, spec and footprint — what \
+             widget_update starts from.",
+            json!({ "widgetId": widget_id.clone() }),
+            &["widgetId"],
             &read,
         ),
         tool(
@@ -316,28 +406,57 @@ pub fn list() -> Vec<Value> {
             "Create a custom widget",
             "Store a custom widget the reader can then place on their home page from its Custom \
              widgets dialog. A widget is a GraphQL data query over the schema graph_schema \
-             answers — check it with graph_validate first, and try it with graph_query — and a \
-             json-render spec ({ root, elements, state? }) built from the app's widget catalogue: \
-             every element's type a catalogue component, its props that component's (every \
-             required prop present; a nullable one may be null), its children keys of other \
-             elements, and its on.<event> actions catalogue actions or json-render's setState, \
-             pushState, removeState and validateForm. The spec's state root is the query \
-             answer's data — {\"$state\": \"/decks\"} reads data.decks — with the widget's own \
-             inputs under /ui and its settings under /settings. Settings are drawn in the \
-             card's settings popover, never on the widget: name the element they start from in \
-             a top-level settingsRoot beside root, bind its inputs to /settings/..., and the app \
-             keeps every change (no Save button). A query or spec that does not fit is refused \
-             with every problem named. Answers the stored widget.",
+             answers and a json-render spec ({ root, settingsRoot?, elements, state? }) built \
+             from the app's widget catalogue — read widget_vocabulary for it, and try both with \
+             widget_check and widget_preview first. Every element's type is a catalogue \
+             component, its props that component's (every required prop present; a nullable one \
+             may be null), its children keys of other elements, and its on.<event> actions \
+             catalogue actions or json-render's setState, pushState, removeState and \
+             validateForm. The spec's state root is the query answer's data — {\"$state\": \
+             \"/decks\"} reads data.decks — with the widget's own inputs under /ui and its \
+             settings under /settings. Settings are drawn in the card's settings popover, never \
+             on the widget: name the element they start from in a top-level settingsRoot beside \
+             root, bind its inputs to /settings/..., and the app keeps every change (no Save \
+             button). A query or spec that does not fit is refused with every problem named. \
+             Answers the stored widget.",
             json!({
-                "name": { "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_NAME_CHARS, "description": "The widget's title." },
-                "description": { "type": "string", "maxLength": grimoire_core::custom_widgets::MAX_DESCRIPTION_CHARS, "description": "What it shows, in a sentence (default empty)." },
+                "name": widget_name.clone(),
+                "description": widget_description.clone(),
                 "query": document,
-                "spec": { "type": "object", "description": "The json-render spec: root (an element key), an optional settingsRoot (the element key of the settings popover's face), elements (key → { type, props, children, on?, visible?, repeat? }) and an optional state." },
-                "w": { "type": "integer", "minimum": grimoire_core::custom_widgets::W.start(), "maximum": grimoire_core::custom_widgets::W.end(), "description": "Width in grid cells (default 4)." },
-                "h": { "type": "integer", "minimum": grimoire_core::custom_widgets::H.start(), "maximum": grimoire_core::custom_widgets::H.end(), "description": "Height in grid cells (default 3)." },
+                "spec": widget_spec_arg.clone(),
+                "w": widget_w.clone(),
+                "h": widget_h.clone(),
             }),
             &["name", "query", "spec"],
             &add,
+        ),
+        tool(
+            "widget_update",
+            "Update a custom widget",
+            "Change a stored custom widget: any of its name, description, data query, spec and \
+             footprint, the rest left as they are. A query or spec given is checked as \
+             widget_create checks it, and refused with every problem named. The reader's copies on \
+             the home page draw the new widget at once. Answers the stored widget.",
+            json!({
+                "widgetId": widget_id.clone(),
+                "name": widget_name,
+                "description": widget_description,
+                "query": document,
+                "spec": widget_spec_arg,
+                "w": widget_w,
+                "h": widget_h,
+            }),
+            &["widgetId"],
+            &edit,
+        ),
+        tool(
+            "widget_delete",
+            "Delete a custom widget",
+            "Delete one of the reader's custom widgets. Its copies leave the home page with it, \
+             and it cannot be undone — delete only a widget the reader asked to remove.",
+            json!({ "widgetId": widget_id }),
+            &["widgetId"],
+            &remove,
         ),
     ]
 }
@@ -386,8 +505,14 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "add_to_collection" => add_to_collection(state, &args).await,
         "add_to_wishlist" => add_to_wishlist(state, &args).await,
         "add_card_to_deck" => add_card_to_deck(state, &args).await,
+        "widget_vocabulary" => widget_vocabulary(&args),
+        "widget_check" => widget_check(&args),
+        "widget_preview" => widget_preview(state, &args).await,
         "widget_list" => widget_list(state).await,
+        "widget_get" => widget_get(state, &args).await,
         "widget_create" => widget_create(state, &args).await,
+        "widget_update" => widget_update(state, &args).await,
+        "widget_delete" => widget_delete(state, &args).await,
         _ => return Called::NoSuchTool,
     };
     match answered {
@@ -1027,6 +1152,148 @@ async fn widget_list(state: &Arc<AppState>) -> Result<Value, String> {
     Ok(json!({ "widgets": widgets }))
 }
 
+/// `widget_vocabulary`: the committed prompt, and the contract when asked.
+fn widget_vocabulary(args: &Args) -> Result<Value, String> {
+    let mut answer = json!({ "prompt": CATALOG_PROMPT });
+    if args.flag("includeContract")? {
+        answer["contract"] = contract().clone();
+    }
+    Ok(answer)
+}
+
+/// A widget's data query, as written: absent, or a string that is not blank.
+fn query_arg(args: &Args) -> Result<Option<String>, String> {
+    match args.0.get("query") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(q)) if !q.trim().is_empty() => Ok(Some(q.clone())),
+        Some(Value::String(_)) => Err("query cannot be blank.".to_owned()),
+        Some(_) => Err("query must be a string.".to_owned()),
+    }
+}
+
+/// A widget's spec: absent, or an object.
+fn spec_arg(args: &Args) -> Result<Option<Value>, String> {
+    match args.0.get("spec") {
+        None | Some(Value::Null) => Ok(None),
+        Some(spec @ Value::Object(_)) => Ok(Some(spec.clone())),
+        Some(_) => Err("spec must be a JSON object.".to_owned()),
+    }
+}
+
+/// Every way a query does not fit the read graph, one sentence each with its place.
+fn query_problems(query: &str) -> Vec<String> {
+    crate::graph::graph()
+        .validate(query)
+        .into_iter()
+        .map(|p| match (p.line, p.column) {
+            (Some(line), Some(column)) => {
+                format!("The query, line {line}, column {column}: {}", p.message)
+            }
+            _ => format!("The query: {}", p.message),
+        })
+        .collect()
+}
+
+/// Every problem of whichever of the two halves was given — the check `widget_check`,
+/// `widget_create` and `widget_update` share, so the three cannot disagree.
+fn widget_problems(query: Option<&str>, spec: Option<&Value>) -> Vec<String> {
+    let mut problems = query.map(query_problems).unwrap_or_default();
+    if let Some(spec) = spec {
+        problems.extend(spec_problems(spec));
+    }
+    problems
+}
+
+/// `widget_check`: [`widget_problems`], storing nothing.
+fn widget_check(args: &Args) -> Result<Value, String> {
+    let query = query_arg(args)?;
+    let spec = spec_arg(args)?;
+    if query.is_none() && spec.is_none() {
+        return Err("Give a query, a spec or both to check.".to_owned());
+    }
+    let problems = widget_problems(query.as_deref(), spec.as_ref());
+    Ok(json!({ "valid": problems.is_empty(), "problems": problems }))
+}
+
+/// **The state a spec is drawn over, from an answer** — `widgetState.ts`' `widgetState`, which the
+/// page draws with, here so an agent can see it before storing: the answer's data at the root less
+/// the two keys the widget owns, `/ui` from the spec's `state.ui`, and `/settings` from the spec's
+/// `state.settings` with `saved` laid over it key by key. Both sides hold to one golden
+/// (`generated/__golden__/widget-state.json`, `the_widget_state_is_the_page_s`).
+fn widget_state(spec: Option<&Value>, data: &Value, saved: Option<&Map<String, Value>>) -> Value {
+    let mut state = Map::new();
+    if let Some(data) = data.as_object() {
+        for (key, value) in data {
+            if key != "ui" && key != "settings" {
+                state.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    let seeds = spec.and_then(|s| s.get("state")).and_then(Value::as_object);
+    let ui = seeds
+        .and_then(|s| s.get("ui"))
+        .filter(|ui| ui.is_object())
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mut settings = seeds
+        .and_then(|s| s.get("settings"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for (key, value) in saved.into_iter().flatten() {
+        settings.insert(key.clone(), value.clone());
+    }
+    state.insert("ui".to_owned(), ui);
+    state.insert("settings".to_owned(), Value::Object(settings));
+    Value::Object(state)
+}
+
+/// `widget_preview`: the query run as `graph_query` runs it, and [`widget_state`] of its answer.
+async fn widget_preview(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let query = query_arg(args)?.ok_or("query is required.")?;
+    let spec = spec_arg(args)?;
+    let saved = match args.0.get("settings") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(saved)) => Some(saved.clone()),
+        Some(_) => return Err("settings must be an object.".to_owned()),
+    };
+    let core = state.core.clone();
+    let response = tauri::async_runtime::spawn_blocking(move || {
+        let response = crate::graph::graph().run(&core, &query, None, None, None);
+        serde_json::to_value(response).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("the graph could not be read: {e}"))??;
+    let data = response.get("data").cloned().unwrap_or(Value::Null);
+    let mut answer = json!({
+        "state": widget_state(spec.as_ref(), &data, saved.as_ref()),
+    });
+    if let Some(errors) = response
+        .get("errors")
+        .filter(|e| e.as_array().is_some_and(|e| !e.is_empty()))
+    {
+        answer["errors"] = errors.clone();
+    }
+    if let Some(spec) = &spec {
+        let problems = spec_problems(spec);
+        if !problems.is_empty() {
+            answer["specProblems"] = json!(problems);
+        }
+    }
+    Ok(answer)
+}
+
+/// `widget_get`: one stored widget, whole — the table's list, found by id.
+async fn widget_get(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let id = args.required_int("widgetId")?;
+    let widgets = run(state, "custom_widgets", json!({})).await?;
+    widgets
+        .as_array()
+        .and_then(|all| all.iter().find(|w| w["id"] == json!(id)))
+        .cloned()
+        .ok_or_else(|| grimoire_core::custom_widgets::WIDGET_GONE.to_owned())
+}
+
 /// `widget_create`: the query checked by the read graph and the spec by the catalogue's
 /// contract — every problem of both in one refusal — and only then the table's
 /// `custom_widget_create`, whose own refusals (a blank name, a footprint out of bounds) are the
@@ -1035,18 +1302,8 @@ async fn widget_create(state: &Arc<AppState>, args: &Args) -> Result<Value, Stri
     let name = args.required_text("name")?;
     let description = args.text("description")?.unwrap_or_default();
     // As written, unlike every other text here: the document is stored as the agent sent it.
-    let query = match args.0.get("query") {
-        Some(Value::String(q)) if !q.trim().is_empty() => q.clone(),
-        None | Some(Value::Null) | Some(Value::String(_)) => {
-            return Err("query is required.".to_owned())
-        }
-        Some(_) => return Err("query must be a string.".to_owned()),
-    };
-    let spec = match args.0.get("spec") {
-        Some(spec @ Value::Object(_)) => spec.clone(),
-        None | Some(Value::Null) => return Err("spec is required.".to_owned()),
-        Some(_) => return Err("spec must be a JSON object.".to_owned()),
-    };
+    let query = query_arg(args)?.ok_or("query is required.")?;
+    let spec = spec_arg(args)?.ok_or("spec is required.")?;
     let (w_bounds, h_bounds) = (
         grimoire_core::custom_widgets::W,
         grimoire_core::custom_widgets::H,
@@ -1054,17 +1311,7 @@ async fn widget_create(state: &Arc<AppState>, args: &Args) -> Result<Value, Stri
     let w = args.bounded("w", DEFAULT_WIDGET_W, *w_bounds.start(), *w_bounds.end())?;
     let h = args.bounded("h", DEFAULT_WIDGET_H, *h_bounds.start(), *h_bounds.end())?;
 
-    let mut problems: Vec<String> = crate::graph::graph()
-        .validate(&query)
-        .into_iter()
-        .map(|p| match (p.line, p.column) {
-            (Some(line), Some(column)) => {
-                format!("The query, line {line}, column {column}: {}", p.message)
-            }
-            _ => format!("The query: {}", p.message),
-        })
-        .collect();
-    problems.extend(spec_problems(&spec));
+    let problems = widget_problems(Some(&query), Some(&spec));
     if !problems.is_empty() {
         return Err(format!("The widget was not stored. {}", problems.join(" ")));
     }
@@ -1082,6 +1329,66 @@ async fn widget_create(state: &Arc<AppState>, args: &Args) -> Result<Value, Stri
         CUSTOM_WIDGET_TABLES,
     )
     .await
+}
+
+/// `widget_update`: what was given, checked as [`widget_create`] checks it, then the table's
+/// `custom_widget_update` with only those keys — an absent one is left as it is.
+async fn widget_update(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let id = args.required_int("widgetId")?;
+    let query = query_arg(args)?;
+    let spec = spec_arg(args)?;
+    let problems = widget_problems(query.as_deref(), spec.as_ref());
+    if !problems.is_empty() {
+        return Err(format!(
+            "The widget was not changed. {}",
+            problems.join(" ")
+        ));
+    }
+    let mut patch = json!({ "id": id });
+    if let Some(name) = args.text("name")? {
+        patch["name"] = json!(name);
+    }
+    if let Some(description) = args.0.get("description").filter(|d| !d.is_null()) {
+        let Some(description) = description.as_str() else {
+            return Err("description must be a string.".to_owned());
+        };
+        patch["description"] = json!(description);
+    }
+    if let Some(query) = query {
+        patch["query"] = json!(query);
+    }
+    if let Some(spec) = spec {
+        patch["spec"] = spec;
+    }
+    let (w_bounds, h_bounds) = (
+        grimoire_core::custom_widgets::W,
+        grimoire_core::custom_widgets::H,
+    );
+    for (key, bounds) in [("w", &w_bounds), ("h", &h_bounds)] {
+        if args.int(key)?.is_some() {
+            patch[key] = json!(args.bounded(key, 0, *bounds.start(), *bounds.end())?);
+        }
+    }
+    if patch.as_object().is_some_and(|p| p.len() == 1) {
+        return Err(
+            "Give at least one of name, description, query, spec, w and h to change.".to_owned(),
+        );
+    }
+    write(state, "custom_widget_update", patch, CUSTOM_WIDGET_TABLES).await
+}
+
+/// `widget_delete`: the table's `custom_widget_delete`. The home page takes the widget's placed
+/// copies off when it next reads the list — the layout is the page's document, not this tool's.
+async fn widget_delete(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
+    let id = args.required_int("widgetId")?;
+    write(
+        state,
+        "custom_widget_delete",
+        json!({ "id": id }),
+        CUSTOM_WIDGET_TABLES,
+    )
+    .await?;
+    Ok(json!({ "deleted": id }))
 }
 
 /// Every way `spec` does not fit the catalogue's contract, one sentence each naming the element.
@@ -1242,10 +1549,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 15);
+        assert_eq!(names.len(), 21);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 15, "names are unique");
+        assert_eq!(names.len(), 21, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -1260,21 +1567,30 @@ mod tests {
         }
     }
 
-    /// The three adds and the one widget the reader can place — each a new row, never a change.
+    /// The three adds, and the custom widget's three writes — the only tools that change or remove
+    /// a row, and only a widget's (the owner's decision, 2026-10-31).
     #[test]
-    fn only_the_adds_say_they_write() {
-        let writes: Vec<String> = list()
+    fn only_the_adds_and_a_widget_s_writes_say_they_write() {
+        let writes: Vec<(String, bool)> = list()
             .iter()
             .filter(|t| t["annotations"]["readOnlyHint"] == false)
-            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .map(|t| {
+                (
+                    t["name"].as_str().unwrap().to_owned(),
+                    t["annotations"]["destructiveHint"] == true,
+                )
+            })
             .collect();
+        let writes: Vec<(&str, bool)> = writes.iter().map(|(n, d)| (n.as_str(), *d)).collect();
         assert_eq!(
             writes,
             [
-                "add_to_collection",
-                "add_to_wishlist",
-                "add_card_to_deck",
-                "widget_create"
+                ("add_to_collection", false),
+                ("add_to_wishlist", false),
+                ("add_card_to_deck", false),
+                ("widget_create", false),
+                ("widget_update", true),
+                ("widget_delete", true),
             ]
         );
     }
@@ -1530,6 +1846,171 @@ mod tests {
             spec_problems(&widget_spec()).is_empty(),
             "{:?}",
             spec_problems(&widget_spec())
+        );
+    }
+
+    /// `widgetState.ts` and [`widget_state`] hold to one golden, so a preview is what the page draws.
+    #[test]
+    fn the_widget_state_is_the_page_s() {
+        let golden: Value = serde_json::from_str(include_str!(
+            "../../../../../packages/ui/features/home/generated/__golden__/widget-state.json"
+        ))
+        .unwrap();
+        let cases = golden.as_array().unwrap();
+        assert!(cases.len() >= 4, "the golden was read");
+        for case in cases {
+            assert_eq!(
+                widget_state(
+                    Some(&case["spec"]),
+                    &case["data"],
+                    case["saved"].as_object()
+                ),
+                case["state"],
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_vocabulary_is_the_committed_prompt_and_on_request_the_contract() {
+        let state = state("widget-vocabulary");
+        let plain = done(&state, "widget_vocabulary", json!({})).await;
+        assert_eq!(plain["prompt"], CATALOG_PROMPT);
+        assert!(plain.get("contract").is_none());
+        assert!(
+            CATALOG_PROMPT.contains("settingsRoot"),
+            "the app's rules are in it"
+        );
+        let whole = done(
+            &state,
+            "widget_vocabulary",
+            json!({ "includeContract": true }),
+        )
+        .await;
+        assert_eq!(&whole["contract"], contract());
+    }
+
+    #[tokio::test]
+    async fn a_check_stores_nothing_and_names_every_problem() {
+        let state = state("widget-check");
+        let fine = done(
+            &state,
+            "widget_check",
+            json!({ "query": "{ decks { id } }", "spec": widget_spec() }),
+        )
+        .await;
+        assert_eq!(fine, json!({ "valid": true, "problems": [] }));
+
+        let mut spec = widget_spec();
+        spec["elements"]["count"]["type"] = json!("Iframe");
+        let bad = done(
+            &state,
+            "widget_check",
+            json!({ "query": "{ dekcs { id } }", "spec": spec }),
+        )
+        .await;
+        assert_eq!(bad["valid"], false);
+        let problems = bad["problems"].as_array().unwrap();
+        assert!(problems
+            .iter()
+            .any(|p| p.as_str().unwrap().starts_with("The query")));
+        assert!(problems
+            .iter()
+            .any(|p| p.as_str().unwrap().contains("Iframe")));
+
+        // A spec alone is checked alone.
+        let spec_only = done(&state, "widget_check", json!({ "spec": widget_spec() })).await;
+        assert_eq!(spec_only["valid"], true);
+        assert!(refused(&state, "widget_check", json!({}))
+            .await
+            .contains("Give a query"));
+        let listed = done(&state, "widget_list", json!({})).await;
+        assert_eq!(listed["widgets"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_preview_is_the_state_the_page_would_draw() {
+        let state = state("widget-preview");
+        let mut spec = widget_spec();
+        spec["state"] =
+            json!({ "ui": { "open": true }, "settings": { "rows": 3, "sort": "name" } });
+        let preview = done(
+            &state,
+            "widget_preview",
+            json!({ "query": "{ decks { id } }", "spec": spec, "settings": { "rows": 8 } }),
+        )
+        .await;
+        assert_eq!(preview["state"]["decks"], json!([]));
+        assert_eq!(preview["state"]["ui"], json!({ "open": true }));
+        assert_eq!(
+            preview["state"]["settings"],
+            json!({ "rows": 8, "sort": "name" })
+        );
+        assert!(preview.get("errors").is_none());
+        assert!(preview.get("specProblems").is_none());
+
+        // A query the graph refuses answers its errors beside an empty state.
+        let refused_query = done(&state, "widget_preview", json!({ "query": "{ dekcs }" })).await;
+        assert!(refused_query["errors"]
+            .as_array()
+            .is_some_and(|e| !e.is_empty()));
+        assert_eq!(refused_query["state"], json!({ "ui": {}, "settings": {} }));
+    }
+
+    #[tokio::test]
+    async fn a_widget_is_got_updated_and_deleted() {
+        let state = state("widget-update");
+        let made = done(
+            &state,
+            "widget_create",
+            json!({ "name": "Deck count", "query": "{ decks { id } }", "spec": widget_spec() }),
+        )
+        .await;
+        let id = made["id"].clone();
+
+        let got = done(&state, "widget_get", json!({ "widgetId": id })).await;
+        assert_eq!(got["spec"], widget_spec());
+        assert_eq!(got["query"], "{ decks { id } }");
+
+        // Only what is given changes.
+        let renamed = done(
+            &state,
+            "widget_update",
+            json!({ "widgetId": id, "name": "Decks", "w": 6 }),
+        )
+        .await;
+        assert_eq!(renamed["name"], "Decks");
+        assert_eq!(renamed["w"], 6);
+        assert_eq!(renamed["query"], "{ decks { id } }");
+        assert_eq!(renamed["spec"], widget_spec());
+
+        // A query or spec given is checked, and a refused change changes nothing.
+        let mut spec = widget_spec();
+        spec["elements"]["again"]["on"]["press"][0]["action"] = json!("deleteDeck");
+        let why = refused(
+            &state,
+            "widget_update",
+            json!({ "widgetId": id, "spec": spec }),
+        )
+        .await;
+        assert!(why.starts_with("The widget was not changed."), "{why}");
+        assert!(why.contains("deleteDeck"));
+        let unchanged = done(&state, "widget_get", json!({ "widgetId": id })).await;
+        assert_eq!(unchanged["spec"], widget_spec());
+        assert!(refused(&state, "widget_update", json!({ "widgetId": id }))
+            .await
+            .contains("at least one"));
+
+        let gone = done(&state, "widget_delete", json!({ "widgetId": id })).await;
+        assert_eq!(gone, json!({ "deleted": id }));
+        assert_eq!(
+            refused(&state, "widget_get", json!({ "widgetId": id })).await,
+            grimoire_core::custom_widgets::WIDGET_GONE
+        );
+        assert_eq!(
+            refused(&state, "widget_delete", json!({ "widgetId": id })).await,
+            grimoire_core::custom_widgets::WIDGET_GONE
         );
     }
 

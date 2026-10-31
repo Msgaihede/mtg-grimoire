@@ -202,6 +202,15 @@ export const ARMS = [
   // Python change through every Rust build to prove nothing about it.
   { match: ["crates/card-neural/train/*"], jobs: [] },
 
+  // **The widget catalogue's prompt**, a Markdown file that is no prose: `catalog.test.tsx` holds it
+  // to `catalog.ts` byte for byte (`toMatchFileSnapshot`, which the census cannot see), and the
+  // desktop's MCP server compiles it in (`widget_vocabulary`, the `custom_widget` prompt —
+  // `include_str!`). **Above the prose arm**, whose `*.md` would take it and run neither.
+  {
+    match: ["packages/ui/features/home/generated/catalog.prompt.md"],
+    jobs: ["rust", ...PAGE_SIDE],
+  },
+
   // Affects no job. Nothing here is compiled, linted or tested: `eslint .` never sees a `.md`,
   // and every `.md` a test reads has an arm above this one. `ci-route.test.ts` holds that to the
   // census — `?raw` imports, `import.meta.glob` patterns and `claude-md.test.ts`'s walk — and
@@ -246,13 +255,15 @@ export const ARMS = [
   // so it owes whatever that arm sets — `web` since phase 5: `syncedTables.json` is a module the
   // page imports (`crossWindow.ts`), and the other two ride along rather than earning an arm
   // each. The widget catalogue's `catalog.contract.json` joined them with user schema v68: the
-  // desktop's MCP tool `widget_create` checks a spec against it (`mcp::tools`, `include_str!`).
+  // desktop's MCP tool `widget_create` checks a spec against it (`mcp::tools`, `include_str!`);
+  // the widget-state golden followed with the authoring tools (`widget_preview`'s state).
   {
     match: [
       "packages/ui/features/transfer/__golden__/*",
       "packages/ui/lib/userTables.json",
       "packages/ui/lib/syncedTables.json",
       "packages/ui/features/home/generated/catalog.contract.json",
+      "packages/ui/features/home/generated/__golden__/*",
     ],
     jobs: ["rust", ...PAGE_SIDE],
   },
