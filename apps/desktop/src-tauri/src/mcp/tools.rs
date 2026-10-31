@@ -14,10 +14,9 @@
 //! whole of the reader's data as one GraphQL schema (`crates/grimoire-graph`): the schema to write
 //! a home widget's query against, a check of a draft with each problem's line and column, and the
 //! answer, exactly as the page's `graphql_query` would get it.
-//! **Writes**: `add_to_collection`, `add_to_wishlist` and `add_card_to_deck` — the three adds issue
-//! #1396 names, each the press of the same name in the app. Nothing here changes or removes a row
-//! of the reader's collection, wishlist or decks: an agent proposing a deletion asks the reader,
-//! who has the app open.
+//! **No tool writes the reader's collection, wishlist or decks** (the owner's decision, 2026-10-31,
+//! which retired issue #1396's three adds): an agent finds and explains, and the reader makes the
+//! change in the app, which is open.
 //!
 //! **Custom widgets are the one exception, and only for the widgets themselves** (the owner's
 //! decision, 2026-10-31): a widget is something an agent writes for the reader, so it may write it
@@ -51,33 +50,6 @@ pub enum Called {
 /// The most rows one call answers. A page of a collection is a few hundred bytes a row; an agent
 /// wanting more pages with `offset`.
 const MAX_LIMIT: i64 = 200;
-
-/// The largest quantity one add takes — the issue's allow-list figure for an intent, and a
-/// generous one for a press: an agent asked for "four" that sends 4000 is refused, not obeyed.
-const MAX_QUANTITY: i64 = 99;
-
-/// The pile a deck add with no pile named makes when the list has no main pile yet —
-/// `packages/ui/features/decks/deckQuery.ts`'s `DEFAULT_CATEGORY_NAME`, the app's own word for it.
-const DEFAULT_PILE: &str = "Main deck";
-
-/// The tables each write tool can touch, as `db:changed` names them. Held to the schema's own list
-/// by `every_announced_table_is_a_user_table`.
-const COLLECTION_TABLES: &[&str] = &["collection_entries", "activity"];
-const WISHLIST_TABLES: &[&str] = &["wishlist_entries", "activity"];
-/// A deck add writes the card or a token entry, may make the pile it names, records the deck's
-/// audit and undo rows, stamps the deck, and rewrites a theory deck's managed wishlist folder.
-const DECK_TABLES: &[&str] = &[
-    "deck_cards",
-    "deck_categories",
-    "deck_tokens",
-    "deck_token_printings",
-    "deck_audit",
-    "deck_undo",
-    "decks",
-    "wishlist_entries",
-    "wishlist_folders",
-    "activity",
-];
 
 /// A custom widget's write touches its own table and nothing else.
 const CUSTOM_WIDGET_TABLES: &[&str] = &["custom_widgets"];
@@ -152,13 +124,6 @@ pub fn list() -> Vec<Value> {
         "type": "string",
         "description": "The printing's Scryfall id, from find_cards.",
     });
-    let quantity = json!({
-        "type": "integer", "minimum": 1, "maximum": MAX_QUANTITY,
-        "description": "How many copies (default 1).",
-    });
-    let finish = json!({
-        "type": "string", "enum": ["nonfoil", "foil", "etched"],
-    });
     let list_variant = json!({
         "type": "string", "enum": ["live", "theory"],
         "description": "The deck's actual list (live, the default) or its theory list.",
@@ -207,7 +172,7 @@ pub fn list() -> Vec<Value> {
             "find_cards",
             "Find cards",
             "Search the card database (every Magic card, not just the user's) by name. Answers \
-             printings with their Scryfall ids (cardId), which every add tool takes. By default \
+             printings with their Scryfall ids (cardId), which get_card takes. By default \
              one printing per card; set allPrintings to choose a specific set's printing.",
             json!({
                 "query": { "type": "string", "description": "Words of the card's name." },
@@ -257,8 +222,9 @@ pub fn list() -> Vec<Value> {
         tool(
             "list_folders",
             "List folders",
-            "The user's folders in the collection, the wishlist or the deck list, with their ids. \
-             Only collection folders of kind \"user\" can be added to; the others belong to decks.",
+            "The user's folders in the collection, the wishlist or the deck list, with their ids — \
+             what search_collection and search_wishlist take as folderId. A collection folder of \
+             kind other than \"user\" belongs to a deck.",
             json!({
                 "list": { "type": "string", "enum": ["collection", "wishlist", "decks"] },
             }),
@@ -288,52 +254,6 @@ pub fn list() -> Vec<Value> {
             }),
             &["deckId"],
             &read,
-        ),
-        tool(
-            "add_to_collection",
-            "Add to collection",
-            "Add copies of one printing to the user's collection, in the root or in one of \
-             their collection folders.",
-            json!({
-                "cardId": card_id,
-                "quantity": quantity,
-                "finish": finish,
-                "condition": { "type": "string", "enum": ["NM", "LP", "MP", "HP", "DMG"], "description": "Default: the user's own default condition." },
-                "folderId": { "type": "integer", "description": "A collection folder of kind \"user\" (from list_folders); omit for the root." },
-            }),
-            &["cardId"],
-            &add,
-        ),
-        tool(
-            "add_to_wishlist",
-            "Add to wishlist",
-            "Add a card to the user's wishlist — this exact printing, or any printing of the \
-             card with anyPrinting.",
-            json!({
-                "cardId": card_id,
-                "quantity": quantity,
-                "anyPrinting": { "type": "boolean", "description": "Wish for the card in any printing rather than this one." },
-                "preferredFinish": finish,
-                "folderId": { "type": "integer", "description": "A wishlist folder (from list_folders); omit for the root." },
-            }),
-            &["cardId"],
-            &add,
-        ),
-        tool(
-            "add_card_to_deck",
-            "Add card to deck",
-            "Add copies of one printing to a deck's pile. The pile is named, and made if the \
-             deck has none of that name; omitted, it is the list's first main pile, or \"Main deck\".",
-            json!({
-                "deckId": { "type": "integer", "description": "From list_decks." },
-                "cardId": card_id,
-                "quantity": quantity,
-                "pile": { "type": "string", "description": "The pile's name, e.g. \"Sideboard\" or \"Ramp\"." },
-                "finish": finish,
-                "list": list_variant,
-            }),
-            &["deckId", "cardId"],
-            &add,
         ),
         tool(
             "widget_vocabulary",
@@ -507,9 +427,6 @@ pub async fn call(state: &Arc<AppState>, name: &str, args: Value) -> Called {
         "list_folders" => list_folders(state, &args).await,
         "list_decks" => list_decks(state, &args).await,
         "get_deck" => get_deck(state, &args).await,
-        "add_to_collection" => add_to_collection(state, &args).await,
-        "add_to_wishlist" => add_to_wishlist(state, &args).await,
-        "add_card_to_deck" => add_card_to_deck(state, &args).await,
         "widget_vocabulary" => widget_vocabulary(&args),
         "widget_check" => widget_check(&args),
         "widget_preview" => widget_preview(state, &args).await,
@@ -1002,135 +919,6 @@ async fn get_deck(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
     deck["list"] = json!(variant);
     deck["piles"] = Value::Array(piles);
     Ok(deck)
-}
-
-async fn add_to_collection(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
-    let card_id = args.required_text("cardId")?;
-    let quantity = args.bounded("quantity", 1, 1, MAX_QUANTITY)?;
-    let finish = args
-        .choice("finish", &grimoire_core::schema::FINISHES, Some("nonfoil"))?
-        .unwrap_or_default();
-    let condition = args.choice("condition", &["NM", "LP", "MP", "HP", "DMG"], None)?;
-    let folder = args.int("folderId")?;
-    let change = write(
-        state,
-        "collection_add",
-        json!({ "entry": {
-            "cardId": card_id,
-            "finish": finish,
-            "condition": condition,
-            "quantity": quantity,
-            "folderId": folder,
-        }}),
-        COLLECTION_TABLES,
-    )
-    .await?;
-    Ok(json!({
-        "added": quantity,
-        "entryId": change.get("id"),
-        "quantityNow": change.get("quantity"),
-    }))
-}
-
-async fn add_to_wishlist(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
-    let card_id = args.required_text("cardId")?;
-    let quantity = args.bounded("quantity", 1, 1, MAX_QUANTITY)?;
-    let finish = args.choice("preferredFinish", &grimoire_core::schema::FINISHES, None)?;
-    let folder = args.int("folderId")?;
-    let wish = if args.flag("anyPrinting")? {
-        // A wish for the card rather than the printing names its oracle card, read off the
-        // printing the agent found.
-        let detail = run(state, "card_detail", json!({ "id": card_id })).await?;
-        let oracle = detail.get("oracleId").and_then(Value::as_str);
-        let name = detail.get("name").and_then(Value::as_str);
-        let (Some(oracle), Some(name)) = (oracle, name) else {
-            return Err(format!(
-                "No card has the id {card_id}. Use find_cards to look one up."
-            ));
-        };
-        json!({
-            "oracleId": oracle,
-            "name": name,
-            "quantity": quantity,
-            "preferredFinish": finish,
-            "folderId": folder,
-        })
-    } else {
-        json!({
-            "cardId": card_id,
-            "quantity": quantity,
-            "preferredFinish": finish,
-            "folderId": folder,
-        })
-    };
-    let change = write(
-        state,
-        "wishlist_add",
-        json!({ "wish": wish }),
-        WISHLIST_TABLES,
-    )
-    .await?;
-    Ok(json!({
-        "added": quantity,
-        "wishId": change.get("id"),
-        "quantityNow": change.get("quantity"),
-    }))
-}
-
-async fn add_card_to_deck(state: &Arc<AppState>, args: &Args) -> Result<Value, String> {
-    let deck_id = args.required_int("deckId")?;
-    let card_id = args.required_text("cardId")?;
-    let quantity = args.bounded("quantity", 1, 1, MAX_QUANTITY)?;
-    let finish = args.choice("finish", &grimoire_core::schema::FINISHES, None)?;
-    let variant = args
-        .choice("list", &["live", "theory"], Some("live"))?
-        .unwrap_or_default();
-    let pile = args.text("pile")?;
-    // No pile named: the list's first main pile, or `Main deck` when it has none yet — a new
-    // deck has only its predefined piles. The deck editor's own Add picks a pile by the card's
-    // type (`autoCategoryFor`), which is TypeScript's rule to draw and not repeated here; an
-    // agent that wants "Creatures" names it.
-    let (category_id, category_name) = match pile {
-        Some(name) => (None, Some(name)),
-        None => {
-            let piles = run(
-                state,
-                "deck_category_list",
-                json!({ "deckId": deck_id, "variant": variant }),
-            )
-            .await?;
-            let main = piles.as_array().and_then(|all| {
-                all.iter()
-                    .find(|p| p.get("kind").and_then(Value::as_str) == Some("main"))
-                    .and_then(|p| p.get("id").and_then(Value::as_i64))
-            });
-            match main {
-                Some(id) => (Some(id), None),
-                None => (None, Some(DEFAULT_PILE.to_owned())),
-            }
-        }
-    };
-    let change = write(
-        state,
-        "deck_add_card",
-        json!({
-            "deckId": deck_id,
-            "cardId": card_id,
-            "categoryId": category_id,
-            "categoryName": category_name,
-            "variant": variant,
-            "finish": finish,
-            "quantity": quantity,
-        }),
-        DECK_TABLES,
-    )
-    .await?;
-    Ok(json!({
-        "added": quantity,
-        // `id: 0` is `deck::add_card`'s answer for a token or an emblem, filed as a token entry.
-        "filedAsToken": change.get("id") == Some(&json!(0)),
-        "quantityNow": change.get("quantity"),
-    }))
 }
 
 async fn widget_list(state: &Arc<AppState>) -> Result<Value, String> {
@@ -1695,10 +1483,10 @@ mod tests {
     fn every_tool_has_a_closed_object_schema_and_a_distinct_name() {
         let tools = list();
         let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names.len(), 21);
+        assert_eq!(names.len(), 18);
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), 21, "names are unique");
+        assert_eq!(names.len(), 18, "names are unique");
         for t in &tools {
             assert_eq!(t["inputSchema"]["type"], "object");
             assert_eq!(t["inputSchema"]["additionalProperties"], false);
@@ -1713,10 +1501,11 @@ mod tests {
         }
     }
 
-    /// The three adds, and the custom widget's three writes — the only tools that change or remove
-    /// a row, and only a widget's (the owner's decision, 2026-10-31).
+    /// The custom widget's three writes are the only tools that write at all, and only a widget —
+    /// the reader's cards, decks and wishlists take no write from here (the owner's decision,
+    /// 2026-10-31).
     #[test]
-    fn only_the_adds_and_a_widget_s_writes_say_they_write() {
+    fn only_a_widget_s_writes_say_they_write() {
         let writes: Vec<(String, bool)> = list()
             .iter()
             .filter(|t| t["annotations"]["readOnlyHint"] == false)
@@ -1731,9 +1520,6 @@ mod tests {
         assert_eq!(
             writes,
             [
-                ("add_to_collection", false),
-                ("add_to_wishlist", false),
-                ("add_card_to_deck", false),
                 ("widget_create", false),
                 ("widget_update", true),
                 ("widget_delete", true),
@@ -1748,13 +1534,35 @@ mod tests {
             .filter(|(_, side)| *side == grimoire_core::schema::Side::User)
             .map(|(name, _)| *name)
             .collect();
-        for table in COLLECTION_TABLES
-            .iter()
-            .chain(WISHLIST_TABLES)
-            .chain(DECK_TABLES)
-            .chain(CUSTOM_WIDGET_TABLES)
-        {
+        for table in CUSTOM_WIDGET_TABLES {
             assert!(user.contains(table), "{table} is not a user table");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_collection_search_finds_what_the_reader_owns() {
+        let state = state("collection-search");
+        seed(&state, |c| {
+            grimoire_core::schema::fixtures::seed_card(c, "bolt-1", "lea", "161");
+            grimoire_core::schema::fixtures::entry(c, "bolt-1", 3);
+        });
+        let found = done(&state, "search_collection", json!({})).await;
+        assert_eq!(found["total"], 1);
+        assert_eq!(found["entries"][0]["cardId"], "bolt-1");
+        assert_eq!(found["entries"][0]["quantity"], 3);
+        assert_eq!(found["entries"][0]["set"], "lea");
+    }
+
+    /// The three adds are retired: no tool writes the reader's cards (the owner's decision).
+    #[tokio::test]
+    async fn the_collection_writes_are_no_tools() {
+        let state = state("no-adds");
+        for gone in ["add_to_collection", "add_to_wishlist", "add_card_to_deck"] {
+            assert!(list().iter().all(|t| t["name"] != gone), "{gone} is listed");
+            assert!(matches!(
+                call(&state, gone, json!({ "cardId": "bolt-1" })).await,
+                Called::NoSuchTool
+            ));
         }
     }
 
@@ -1766,7 +1574,7 @@ mod tests {
     }
 
     /// The three graph tools: the schema an agent writes against, a draft checked with where its
-    /// problem is, and the answer a widget would get — the deck the add tool made included.
+    /// problem is, and the answer a widget would get — over a seeded deck.
     #[tokio::test]
     async fn the_graph_tools_serve_check_and_run_a_query() {
         let state = state("graph-tools");
@@ -1807,122 +1615,6 @@ mod tests {
         )
         .await;
         assert!(why.contains("variables"), "{why}");
-    }
-
-    #[tokio::test]
-    async fn an_add_lands_in_the_collection_and_the_search_finds_it() {
-        let state = state("add-and-search");
-        seed(&state, |c| {
-            grimoire_core::schema::fixtures::seed_card(c, "bolt-1", "lea", "161")
-        });
-        let added = done(
-            &state,
-            "add_to_collection",
-            json!({ "cardId": "bolt-1", "quantity": 3, "finish": "nonfoil" }),
-        )
-        .await;
-        assert_eq!(added["quantityNow"], 3);
-        let found = done(&state, "search_collection", json!({})).await;
-        assert_eq!(found["total"], 1);
-        assert_eq!(found["entries"][0]["cardId"], "bolt-1");
-        assert_eq!(found["entries"][0]["quantity"], 3);
-        assert_eq!(found["entries"][0]["set"], "lea");
-    }
-
-    #[tokio::test]
-    async fn an_add_is_bounded_and_names_a_real_card() {
-        let state = state("add-bounds");
-        seed(&state, |c| {
-            grimoire_core::schema::fixtures::seed_card(c, "bolt-1", "lea", "161")
-        });
-        let why = refused(
-            &state,
-            "add_to_collection",
-            json!({ "cardId": "bolt-1", "quantity": 4000 }),
-        )
-        .await;
-        assert!(why.contains("quantity"), "{why}");
-        let why = refused(
-            &state,
-            "add_to_collection",
-            json!({ "cardId": "bolt-1", "finish": "shiny" }),
-        )
-        .await;
-        assert!(why.contains("finish"), "{why}");
-        refused(
-            &state,
-            "add_to_collection",
-            json!({ "cardId": "no-such-card" }),
-        )
-        .await;
-        refused(&state, "add_to_collection", json!({})).await;
-    }
-
-    #[tokio::test]
-    async fn a_wish_for_any_printing_names_the_oracle_card() {
-        let state = state("wish-any");
-        seed(&state, |c| {
-            grimoire_core::schema::fixtures::seed_card(c, "bolt-1", "lea", "161")
-        });
-        done(
-            &state,
-            "add_to_wishlist",
-            json!({ "cardId": "bolt-1", "anyPrinting": true, "quantity": 2 }),
-        )
-        .await;
-        let wishes = done(&state, "search_wishlist", json!({})).await;
-        assert_eq!(wishes["total"], 1);
-        assert_eq!(wishes["wishes"][0]["oracleId"], "o-bolt-1");
-        assert_eq!(wishes["wishes"][0]["anyPrinting"], true);
-        assert_eq!(wishes["wishes"][0]["quantity"], 2);
-    }
-
-    #[tokio::test]
-    async fn a_card_added_to_a_deck_lands_in_its_main_pile_or_the_one_named() {
-        let state = state("deck-add");
-        seed(&state, |c| {
-            grimoire_core::schema::fixtures::seed_card(c, "bolt-1", "lea", "161")
-        });
-        let created = run(
-            &state,
-            "deck_create",
-            json!({ "deck": { "name": "Bolt Tribal", "formatKey": "modern" } }),
-        )
-        .await
-        .unwrap();
-        let deck_id = created["id"].as_i64().unwrap();
-        let decks = done(&state, "list_decks", json!({ "query": "bolt" })).await;
-        assert_eq!(decks["decks"][0]["deckId"], deck_id);
-
-        done(
-            &state,
-            "add_card_to_deck",
-            json!({ "deckId": deck_id, "cardId": "bolt-1", "quantity": 4 }),
-        )
-        .await;
-        done(
-            &state,
-            "add_card_to_deck",
-            json!({ "deckId": deck_id, "cardId": "bolt-1", "pile": "Burn" }),
-        )
-        .await;
-        let deck = done(&state, "get_deck", json!({ "deckId": deck_id })).await;
-        let piles = deck["piles"].as_array().unwrap();
-        let holding: Vec<(&str, i64)> =
-            piles
-                .iter()
-                .flat_map(|p| {
-                    p["cards"].as_array().unwrap().iter().map(move |c| {
-                        (p["pile"].as_str().unwrap(), c["quantity"].as_i64().unwrap())
-                    })
-                })
-                .collect();
-        assert!(holding.contains(&("Burn", 1)), "{holding:?}");
-        assert_eq!(
-            holding.iter().map(|(_, q)| q).sum::<i64>(),
-            5,
-            "{holding:?}"
-        );
     }
 
     /// A spec the catalogue draws: a Stack of a Text reading the answer and a refresh Button.

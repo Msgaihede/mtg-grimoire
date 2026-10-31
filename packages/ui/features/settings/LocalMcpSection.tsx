@@ -25,7 +25,7 @@ export const MCP_HEADING = "AI agents on this computer (MCP)";
  */
 export const MCP_SENTENCE =
   "Lets an AI agent on this computer — Claude Code, Claude Desktop, Codex, Gemini CLI and " +
-  "others — read and add to your collection, wishlist and decks while this app is open. " +
+  "others — read your collection, wishlist and decks and build home widgets while this app is open. " +
   "Nothing leaves this computer, and it's free.";
 
 /** The note beside a switch that is off. */
@@ -225,7 +225,7 @@ const NO_REFUSAL: Write = { submittedAt: 0, isError: false, error: null, isSucce
 /**
  * Settings → Integrations, its first part: the local MCP server (issues #1395 and #1396, PR 1) —
  * an endpoint the running desktop app serves on `127.0.0.1`, so an AI agent on the same computer
- * can read and add to the reader's collection, wishlist and decks.
+ * can read the reader's collection, wishlist and decks, and write their custom home widgets.
  *
  * **Not the cloud copy below it, and the two must not read as one switch.** That copy is the
  * group's, on a server, behind a membership; this is a socket on this computer, free, reading the

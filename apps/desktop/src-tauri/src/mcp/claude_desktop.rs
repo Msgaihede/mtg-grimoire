@@ -48,7 +48,8 @@ pub fn manifest(url: &str, token: &str) -> Value {
         "display_name": "MTG Grimoire",
         "version": env!("CARGO_PKG_VERSION"),
         "description": "Your Magic: The Gathering collection, wishlist and decks in MTG Grimoire, \
-    read and added to while the app is open on this computer. Nothing leaves the computer.",
+    read while the app is open on this computer, and custom home widgets built for you. Nothing \
+    leaves the computer.",
         "author": { "name": "MTG Grimoire" },
         "icon": "icon.png",
         "server": {

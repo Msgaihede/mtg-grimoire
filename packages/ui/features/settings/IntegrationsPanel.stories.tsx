@@ -49,8 +49,8 @@ const meta = {
         component:
           "**Two parts, two switches.** First the local MCP server (issue #1395): an endpoint " +
           "this app serves on `127.0.0.1` while it is open, so an AI agent on the same computer " +
-          "— Claude Code, Claude Desktop, Codex, Gemini CLI, Antigravity, Cursor — can read and add to the collection, wishlist " +
-          "and decks. Free, desktop-only, nothing leaves the computer; gated by a bearer token " +
+          "— Claude Code, Claude Desktop, Codex, Gemini CLI, Antigravity, Cursor — can read the collection, wishlist " +
+          "and decks and build custom home widgets. Free, desktop-only, nothing leaves the computer; gated by a bearer token " +
           "the part masks until asked, copies, and replaces only after a question. The port is " +
           "the reader's to move, which is the way out when a launch finds it taken. The " +
           "`Local server` stories below are that part.\n\n" +
