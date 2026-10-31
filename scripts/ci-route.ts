@@ -202,6 +202,12 @@ export const ARMS = [
   // Python change through every Rust build to prove nothing about it.
   { match: ["crates/card-neural/train/*"], jobs: [] },
 
+  // **The MCP server's skills** (`apps/desktop/src-tauri/src/mcp/prompts/*.md`), Markdown that is no
+  // prose: compiled into the desktop as its MCP prompts (`include_str!`), and every `graphql`
+  // example in them is held to the read graph (`mcp::prompts`' `every_example_query_is_valid`).
+  // `apps/desktop/src-tauri/*`'s jobs. **Above the prose arm**, whose `*.md` would run neither.
+  { match: ["apps/desktop/src-tauri/src/mcp/prompts/*"], jobs: RUST_SIDE },
+
   // **The widget catalogue's prompt**, a Markdown file that is no prose: `catalog.test.tsx` holds it
   // to `catalog.ts` byte for byte (`toMatchFileSnapshot`, which the census cannot see), and the
   // desktop's MCP server compiles it in (`widget_vocabulary`, the `custom_widget` prompt —

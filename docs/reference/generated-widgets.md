@@ -172,7 +172,7 @@ other entry.
   Component names, props and the query's validity are not looked at.
 - **The desktop's MCP server** ([local-mcp-server.md](local-mcp-server.md)) is how an agent writes
   one: `widget_vocabulary` (the committed prompt, and on request the contract) and the MCP prompt
-  `custom_widget`; `widget_check` (the query by the read graph, the spec against
+  `create_widget` (with `search_cards` and `graphql_discovery` beside it); `widget_check` (the query by the read graph, the spec against
   `catalog.contract.json` — every element's type a component, its props declared and the required
   ones present, its children real keys, its actions the catalogue's or json-render's four built-ins,
   its `settingsRoot` an element apart from the root) and `widget_preview` (the state the page would

@@ -32,6 +32,7 @@
 
 pub mod claude_desktop;
 pub mod http;
+pub mod prompts;
 pub mod rpc;
 pub mod tools;
 
