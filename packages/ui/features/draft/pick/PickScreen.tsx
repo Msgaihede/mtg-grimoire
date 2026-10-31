@@ -2,11 +2,13 @@ import { useEffect, useId, useMemo, useRef, useState, type JSX, type KeyboardEve
 import { Hourglass, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
+import { formatZoom, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
 import { dndDraggable, useDndDropTarget } from "@/lib/dndTarget";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { DraftCard, DraftView } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
@@ -16,19 +18,26 @@ import { PoolColumns } from "./PoolColumns";
 import { RoundStrip, SeatsStrip } from "./TableStrip";
 import { WinstonTable } from "./WinstonTable";
 
-/** The pack's tile width, px: the slider's ends and where it starts. */
-export const PACK_SCALE = { min: 130, max: 300, start: 190 } as const;
+/**
+ * The pack's tile width at 100%, px — the size the pack opened at when its slider held pixels.
+ *
+ * The size itself is `cardZoom.draft` (issue #1433): ctrl+wheel over the draft and the Card size
+ * slider step the same ladder every other card wall is sized on, so the two controls cannot
+ * disagree and the size outlives the session as the other walls' do.
+ */
+export const PACK_TILE_WIDTH = 190;
 
-/** The slider's place for the window's life (`lib/viewMemory.ts`): a reader who sized the pack
- *  for their screen should find it so on the next pick and the next draft. */
-const scaleMemory = viewMemory<number>("draft.packScale");
+/** Where `zoom` stands on {@link ZOOM_STEPS} — the slider's value. The store holds only stops. */
+function stopOf(zoom: number): number {
+  return Math.max(0, (ZOOM_STEPS as readonly number[]).indexOf(zoom));
+}
 
 const SORTS: { value: PackSort; label: string }[] = [
   { value: "rarity", label: "Rarity" },
   { value: "dealt", label: "As dealt" },
 ];
 
-/** The pack's order for the window's life, as the slider's — rarity until the reader says
+/** The pack's order for the window's life (`lib/viewMemory.ts`) — rarity until the reader says
  *  otherwise (issue #1432). */
 const sortMemory = viewMemory<PackSort>("draft.packSort");
 
@@ -77,10 +86,13 @@ export function PickScreen({
   /** This turn's decision is sent and its answer not in yet (a guest's, until the host's push). */
   winstonSent?: boolean;
 }): JSX.Element {
-  const [scale, setScaleState] = useState(() => scaleMemory.recall() ?? PACK_SCALE.start);
-  const setScale = (value: number) => {
-    scaleMemory.keep(value);
-    setScaleState(value);
+  const zoom = useAppStore((s) => s.cardZoom.draft);
+  /** The slider moved to stop `to`: walk there through `zoomCards`, the zoom's one door, so the
+   *  slider is a gesture like the wheel's — on the ladder, and the badge says where it landed. */
+  const zoomTo = (to: number) => {
+    const { zoomCards } = useAppStore.getState();
+    const direction = to > stopOf(zoom) ? 1 : -1;
+    for (let at = stopOf(zoom); at !== to; at += direction) zoomCards("draft", direction);
   };
   const scaleId = useId();
   const [sort, setSortState] = useState<PackSort>(() => sortMemory.recall() ?? "rarity");
@@ -167,11 +179,12 @@ export function PickScreen({
             <input
               id={scaleId}
               type="range"
-              min={PACK_SCALE.min}
-              max={PACK_SCALE.max}
-              step={10}
-              value={scale}
-              onChange={(e) => setScale(Number(e.target.value))}
+              min={0}
+              max={ZOOM_STEPS.length - 1}
+              step={1}
+              value={stopOf(zoom)}
+              aria-valuetext={formatZoom(zoom)}
+              onChange={(e) => zoomTo(Number(e.target.value))}
               className="w-32 accent-accent"
             />
             {onAutoPick !== undefined && (
@@ -207,7 +220,7 @@ export function PickScreen({
             key={`${view.packNumber}.${view.pickNumber}`}
             pack={sorted}
             need={need}
-            scale={scale}
+            width={scaled(PACK_TILE_WIDTH, zoom)}
             busy={busy}
             onPick={onPick}
           />
@@ -239,13 +252,14 @@ export function PickScreen({
 function PackWall({
   pack,
   need,
-  scale,
+  width,
   busy,
   onPick,
 }: {
   pack: readonly DraftCard[];
   need: number;
-  scale: number;
+  /** A tile's least width, px — the draft's zoom applied to {@link PACK_TILE_WIDTH}. */
+  width: number;
   busy: boolean;
   onPick: (cards: DraftCard[]) => void;
 }): JSX.Element {
@@ -360,7 +374,7 @@ function PackWall({
         aria-label="Pack"
         onKeyDown={onKeyDown}
         className="m-0 grid list-none gap-3 p-0"
-        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${scale}px, 1fr))` }}
+        style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${width}px, 1fr))` }}
       >
         {pack.map((c, index) => {
           const selected = chosen.includes(c.instanceId);

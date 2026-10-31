@@ -3,6 +3,7 @@ import { CardArt } from "@/components/CardArt";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { FinishMark } from "@/components/FinishMark";
 import { RarityGem } from "@/components/RarityGem";
+import { scaled } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
 import type { BoosterCard } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
@@ -18,6 +19,9 @@ const SORTS: { value: CardSort; label: string }[] = [
   { value: "rarity", label: "Rarity" },
   { value: "number", label: "Collector number" },
 ];
+
+/** A tile's least width at 100%, px — the 9.5rem the wall drew before it had a zoom. */
+const TILE_WIDTH = 152;
 
 /**
  * The cards one press opened, as a wall of tiles in the order the reader picks — price high to
@@ -46,6 +50,7 @@ export function OpenedWall({
 }): JSX.Element {
   const sortId = useId();
   const open = useAppStore((s) => s.setSelectedCardId);
+  const zoom = useAppStore((s) => s.cardZoom.packs);
   const rows = sortOpened(cards, sort, priceOf, facts);
 
   return (
@@ -65,7 +70,10 @@ export function OpenedWall({
       </div>
       <ul
         aria-label="Opened cards"
-        className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(9.5rem,1fr))] gap-3 p-0"
+        className="m-0 grid list-none gap-3 p-0"
+        style={{
+          gridTemplateColumns: `repeat(auto-fill, minmax(${scaled(TILE_WIDTH, zoom)}px, 1fr))`,
+        }}
       >
         {rows.map(({ card, index, price }) => {
           const fact = facts.get(card.cardId);

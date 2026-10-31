@@ -3,9 +3,14 @@ import { Hourglass, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { GrimoireMark } from "@/components/GrimoireMark";
 import { plural } from "@/lib/counts";
+import { scaled } from "@/lib/cardZoom";
 import type { DraftView, WinstonView } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
+
+/** A face-up pile's tile width at 100%, px — sized by the draft's zoom, as the pack is. */
+const PILE_TILE_WIDTH = 150;
 
 /** A face-down card's shadow edges, by how deep the pile under it is — none, one, or two. */
 const EDGES = [
@@ -43,6 +48,7 @@ export function WinstonTable({
   onAutoPick?: () => void;
 }): JSX.Element {
   const headingId = useId();
+  const zoom = useAppStore((s) => s.cardZoom.draft);
   const active = stack.activePile;
   const pile = active === null ? undefined : stack.piles[active];
   const deciding = stack.yourTurn && pile !== undefined && view.status === "drafting";
@@ -107,7 +113,10 @@ export function WinstonTable({
           </p>
           <ul
             aria-label={`Pile ${(active ?? 0) + 1}`}
-            className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 p-0"
+            className="m-0 grid list-none gap-3 p-0"
+            style={{
+              gridTemplateColumns: `repeat(auto-fill, minmax(${scaled(PILE_TILE_WIDTH, zoom)}px, 1fr))`,
+            }}
           >
             {pile.cards.map((c) => (
               <li key={c.instanceId}>

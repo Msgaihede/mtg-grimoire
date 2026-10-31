@@ -140,6 +140,14 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
  * number is **not** a multiplier on a tile's width — `HomePage` spends it as a CSS `zoom` on the
  * grid box and divides its measured canvas by it, so the same ladder buys bigger type and fewer
  * columns in one move. See `features/home/HomePage.tsx`.
+ *
+ * `draft` is a draft in progress — the pack being picked from, a Winston pile turned face up, and
+ * the pool laid out by mana value under them (issue #1433). **One key for all three**, unlike the
+ * deck editor's split, because they are one table read in one glance: the pool is where a card
+ * from the pack is dropped, and a pack drawn at one size over a pool drawn at another is two
+ * scales on a desk the reader is moving cards across. `packs` is Open Packs' wall of what a press
+ * opened — its own key because it is another job on another screen of the same page: checking
+ * what a booster held, not deciding which card to take from it.
  */
 export const ZOOM_SECTIONS = [
   "search",
@@ -153,6 +161,8 @@ export const ZOOM_SECTIONS = [
   "deckGallery",
   "home",
   "printings",
+  "draft",
+  "packs",
 ] as const;
 
 export type ZoomSection = (typeof ZOOM_SECTIONS)[number];
@@ -206,6 +216,11 @@ export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   // reason: the modal opens *over* a wall the reader has already sized, and a ctrl+wheel inside
   // it must not resize the page underneath.
   printings: DEFAULT_ZOOM,
+  // A draft's pack, Winston pile and pool. Life size is the 190px pack tile the pick screen opened
+  // at before it had a zoom, and the pool's eight columns capped at that same width.
+  draft: DEFAULT_ZOOM,
+  // Open Packs' wall of opened cards — 152px tiles at life size, the width it always drew.
+  packs: DEFAULT_ZOOM,
 };
 
 /**

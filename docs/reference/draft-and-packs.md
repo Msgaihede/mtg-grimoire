@@ -119,6 +119,13 @@ every other mode — the host shuffles them into the stack — and draws a table
 the stack and the piles face down with their counts, the active pile face up on your turn with
 **Take pile** and **Decline** (`draft_winston`, or a guest's `lobby_winston`).
 
+**The cards zoom like every other wall** (issue #1433): ctrl+wheel over a draft steps
+`cardZoom.draft`, one section for the pack, a face-up Winston pile and the pool, because they are
+one table a card is dragged across; the pick screen's **Card size** slider walks the same ladder
+through `zoomCards`, so the two controls are one number and it is remembered with the other walls'.
+The pool's eight columns take the zoom as a ceiling (`minmax(0, 190px × zoom)`) so the pool still
+fits without a scroll. Open Packs' opened wall is a section of its own, `packs`.
+
 A refused pick changes nothing (the session is cloned and put back on any error). A solo draft is
 saved after each change (`app_meta` `draft_session`) and can be resumed; a pod cannot.
 
