@@ -599,6 +599,23 @@ describe("HomePage", () => {
     );
   });
 
+  // The MCP server's `widget_delete` takes the definition alone; the page takes the copies.
+  it("takes a copy off the page once its widget is gone from the list", async () => {
+    spyOnCustom([]);
+    mount(layoutOf(A, COPY));
+    await waitFor(() => expect(storedWidget("custom")).toBeUndefined());
+    expect(storedWidget("a")).toBeDefined();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a copy alone while its widget is listed", async () => {
+    const read = spyOnCustom([definition()]);
+    mount(layoutOf(A, COPY));
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    await screen.findByRole("region", { name: "Shelf" });
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("deletes a custom widget and the copies of it on the page", async () => {
     const user = userEvent.setup();
     spyOnCustom([definition()]);

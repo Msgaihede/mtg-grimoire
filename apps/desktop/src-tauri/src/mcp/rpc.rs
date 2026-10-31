@@ -35,7 +35,10 @@ These tools read and change the user's own collection, wishlist and decks on thi
 Card identities are Scryfall printing ids (cardId): use find_cards to turn a card name into one \
 before adding it anywhere. Folders and decks are named by numeric ids from list_folders and \
 list_decks. Adds are real writes to the user's data and sync to their other devices, so add \
-only what the user asked for.";
+only what the user asked for. To build the user a home-page widget, read widget_vocabulary (or \
+the custom_widget prompt), write a query against graph_schema, try it with widget_check and \
+widget_preview, then store it with widget_create; widget_update and widget_delete change only \
+the user's custom widgets.";
 
 /// What [`handle`] made of a request body.
 pub enum Outcome {
@@ -117,6 +120,23 @@ async fn call(state: &Arc<AppState>, method: &str, params: Value) -> Result<Valu
         "initialize" => Ok(initialize(&params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools::list() })),
+        "prompts/list" => Ok(json!({ "prompts": [custom_widget_prompt()] })),
+        "prompts/get" => {
+            let name = params.get("name").and_then(Value::as_str).ok_or((
+                INVALID_PARAMS,
+                "prompts/get needs a prompt name.".to_owned(),
+            ))?;
+            if name != CUSTOM_WIDGET_PROMPT {
+                return Err((INVALID_PARAMS, format!("There is no prompt named {name}.")));
+            }
+            let idea = params
+                .get("arguments")
+                .and_then(|a| a.get("idea"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|idea| !idea.is_empty());
+            Ok(custom_widget_messages(idea))
+        }
         "tools/call" => {
             let name = params
                 .get("name")
@@ -161,13 +181,51 @@ fn initialize(params: &Value) -> Value {
         .unwrap_or(SUPPORTED_VERSIONS[0]);
     json!({
         "protocolVersion": version,
-        "capabilities": { "tools": { "listChanged": false } },
+        "capabilities": {
+            "tools": { "listChanged": false },
+            "prompts": { "listChanged": false },
+        },
         "serverInfo": {
             "name": "mtg-grimoire",
             "title": "MTG Grimoire",
             "version": env!("CARGO_PKG_VERSION"),
         },
         "instructions": INSTRUCTIONS,
+    })
+}
+
+/// The one MCP prompt: writing a custom home widget, from the widget catalogue's committed
+/// prompt — what `widget_vocabulary` answers as a tool, for a client that offers prompts instead.
+const CUSTOM_WIDGET_PROMPT: &str = "custom_widget";
+
+fn custom_widget_prompt() -> Value {
+    json!({
+        "name": CUSTOM_WIDGET_PROMPT,
+        "title": "Build a custom home widget",
+        "description": "The widget catalogue and this app's rules for writing a custom home-page \
+            widget's json-render spec, and the steps to check, preview and store it.",
+        "arguments": [{
+            "name": "idea",
+            "description": "What the widget should show, in the user's words.",
+            "required": false,
+        }],
+    })
+}
+
+/// The prompt's one message: the catalogue, the steps, and the reader's idea when there is one.
+fn custom_widget_messages(idea: Option<&str>) -> Value {
+    let mut text = format!(
+        "{}\n\nWrite the widget's data query against the schema graph_schema answers, then check \
+         the query and spec with widget_check, look at the state with widget_preview, and store \
+         it with widget_create.",
+        tools::CATALOG_PROMPT.trim_end()
+    );
+    if let Some(idea) = idea {
+        text.push_str(&format!("\n\nThe widget to build: {idea}"));
+    }
+    json!({
+        "description": "Build a custom home widget",
+        "messages": [{ "role": "user", "content": { "type": "text", "text": text } }],
     })
 }
 
@@ -187,6 +245,22 @@ mod tests {
         assert_eq!(unknown["protocolVersion"], SUPPORTED_VERSIONS[0]);
         assert_eq!(unknown["serverInfo"]["name"], "mtg-grimoire");
         assert_eq!(unknown["capabilities"]["tools"]["listChanged"], false);
+        assert_eq!(unknown["capabilities"]["prompts"]["listChanged"], false);
+    }
+
+    #[test]
+    fn the_one_prompt_is_the_widget_catalogue_with_the_reader_s_idea() {
+        let listed = custom_widget_prompt();
+        assert_eq!(listed["name"], CUSTOM_WIDGET_PROMPT);
+        let plain = custom_widget_messages(None);
+        let text = plain["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(text.starts_with(tools::CATALOG_PROMPT.trim_end()));
+        assert!(text.contains("widget_create") && !text.contains("The widget to build"));
+        let asked = custom_widget_messages(Some("my most valuable cards"));
+        assert!(asked["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("The widget to build: my most valuable cards"));
     }
 
     #[test]

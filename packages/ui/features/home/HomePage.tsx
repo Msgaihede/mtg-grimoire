@@ -120,6 +120,7 @@ import {
 import { CustomWidgetsDialog, placedCopies } from "./CustomWidgetsDialog";
 import { CustomWidget as CustomWidgetBody, CustomWidgetSettings } from "./generated/CustomWidget";
 import { CUSTOM_WIDGETS_KEY, useCustomWidgets } from "./generated/useCustomWidgets";
+import { customConfig } from "./generated/widgetState";
 import { useHomeLayout } from "./useHomeLayout";
 import { WidgetCard } from "./WidgetCard";
 import { WidgetCatalogue } from "./WidgetCatalogue";
@@ -657,6 +658,29 @@ export function HomePage(): ReactElement {
   }, []);
 
   /* ------------------------------------------------------------- custom widgets ------- */
+
+  /**
+   * **A copy whose widget is gone leaves the page.** The MCP server's `widget_delete` removes a
+   * definition with no hand on the layout — the layout is this page's document — so the page
+   * takes the copies off itself, once both have been read: the layout and the definitions are this
+   * device's alone, so a definition missing from a successful read is a deleted one, never one
+   * that has not arrived yet. A copy naming no widget at all is left to say so.
+   */
+  useEffect(() => {
+    if (!ready || !custom.ready) return;
+    const known = new Set(custom.widgets.map((each) => each.id));
+    const gone = new Set(
+      layout.widgets
+        .filter((entry) => {
+          if (entry.kind !== CUSTOM_KIND) return false;
+          const id = customConfig(entry.config).widgetId;
+          return id !== null && !known.has(id);
+        })
+        .map((entry) => entry.id),
+    );
+    if (gone.size === 0) return;
+    update({ ...layout, widgets: layout.widgets.filter((entry) => !gone.has(entry.id)) });
+  }, [ready, custom.ready, custom.widgets, layout, update]);
 
   /** The Custom widgets dialog owes the caret back as the catalogue does, to its own opener. */
   const returnCustomCaret = useRef(false);

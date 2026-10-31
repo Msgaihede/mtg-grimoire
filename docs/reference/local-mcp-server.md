@@ -48,11 +48,20 @@ core's own sentence, handed to the agent as a tool result with `isError: true`.
 | `graph_validate`    | `Graph::validate`                                                      | Whether a GraphQL query is valid, and every problem with its line and column, without running it                                                                                                                                         |
 | `graph_query`       | `Graph::run`                                                           | The query's answer as a widget gets it: `data`, `errors` (a failed field is `null` beside the rest) and `extensions.invalidatedBy`                                                                                                       |
 | `add_card_to_deck`  | `deck_category_list`, `deck_add_card`                                  | Copies into a named pile (made if missing) or the list's first main pile — `Main deck` when it has none yet (the editor's by-type pile choice is TypeScript's and is not repeated)                                                       |
+| `widget_vocabulary` | the committed `catalog.prompt.md` (and `catalog.contract.json`)        | The widget catalogue as a model writes from it: the spec format, every component and its props, the actions and functions, and the app's rules — with `includeContract`, the same as JSON Schema                                         |
+| `widget_check`      | `Graph::validate`, the contract check                                  | Whether a query, a spec or both would be stored, and every problem by element — `widget_create`'s checks, storing nothing                                                                                                                |
+| `widget_preview`    | `Graph::run`                                                           | The state a spec is drawn over: the answer's data at the root, `/ui` and `/settings` seeded from the spec (`settings` laid over), beside the graph's errors and the spec's problems — the page's `widgetState`, held to a shared golden  |
 | `widget_list`       | `custom_widgets`                                                       | The reader's own home-page widgets: id (`widgetId`, what a placed widget's `config` names), name, description and footprint — not the query or the spec                                                                                  |
+| `widget_get`        | `custom_widgets`                                                       | One widget whole: name, description, query, spec and footprint                                                                                                                                                                           |
 | `widget_create`     | `Graph::validate`, then `custom_widget_create`                         | A custom widget stored, once its query passed the read graph and its spec the widget catalogue's contract (below); the stored widget as the table answers it                                                                             |
+| `widget_update`     | the same checks, then `custom_widget_update`                           | A widget changed: only the fields given, a query or spec given checked first; the stored widget                                                                                                                                          |
+| `widget_delete`     | `custom_widget_delete`                                                 | A widget deleted; the home page takes its placed copies off when it next reads the list                                                                                                                                                  |
 
-**The four writes are adds, and only adds** — the issue's three, and a custom widget. Nothing
-changes or removes a row; an agent proposing that asks the reader, whose app is open. A quantity is
+**The reader's data takes adds, and only adds** — the issue's three. Nothing changes or removes a
+row of the collection, the wishlist or a deck; an agent proposing that asks the reader, whose app is
+open. **A custom widget is the one exception, and only the widget itself** (the owner's decision,
+2026-10-31): it is something an agent writes for the reader, so `widget_update` and `widget_delete`
+may rewrite or remove it — annotated `destructiveHint`, which no other tool is. A quantity is
 1–99. Each add is a real write: `with_write`'s fence, the capture triggers, the activity feed, the
 plain-text mirror, and a sync op like any press, so it reaches the reader's other devices on the
 next trip — except a custom widget, which is device-local (user schema v68: never synced, carried
@@ -69,7 +78,19 @@ present (a value is never type-checked — any may be an expression like `{"$sta
 `pushState`, `removeState`, `validateForm`. Every problem of both halves is one sentence naming its
 element, all in one refusal, and nothing is stored. Then the table's `custom_widget_create` writes
 it, and its own sentences (a blank name, a footprint outside 2–12 × 2–8) are the core's. `w` and
-`h` default to 4 and 3.
+`h` default to 4 and 3. `widget_update` checks whichever of the two halves it is given the same
+way (`widget_problems`, which `widget_check` also answers), and a refused update changes nothing.
+
+**Writing a widget, as an agent would.** `widget_vocabulary` (or the MCP prompt `custom_widget`,
+below) for the catalogue; `graph_schema` for the data; `widget_check` and `widget_preview` until the
+query, the spec and the state agree; then `widget_create`. `widget_preview`'s state is built in Rust
+(`tools::widget_state`), and the page builds it in TypeScript (`widgetState.ts`): both hold to
+`packages/ui/features/home/generated/__golden__/widget-state.json`, so a preview is what the page
+draws.
+
+**One MCP prompt, `custom_widget`** (`prompts/list`, `prompts/get`; the `prompts` capability): the
+catalogue's committed prompt, the steps above, and the reader's `idea` when given — for a client that
+offers prompts rather than reading a tool's answer.
 
 **Every write tells every window.** `crate::changes` emits `db:changed` only while a second window
 is open, because the window that pressed already knows. An agent's write has no such window, so each

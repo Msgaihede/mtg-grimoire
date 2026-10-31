@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Spec } from "@json-render/core";
+import GOLDEN from "./__golden__/widget-state.json";
 import { answerState, checkSpec, customConfig, widgetState } from "./widgetState";
 
 const SPEC: Spec = {
@@ -82,5 +83,18 @@ describe("checkSpec", () => {
     });
     expect(checked.ok).toBe(false);
     if (!checked.ok) expect(checked.problem).toMatch(/elements\.a/);
+  });
+});
+
+/**
+ * **The mapping, as a file both sides hold.** The desktop's MCP tool `widget_preview` builds the
+ * same state in Rust (`mcp::tools::widget_state`) so an agent sees what the page will draw; its
+ * test reads this file too, so the two cannot drift apart.
+ */
+describe("the shared widget-state golden", () => {
+  it.each(GOLDEN.map((c) => [c.name, c] as const))("%s", (_, c) => {
+    expect(
+      widgetState(c.spec as Spec, c.data, c.saved as Record<string, unknown> | null),
+    ).toEqual(c.state);
   });
 });
