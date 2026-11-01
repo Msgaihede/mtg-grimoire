@@ -341,6 +341,7 @@ export function targetPrompt(): TurnFive {
         cancellable: true,
         pick: null,
         keyword: null,
+        damage: null,
       },
       stack: [],
     },
@@ -383,6 +384,7 @@ export function orderTriggersPrompt(): TurnFive {
         cancellable: false,
         pick: null,
         keyword: null,
+        damage: null,
       },
       stack: [],
     },
@@ -428,6 +430,7 @@ export function castChoicePrompt(): TurnFive {
         cancellable: true,
         pick: null,
         keyword: null,
+        damage: null,
       },
     },
   };
@@ -462,6 +465,7 @@ export function optionalEffectPrompt(): TurnFive {
         cancellable: false,
         pick: null,
         keyword: null,
+        damage: null,
       },
     },
   };
@@ -661,6 +665,64 @@ function pickPrompt(t: TurnFive, kind: string, source: string, pick: PlaytestPic
         cancellable: false,
         pick,
         keyword: null,
+        damage: null,
+      },
+    },
+  };
+}
+
+/**
+ * The reader's Tarmogoyf (3 power) is blocked by Ragavan (lethal 1) and Boros Reckoner (lethal 3):
+ * the reader divides its damage (`AssignCombatDamage`, issue #1448). The engine's own split is the
+ * one plain answer. `trample` gives the Goyf trample, so what is left past lethal may go on.
+ */
+export function damagePrompt(trample = false): TurnFive {
+  const t = turnFive();
+  const ref = (c: GameCard) => ({
+    id: c.id,
+    name: c.name,
+    cardId: c.cardId,
+    text: null,
+    cause: null,
+  });
+  const total = trample ? 5 : 3;
+  return {
+    ...t,
+    view: {
+      ...t.view,
+      stage: "prompt",
+      phase: "combat",
+      step: "damage",
+      prompt: {
+        kind: "AssignCombatDamage",
+        source: null,
+        sourceText: null,
+        cause: null,
+        options: [
+          {
+            index: 0,
+            kind: "AssignCombatDamage",
+            cards: [],
+            players: [],
+            number: null,
+            yes: null,
+            label: null,
+          },
+        ],
+        cancellable: false,
+        pick: null,
+        keyword: null,
+        damage: {
+          attacker: ref(t.goyf),
+          total,
+          blockers: [
+            { card: ref(t.ragavan), lethal: 1 },
+            { card: ref(t.reckoner), lethal: 3 },
+          ],
+          trample,
+          defender: "opponent",
+          target: null,
+        },
       },
     },
   };

@@ -89,8 +89,10 @@ the pin, the hybrid model, the goldfish, the table's pieces) and
   stop is not passed over. Never put it in `is_sandbox`, and never let the sandbox's `Tap` make
   mana.
 - **A prompt is the engine's legal answers, read generically** (`option_of`), never a match on
-  `WaitingFor`'s hundred-odd variants. The one exception is `pick`: the few questions answered by
-  a set of cards, whose fields give the count. `auto` must answer any prompt (phase-ai for the
+  `WaitingFor`'s hundred-odd variants. The exceptions are `pick` — the few questions answered by
+  a set of cards, whose fields give the count — and `damage`, the attacker's division of combat
+  damage among its blockers (issue #1448), whose one listed answer is the engine's own split and
+  so never a `sole_answer`. `auto` must answer any prompt (phase-ai for the
   reader). A question with one answer (`sole_answer`) is taken by `advance`, never asked.
 - **A replay frame shows, it never offers.** Every `PlaytestFrame` view is `watching`, with no
   prompt, attack or block (`view_as(true)`), so the opponents' own questions never reach the page.

@@ -150,6 +150,7 @@ export function atPress(action: PlaytestAction): SoundId | null {
       return "pass";
     case "choose":
     case "pickCards":
+    case "assignDamage":
       return "choose";
     default:
       return null;

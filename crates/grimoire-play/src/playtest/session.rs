@@ -20,8 +20,10 @@
 //! of question, so no board draws each one: the view lists `legal_actions` with the facts in each
 //! (`option_of`), and `auto` answers any of them with the AI's choice for the reader. A question
 //! answered by a set of cards — a scry, a discard, a search, a sacrifice — also carries a `pick`
-//! (`pick`): the enumeration offers only a few of its answers. A question with one answer is not
-//! asked at all (`sole_answer`): `advance` takes it, as the reader would have.
+//! (`pick`): the enumeration offers only a few of its answers. So does the division of an
+//! attacker's combat damage among its blockers (`damage`, issue #1448): the engine lists one split
+//! of its own, and the reader, as the attacker's controller, makes their own. A question with one
+//! answer is not asked at all (`sole_answer`): `advance` takes it, as the reader would have.
 //!
 //! **The sandbox is a setting** (`setSandbox`): a hand on the table, phase's debug actions — move a
 //! card anywhere, tap, counters, tokens, draws, life totals — on the reader's own cards and on
@@ -62,7 +64,8 @@ use engine::types::actions::{DebugAction, DebugTokenRequest, GameAction, Mulliga
 use engine::types::events::{ActivatedAbilityKind, GameEvent};
 use engine::types::format::FormatConfig;
 use engine::types::game_state::{
-    CastOfferKind, ManaChoice, MulliganDecisionPhase, StackEntry, StackEntryKind, WaitingFor,
+    CastOfferKind, CombatDamageAssignmentMode, ManaChoice, MulliganDecisionPhase, StackEntry,
+    StackEntryKind, WaitingFor,
 };
 use engine::types::identifiers::ObjectId;
 use engine::types::phase::Phase;
@@ -87,10 +90,10 @@ use crate::view::{GameCard, MulliganView, Place, Seat, TokenOffer};
 use super::view::{
     Difficulty, PlaytestAction, PlaytestAttack, PlaytestAttackPair, PlaytestAttacker,
     PlaytestBlock, PlaytestBlockPair, PlaytestBlocker, PlaytestCardRef, PlaytestCause,
-    PlaytestCombat, PlaytestCommanderDamage, PlaytestEmblem, PlaytestFrame, PlaytestHappened,
-    PlaytestOption, PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer,
-    PlaytestPrompt, PlaytestSeat, PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop,
-    PlaytestStopStep, PlaytestView,
+    PlaytestCombat, PlaytestCommanderDamage, PlaytestDamage, PlaytestDamageBlocker,
+    PlaytestDamageShare, PlaytestEmblem, PlaytestFrame, PlaytestHappened, PlaytestOption,
+    PlaytestPhase, PlaytestPick, PlaytestPickPurpose, PlaytestPlayer, PlaytestPrompt, PlaytestSeat,
+    PlaytestStackItem, PlaytestStage, PlaytestStep, PlaytestStop, PlaytestStopStep, PlaytestView,
 };
 
 /// The reader's seat: the person whose app holds the game — the host, in a lobby's game. The
@@ -1633,6 +1636,7 @@ impl Playtest {
                 cancellable: true,
                 pick: None,
                 keyword: None,
+                damage: None,
             };
         }
         // The question's own data names its ability when it is about one — a trigger's targets —
@@ -1683,7 +1687,124 @@ impl Playtest {
             cancellable: self.pending.is_some(),
             pick: self.pick().map(|(pick, _)| pick),
             keyword: self.keyword(),
+            damage: self.damage(),
         }
+    }
+
+    /// The reader's attacker's combat damage to divide among its blockers (CR 510.1c), and with
+    /// trample past them (CR 702.19b) — the engine's `AssignCombatDamage`, asked of the
+    /// attacker's controller (or of the defender, against banding: CR 702.22j). `legal_actions`
+    /// lists one split only, the engine's greedy one, so without this the reader would never
+    /// choose which blocker dies (issue #1448).
+    fn damage(&self) -> Option<PlaytestDamage> {
+        let WaitingFor::AssignCombatDamage {
+            player,
+            attacker_id,
+            total_damage,
+            blockers,
+            trample,
+            defending_player,
+            attack_target,
+            ..
+        } = &self.state.waiting_for
+        else {
+            return None;
+        };
+        if *player != self.you {
+            return None;
+        }
+        Some(PlaytestDamage {
+            attacker: self.card_ref(*attacker_id)?,
+            total: *total_damage,
+            blockers: blockers
+                .iter()
+                .filter_map(|slot| {
+                    Some(PlaytestDamageBlocker {
+                        card: self.card_ref(slot.blocker_id)?,
+                        lethal: slot.lethal_minimum,
+                    })
+                })
+                .collect(),
+            trample: trample.is_some(),
+            defender: self.seat_of(*defending_player),
+            target: target_id(attack_target).and_then(|id| self.card_ref(ObjectId(id))),
+        })
+    }
+
+    /// The reader's division of combat damage (`AssignDamage`) as the engine takes it, or the
+    /// sentence that says why it is not one. Trample past a planeswalker onto its controller
+    /// (CR 702.19c) gives the planeswalker its loyalty first and the controller the rest.
+    fn damage_answer(
+        &self,
+        shares: &[PlaytestDamageShare],
+        excess: u32,
+    ) -> Result<GameAction, String> {
+        let damage = self
+            .damage()
+            .ok_or("This question is not how to divide combat damage.")?;
+        let WaitingFor::AssignCombatDamage {
+            pw_loyalty,
+            trample,
+            attack_target,
+            ..
+        } = &self.state.waiting_for
+        else {
+            return Err(NO_PROMPT.into());
+        };
+        let mut seen = HashSet::new();
+        for share in shares {
+            if !damage.blockers.iter().any(|b| b.card.id == share.blocker)
+                || !seen.insert(share.blocker)
+            {
+                return Err("That creature is not blocking the attacker.".into());
+            }
+        }
+        let assigned: u32 = shares.iter().map(|s| s.amount).sum::<u32>() + excess;
+        if assigned != damage.total {
+            return Err(format!(
+                "Assign all {} damage: {assigned} {} assigned.",
+                damage.total,
+                if assigned == 1 { "is" } else { "are" }
+            ));
+        }
+        if excess > 0 {
+            if !damage.trample {
+                return Err(
+                    "Only a creature with trample assigns damage past its blockers.".into(),
+                );
+            }
+            let short = damage.blockers.iter().find(|b| {
+                let given = shares
+                    .iter()
+                    .find(|s| s.blocker == b.card.id)
+                    .map_or(0, |s| s.amount);
+                given < b.lethal
+            });
+            if let Some(b) = short {
+                return Err(format!(
+                    "Assign lethal damage to {} ({}) before any goes past the blockers.",
+                    b.card.name, b.lethal
+                ));
+            }
+        }
+        let over_planeswalker = *trample
+            == Some(engine::game::combat::TrampleKind::OverPlaneswalkers)
+            && matches!(attack_target, AttackTarget::Planeswalker(_));
+        let (trample_damage, controller_damage) = if over_planeswalker {
+            let to_pw = excess.min(pw_loyalty.unwrap_or(0));
+            (to_pw, excess - to_pw)
+        } else {
+            (excess, 0)
+        };
+        Ok(GameAction::AssignCombatDamage {
+            mode: CombatDamageAssignmentMode::Normal,
+            assignments: shares
+                .iter()
+                .map(|s| (ObjectId(s.blocker), s.amount))
+                .collect(),
+            trample_damage,
+            controller_damage,
+        })
     }
 
     /// The keyword the question is about, when its data names one — the alternative cost a
@@ -1998,6 +2119,13 @@ impl Playtest {
     /// for that. A pick has one answer when every eligible card must be picked, in no order that
     /// matters.
     fn sole_answer(&self) -> Option<GameAction> {
+        // The engine lists one division of combat damage, its own; the reader has more whenever
+        // two creatures block, or trample could carry damage past one (issue #1448).
+        if let Some(damage) = self.damage() {
+            if damage.blockers.len() > 1 || damage.trample {
+                return None;
+            }
+        }
         if let Some((pick, answer)) = self.pick() {
             let all = pick.min == pick.max && pick.eligible.len() == pick.min as usize;
             return (all && (!pick.ordered || pick.min <= 1))
@@ -2405,6 +2533,14 @@ impl Playtest {
                     }
                 }
                 self.apply(self.you, pick_answer(ids, answer), out)?;
+                self.advance(out)
+            }
+            PlaytestAction::AssignDamage { blockers, excess } => {
+                if stage != PlaytestStage::Prompt || choice.is_some() {
+                    return Err(NO_PROMPT.into());
+                }
+                let answer = self.damage_answer(&blockers, excess)?;
+                self.apply(self.you, answer, out)?;
                 self.advance(out)
             }
             PlaytestAction::Cancel => {
