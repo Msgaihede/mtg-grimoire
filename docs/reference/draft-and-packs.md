@@ -79,7 +79,8 @@ weights, `printing_prices` answers the prices at the reader's marketplace, and t
 - **the simulation** — 10 000 boosters opened with a fixed seed (the figures do not move between
   presses), sorted; the median, the opened pack's percentile (mid-rank), the chance to beat a price
   the reader types, and a histogram (equal bins to the 99th percentile, the tail folded into the
-  last);
+  last), each bar told as its share of the simulation — the chance a pack lands in it — never a
+  raw count (issue #1451);
 - a sealed product's figures as the sum of its boosters'.
 
 A card opened from a foil sheet is priced foil, else nonfoil, else etched; an unpriced card counts 0
