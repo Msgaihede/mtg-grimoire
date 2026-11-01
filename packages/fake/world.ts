@@ -58,6 +58,7 @@ import type { SeedName } from "./seeds";
 import { resetWindow } from "./window";
 import { resetBulkUndo } from "@grimoire/ui/lib/bulkUndo";
 import { resetViewMemory } from "@grimoire/ui/lib/viewMemory";
+import { resetPackMarketplaces } from "@grimoire/ui/features/draft/packs/marketplacePick";
 import { MEMBERSHIP_ELSEWHERE } from "@grimoire/ui/lib/core/hostMembership";
 import { STORAGE_GROUP_WARNING } from "@grimoire/ui/lib/core/hostStorage";
 import lightMembership from "../../apps/light/src-tauri/src/membership.rs?raw";
@@ -110,7 +111,6 @@ export interface InstallOptions {
  * to it — and a snapshot taken then would restore that instead of the app's own defaults.
  */
 const PRISTINE_STORE = useAppStore.getState();
-
 
 /** Wrappers this file put on a `queryFn`/`mutationFn`, so a second pass over an
  *  already-defaulted options object does not wrap one twice. */
@@ -293,6 +293,9 @@ export function installWorld(
   // `@/lib/viewMemory` is the third (issue #908): the filters a story left on the Search or Tags
   // page would otherwise be the next story's opening query. Same gate, same reason.
   if (options.resetStore !== false) resetViewMemory();
+  // The Packs page's marketplace pick (issue #1446) is the fourth — kept in `localStorage`, so a
+  // story's pick would otherwise outlive a reload too. Same gate, same reason.
+  if (options.resetStore !== false) resetPackMarketplaces();
 
   const removeCorpus = installCorpus(db.cards);
   const client = worldQueryClient(scope);

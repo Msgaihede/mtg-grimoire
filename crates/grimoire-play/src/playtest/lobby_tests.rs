@@ -7,8 +7,9 @@ use std::collections::HashSet;
 use super::session::{OpponentDeck, Playtest};
 use super::tests::{engine, green, red};
 use super::view::{
-    Difficulty, PlaytestAction as A, PlaytestHappened as H, PlaytestPlayer, PlaytestStage as Stage,
-    PlaytestStep, PlaytestView,
+    Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestBlockPair, PlaytestDamageShare,
+    PlaytestHappened as H, PlaytestPhase, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep,
+    PlaytestView,
 };
 
 const RED: [&str; 4] = ["Mountain", "Raging Goblin", "Hill Giant", "Lightning Bolt"];
@@ -302,4 +303,118 @@ fn the_reader_s_seat_is_never_handed_to_the_ai() {
         game.hand_to_ai(0).unwrap_err()
     });
     assert!(refused.contains("not a person's"));
+}
+
+/// Issue #1448: a creature blocked by two is the attacker's to divide (CR 510.1c), never the
+/// engine's split in the order they blocked. The reader's Grizzly Bears, blocked by the guest's
+/// two Raging Goblins, is asked how to deal its 2: a split short of the whole is refused and
+/// changes nothing, and both points on the second goblin kill it and leave the first standing.
+/// A person blocks, so the blocks are the test's and not the AI's dice.
+#[test]
+fn the_attacker_divides_its_damage_among_two_blockers() {
+    let (asked, refused, after) = engine(|| {
+        let (mut game, _, guest) = duel(4);
+        game.put_for_test(PlaytestPlayer::You, "Grizzly Bears");
+        game.put_for_test(PlaytestPlayer::Opponent, "Raging Goblin");
+        game.put_for_test(PlaytestPlayer::Opponent, "Raging Goblin");
+        let mut guest = guest.view;
+        for _ in 0..600 {
+            let host = game.view();
+            assert_ne!(host.stage, Stage::Over, "the game ended before the attack");
+            if host.prompt.as_ref().is_some_and(|p| p.damage.is_some()) {
+                break;
+            }
+            let step = if host.stage == Stage::Waiting {
+                let action = match (&guest.stage, &guest.block) {
+                    (Stage::Block, Some(block)) => A::Block {
+                        blocks: block
+                            .blockers
+                            .iter()
+                            .filter_map(|b| {
+                                b.attackers.first().map(|&attacker| PlaytestBlockPair {
+                                    blocker: b.id,
+                                    attacker,
+                                })
+                            })
+                            .collect(),
+                    },
+                    (stage, _) => next(*stage),
+                };
+                game.act_by(1, action).expect("the guest acts")
+            } else {
+                let action = match (&host.stage, &host.attack) {
+                    (Stage::Main, _)
+                        if host.active == PlaytestPlayer::You
+                            && host.phase == PlaytestPhase::Main1 =>
+                    {
+                        A::Pass
+                    }
+                    (Stage::Attack, Some(attack)) => A::Attack {
+                        attacks: attack
+                            .attackers
+                            .iter()
+                            .map(|a| PlaytestAttackPair {
+                                attacker: a.id,
+                                target: None,
+                                player: None,
+                            })
+                            .collect(),
+                    },
+                    (stage, _) => next(*stage),
+                };
+                game.act(action).expect("the reader acts")
+            };
+            let _ = step;
+            for (seat, step) in game.guest_steps() {
+                if seat == 1 {
+                    guest = step.view;
+                }
+            }
+        }
+        let asked = game.view();
+        let damage = asked
+            .prompt
+            .as_ref()
+            .and_then(|p| p.damage.clone())
+            .expect("the reader is asked how to divide the damage");
+        let second = damage.blockers[1].card.id;
+        let refused = game
+            .act(A::AssignDamage {
+                blockers: vec![PlaytestDamageShare {
+                    blocker: second,
+                    amount: 1,
+                }],
+                excess: 0,
+            })
+            .unwrap_err();
+        assert_eq!(game.view(), asked, "a refused split changes nothing");
+        game.act(A::AssignDamage {
+            blockers: vec![PlaytestDamageShare {
+                blocker: second,
+                amount: 2,
+            }],
+            excess: 0,
+        })
+        .expect("the split is taken");
+        (asked, refused, game.view())
+    });
+    let damage = asked.prompt.as_ref().unwrap().damage.as_ref().unwrap();
+    assert_eq!(damage.attacker.name, "Grizzly Bears");
+    assert_eq!(damage.total, 2);
+    assert!(!damage.trample);
+    assert_eq!(damage.defender, PlaytestPlayer::Opponent);
+    assert_eq!(damage.blockers.len(), 2);
+    assert!(damage
+        .blockers
+        .iter()
+        .all(|b| b.card.name == "Raging Goblin" && b.lethal == 1));
+    assert!(refused.contains("Assign all 2 damage"), "{refused}");
+    let (first, second) = (damage.blockers[0].card.id, damage.blockers[1].card.id);
+    let standing: Vec<u64> = after.opponents[0]
+        .battlefield
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert!(standing.contains(&first), "the goblin given none lives");
+    assert!(!standing.contains(&second), "the goblin given both dies");
 }

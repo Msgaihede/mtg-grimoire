@@ -268,6 +268,7 @@ describe("pickableCards", () => {
       cancellable: false,
       pick: null,
       keyword: null,
+      damage: null,
       options: [
         option({ index: 0, cards: [a] }),
         option({ index: 1, cards: [a, b] }),
@@ -291,6 +292,7 @@ describe("pickableCards", () => {
       cancellable: false,
       pick: null,
       keyword: null,
+      damage: null,
       options: [option({ index: 0, kind: "ChooseReplacement", cards: [effect] })],
     });
     expect(picks.size).toBe(0);

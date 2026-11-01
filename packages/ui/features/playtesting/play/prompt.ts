@@ -50,6 +50,7 @@ const TITLES: Record<string, string> = {
   UnlessPayment: "Pay?",
   ReplacementChoice: "Choose a replacement effect",
   OrderTriggers: "Put your triggers in order",
+  AssignCombatDamage: "Assign combat damage",
 };
 
 /** What the reader is choosing, for the questions whose title alone does not say it. */

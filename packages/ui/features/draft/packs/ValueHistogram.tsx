@@ -7,8 +7,9 @@
  * series, so no legend — the heading above names it. Money is the accent, so the bars are; every
  * word and figure wears a text token (dataviz: text never wears the data colour). Bars are 24px at
  * most with a 2px surface gap and a 4px rounded top on a square baseline. A bar's hit target is
- * its whole slot, full height, and its tooltip says the band and the count; the same figures are
- * in the table under it, so the tooltip never gates a number.
+ * its whole slot, full height, and its tooltip says the band and its share of the simulated values
+ * — the chance one lands there, which a reader can act on where a raw count of 10 000 is not
+ * (issue #1451); the same figures are in the table under it, so the tooltip never gates a number.
  *
  * **The x scale is the bins' index, not money.** `histogram` folds the long right tail into the
  * last bin, so the last bar is wider in money than the others and the right-hand label says
@@ -50,6 +51,20 @@ function barPath(x: number, y: number, w: number, h: number): string {
     `M${x} ${y}V${y - h + r}Q${x} ${y - h} ${x + r} ${y - h}` +
     `H${x + w - r}Q${x + w} ${y - h} ${x + w} ${y - h + r}V${y}Z`
   );
+}
+
+/**
+ * A bin's share of all the values as a percent with one decimal — a bar of a 24-bar chart is
+ * often a few percent, where a whole percent would flatten neighbours into one figure — never
+ * claiming certainty it does not have: `<0.1%` for a bar that holds a value, `>99.9%` for one that
+ * misses some.
+ */
+export function shareText(count: number, total: number): string {
+  if (total <= 0) return "0%";
+  const pct = (count / total) * 100;
+  if (pct > 0 && pct < 0.1) return "<0.1%";
+  if (pct < 100 && pct > 99.9) return ">99.9%";
+  return `${Number(pct.toFixed(1)).toLocaleString("en-US")}%`;
 }
 
 /** Where `value` falls on the index scale: bin `i` spans `[i, i + 1)`. */
@@ -97,6 +112,7 @@ export function ValueHistogram({
   const barW = Math.max(1, Math.min(BAR_MAX, slot - GAP));
   const bottom = HEIGHT - AXIS;
   const tallest = Math.max(1, ...bins.map((b) => b.count));
+  const total = bins.reduce((sum, b) => sum + b.count, 0);
   const xOf = (p: number) => (p / n) * width;
   const hot = hover !== null && hover < n ? bins[hover] : null;
 
@@ -193,7 +209,7 @@ export function ValueHistogram({
             }
           >
             <span className="block font-mono text-sm tabular-nums text-text">
-              {hot.count.toLocaleString("en-US")} {unit}
+              {shareText(hot.count, total)} of {unit}
             </span>
             <span className="block font-mono text-xs tabular-nums text-dim">
               {formatPrice(hot.from, currency)}–{formatPrice(hot.to, currency)}
@@ -207,7 +223,7 @@ export function ValueHistogram({
           <thead>
             <tr className="text-left">
               <th className="py-0.5 font-normal">Value</th>
-              <th className="py-0.5 text-right font-normal capitalize">{unit}</th>
+              <th className="py-0.5 text-right font-normal">% of {unit}</th>
             </tr>
           </thead>
           <tbody>
@@ -216,7 +232,7 @@ export function ValueHistogram({
                 <td className="py-0.5">
                   {formatPrice(b.from, currency)}–{formatPrice(b.to, currency)}
                 </td>
-                <td className="py-0.5 text-right">{b.count.toLocaleString("en-US")}</td>
+                <td className="py-0.5 text-right">{shareText(b.count, total)}</td>
               </tr>
             ))}
           </tbody>

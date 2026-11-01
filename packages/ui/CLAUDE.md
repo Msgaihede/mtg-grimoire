@@ -88,7 +88,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **The header's quick search (issue #1098)**: `features/quickSearch/` — a combobox centred in `TitleBar` (its `center` slot, filled by `AppShell`), `Ctrl+K` from anywhere. Groups are always Decks, Collection, Wishlist, All cards, Settings (`results.ts`' `GROUP_ORDER`); the corpus group is drawn only once both lists have answered the same text, so a corpus row is never above the reader's own copy. A result navigates through one-shot store hand-offs (`showDeckFolder`, `showTextInSearch`, `revealCard`, plus the existing `pendingFolder`/`pendingSettingsPanel`), each cleared by `setActiveView` and spent by its page. See [quick-search.md](../../docs/reference/quick-search.md).
 - **Pricing & marketplaces**:
   - Currency and pricing formatting strictly use `formatPrice(value, currency)` driven by `useMarketplace()`.
-  - `null` prices render as an em dash; never fall back to another marketplace's price.
+  - `null` prices render as an em dash; never fall back to another marketplace's price. The one surface that prices at several is Open Packs, at the reader's own pick of one currency's marketplaces (`features/draft/packs/marketplaces.ts`).
 
 ---
 

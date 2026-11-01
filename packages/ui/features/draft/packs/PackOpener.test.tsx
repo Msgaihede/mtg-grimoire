@@ -3,12 +3,18 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import type { BoosterCard, BoosterSet, BoosterSetSummary, PrintingPrices } from "@/lib/ipc";
+import type {
+  BoosterCard,
+  BoosterSet,
+  BoosterSetSummary,
+  FinishPrices,
+  PrintingPrices,
+} from "@/lib/ipc";
 import { PRICES, PRODUCT, SET as FIXTURE } from "../booster/fixture";
 import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
-import { pickOption } from "@/test-dropdown";
+import { openDropdown, pickOption } from "@/test-dropdown";
 
 /** Every card the fixture's sheets name, in the corpus, but for one MTGJSON alone knows. */
 const CARDS: BoosterCard[] = [
@@ -70,17 +76,44 @@ vi.mock("../booster/rng", async (importOriginal) => ({
 }));
 
 import { packValue, finishPrice } from "../booster/value";
-import { openOne } from "./opening";
+import { figuresOf, openOne } from "./opening";
+import { openables } from "./products";
+import { parseStored, STORAGE_KEY, usePackMarketplaceStore } from "./marketplacePick";
 import { PackOpener } from "./PackOpener";
+
+const halved = (p: FinishPrices): FinishPrices => ({
+  nonfoil: p.nonfoil === null ? null : p.nonfoil / 2,
+  foil: p.foil === null ? null : p.foil / 2,
+  etched: p.etched === null ? null : p.etched / 2,
+});
+
+/** The Expected value line's figure for the stage's first product, at `priceOf`. */
+function expectedLine(
+  priceOf: (id: string, foil: boolean) => number | null,
+  currency: "usd" | "eur",
+) {
+  const first = openables(SET)[0];
+  const priced = (id: string, foil: boolean) => (id === "land" ? null : priceOf(id, foil));
+  return `Expected value ${formatPrice(figuresOf(SET, first, priced).ev, currency)}`;
+}
 
 function setup() {
   packsBoosterSets.mockResolvedValue([SUMMARY]);
   packsBoosterSet.mockResolvedValue(SET);
-  printingPrices.mockImplementation(async (ids: string[]): Promise<PrintingPrices[]> =>
-    ids.flatMap((cardId) => {
-      const finishPrices = PRICES.get(cardId);
-      return finishPrices ? [{ cardId, finishPrices }] : [];
-    }),
+  printingPrices.mockImplementation(
+    async (ids: string[], marketplace: string): Promise<PrintingPrices[]> =>
+      ids.flatMap((cardId) => {
+        const finishPrices = PRICES.get(cardId);
+        if (!finishPrices) return [];
+        // Card Kingdom quotes every card at half, and only the rare and the mythic: the rest is
+        // TCGplayer's alone, which is what makes the lowest a per-card answer.
+        if (marketplace === "cardkingdom") {
+          return cardId === "rare" || cardId === "mythic"
+            ? [{ cardId, finishPrices: halved(finishPrices) }]
+            : [];
+        }
+        return [{ cardId, finishPrices }];
+      }),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onBack = vi.fn();
@@ -94,7 +127,11 @@ function setup() {
   return { user: userEvent.setup(), onBack };
 }
 
-beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
+beforeEach(() => {
+  useAppStore.setState(useAppStore.getInitialState());
+  getMarketplace.mockResolvedValue("tcgplayer");
+  printingPrices.mockClear();
+});
 
 describe("PackOpener", () => {
   /** Issue #1433: ctrl+wheel over a set's stage steps the opened wall's own section. */
@@ -207,6 +244,80 @@ describe("PackOpener", () => {
     act(() => refreshed.fire());
     expect(await screen.findByRole("button", { name: /Next Set/ })).toBeInTheDocument();
     expect(packsBoosterSets).toHaveBeenCalledTimes(2);
+  });
+
+  /** Issue #1446: several marketplaces, and the lowest price any of them quotes. */
+  describe("prices from several marketplaces", () => {
+    const tcg = (id: string, foil: boolean) => finishPrice(PRICES.get(id), foil);
+    const lowest = (id: string, foil: boolean) =>
+      id === "rare" || id === "mythic" ? finishPrice(halved(PRICES.get(id)!), foil) : tcg(id, foil);
+
+    it("starts at the app's marketplace, and prices at the lowest of the ones picked", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      const trigger = await screen.findByRole("button", { name: "Prices from" });
+      expect(trigger).toHaveTextContent("TCGplayer");
+      expect(await screen.findByText(/^Expected value/)).toHaveTextContent(
+        expectedLine(tcg, "usd"),
+      );
+
+      await openDropdown(user, "Prices from");
+      await user.click(screen.getByRole("option", { name: /Card Kingdom/ }));
+
+      expect(trigger).toHaveTextContent("Lowest of 2 marketplaces");
+      expect(printingPrices).toHaveBeenCalledWith(expect.any(Array), "cardkingdom");
+      await waitFor(() =>
+        expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(lowest, "usd")),
+      );
+      expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY)!)).toEqual([
+        "tcgplayer",
+        "cardkingdom",
+      ]);
+    });
+
+    it("starts over from a marketplace in the other currency, and keeps at least one", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await screen.findByText(/^Expected value/);
+      await openDropdown(user, "Prices from");
+      // The one picked cannot be put down: there is always a marketplace to price at.
+      await user.click(screen.getByRole("option", { name: /TCGplayer/ }));
+      const trigger = screen.getByRole("button", { name: "Prices from" });
+      expect(trigger).toHaveTextContent("TCGplayer");
+
+      await user.click(screen.getByRole("option", { name: /Cardmarket/ }));
+      expect(trigger).toHaveTextContent("Cardmarket");
+      expect(screen.getByRole("option", { name: /TCGplayer/ })).toHaveAttribute(
+        "aria-selected",
+        "false",
+      );
+      await waitFor(() =>
+        expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(tcg, "eur")),
+      );
+      // Card trader has no prices this app can read.
+      expect(screen.getByRole("option", { name: /Card trader/ })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+    });
+
+    it("opens on the pick this device remembers, not the app's marketplace", async () => {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(["cardkingdom", "tcgplayer"]));
+      // The store reads the device's pick once, as the window loads; this is that load.
+      usePackMarketplaceStore.setState({
+        stored: parseStored(window.localStorage.getItem(STORAGE_KEY)),
+      });
+      getMarketplace.mockResolvedValue("cardmarket");
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      expect(await screen.findByRole("button", { name: "Prices from" })).toHaveTextContent(
+        "Lowest of 2 marketplaces",
+      );
+      await waitFor(() =>
+        expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(lowest, "usd")),
+      );
+      expect(printingPrices).not.toHaveBeenCalledWith(expect.any(Array), "cardmarket");
+    });
   });
 
   it("walks back up the trail", async () => {

@@ -120,6 +120,10 @@ place a printing's per-finish price is read, at the reader's marketplace. A card
 `foil` sheet is priced at its foil price, else nonfoil, else etched; an unpriced card counts 0 and
 is drawn with an em dash.
 
+_Amended 2026-11-01 (issue #1446):_ the Packs page prices at one **or several** marketplaces of one
+currency, picked on the page and defaulting to the reader's marketplace; each finish is the lowest
+quote among them. See [draft-and-packs.md](../../reference/draft-and-packs.md).
+
 ## 3. Opening a booster (TypeScript, `packages/ui/features/draft/booster/`)
 
 `open.ts` — `openBooster(product, rng)`: one variant by weight; for each slot, `count` cards from

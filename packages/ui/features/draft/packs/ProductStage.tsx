@@ -1,9 +1,11 @@
 import { useId, useMemo, useState, type JSX } from "react";
 import { PackageOpen, RotateCcw } from "lucide-react";
-import { Dropdown } from "@/components/Dropdown/Dropdown";
+import { Dropdown, MultiDropdown } from "@/components/Dropdown/Dropdown";
+import { FILTER_LABEL } from "@/components/FilterChips";
 import { BUTTON } from "@/features/settings/controls";
 import { plural } from "@/lib/counts";
 import type { BoosterSet } from "@/lib/ipc";
+import { isMarketplaceId, type Marketplace } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
@@ -17,6 +19,7 @@ import {
   type CardSort,
   type Opened,
 } from "./opening";
+import { usePackMarketplaces, type MarketplaceChoice } from "./marketplaces";
 import { OpenedWall } from "./OpenedWall";
 import { PackFigures, type Tally } from "./PackFigures";
 import { openables, openableValue, type Openable } from "./products";
@@ -37,6 +40,41 @@ export const PRIMARY = cn(
 /** A secondary press. */
 export const SECONDARY = cn(BUTTON, "h-9 border-border bg-surface hover:border-accent/60");
 
+/**
+ * What the marketplace picker's trigger says: the one marketplace by name, or how many the
+ * lowest price is taken from — `MultiDropdown`'s "a count, never a value" for several.
+ */
+export function marketplacesLabel(marketplaces: readonly Marketplace[]): string {
+  return marketplaces.length === 1
+    ? marketplaces[0].label
+    : `Lowest of ${marketplaces.length} marketplaces`;
+}
+
+/** The currency's sign, the row's hint — the one fact that decides whether a pick adds or replaces. */
+const CURRENCY_HINT = { usd: "USD", eur: "EUR" } as const;
+
+/** One picker row: greyed when it cannot be priced at, and a tooltip saying why or what it does. */
+function choiceOption(
+  { marketplace, disabled }: MarketplaceChoice,
+  picked: readonly Marketplace[],
+) {
+  const currency = picked[0]?.currency;
+  const title = !marketplace.priced
+    ? `${marketplace.label} has no prices this app can read.`
+    : disabled
+      ? `${marketplace.label}'s prices can't be read here.`
+      : currency !== undefined && marketplace.currency !== currency
+        ? `Prices in ${CURRENCY_HINT[marketplace.currency]} — choosing it replaces the ${CURRENCY_HINT[currency]} marketplaces, since prices in two currencies can't be compared.`
+        : undefined;
+  return {
+    value: marketplace.id,
+    label: marketplace.label,
+    hint: CURRENCY_HINT[marketplace.currency],
+    disabled,
+    title,
+  };
+}
+
 /** "pack" for a booster, "box" for a sealed product — the words the figures speak in. */
 function nouns(openable: Openable): { noun: string; unit: string } {
   return openable.kind === "booster"
@@ -56,7 +94,8 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
   const [opened, setOpened] = useState<Opened | null>(null);
   const [sort, setSort] = useState<CardSort>("price");
   const [tally, setTally] = useState<Tally | undefined>(() => tallyMemory.recall());
-  const { priceOf, ready, currency } = useBoosterPrices(set);
+  const priceAt = usePackMarketplaces();
+  const { priceOf, ready, currency } = useBoosterPrices(set, priceAt.marketplaces);
   const facts = useMemo(() => new Map(set.cards.map((c) => [c.cardId, c])), [set]);
 
   const choice = options.find((o) => openableValue(o) === chosen) ?? options[0];
@@ -108,6 +147,22 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
             hint: o.kind === "booster" ? "Booster" : "Sealed",
           }))}
           className="min-w-64 max-w-[28rem]"
+        />
+        {/* The caption beside the trigger, the printings bar's `Sort`: a bare "TCGplayer" in a row
+            of buttons would not say it is where the prices come from. */}
+        <label id={`${pickId}-prices`} htmlFor={`${pickId}-market`} className={FILTER_LABEL}>
+          Prices from
+        </label>
+        <MultiDropdown
+          id={`${pickId}-market`}
+          labelledBy={`${pickId}-prices`}
+          triggerLabel={marketplacesLabel(priceAt.marketplaces)}
+          options={priceAt.choices.map((c) => choiceOption(c, priceAt.marketplaces))}
+          selected={priceAt.marketplaces.map((m) => m.id)}
+          onToggle={(id) => {
+            if (isMarketplaceId(id)) priceAt.toggle(id);
+          }}
+          className="min-w-44"
         />
         <button type="button" onClick={open} className={PRIMARY}>
           <PackageOpen className="size-4" aria-hidden="true" />
