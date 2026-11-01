@@ -290,6 +290,19 @@ and so declines (`pick.ts`' `pickOffer`). A cast that must be made shows its car
 The engine's own answers to a free-cast window name the card each casts (`option_of` reads
 `selection`), under "Other answers".
 
+**Combat damage: the attacker divides it** (issue #1448). An attacker blocked by two creatures or
+more — or a trampler blocked by one, with damage to spare — is phase's `AssignCombatDamage`, asked of
+the attacker's controller (CR 510.1c; the defender's, against banding, CR 702.22j). phase's
+`legal_actions` lists one answer for it, its own greedy split (lethal to each blocker in the order
+they blocked, the rest on the last), so `sole_answer` took it and the reader never chose which
+blocker died. The prompt now carries `damage` (`Playtest::damage`): the attacker, the total, each
+blocker with the damage lethal to it, whether it tramples, and who or what it attacks; and
+`sole_answer` leaves the question to the reader whenever two block or it tramples.
+`assignDamage` answers it — so much per blocker and `excess` past them — and the session checks the
+blockers, the whole total and trample's lethal-first rule (CR 702.19b) before the engine does;
+trample over a planeswalker gives it its loyalty and its controller the rest (CR 702.19c). The
+engine's own split, and "as though it weren't blocked" where a card allows it, stay as options.
+
 The session checks the count, the power cap, that each card is eligible and that none is picked
 twice. The engine
 checks the rest (a search's "different names", say), and its refusal is the sentence shown. This
@@ -866,6 +879,11 @@ facts are found as a run of `step.happened`, and the end takes the rest.
   scry sorts into "Keep on top" and "Bottom", surveil into "Top" and "Graveyard". Cards that may
   not be picked are dimmed. "Look at the table" folds the panel, "Other answers" shows the generic
   options, and "Let the engine choose" and Cancel stay.
+- **Damage:** a `damage` prompt opens the blockers at 92 × 129 beside the attacker, each with its
+  share under it (− and +) and "Lethal" once it has it; a click on a blocker gives it lethal, a
+  second everything left. With trample a last column carries what is left past the blockers, open
+  only once each has lethal. Confirm ("Assign damage") stays `aria-disabled` until every point is
+  assigned (`damage.ts`); "Other answers" holds the engine's own split.
 - **Picks reset** with every new view.
 
 **The table's shared pieces, widened rather than copied.** The pieces in

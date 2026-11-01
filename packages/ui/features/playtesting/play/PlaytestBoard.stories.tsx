@@ -13,6 +13,7 @@ import {
   orderTriggersPrompt,
   combatArrowsView,
   damageHappened,
+  damagePrompt,
   discardPick,
   fourPlayer,
   fourPlayerAttack,
@@ -547,6 +548,19 @@ export const Emblems: Story = {
 /** Scry 3: Keep on top, in order, and Bottom. */
 export const ScryPick: Story = {
   args: { view: scryPick().view },
+};
+
+/**
+ * The reader's Tarmogoyf is blocked by Ragavan and Boros Reckoner: the reader divides its 3
+ * damage (issue #1448) — a click on a blocker gives it lethal, − and + step a point.
+ */
+export const DamageAssignment: Story = {
+  args: { view: damagePrompt().view },
+};
+
+/** The same with trample: what is left past lethal goes on to the opponent. */
+export const DamageAssignmentTrample: Story = {
+  args: { view: damagePrompt(true).view },
 };
 
 /** Discard exactly two; the land cannot be picked. */

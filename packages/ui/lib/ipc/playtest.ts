@@ -296,6 +296,42 @@ export interface PlaytestPrompt {
    * `Alternative`.
    */
   keyword: string | null;
+  /**
+   * How the reader's attacker divides its combat damage among the creatures blocking it
+   * (`AssignCombatDamage`, CR 510.1c; issue #1448), which `options` cannot list: `assignDamage`
+   * answers.
+   */
+  damage: PlaytestDamage | null;
+}
+
+/**
+ * An attacking creature's combat damage, to divide as its controller chooses among its blockers
+ * (CR 510.1c) — and, with trample, past them to what it attacks once each has lethal (CR 702.19b).
+ */
+export interface PlaytestDamage {
+  attacker: PlaytestCardRef;
+  /** The damage to divide: all of it is assigned. */
+  total: number;
+  /** The blockers, in the engine's order. */
+  blockers: PlaytestDamageBlocker[];
+  /** What is left once every blocker has lethal may go on to what it attacks (`excess`). */
+  trample: boolean;
+  /** The player it attacks, or whose planeswalker or battle it attacks. */
+  defender: PlaytestPlayer;
+  /** The planeswalker or battle it attacks, when not a player. */
+  target: PlaytestCardRef | null;
+}
+
+/** A creature blocking the attacker, and the damage lethal to it (1 against deathtouch). */
+export interface PlaytestDamageBlocker {
+  card: PlaytestCardRef;
+  lethal: number;
+}
+
+/** So much of the attacker's damage to one blocker (`assignDamage`). */
+export interface PlaytestDamageShare {
+  blocker: number;
+  amount: number;
 }
 
 export interface PlaytestPick {
@@ -397,6 +433,9 @@ export type PlaytestAction =
   | { type: "block"; blocks: PlaytestBlockPair[] }
   | { type: "choose"; index: number }
   | { type: "pickCards"; ids: number[] }
+  /** Answer the prompt's `damage`: so much to each blocker, and `excess` past them (trample's,
+   *  once each has lethal). The amounts add up to its whole `total`. */
+  | { type: "assignDamage"; blockers: PlaytestDamageShare[]; excess: number }
   | { type: "auto" }
   | { type: "cancel" }
   /*

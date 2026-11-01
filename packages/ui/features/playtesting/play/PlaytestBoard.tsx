@@ -83,6 +83,7 @@ import {
 import { PlateFrame } from "./PlateFrame";
 import { OPPONENTS, playerName, playerPossessive, seatOfPlayer, tableCards } from "./players";
 import { pickableCards } from "./prompt";
+import { DamagePanel } from "./DamagePanel";
 import { PickPanel } from "./PickPanel";
 import { PromptPanel } from "./PromptPanel";
 import { RespondPrompt, respondingTo } from "./RespondPrompt";
@@ -1202,7 +1203,20 @@ export function PlaytestBoard({
           className="absolute top-[calc(50%-32px)] left-1/2 max-h-[calc(100%-200px)] w-[min(820px,calc(100%-200px))] -translate-x-1/2 -translate-y-1/2"
         />
       )}
-      {prompting && view.prompt!.pick === null && (
+      {prompting && view.prompt!.damage !== null && (
+        <DamagePanel
+          key={`${view.prompt!.damage.attacker.id}:${view.prompt!.damage.blockers.map((b) => b.card.id).join(",")}`}
+          prompt={{ ...view.prompt!, damage: view.prompt!.damage }}
+          table={[...tableCards(view), ...view.you.hand]}
+          disabled={locked}
+          onAct={act}
+          onPoint={pointCard}
+          onUnpoint={unpoint}
+          opponents={view.opponents.length}
+          className="absolute top-[calc(50%-32px)] left-1/2 max-h-[calc(100%-200px)] w-[min(820px,calc(100%-200px))] -translate-x-1/2 -translate-y-1/2"
+        />
+      )}
+      {prompting && view.prompt!.pick === null && view.prompt!.damage === null && (
         <PromptPanel
           prompt={view.prompt!}
           table={[...tableCards(view), ...view.you.hand]}

@@ -335,6 +335,47 @@ pub struct PlaytestPrompt {
     /// may be paid with (`Overload`, `Evoke`, `Bestow`…), whose answers are `Normal` and
     /// `Alternative`.
     pub keyword: Option<String>,
+    /// Present when the question is how the reader's attacker divides its combat damage among the
+    /// creatures blocking it (`AssignCombatDamage`, CR 510.1c; issue #1448), which `options`
+    /// cannot list (the engine offers only its own split). `assignDamage` answers it.
+    pub damage: Option<PlaytestDamage>,
+}
+
+/// An attacking creature's combat damage, to divide as its controller chooses among the creatures
+/// blocking it (CR 510.1c) — and, with trample, past them to what it attacks, once each has been
+/// assigned lethal damage (CR 702.19b).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestDamage {
+    pub attacker: PlaytestCardRef,
+    /// The damage to divide: all of it is assigned.
+    pub total: u32,
+    /// The blockers, in the engine's order.
+    pub blockers: Vec<PlaytestDamageBlocker>,
+    /// The attacker has trample: what is left once every blocker has lethal may go on to the
+    /// player, planeswalker or battle it attacks (`excess`).
+    pub trample: bool,
+    /// The player the attacker attacks, or whose planeswalker or battle it attacks.
+    pub defender: PlaytestPlayer,
+    /// The planeswalker or battle it attacks, when it does not attack a player.
+    pub target: Option<PlaytestCardRef>,
+}
+
+/// One creature blocking the attacker, and the damage that is lethal to it (1 against deathtouch,
+/// CR 702.2c; less the damage already marked on it).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestDamageBlocker {
+    pub card: PlaytestCardRef,
+    pub lethal: u32,
+}
+
+/// So much of the attacker's damage to one blocker (`AssignDamage`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaytestDamageShare {
+    pub blocker: u64,
+    pub amount: u32,
 }
 
 /// A question whose answer is some of a set of cards.
@@ -569,6 +610,13 @@ pub enum PlaytestAction {
     /// Answer the prompt's `pick` with these cards, in order.
     PickCards {
         ids: Vec<u64>,
+    },
+    /// Answer the prompt's `damage`: so much to each blocker (a blocker left out is assigned
+    /// none), and `excess` past them to what the attacker attacks — trample's, and only once every
+    /// blocker has lethal. The amounts add up to the attacker's whole `total`.
+    AssignDamage {
+        blockers: Vec<PlaytestDamageShare>,
+        excess: u32,
     },
     /// Let the engine's AI answer the prompt for the reader.
     Auto,
