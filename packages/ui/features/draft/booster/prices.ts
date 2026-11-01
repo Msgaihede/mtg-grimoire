@@ -1,13 +1,18 @@
 /**
- * Every card a set's boosters can hold, priced at the reader's marketplace — the one read the Packs
- * page's figures stand on (spec §2: prices are not in the booster wire; `printingPrices` is the
- * one place a printing's per-finish price is read).
+ * Every card a set's boosters can hold, priced at the marketplaces the Packs page names — the one
+ * read the page's figures stand on (spec §2: prices are not in the booster wire; `printingPrices`
+ * is the one place a printing's per-finish price is read).
+ *
+ * **Several marketplaces, and a card is worth the lowest any of them quotes** (issue #1446): one
+ * read per marketplace, each in its own cache entry so a marketplace added to the pick asks for
+ * its own prices and nobody else's, then {@link lowestPrices} per finish. The marketplaces are
+ * always of one currency (`packs/marketplaces.ts`); no price is ever taken from a marketplace the
+ * reader did not pick.
  */
 import { useCallback, useMemo } from "react";
-import { skipToken, useQuery } from "@tanstack/react-query";
+import { skipToken, useQueries } from "@tanstack/react-query";
 import { ipc, type BoosterSet, type FinishPrices } from "@/lib/ipc";
-import type { Currency } from "@/lib/marketplace";
-import { useMarketplace } from "@/lib/useMarketplace";
+import type { Currency, Marketplace } from "@/lib/marketplace";
 import { finishPrice, type PriceOf } from "./value";
 
 /**
@@ -29,17 +34,70 @@ export function boosterPricesKey(marketplace: string, set: BoosterSet | undefine
 
 const NONE: ReadonlyMap<string, FinishPrices> = new Map();
 
+/** The lower of two quotes, where `null` is "not quoted" rather than free. */
+function lower(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return Math.min(a, b);
+}
+
 /**
- * `priceOf` for every card of `set`, at the reader's marketplace; `ready` once the read has
+ * Each card's lowest quote **per finish** across `answers` — one map per marketplace.
+ *
+ * Per finish and not per card, so `finishPrice`'s fallback stays a finish's: a foil one
+ * marketplace quotes and another does not is that marketplace's foil price, never the other's
+ * non-foil standing in for it.
+ */
+export function lowestPrices(
+  answers: readonly ReadonlyMap<string, FinishPrices>[],
+): ReadonlyMap<string, FinishPrices> {
+  if (answers.length === 1) return answers[0];
+  const out = new Map<string, FinishPrices>();
+  for (const answer of answers) {
+    for (const [cardId, prices] of answer) {
+      const seen = out.get(cardId);
+      out.set(
+        cardId,
+        seen === undefined
+          ? prices
+          : {
+              nonfoil: lower(seen.nonfoil, prices.nonfoil),
+              foil: lower(seen.foil, prices.foil),
+              etched: lower(seen.etched, prices.etched),
+            },
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * The reads, merged. **At module scope on purpose**: TanStack re-runs a `combine` it is handed a
+ * new reference to on every render, and only a stable one when the reads themselves change — so
+ * the merged map, and the `priceOf` built on it, keep their identity between renders.
+ */
+function combine(
+  results: readonly { data?: ReadonlyMap<string, FinishPrices>; isSuccess: boolean }[],
+) {
+  return {
+    prices: lowestPrices(results.map((r) => r.data ?? NONE)),
+    ready: results.length > 0 && results.every((r) => r.isSuccess),
+  };
+}
+
+/**
+ * `priceOf` for every card of `set`, at the lowest of `marketplaces`; `ready` once every read has
  * answered. Before then (and for a card MTGJSON alone knows, `inCorpus: false`) every price is
  * `null` — drawn as an em dash, counted as 0.
  */
-export function useBoosterPrices(set: BoosterSet | undefined): {
+export function useBoosterPrices(
+  set: BoosterSet | undefined,
+  marketplaces: readonly Marketplace[],
+): {
   priceOf: PriceOf;
   ready: boolean;
   currency: Currency;
 } {
-  const { marketplace } = useMarketplace();
   const ids = useMemo(
     () =>
       set === undefined
@@ -47,24 +105,30 @@ export function useBoosterPrices(set: BoosterSet | undefined): {
         : [...new Set(set.cards.filter((c) => c.inCorpus).map((c) => c.cardId))].sort(),
     [set],
   );
-  const query = useQuery({
-    queryKey: boosterPricesKey(marketplace.id, set),
-    queryFn:
-      set === undefined
-        ? skipToken
-        : async (): Promise<ReadonlyMap<string, FinishPrices>> => {
-            const chunks: string[][] = [];
-            for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
-            const answers = await Promise.all(
-              chunks.map((chunk) => ipc.printingPrices(chunk, marketplace.id)),
-            );
-            return new Map(answers.flat().map((row) => [row.cardId, row.finishPrices]));
-          },
+  const { prices, ready } = useQueries({
+    queries: marketplaces.map((marketplace) => ({
+      queryKey: boosterPricesKey(marketplace.id, set),
+      queryFn:
+        set === undefined
+          ? skipToken
+          : async (): Promise<ReadonlyMap<string, FinishPrices>> => {
+              const chunks: string[][] = [];
+              for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK));
+              const rows = await Promise.all(
+                chunks.map((chunk) => ipc.printingPrices(chunk, marketplace.id)),
+              );
+              return new Map(rows.flat().map((row) => [row.cardId, row.finishPrices]));
+            },
+    })),
+    combine,
   });
-  const prices = query.data ?? NONE;
   const priceOf = useCallback<PriceOf>(
     (cardId, foil) => finishPrice(prices.get(cardId), foil),
     [prices],
   );
-  return { priceOf, ready: set !== undefined && query.isSuccess, currency: marketplace.currency };
+  return {
+    priceOf,
+    ready: set !== undefined && ready,
+    currency: marketplaces[0]?.currency ?? "usd",
+  };
 }

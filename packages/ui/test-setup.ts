@@ -5,6 +5,7 @@ import { afterAll, afterEach } from "vitest";
 import { resetBulkUndo } from "@/lib/bulkUndo";
 import { resetNotifications } from "@/lib/notifications";
 import { resetViewMemory } from "@/lib/viewMemory";
+import { resetPackMarketplaces } from "@/features/draft/packs/marketplacePick";
 
 /**
  * Every `motion` animation lands on its final value in one frame, for the whole suite.
@@ -90,6 +91,10 @@ afterEach(resetBulkUndo);
 // `@/lib/viewMemory` is the same kind of module state (issue #908): a search page a test left
 // narrowed would otherwise open narrowed in the next test that mounts it.
 afterEach(resetViewMemory);
+
+// The Packs page's marketplace pick (issue #1446) is kept in `localStorage` and a store over it:
+// a pick one test made would otherwise be what the next test's page priced at.
+afterEach(resetPackMarketplaces);
 
 // `@/lib/notifications` too: a toast one test raised would otherwise be on screen, and in the
 // inbox, of the next.

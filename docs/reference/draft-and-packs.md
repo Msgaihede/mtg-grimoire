@@ -67,7 +67,8 @@ colour first when the slot holds five or more. A drafted booster is therefore co
 opened one.
 
 The figures (`value.ts`) are conclusions, so they are TypeScript's: Rust answers the sheets and the
-weights, `printing_prices` answers the prices at the reader's marketplace, and the page computes
+weights, `printing_prices` answers the prices at the marketplaces the page prices at (below), and
+the page computes
 
 - **expected value** — per sheet the weighted mean price, × the slot's count, summed per variant and
   weighted by the variant; a colour-balanced slot counts its one card of each colour from that
@@ -85,6 +86,17 @@ weights, `printing_prices` answers the prices at the reader's marketplace, and t
 A card opened from a foil sheet is priced foil, else nonfoil, else etched; an unpriced card counts 0
 and is drawn with an em dash. A card MTGJSON knows and this corpus does not (`inCorpus: false`) has
 no image and no price, and is never dealt into a draft.
+
+**The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a multi-select
+beside the product picker, _Prices from_, that starts at the app's marketplace (Settings) and is the
+reader's pick after that — kept per device in `localStorage` (`grimoire.packs.marketplaces`), never
+in `app_meta`, and never written back to the app's setting. `useBoosterPrices` reads
+`printing_prices` once per picked marketplace (each its own cache entry) and takes each finish's
+lowest quote (`lowestPrices`) before the foil-else-nonfoil fallback, so one marketplace's non-foil
+never stands in for another's foil. **One currency at a time**: the app holds no exchange rate, so
+picking a marketplace in the other currency starts the pick over from it; the last picked one
+cannot be put down; Card trader (unpriced) and a feed the host cannot reach are greyed. Picking a
+feed that has never landed a row fetches it, as Settings does.
 
 ## The draft: phase.rs's draft-core
 
