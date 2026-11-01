@@ -253,7 +253,7 @@ describe("useCollectionFolders", () => {
 
     await waitFor(() => expect(result.current.summary.get(1)).toEqual(BINDER_SUMMARY));
     expect(result.current.summary.get(2)).toEqual(FOILS_SUMMARY);
-    expect(collectionFolderSummary).toHaveBeenCalledWith("manapool");
+    expect(collectionFolderSummary).toHaveBeenCalledWith("manapool", undefined);
     expect(client.getQueryData(["collection", "folderSummary", "manapool"])).toEqual([
       BINDER_SUMMARY,
       FOILS_SUMMARY,
@@ -276,7 +276,7 @@ describe("useCollectionFolders", () => {
     const { result } = renderHook(() => useCollectionFolders(), { wrapper });
 
     await waitFor(() => expect(result.current.summary.get(1)).toEqual(BINDER_SUMMARY));
-    expect(collectionFolderSummary).toHaveBeenCalledWith("manapool");
+    expect(collectionFolderSummary).toHaveBeenCalledWith("manapool", undefined);
     // The other marketplace's cached page is untouched — proof the two answers never mixed.
     expect(client.getQueryData(["collection", "folderSummary", "cardkingdom"])).toEqual([
       { ...BINDER_SUMMARY, cards: 999 },

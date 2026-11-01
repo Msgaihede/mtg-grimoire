@@ -88,6 +88,7 @@ export function Figure({
   title,
   inline = false,
   accent = false,
+  reduced,
 }: {
   label: string;
   /** Already formatted. An em dash rather than a zero while the first answer is in flight:
@@ -99,6 +100,8 @@ export function Figure({
   inline?: boolean;
   /** The one figure that matters most — the money — in gold. A row gilds one figure or none. */
   accent?: boolean;
+  /** A reduced price, drawn right after the number it reduces (`ReducedPrice`). */
+  reduced?: ReactNode;
 }) {
   const tip = useTooltip();
   if (inline) {
@@ -117,6 +120,7 @@ export function Figure({
         <dd className={cn("font-mono text-[15px] tabular-nums", accent && "text-accent")}>
           {value}
         </dd>
+        {reduced && <dd className="font-mono text-[15px] text-dim">{reduced}</dd>}
         {note && <dd className="order-last ml-1 font-mono text-xs text-dim">{note}</dd>}
       </div>
     );
@@ -126,6 +130,7 @@ export function Figure({
       <dt className="text-xs text-dim">{label}</dt>
       <dd className="font-mono text-lg tabular-nums">
         {value}
+        {reduced && <span className="ml-1.5 text-sm text-dim">{reduced}</span>}
         {note && <span className="ml-2 text-xs text-dim">{note}</span>}
       </dd>
     </div>

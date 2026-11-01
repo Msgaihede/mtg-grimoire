@@ -27,6 +27,8 @@
 //! re-asks it under, returned with each answer ([`Graph::run`]'s `extensions.invalidatedBy`).
 
 mod app;
+#[cfg(test)]
+mod batches;
 mod cards;
 mod collection;
 mod decks;

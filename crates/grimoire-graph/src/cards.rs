@@ -40,11 +40,6 @@ use crate::enums::Finish;
 use crate::filters::{core_filters, CardFilterInput};
 use crate::{invalidatedBy, marketplace_of, read, roots, Marketplace};
 
-/// How many Oracle-tag batches have run — the tests assert a whole list is one.
-#[cfg(test)]
-pub(crate) static TAG_BATCHES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 /// A batch's future, driven to the end on a thread of its own — the reason is
 /// [`crate::loaders`]' (nothing in the crate has a runtime to spawn on).
 fn on_a_thread_of_its_own(batch: BoxFuture<'static, ()>) {
@@ -60,7 +55,7 @@ impl Loader<String> for OracleTags {
 
     async fn load(&self, keys: &[String]) -> Result<HashMap<String, Self::Value>, Self::Error> {
         #[cfg(test)]
-        TAG_BATCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::batches::ran(crate::batches::Batch::OracleTags, &self.0);
         let tags = read_card_tags(&self.0.lock_db_read(), keys)
             .map_err(|e| Arc::new(format!("could not read the tags: {e}")))?;
         Ok(tags.into_iter().map(|t| (t.oracle_id, t.slugs)).collect())
@@ -69,10 +64,10 @@ impl Loader<String> for OracleTags {
 
 /// This domain's batch loaders, for one execution.
 pub(crate) fn data(request: Request, state: &Arc<State>) -> Request {
-    request.data(DataLoader::new(
+    request.data(crate::loaders::counted(DataLoader::new(
         OracleTags(state.clone()),
         on_a_thread_of_its_own,
-    ))
+    )))
 }
 
 /// One card's Oracle tags through the batch; none for a printing with no oracle id.
@@ -928,13 +923,12 @@ impl CardsQuery {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     use grimoire_core::state::{fixtures::on_files, State};
     use serde_json::{json, Value};
 
-    use super::TAG_BATCHES;
+    use crate::batches::{runs, Batch};
     use crate::Graph;
 
     /// A user schema with a corpus of three printings of two cards, two sets and two Oracle
@@ -1093,24 +1087,15 @@ pub(crate) mod tests {
     #[test]
     fn a_page_of_cards_costs_one_tags_read() {
         let state = seeded("graph-cards-batch");
-        let query = "{ searchCards { items { oracleId oracleTags } } }";
-        // The counter is shared with any test running beside this one: take the smaller of two
-        // runs, as the decks' batch test does.
-        let runs: Vec<usize> = (0..2)
-            .map(|_| {
-                let before = TAG_BATCHES.load(Ordering::SeqCst);
-                let data = answer(&state, query);
-                for item in data["searchCards"]["items"].as_array().unwrap() {
-                    let want = if item["oracleId"] == json!("o-bolt") {
-                        json!(["burn", "removal"])
-                    } else {
-                        json!([])
-                    };
-                    assert_eq!(item["oracleTags"], want, "{item}");
-                }
-                TAG_BATCHES.load(Ordering::SeqCst) - before
-            })
-            .collect();
-        assert_eq!(runs.into_iter().min(), Some(1));
+        let data = answer(&state, "{ searchCards { items { oracleId oracleTags } } }");
+        for item in data["searchCards"]["items"].as_array().unwrap() {
+            let want = if item["oracleId"] == json!("o-bolt") {
+                json!(["burn", "removal"])
+            } else {
+                json!([])
+            };
+            assert_eq!(item["oracleTags"], want, "{item}");
+        }
+        assert_eq!(runs(Batch::OracleTags, &state), 1);
     }
 }

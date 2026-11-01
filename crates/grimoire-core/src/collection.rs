@@ -2481,6 +2481,17 @@ pub struct CollectionQuery {
     /// the summary makes with its `unpriced` count: no price is not a price of zero.
     pub price_min: Option<f64>,
     pub price_max: Option<f64>,
+    /// The price below which a copy is reported rather than left in — [`summarise`] and
+    /// [`shelf_counts`] answer [`BelowMinimum`] for it, and nothing else reads this field.
+    ///
+    /// **Not [`Self::price_min`], though they sound alike.** That one narrows: a copy outside the
+    /// band leaves the list, the count and the value. This one narrows nothing, because the page
+    /// wants the full price and what the minimum takes off it from one answer, and it is the page
+    /// that subtracts. Rust supplies the fact and TypeScript draws the conclusion.
+    ///
+    /// Absent, zero or negative asks nothing ([`asked_minimum`]): the setting's own default is `0`,
+    /// and it must leave every answer as it was.
+    pub minimum_value: Option<f64>,
     /// How to order the list: columns in priority order, the first deciding and the rest
     /// breaking its ties. Empty or absent is name order. Keys outside [`COLLECTION_SORTS`]
     /// are dropped, never interpolated.
@@ -2636,6 +2647,75 @@ pub struct CollectionSummary {
     /// with the marketplace, which is the point of showing it.
     pub unpriced: i64,
     pub needs_review: i64,
+    /// What [`CollectionQuery::minimum_value`] asked about, over the same rows as
+    /// [`Self::value`]. **Absent from the wire when nothing was asked**, so a caller that does not
+    /// ask gets the answer it always got.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub below_minimum: Option<BelowMinimum>,
+}
+
+/// The copies priced below a reader's minimum card value, and what they add up to — the fact the
+/// page takes off the full price before it applies the sell percentage
+/// ([`crate::collection_value`]). Asked, and nothing below, is a zero and not an absence.
+///
+/// **Per copy, at the copy's own price**: the same expression `value` sums, so a foil and a
+/// nonfoil of one printing are judged apart, and a stack of cheap cards stays cheap however many
+/// copies it holds. Never a `quantity × price` subtotal.
+///
+/// **Strictly below.** A copy priced exactly at the minimum has reached it. **A copy with no price
+/// is not below**: it is [`CollectionSummary::unpriced`], already reported, and already worth
+/// nothing in the value this is subtracted from. Counting it here too would say something about a
+/// price nobody quoted.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BelowMinimum {
+    /// Copies, not entries — [`CollectionSummary::total_cards`]' unit.
+    pub cards: i64,
+    /// `sum(quantity × unit price)` over those copies, at the query's marketplace.
+    pub value: f64,
+}
+
+/// A minimum that asks anything: a positive one. **`0` is the setting's default and asks nothing**,
+/// since no price is below it, so a reader who never set one sends what every caller sends and
+/// gets back exactly what they always did. `None` here is the one decision about the wire, and it
+/// is made in Rust before a statement is built.
+pub(crate) fn asked_minimum(minimum: Option<f64>) -> Option<f64> {
+    minimum.filter(|m| *m > 0.0)
+}
+
+/// The two columns behind a [`BelowMinimum`], with a leading comma to go on the end of a `SELECT`
+/// list, and nothing at all when `minimum` asks nothing — so a statement nobody asked this of is
+/// byte for byte the one it was, at the cost it was.
+///
+/// **The minimum binds as `?1`.** These columns stand in the `SELECT` list, ahead of every bare `?`
+/// in the `WHERE`, and SQLite numbers a bare `?` one past the highest it has met — so the caller
+/// binds the minimum first and [`scope`]'s parameters follow it unchanged. `NULL < ?1` is NULL, and
+/// that is the whole of the rule that an unpriced copy is not below.
+pub(crate) fn below_columns(minimum: Option<f64>, copies: &str, price: &str) -> String {
+    match minimum {
+        Some(_) => format!(
+            ", coalesce(sum(CASE WHEN {price} < ?1 THEN {copies} ELSE 0 END), 0),
+               coalesce(sum(CASE WHEN {price} < ?1 THEN {copies} * {price} ELSE 0.0 END), 0.0)"
+        ),
+        None => String::new(),
+    }
+}
+
+/// The [`BelowMinimum`] read from the two columns [`below_columns`] added at `first`, or `None`
+/// when `minimum` asked nothing and they are not there.
+pub(crate) fn below_at(
+    r: &rusqlite::Row<'_>,
+    first: usize,
+    minimum: Option<f64>,
+) -> rusqlite::Result<Option<BelowMinimum>> {
+    minimum
+        .map(|_| {
+            Ok(BelowMinimum {
+                cards: r.get(first)?,
+                value: r.get(first + 1)?,
+            })
+        })
+        .transpose()
 }
 
 /// The rows every statement here reads, and the only join any of them makes.
@@ -3211,8 +3291,10 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
 /// The aggregate header, over the *same* rows the list is showing.
 pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSummary, String> {
     let breaks = rule_break_ids(conn, q)?;
-    let p = scope(q, breaks.as_deref());
+    let mut p = scope(q, breaks.as_deref());
     let where_sql = p.where_sql();
+    let price = crate::sorting::held_price_expr(q.marketplace, ENTRY_FINISH);
+    let minimum = asked_minimum(q.minimum_value);
     let sql = format!(
         "SELECT coalesce(sum(e.quantity), 0),
                 count(DISTINCT e.card_id),
@@ -3221,10 +3303,14 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
                 coalesce(sum(e.quantity * coalesce({price}, 0.0)), 0.0),
                 coalesce(sum(CASE WHEN {price} IS NULL THEN e.quantity ELSE 0 END), 0),
                 coalesce(sum(CASE WHEN e.needs_review IS NOT NULL THEN 1 ELSE 0 END), 0)
+                {below}
          FROM {from} WHERE {where_sql}",
         from = from_sql(),
-        price = crate::sorting::held_price_expr(q.marketplace, ENTRY_FINISH)
+        below = below_columns(minimum, "e.quantity", &price),
     );
+    if let Some(minimum) = minimum {
+        p.params.insert(0, Box::new(minimum));
+    }
     conn.query_row(
         &sql,
         rusqlite::params_from_iter(p.params.iter().map(|p| p.as_ref())),
@@ -3237,6 +3323,7 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
                 value: r.get(4)?,
                 unpriced: r.get(5)?,
                 needs_review: r.get(6)?,
+                below_minimum: below_at(r, 7, minimum)?,
             })
         },
     )
@@ -3281,6 +3368,11 @@ pub struct ShelfCount {
     /// `art_card_id` on the wishlist. **Unfiltered**: a search or a filter opens every shelf, so a
     /// peek is only ever drawn with none active, and it shows what the shelf holds.
     pub peek: Vec<String>,
+    /// What [`CollectionQuery::minimum_value`] asked about, over the rows [`Self::value`] sums.
+    /// **Absent from the wire when nothing was asked, and always on the wishlist**: a wish is not
+    /// held, and a sell percentage has nothing to say about what a card would cost.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub below_minimum: Option<BelowMinimum>,
 }
 
 /// Fill each count's `peek` from the statement `sql` builds for the returned shelves — one that
@@ -3361,14 +3453,16 @@ fn collection_peek_sql(shelves: &[i64]) -> String {
 /// — a heading's "n unpriced" sits beside its "n cards", and the two must be one unit.
 pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfCount>, String> {
     let breaks = rule_break_ids(conn, q)?;
-    let p = scope(q, breaks.as_deref());
+    let mut p = scope(q, breaks.as_deref());
     let where_sql = p.where_sql();
+    let minimum = asked_minimum(q.minimum_value);
     let sql = format!(
         "SELECT shelf,
                 count(DISTINCT tile),
                 coalesce(sum(copies), 0),
                 sum(copies * unit_price),
                 coalesce(sum(CASE WHEN unit_price IS NULL THEN copies ELSE 0 END), 0)
+                {below}
            FROM (SELECT coalesce(e.folder_id, 0) AS shelf,
                         e.card_id || '/' || e.finish AS tile,
                         e.quantity AS copies,
@@ -3377,8 +3471,12 @@ pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfC
           GROUP BY shelf
           ORDER BY shelf",
         from = from_sql(),
-        price = crate::sorting::held_price_expr(q.marketplace, ENTRY_FINISH)
+        price = crate::sorting::held_price_expr(q.marketplace, ENTRY_FINISH),
+        below = below_columns(minimum, "copies", "unit_price"),
     );
+    if let Some(minimum) = minimum {
+        p.params.insert(0, Box::new(minimum));
+    }
     let mut counts = {
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let rows = stmt
@@ -3392,6 +3490,7 @@ pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfC
                         value: r.get(3)?,
                         unpriced: r.get(4)?,
                         peek: Vec::new(),
+                        below_minimum: below_at(r, 5, minimum)?,
                     })
                 },
             )
@@ -4980,6 +5079,7 @@ mod tests {
             value,
             unpriced,
             peek: peek.iter().map(|id| (*id).to_owned()).collect(),
+            below_minimum: None,
         }
     }
 
@@ -7637,6 +7737,7 @@ mod tests {
             value: 1213.0,
             unpriced: 4,
             needs_review: 0,
+            below_minimum: None,
         })
         .unwrap();
         assert_eq!(
@@ -7646,6 +7747,263 @@ mod tests {
                 "value": 1213.0, "unpriced": 4, "needsReview": 0
             })
         );
+    }
+
+    // ---- what a minimum card value takes off ----
+
+    /// A query that asks about `minimum` over the whole collection.
+    fn below(minimum: f64) -> CollectionQuery {
+        CollectionQuery {
+            minimum_value: Some(minimum),
+            ..Default::default()
+        }
+    }
+
+    /// `bolt-jp` at 12.00 nonfoil and 90.00 foil, `card-1` at 1.00, and `bolt-lea`'s foil, which
+    /// TCGplayer does not quote.
+    fn below_fixture() -> Connection {
+        let conn = seeded();
+        shelved(&conn, "bolt-jp", "nonfoil", "NM", None, 2);
+        shelved(&conn, "bolt-jp", "foil", "NM", None, 1);
+        shelved(&conn, "card-1", "nonfoil", "NM", None, 4);
+        shelved(&conn, "bolt-lea", "foil", "NM", None, 3);
+        conn
+    }
+
+    /// **Strictly below, and a copy priced exactly at the minimum has reached it**: 12.00 leaves
+    /// the two `bolt-jp` where a cent more takes them. Each is counted in copies, at the sum of
+    /// what those copies are worth.
+    #[test]
+    fn a_copy_priced_at_the_minimum_is_not_below_it() {
+        let conn = below_fixture();
+        assert_eq!(
+            summarise(&conn, &below(12.0)).unwrap().below_minimum,
+            Some(BelowMinimum {
+                cards: 4,
+                value: 4.0
+            }),
+            "only the four card-1 at 1.00"
+        );
+        assert_eq!(
+            summarise(&conn, &below(12.01)).unwrap().below_minimum,
+            Some(BelowMinimum {
+                cards: 6,
+                value: 4.0 + 24.0
+            }),
+            "the quantity counts: two copies of bolt-jp, not one row"
+        );
+    }
+
+    /// **A copy with no price is not below any minimum**: it is `unpriced`, already reported. The
+    /// `bolt-lea` foils are in neither figure, however high the minimum climbs.
+    #[test]
+    fn an_unpriced_copy_is_not_below_a_minimum() {
+        let conn = below_fixture();
+        let header = summarise(&conn, &below(1_000_000.0)).unwrap();
+        assert_eq!(header.unpriced, 3);
+        assert_eq!(
+            header.below_minimum,
+            Some(BelowMinimum {
+                cards: 7,
+                value: 118.0
+            }),
+            "every priced copy, and the three unpriced ones in neither"
+        );
+        assert_eq!(header.below_minimum.unwrap().value, header.value);
+    }
+
+    /// **A foil and a nonfoil of one printing are judged at their own prices**, and a stack is
+    /// judged by the copy: four `card-1` add up to more than the minimum and are still below it.
+    #[test]
+    fn a_minimum_judges_each_finish_at_its_own_price_and_never_a_subtotal() {
+        let conn = below_fixture();
+        assert_eq!(
+            summarise(&conn, &below(50.0)).unwrap().below_minimum,
+            Some(BelowMinimum {
+                cards: 6,
+                value: 4.0 + 24.0
+            }),
+            "bolt-jp's nonfoils at 12.00 are below; its foil at 90.00 is not"
+        );
+        assert_eq!(
+            summarise(&conn, &below(2.0)).unwrap().below_minimum,
+            Some(BelowMinimum {
+                cards: 4,
+                value: 4.0
+            }),
+            "4 x 1.00 is 4.00, above the minimum, and each copy is still 1.00"
+        );
+    }
+
+    /// **The same rows as `value`**: a filtered page's reduced price is of the filtered rows, and
+    /// a filter binding a parameter of its own keeps its place behind the minimum's.
+    #[test]
+    fn a_minimum_reads_the_rows_the_filters_leave() {
+        let conn = below_fixture();
+        let header = summarise(
+            &conn,
+            &CollectionQuery {
+                finishes: Some(vec!["foil".into()]),
+                conditions: Some(vec!["NM".into()]),
+                price_max: Some(100.0),
+                ..below(1_000.0)
+            },
+        )
+        .unwrap();
+        assert_eq!(header.value, 90.0);
+        assert_eq!(
+            header.below_minimum,
+            Some(BelowMinimum {
+                cards: 1,
+                value: 90.0
+            }),
+            "the nonfoils are filtered out of both figures"
+        );
+    }
+
+    /// **The figure moves with the marketplace**: Cardmarket prices `bolt-lea` at 320.00 where
+    /// TCGplayer's 400.50 clears a 350.00 minimum. And every marketplace's price expression
+    /// prepares in the new columns, the feed's correlated subquery included.
+    #[test]
+    fn a_minimum_is_judged_at_the_marketplace_the_query_names() {
+        let conn = seeded();
+        shelved(&conn, "bolt-lea", "nonfoil", "NM", None, 1);
+        let at = |marketplace| CollectionQuery {
+            marketplace,
+            ..below(350.0)
+        };
+        let tcg = summarise(&conn, &at(crate::sorting::Marketplace::Tcgplayer)).unwrap();
+        assert_eq!(tcg.below_minimum.unwrap().cards, 0);
+        let eur = summarise(&conn, &at(crate::sorting::Marketplace::Cardmarket)).unwrap();
+        assert_eq!(
+            eur.below_minimum,
+            Some(BelowMinimum {
+                cards: 1,
+                value: 320.0
+            })
+        );
+        for id in crate::marketplace::MARKETPLACE_IDS {
+            let market = crate::sorting::Marketplace::from_id(id);
+            summarise(&conn, &at(market)).unwrap_or_else(|e| panic!("{id}: {e}"));
+            shelf_counts(&conn, &at(market)).unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+    }
+
+    /// **An unasked question keeps today's answer, byte for byte**: absent, zero and negative all
+    /// ask nothing, and the field is not on the wire. Asked with nothing below is a zero on the
+    /// wire, under the name the page reads — not an absence.
+    #[test]
+    fn a_minimum_nobody_asked_is_absent_from_the_wire() {
+        let conn = below_fixture();
+        for query in [
+            CollectionQuery::default(),
+            below(0.0),
+            below(-1.0),
+            below(f64::NAN),
+        ] {
+            let header = summarise(&conn, &query).unwrap();
+            assert_eq!(header.below_minimum, None, "{:?}", query.minimum_value);
+            let json = serde_json::to_value(&header).unwrap();
+            assert!(json.get("belowMinimum").is_none(), "{json}");
+        }
+
+        let asked = serde_json::to_value(summarise(&conn, &below(0.01)).unwrap()).unwrap();
+        assert_eq!(
+            asked["belowMinimum"],
+            serde_json::json!({ "cards": 0, "value": 0.0 })
+        );
+    }
+
+    /// `minimumValue` is the name the page sends, inside `query`, and the card filters flattened
+    /// onto the same object leave it alone.
+    #[test]
+    fn a_minimum_arrives_under_the_name_the_page_sends() {
+        let query: CollectionQuery =
+            serde_json::from_value(serde_json::json!({ "minimumValue": 1, "sets": ["lea"] }))
+                .unwrap();
+        assert_eq!(query.minimum_value, Some(1.0));
+        let unasked: CollectionQuery = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(unasked.minimum_value, None);
+    }
+
+    /// **A shelf's minimum is that shelf's, over the rows its `value` sums**: the search or a
+    /// filter narrows it with them, a shelf with nothing below answers a zero, a shelf the
+    /// marketplace prices nothing on is not below, and the figures beside it do not move. The
+    /// shelves are one statement, so a shelf list binding `?` behind the minimum is asked here.
+    #[test]
+    fn a_shelf_counts_what_is_below_the_minimum_on_that_shelf() {
+        let s = shelved_collection();
+        let every = vec![0, s.binder, s.sleeve, s.foils];
+        let query = CollectionQuery {
+            minimum_value: Some(100.0),
+            ..on_shelves(every.clone())
+        };
+        let counts = shelf_counts(&s.conn, &query).unwrap();
+        let below_on: Vec<(i64, Option<BelowMinimum>)> = counts
+            .iter()
+            .map(|c| (c.folder_id, c.below_minimum))
+            .collect();
+        let none = BelowMinimum {
+            cards: 0,
+            value: 0.0,
+        };
+        assert_eq!(
+            below_on,
+            vec![
+                (
+                    0,
+                    Some(BelowMinimum {
+                        cards: 5,
+                        value: 5.0
+                    })
+                ),
+                (
+                    s.binder,
+                    Some(BelowMinimum {
+                        cards: 1,
+                        value: 90.0
+                    })
+                ),
+                (s.sleeve, Some(none)),
+                (s.foils, Some(none)),
+            ]
+        );
+        assert_eq!(
+            counts[1].value,
+            Some(1291.5),
+            "the value beside it is still the whole shelf's"
+        );
+
+        let header = summarise(&s.conn, &query).unwrap();
+        let summed: f64 = below_on
+            .iter()
+            .map(|(_, b)| b.map(|b| b.value).unwrap_or(0.0))
+            .sum();
+        assert_eq!(
+            header.below_minimum.unwrap().value,
+            summed,
+            "the shelves add up to the header"
+        );
+
+        let filtered = shelf_counts(
+            &s.conn,
+            &CollectionQuery {
+                conditions: Some(vec!["LP".into()]),
+                ..query
+            },
+        )
+        .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(
+            filtered[0].below_minimum,
+            Some(none),
+            "the binder's foil is NM, so the filter takes it out of this figure too"
+        );
+
+        let unasked = shelf_counts(&s.conn, &on_shelves(every)).unwrap();
+        assert!(unasked.iter().all(|c| c.below_minimum.is_none()));
+        let json = serde_json::to_value(&unasked[0]).unwrap();
+        assert!(json.get("belowMinimum").is_none(), "{json}");
     }
 
     #[test]

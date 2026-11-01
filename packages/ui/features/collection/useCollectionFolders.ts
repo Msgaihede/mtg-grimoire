@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { offerUndo } from "@/lib/bulkUndo";
 import { plural } from "@/lib/counts";
 import { ipc, type CollectionFolder, type FolderConflicts, type FolderRule } from "@/lib/ipc";
+import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 
@@ -93,6 +94,7 @@ export function useCreateCollectionFolder() {
 export function useCollectionFolders() {
   const queryClient = useQueryClient();
   const { marketplace } = useMarketplace();
+  const { minimum } = useCollectionValue();
 
   const { query, folders } = useCollectionFolderList();
 
@@ -106,8 +108,13 @@ export function useCollectionFolders() {
    * neither marketplace's folder cards may be served from the other's cached page.
    */
   const summaryQuery = useQuery({
-    queryKey: ["collection", "folderSummary", marketplace.id],
-    queryFn: () => ipc.collectionFolderSummary(marketplace.id),
+    queryKey: [
+      "collection",
+      "folderSummary",
+      marketplace.id,
+      ...(minimum === undefined ? [] : [minimum]),
+    ],
+    queryFn: () => ipc.collectionFolderSummary(marketplace.id, minimum),
   });
 
   /**

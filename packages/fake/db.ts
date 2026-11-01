@@ -128,6 +128,7 @@ import {
   DEFAULT_SCAN_SOUNDS,
   ladderRefusal,
 } from "@grimoire/ui/features/scanner/sounds/scanSounds";
+import { DEFAULT_COLLECTION_VALUE } from "@grimoire/ui/lib/collectionValue";
 // The app's own list of the four sizes the cache stores, borrowed rather than re-spelled for
 // `hasVariableCost`'s reason below: `card_image_uri` refuses a variant that is not one of them,
 // and a second hand-typed list here would let the workbench and the window disagree about which
@@ -268,6 +269,8 @@ import type {
   ScannerCaptured,
   ScannerSubmission,
   ScannerSubmitted,
+  BelowMinimum,
+  CollectionValue,
   ScanSounds,
   ScannerPrefs,
   ScannerStatus,
@@ -2426,6 +2429,9 @@ export interface FakeDb {
    * {@link readHandlers.scan_sounds} and {@link writeHandlers.set_scan_sounds}.
    */
   scanSounds: ScanSounds | null;
+  /** `app_meta.collection_value` — the reader's sell percentage and minimum card value; `null` for
+   *  the row not being there, which is no reduced price. */
+  collectionValue: CollectionValue | null;
   /**
    * `app_meta.new_printings_seen` — when this device last looked at the New printings feed, in
    * unix seconds, or `null` for **never**.
@@ -3904,6 +3910,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     startView: null,
     // A reader who has never touched the scan sounds: on, at 1, 10, 100 and 1000.
     scanSounds: null,
+    collectionValue: null,
     // The third field in this function whose default depends on the world rather than on this
     // line — **derived below** by {@link newPrintingsSeenFromDecks}, beside the two above. A
     // `null` here would be *never*, which draws a dot on every row of the New printings feed and
@@ -9547,10 +9554,20 @@ const SHELF_PEEK = 4;
  * statement reads shelf membership and nothing else — sorted by name then card id, one id per
  * card, cut to {@link SHELF_PEEK}; only shelves that have a count row get one.
  */
-function shelfCounts(rows: readonly ShelfRow[], peekRows: readonly PeekRow[]): ShelfCount[] {
+function shelfCounts(
+  rows: readonly ShelfRow[],
+  peekRows: readonly PeekRow[],
+  minimum?: number,
+): ShelfCount[] {
   const shelves = new Map<
     number,
-    { tiles: Set<string>; copies: number; value: number | null; unpriced: number }
+    {
+      tiles: Set<string>;
+      copies: number;
+      value: number | null;
+      unpriced: number;
+      below: BelowMinimum;
+    }
   >();
   for (const row of rows) {
     const shelf = shelves.get(row.shelf) ?? {
@@ -9558,11 +9575,16 @@ function shelfCounts(rows: readonly ShelfRow[], peekRows: readonly PeekRow[]): S
       copies: 0,
       value: null,
       unpriced: 0,
+      below: { cards: 0, value: 0 },
     };
     shelf.tiles.add(row.tile);
     shelf.copies += row.copies;
     if (row.unit === null) shelf.unpriced += row.unpricedBy;
     else shelf.value = (shelf.value ?? 0) + row.unit * row.copies;
+    if (isBelow(row.unit, minimum)) {
+      shelf.below.cards += row.copies;
+      shelf.below.value += (row.unit ?? 0) * row.copies;
+    }
     shelves.set(row.shelf, shelf);
   }
   const peekOf = (shelf: number): string[] => {
@@ -9585,7 +9607,20 @@ function shelfCounts(rows: readonly ShelfRow[], peekRows: readonly PeekRow[]): S
       value: s.value,
       unpriced: s.unpriced,
       peek: peekOf(folderId),
+      ...(asksMinimum(minimum) ? { belowMinimum: s.below } : {}),
     }));
+}
+
+/** `collection::summarise`'s test of what a query asked: a minimum that is not above zero asks
+ *  nothing, and the answer then carries no such field. */
+function asksMinimum(minimum: number | null | undefined): minimum is number {
+  return typeof minimum === "number" && minimum > 0;
+}
+
+/** One copy against the minimum: **strictly** below it, and a copy with no price is not below
+ *  anything — it is already `unpriced`. */
+function isBelow(unit: number | null, minimum: number | null | undefined): boolean {
+  return unit !== null && asksMinimum(minimum) && unit < minimum;
 }
 
 /* ------------------------------------------------------------------ the handlers ------ */
@@ -10147,6 +10182,7 @@ function valueHistoryFrom(
   snapshots: readonly ValueRow[],
   current: readonly ValueRow[],
   today: number,
+  minimum?: number,
 ): ValueHistory {
   const cardOf = (row: ValueRow) => (row.cardId === null ? null : cardById(db, row.cardId));
   /** One point's arithmetic before it is aligned to the answer's lines. `present` is every
@@ -10157,6 +10193,7 @@ function valueHistoryFrom(
   interface Tally {
     day: number;
     total: number;
+    below: number;
     byBucket: Map<string, number>;
     present: Map<string, number>;
     holding: Map<string, { copies: number; price: number }> | null;
@@ -10201,6 +10238,7 @@ function valueHistoryFrom(
       const t: Tally = {
         day: period.day,
         total: 0,
+        below: 0,
         byBucket: new Map(),
         present: new Map(),
         holding: new Map(),
@@ -10209,6 +10247,7 @@ function valueHistoryFrom(
         const copies = s.copies;
         // Held but unpriced: worth nothing to the total, and present all the same.
         if (s.price !== null) add(t, cardOf(s), copies * s.price);
+        if (isBelow(s.price, minimum)) t.below += copies * (s.price ?? 0);
         const price = s.price ?? 0;
         t.present.set(printing, price);
         t.holding?.set(printing, { copies, price });
@@ -10218,12 +10257,14 @@ function valueHistoryFrom(
   const live: Tally = {
     day: today,
     total: 0,
+    below: 0,
     byBucket: new Map(),
     present: new Map(),
     holding: null,
   };
   for (const e of current) {
     add(live, cardOf(e), e.copies * (e.price ?? 0));
+    if (isBelow(e.price, minimum)) live.below += e.copies * (e.price ?? 0);
     live.present.set(e.key, e.price ?? 0);
   }
   tallies.push(live);
@@ -10269,6 +10310,7 @@ function valueHistoryFrom(
       values: lines.map((line) => line.sums.reduce((n, key) => n + (t.byBucket.get(key) ?? 0), 0)),
       moved,
       live: t === live,
+      ...(asksMinimum(minimum) ? { below: t.below } : {}),
     };
   });
   return { buckets: lines.map((line) => line.bucket), points, today };
@@ -11030,7 +11072,16 @@ export function readHandlers(db: FakeDb) {
       }));
       const sum = (f: (r: (typeof priced)[number]) => number) =>
         priced.reduce((n, r) => n + f(r), 0);
+      const below = priced.filter((r) => isBelow(r.unit, args.query.minimumValue));
       return {
+        ...(asksMinimum(args.query.minimumValue)
+          ? {
+              belowMinimum: {
+                cards: below.reduce((n, r) => n + r.e.quantity, 0),
+                value: below.reduce((n, r) => n + r.e.quantity * (r.unit ?? 0), 0),
+              },
+            }
+          : {}),
         // Copies, not rows — a row emptied to zero contributes 0.
         totalCards: sum((r) => r.e.quantity),
         // Printings **recorded**, not printings currently held: a zero row still counts.
@@ -11069,6 +11120,7 @@ export function readHandlers(db: FakeDb) {
           cardId: e.cardId,
           name: cardById(db, e.cardId)?.name ?? e.cardId,
         })),
+        args.query.minimumValue,
       );
     },
 
@@ -11386,15 +11438,25 @@ export function readHandlers(db: FakeDb) {
      */
     collection_folder_summary: (args: {
       marketplace?: MarketplaceId;
+      minimumValue?: number;
     }): CollectionFolderSummary[] => {
       const mp = marketplaceOf(args.marketplace);
       const byFolder = new Map<number, CollectionFolderSummary>();
       for (const e of db.collectionEntries) {
         if (e.folderId === null) continue;
-        const row = byFolder.get(e.folderId) ?? { folderId: e.folderId, cards: 0, value: null };
+        const row: CollectionFolderSummary = byFolder.get(e.folderId) ?? {
+          folderId: e.folderId,
+          cards: 0,
+          value: null,
+          ...(asksMinimum(args.minimumValue) ? { belowMinimum: { cards: 0, value: 0 } } : {}),
+        };
         row.cards += e.quantity;
         const unit = heldPriceAt(db, cardById(db, e.cardId), e.finish, mp);
         if (unit !== null) row.value = (row.value ?? 0) + e.quantity * unit;
+        if (row.belowMinimum !== undefined && isBelow(unit, args.minimumValue)) {
+          row.belowMinimum.cards += e.quantity;
+          row.belowMinimum.value += e.quantity * (unit ?? 0);
+        }
         byFolder.set(e.folderId, row);
       }
       return [...byFolder.values()].sort((a, b) => a.folderId - b.folderId);
@@ -13650,7 +13712,11 @@ export function readHandlers(db: FakeDb) {
      * rule: `cardtrader` quotes TCGplayer and stores no snapshots of its own. A read, so it answers
      * through every second of a sync.
      */
-    collection_value_history: (args: { split: string; marketplace?: string }): ValueHistory => {
+    collection_value_history: (args: {
+      split: string;
+      marketplace?: string;
+      minimumValue?: number;
+    }): ValueHistory => {
       const bucketOf = valueBucketer(args.split);
       const asked = marketplaceOf(args.marketplace);
       const mp = MARKETPLACES[asked].priced ? asked : DEFAULT_MARKETPLACE;
@@ -13669,7 +13735,15 @@ export function readHandlers(db: FakeDb) {
         price: heldPriceAt(db, cardById(db, e.cardId), e.finish, mp),
         takenAt: CLOCK_BASE,
       }));
-      return valueHistoryFrom(db, args.split, bucketOf, snapshots, current, today);
+      return valueHistoryFrom(
+        db,
+        args.split,
+        bucketOf,
+        snapshots,
+        current,
+        today,
+        args.minimumValue,
+      );
     },
 
     /**
@@ -13881,6 +13955,9 @@ export function readHandlers(db: FakeDb) {
     /** `scansounds::stored` — the reader's scan sounds, or the defaults. A read, so it answers
      *  through a sync. */
     scan_sounds: (): ScanSounds => throughJson(db.scanSounds ?? DEFAULT_SCAN_SOUNDS),
+
+    /** `collection_value::stored`: the row, or the defaults, which are no reduced price. */
+    collection_value: (): CollectionValue => throughJson(db.collectionValue ?? DEFAULT_COLLECTION_VALUE),
 
     start_view: (): string =>
       db.startView !== null && db.startView.trim() !== "" ? db.startView : DEFAULT_START_VIEW,
@@ -24616,6 +24693,27 @@ export function writeHandlers(db: FakeDb) {
       const refusal = ladderRefusal(args.sounds);
       if (refusal !== null) throw refuse(refusal);
       db.scanSounds = throughJson(args.sounds);
+    },
+
+    /**
+     * `collection_value::store` — remember the two figures, whole. One refusal, the crate's
+     * `OUT_OF_BOUNDS`, and `busy` like every ordinary write.
+     */
+    set_collection_value: (args: { settings: CollectionValue }): void => {
+      refuseIfBusy(db);
+      const { sellPercent, minimumValue } = args.settings;
+      const inRange =
+        Number.isFinite(sellPercent) &&
+        Number.isFinite(minimumValue) &&
+        sellPercent > 0 &&
+        sellPercent <= 100 &&
+        minimumValue >= 0;
+      if (!inRange) {
+        throw refuse(
+          "Sell percentage has to be above 0 and at most 100, and the minimum card value can't be below zero.",
+        );
+      }
+      db.collectionValue = throughJson(args.settings);
     },
 
     set_start_view: (args: { view: string }): void => {

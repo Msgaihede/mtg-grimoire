@@ -50,19 +50,23 @@
 import { useMemo, useState, type CSSProperties, type ReactElement } from "react";
 import { useQuery, type QueryKey } from "@tanstack/react-query";
 
+import { ReducedPrice } from "@/components/ReducedPrice";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { reducedValue, type ReducedValue } from "@/lib/collectionValue";
 import { count, plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
   ipc,
   ipcError,
   type CollectionSummary,
+  type CollectionValue,
   type ValueHistory,
   type ValueSplit,
 } from "@/lib/ipc";
 import type { Currency, MarketplaceId } from "@/lib/marketplace";
 import { PRESS, PRESS_SOFT } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
+import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 
@@ -217,8 +221,12 @@ interface ValueSource {
   empty: string;
   /** The rail foot's word for the markers, lowercase. */
   markers: string;
-  key: (split: ValueSplit, marketplace: MarketplaceId) => QueryKey;
-  read: (split: ValueSplit, marketplace: MarketplaceId) => Promise<ValueHistory>;
+  key: (split: ValueSplit, marketplace: MarketplaceId, minimum?: number) => QueryKey;
+  read: (
+    split: ValueSplit,
+    marketplace: MarketplaceId,
+    minimum?: number,
+  ) => Promise<ValueHistory>;
 }
 
 const COLLECTION_SOURCE: ValueSource = {
@@ -227,7 +235,7 @@ const COLLECTION_SOURCE: ValueSource = {
   empty: "Nothing in your collection yet.",
   markers: "collection changes",
   key: valueHistoryKey,
-  read: (split, marketplace) => ipc.collectionValueHistory(split, marketplace),
+  read: (split, marketplace, minimum) => ipc.collectionValueHistory(split, marketplace, minimum),
 };
 
 const WISHLIST_SOURCE: ValueSource = {
@@ -244,27 +252,44 @@ const WISHLIST_SOURCE: ValueSource = {
 interface SummaryFacts {
   empty: boolean;
   unpriced: number;
+  /** Today's reduced price, which is what the figure line's tooltip breaks down. */
+  reduced?: ReducedValue | null;
 }
 
 /** The Collection value graph — `CollectionValueWidget`'s summary read beside the history. */
 export function ValueHistoryWidget(props: WidgetBodyProps): ReactElement {
   const { marketplace } = useMarketplace();
+  const { settings, minimum } = useCollectionValue();
   const summary = useQuery({
-    queryKey: collectionTotalKey(marketplace.id),
+    queryKey: collectionTotalKey(marketplace.id, minimum),
     // `CollectionValueWidget`'s read, word for word: every copy, and `limit: 0` makes it a count.
     queryFn: (): Promise<CollectionSummary> =>
-      ipc.collectionSummary({ limit: 0, offset: 0, marketplace: marketplace.id }),
+      ipc.collectionSummary({
+        limit: 0,
+        offset: 0,
+        marketplace: marketplace.id,
+        minimumValue: minimum,
+      }),
   });
   const facts =
     summary.data === undefined
       ? undefined
-      : { empty: summary.data.totalCards === 0, unpriced: summary.data.unpriced };
+      : {
+          empty: summary.data.totalCards === 0,
+          unpriced: summary.data.unpriced,
+          reduced:
+            summary.data.totalCards === 0
+              ? null
+              : reducedValue(summary.data.value, summary.data.belowMinimum, settings),
+        };
   return (
     <ValueHistoryBody
       {...props}
       source={COLLECTION_SOURCE}
       summary={facts}
       summaryError={summary.error}
+      valueSettings={settings}
+      minimum={minimum}
     />
   );
 }
@@ -303,10 +328,15 @@ function ValueHistoryBody({
   source,
   summary,
   summaryError,
+  valueSettings,
+  minimum,
 }: WidgetBodyProps & {
   source: ValueSource;
   summary: SummaryFacts | undefined;
   summaryError: unknown;
+  /** The reader's reduced-price figures — the collection's graph only. */
+  valueSettings?: CollectionValue;
+  minimum?: number;
 }): ReactElement {
   const { marketplace, currency } = useMarketplace();
   const split = splitOf(pickOf(widget, "split"));
@@ -338,8 +368,8 @@ function ValueHistoryBody({
   }
 
   const history = useQuery({
-    queryKey: source.key(split, marketplace.id),
-    queryFn: () => source.read(split, marketplace.id),
+    queryKey: source.key(split, marketplace.id, minimum),
+    queryFn: () => source.read(split, marketplace.id, minimum),
   });
 
   // The split and the range are read again inside, off the widget itself, rather than closed over:
@@ -353,8 +383,9 @@ function ValueHistoryBody({
             history.data,
             splitOf(pickOf(widget, "split")),
             windowOf(pickOf(widget, "window")),
+            valueSettings,
           ),
-    [history.data, widget],
+    [history.data, widget, valueSettings],
   );
   const n = view?.days.length ?? 0;
   const keys = view?.series.map((s) => s.key) ?? [];
@@ -391,7 +422,12 @@ function ValueHistoryBody({
     return <WidgetMessage>{source.empty}</WidgetMessage>;
   }
 
-  const layout = layoutFor(fit, { split, figures: figuresOn, bucketCount: view.series.length });
+  const layout = layoutFor(fit, {
+    split,
+    figures: figuresOn,
+    bucketCount: view.series.length,
+    reduced: view.reduced !== null,
+  });
   /** Only today's live point: a database that has not yet kept a day with copies in it —
    *  a first launch, or one upgraded from before `price_snapshots.copies` existed. */
   const firstDay = history.data.points.length === 1;
@@ -456,6 +492,16 @@ function ValueHistoryBody({
 
   const figureLabel = `Value (${currency.toUpperCase()})${hot !== null ? ` · ${readout.date}` : ""}`;
   const note = unpriced > 0 && !tile && hot === null ? `${count(unpriced)} unpriced` : null;
+  // Today's has a breakdown to hover, from the summary. A past day's is that day's figure alone.
+  const reducedFigure =
+    readout.reduced === null
+      ? null
+      : hot === null && summary.reduced
+        ? { today: summary.reduced }
+        : { text: readout.reduced };
+  // One more line on one scale, where it is a line at all: on Total, in money, on a card with room.
+  const reducedLine =
+    split === "total" && measure === "value" && !tile ? view.reduced : null;
 
   return (
     <div className="relative w-full shrink-0" style={{ height: Math.floor(fit.bodyHeightPx) }}>
@@ -468,6 +514,10 @@ function ValueHistoryBody({
           readout={readout}
           withChange={n > 1}
           note={note}
+          reduced={reducedFigure}
+          reducedStacked={layout.reducedStacked}
+          currency={currency}
+          unpriced={unpriced}
           second={
             !inRail && !tile && split !== "total" && litRow !== null && lit !== undefined
               ? {
@@ -539,6 +589,8 @@ function ValueHistoryBody({
               height={layout.chart.h}
               hover={hot}
               onHover={live ? setHover : undefined}
+              reducedLine={reducedLine}
+              reducedNamed={!inRail}
               markers={markersOn}
               // On a tile the figure line is the readout; a tile with its figures off has only this.
               readout={tile && layout.figures !== null ? null : readout}
@@ -569,6 +621,7 @@ function ValueHistoryBody({
           rowFigure={rowFigure}
           foot={`${marketplace.label} prices${markersOn ? ` · ◇ ${source.markers}` : ""}`}
           subject={source.subject}
+          reducedDrawn={reducedLine !== null}
         />
       )}
 
@@ -617,6 +670,10 @@ function FigureBlock({
   readout,
   withChange,
   note,
+  reduced,
+  reducedStacked,
+  currency,
+  unpriced,
   second,
   withSecondChange,
 }: {
@@ -627,6 +684,11 @@ function FigureBlock({
   readout: Readout;
   withChange: boolean;
   note: string | null;
+  /** Today's reduced price with its breakdown, or a hovered day's as a figure alone. */
+  reduced: { today: ReducedValue } | { text: string } | null;
+  reducedStacked: boolean;
+  currency: Currency;
+  unpriced: number;
   second: { fill: string; label: string; value: string; change: string; up: boolean } | null;
   withSecondChange: boolean;
 }): ReactElement {
@@ -638,6 +700,12 @@ function FigureBlock({
   const noteEl =
     note === null ? null : (
       <span className="min-w-0 truncate text-xs text-dim">{note}</span>
+    );
+  const reducedEl =
+    reduced === null ? null : "today" in reduced ? (
+      <ReducedPrice value={reduced.today} currency={currency} unpriced={unpriced} />
+    ) : (
+      <span className="whitespace-nowrap tabular-nums">({reduced.text})</span>
     );
   return (
     <div
@@ -658,6 +726,9 @@ function FigureBlock({
           >
             {readout.total.value}
           </span>
+          {reducedEl !== null && !reducedStacked && (
+            <span className="shrink-0 font-mono text-[0.8125rem] text-dim">{reducedEl}</span>
+          )}
           {/* The note travels with the figure it qualifies — except in the narrow rail, where it
               goes last so the chip is not the one that gives way. */}
           {inRail ? (
@@ -672,6 +743,9 @@ function FigureBlock({
             </>
           )}
         </div>
+        {reducedEl !== null && reducedStacked && (
+          <div className="font-mono text-[0.8125rem] leading-[18px] text-dim">{reducedEl}</div>
+        )}
       </div>
       {second !== null && (
         <div className="min-w-0 flex-1 basis-[120px]">
@@ -790,6 +864,39 @@ function PlainRow({
   );
 }
 
+/** The reduced price's row in Total's rail: what names the dashed line, and how far it moved. */
+function ReducedRow({
+  change,
+  up,
+  dashed,
+}: {
+  change: string;
+  up: boolean;
+  dashed: boolean;
+}): ReactElement {
+  return (
+    <div className={cn(PLAIN_ROW, dashed && "border-accent")}>
+      {dashed && (
+        <svg aria-hidden="true" width="16" height="4" viewBox="0 0 16 4" className="shrink-0">
+          <line
+            x1="0"
+            x2="16"
+            y1="2"
+            y2="2"
+            stroke="var(--color-accent)"
+            strokeWidth="1.5"
+            strokeDasharray="5 3"
+          />
+        </svg>
+      )}
+      <span className="min-w-0 flex-1 truncate text-[0.8125rem] leading-[18px] font-medium">
+        Reduced price
+      </span>{" "}
+      <DeltaChip text={change} up={up} small />
+    </div>
+  );
+}
+
 /**
  * The rail's list: the lines to follow, cut to the whole rows it has with the tail folded into one
  * `N more` row — or, on Total, the range's own figures: the change, the part prices moved and the
@@ -808,6 +915,7 @@ function RailList({
   rowFigure,
   foot,
   subject,
+  reducedDrawn,
 }: {
   rect: Rect;
   rows: number;
@@ -820,6 +928,8 @@ function RailList({
   rowFigure: (key: string) => ReactElement | null;
   foot: string;
   subject: ValueSubject;
+  /** The chart draws the reduced line, so its row here wears the dashes that name it. */
+  reducedDrawn: boolean;
 }): ReactElement {
   let drawn: ReactElement[];
   if (split !== "total") {
@@ -842,7 +952,20 @@ function RailList({
       );
     }
   } else {
-    drawn = totalFacts(view, at, currency, subject).slice(0, rows);
+    const reduced = view.reduced;
+    drawn = [
+      ...(reduced === null
+        ? []
+        : [
+            <ReducedRow
+              key="reduced"
+              change={signed(reduced[at] - reduced[0], currency)}
+              up={reduced[at] >= reduced[0]}
+              dashed={reducedDrawn}
+            />,
+          ]),
+      ...totalFacts(view, at, currency, subject),
+    ].slice(0, rows);
   }
   const used = drawn.length === 0 ? 0 : drawn.length * ROW_PITCH - 3;
   return (

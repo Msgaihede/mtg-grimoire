@@ -13643,7 +13643,9 @@ describe("the busy fault", () => {
     // 150 → 153 on 2026-10-30 with the custom widgets' three writes, `custom_widget_create`,
     // `custom_widget_update` and `custom_widget_delete`, each reaching `refuseIfBusy` first; the
     // read, `custom_widgets`, sits in `readHandlers`. Count again after a merge.
-    expect(names).toHaveLength(153);
+    // 153 → 154 on 2026-11-01 with `set_collection_value`, the reduced price's two figures
+    // (issues #1449, #1450), through `with_write`.
+    expect(names).toHaveLength(154);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

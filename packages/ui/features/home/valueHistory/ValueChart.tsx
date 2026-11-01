@@ -69,6 +69,11 @@ export interface ValueChartProps {
   hover: number | null;
   /** Move or drop the hovered point. **Absent in a still or editing body**, which draws no slider. */
   onHover?: (index: number | null) => void;
+  /** The reduced price as a second line, dashed under the lit one; `null` for none. Drawn only
+   *  where it is one more line on one scale: Total, in money. On `%` the two all but overlap. */
+  reducedLine?: readonly number[] | null;
+  /** Write the line's name on it, where no rail beside the chart names it. */
+  reducedNamed?: boolean;
   /** Draw the collection-change diamonds. */
   markers: boolean;
   /** The readout to open beside the crosshair, or `null` for none — a tile whose figure line is
@@ -188,6 +193,8 @@ export function ValueChart({
   height,
   hover,
   onHover,
+  reducedLine = null,
+  reducedNamed = false,
   markers,
   readout,
   label,
@@ -206,7 +213,7 @@ export function ValueChart({
   const h = height;
 
   const shown = view.series.map((s) => shownValues(s, measure));
-  const scale = scaleFor(shown.flat(), measure);
+  const scale = scaleFor([...shown.flat(), ...(reducedLine ?? [])], measure);
   const tickLabels = scale.ticks.map((t) => tickLabel(t, measure, currency));
   const withScale = w >= SCALE_MIN_WIDTH;
   const withDates = h >= DATES_MIN_HEIGHT;
@@ -239,6 +246,7 @@ export function ValueChart({
   // The wash runs down to the start on Change, so it says which side of the start the line is on.
   const floor = px(measure === "change" ? yOf(0) : bottom);
   const wash = n > 1 ? `${litLine} L${xs[n - 1]} ${floor} L${xs[0]} ${floor} Z` : "";
+  const reducedYs = reducedLine === null ? null : reducedLine.map((v) => px(yOf(v)));
 
   const marks = markers ? markerDays(view).map((day) => px(xOfDay(day))) : [];
   const dates = withDates ? dateTicks(view, xs) : [];
@@ -354,6 +362,19 @@ export function ValueChart({
         {n > 1 && lit !== undefined && (
           <>
             <path data-mark="area" d={wash} fill={lit.fill} fillOpacity={0.1} />
+            {reducedYs !== null && (
+              <path
+                data-mark="reduced"
+                d={pathOf(xs, reducedYs)}
+                fill="none"
+                stroke={lit.fill}
+                strokeOpacity={0.75}
+                strokeWidth={1.5}
+                strokeDasharray="5 4"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            )}
             <path
               data-mark="line"
               data-key={lit.key}
@@ -394,6 +415,32 @@ export function ValueChart({
         )}
 
         {lit !== undefined && n > 0 && <Dot x={xs[n - 1]} y={litYs[n - 1]} fill={lit.fill} />}
+
+        {reducedYs !== null && lit !== undefined && n > 0 && (
+          <Dot
+            x={xs[n - 1]}
+            y={reducedYs[n - 1]}
+            fill={lit.fill}
+            r={SMALL_R}
+            ring={SMALL_RING}
+            opacity={0.75}
+          />
+        )}
+        {reducedYs !== null && lit !== undefined && hot !== null && hot !== n - 1 && (
+          <Dot
+            x={xs[hot]}
+            y={reducedYs[hot]}
+            fill={lit.fill}
+            r={SMALL_R}
+            ring={SMALL_RING}
+            opacity={0.75}
+          />
+        )}
+        {reducedYs !== null && reducedNamed && n > 0 && (
+          <text x={left} y={reducedYs[0] - 6} className="text-dim" fill="currentColor" fontSize={TICK_SIZE}>
+            Reduced price
+          </text>
+        )}
 
         {hot !== null &&
           view.series.map((s, i) =>

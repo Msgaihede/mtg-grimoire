@@ -50,6 +50,14 @@
 //!   held set is a collection change** — before v50 an unquoted finish wrote no row, and the
 //!   remainder read the price disappearing as the card being sold. An unpriced copy is still
 //!   worth nothing in a total, which is [`crate::collection::summarise`]'s arithmetic.
+//! * **`below` replays the reader's minimum card value against each period's own prices.** A card
+//!   that was $2 last week and is $0.10 today is below a $0.50 minimum today and was not last week,
+//!   so a reduced line is what the reader would have been told on that day and not today's rule
+//!   drawn backwards over today's cheap cards. It is per copy, strictly below, an unpriced holding
+//!   never below, and the live point's is [`crate::collection::BelowMinimum`]'s `value` for the same
+//!   minimum, to the cent. Only the collection's graph asks: a wish is not held, and the sell
+//!   percentage this is subtracted for has nothing to say about what a card would cost. What the
+//!   reduced line comes to is TypeScript's sum.
 //! * **A card is in exactly one bucket, so the buckets always sum to the total.** The type split
 //!   is `deckBuckets.ts`' `typeBucket` — the front face, first match of eight words — so a reader
 //!   meets one answer to "what type is this card" across the deck editor and the home page. The
@@ -123,6 +131,11 @@ pub struct ValuePoint {
     pub moved: Option<f64>,
     /// True only for the last point: today, computed live from collection_entries.
     pub live: bool,
+    /// Σ copies × price over this period's rows priced below the minimum the call asked — per
+    /// copy, strictly below, an unpriced holding never below. **`None` on every point, and absent
+    /// from the wire, when it asked none.**
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub below: Option<f64>,
 }
 
 /// The whole graph.
@@ -261,7 +274,10 @@ fn type_key() -> String {
 ///
 /// Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`), `?3` the daily horizon, `?4` the
 /// keep horizon — all four read once, by [`history`]'s first statement, so a read straddling UTC
-/// midnight cannot put a row on both sides of a line.
+/// midnight cannot put a row on both sides of a line — and `?5` the minimum card value, NULL when
+/// none was asked, which falls every row to the `ELSE`. **One more column of this statement rather
+/// than a second one**, so a point's `below` is over the rows its `total` is; whether the answer
+/// carries it is decided in Rust, by [`read`].
 ///
 /// * `src` — [`Source::rows`], before today and inside [`KEEP_DAYS`], priced or not — for the
 ///   collection a count of at least one, so a watched printing's `copies = 0` row (issue #906)
@@ -319,7 +335,8 @@ fn periods_sql(source: Source, key: &str, name: &str, market: Marketplace) -> St
                 sum(CASE WHEN x.prev_idx = x.idx - 1
                          THEN x.prev_copies
                               * (coalesce(x.price, 0.0) - coalesce(x.prev_price, 0.0))
-                         ELSE 0.0 END)
+                         ELSE 0.0 END),
+                sum(CASE WHEN x.price < ?5 THEN x.copies * x.price ELSE 0.0 END)
            FROM (SELECT q.*, {key} AS bucket, {name} AS name
                    FROM paired q
                    LEFT JOIN cards c ON c.id = q.card_id) x
@@ -341,10 +358,13 @@ struct Period {
     /// Raw bucket key → value, in the statement's order.
     values: Vec<(String, f64)>,
     moved: f64,
+    /// Σ copies × price over the rows below the minimum — 0 when none was asked.
+    below: f64,
 }
 
 /// The collection's value over time at `market`, cut by `split` (`total`, `type`, `color` or
-/// `set`), oldest point first and today's live point last.
+/// `set`), oldest point first and today's live point last. `minimum` asks what each point holds
+/// below that price ([`ValuePoint::below`]); absent, zero or negative asks nothing.
 ///
 /// An unknown split refuses with [`NOT_A_SPLIT`]; an empty collection — no entry holding a copy
 /// — answers no buckets and no points, whatever history the table keeps.
@@ -352,8 +372,9 @@ pub fn history(
     conn: &Connection,
     split: &str,
     market: Marketplace,
+    minimum: Option<f64>,
 ) -> Result<ValueHistory, String> {
-    read(conn, Source::Collection, split, market)
+    read(conn, Source::Collection, split, market, minimum)
 }
 
 /// The wishlist's value over time at `market` (issue #1378) — [`history`] over `wish_snapshots`,
@@ -368,7 +389,7 @@ pub fn wishlist_history(
     split: &str,
     market: Marketplace,
 ) -> Result<ValueHistory, String> {
-    read(conn, Source::Wishlist, split, market)
+    read(conn, Source::Wishlist, split, market, None)
 }
 
 fn read(
@@ -376,9 +397,11 @@ fn read(
     source: Source,
     split: &str,
     market: Marketplace,
+    minimum: Option<f64>,
 ) -> Result<ValueHistory, String> {
     let split = Split::parse(split)?;
     let (key, name) = split.columns()?;
+    let minimum = crate::collection::asked_minimum(minimum);
 
     let (day, today, horizon, keep): (String, i64, String, String) = conn
         .query_row(
@@ -422,7 +445,7 @@ fn read(
             .prepare(&periods_sql(source, &key, name, market))
             .map_err(|e| e.to_string())?;
         let mut rows = stmt
-            .query(params![market_key(market), day, horizon, keep])
+            .query(params![market_key(market), day, horizon, keep, minimum])
             .map_err(|e| e.to_string())?;
         while let Some(r) = rows.next().map_err(|e| e.to_string())? {
             let at: String = r.get(0).map_err(|e| e.to_string())?;
@@ -430,17 +453,20 @@ fn read(
             let label: Option<String> = r.get(3).map_err(|e| e.to_string())?;
             let value: Option<f64> = r.get(4).map_err(|e| e.to_string())?;
             let moved: Option<f64> = r.get(5).map_err(|e| e.to_string())?;
+            let below: Option<f64> = r.get(6).map_err(|e| e.to_string())?;
             if periods.last().map(|p| p.at != at).unwrap_or(true) {
                 periods.push(Period {
                     at,
                     day: r.get(1).map_err(|e| e.to_string())?,
                     values: Vec::new(),
                     moved: 0.0,
+                    below: 0.0,
                 });
             }
             let period = periods.last_mut().expect("pushed above");
             period.values.push((bucket.clone(), value.unwrap_or(0.0)));
             period.moved += moved.unwrap_or(0.0);
+            period.below += below.unwrap_or(0.0);
             let known = names.entry(bucket).or_insert(None);
             if known.is_none() {
                 *known = label;
@@ -481,6 +507,7 @@ fn read(
             values: place(&p.values),
             moved: (i > 0).then_some(p.moved),
             live: false,
+            below: minimum.map(|_| p.below),
         })
         .collect();
     let first = points.is_empty();
@@ -490,6 +517,7 @@ fn read(
         values: place(live.as_ref().map(|p| p.values.as_slice()).unwrap_or(&[])),
         moved: (!first).then(|| live.as_ref().map(|p| p.moved).unwrap_or(0.0)),
         live: true,
+        below: minimum.map(|_| live.as_ref().map(|p| p.below).unwrap_or(0.0)),
     });
 
     Ok(ValueHistory {
@@ -681,7 +709,7 @@ mod tests {
     }
 
     fn tcg(conn: &Connection, split: &str) -> ValueHistory {
-        history(conn, split, Marketplace::Tcgplayer).unwrap()
+        history(conn, split, Marketplace::Tcgplayer, None).unwrap()
     }
 
     fn totals(h: &ValueHistory) -> Vec<f64> {
@@ -758,7 +786,7 @@ mod tests {
             )
             .unwrap();
             for split in ["total", "type", "color", "set"] {
-                let h = history(&conn, split, market).unwrap();
+                let h = history(&conn, split, market, None).unwrap();
                 let live = h.points.last().unwrap();
                 assert!(live.live);
                 assert!(
@@ -1103,7 +1131,7 @@ mod tests {
         own(&conn, "bolt", "nonfoil", "NM", 1);
         for word in ["rarity", "", "Type", "finish"] {
             assert_eq!(
-                history(&conn, word, Marketplace::Tcgplayer).unwrap_err(),
+                history(&conn, word, Marketplace::Tcgplayer, None).unwrap_err(),
                 NOT_A_SPLIT,
                 "{word:?}"
             );
@@ -1185,9 +1213,9 @@ mod tests {
         let conn = conn();
         own(&conn, "bolt", "nonfoil", "NM", 1);
         past(&conn, 1, "bolt", "nonfoil", 9.0, Some(1));
-        let cm = history(&conn, "total", Marketplace::Cardmarket).unwrap();
+        let cm = history(&conn, "total", Marketplace::Cardmarket, None).unwrap();
         assert_eq!(totals(&cm), [8.0], "Cardmarket keeps no TCGplayer rows");
-        let ck = history(&conn, "total", Marketplace::Cardkingdom).unwrap();
+        let ck = history(&conn, "total", Marketplace::Cardkingdom, None).unwrap();
         assert_eq!(
             totals(&ck),
             [12.5],
@@ -1208,6 +1236,7 @@ mod tests {
                 values: vec![2.5],
                 moved: None,
                 live: true,
+                below: None,
             }],
             today: 1_800_000_000,
         })
@@ -1223,6 +1252,154 @@ mod tests {
                 "today": 1_800_000_000
             })
         );
+    }
+
+    /// A point that was asked about a minimum carries `below`, under that name — and only then,
+    /// which the test above is the other half of.
+    #[test]
+    fn a_point_asked_about_a_minimum_serialises_its_below() {
+        let v = serde_json::to_value(ValuePoint {
+            day: 1_800_000_000,
+            total: 2.5,
+            values: Vec::new(),
+            moved: None,
+            live: true,
+            below: Some(1.5),
+        })
+        .unwrap();
+        assert_eq!(v["below"], serde_json::json!(1.5));
+    }
+
+    // ---- what a minimum card value takes off ----
+
+    fn below_of(h: &ValueHistory) -> Vec<Option<f64>> {
+        h.points.iter().map(|p| p.below).collect()
+    }
+
+    /// **Today's `below` is the collection header's `below_minimum.value`**, to the cent, at every
+    /// priced marketplace, under every split and at every minimum — over the fixture the live point
+    /// is pinned on: a printing held twice at one finish, a foil, an etched copy two marketplaces
+    /// cannot price, a card no marketplace prices, an orphan, a zero row, and a `nonfoil` copy of a
+    /// printing sold only in foil.
+    #[test]
+    fn the_live_points_below_is_the_collection_summarys_below_minimum() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil", "NM", 2);
+        own(&conn, "bolt", "nonfoil", "LP", 1);
+        own(&conn, "bolt", "foil", "NM", 1);
+        own(&conn, "ring", "etched", "NM", 1);
+        own(&conn, "ring", "nonfoil", "NM", 0);
+        own(&conn, "free", "nonfoil", "NM", 3);
+        own(&conn, "elf", "nonfoil", "NM", 4);
+        own(&conn, "gone", "nonfoil", "NM", 1);
+        conn.execute(
+            r#"INSERT INTO cards (id, oracle_id, name, set_code, set_name, collector_number, lang,
+                                  layout, type_line, color_identity, finishes, prices, raw)
+               VALUES ('surge', 'o6', 'Surge Only', 'hoc', 'Hobbit', '85', 'en', 'normal',
+                       'Artifact', '', '["foil"]', '{"usd":null,"usd_foil":"20.00"}', '{}')"#,
+            [],
+        )
+        .unwrap();
+        own(&conn, "surge", "nonfoil", "NM", 1);
+
+        for market in crate::price_history::priced_markets() {
+            for minimum in [2.5, 9.0, 10.0, 11.0, 21.0, 75.0, 1000.0] {
+                let summary = summarise(
+                    &conn,
+                    &CollectionQuery {
+                        marketplace: market,
+                        minimum_value: Some(minimum),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let header = summary.below_minimum.expect("a minimum was asked");
+                for split in ["total", "type", "color", "set"] {
+                    let h = history(&conn, split, market, Some(minimum)).unwrap();
+                    let below = h.points.last().unwrap().below.expect("a minimum was asked");
+                    assert!(
+                        cents(below, header.value),
+                        "{market:?} {split} at {minimum}: {below} against {}",
+                        header.value
+                    );
+                }
+            }
+        }
+        // And the figure itself, so two figures gone wrong in step cannot hide here: at TCGplayer
+        // and an 11.00 minimum, 3 × 10 + 4 × 3 — the surge foil at 20 and the bolt foil at 50 clear
+        // it, and `free`, the orphan and the etched copy have no price to be below it with.
+        let h = history(&conn, "total", Marketplace::Tcgplayer, Some(11.0)).unwrap();
+        assert_eq!(below_of(&h), [Some(30.0 + 12.0)]);
+    }
+
+    /// **A past point replays the minimum against that day's own price**, never today's. The card
+    /// was $2 a week ago and is $0.10 today, so it is below a $0.50 minimum today and was not then.
+    /// Two days back it is below beside a `bolt` held then; yesterday it sits exactly at the minimum
+    /// and has reached it, and the `bolt`, unquoted that day, has no price to be below it with.
+    #[test]
+    fn a_past_point_is_judged_at_that_days_own_price() {
+        let conn = conn();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id, oracle_id, name, set_code, set_name, collector_number, lang,
+                                  layout, type_line, color_identity, prices, raw)
+               VALUES ('fell', 'o7', 'Fallen Card', 'lea', 'Alpha', '9', 'en', 'normal',
+                       'Instant', 'R', '{"usd":"0.10"}', '{}');"#,
+        )
+        .unwrap();
+        own(&conn, "fell", "nonfoil", "NM", 3);
+        past(&conn, 7, "fell", "nonfoil", 2.0, Some(3));
+        past(&conn, 2, "fell", "nonfoil", 0.4, Some(3));
+        past(&conn, 2, "bolt", "nonfoil", 0.3, Some(2));
+        past(&conn, 1, "fell", "nonfoil", 0.5, Some(3));
+        unpriced(&conn, 1, "bolt", "nonfoil", 2);
+
+        let h = history(&conn, "total", Marketplace::Tcgplayer, Some(0.5)).unwrap();
+
+        let got = below_of(&h);
+        assert_eq!(got.len(), 4, "{h:?}");
+        for (at, want) in got.iter().zip([0.0, 1.2 + 0.6, 0.0, 0.3]) {
+            assert!(cents(at.unwrap(), want), "{got:?}");
+        }
+        assert_eq!(
+            totals(&h),
+            totals(&tcg(&conn, "total")),
+            "a minimum takes nothing out of a total: the reduced line is the page's sum"
+        );
+    }
+
+    /// **`below` adds across the buckets of a split**, since a period is summed per bucket and its
+    /// money is one figure however the graph is cut.
+    #[test]
+    fn a_split_answers_the_same_below_as_the_total() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil", "NM", 1); // instant, 10.00
+        own(&conn, "elf", "nonfoil", "NM", 2); // creature, 3.00
+        past(&conn, 1, "bolt", "nonfoil", 9.0, Some(1));
+        past(&conn, 1, "elf", "nonfoil", 4.0, Some(2));
+
+        for split in ["type", "color", "set"] {
+            let h = history(&conn, split, Marketplace::Tcgplayer, Some(9.5)).unwrap();
+            assert_eq!(below_of(&h), [Some(9.0 + 8.0), Some(6.0)], "{split}");
+        }
+    }
+
+    /// **An unasked minimum is no `below` at all**: absent, zero and negative, on every point,
+    /// and off the wire. The wishlist's graph never carries one.
+    #[test]
+    fn a_minimum_nobody_asked_is_on_no_point() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil", "NM", 2);
+        past(&conn, 1, "bolt", "nonfoil", 9.0, Some(2));
+        wish(&conn, "o1", Some("bolt"), Some("nonfoil"), 1);
+        wished(&conn, 1, "bolt", "nonfoil", Some("bolt"), Some(9.0), 1);
+
+        for minimum in [None, Some(0.0), Some(-1.0)] {
+            let h = history(&conn, "total", Marketplace::Tcgplayer, minimum).unwrap();
+            assert_eq!(below_of(&h), [None, None], "{minimum:?}");
+            let json = serde_json::to_value(&h).unwrap();
+            assert!(json["points"][0].get("below").is_none(), "{json}");
+        }
+        assert_eq!(below_of(&wishes(&conn, "total")), [None, None]);
     }
 
     // ---- the wishlist's graph (issue #1378) ----

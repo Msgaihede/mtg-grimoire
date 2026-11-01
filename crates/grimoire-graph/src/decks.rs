@@ -125,10 +125,6 @@ fn deck_by_id(ctx: &Context<'_>, id: Option<i64>) -> Result<Option<Deck>> {
 // Per-deck batches.
 // ---------------------------------------------------------------------------------------------
 
-/// How many per-deck batches have run — the tests assert a whole list is one per edge.
-#[cfg(test)]
-static PER_DECK_BATCHES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 /// A core read that answers many decks at once, given the rest of the edge's arguments.
 type BatchRead<A, V> = fn(&Connection, &[i64], &A) -> Result<HashMap<i64, Vec<V>>, String>;
 
@@ -149,7 +145,7 @@ where
 
     async fn load(&self, keys: &[(A, i64)]) -> Result<HashMap<(A, i64), Self::Value>, Self::Error> {
         #[cfg(test)]
-        PER_DECK_BATCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::batches::ran(crate::batches::Batch::PerDeck, &self.state);
         let mut groups: HashMap<&A, Vec<i64>> = HashMap::new();
         for (args, deck_id) in keys {
             groups.entry(args).or_default().push(*deck_id);
@@ -178,13 +174,13 @@ where
     A: Clone + Eq + Hash + Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
-    DataLoader::new(
+    crate::loaders::counted(DataLoader::new(
         PerDeck {
             state: state.clone(),
             read,
         },
         on_a_thread_of_its_own,
-    )
+    ))
 }
 
 type TodoLists = PerDeck<(), CoreTodoList>;
@@ -1569,8 +1565,6 @@ mod tests {
     //! The decks over a real database: rows written through the core's own functions, every
     //! answer read back through [`crate::Graph::run`].
 
-    use std::sync::atomic::Ordering;
-
     use grimoire_core::deck::{create_deck, update_deck, DeckInput, DeckPatch};
     use grimoire_core::deck_meta::{create_category, create_folder, create_label, set_card_label};
     use grimoire_core::deck_notes::create_note;
@@ -1580,6 +1574,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::batches::{runs, Batch};
     use crate::Graph;
 
     fn answer(state: &Arc<State>, query: &str) -> Value {
@@ -1790,20 +1785,12 @@ mod tests {
                 deck(&conn, &format!("Deck {n}"));
             }
         }
-        // The counter is shared with the tests running beside this one, so run twice and take
-        // the smaller difference: a neighbour's batch can land inside one window, not both.
-        let runs: Vec<usize> = (0..2)
-            .map(|_| {
-                let before = PER_DECK_BATCHES.load(Ordering::SeqCst);
-                let data = answer(
-                    &state,
-                    "{ decks { todoLists { id } labels { id } categories { id } history { id } } }",
-                );
-                assert_eq!(data["decks"].as_array().unwrap().len(), 12);
-                PER_DECK_BATCHES.load(Ordering::SeqCst) - before
-            })
-            .collect();
-        assert_eq!(runs.into_iter().min(), Some(4));
+        let data = answer(
+            &state,
+            "{ decks { todoLists { id } labels { id } categories { id } history { id } } }",
+        );
+        assert_eq!(data["decks"].as_array().unwrap().len(), 12);
+        assert_eq!(runs(Batch::PerDeck, &state), 4);
     }
 
     /// Stored JSON text is parsed leniently: text that is not JSON stays

@@ -242,6 +242,11 @@ pub struct CollectionFolderSummary {
     /// the feed has never heard of would otherwise read as a folder worth nothing. `None` draws
     /// an em dash, which is this app's answer for a price it does not have.
     pub value: Option<f64>,
+    /// What the copies in [`Self::value`] hold below the reader's minimum card value, **direct
+    /// like everything else here** — the tree sums it across children, as it does the two above.
+    /// Absent from the wire when the call asked no minimum.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub below_minimum: Option<crate::collection::BelowMinimum>,
 }
 
 /// A name good enough for a folder — trimmed, non-empty. [`crate::wishlist_folders`]'s
@@ -1490,28 +1495,36 @@ fn merge_entry(tx: &Connection, target: i64, source: i64) -> Result<(), String> 
 /// **An empty folder produces no row at all**, which is the shape rule a caller has to know: a
 /// page cannot build its tree from this command. [`list_folders`] is the census, and this is a
 /// lookup layered onto it.
+///
+/// **`minimum` is [`crate::collection::BelowMinimum`]'s question, per folder**, and it adds nothing
+/// to the statement when it asks nothing ([`crate::collection::asked_minimum`]).
 pub fn folder_summary(
     conn: &Connection,
     marketplace: Marketplace,
+    minimum: Option<f64>,
 ) -> Result<Vec<CollectionFolderSummary>, String> {
+    let price = crate::sorting::held_price_expr(marketplace, ENTRY_FINISH);
+    let minimum = crate::collection::asked_minimum(minimum);
     let sql = format!(
         "SELECT e.folder_id,
                 coalesce(sum(e.quantity), 0) AS cards,
                 sum(e.quantity * {price}) AS value
+                {below}
            FROM collection_entries e
            LEFT JOIN cards c ON c.id = e.card_id
           WHERE e.folder_id IS NOT NULL
           GROUP BY e.folder_id
           ORDER BY e.folder_id",
-        price = crate::sorting::held_price_expr(marketplace, ENTRY_FINISH)
+        below = crate::collection::below_columns(minimum, "e.quantity", &price),
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map(rusqlite::params_from_iter(minimum), |r| {
             Ok(CollectionFolderSummary {
                 folder_id: r.get(0)?,
                 cards: r.get(1)?,
                 value: r.get(2)?,
+                below_minimum: crate::collection::below_at(r, 3, minimum)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2739,7 +2752,7 @@ mod tests {
         insert_entry(&conn, "bear-lea", Some(rares.id), 4);
         insert_entry(&conn, "bolt-lea", None, 9);
 
-        let rows = folder_summary(&conn, ANY_MARKET).unwrap();
+        let rows = folder_summary(&conn, ANY_MARKET, None).unwrap();
 
         assert_eq!(rows.len(), 2, "the root is not a folder and draws no tile");
         let (top, inner) = (&rows[0], &rows[1]);
@@ -2774,7 +2787,7 @@ mod tests {
         insert_entry(&conn, "ghost", Some(mixed.id), 7);
         insert_entry(&conn, "ghost", Some(unknown.id), 4);
 
-        let rows = folder_summary(&conn, ANY_MARKET).unwrap();
+        let rows = folder_summary(&conn, ANY_MARKET, None).unwrap();
 
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].cards, 9, "an unpriced card is still a card in here");
@@ -2787,13 +2800,89 @@ mod tests {
         assert_eq!(rows[1].value, None, "an em dash, never $0.00");
     }
 
+    /// **A folder's minimum is direct, like its value**: strictly below, judged per copy, copies
+    /// counted, and a card with no price is not below. The sub-folder's cheap cards are the
+    /// sub-folder's — the tree sums them, SQL does not — and the root draws no tile here either.
+    #[test]
+    fn folder_summary_counts_what_each_folder_holds_below_the_minimum() {
+        use crate::collection::BelowMinimum;
+        let conn = open();
+        priced_card(&conn, "bolt-lea", "5.00");
+        priced_card(&conn, "bear-lea", "0.25");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let rares = create_folder(&conn, Some(binder.id), "Rares").unwrap();
+        let exact = create_folder(&conn, None, "Exact").unwrap();
+        insert_entry(&conn, "bolt-lea", Some(binder.id), 3);
+        insert_entry(&conn, "ghost", Some(binder.id), 7);
+        insert_entry(&conn, "bear-lea", Some(rares.id), 4);
+        insert_entry(&conn, "bear-lea", None, 9);
+        insert_entry(&conn, "bolt-lea", Some(exact.id), 1);
+
+        let rows = folder_summary(&conn, ANY_MARKET, Some(5.0)).unwrap();
+
+        let of = |id: i64| rows.iter().find(|r| r.folder_id == id).unwrap();
+        assert_eq!(rows.len(), 3, "the root is still no folder");
+        assert_eq!(
+            of(binder.id).below_minimum,
+            Some(BelowMinimum {
+                cards: 0,
+                value: 0.0
+            }),
+            "a 5.00 copy has reached a 5.00 minimum, and the ghost has no price to be below it"
+        );
+        assert_eq!(
+            of(rares.id).below_minimum,
+            Some(BelowMinimum {
+                cards: 4,
+                value: 1.0
+            }),
+            "4 x 0.25, and 1.00 of them in all"
+        );
+        assert_eq!(of(rares.id).value, Some(1.0), "the value still holds them");
+        assert_eq!(of(exact.id).below_minimum.unwrap().cards, 0);
+
+        let dearer = folder_summary(&conn, ANY_MARKET, Some(5.01)).unwrap();
+        assert_eq!(
+            dearer[0].below_minimum,
+            Some(BelowMinimum {
+                cards: 3,
+                value: 15.0
+            }),
+            "a cent more and the three copies are below it, each at its own price"
+        );
+    }
+
+    /// **An unasked minimum keeps the wire as it was**: absent, zero and negative, and the field
+    /// off the serialised row. Asked, the row carries it under the name the page reads.
+    #[test]
+    fn folder_summary_leaves_a_minimum_nobody_asked_off_the_wire() {
+        let conn = open();
+        priced_card(&conn, "bolt-lea", "5.00");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        insert_entry(&conn, "bolt-lea", Some(binder.id), 2);
+
+        for minimum in [None, Some(0.0), Some(-1.0)] {
+            let rows = folder_summary(&conn, ANY_MARKET, minimum).unwrap();
+            assert_eq!(
+                serde_json::to_value(&rows[0]).unwrap(),
+                serde_json::json!({ "folderId": binder.id, "cards": 2, "value": 10.0 }),
+                "{minimum:?}"
+            );
+        }
+        let rows = folder_summary(&conn, ANY_MARKET, Some(6.0)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&rows[0]).unwrap()["belowMinimum"],
+            serde_json::json!({ "cards": 2, "value": 10.0 })
+        );
+    }
+
     /// An empty folder produces no row at all, which is the shape rule that makes
     /// [`list_folders`] the census and this a lookup layered onto it.
     #[test]
     fn folder_summary_says_nothing_at_all_about_an_empty_folder() {
         let conn = open();
         create_folder(&conn, None, "Empty").unwrap();
-        assert!(folder_summary(&conn, ANY_MARKET).unwrap().is_empty());
+        assert!(folder_summary(&conn, ANY_MARKET, None).unwrap().is_empty());
     }
 
     /// Every marketplace's price SQL prepares, over a folder that has a row to answer with.
@@ -2815,12 +2904,18 @@ mod tests {
         insert_entry(&conn, "bolt-lea", Some(binder.id), 3);
 
         for id in crate::marketplace::MARKETPLACE_IDS {
-            let rows = folder_summary(&conn, Marketplace::from_id(id))
+            let rows = folder_summary(&conn, Marketplace::from_id(id), None)
                 .unwrap_or_else(|e| panic!("{id} could not be summed: {e}"));
             // Not merely `is_ok`: an empty answer passes that and proves nothing about the SQL
             // having run over a row. `cards` carries no price, so it is the same figure
             // whichever marketplace was asked.
             assert_eq!((rows.len(), rows[0].cards), (1, 3), "at {id}");
+            // The same again with the minimum's columns in it, where the expression is spelled
+            // twice more.
+            let rows = folder_summary(&conn, Marketplace::from_id(id), Some(1.0))
+                .unwrap_or_else(|e| panic!("{id} could not be summed: {e}"));
+            assert_eq!(rows.len(), 1, "at {id}");
+            assert!(rows[0].below_minimum.is_some(), "at {id}");
         }
     }
 

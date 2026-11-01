@@ -35,7 +35,8 @@
  * cent or more: a fold's sum can leave `1e-13` where there was nothing, and a base that small is
  * `Infinity` by another name.
  */
-import type { ValueHistory, ValueSplit } from "@/lib/ipc";
+import { reducedPoint, reducesValue } from "@/lib/collectionValue";
+import type { CollectionValue, ValueHistory, ValueSplit } from "@/lib/ipc";
 import { MANA_LABEL } from "@/lib/mana";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
@@ -116,6 +117,8 @@ export interface HistoryView {
   moved: (number | null)[];
   /** `[total]` for Total; the folded buckets otherwise. */
   series: Series[];
+  /** Each day's total reduced by the reader's settings, same length as `days`; `null` with none. */
+  reduced: number[] | null;
   /** The kept history starts after the range would — see the module doc. */
   historyShort: boolean;
   today: number;
@@ -197,8 +200,19 @@ function fold(
   return series;
 }
 
-/** Range, fold and label. Pure. */
-export function viewOf(h: ValueHistory, split: ValueSplit, window: ValueWindow): HistoryView {
+/**
+ * Range, fold and label. Pure.
+ *
+ * `settings` are the reader's reduced-price figures, the Collection value graph's alone. **The
+ * percentage is applied here, to every point**, and each point's `below` is its own period's: a
+ * reader's settings of today, read against the prices of each day.
+ */
+export function viewOf(
+  h: ValueHistory,
+  split: ValueSplit,
+  window: ValueWindow,
+  settings?: CollectionValue,
+): HistoryView {
   const reach = WINDOW_DAYS[window];
   const cutoff = reach === null ? null : h.today - reach * DAY_SECONDS;
   const points = cutoff === null ? h.points : h.points.filter((p) => p.day >= cutoff);
@@ -218,6 +232,10 @@ export function viewOf(h: ValueHistory, split: ValueSplit, window: ValueWindow):
     totals,
     moved,
     series,
+    reduced:
+      settings === undefined || !reducesValue(settings)
+        ? null
+        : points.map((p) => reducedPoint(finite(p.total), p.below, settings)),
     historyShort: cutoff !== null && oldest !== null && oldest > cutoff,
     today: h.today,
   };
@@ -359,6 +377,8 @@ export interface Readout {
    *  whose facts say it on a row of their own. */
   since: string;
   total: { value: string; change: string; up: boolean };
+  /** The day's reduced price, on Total and on a split alike; `null` with no settings. */
+  reduced: string | null;
   /** Every line's value and change, the followed one lit. Empty on Total. */
   rows: {
     key: string;
@@ -442,6 +462,7 @@ export function readoutAt(
       date: "",
       since: "",
       total: { value: formatPrice(null, currency), change: "", up: true },
+      reduced: null,
       rows: [],
       facts: [],
       note: null,
@@ -459,6 +480,7 @@ export function readoutAt(
       change: signedPercent(totalPct / 100),
       up: upOf(totalPct),
     },
+    reduced: v.reduced === null ? null : formatPrice(v.reduced[at], currency),
   };
   const change = collectionChange(v, at);
   const per = at > 0 ? stepWord(v, at) : "";
@@ -466,6 +488,7 @@ export function readoutAt(
   if (isTotal(v)) {
     const facts: Readout["facts"] = [
       { label: "Value", value: formatPrice(total, currency) },
+      ...(head.reduced === null ? [] : [{ label: "Reduced price", value: head.reduced }]),
       {
         label: `Since ${start}`,
         value: signed(total - v.totals[0], currency),
@@ -600,11 +623,15 @@ export interface Layout {
   /** Whole rows that fit under the rail's figure block; 0 without a rail. */
   railRows: number;
   listColumns: 1 | 2;
+  /** The figure block carries a line for the reduced price under the number. */
+  reducedStacked: boolean;
 }
 
 /** One list row: a 24px bordered row and the 3px between rows. */
 const ROW_PITCH = 27;
 const ROW_GAP = 3;
+/** The line a reduced price takes under the figure. */
+const REDUCED_LINE_H = 18;
 /** The in-card chips' row, and the strip of bucket names. */
 const CONTROLS_H = 26;
 const STRIP_H = 24;
@@ -645,23 +672,33 @@ type Bottom = "list" | "strip" | null;
  */
 export function layoutFor(
   fit: WidgetFit,
-  opts: { split: ValueSplit; figures: boolean; bucketCount: number },
+  opts: { split: ValueSplit; figures: boolean; bucketCount: number; reduced?: boolean },
 ): Layout {
   const bodyW = Math.max(0, fit.bodyWidthPx);
   const bodyH = Math.max(0, fit.bodyHeightPx);
   const gap = fit.compact ? 5 : 8;
-  // The label, the figure line (the bigger figure from a band up), its padding and its rule.
-  const figuresH = 16 + (fit.tier >= 2 ? 28 : 24) + (fit.compact ? 5 : 8) + 1;
   const wantControls = fit.tier >= 2 && fit.h >= 3;
   const buckets = opts.split !== "total" && opts.bucketCount > 0;
   const railW = fit.w >= 7 ? RAIL_W_WIDE : RAIL_W;
+  const railed = fit.tier === 3 && bodyW >= railW + RAIL_GAP + MIN_CHART_W;
+  // A reduced price stands beside the figure only on a band's Total, the one place the line has
+  // room for it. A rail, a tile and a band sharing its line with the followed one take it under.
+  const reducedStacked =
+    opts.reduced === true && (railed || fit.tier === 0 || opts.split !== "total");
+  // The label, the figure line (the bigger figure from a band up), its padding and its rule.
+  const figuresH =
+    16 +
+    (fit.tier >= 2 ? 28 : 24) +
+    (reducedStacked ? REDUCED_LINE_H : 0) +
+    (fit.compact ? 5 : 8) +
+    1;
 
   const chips = (controls: Rect | null) => ({
     controlsHaveRanges: controls !== null && bodyW >= RANGES_AT,
     controlsHaveMeasure: controls !== null && bodyW >= MEASURE_AT,
   });
 
-  if (fit.tier === 3 && bodyW >= railW + RAIL_GAP + MIN_CHART_W) {
+  if (railed) {
     const withControls = wantControls && bodyH - CONTROLS_H - gap >= MIN_CHART_H;
     const controls = withControls ? { x: 0, y: 0, w: bodyW, h: CONTROLS_H } : null;
     const top = withControls ? CONTROLS_H + gap : 0;
@@ -680,6 +717,7 @@ export function layoutFor(
       ...chips(controls),
       railRows: list === null ? 0 : Math.max(0, Math.floor((list.h + ROW_GAP) / ROW_PITCH)),
       listColumns: 1,
+      reducedStacked,
     };
   }
 
@@ -720,5 +758,6 @@ export function layoutFor(
     ...chips(controls),
     railRows: 0,
     listColumns: bottom === "list" ? 2 : 1,
+    reducedStacked,
   };
 }

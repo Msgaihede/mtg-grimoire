@@ -86,6 +86,7 @@ describe("Settings in the light edition", () => {
     expect(entries()).toEqual([
       "Updates",
       "Card data",
+      "Collection value",
       "Sync",
       "Tags",
       "Appearance",

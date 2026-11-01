@@ -1774,6 +1774,7 @@ pub fn shelf_counts(conn: &Connection, q: &WishlistQuery) -> Result<Vec<ShelfCou
                         value: r.get(3)?,
                         unpriced: r.get(4)?,
                         peek: Vec::new(),
+                        below_minimum: None,
                     })
                 },
             )
@@ -4578,6 +4579,7 @@ mod tests {
             value,
             unpriced,
             peek: peek.iter().map(|id| (*id).to_owned()).collect(),
+            below_minimum: None,
         }
     }
 

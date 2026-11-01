@@ -26,7 +26,9 @@
  */
 import type { ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { ReducedPrice } from "@/components/ReducedPrice";
 import { percent } from "@/features/decks/stats/StatsCard";
+import { reducedValue } from "@/lib/collectionValue";
 import { count } from "@/lib/counts";
 import { finishLabel } from "@/lib/finish";
 import {
@@ -39,6 +41,7 @@ import {
 import { MANA_FILL, MANA_KEYS, MANA_LABEL, type ManaKey } from "@/lib/mana";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { footerLinePx } from "../fit";
 import { collectionBreakdownKey, collectionTotalKey } from "../keys";
@@ -299,16 +302,22 @@ function sentence(bucket: ValueBucket, total: number, marketplace: Marketplace):
  */
 export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactElement {
   const { marketplace } = useMarketplace();
+  const { settings, minimum } = useCollectionValue();
   const dimension = collectionDimension(widget);
   const asList = pickOf(widget, "chart") === "list";
   const withFigures = toggleOn(widget, "figures");
 
   const total = useQuery({
-    queryKey: collectionTotalKey(marketplace.id),
+    queryKey: collectionTotalKey(marketplace.id, minimum),
     // No filters at all: this is the home page's figure rather than a wall's, so it asks about
     // every copy the reader owns. `limit: 0` is what makes it a count and not a page.
     queryFn: (): Promise<CollectionSummary> =>
-      ipc.collectionSummary({ limit: 0, offset: 0, marketplace: marketplace.id }),
+      ipc.collectionSummary({
+        limit: 0,
+        offset: 0,
+        marketplace: marketplace.id,
+        minimumValue: minimum,
+      }),
   });
   const breakdown = useQuery({
     queryKey: collectionBreakdownKey(dimension, marketplace.id),
@@ -332,6 +341,12 @@ export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactEl
   }
 
   const summary = total.data;
+  // The total's alone: the bars below stay at full value, because a bar is where the money is and
+  // not what it would fetch.
+  const reduced =
+    summary.totalCards === 0
+      ? null
+      : reducedValue(summary.value, summary.belowMinimum, settings);
   const ranked = rankBuckets(breakdown.data, dimension);
   // Every bucket, not the drawn ones: the spoken share is a share of the whole, and a fold that
   // was cut differently on a smaller card must not change what a percentage is of.
@@ -388,6 +403,19 @@ export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactEl
               note: summary.unpriced > 0 ? `${count(summary.unpriced)} unpriced` : undefined,
               tone: "accent",
               hint: pricesAsOf(marketplace),
+              reduced:
+                reduced === null
+                  ? undefined
+                  : {
+                      node: (
+                        <ReducedPrice
+                          value={reduced}
+                          currency={marketplace.currency}
+                          unpriced={summary.unpriced}
+                        />
+                      ),
+                      chars: formatPrice(reduced.reduced, marketplace.currency).length + 2,
+                    },
             },
             { key: "cards", label: "Cards", value: count(summary.totalCards), tone: "text" },
           ]}

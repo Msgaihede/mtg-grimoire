@@ -49,6 +49,7 @@ pub mod changes;
 pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
+pub mod collection_value;
 pub use grimoire_core::collection_source;
 pub mod combos;
 /// The fence between `grimoire-core`'s command table and `generate_handler!` — test-only.

@@ -70,6 +70,7 @@ pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
 pub mod collection_source;
+pub mod collection_value;
 /// **The command table**: one declaration per command a host with no window answers, and
 /// [`dispatch`], which answers one by name — what the light app's hosts call the engine through.
 pub mod commands;

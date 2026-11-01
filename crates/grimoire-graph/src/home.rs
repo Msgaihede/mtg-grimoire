@@ -775,7 +775,7 @@ impl HomeQuery {
         let market = Market::from_id(&marketplace_of(ctx, marketplace));
         let split = split.unwrap_or(ValueSplit::Type).id();
         let history = read(ctx, |c| {
-            grimoire_core::value_history::history(c, split, market)
+            grimoire_core::value_history::history(c, split, market, None)
         })?;
         Ok(Some(ValueHistory(history)))
     }

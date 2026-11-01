@@ -9,7 +9,9 @@
  * folder. The shelf headings state the same figures through `collectionShelfModel.ts`'s
  * `shelfStat`, which adds the filtered `N of M` form a card never needed.
  */
+import type { ReducedValue } from "@/lib/collectionValue";
 import { count } from "@/lib/counts";
+import type { BelowMinimum } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 
@@ -32,6 +34,8 @@ import { formatPrice } from "@/lib/prices";
 export interface CollectionFolderTotals {
   cards: number;
   value: number | null;
+  /** What falls under the reader's minimum, added up the same way; absent with none set. */
+  belowMinimum?: BelowMinimum;
 }
 
 /**
@@ -82,11 +86,15 @@ export interface CollectionFolderTotals {
  * `lockedFolderIds`' answer and never `CollectionFolder.locked`. It defaults to `false` for
  * the app's own two kinds, which cannot be locked at all: the write refuses anything that is not
  * `kind = 'user'` in words.
+ *
+ * `reduced` is the drawer's reduced price, where the reader has settings that make one. It follows
+ * the money it reduces, in brackets on screen and in words aloud.
  */
 export function folderFace(
   summary: CollectionFolderTotals | null,
   currency: Currency,
   locked = false,
+  reduced: ReducedValue | null = null,
 ): { shown: string; spoken: string } {
   // One wrapper around all three returns rather than a fourth branch, so a face that grows a
   // fifth shape cannot be the one that forgets to say the drawer is set aside.
@@ -98,9 +106,14 @@ export function folderFace(
   // The two spellings differ on exactly one field, and only where the marketplace priced nothing
   // in the drawer: the em dash is the right mark on screen and the wrong word in a sentence —
   // the same rule the "still counting" branch above applies one field earlier.
+  const price = formatPrice(summary.value, currency);
+  const less = reduced === null ? null : formatPrice(reduced.reduced, currency);
   const money =
     summary.value === null
       ? { shown: "—", spoken: "not priced" }
-      : { shown: formatPrice(summary.value, currency), spoken: formatPrice(summary.value, currency) };
+      : {
+          shown: less === null ? price : `${price} (${less})`,
+          spoken: less === null ? price : `${price}, reduced price ${less}`,
+        };
   return face(`${cards} · ${money.shown}`, `${cards}, ${money.spoken}`);
 }

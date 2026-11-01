@@ -45,6 +45,7 @@ describe("SettingsNav", () => {
     expect(entries().map((entry) => entry.textContent)).toEqual([
       "Updates",
       "Card data",
+      "Collection value",
       "Sync",
       "Integrations",
       "Tags",

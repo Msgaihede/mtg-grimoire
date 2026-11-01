@@ -29,6 +29,8 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { PageBar } from "@/components/PageBar";
 import { QuantityStepper } from "@/components/QuantityStepper";
+import { ReducedPrice } from "@/components/ReducedPrice";
+import { reducedValue, type ReducedValue } from "@/lib/collectionValue";
 import { ViewAllToggle } from "@/components/ViewAllToggle";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
@@ -124,6 +126,7 @@ import {
   peekOf,
   rolledUp,
   shelfStat,
+  shelfStatTail,
   treeParents,
 } from "./collectionShelfModel";
 import { EditCopy, type EditCopyTarget } from "./EditCopy";
@@ -496,6 +499,7 @@ export function CollectionPage() {
   // level nothing has cached arrives (`useCollection`'s `shown`). Everything drawn reads the
   // first; the page's navigation — the two hand-offs below and Escape's step up — reads the second.
   const { query, figures, rows, total, marketplace, folderId, requestedFolderId } = collection;
+  const { valueSettings } = collection;
   // **`View all`** (issue #907) in the same two tenses: the wall drawn, and the toggle pressed.
   const { viewAll, requestedViewAll, setViewAll } = collection;
   const view = useAppStore((s) => s.collectionView);
@@ -2527,6 +2531,16 @@ export function CollectionPage() {
       shelfTotal(shelf, subtotals, folders.summaryQuery.isPending ? null : folders.summary),
     [folders.summaryQuery.isPending, subtotals, folders.summary],
   );
+  /** A heading's reduced price — none under a filter, whose `N of M` states no money to reduce, and
+   *  none on a shelf holding nothing. */
+  const reducedOf = useCallback(
+    (shelf: Shelf): ReducedValue | null => {
+      const figures = rolled?.get(shelf.id);
+      if (filtering || figures === undefined || figures.copies === 0) return null;
+      return reducedValue(figures.value, figures.belowMinimum, valueSettings);
+    },
+    [rolled, filtering, valueSettings],
+  );
   const statOf = useCallback(
     (shelf: Shelf) =>
       shelf.id === NEW_FOLDER_SHELF
@@ -2536,8 +2550,9 @@ export function CollectionPage() {
             total: totalOf(shelf),
             filtering,
             currency: marketplace.currency,
+            withoutUnpriced: reducedOf(shelf) !== null,
           }),
-    [rolled, totalOf, filtering, marketplace.currency],
+    [rolled, totalOf, filtering, marketplace.currency, reducedOf],
   );
   /**
    * A chevron press: the new state, stored only where it moves off the kind's default.
@@ -2601,10 +2616,22 @@ export function CollectionPage() {
                 onCancel: dismiss,
               }
             : undefined;
+      const reduced = reducedOf(shelf);
+      const figures = rolled?.get(shelf.id);
       return (
         <CollectionShelfHeading
           shelf={shelf}
           stat={statOf(shelf)}
+          reduced={
+            reduced === null ? undefined : (
+              <ReducedPrice
+                value={reduced}
+                currency={marketplace.currency}
+                unpriced={figures?.unpriced ?? 0}
+              />
+            )
+          }
+          statTail={reduced === null || figures === undefined ? undefined : shelfStatTail(figures)}
           peek={peekOf(shelf, builtShelves, shelfCounts)}
           onToggle={() => toggle(shelf)}
           // Refused in the open while a filter is on (spec §3.4): the chevron says why, and
@@ -2649,6 +2676,9 @@ export function CollectionPage() {
       cancelNewFolder,
       openPanel,
       statOf,
+      reducedOf,
+      rolled,
+      marketplace.currency,
       builtShelves,
       shelfCounts,
       toggle,
@@ -2964,7 +2994,13 @@ export function CollectionPage() {
             onDropFolder={placeOnLevel}
           />
         }
-        figures={<CollectionPageFigures summary={figures} marketplace={marketplace} />}
+        figures={
+          <CollectionPageFigures
+            summary={figures}
+            marketplace={marketplace}
+            valueSettings={collection.valueSettings}
+          />
+        }
         // The row's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued. The names say *what* is moved, because both
         // dialogs carry a control called `Import` and two of those on one screen is a pair a

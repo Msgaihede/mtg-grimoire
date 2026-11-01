@@ -73,6 +73,7 @@ export type LightView = (typeof LIGHT_VIEWS)[number];
 export const LIGHT_SETTINGS = [
   "updates",
   "prices",
+  "collection-value",
   "sync",
   "review",
   "hidden-tags",

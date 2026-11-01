@@ -427,9 +427,9 @@ commands! {
 
     // collection_folders
     read collection_folder_list in collection_folders() = |conn| list_folders(conn);
-    read collection_folder_summary in collection_folders(marketplace: Option<String>) = |conn| {
+    read collection_folder_summary in collection_folders(marketplace: Option<String>, minimum_value: Option<f64>) = |conn| {
         let marketplace = Marketplace::from_opt(marketplace.as_deref());
-        folder_summary(conn, marketplace)
+        folder_summary(conn, marketplace, minimum_value)
     };
     read collection_rule_conflicts in collection_folders(marketplace: Option<String>) = |conn| {
         let marketplace = Marketplace::from_opt(marketplace.as_deref());
@@ -1101,6 +1101,12 @@ commands! {
     read scan_sounds in scansounds() = |conn| Ok(stored(conn));
     write set_scan_sounds in scansounds(sounds: ScanSounds) = |conn| store(conn, &sounds);
 
+    // collection_value
+    read collection_value in collection_value() = |conn| Ok(stored(conn));
+    write set_collection_value in collection_value(settings: CollectionValue) = |conn| {
+        store(conn, &settings)
+    };
+
     // startview
     read start_view in startview() = |conn| Ok(stored(conn));
     write set_start_view in startview(view: String) = |conn| store(conn, &view);
@@ -1292,8 +1298,8 @@ commands! {
     read upcoming_sets in upcoming_sets(days: i64) = |conn| upcoming_sets_for(conn, days);
 
     // value_history
-    read collection_value_history in value_history(split: String, marketplace: Option<Marketplace>) = |conn| {
-        history(conn, &split, marketplace.unwrap_or_default())
+    read collection_value_history in value_history(split: String, marketplace: Option<Marketplace>, minimum_value: Option<f64>) = |conn| {
+        history(conn, &split, marketplace.unwrap_or_default(), minimum_value)
     };
     read wishlist_value_history in value_history(split: String, marketplace: Option<Marketplace>) = |conn| {
         wishlist_history(conn, &split, marketplace.unwrap_or_default())
@@ -2465,6 +2471,7 @@ mod tests {
             "search_marks" => json!({ "req": { "ids": ["c-bolt"] } }),
             "set_home_layout" => json!({ "layout": seeded.layout }),
             "set_scan_sounds" => json!({ "sounds": {} }),
+            "set_collection_value" => json!({ "settings": {} }),
             // The scoped statement, which `{}` would never reach: all three lists at once.
             "price_movers" => json!({
                 "window": "7d",

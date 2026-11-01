@@ -47,6 +47,9 @@ export const FOLLOW_LIVE_APP_META: readonly QueryKey[] = [
   // The scanner's sounds (`features/scanner/sounds/useScanSoundSettings.ts`' `SCAN_SOUNDS_KEY`,
   // spelled here for `trayCount`'s reason): set in Settings, heard in a Scanner another window has.
   ["scanSounds"],
+  // The reduced price's two figures (`useCollectionValue`'s `COLLECTION_VALUE_KEY`): set in
+  // Settings, drawn beside every collection value another window has open.
+  ["collectionValue"],
   // The local MCP server's switch, port and token (issue #1395): stored in `app_meta` and served
   // by this one process, so a second window's Integrations panel would otherwise keep drawing a
   // token the first has just replaced. Imported rather than spelled — `query.ts` is this folder's,

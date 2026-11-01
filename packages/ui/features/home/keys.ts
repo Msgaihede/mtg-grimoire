@@ -112,13 +112,14 @@ import type { BreakdownDimension } from "./widgets";
  * `"home"` where `useCollection`'s summary carries its filter key: this one asks about the whole
  * cabinet rather than about the wall a reader is standing at, so the two must not share an entry.
  * Read by both `SummaryWidget` and `CollectionValueWidget`, which is one fetch between them.
+ *
+ * **`minimum` is the reader's minimum card value**, the one setting that changes what Rust answers.
+ * Left out, or with none set, the key is the one it always was.
  */
-export const collectionTotalKey = (marketplace: MarketplaceId): QueryKey => [
-  "collection",
-  "summary",
-  "home",
-  marketplace,
-];
+export const collectionTotalKey = (marketplace: MarketplaceId, minimum?: number): QueryKey =>
+  minimum === undefined
+    ? ["collection", "summary", "home", marketplace]
+    : ["collection", "summary", "home", marketplace, minimum];
 
 /** The collection sliced one way, priced at one marketplace — `ipc.collectionBreakdown`.
  *  {@link collectionTotalKey}'s reasons, and the dimension is in the key because it is the
@@ -247,9 +248,13 @@ export const priceHistoryKey = (
  * what Rust answers. **The range and the measure are deliberately absent**: the command answers
  * every kept point and the widget windows and scales them itself, so a reader stepping from 90
  * days to a year, or from change to value, re-renders one cached answer rather than re-reading it.
+ * `minimum` is {@link collectionTotalKey}'s; the sell percentage is arithmetic on the answer and
+ * never in a key.
  */
-export function valueHistoryKey(split: ValueSplit, marketplace: MarketplaceId) {
-  return ["collection", "valueHistory", split, marketplace] as const;
+export function valueHistoryKey(split: ValueSplit, marketplace: MarketplaceId, minimum?: number) {
+  return minimum === undefined
+    ? (["collection", "valueHistory", split, marketplace] as const)
+    : (["collection", "valueHistory", split, marketplace, minimum] as const);
 }
 
 /**
