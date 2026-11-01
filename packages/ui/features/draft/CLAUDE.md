@@ -15,7 +15,7 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `booster/`                                   | Pure booster logic: `open.ts` (collation, `draftProduct`), `value.ts` (expected value, variance, simulation, percentile), `rng.ts` (seeded `mulberry32`), `prices.ts` (`useBoosterPrices`) |
 | `sets.ts`, `SetGrid.tsx`                     | MTGJSON's booster sets (`useBoosterSets`), one set's `BoosterSet` (`useBoosterSet`), the set wall                                                                                          |
-| `packs/`                                     | Open Packs: the product picker, the opened wall, the figures and the histogram                                                                                                             |
+| `packs/`                                     | Open Packs: the product picker, the marketplace pick (`marketplaces.ts`), the opened wall, the figures and the histogram                                                                   |
 | `DraftPage.tsx`                              | The hub (_Draft in progress_, _Start new_) and the page-local state machine                                                                                                                |
 | `setup/`                                     | Quick, Sealed, Cube, Commander and Winston setup; `deal.ts` deals boosters to seats and holds each table's seat bounds                                                                     |
 | `pick/`                                      | The pick screen (one card a pick, or two in a Commander draft; the pack by rarity unless sorted as dealt), the Winston table, the pool by mana value, the table strip                      |
@@ -29,6 +29,11 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   and cards (`packs_booster_set`) and prices come from `printing_prices`; which cards a booster
   holds, what it is worth on average and where a pack falls are `booster/`'s. Never move that math
   to Rust, and never put a price in `BoosterSet`.
+- **Open Packs prices at the page's own marketplaces** (`packs/marketplaces.ts`, issue #1446): one
+  or several of one currency, the app's marketplace until the reader picks, kept per device in
+  `localStorage` — never `app_meta`, and never written to the app's setting. A card is worth each
+  finish's lowest quote among them (`lowestPrices`); never mix currencies, and never let the pick
+  go empty.
 - **The set walls are MTGJSON's** (`useBoosterSets` over `packs_booster_sets`): Open Packs and a
   draft's pack order offer only the sets MTGJSON sells a booster pack of. Never build a wall from
   the corpus's `list_sets` — Scryfall splits a release into sets no booster is sold of.
