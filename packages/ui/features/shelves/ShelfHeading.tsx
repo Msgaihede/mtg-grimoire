@@ -81,6 +81,10 @@ export interface ShelfHeadingProps {
   /** Already formatted by the page — `42 cards · $2,490.00`, or `3 of 42 cards` under a filter.
    *  `""` draws nothing (a folder still being named has no figures). */
   stat: string;
+  /** A reduced price, drawn after {@link stat} (`ReducedPrice`). The page decides whether there is
+   *  one, as it does {@link badge}; `statTail` is whatever the figures say after it. */
+  reduced?: ReactNode;
+  statTail?: string;
   /** Up to {@link PEEK_LIMIT}, drawn only while collapsed. */
   peek: readonly { cardId: string; name: string }[];
   /** The chevron and the folder's own name — both fold the shelf (issue #599). */
@@ -237,6 +241,8 @@ export function addFolderLabel(shelf: Pick<Shelf, "kind" | "name">): string {
 export function ShelfHeading({
   shelf,
   stat,
+  reduced,
+  statTail,
   peek,
   onToggle,
   onOpen,
@@ -430,6 +436,13 @@ export function ShelfHeading({
           {...tip(stat, { whenClipped: true })}
         >
           {stat}
+          {reduced !== undefined && reduced !== null && (
+            <>
+              {" "}
+              {reduced}
+              {statTail}
+            </>
+          )}
         </span>
       )}
       {shelf.collapsed && peek.length > 0 && (

@@ -70,6 +70,38 @@ describe("WidgetFooterLine", () => {
  * one drawing the numbers largest is kept, so a bigger card draws bigger figures rather than the
  * same small line over an empty card. Never an arrangement wider or taller than the box.
  */
+describe("figureGrid with a reduced price", () => {
+  const MONEY = 9;
+  const REDUCED = 11;
+
+  /** Summary's default 4×2: room for the big number, and a line under it for the rest. */
+  it("hangs the reduced price under a number too wide to share its line", () => {
+    expect(figureGrid(4, MONEY, { widthPx: 446, heightPx: 176 }, 10, REDUCED)).toEqual({
+      rows: 2,
+      columns: 2,
+      sizePx: 34,
+      stacked: true,
+    });
+  });
+
+  /** Summary at 8×1: no line to spare, so the number steps down until the two share one. */
+  it("gives up size rather than a line it does not have", () => {
+    expect(figureGrid(4, MONEY, { widthPx: 926, heightPx: 66 }, 10, REDUCED)).toEqual({
+      rows: 1,
+      columns: 4,
+      sizePx: 22,
+      stacked: false,
+    });
+  });
+
+  it("changes nothing with no reduced price to place", () => {
+    expect(figureGrid(4, MONEY, { widthPx: 446, heightPx: 176 }, 10)).toMatchObject({
+      sizePx: 34,
+      stacked: false,
+    });
+  });
+});
+
 describe("figureGrid", () => {
   it("draws the numbers larger in a larger box", () => {
     const small = figureGrid(4, 6, { widthPx: 430, heightPx: 62 });

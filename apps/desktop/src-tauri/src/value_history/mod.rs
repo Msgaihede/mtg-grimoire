@@ -13,12 +13,14 @@ use std::sync::Arc;
 
 /// The Collection value graph's read. **Read-only** connection, blocking pool, and the
 /// marketplace taken as `price_movers` takes it — an absent or unknown id is TCGplayer, never a
-/// refusal. The split is refused in words when it is not one of the four.
+/// refusal. The split is refused in words when it is not one of the four. `minimum_value` asks
+/// what each point holds below that price, at that point's own prices; an absent one asks nothing.
 #[tauri::command]
 pub async fn collection_value_history(
     state: tauri::State<'_, Arc<AppState>>,
     split: String,
     marketplace: Option<Marketplace>,
+    minimum_value: Option<f64>,
 ) -> Result<ValueHistory, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -26,6 +28,7 @@ pub async fn collection_value_history(
             &crate::sync::lock_db_read(&state),
             &split,
             marketplace.unwrap_or_default(),
+            minimum_value,
         )
     })
     .await

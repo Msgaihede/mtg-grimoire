@@ -184,6 +184,9 @@ export function ValueReadout({ readout }: { readout: Readout }): ReactElement {
             strong
             column
           />
+          {readout.reduced !== null && (
+            <Line name="Reduced price" value={readout.reduced} strong={false} column />
+          )}
           <Rule />
           {readout.rows.map((row) => (
             <Line
@@ -206,7 +209,7 @@ export function ValueReadout({ readout }: { readout: Readout }): ReactElement {
             value={fact.value}
             change={fact.change}
             up={fact.up}
-            strong={i === 0}
+            strong={i === 0 || fact.label === "Reduced price"}
             column={false}
           />
         ))

@@ -66,6 +66,7 @@
  */
 import type { ReactElement, ReactNode } from "react";
 import { Folder, Heart, Inbox, Layers } from "lucide-react";
+import { ReducedPrice } from "@/components/ReducedPrice";
 import {
   folderFace,
   type CollectionFolderTotals,
@@ -87,6 +88,8 @@ import {
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { addBelow, reducedValue } from "@/lib/collectionValue";
+import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { widgetConfig } from "../layout";
 import { WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
@@ -214,6 +217,7 @@ function addCards(into: CollectionFolderTotals, under: CollectionFolderTotals) {
   return {
     cards: into.cards + under.cards,
     value: under.value === null ? into.value : (into.value ?? 0) + under.value,
+    belowMinimum: addBelow(into.belowMinimum, under.belowMinimum),
   };
 }
 
@@ -378,6 +382,9 @@ interface FolderRowModel {
   caption: string;
   /** The money at the right, or `undefined` for a drawer holding nothing — which has no price. */
   money: string | undefined;
+  /** The drawer's reduced price, beside the money. A collection folder's, with settings that make
+   *  one. */
+  reduced?: ReactNode;
   /** The count alone — what a bare row shows in place of money it does not have. */
   count: string;
   /** The folder's whole face, for a two-cell tile that moves its figure under the name. */
@@ -440,6 +447,7 @@ export function shareRows<T>(first: readonly T[], second: readonly T[], n: numbe
 
 export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
   const { currency } = useMarketplace();
+  const { settings: valueSettings } = useCollectionValue();
   const setActiveView = useAppStore((s) => s.setActiveView);
   const setPendingFolder = useAppStore((s) => s.setPendingFolder);
   const collection = useCollectionFolders();
@@ -474,7 +482,9 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     ).map((folder) => {
       const kind = collectionKind(folder);
       const totals = cardTotals.get(folder.id) ?? NO_CARDS;
-      const face = folderFace(totals, currency);
+      const reduced =
+        totals.cards === 0 ? null : reducedValue(totals.value, totals.belowMinimum, valueSettings);
+      const face = folderFace(totals, currency, false, reduced);
       // `folderFace`'s own count spelling, so the row's count and the tile's never disagree about
       // how "1,204 cards" is written.
       const cards = `${count(totals.cards)} ${totals.cards === 1 ? "card" : "cards"}`;
@@ -486,6 +496,11 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
         caption: `${kind.lead} · ${cards}`,
         // An empty drawer shows its count and no money at all — `folderFace`'s rule.
         money: totals.cards === 0 ? undefined : formatPrice(totals.value, currency),
+        // `plain`: the row is a press, so the name below says the price.
+        reduced:
+          reduced === null ? undefined : (
+            <ReducedPrice value={reduced} currency={currency} plain />
+          ),
         count: cards,
         face: face.shown,
         spokenName: `${folder.name}, ${kind.spoken}, ${face.spoken}`,
@@ -632,6 +647,8 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
               // A bare row that has no money — an empty drawer — shows its count instead, so the
               // one fact an empty drawer has is still on the row.
               value={tile ? undefined : bare ? (row.money ?? row.count) : row.money}
+              // A bare row is one line, with no second one to hang it on. The press still says it.
+              reduced={tile || bare ? undefined : row.reduced}
               icon={row.icon}
               iconColor={row.color}
               onPress={still ? undefined : () => openFolder(row.cabinet, row.id)}
@@ -654,7 +671,9 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
 /** A folder's own copies and money — the summary row, or the empty drawer it stands for when
  *  there is none. See this module's head: a miss here is *empty*, never *unknown*. */
 function summaryTotals(row: CollectionFolderSummary | undefined): CollectionFolderTotals {
-  return row === undefined ? NO_CARDS : { cards: row.cards, value: row.value };
+  return row === undefined
+    ? NO_CARDS
+    : { cards: row.cards, value: row.value, belowMinimum: row.belowMinimum };
 }
 
 function wishSummary(row: WishlistFolderSummary | undefined): WishTotals {

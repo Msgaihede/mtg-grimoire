@@ -25,6 +25,7 @@ describe("Settings on the phone", () => {
     expect(rows.map((row) => row.textContent)).toEqual([
       "Updates",
       "Card data",
+      "Collection value",
       "Sync",
       "Tags",
       "Appearance",

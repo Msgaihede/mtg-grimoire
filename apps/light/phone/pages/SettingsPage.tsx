@@ -9,6 +9,7 @@ import { LabelsPanel } from "@grimoire/ui/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@grimoire/ui/features/settings/MarketplacePanel";
 import { PrivacyLink } from "@grimoire/ui/features/settings/PrivacyLink";
 import { ReviewPanel } from "@grimoire/ui/features/settings/ReviewPanel";
+import { CollectionValuePanel } from "@grimoire/ui/features/settings/CollectionValuePanel";
 import { ScanSoundsPanel } from "@grimoire/ui/features/settings/ScanSoundsPanel";
 import { SyncPanel } from "@grimoire/ui/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@grimoire/ui/features/settings/TheoryMarksPanel";
@@ -67,6 +68,8 @@ function Panel({ id, log }: { id: LightPanel; log: ErrorLog }): JSX.Element {
       return <VersionPanel />;
     case "prices":
       return <Prices />;
+    case "collection-value":
+      return <CollectionValuePanel />;
     case "sync":
       // The desktop's own panel. Where the host offers a membership (the web app), *Connect
       // Patreon* leaves through `@/lib/core`'s host seam, as a new tab. The Android host offers

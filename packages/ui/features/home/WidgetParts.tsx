@@ -50,6 +50,10 @@ export interface WidgetFigureItem {
   onPress?: () => void;
   /** The press's accessible name. Required with `onPress`: a bare number is not a name. */
   pressLabel?: string;
+  /** A reduced price (`ReducedPrice`), and its width in characters, brackets included — what a
+   *  filling line needs to decide whether it stands beside the number or under it. **It stays
+   *  where a note is dropped**: it is the figure's second half, not a qualification of it. */
+  reduced?: { node: ReactNode; chars: number };
 }
 
 /** The type sizes a filling figure's number steps through, smallest first, in pixels. */
@@ -69,6 +73,17 @@ export interface FigureGrid {
   rows: number;
   columns: number;
   sizePx: number;
+  /** A reduced price is drawn on a line under its number, because no room was left beside it. */
+  stacked: boolean;
+}
+
+/** The space between a number and the reduced price beside it — `ml-1.5`. */
+const REDUCED_GAP_PX = 6;
+
+/** A reduced price's type size beside or under a number this big: a step down from it always, so
+ *  it never competes with the figure it qualifies. */
+export function reducedSizePx(sizePx: number): number {
+  return sizePx >= 28 ? 15 : 13;
 }
 
 /**
@@ -81,12 +96,18 @@ export interface FigureGrid {
  * label and the number fit the cell's height and the number fits its width**, so a filling line can
  * never be wider or taller than the body that was measured for it. Ties go to fewer rows: four
  * figures across a wide card read as one line, which is what a summary is.
+ *
+ * **`reducedChars` is a reduced price's length, and it has to fit too**: beside the number where
+ * the cell is wide enough, on a line of its own where it is tall enough (`stacked`), and a size that
+ * leaves it neither is not taken. Counted against the longest number, which is the money it sits
+ * beside.
  */
 export function figureGrid(
   count: number,
   longest: number,
   box: { widthPx: number; heightPx: number },
   longestLabel = 0,
+  reducedChars = 0,
 ): FigureGrid | null {
   let best: FigureGrid | null = null;
   for (let rows = 1; rows <= count; rows++) {
@@ -98,9 +119,18 @@ export function figureGrid(
     // A label cut to `Collec…` is a figure nobody can name, so the label must fit its cell too.
     if (longestLabel * LABEL_ADVANCE_PX > cellW) continue;
     for (const sizePx of FIGURE_SIZES_PX) {
-      const fits =
-        FIGURE_LABEL_PX + sizePx * 1.2 <= cellH && longest * MONO_ADVANCE * sizePx <= cellW;
-      if (fits && (best === null || sizePx > best.sizePx)) best = { rows, columns, sizePx };
+      const tall = FIGURE_LABEL_PX + sizePx * 1.2;
+      const wide = longest * MONO_ADVANCE * sizePx;
+      if (tall > cellH || wide > cellW) continue;
+      const small = reducedSizePx(sizePx);
+      const beside =
+        reducedChars === 0 ||
+        wide + REDUCED_GAP_PX + reducedChars * MONO_ADVANCE * small <= cellW;
+      const under = tall + small * 1.2 <= cellH;
+      if (!beside && !under) continue;
+      if (best === null || sizePx > best.sizePx) {
+        best = { rows, columns, sizePx, stacked: !beside };
+      }
     }
   }
   return best;
@@ -142,6 +172,7 @@ export function WidgetFigures({
         Math.max(1, ...figures.map((figure) => figure.value.length)),
         { widthPx: fit.bodyWidthPx, heightPx: fit.bodyHeightPx },
         Math.max(0, ...figures.map((figure) => figure.label.length)),
+        Math.max(0, ...figures.map((figure) => figure.reduced?.chars ?? 0)),
       )
     : null;
   return (
@@ -166,6 +197,7 @@ export function WidgetFigures({
           fit.tier === 0 || (figures.length > 2 && (figure.note ?? "").length > 6)
             ? ""
             : (figure.note ?? "");
+        const reduced = figure.reduced?.node;
         const body = (
           <>
             <span className="block truncate text-xs text-dim">{figure.label}</span>
@@ -182,16 +214,36 @@ export function WidgetFigures({
               >
                 {figure.value}
               </span>
+              {reduced !== undefined && grid?.stacked !== true && (
+                <span
+                  className="ml-1.5 shrink-0 text-dim"
+                  style={{ fontSize: reducedSizePx(grid?.sizePx ?? (big ? 22 : 18)) }}
+                >
+                  {reduced}
+                </span>
+              )}
               {note !== "" && (
                 <span className="ml-1.5 min-w-0 truncate text-xs text-dim">{note}</span>
               )}
             </span>
+            {reduced !== undefined && grid?.stacked === true && (
+              <span
+                className="block font-mono leading-[1.2] text-dim"
+                style={{ fontSize: reducedSizePx(grid.sizePx) }}
+              >
+                {reduced}
+              </span>
+            )}
           </>
         );
         // A filling figure is centred in its cell, so the spare height is shared above and below
-        // the figures rather than left in one block under them.
+        // the figures rather than left in one block under them. A stacked line starts each cell at
+        // its top instead, so the numbers still share a baseline with the reduced price hung under
+        // one of them.
         const cell =
-          grid === null ? "min-w-0 flex-1 basis-[120px]" : "flex min-w-0 flex-col justify-center";
+          grid === null
+            ? cn("min-w-0 flex-1", reduced === undefined ? "basis-[120px]" : "basis-[216px]")
+            : cn("flex min-w-0 flex-col", grid.stacked ? "justify-start" : "justify-center");
         return figure.onPress === undefined ? (
           <div key={figure.key} className={cell}>
             {body}
@@ -345,6 +397,8 @@ export interface WidgetRowProps {
   captionStrong?: boolean;
   /** The figure at the right. */
   value?: string;
+  /** A reduced price, on a line under {@link value}: only a row with a caption has one to spare. */
+  reduced?: ReactNode;
   /** A gain or a loss: the value sits on a tinted chip. */
   delta?: RowDelta;
   /** A small glyph before the name, already sized (`size-3.5`) and `aria-hidden`. */
@@ -377,6 +431,7 @@ export function WidgetRow({
   caption,
   captionStrong = false,
   value,
+  reduced,
   delta,
   icon,
   iconColor,
@@ -422,8 +477,15 @@ export function WidgetRow({
         )}
       </span>
       {value !== undefined && value !== "" && (
-        <span className="flex-none font-mono text-sm tabular-nums text-text" style={chip}>
-          {value}
+        // Under the money rather than beside it: a row is narrow, and the two side by side cut the
+        // name down to its first letter. A caption's second line is what makes the room.
+        <span className="flex flex-none flex-col items-end">
+          <span className="font-mono text-sm tabular-nums text-text" style={chip}>
+            {value}
+          </span>
+          {reduced !== undefined && (
+            <span className="font-mono text-xs text-dim">{reduced}</span>
+          )}
         </span>
       )}
     </>

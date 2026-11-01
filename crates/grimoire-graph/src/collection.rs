@@ -511,11 +511,6 @@ impl CollectionSummary {
     }
 }
 
-/// How many folder-list batches have run — the tests assert a whole page of entries is one.
-#[cfg(test)]
-pub(crate) static FOLDER_BATCHES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 /// Where a batch runs: a thread of its own, driven to the end there — `crate::loaders`' reason
 /// (nothing in the crate has a runtime to spawn on).
 pub(crate) fn on_a_thread_of_its_own(batch: BoxFuture<'static, ()>) {
@@ -538,7 +533,7 @@ impl Loader<i64> for CollectionFolders {
 
     async fn load(&self, keys: &[i64]) -> Result<HashMap<i64, Self::Value>, Self::Error> {
         #[cfg(test)]
-        FOLDER_BATCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::batches::ran(crate::batches::Batch::CollectionFolders, &self.0);
         let folders = list_folders(&self.0.lock_db_read()).map_err(Arc::new)?;
         Ok(folders
             .into_iter()
@@ -566,7 +561,9 @@ impl Loader<FolderKey> for CollectionFolderSummaries {
         let conn = self.0.lock_db_read();
         let mut out = HashMap::new();
         for marketplace in marketplaces {
-            for row in folder_summary(&conn, Market::from_id(marketplace)).map_err(Arc::new)? {
+            for row in
+                folder_summary(&conn, Market::from_id(marketplace), None).map_err(Arc::new)?
+            {
                 let key = FolderKey {
                     marketplace: marketplace.to_owned(),
                     folder_id: row.folder_id,
@@ -581,10 +578,10 @@ impl Loader<FolderKey> for CollectionFolderSummaries {
 /// This domain's batch loaders, for one execution.
 pub(crate) fn data(request: async_graphql::Request, state: &Arc<State>) -> async_graphql::Request {
     request
-        .data(DataLoader::new(
+        .data(crate::loaders::counted(DataLoader::new(
             CollectionFolders(state.clone()),
             on_a_thread_of_its_own,
-        ))
+        )))
         .data(DataLoader::new(
             CollectionFolderSummaries(state.clone()),
             on_a_thread_of_its_own,
@@ -780,7 +777,7 @@ impl CollectionQuery {
         marketplace: Option<Marketplace>,
     ) -> Result<Option<Vec<CollectionFolderSummary>>> {
         let marketplace = Market::from_id(&marketplace_of(ctx, marketplace));
-        let rows = read(ctx, |c| folder_summary(c, marketplace))?;
+        let rows = read(ctx, |c| folder_summary(c, marketplace, None))?;
         Ok(Some(
             rows.into_iter()
                 .map(|r| CollectionFolderSummary(Arc::new(r)))
@@ -806,7 +803,6 @@ impl CollectionQuery {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     use grimoire_core::collection::{add_entry, EntryInput};
@@ -817,7 +813,8 @@ mod tests {
     use grimoire_core::state::{fixtures::on_files, State};
     use serde_json::{json, Value};
 
-    use super::{json_column, page_of, FOLDER_BATCHES};
+    use super::{json_column, page_of};
+    use crate::batches::{runs, Batch};
     use crate::Graph;
 
     fn answer(state: &Arc<State>, query: &str) -> Value {
@@ -986,19 +983,11 @@ mod tests {
                 add_entry(&conn, &entry).unwrap();
             }
         }
-        // The counter is shared with any test running beside this one: run twice and take the
-        // smaller difference, as `tests.rs` does for deck notes.
-        let runs: Vec<usize> = (0..2)
-            .map(|_| {
-                let before = FOLDER_BATCHES.load(Ordering::SeqCst);
-                answer(
-                    &state,
-                    "{ collectionEntries { items { folder { name } } } }",
-                );
-                FOLDER_BATCHES.load(Ordering::SeqCst) - before
-            })
-            .collect();
-        assert_eq!(runs.into_iter().min(), Some(1));
+        answer(
+            &state,
+            "{ collectionEntries { items { folder { name } } } }",
+        );
+        assert_eq!(runs(Batch::CollectionFolders, &state), 1);
     }
 
     #[test]

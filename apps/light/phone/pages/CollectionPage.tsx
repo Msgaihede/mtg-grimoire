@@ -286,7 +286,11 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
         itemsOf={itemsOf}
         header={
           <div className="pt-3 pb-1">
-            <CollectionSummaryHeader summary={figures} marketplace={marketplace} />
+            <CollectionSummaryHeader
+              summary={figures}
+              marketplace={marketplace}
+              valueSettings={collection.valueSettings}
+            />
             {/* Import and export, beside the figures they change — the desktop's two entries.
                 The export sweeps what this wall covers: the hook's own `filters`, shelves at and
                 below the level included, and inside a folder it says which one (the desktop

@@ -21,13 +21,22 @@ use grimoire_core::deck_notes::{list_notes_of_decks, DeckNoteRow};
 use grimoire_core::sorting::Marketplace;
 use grimoire_core::state::State;
 
-/// How many deck-note batches have run — `tests.rs` asserts a whole list is one.
-#[cfg(test)]
-pub(crate) static NOTE_BATCHES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 fn on_a_thread_of_its_own(batch: BoxFuture<'static, ()>) {
     std::thread::spawn(move || futures_executor::block_on(batch));
+}
+
+/// A loader whose batches a test counts. **A wider window under test, and nothing in a build.** A
+/// level's keys are all asked in one pass, but a loaded CI runner can stop that thread for longer
+/// than the 1 ms a batch waits, and the keys after it would be a second, harmless read that
+/// fails an exact count. What the tests hold is that one pass is one batch, not the runner's timing.
+#[cfg(test)]
+pub(crate) fn counted<T: Send + Sync + 'static>(loader: DataLoader<T>) -> DataLoader<T> {
+    loader.delay(std::time::Duration::from_millis(50))
+}
+
+#[cfg(not(test))]
+pub(crate) fn counted<T>(loader: DataLoader<T>) -> DataLoader<T> {
+    loader
 }
 
 /// Every deck's deck notes, for the decks a level of the answer asked about.
@@ -39,13 +48,16 @@ impl Loader<i64> for DeckNotes {
 
     async fn load(&self, keys: &[i64]) -> Result<HashMap<i64, Self::Value>, Self::Error> {
         #[cfg(test)]
-        NOTE_BATCHES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::batches::ran(crate::batches::Batch::DeckNotes, &self.0);
         list_notes_of_decks(&self.0.lock_db_read(), keys).map_err(Arc::new)
     }
 }
 
 pub fn deck_notes(state: &Arc<State>) -> DataLoader<DeckNotes> {
-    DataLoader::new(DeckNotes(state.clone()), on_a_thread_of_its_own)
+    counted(DataLoader::new(
+        DeckNotes(state.clone()),
+        on_a_thread_of_its_own,
+    ))
 }
 
 /// One deck's worth at one marketplace — the key a `value(marketplace:)` edge asks for.

@@ -1,7 +1,9 @@
 import type { ReactNode } from "react";
 import { Figure, FigureRow, InlineFigureRow } from "@/components/Figure";
+import { ReducedPrice } from "@/components/ReducedPrice";
+import { reducedValue } from "@/lib/collectionValue";
 import { count } from "@/lib/counts";
-import type { CollectionSummary as Summary } from "@/lib/ipc";
+import type { CollectionValue, CollectionSummary as Summary } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 
@@ -43,19 +45,28 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 export function CollectionSummaryHeader({
   summary,
   marketplace,
+  valueSettings,
   actions,
 }: {
   summary: Summary | undefined;
   /** Which marketplace's prices this row totals: its currency writes the figure, its label is
    *  the as-of sentence. The figure itself was summed by the query. */
   marketplace: Marketplace;
+  /** The reader's sell percentage and minimum, which put a reduced price beside the value. A
+   *  prop for `marketplace`'s reason: this row reads nothing itself. */
+  valueSettings?: CollectionValue;
   /** The far end of the band. Passed straight through to `FigureRow`, which is where the markup
    *  rule for it lives. */
   actions?: ReactNode;
 }) {
   return (
     <FigureRow actions={actions}>
-      <CollectionFigureList summary={summary} marketplace={marketplace} inline={false} />
+      <CollectionFigureList
+        summary={summary}
+        marketplace={marketplace}
+        valueSettings={valueSettings}
+        inline={false}
+      />
     </FigureRow>
   );
 }
@@ -73,13 +84,20 @@ export function CollectionSummaryHeader({
 export function CollectionPageFigures({
   summary,
   marketplace,
+  valueSettings,
 }: {
   summary: Summary | undefined;
   marketplace: Marketplace;
+  valueSettings?: CollectionValue;
 }) {
   return (
     <InlineFigureRow>
-      <CollectionFigureList summary={summary} marketplace={marketplace} inline />
+      <CollectionFigureList
+        summary={summary}
+        marketplace={marketplace}
+        valueSettings={valueSettings}
+        inline
+      />
     </InlineFigureRow>
   );
 }
@@ -87,14 +105,21 @@ export function CollectionPageFigures({
 function CollectionFigureList({
   summary,
   marketplace,
+  valueSettings,
   inline,
 }: {
   summary: Summary | undefined;
   marketplace: Marketplace;
+  valueSettings: CollectionValue | undefined;
   inline: boolean;
 }) {
   const value = summary ? summary.value : null;
   const unpriced = summary ? summary.unpriced : 0;
+  // Nothing to reduce on an empty wall: `$0.00 ($0.00)` is one number nobody quoted, twice.
+  const reduced =
+    summary && summary.totalCards > 0 && valueSettings
+      ? reducedValue(summary.value, summary.belowMinimum, valueSettings)
+      : null;
   return (
     <>
       {/* Copies, not rows — a row emptied to zero contributes nothing to what is owned. */}
@@ -115,6 +140,11 @@ function CollectionFigureList({
         accent={inline}
         label={inline ? "value" : `Value (${marketplace.currency.toUpperCase()})`}
         value={summary ? formatPrice(value, marketplace.currency) : "—"}
+        reduced={
+          reduced && (
+            <ReducedPrice value={reduced} currency={marketplace.currency} unpriced={unpriced} />
+          )
+        }
         note={unpriced > 0 ? `${count(unpriced)} unpriced` : undefined}
         title={pricesAsOf(marketplace)}
       />

@@ -240,6 +240,12 @@ export interface ValuePoint {
   /** The price-only part of `total − previous.total` — see above. */
   moved: number | null;
   /**
+   * What the point's rows priced below the asked minimum add up to, each read at **that period's**
+   * price, so a card that fell under the minimum last week is counted before and not after.
+   * Absent unless the read was asked one.
+   */
+  below?: number;
+  /**
    * True on the last point only: **today**, computed live from `collection_entries` at today's
    * price the way `collection_summary` computes the collection's value — so the graph's last point
    * is exactly the figure the Collection value widget prints beside it.
@@ -604,10 +610,10 @@ export const homeCommands = {
    * graph's read, and `price_snapshots`' second reader after the movers (user schema v50 is what
    * gave it copies to multiply by). Oldest first, a live point for today last; range and measure
    * are the widget's and are not asked for here. An unknown `split` is refused in words. See
-   * {@link ValueHistory}.
+   * {@link ValueHistory}. `minimumValue` asks each point's {@link ValuePoint.below} as well.
    */
-  collectionValueHistory: (split: ValueSplit, marketplace: MarketplaceId) =>
-    invoke<ValueHistory>("collection_value_history", { split, marketplace }),
+  collectionValueHistory: (split: ValueSplit, marketplace: MarketplaceId, minimumValue?: number) =>
+    invoke<ValueHistory>("collection_value_history", { split, marketplace, minimumValue }),
   /**
    * The wishlist's value over time at `marketplace`, cut by `split` — the Wishlist value graph's
    * read (issue #1378), {@link collectionValueHistory}'s every rule over user schema v66's

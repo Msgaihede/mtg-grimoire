@@ -218,16 +218,20 @@ pub async fn collection_set_folder_many(
 
 /// **Read-only**, and priced at the marketplace the caller names — anything the app does not
 /// know is TCGplayer, [`crate::sorting::Marketplace::from_opt`]'s rule for every list query.
+/// `minimum_value` asks what each folder holds below that price, and an absent one asks nothing.
 #[tauri::command]
 pub async fn collection_folder_summary(
     state: tauri::State<'_, Arc<AppState>>,
     marketplace: Option<String>,
+    minimum_value: Option<f64>,
 ) -> Result<Vec<CollectionFolderSummary>, String> {
     let state = state.inner().clone();
     let marketplace = Marketplace::from_opt(marketplace.as_deref());
-    tauri::async_runtime::spawn_blocking(move || folder_summary(&lock_db_read(&state), marketplace))
-        .await
-        .map_err(|e| format!("the collection folder totals could not be read: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        folder_summary(&lock_db_read(&state), marketplace, minimum_value)
+    })
+    .await
+    .map_err(|e| format!("the collection folder totals could not be read: {e}"))?
 }
 
 /// **Read-only**: which entries break a rule of the folder they are filed in — see

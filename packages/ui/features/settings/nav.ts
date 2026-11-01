@@ -29,6 +29,7 @@
 export type PanelId =
   | "updates"
   | "prices"
+  | "collection-value"
   | "sync"
   | "review"
   | "integrations"
@@ -47,6 +48,7 @@ export type PanelId =
 export type GroupId =
   | "updates"
   | "carddata"
+  | "collectionvalue"
   | "sync"
   | "integrations"
   | "tags"
@@ -95,6 +97,21 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     keywords:
       "marketplace currency money value tcgplayer cardmarket card kingdom mana pool " +
       "cardtrader usd eur feed pricelist",
+  },
+  /**
+   * What the reader expects to get for their cards (issues #1449, #1450). **A rail entry of its
+   * own**, a group of one for `Card data`'s reason: it answers what the collection is worth to
+   * them, and `Card data` answers where a price comes from.
+   *
+   * The keyword line is the words the two issues were written in, `finance` among them, since
+   * nobody types this app's word for it.
+   */
+  "collection-value": {
+    title: "Collection value",
+    group: "collectionvalue",
+    keywords:
+      "sell selling percentage percent minimum threshold bulk reduced price worth finance " +
+      "resale cheap",
   },
   sync: {
     title: "Sync",
@@ -312,6 +329,7 @@ type GroupMeta = {
 export const GROUPS: Record<GroupId, GroupMeta> = {
   updates: { label: "Updates" },
   carddata: { label: "Card data" },
+  collectionvalue: { label: "Collection value" },
   sync: { label: "Sync", badge: "review" },
   integrations: { label: "Integrations" },
   tags: { label: "Tags" },

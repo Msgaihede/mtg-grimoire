@@ -54,6 +54,20 @@ export interface ScanSounds {
   jackpot: number;
 }
 
+/**
+ * What the reader expects to get for their cards — `collection_value::CollectionValue`, one
+ * `app_meta` row written whole (issues #1449, #1450).
+ *
+ * `sellPercent` is the share of market price they expect, above 0 and at most 100; `minimumValue`
+ * is the price below which a card is not worth selling, in the marketplace's own currency and
+ * never converted — `ScanSounds`' rule. The defaults, 100 and 0, are "no reduced price". The crate
+ * refuses anything outside those bounds and reads a stored row outside them as the defaults.
+ */
+export interface CollectionValue {
+  sellPercent: number;
+  minimumValue: number;
+}
+
 /** The prefs commands — spread into `ipc` by `../ipc.ts`, which is the only reader of this object. */
 export const prefCommands = {
   /**
@@ -427,4 +441,10 @@ export const prefCommands = {
    * written from Settings, unlike `setScannerPrefs`.
    */
   setScanSounds: (sounds: ScanSounds) => invoke<void>("set_scan_sounds", { sounds }),
+  /** What the reader expects to get for their cards. A row that cannot be read is the defaults. */
+  collectionValue: () => invoke<CollectionValue>("collection_value"),
+  /** Remember it, whole. Refuses a figure out of bounds, and answers `collection::BUSY` under a
+   *  running sync. */
+  setCollectionValue: (settings: CollectionValue) =>
+    invoke<void>("set_collection_value", { settings }),
 };

@@ -21,7 +21,9 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { CollectionSummary, DeckRow, DeckValue, HomeWidget, WishlistSummary } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
+import { DEFAULT_COLLECTION_VALUE } from "@/lib/collectionValue";
 import { useAppStore } from "@/lib/store";
+import { COLLECTION_VALUE_KEY } from "@/lib/useCollectionValue";
 import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { makeFit, spanPx, type WidgetFit } from "../fit";
 import { collectionTotalKey, deckListKey, deckValuesKey, wishlistTotalKey } from "../keys";
@@ -147,6 +149,7 @@ function renderWidget(seed: Seed = {}) {
   // so the hook has nothing left to fetch.
   client.setQueryData(MARKETPLACE_KEY, marketplace);
   client.setQueryData(MARKETPLACE_FEEDS_KEY, []);
+  client.setQueryData(COLLECTION_VALUE_KEY, DEFAULT_COLLECTION_VALUE);
   if (seed.collection) client.setQueryData(collectionTotalKey(marketplace), seed.collection);
   if (seed.decks) client.setQueryData(deckListKey, seed.decks);
   if (seed.deckValues) client.setQueryData(deckValuesKey(marketplace), seed.deckValues);

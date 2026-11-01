@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { reducedValue } from "@/lib/collectionValue";
 import { folderFace } from "./CollectionFolderCard";
 
 /**
@@ -7,6 +8,17 @@ import { folderFace } from "./CollectionFolderCard";
  * the widget is its reader now.
  */
 describe("folderFace", () => {
+  it("follows the money with a reduced price, in brackets and in words", () => {
+    const reduced = reducedValue(1300, { cards: 96, value: 14.2 }, {
+      sellPercent: 70,
+      minimumValue: 0.5,
+    });
+    expect(folderFace({ cards: 240, value: 1300 }, "usd", false, reduced)).toEqual({
+      shown: "240 cards · $1,300.00 ($900.06)",
+      spoken: "240 cards, $1,300.00, reduced price $900.06",
+    });
+  });
+
   it("draws an em dash, and says so in words, before the summary has answered", () => {
     expect(folderFace(null, "usd")).toEqual({ shown: "—", spoken: "still counting" });
   });

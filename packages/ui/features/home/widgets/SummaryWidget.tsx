@@ -61,6 +61,8 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+import { ReducedPrice } from "@/components/ReducedPrice";
+import { reducedValue, type ReducedValue } from "@/lib/collectionValue";
 import { count } from "@/lib/counts";
 import {
   ipc,
@@ -73,6 +75,7 @@ import {
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
 import type { WidgetFit } from "../fit";
 import {
@@ -161,29 +164,37 @@ export function sumDeckValues(values: readonly DeckValue[]): {
  */
 function figuresFor(
   fit: WidgetFit,
-  figures: readonly Pick<WidgetFigureItem, "label" | "value">[],
+  figures: readonly Pick<WidgetFigureItem, "label" | "value" | "reduced">[],
 ): number {
   for (let n = figures.length; n > 1; n--) {
     const kept = figures.slice(0, n);
     const longest = Math.max(1, ...kept.map((figure) => figure.value.length));
     const label = Math.max(0, ...kept.map((figure) => figure.label.length));
+    const reduced = Math.max(0, ...kept.map((figure) => figure.reduced?.chars ?? 0));
     const box = { widthPx: fit.bodyWidthPx, heightPx: fit.bodyHeightPx };
-    if (figureGrid(n, longest, box, label) !== null) return n;
+    if (figureGrid(n, longest, box, label, reduced) !== null) return n;
   }
   return Math.min(1, figures.length);
 }
 
 export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
   const { marketplace } = useMarketplace();
+  const { settings, minimum } = useCollectionValue();
   const setActiveView = useAppStore((s) => s.setActiveView);
 
   const collection = useQuery({
-    queryKey: collectionTotalKey(marketplace.id),
+    queryKey: collectionTotalKey(marketplace.id, minimum),
     // No filters at all, which is what makes this the *whole* collection: `folderId` absent and
     // `rootOnly` absent is every folder there is — `CollectionQuery.folderId` says so — and
     // `excludeLocked` keeps its `false` default, so a drawer the reader set aside is still
     // cardboard they own. `limit: 0` is the summary's own idiom for "count, do not list".
-    queryFn: () => ipc.collectionSummary({ limit: 0, offset: 0, marketplace: marketplace.id }),
+    queryFn: () =>
+      ipc.collectionSummary({
+        limit: 0,
+        offset: 0,
+        marketplace: marketplace.id,
+        minimumValue: minimum,
+      }),
   });
   const decks = useQuery({ queryKey: deckListKey, queryFn: () => ipc.deckList() });
   const deckValues = useQuery({
@@ -235,6 +246,10 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     wishlist: wishlist.data,
     currency: marketplace.currency,
     asOf: pricesAsOf(marketplace),
+    reduced:
+      collection.data.totalCards === 0
+        ? null
+        : reducedValue(collection.data.value, collection.data.belowMinimum, settings),
     // **A still body opens nothing** — a catalogue preview is a picture of this card, and a
     // figure there that navigated would take the reader out of the dialog they are choosing in.
     onOpen: still ? null : setActiveView,
@@ -269,6 +284,7 @@ function figures({
   wishlist,
   currency,
   asOf,
+  reduced,
   onOpen,
 }: {
   collection: CollectionSummary;
@@ -277,6 +293,8 @@ function figures({
   wishlist: WishlistSummary;
   currency: Currency;
   asOf: string;
+  /** The collection's value reduced by the reader's settings; `null` with none set. */
+  reduced: ReducedValue | null;
   /** `null` on a still body, which draws the figures as text rather than presses. */
   onOpen: ((view: ViewId) => void) | null;
 }): (WidgetFigureItem & { key: SummaryFigureKey })[] {
@@ -317,6 +335,7 @@ function figures({
   const collectionNote =
     collection.unpriced > 0 ? `${count(collection.unpriced)} unpriced` : undefined;
   const collectionPrice = formatPrice(collection.value, currency);
+  const reducedPrice = reduced === null ? null : formatPrice(reduced.reduced, currency);
 
   return [
     counted("collection", "collection", "Collection", collection.totalCards, "card", {
@@ -351,7 +370,26 @@ function figures({
       tone: "accent",
       hint: onOpen === null ? undefined : asOf,
       onPress: onOpen === null ? undefined : () => onOpen("collection"),
-      pressLabel: `Collection value: ${collectionPrice}${collectionNote ? `, ${collectionNote}` : ""}`,
+      // `plain`, and the press label says it: this figure is a press, so a tab stop of the reduced
+      // price's own would be a button in a button.
+      reduced:
+        reduced === null || reducedPrice === null
+          ? undefined
+          : {
+              node: (
+                <ReducedPrice
+                  value={reduced}
+                  currency={currency}
+                  unpriced={collection.unpriced}
+                  plain
+                />
+              ),
+              chars: reducedPrice.length + 2,
+            },
+      pressLabel:
+        `Collection value: ${collectionPrice}` +
+        (reducedPrice === null ? "" : `, reduced price ${reducedPrice}`) +
+        (collectionNote ? `, ${collectionNote}` : ""),
     },
   ];
 }

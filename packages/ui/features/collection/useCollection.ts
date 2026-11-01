@@ -42,6 +42,7 @@ import {
   visibleShelves,
 } from "@/lib/shelves";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
+import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { countsById, shelfFolderOf } from "./collectionShelfModel";
 import { useCollectionFolderList } from "./useCollectionFolders";
@@ -310,6 +311,9 @@ export function useCollection({
   // Which marketplace this list quotes — an input to both queries below, and part of both
   // keys: it decides what a Value cell contains, not merely how it is written.
   const { marketplace } = useMarketplace();
+  // Asked of the figures and the headings only: the list prices each row and reduces nothing.
+  const { settings: valueSettings, minimum } = useCollectionValue();
+  const minimumKey = minimum === undefined ? [] : [minimum];
   const [text, setText] = useState(initialText ?? "");
   const [format, setFormat] = useState("");
   // **One state for the row and its `Exact` flag, not two** — see {@link ColorFilter}, which
@@ -638,11 +642,12 @@ export function useCollection({
   });
 
   const summary = useQuery({
-    queryKey: ["collection", "summary", filterKey, countKey],
+    queryKey: ["collection", "summary", filterKey, countKey, ...minimumKey],
     // **Every shelf the wall covers** (spec §3.6) — collapsed ones included — so `Cards`, `Unique`,
     // `Value` and `For trade` are the reader's real figures whatever is folded. `filters` already
     // carries `shelves: toCount`; the list above is the one query that narrows it.
-    queryFn: () => ipc.collectionSummary({ ...filters, limit: 0, offset: 0 }),
+    queryFn: () =>
+      ipc.collectionSummary({ ...filters, minimumValue: minimum, limit: 0, offset: 0 }),
     placeholderData: keepPreviousData,
     enabled: censusReady,
   });
@@ -654,8 +659,9 @@ export function useCollection({
    * blank every heading's figures for a round trip: the last answer stands until the next lands.
    */
   const shelfCounts = useQuery({
-    queryKey: ["collection", "shelfCounts", filterKey, countKey],
-    queryFn: () => ipc.collectionShelfCounts({ ...filters, limit: 0, offset: 0 }),
+    queryKey: ["collection", "shelfCounts", filterKey, countKey, ...minimumKey],
+    queryFn: () =>
+      ipc.collectionShelfCounts({ ...filters, minimumValue: minimum, limit: 0, offset: 0 }),
     placeholderData: keepPreviousData,
     enabled: censusReady,
   });
@@ -789,6 +795,7 @@ export function useCollection({
   );
 
   return {
+    valueSettings,
     text,
     setText,
     format,

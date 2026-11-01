@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PageBar } from "@/components/PageBar";
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
+import { CollectionValuePanel } from "@/features/settings/CollectionValuePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
@@ -367,6 +368,8 @@ export function SettingsPage({ update }: { update: Update }) {
               itself now and has no panel; the entry stays, because it names the question rather than
               the panel that happens to answer it. `nav.ts` has the whole of that reasoning. */}
           {shown("prices") && <MarketplacePanel marketplace={marketplace} />}
+
+          {shown("collection-value") && <CollectionValuePanel />}
 
           {/* **First in `Sync`, and still in the group that throws nothing away.** Removing a device
               is the sharpest press on this panel and it is not a clear: the copies, the decks and

@@ -1,7 +1,6 @@
 //! The graph over a real database: the user schema on files, decks and notes written through
 //! the core's own functions, and every answer read back through [`Graph::run`].
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use grimoire_core::deck_notes::{create_note, list_notes};
@@ -9,7 +8,7 @@ use grimoire_core::schema::fixtures::deck;
 use grimoire_core::state::{fixtures::on_files, State};
 use serde_json::{json, Value};
 
-use crate::loaders::NOTE_BATCHES;
+use crate::batches::{runs, Batch};
 use crate::{Graph, MAX_DEPTH};
 
 fn state(name: &str) -> Arc<State> {
@@ -114,17 +113,8 @@ fn a_list_of_decks_costs_one_notes_read() {
             deck(&conn, &format!("Deck {n}"));
         }
     }
-    let graph = Graph::new();
-    // The counter is shared with any test running beside this one, so run twice and take the
-    // smaller difference: a neighbour's batch can land inside one window, not inside both.
-    let runs: Vec<usize> = (0..2)
-        .map(|_| {
-            let before = NOTE_BATCHES.load(Ordering::SeqCst);
-            answer(&graph, &state, "{ decks { notes { id } } }");
-            NOTE_BATCHES.load(Ordering::SeqCst) - before
-        })
-        .collect();
-    assert_eq!(runs.into_iter().min(), Some(1));
+    answer(&Graph::new(), &state, "{ decks { notes { id } } }");
+    assert_eq!(runs(Batch::DeckNotes, &state), 1);
 }
 
 #[test]

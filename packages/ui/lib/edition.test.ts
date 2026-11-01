@@ -74,6 +74,7 @@ describe("the editions' Settings entries", () => {
     expect(panelsOf(LIGHT_EDITION.settings)).toEqual([
       "updates",
       "prices",
+      "collection-value",
       "sync",
       "review",
       "hidden-tags",
@@ -97,6 +98,7 @@ describe("the editions' Settings entries", () => {
     expect(groups).toEqual([
       "updates",
       "carddata",
+      "collectionvalue",
       "sync",
       "tags",
       "appearance",

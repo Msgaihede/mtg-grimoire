@@ -407,6 +407,12 @@ export interface CollectionQuery extends CardFilters {
   /** Which marketplace every price is quoted from, and therefore what the `value` and `price`
    *  orders rank by. Absent means `tcgplayer`; see {@link SearchRequest.marketplace}. */
   marketplace?: MarketplaceId;
+  /**
+   * Ask `collection_summary` and `collection_shelf_counts` what falls under this price, as
+   * {@link BelowMinimum}. Absent, or not above zero, asks nothing and the answer carries no such
+   * field. The list ignores it.
+   */
+  minimumValue?: number;
   /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
   limit: number;
   offset: number;
@@ -554,6 +560,20 @@ export interface CollectionPage {
   total: number;
 }
 
+/**
+ * The copies priced below the reader's minimum card value, and what they add up to —
+ * `collection::BelowMinimum`, the one fact the reduced price needs from a statement.
+ *
+ * **Compared per copy, at the copy's own price**, so a playset of $0.40 cards is below a $0.50
+ * minimum however much the four add up to, and a foil is judged at its foil price. **Strictly
+ * below**: a card priced exactly at the minimum counts. A copy with no price is not below anything;
+ * it is already `unpriced`.
+ */
+export interface BelowMinimum {
+  cards: number;
+  value: number;
+}
+
 /** The aggregate header, over the same filters as the list it captions. */
 export interface CollectionSummary {
   /** Copies, not rows: a row holding none contributes 0. */
@@ -571,6 +591,8 @@ export interface CollectionSummary {
    *  same holes. */
   unpriced: number;
   needsReview: number;
+  /** Absent unless the query asked {@link CollectionQuery.minimumValue}. */
+  belowMinimum?: BelowMinimum;
 }
 
 /**
@@ -599,6 +621,9 @@ export interface ShelfCount {
    *  id that card's tile is drawn from (a wish's `artCardId`). **Unfiltered**: a filter opens
    *  every shelf, so a peek is only drawn with none active. */
   peek: string[];
+  /** The collection's only, and absent unless the query asked
+   *  {@link CollectionQuery.minimumValue}. Direct to the shelf, like the figures beside it. */
+  belowMinimum?: BelowMinimum;
 }
 
 /** The two pages that draw shelves — `shelffolds::PAGES`, and the keys of {@link ShelfFolds}. */
@@ -837,6 +862,8 @@ export interface CollectionFolderSummary {
    * which is this app's answer for a price it does not have.
    */
   value: number | null;
+  /** Absent unless the command was asked a minimum. Direct to the folder, like `value`. */
+  belowMinimum?: BelowMinimum;
 }
 
 /** The collection commands — spread into `ipc` by `../ipc.ts`, which is the only reader of this object. */
@@ -1103,10 +1130,10 @@ export const collectionCommands = {
    *
    * Priced at the named marketplace, off the same `price_expr` the collection header's own total
    * comes from, so a folder's figure and the whole collection's can never disagree about what one
-   * copy costs.
+   * copy costs. `minimumValue` asks each row's {@link BelowMinimum} as well.
    */
-  collectionFolderSummary: (marketplace: MarketplaceId) =>
-    invoke<CollectionFolderSummary[]>("collection_folder_summary", { marketplace }),
+  collectionFolderSummary: (marketplace: MarketplaceId, minimumValue?: number) =>
+    invoke<CollectionFolderSummary[]>("collection_folder_summary", { marketplace, minimumValue }),
   /**
    * Take `quantity` copies out of a collection row, put them in a deck's group, and write the
    * `deck_cards` row that says the deck plays them — **one transaction**, so mid-move the copies

@@ -94,6 +94,7 @@ function sweep(): { ids: Set<string>; dynamic: string[] } {
 const RAIL: GroupId[] = [
   "updates",
   "carddata",
+  "collectionvalue",
   "sync",
   "integrations",
   "tags",
@@ -107,6 +108,7 @@ const RAIL: GroupId[] = [
 const UNDER: Record<GroupId, PanelId[]> = {
   updates: ["updates"],
   carddata: ["prices"],
+  collectionvalue: ["collection-value"],
   sync: ["sync", "review"],
   integrations: ["integrations"],
   tags: ["hidden-tags"],
@@ -139,9 +141,9 @@ describe("the settings rail", () => {
     expect([...ids].sort()).toEqual(declared.sort());
   });
 
-  it("has nine entries, in declaration order", () => {
+  it("has ten entries, in declaration order", () => {
     expect(GROUP_ORDER).toEqual(RAIL);
-    expect(GROUP_ORDER).toHaveLength(9);
+    expect(GROUP_ORDER).toHaveLength(10);
     // `GROUP_ORDER` is derived from `GROUPS`, so this is what would catch the two coming apart —
     // an entry with a label and no place in the rail, or the reverse.
     expect(Object.keys(GROUPS)).toEqual(RAIL);
@@ -165,6 +167,7 @@ describe("PANEL_ORDER", () => {
     expect(PANEL_ORDER).toEqual([
       "updates",
       "prices",
+      "collection-value",
       "sync",
       "review",
       "integrations",

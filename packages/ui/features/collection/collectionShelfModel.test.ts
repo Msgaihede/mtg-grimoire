@@ -14,6 +14,7 @@ import {
   rolledUp,
   shelfFolderOf,
   shelfStat,
+  shelfStatTail,
   treeParents,
 } from "./collectionShelfModel";
 
@@ -128,6 +129,41 @@ describe("rolledUp", () => {
 
   it("has no entry for a shelf with nothing in it or under it", () => {
     expect(rolledUp([shelf({ id: 3 })], new Map()).get(3)).toBeUndefined();
+  });
+});
+
+describe("a heading with a reduced price", () => {
+  const figures = { copies: 240, value: 1300, unpriced: 12 };
+
+  it("leaves the unpriced note for after the brackets", () => {
+    expect(
+      shelfStat({ figures, total: 240, filtering: false, currency: "usd", withoutUnpriced: true }),
+    ).toBe("240 cards · $1,300.00");
+    expect(shelfStatTail(figures)).toBe(" · 12 unpriced");
+    expect(shelfStatTail({ ...figures, unpriced: 0 })).toBe("");
+  });
+
+  it("rolls what is below the minimum up the tree with the rest of the figures", () => {
+    const shelf = (id: number, pathIds: number[]) =>
+      ({ id, pathIds }) as unknown as Parameters<typeof rolledUp>[0][number];
+    const count = (folderId: number, cards: number, value: number) => ({
+      folderId,
+      tiles: 1,
+      copies: 10,
+      value: 100,
+      unpriced: 0,
+      peek: [],
+      belowMinimum: { cards, value },
+    });
+    const rolled = rolledUp(
+      [shelf(1, []), shelf(2, [1])],
+      new Map([
+        [1, count(1, 2, 0.5)],
+        [2, count(2, 3, 0.75)],
+      ]),
+    );
+    expect(rolled.get(1)?.belowMinimum).toEqual({ cards: 5, value: 1.25 });
+    expect(rolled.get(2)?.belowMinimum).toEqual({ cards: 3, value: 0.75 });
   });
 });
 

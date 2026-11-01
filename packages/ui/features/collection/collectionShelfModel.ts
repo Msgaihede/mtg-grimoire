@@ -11,9 +11,10 @@
  * reach through a render.
  */
 import { PEEK_LIMIT } from "@/features/shelves/ShelfHeading";
+import { addBelow } from "@/lib/collectionValue";
 import { count } from "@/lib/counts";
 import type { FolderLike, FolderNode } from "@/lib/folderTree";
-import type { CollectionFolder, ShelfCount } from "@/lib/ipc";
+import type { BelowMinimum, CollectionFolder, ShelfCount } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { defaultCollapsed, visibleShelves, type Shelf, type ShelfFolder } from "@/lib/shelves";
@@ -83,6 +84,8 @@ export interface ShelfFigures {
   /** `null` until something at or under the shelf is priced — `sum()`'s own reading of `NULL`. */
   value: number | null;
   unpriced: number;
+  /** What falls under the reader's minimum, at and under the shelf; absent with none set. */
+  belowMinimum?: BelowMinimum;
 }
 
 /**
@@ -107,6 +110,7 @@ export function rolledUp(
         copies: at.copies + own.copies,
         value: own.value === null ? at.value : (at.value ?? 0) + own.value,
         unpriced: at.unpriced + own.unpriced,
+        belowMinimum: addBelow(at.belowMinimum, own.belowMinimum),
       });
     }
   }
@@ -124,17 +128,21 @@ export function rolledUp(
  *   and `subtotalsOf`; `null` where nothing counts it (Not sorted) or it has not answered, and
  *   then a filtered heading states its matches alone.
  * - Money only where there are cards and something is priced: `$0.00` is a price nobody quoted.
+ * - `withoutUnpriced` leaves the unpriced note off, for a heading that draws a reduced price in
+ *   between: `240 cards · $1,300.00 ($900.06) · 12 unpriced`. {@link shelfStatTail} is the rest.
  */
 export function shelfStat({
   figures,
   total,
   filtering,
   currency,
+  withoutUnpriced = false,
 }: {
   figures: ShelfFigures | null | undefined;
   total: number | null;
   filtering: boolean;
   currency: Currency;
+  withoutUnpriced?: boolean;
 }): string {
   if (figures === null) return "—";
   const f = figures ?? { copies: 0, value: null, unpriced: 0 };
@@ -146,8 +154,13 @@ export function shelfStat({
   }
   const parts = [`${count(f.copies)} ${cards(f.copies)}`];
   if (f.copies > 0 && f.value !== null) parts.push(formatPrice(f.value, currency));
-  if (f.unpriced > 0) parts.push(`${count(f.unpriced)} unpriced`);
+  if (f.unpriced > 0 && !withoutUnpriced) parts.push(`${count(f.unpriced)} unpriced`);
   return parts.join(" · ");
+}
+
+/** What follows a reduced price on a heading: the unpriced note {@link shelfStat} left off. */
+export function shelfStatTail(figures: ShelfFigures): string {
+  return figures.unpriced > 0 ? ` · ${count(figures.unpriced)} unpriced` : "";
 }
 
 /**
