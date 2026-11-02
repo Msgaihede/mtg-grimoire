@@ -39,6 +39,8 @@ use grimoire_core::platform::http;
 
 use crate::sync::AppState;
 
+pub mod fx;
+
 /// MTGJSON's per-set files. No trailing slash.
 const MTGJSON: &str = "https://mtgjson.com/api/v5";
 

@@ -48,8 +48,10 @@ export function winstonTurn(view: DraftView): string | null {
  * `lobby_winston` is answered by the push — and until that push the turn it was sent on is held
  * (`winstonSent`), so a second press cannot decline the next pile by accident.
  *
- * Going back to the hub keeps the draft (`./current.ts`; a solo draft is saved by the host too);
- * *Abandon* puts a solo draft away, *Leave pod* leaves the lobby.
+ * Going back to the hub keeps the draft (`./current.ts`; a solo draft is saved by the host too),
+ * and coming back to it asks again for the view this seat missed meanwhile — `draft_view` for a
+ * draft this app runs, `lobby_rejoin` (the host's push) for a guest's. *Abandon* puts a solo
+ * draft away, *Leave pod* leaves the lobby.
  */
 export function DraftSession({
   draft,
@@ -112,6 +114,17 @@ export function DraftSession({
       live = false;
     };
   }, [draft, role]);
+
+  // A guest is never answered a view on demand — it only arrives pushed — so a guest arriving
+  // asks the host to push it again (`lobby_rejoin`, issue #1468): the views the host sent while
+  // the reader was on another view, or before a reload, went by with no one listening, and the
+  // one kept may be a pick behind (or still waiting on a pack that has since come).
+  useEffect(() => {
+    if (role !== "guest") return;
+    ipc.lobbyRejoin().catch(() => {
+      // A lobby that closed says so over the draft (`notice`); the view on screen stays.
+    });
+  }, [role]);
 
   const run = async (work: () => Promise<void>) => {
     if (inFlight.current) return;

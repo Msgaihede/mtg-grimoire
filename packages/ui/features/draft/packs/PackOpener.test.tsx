@@ -44,6 +44,9 @@ const SUMMARY: BoosterSetSummary = {
 
 const SEED = 1234;
 
+/** The ECB's rate the host answers: $1.25 to the euro. */
+const RATE = { usdPerEur: 1.25, date: "2026-10-30", fetchedAt: 0 };
+
 const packsBoosterSets = vi.hoisted(() => vi.fn());
 const packsBoosterSet = vi.hoisted(() => vi.fn());
 // The host's `packs:refreshed`, held so a test can fire it.
@@ -57,6 +60,7 @@ const onPacksRefreshed = vi.hoisted(() =>
 const printingPrices = vi.hoisted(() => vi.fn());
 const getMarketplace = vi.hoisted(() => vi.fn().mockResolvedValue("tcgplayer"));
 const marketplaceFeedStatus = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+const packsExchangeRate = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -67,6 +71,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     printingPrices,
     getMarketplace,
     marketplaceFeedStatus,
+    packsExchangeRate,
   },
 }));
 
@@ -117,6 +122,10 @@ function setup() {
             ? [{ cardId, finishPrices: halved(finishPrices) }]
             : [];
         }
+        // Cardmarket quotes the rare alone, at half the dollar figure — in euros.
+        if (marketplace === "cardmarket") {
+          return cardId === "rare" ? [{ cardId, finishPrices: halved(finishPrices) }] : [];
+        }
         return [{ cardId, finishPrices }];
       }),
   );
@@ -136,6 +145,7 @@ beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState());
   getMarketplace.mockResolvedValue("tcgplayer");
   printingPrices.mockClear();
+  packsExchangeRate.mockReset().mockResolvedValue(RATE);
 });
 
 describe("PackOpener", () => {
@@ -178,9 +188,11 @@ describe("PackOpener", () => {
     expect(screen.getByRole("heading", { name: /Total value/ })).toHaveTextContent(
       formatPrice(total, "usd"),
     );
-    // The land is MTGJSON's alone here: a name tile, not a button.
+    // The land is MTGJSON's alone here: a tile with no picture, not a button.
     expect(within(wall).getByText("Card land")).toBeInTheDocument();
     expect(within(wall).queryByRole("button", { name: /Card land/ })).toBeNull();
+    // Issue #1462: every tile is the app's own, its chin naming the printing — the land's too.
+    expect(within(wall).getAllByText("TST · 1")).toHaveLength(7);
 
     const figures = screen.getByRole("complementary", { name: "Figures" });
     expect(within(figures).getByText("Theoretical").nextSibling).toHaveTextContent(
@@ -219,6 +231,24 @@ describe("PackOpener", () => {
     expect(screen.getByText(/3 items in it could not be opened/)).toBeInTheDocument();
   });
 
+  /** Issue #1464: the product picker is a combobox — type to narrow, pick from what is left. */
+  it("searches the products by name, kind and category", async () => {
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+    await screen.findByText(/^Expected value/);
+    // Named: the marketplace picker beside it is a combobox of its own.
+    await openDropdown(user, "Product");
+    await user.type(screen.getByRole("combobox", { name: "Search products" }), "sealed bundle");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Test Bundle"),
+    ]);
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Product" })).toHaveTextContent("Test Bundle");
+    await openDropdown(user, "Product");
+    await user.type(screen.getByRole("combobox", { name: "Search products" }), "nothing like it");
+    expect(screen.getByText("No product matches.")).toBeInTheDocument();
+  });
+
   it("says the host's refusal and retries", async () => {
     const { user } = setup();
     packsBoosterSet.mockRejectedValueOnce("MTGJSON could not be reached.");
@@ -251,25 +281,43 @@ describe("PackOpener", () => {
     expect(packsBoosterSets).toHaveBeenCalledTimes(2);
   });
 
-  /** Issue #1446: several marketplaces, and the lowest price any of them quotes. */
+  /** Issues #1446 and #1463: several marketplaces, and the lowest price any of them quotes. */
   describe("prices from several marketplaces", () => {
     const tcg = (id: string, foil: boolean) => finishPrice(PRICES.get(id), foil);
     const lowest = (id: string, foil: boolean) =>
       id === "rare" || id === "mythic" ? finishPrice(halved(PRICES.get(id)!), foil) : tcg(id, foil);
+    /** TCGplayer's dollars against Cardmarket's euros at $1.25: the rare is half of TCGplayer's in
+     *  euros, so 0.625 of it in dollars, and every other card TCGplayer's alone. */
+    const mixed = (id: string, foil: boolean) => {
+      const price = tcg(id, foil);
+      return id === "rare" && price !== null ? price * 0.625 : price;
+    };
+
+    const chips = () =>
+      within(screen.getByRole("list", { name: "Marketplaces priced at" }))
+        .getAllByRole("listitem")
+        .map((li) => li.textContent);
+
+    async function openStage(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await screen.findByText(/^Expected value/);
+      return screen.getByRole("combobox", { name: "Prices from" });
+    }
 
     it("starts at the app's marketplace, and prices at the lowest of the ones picked", async () => {
       const { user } = setup();
-      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
-      const trigger = await screen.findByRole("button", { name: "Prices from" });
-      expect(trigger).toHaveTextContent("TCGplayer");
-      expect(await screen.findByText(/^Expected value/)).toHaveTextContent(
-        expectedLine(tcg, "usd"),
-      );
+      const box = await openStage(user);
+      expect(chips()).toEqual(["TCGplayer"]);
+      expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(tcg, "usd"));
 
-      await openDropdown(user, "Prices from");
+      await user.click(box);
       await user.click(screen.getByRole("option", { name: /Card Kingdom/ }));
 
-      expect(trigger).toHaveTextContent("Lowest of 2 marketplaces");
+      expect(chips()).toEqual(["TCGplayer", "Card Kingdom"]);
+      expect(screen.getByRole("option", { name: /Card Kingdom/ })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
       expect(printingPrices).toHaveBeenCalledWith(expect.any(Array), "cardkingdom");
       await waitFor(() =>
         expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(lowest, "usd")),
@@ -278,32 +326,97 @@ describe("PackOpener", () => {
         "tcgplayer",
         "cardkingdom",
       ]);
+      // One currency: nothing converted, so no rate asked and no line about one.
+      expect(packsExchangeRate).not.toHaveBeenCalled();
+      expect(screen.queryByText(/ECB/)).not.toBeInTheDocument();
     });
 
-    it("starts over from a marketplace in the other currency, and keeps at least one", async () => {
+    it("searches the marketplaces as you type, and Enter picks the first match", async () => {
       const { user } = setup();
-      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
-      await screen.findByText(/^Expected value/);
-      await openDropdown(user, "Prices from");
-      // The one picked cannot be put down: there is always a marketplace to price at.
-      await user.click(screen.getByRole("option", { name: /TCGplayer/ }));
-      const trigger = screen.getByRole("button", { name: "Prices from" });
-      expect(trigger).toHaveTextContent("TCGplayer");
+      const box = await openStage(user);
+      await user.type(box, "king");
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Card KingdomUSD"]);
+      await user.keyboard("{Enter}");
+      expect(chips()).toEqual(["TCGplayer", "Card Kingdom"]);
+      expect(box).toHaveValue("");
 
-      await user.click(screen.getByRole("option", { name: /Cardmarket/ }));
-      expect(trigger).toHaveTextContent("Cardmarket");
-      expect(screen.getByRole("option", { name: /TCGplayer/ })).toHaveAttribute(
-        "aria-selected",
-        "false",
-      );
-      await waitFor(() =>
-        expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(tcg, "eur")),
-      );
-      // Card trader has no prices this app can read.
+      await user.type(box, "eur");
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "CardmarketEUR",
+        "Card traderEUR",
+      ]);
+      await user.clear(box);
+      await user.type(box, "zzz");
+      expect(screen.getByText("No marketplace matches “zzz”.")).toBeInTheDocument();
+    });
+
+    it("walks the rows with the arrow keys, passing over one that cannot be pressed", async () => {
+      const { user } = setup();
+      const box = await openStage(user);
+      await user.click(box);
+      // TCGplayer, Cardmarket, Card Kingdom, Mana Pool — and up from the first, Card trader is
+      // passed over for Mana Pool.
+      await user.keyboard("{ArrowUp}");
+      const active = box.getAttribute("aria-activedescendant");
+      expect(document.getElementById(active!)).toHaveTextContent("Mana Pool");
       expect(screen.getByRole("option", { name: /Card trader/ })).toHaveAttribute(
         "aria-disabled",
         "true",
       );
+      await user.keyboard("{Enter}");
+      expect(chips()).toEqual(["TCGplayer", "Mana Pool"]);
+    });
+
+    it("prices TCGplayer and Cardmarket together, in the app's currency at the ECB's rate", async () => {
+      const { user } = setup();
+      const box = await openStage(user);
+      await user.click(box);
+      await user.click(screen.getByRole("option", { name: /Cardmarket/ }));
+
+      expect(chips()).toEqual(["TCGplayer", "Cardmarket"]);
+      expect(packsExchangeRate).toHaveBeenCalledTimes(1);
+      expect(printingPrices).toHaveBeenCalledWith(expect.any(Array), "cardmarket");
+      await waitFor(() =>
+        expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(mixed, "usd")),
+      );
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Lowest of TCGplayer and Cardmarket, in dollars — converted at €1 = $1.2500, the ECB's rate of 2026-10-30.",
+      );
+    });
+
+    it("leaves the other currency out, and says so, when the rate cannot be had", async () => {
+      packsExchangeRate.mockReset().mockRejectedValue("The exchange rate could not be fetched.");
+      const { user } = setup();
+      const box = await openStage(user);
+      await user.click(box);
+      await user.click(screen.getByRole("option", { name: /Cardmarket/ }));
+
+      expect(chips()).toEqual(["TCGplayer", "Cardmarket"]);
+      expect(
+        await screen.findByText(/^Cardmarket left out: the exchange rate could not be fetched/),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(tcg, "usd"));
+      expect(printingPrices).not.toHaveBeenCalledWith(expect.any(Array), "cardmarket");
+    });
+
+    it("puts a chip down with its ✕ or Backspace, but never the last", async () => {
+      const { user } = setup();
+      const box = await openStage(user);
+      // The one picked has no ✕, and pressing its row keeps it.
+      expect(screen.queryByRole("button", { name: /Stop pricing at/ })).not.toBeInTheDocument();
+      await user.click(box);
+      await user.click(screen.getByRole("option", { name: /TCGplayer/ }));
+      expect(chips()).toEqual(["TCGplayer"]);
+
+      await user.click(screen.getByRole("option", { name: /Card Kingdom/ }));
+      await user.click(screen.getByRole("option", { name: /Mana Pool/ }));
+      expect(chips()).toEqual(["TCGplayer", "Card Kingdom", "Mana Pool"]);
+      await user.click(screen.getByRole("button", { name: "Stop pricing at Card Kingdom" }));
+      expect(chips()).toEqual(["TCGplayer", "Mana Pool"]);
+      await user.keyboard("{Backspace}");
+      expect(chips()).toEqual(["TCGplayer"]);
+      await user.keyboard("{Backspace}");
+      expect(chips()).toEqual(["TCGplayer"]);
     });
 
     it("opens on the pick this device remembers, not the app's marketplace", async () => {
@@ -315,12 +428,10 @@ describe("PackOpener", () => {
       getMarketplace.mockResolvedValue("cardmarket");
       const { user } = setup();
       await user.click(await screen.findByRole("button", { name: /Test Set/ }));
-      expect(await screen.findByRole("button", { name: "Prices from" })).toHaveTextContent(
-        "Lowest of 2 marketplaces",
-      );
       await waitFor(() =>
         expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(lowest, "usd")),
       );
+      expect(chips()).toEqual(["TCGplayer", "Card Kingdom"]);
       expect(printingPrices).not.toHaveBeenCalledWith(expect.any(Array), "cardmarket");
     });
   });
@@ -334,10 +445,7 @@ describe("PackOpener", () => {
     /** `(full − below the minimum) × percent`, worked here rather than by the page's own helper. */
     function reducedOf(prices: (number | null)[], percent: number, minimum: number): number {
       const full = prices.reduce<number>((s, p) => s + (p ?? 0), 0);
-      const below = prices.reduce<number>(
-        (s, p) => s + (p !== null && p < minimum ? p : 0),
-        0,
-      );
+      const below = prices.reduce<number>((s, p) => s + (p !== null && p < minimum ? p : 0), 0);
       return Math.round((full - below) * percent) / 100;
     }
 

@@ -18,7 +18,7 @@
  * a story's `installWorld` makes a fresh `FakeDb`, so a draft never outlives its story and no
  * field is added to the world's own table.
  *
- * **Lobbies refuse** (`LOBBIES_OFF`), `lobby_winston` with them, — the fake has no relay and no second app to meet in one —
+ * **Lobbies refuse** (`LOBBIES_OFF`), `lobby_winston` and `lobby_rejoin` with them, — the fake has no relay and no second app to meet in one —
  * except the two reads a page makes on arrival, which answer *no lobby*. A game's lobby (the
  * Playtesting page's, issue #1419) is the same lobby, so its three commands — `lobby_deck`,
  * `lobby_game_start`, `lobby_act` — are here and refuse alike, and so are a trade's two
@@ -35,10 +35,12 @@ import type {
   DeckRow,
   DeckVariant,
   DraftCard,
+  DraftDeckRef,
   DraftSaved,
   DraftSetup,
   DraftView,
   EntryChange,
+  ExchangeRate,
   LobbyState,
   PlaytestStep,
   SealedProduct,
@@ -117,8 +119,12 @@ const WINSTON_PILES = 3;
 
 interface DraftWorld {
   draft: DraftState | null;
-  /** `app_meta` `draft_decks`: the decks a draft made and the reader has not saved. */
-  draftDecks: number[];
+  /**
+   * `app_meta` `draft_decks`: the decks a draft made and the reader has not saved, each by its id
+   * and the uid it was made with (issue #1467). This fake's deck uid is derived from the id, so it
+   * cannot tell a reused id from the deck that had it — `draft_deck.rs`' tests hold that half.
+   */
+  draftDecks: DraftDeckRef[];
 }
 
 const WORLDS = new WeakMap<FakeDb, DraftWorld>();
@@ -612,7 +618,7 @@ export function createDraftDeck(
       quantity,
     });
   }
-  worldOf(db).draftDecks.push(row.id);
+  if (row.syncUid !== null) worldOf(db).draftDecks.push({ id: row.id, syncUid: row.syncUid });
   return row;
 }
 
@@ -644,6 +650,12 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
     packs_booster_sets: (): BoosterSetSummary[] => fakeBoosterSets(db),
     packs_booster_set: (args: { setCode: string; refresh: boolean }): BoosterSet =>
       fakeBoosterSet(db, args.setCode),
+    // The ECB's rate as the desktop host answers it — a fixed one, so the stories' figures hold.
+    packs_exchange_rate: (): ExchangeRate => ({
+      usdPerEur: 1.08,
+      date: "2026-10-30",
+      fetchedAt: Date.UTC(2026, 9, 30, 15),
+    }),
 
     draft_start: (args: { setup: DraftSetup; draft: number }): DraftView => {
       const state = startDraft(db, args.setup, args.draft);
@@ -709,22 +721,22 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
     draft_deck_create: (args: { name: string; cardIds: string[]; commander?: boolean }): DeckRow =>
       createDraftDeck(db, writes, args.name, args.cardIds, args.commander === true),
     /** Only the decks that still exist — a draft deck deleted from the gallery leaves the list. */
-    draft_deck_ids: (): number[] => {
+    draft_deck_ids: (): DraftDeckRef[] => {
       const world = worldOf(db);
-      world.draftDecks = world.draftDecks.filter((id) => db.decks.some((d) => d.id === id));
-      return [...world.draftDecks];
+      world.draftDecks = world.draftDecks.filter((e) => db.decks.some((d) => d.id === e.id));
+      return world.draftDecks.map((e) => ({ ...e }));
     },
     draft_deck_keep: (args: { deckId: number }): void => {
       const world = worldOf(db);
-      world.draftDecks = world.draftDecks.filter((id) => id !== args.deckId);
+      world.draftDecks = world.draftDecks.filter((e) => e.id !== args.deckId);
     },
     draft_deck_discard: (args: { deckId: number }): void => {
       const world = worldOf(db);
-      if (!world.draftDecks.includes(args.deckId)) {
+      if (!world.draftDecks.some((e) => e.id === args.deckId)) {
         throw new Error("That deck is not a draft deck any more.");
       }
       writes.deck_delete({ id: args.deckId });
-      world.draftDecks = world.draftDecks.filter((id) => id !== args.deckId);
+      world.draftDecks = world.draftDecks.filter((e) => e.id !== args.deckId);
     },
     draft_basic_lands: (args: { setCodes: string[] }): BasicLand[] => basicLands(db, args.setCodes),
 
@@ -737,6 +749,9 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
     lobby_state: (): LobbyState | null => null,
     lobby_leave: (): void => {},
     lobby_start: (): DraftView => {
+      throw new Error(LOBBIES_OFF);
+    },
+    lobby_rejoin: (): number | null => {
       throw new Error(LOBBIES_OFF);
     },
     lobby_pick: (): void => {

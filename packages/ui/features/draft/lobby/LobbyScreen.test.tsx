@@ -16,6 +16,8 @@ const ipcMock = vi.hoisted(() => ({
   lobbyStart: vi.fn(),
   lobbyKick: vi.fn(),
   lobbyLeave: vi.fn(),
+  lobbyRejoin: vi.fn(),
+  draftView: vi.fn(),
 }));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -57,6 +59,8 @@ beforeEach(() => {
   ipcMock.packsBoosterSets.mockResolvedValue([TEST_SET]);
   ipcMock.packsBoosterSet.mockResolvedValue(SET);
   ipcMock.lobbyStart.mockResolvedValue(VIEW);
+  ipcMock.lobbyRejoin.mockResolvedValue(null);
+  ipcMock.draftView.mockResolvedValue(VIEW);
 });
 
 function setup() {
@@ -147,5 +151,62 @@ describe("the host's room", () => {
       "aria-disabled",
       "true",
     );
+  });
+});
+
+describe("a seat left mid-draft (issue #1468)", () => {
+  const GUEST: LobbyState = {
+    ...HOSTING,
+    role: "guest",
+    phase: "drafting",
+    name: "Bea",
+    peers: [{ peer: "p1", name: "Bea", online: true, deck: null }],
+  };
+
+  it("asks the host for a guest's view again, and moves on with the push", async () => {
+    let push: (view: DraftView) => void = () => {};
+    ipcMock.onDraftView.mockImplementation((cb: (view: DraftView) => void) => {
+      push = cb;
+      return () => {};
+    });
+    ipcMock.lobbyState.mockResolvedValue(GUEST);
+    const { onDraft } = setup();
+    await waitFor(() => expect(ipcMock.lobbyRejoin).toHaveBeenCalledOnce());
+    expect(ipcMock.draftView).not.toHaveBeenCalled();
+    push(VIEW);
+    expect(onDraft).toHaveBeenCalledWith(null, VIEW, "guest");
+  });
+
+  it("waits for a host who has dropped before asking", async () => {
+    ipcMock.lobbyState.mockResolvedValue({ ...GUEST, hostOnline: false });
+    setup();
+    expect(
+      await screen.findByText("Ada has dropped — waiting for them to come back."),
+    ).toBeVisible();
+    expect(ipcMock.lobbyRejoin).not.toHaveBeenCalled();
+  });
+
+  it("takes a host's seat again by the draft's name", async () => {
+    ipcMock.lobbyState.mockResolvedValue({ ...HOSTING, phase: "drafting" });
+    ipcMock.lobbyRejoin.mockResolvedValue(9);
+    const { onDraft } = setup();
+    await waitFor(() => expect(onDraft).toHaveBeenCalledWith(9, VIEW, "host"));
+    expect(ipcMock.draftView).toHaveBeenCalledWith(9);
+  });
+
+  it("says why when the seat cannot be taken again", async () => {
+    ipcMock.lobbyState.mockResolvedValue({ ...HOSTING, phase: "drafting" });
+    ipcMock.lobbyRejoin.mockRejectedValue("This lobby has no draft under way.");
+    const { onDraft } = setup();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This lobby has no draft under way.",
+    );
+    expect(onDraft).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing while the lobby is still open", async () => {
+    setup();
+    await screen.findByRole("button", { name: /Start draft/ });
+    expect(ipcMock.lobbyRejoin).not.toHaveBeenCalled();
   });
 });

@@ -13,9 +13,19 @@
 //! third pile, **Commander** (kind `commander`, empty, a reader's pile so it is drawn while
 //! empty), beside Deck and Pool.
 //!
-//! **Until the reader saves it, it is a draft deck**: its id is on the `app_meta` row
+//! **Until the reader saves it, it is a draft deck**: it is on the `app_meta` row
 //! [`K_DRAFT_DECKS`] (a JSON array; `app_meta` is never synced), which is what the editor asks to
 //! draw its draft bar instead of the card search. [`keep`] takes it off; [`discard`] deletes it.
+//!
+//! **An entry names a deck by its id *and* its `sync_uid`, and both must still match** (issue
+//! #1467). `decks.id` is `INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so SQLite hands the next
+//! deck `max(id) + 1` — a draft deck deleted from the gallery (the newest deck, so the highest
+//! id) gave its id to the next deck the reader made, and a list of bare ids then called that
+//! ordinary deck a draft deck: the editor drew the draft bar on it, and its **Discard** deleted
+//! it. The uid is the row's own name and is never reused, so [`ids`] answers only an entry whose
+//! deck still carries it, and [`discard`] refuses any other. A legacy entry — a bare id, from
+//! before the uid was stored — cannot be told from a reused id and is dropped: the safe
+//! direction, since a draft deck left unsaved then is still a deck, only without its draft bar.
 //!
 //! Every write here takes `&Connection`; the host wraps each in `state::with_write`. Each step
 //! is one of the deck module's own transactions, so [`create`] is not one transaction: a step
@@ -23,7 +33,7 @@
 use std::collections::BTreeMap;
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::app_meta::{get_app_meta, set_app_meta};
 use crate::deck::{create_deck, delete_deck, DeckInput, DeckRow, K_LAST_DECK_FORMAT};
@@ -32,8 +42,21 @@ use crate::import::{commit_import, ImportItem};
 /// The list a draft deck's cards are in — the deck's `live` one.
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 
-/// The `app_meta` key holding the unsaved draft decks' ids.
+/// The `app_meta` key holding the unsaved draft decks, as [`DraftDeckRef`]s.
 pub const K_DRAFT_DECKS: &str = "draft_decks";
+
+/// One unsaved draft deck: its id, and the `decks.sync_uid` it had when the draft made it.
+///
+/// **The pair is the identity, never the id alone** — see the module's note on issue #1467. Both
+/// the stored row and `draft_deck_ids`' answer have this shape, mirrored in
+/// `packages/ui/lib/ipc/draft.ts`, so the editor can check the deck it has open against the uid
+/// too, and a stale cached list can never name a deck that took a deleted draft deck's id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftDeckRef {
+    pub id: i64,
+    pub sync_uid: String,
+}
 
 /// The format a draft deck is made in.
 pub const LIMITED: &str = "limited";
@@ -139,9 +162,18 @@ pub fn create(
 
     let filled = piles(conn, deck.id, commander)
         .and_then(|()| commit_import(conn, deck.id, LIVE, "merge", &items).map(|_| ()))
-        .and_then(|()| {
-            let mut list = listed(conn);
-            list.push(deck.id);
+        .and_then(|()| uid_of(conn, deck.id))
+        .and_then(|sync_uid| {
+            // Only the entries still naming their deck are carried: a stale one — a draft deck
+            // deleted from the gallery — is dropped here rather than left to match a later deck.
+            let mut list: Vec<DraftDeckRef> = live(conn)
+                .into_iter()
+                .filter(|entry| entry.id != deck.id)
+                .collect();
+            list.push(DraftDeckRef {
+                id: deck.id,
+                sync_uid,
+            });
             write_list(conn, &list)
         });
     if let Err(e) = filled {
@@ -212,22 +244,54 @@ fn piles(conn: &Connection, deck_id: i64, commander: bool) -> Result<(), String>
     tx.commit().map_err(|e| e.to_string())
 }
 
-/// The ids on [`K_DRAFT_DECKS`], as stored. A missing or unreadable row is an empty list.
-fn listed(conn: &Connection) -> Vec<i64> {
-    get_app_meta(conn, K_DRAFT_DECKS)
-        .and_then(|v| serde_json::from_str(&v).ok())
-        .unwrap_or_default()
+/// The deck's `sync_uid`, minted first should it have none.
+///
+/// The capture trigger mints one on every insert (`sync_engine::capture`), so on a real database
+/// this only reads; the mint is `schema::mint_missing_uids`' statement for one row, the belt for a
+/// file the trigger was not on (a test's bare schema, a write made while a sync apply is under
+/// way). The update trigger's `OF` list does not name the column, so the mint records no op.
+fn uid_of(conn: &Connection, deck_id: i64) -> Result<String, String> {
+    conn.execute(
+        "UPDATE decks SET sync_uid = lower(hex(randomblob(16)))
+          WHERE id = ?1 AND sync_uid IS NULL",
+        params![deck_id],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT sync_uid FROM decks WHERE id = ?1",
+        params![deck_id],
+        |r| r.get::<_, String>(0),
+    )
+    .map_err(|e| e.to_string())
 }
 
-fn write_list(conn: &Connection, ids: &[i64]) -> Result<(), String> {
-    let json = serde_json::to_string(ids).map_err(|e| e.to_string())?;
+/// The entries on [`K_DRAFT_DECKS`], as stored. **Reading can never fail**: a missing row or one
+/// that is not a JSON array is an empty list, and an element that is not a `{ id, syncUid }`
+/// object — a legacy bare id among them (see the module's note) — is dropped on its own.
+fn listed(conn: &Connection) -> Vec<DraftDeckRef> {
+    let Some(serde_json::Value::Array(items)) = get_app_meta(conn, K_DRAFT_DECKS)
+        .and_then(|v| serde_json::from_str::<serde_json::Value>(&v).ok())
+    else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| serde_json::from_value::<DraftDeckRef>(item).ok())
+        .filter(|entry| entry.id > 0 && !entry.sync_uid.is_empty())
+        .collect()
+}
+
+fn write_list(conn: &Connection, list: &[DraftDeckRef]) -> Result<(), String> {
+    let json = serde_json::to_string(list).map_err(|e| e.to_string())?;
     set_app_meta(conn, K_DRAFT_DECKS, &json).map_err(|e| e.to_string())
 }
 
-fn exists(conn: &Connection, deck_id: i64) -> bool {
+/// Whether the deck `entry.id` exists **and still carries `entry.sync_uid`** — the one test an
+/// entry has to pass to count. A deck that took a deleted draft deck's id has a uid of its own.
+fn names_its_deck(conn: &Connection, entry: &DraftDeckRef) -> bool {
     conn.query_row(
-        "SELECT 1 FROM decks WHERE id = ?1",
-        params![deck_id],
+        "SELECT 1 FROM decks WHERE id = ?1 AND sync_uid = ?2",
+        params![entry.id, entry.sync_uid],
         |_| Ok(()),
     )
     .optional()
@@ -236,26 +300,41 @@ fn exists(conn: &Connection, deck_id: i64) -> bool {
     .is_some()
 }
 
-/// The unsaved draft decks that still exist, oldest first. A read: a deck deleted elsewhere is
-/// left out here and dropped from the row at the next write.
-pub fn ids(conn: &Connection) -> Vec<i64> {
+/// The stored entries that still name their deck, oldest first.
+fn live(conn: &Connection) -> Vec<DraftDeckRef> {
     listed(conn)
         .into_iter()
-        .filter(|id| exists(conn, *id))
+        .filter(|entry| names_its_deck(conn, entry))
         .collect()
+}
+
+/// The unsaved draft decks that still exist with the uid they were made with, oldest first. A
+/// read: an entry whose deck was deleted elsewhere — or whose id a later deck took — is left out
+/// here and dropped from the row at the next write.
+pub fn ids(conn: &Connection) -> Vec<DraftDeckRef> {
+    live(conn)
+}
+
+/// Whether `deck_id` is an unsaved draft deck now — on the list, with its uid matching.
+pub fn is_draft_deck(conn: &Connection, deck_id: i64) -> bool {
+    live(conn).iter().any(|entry| entry.id == deck_id)
 }
 
 /// Save the draft deck: off the list, a deck like any other from now on. A deck not on the
 /// list is already that, and is no error.
 pub fn keep(conn: &Connection, deck_id: i64) -> Result<(), String> {
-    let list: Vec<i64> = ids(conn).into_iter().filter(|id| *id != deck_id).collect();
+    let list: Vec<DraftDeckRef> = live(conn)
+        .into_iter()
+        .filter(|entry| entry.id != deck_id)
+        .collect();
     write_list(conn, &list)
 }
 
 /// Delete the draft deck and take it off the list. Refused with [`NOT_A_DRAFT_DECK`] for a deck
-/// the list does not hold, so a stale page can never delete a saved deck.
+/// the list does not hold **with its uid** ([`is_draft_deck`]), so neither a stale page nor a
+/// stale entry whose id a later deck took can ever delete a saved deck (issue #1467).
 pub fn discard(conn: &Connection, deck_id: i64) -> Result<(), String> {
-    if !listed(conn).contains(&deck_id) {
+    if !is_draft_deck(conn, deck_id) {
         return Err(NOT_A_DRAFT_DECK.to_owned());
     }
     delete_deck(conn, deck_id)?;
@@ -330,6 +409,18 @@ mod tests {
         conn
     }
 
+    fn exists(conn: &Connection, deck_id: i64) -> bool {
+        conn.query_row("SELECT 1 FROM decks WHERE id = ?1", [deck_id], |_| Ok(()))
+            .optional()
+            .unwrap()
+            .is_some()
+    }
+
+    /// [`ids`]' deck ids alone, for the tests that ask only which decks are listed.
+    fn listed_ids(conn: &Connection) -> Vec<i64> {
+        ids(conn).into_iter().map(|entry| entry.id).collect()
+    }
+
     fn pool() -> Vec<String> {
         ["bolt", "angel", "bolt", "ghost", "treasure"]
             .map(String::from)
@@ -387,7 +478,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(owned, 0, "nothing in the collection, no group");
-        assert_eq!(ids(&conn), vec![deck.id]);
+        assert_eq!(listed_ids(&conn), vec![deck.id]);
         assert_eq!(get_app_meta(&conn, K_LAST_DECK_FORMAT), None);
     }
 
@@ -430,7 +521,7 @@ mod tests {
             ],
             "Deck first, the Commander pile empty and drawn while empty, the pool in Pool"
         );
-        assert_eq!(ids(&conn), vec![deck.id]);
+        assert_eq!(listed_ids(&conn), vec![deck.id]);
 
         // Without it, the deck is Limited.
         let limited = create(&conn, "HOB draft", &pool(), false).unwrap();
@@ -465,23 +556,123 @@ mod tests {
         let a = create(&conn, "a", &pool(), false).unwrap().id;
         let b = create(&conn, "b", &pool(), false).unwrap().id;
         let c = create(&conn, "c", &pool(), false).unwrap().id;
-        assert_eq!(ids(&conn), vec![a, b, c]);
+        assert_eq!(listed_ids(&conn), vec![a, b, c]);
 
         keep(&conn, a).unwrap();
-        assert_eq!(ids(&conn), vec![b, c]);
+        assert_eq!(listed_ids(&conn), vec![b, c]);
         assert!(exists(&conn, a), "a kept deck stays");
         assert_eq!(discard(&conn, a).unwrap_err(), NOT_A_DRAFT_DECK);
         assert!(exists(&conn, a));
 
         discard(&conn, b).unwrap();
         assert!(!exists(&conn, b));
-        assert_eq!(ids(&conn), vec![c]);
+        assert_eq!(listed_ids(&conn), vec![c]);
 
         delete_deck(&conn, c).unwrap();
         assert!(
             ids(&conn).is_empty(),
             "a deck deleted elsewhere is not listed"
         );
+    }
+
+    /// A deck the reader makes after a draft deck was deleted from the gallery.
+    fn ordinary_deck(conn: &Connection, name: &str) -> i64 {
+        let id = create_deck(
+            conn,
+            &DeckInput {
+                name: name.to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        // The capture trigger's mint, which this bare schema does not carry.
+        uid_of(conn, id).unwrap();
+        id
+    }
+
+    #[test]
+    fn every_entry_carries_its_decks_uid() {
+        let conn = conn();
+        let deck = create(&conn, "a", &pool(), false).unwrap();
+        let uid: String = conn
+            .query_row("SELECT sync_uid FROM decks WHERE id = ?1", [deck.id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(uid.len(), 32, "minted when the deck had none");
+        assert_eq!(
+            ids(&conn),
+            vec![DraftDeckRef {
+                id: deck.id,
+                sync_uid: uid.clone()
+            }]
+        );
+        assert_eq!(
+            get_app_meta(&conn, K_DRAFT_DECKS).unwrap(),
+            format!(r#"[{{"id":{},"syncUid":"{uid}"}}]"#, deck.id),
+            "the row's shape is the wire's"
+        );
+    }
+
+    /// Issue #1467: a draft deck deleted from the gallery gave its id to the next deck the reader
+    /// made, and that ordinary deck opened with the draft bar — and its Discard deleted it.
+    #[test]
+    fn a_deck_that_takes_a_deleted_draft_decks_id_is_never_a_draft_deck() {
+        let conn = conn();
+        let draft = create(&conn, "draft", &pool(), false).unwrap().id;
+        delete_deck(&conn, draft).unwrap();
+
+        let mine = ordinary_deck(&conn, "My deck");
+        assert_eq!(
+            mine, draft,
+            "SQLite reuses the highest deleted id — the premise"
+        );
+        assert!(!is_draft_deck(&conn, mine));
+        assert!(ids(&conn).is_empty());
+
+        assert_eq!(discard(&conn, mine).unwrap_err(), NOT_A_DRAFT_DECK);
+        assert!(
+            exists(&conn, mine),
+            "Discard never deletes an ordinary deck"
+        );
+
+        // The next write drops the stale entry rather than carrying it.
+        let next = create(&conn, "next", &pool(), false).unwrap().id;
+        assert_eq!(listed_ids(&conn), vec![next]);
+        assert_eq!(listed(&conn).len(), 1);
+    }
+
+    #[test]
+    fn a_legacy_list_of_bare_ids_names_no_draft_deck() {
+        let conn = conn();
+        let mine = ordinary_deck(&conn, "My deck");
+        set_app_meta(&conn, K_DRAFT_DECKS, &format!("[{mine}]")).unwrap();
+        assert!(ids(&conn).is_empty());
+        assert!(!is_draft_deck(&conn, mine));
+        assert_eq!(discard(&conn, mine).unwrap_err(), NOT_A_DRAFT_DECK);
+        assert!(exists(&conn, mine));
+
+        // A bare id beside a real entry costs only itself.
+        let draft = create(&conn, "draft", &pool(), false).unwrap().id;
+        assert_eq!(listed_ids(&conn), vec![draft]);
+        for junk in ["not json", "{}", r#"[{"id":"x"},null,7]"#] {
+            set_app_meta(&conn, K_DRAFT_DECKS, junk).unwrap();
+            assert!(ids(&conn).is_empty(), "{junk}");
+        }
+    }
+
+    #[test]
+    fn an_entry_whose_uid_no_longer_matches_is_not_listed() {
+        let conn = conn();
+        let draft = create(&conn, "draft", &pool(), false).unwrap().id;
+        conn.execute(
+            "UPDATE decks SET sync_uid = 'someone-else' WHERE id = ?1",
+            [draft],
+        )
+        .unwrap();
+        assert!(!is_draft_deck(&conn, draft));
+        assert_eq!(discard(&conn, draft).unwrap_err(), NOT_A_DRAFT_DECK);
     }
 
     #[test]

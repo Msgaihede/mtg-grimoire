@@ -190,6 +190,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
     ),
     (
+        "lobby_rejoin",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
         "lobby_pick",
         "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
     ),
@@ -228,6 +232,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
     (
         "packs_booster_sets",
         "MTGJSON booster data feeds only the desktop's Draft & Packs page",
+    ),
+    (
+        "packs_exchange_rate",
+        "The ECB's dollar rate converts prices for the desktop's Open Packs page alone",
     ),
     (
         "graphql_query",
