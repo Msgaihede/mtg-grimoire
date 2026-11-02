@@ -1,15 +1,11 @@
 import { useId, type JSX } from "react";
-import { CardArt } from "@/components/CardArt";
+import { CardTile } from "@/components/CardTile";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
-import { FinishMark } from "@/components/FinishMark";
-import { RarityGem } from "@/components/RarityGem";
 import { scaled } from "@/lib/cardZoom";
-import { FOCUS } from "@/lib/focus";
 import type { BoosterCard } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
-import { cn } from "@/lib/utils";
 import type { OpenedCard } from "../booster/open";
 import type { PriceOf } from "../booster/value";
 import { sortOpened, type CardSort } from "./opening";
@@ -27,11 +23,13 @@ const TILE_WIDTH = 152;
  * The cards one press opened, as a wall of tiles in the order the reader picks — price high to
  * low first, botbox.dev's order, because the question a pack answers is "what did I get".
  *
- * Each tile is the card (`CardArt`, with the foil sheen and chip on a foil), its price at the
- * reader's marketplace (an em dash when there is none) and its rarity. **A card this corpus does
- * not hold** (`inCorpus: false` — MTGJSON knows it, the local card data does not yet) is a plain
- * name tile: there is no picture to ask for and no card to open. Every other tile is a button
- * that opens the card's modal, as a tile anywhere else in the app does.
+ * Each tile is the app's own `CardTile` (issue #1462) — the art, with the foil sheen and chip on a
+ * foil, and the `CardChin` every other wall draws under it: rarity, `SET · number`, the finish and
+ * the price at the reader's marketplaces (an em dash when there is none). **A card this corpus
+ * does not hold** (`inCorpus: false` — MTGJSON knows it, the local card data does not yet) is the
+ * same tile with no picture and no press: there is no image to ask for and no card to open, but
+ * its printing is still MTGJSON's fact to state. Every other tile's art is a button that opens the
+ * card's modal, as a tile anywhere else in the app does.
  */
 export function OpenedWall({
   cards,
@@ -80,54 +78,33 @@ export function OpenedWall({
           const name = fact?.name ?? "Unknown card";
           const inCorpus = fact?.inCorpus ?? false;
           return (
-            <li key={`${index}-${card.cardId}`} className="flex min-w-0 flex-col gap-1.5">
-              {inCorpus ? (
-                <button
-                  type="button"
-                  onClick={() => open(card.cardId)}
-                  aria-label={`${name}${card.foil ? ", foil" : ""}, ${formatPrice(price, currency)}`}
-                  className={cn("group block rounded-lg", FOCUS)}
-                >
-                  <CardArt
-                    cardId={card.cardId}
-                    name={name}
-                    finish={card.foil ? "foil" : null}
-                    hoverZoom
-                    loading="lazy"
-                  />
-                </button>
-              ) : (
-                <NameTile name={name} fact={fact} />
-              )}
-              <div className="flex min-w-0 items-center justify-between gap-2 text-xs">
-                <RarityGem rarity={fact?.rarity ?? null} withLabel className="capitalize" />
-                <span className="flex items-center gap-1 font-mono tabular-nums text-text">
-                  {card.foil && <FinishMark finish="foil" className="size-3 text-accent" />}
-                  {formatPrice(price, currency)}
-                </span>
-              </div>
+            <li
+              key={`${index}-${card.cardId}`}
+              className="min-w-0"
+              title={inCorpus ? undefined : "Not in this app's card data yet"}
+            >
+              <CardTile
+                // `null` for a card this corpus lacks: no picture to ask for, so the frame draws
+                // its named no-art state and fetches nothing.
+                cardId={inCorpus ? card.cardId : null}
+                name={name}
+                finish={card.foil ? "foil" : null}
+                rarity={fact?.rarity ?? null}
+                chin={
+                  fact !== undefined
+                    ? { setCode: fact.setCode, collectorNumber: fact.collectorNumber }
+                    : { printing: "—", printingTitle: null }
+                }
+                money={formatPrice(price, currency)}
+                zoom={zoom}
+                onPress={inCorpus ? () => open(card.cardId) : undefined}
+                hoverZoom
+                loading="lazy"
+              />
             </li>
           );
         })}
       </ul>
-    </div>
-  );
-}
-
-/** A card with no picture to draw: its name and printing, in the card's own frame. */
-function NameTile({ name, fact }: { name: string; fact: BoosterCard | undefined }): JSX.Element {
-  return (
-    <div
-      className="flex aspect-[5/7] w-full flex-col items-center justify-center gap-1 rounded-lg border border-border bg-surface px-2 text-center"
-      title="Not in this app's card data yet"
-    >
-      <span className="line-clamp-3 text-sm">{name}</span>
-      {fact?.typeLine && <span className="line-clamp-2 text-xs text-dim">{fact.typeLine}</span>}
-      {fact !== undefined && (
-        <span className="font-mono text-[0.6875rem] uppercase text-dim">
-          {fact.setCode} {fact.collectorNumber}
-        </span>
-      )}
     </div>
   );
 }

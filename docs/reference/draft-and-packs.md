@@ -154,6 +154,13 @@ through `zoomCards`, so the two controls are one number and it is remembered wit
 The pool's eight columns take the zoom as a ceiling (`minmax(0, 190px × zoom)`) so the pool still
 fits without a scroll. Open Packs' opened wall is a section of its own, `packs`.
 
+**An opened card is the app's own tile** (issue #1462): `OpenedWall` draws each card with
+`components/CardTile` — the art, and under it the `CardChin` every other wall draws, with the
+rarity, `SET · number`, the finish and the price at the page's marketplaces. A card MTGJSON knows
+and the corpus does not is the same tile with no picture and no press, its chin still naming the
+printing. It had drawn its own art-and-caption row (a rarity label and a price, no set or number)
+until a reader asked why its cards looked unlike every other wall's.
+
 A refused pick changes nothing (the session is cloned and put back on any error). A solo draft is
 saved after each change (`app_meta` `draft_session`) and can be resumed; a pod cannot.
 
