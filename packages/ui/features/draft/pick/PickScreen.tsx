@@ -8,8 +8,9 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { Hourglass, WandSparkles } from "lucide-react";
+import { Hourglass, PanelBottom, PanelRight, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { scaled } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
@@ -20,11 +21,13 @@ import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
-import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
+import { InlineError, LABEL, PANEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
 import { carriedPick, pickDragData, readPickDrag, type PickDrag } from "./pickDrag";
 import { sortPack, type PackSort } from "./pool";
 import { PoolColumns } from "./PoolColumns";
+import { PoolTray } from "./PoolTray";
 import { RoundStrip, SeatsStrip } from "./TableStrip";
+import { useDraftTrayLayout, type DraftTrayLayout } from "./trayLayout";
 import { WinstonTable } from "./WinstonTable";
 
 /**
@@ -69,6 +72,14 @@ export function picksNeeded(view: DraftView): number {
  *
  * **The pack is laid out by rarity, mythic first** (issue #1432), a rarity's cards in the order they
  * were dealt; the Sort menu offers the dealt order instead, kept for the window's life.
+ *
+ * **The pool is under the pack, or in a tray beside it** (issue #1474, `trayLayout.ts`): the curve
+ * of stacked cards (`PoolColumns`, the default) or a compact list of names (`PoolTray`) — MTG
+ * Arena's two drafting views — switched by the Pool toggle in the pack's heading row and kept per
+ * device. Beside the pack, the pack and the tray scroll apart, so the tray (the drop target) stays
+ * in reach however far down a zoomed-in pack the reader is; `DraftSession` hands the screen its
+ * whole height for it. A Winston table keeps its pool underneath — it has no pack heading to carry
+ * the toggle, and its piles are the width of the room.
  */
 export function PickScreen({
   view,
@@ -93,6 +104,7 @@ export function PickScreen({
 }): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.draft);
   const headingId = useId();
+  const layout = useDraftTrayLayout((s) => s.layout);
   const [sort, setSortState] = useState<PackSort>(() => sortMemory.recall() ?? "rarity");
   const setSort = (value: PackSort) => {
     sortMemory.keep(value);
@@ -136,81 +148,112 @@ export function PickScreen({
     );
   }
 
-  return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <RoundStrip view={view} />
-        <SeatsStrip view={view} />
+  const strips = (
+    <div className="flex flex-col gap-3">
+      <RoundStrip view={view} />
+      <SeatsStrip view={view} />
+    </div>
+  );
+
+  const packSection = (
+    <section aria-labelledby={`${headingId}-pack`} className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        <h3
+          id={`${headingId}-pack`}
+          className="m-0 font-heading text-lg font-semibold leading-none"
+        >
+          Pack {view.packNumber + 1} · Pick {view.pickNumber + 1}
+        </h3>
+        {!waiting && (
+          <span className="font-mono text-sm tabular-nums text-dim">{view.pack.length} left</span>
+        )}
+        {!waiting && need > 1 && (
+          <span className="rounded-full border border-accent/50 bg-accent/10 px-2.5 text-xs leading-6 text-accent">
+            Choose {need}
+          </span>
+        )}
+        <div className="ml-auto flex flex-wrap items-center gap-3">
+          <TrayToggle layout={layout} />
+          <span id={`${headingId}-sort-label`} className={LABEL}>
+            Sort
+          </span>
+          <Dropdown
+            id={`${headingId}-sort`}
+            labelledBy={`${headingId}-sort-label`}
+            size="sm"
+            value={sort}
+            onChange={(v) => setSort(v as PackSort)}
+            options={SORTS}
+          />
+          {onAutoPick !== undefined && (
+            <button
+              type="button"
+              aria-disabled={waiting || busy}
+              onClick={() => {
+                if (!waiting && !busy) onAutoPick();
+              }}
+              className={QUIET_BUTTON}
+            >
+              <WandSparkles className="size-4" aria-hidden="true" />
+              Pick for me
+            </button>
+          )}
+        </div>
       </div>
 
-      <section aria-labelledby={`${headingId}-pack`} className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <h3
-            id={`${headingId}-pack`}
-            className="m-0 font-heading text-lg font-semibold leading-none"
-          >
-            Pack {view.packNumber + 1} · Pick {view.pickNumber + 1}
-          </h3>
-          {!waiting && (
-            <span className="font-mono text-sm tabular-nums text-dim">{view.pack.length} left</span>
-          )}
-          {!waiting && need > 1 && (
-            <span className="rounded-full border border-accent/50 bg-accent/10 px-2.5 text-xs leading-6 text-accent">
-              Choose {need}
-            </span>
-          )}
-          <div className="ml-auto flex flex-wrap items-center gap-3">
-            <span id={`${headingId}-sort-label`} className={LABEL}>
-              Sort
-            </span>
-            <Dropdown
-              id={`${headingId}-sort`}
-              labelledBy={`${headingId}-sort-label`}
-              size="sm"
-              value={sort}
-              onChange={(v) => setSort(v as PackSort)}
-              options={SORTS}
-            />
-            {onAutoPick !== undefined && (
-              <button
-                type="button"
-                aria-disabled={waiting || busy}
-                onClick={() => {
-                  if (!waiting && !busy) onAutoPick();
-                }}
-                className={QUIET_BUTTON}
-              >
-                <WandSparkles className="size-4" aria-hidden="true" />
-                Pick for me
-              </button>
-            )}
-          </div>
+      {waiting ? (
+        <div
+          role="status"
+          className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-6 py-16 text-center"
+        >
+          <Hourglass className="size-6 text-accent" aria-hidden="true" />
+          <p className="m-0 text-sm">Waiting for the table…</p>
+          <p className="m-0 font-mono text-xs tabular-nums text-dim">
+            {picked} of {view.seats.length} have picked
+          </p>
         </div>
+      ) : (
+        <PackWall
+          // A new pack is a new wall: the choice made in the last one does not carry over.
+          key={`${view.packNumber}.${view.pickNumber}`}
+          pack={sorted}
+          need={need}
+          width={scaled(PACK_TILE_WIDTH, zoom)}
+          busy={busy}
+          onPick={onPick}
+        />
+      )}
+      <InlineError message={error} />
+    </section>
+  );
 
-        {waiting ? (
-          <div
-            role="status"
-            className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-6 py-16 text-center"
-          >
-            <Hourglass className="size-6 text-accent" aria-hidden="true" />
-            <p className="m-0 text-sm">Waiting for the table…</p>
-            <p className="m-0 font-mono text-xs tabular-nums text-dim">
-              {picked} of {view.seats.length} have picked
-            </p>
-          </div>
-        ) : (
-          <PackWall
-            // A new pack is a new wall: the choice made in the last one does not carry over.
-            key={`${view.packNumber}.${view.pickNumber}`}
-            pack={sorted}
-            need={need}
-            width={scaled(PACK_TILE_WIDTH, zoom)}
-            busy={busy}
-            onPick={onPick}
-          />
-        )}
-        <InlineError message={error} />
-      </section>
+  if (layout === "side") {
+    return (
+      <div className="flex min-h-0 flex-1 gap-5">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 overflow-y-auto pb-8 pr-1">
+          {strips}
+          {packSection}
+        </div>
+        {/* The tray is where a card from the pack is dropped to pick it. */}
+        <aside
+          ref={poolRef}
+          className={cn(
+            PANEL,
+            "mb-3 flex min-h-0 w-72 shrink-0 flex-col p-3",
+            armed && DROP_RING,
+            over && DROP_OVER,
+          )}
+        >
+          <PoolTray pool={view.pool} />
+        </aside>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      {strips}
+      {packSection}
 
       {/* The pool is where a card from the pack is dropped to pick it. */}
       <div
@@ -219,6 +262,53 @@ export function PickScreen({
       >
         <PoolColumns pool={view.pool} />
       </div>
+    </div>
+  );
+}
+
+/** The two layouts in the order the toggle draws them, and the words for each. */
+const TRAY_LAYOUTS = [
+  { id: "bottom", label: "Pool below the pack", Icon: PanelBottom },
+  { id: "side", label: "Pool beside the pack", Icon: PanelRight },
+] as const satisfies readonly { id: DraftTrayLayout; label: string; Icon: typeof PanelBottom }[];
+
+/**
+ * Where the pool is drawn — under the pack or in a tray beside it (issue #1474). Two icon squares
+ * in one bordered group, the pressed one filled the way `Segmented`'s are: two glyphs of a window
+ * with its panel at the bottom or the side say which is which at a glance on a row that is already
+ * full of words, and the tooltip and the name say it in words.
+ */
+function TrayToggle({ layout }: { layout: DraftTrayLayout }): JSX.Element {
+  const tip = useTooltip();
+  const keep = useDraftTrayLayout((s) => s.keep);
+  return (
+    <div
+      role="group"
+      aria-label="Pool layout"
+      className="flex overflow-hidden rounded-md border border-border"
+    >
+      {TRAY_LAYOUTS.map(({ id, label, Icon }) => {
+        const pressed = layout === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={pressed}
+            aria-label={label}
+            // `describes: false`: identical to the `aria-label` above.
+            {...tip(label, { describes: false })}
+            onClick={() => keep(id)}
+            className={cn(
+              "inline-flex size-9 items-center justify-center",
+              "transition-colors duration-150 motion-reduce:transition-none",
+              pressed ? "bg-accent text-accent-fg" : "text-dim hover:text-text",
+              FOCUS,
+            )}
+          >
+            <Icon className="size-4" aria-hidden="true" />
+          </button>
+        );
+      })}
     </div>
   );
 }

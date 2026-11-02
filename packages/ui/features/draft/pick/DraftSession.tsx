@@ -9,6 +9,7 @@ import { currentDraft } from "./current";
 import { PickScreen } from "./PickScreen";
 import { acceptsView } from "./pool";
 import { PoolColumns } from "./PoolColumns";
+import { useDraftTrayLayout } from "./trayLayout";
 
 export const MODE_TITLE: Record<DraftMode, string> = {
   quick: "Quick Draft",
@@ -192,6 +193,11 @@ export function DraftSession({
     });
 
   const building = view?.status === "deckbuilding";
+  // The pool in a tray beside the pack (issue #1474): the pick screen splits the height between
+  // the pack's scroller and the tray's, so this box gives it the whole height and scrolls nothing
+  // itself. A Winston table and the Build step keep the pool underneath, in this one scroller.
+  const layout = useDraftTrayLayout((s) => s.layout);
+  const sideTray = layout === "side" && view !== null && !building && view.stack === null;
 
   return (
     <section className="flex h-full min-h-0 flex-col">
@@ -221,7 +227,13 @@ export function DraftSession({
           </button>
         }
       />
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pb-8 pt-3 pr-1">
+      <div
+        ref={scrollRef}
+        className={cn(
+          "min-h-0 flex-1 pt-3",
+          sideTray ? "flex flex-col overflow-hidden" : "overflow-y-auto pb-8 pr-1",
+        )}
+      >
         {notice !== null && (
           <p
             role="status"

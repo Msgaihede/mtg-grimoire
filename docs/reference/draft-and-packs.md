@@ -183,6 +183,18 @@ and the corpus does not is the same tile with no picture and no press, its chin 
 printing. It had drawn its own art-and-caption row (a rarity label and a price, no set or number)
 until a reader asked why its cards looked unlike every other wall's.
 
+**The pool is below the pack, or in a tray beside it** (issue #1474, MTG Arena's two drafting
+views): the curve of stacked cards under the pack is the default; the pack heading's **Pool**
+toggle moves it to a compact side tray (`pick/PoolTray.tsx`) — one row per card name with its
+count, in the curve's columns (mana value, then lands), a colour edge down each row, and the card's
+art after a quarter second's rest on a row (the card modal's printings dwell, `usePrintingDwell`).
+In that layout the pack and the tray scroll apart, so the tray — the drop target there — stays in
+reach under a zoomed-in pack. The choice is kept per device in `localStorage`
+(`grimoire.draft.trayLayout`), the Packs page's arrangement: it is a way of looking at this screen.
+A Winston table and the Build step keep the curve: neither has a pack heading to carry the toggle.
+`DraftCard` carries no mana cost, so a row shows none; adding one would be an IPC change for a
+glyph the column heading already says in words.
+
 A refused pick changes nothing (the session is cloned and put back on any error). A solo draft is
 saved after each change (`app_meta` `draft_session`) and can be resumed; a pod cannot.
 
