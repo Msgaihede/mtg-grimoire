@@ -166,6 +166,19 @@ describe("DraftSession", () => {
     expect(screen.getByRole("list", { name: "Mana value 1: 1 card" })).toBeInTheDocument();
   });
 
+  it("draws an empty pool a card tall, its columns under the hint (issue #1473)", () => {
+    setup(view());
+    const pool = screen.getByRole("region", { name: "Your pool" });
+    // Every column is drawn before the first pick, so the first card moves nothing.
+    expect(within(pool).getByRole("list", { name: "Mana value 0: 0 cards" })).toBeInTheDocument();
+    expect(within(pool).getByRole("list", { name: "Lands: 0 cards" })).toBeInTheDocument();
+    const hint = within(pool).getByText("The cards you pick land here, by mana value.");
+    expect(hint).toHaveStyle({ gridRow: "2" });
+    // jsdom lays nothing out: the row's height is held by one column's card, 5:7, in that row.
+    const holder = hint.parentElement!.querySelector('[aria-hidden="true"].aspect-\\[5\\/7\\]');
+    expect(holder).toHaveStyle({ gridRow: "2" });
+  });
+
   it("chooses with a click and picks with the Pick button, never with a double-click", async () => {
     ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
     setup(view());
@@ -484,8 +497,7 @@ describe("DraftSession", () => {
       setup(view({ pool: [card("Bolt")] }));
       expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(190px, 1fr))");
       const pool = () =>
-        screen.getByRole("list", { name: "Mana value 1: 1 card" }).parentElement!
-          .parentElement as HTMLElement;
+        screen.getByRole("list", { name: "Mana value 1: 1 card" }).parentElement as HTMLElement;
       expect(tileWidth(pool())).toBe("repeat(8, minmax(0, 190px))");
 
       fireEvent.wheel(scroller(), { deltaY: -100, ctrlKey: true });
@@ -506,19 +518,14 @@ describe("DraftSession", () => {
       expect(useAppStore.getState().cardZoom.draft).toBe(DEFAULT_ZOOM);
     });
 
-    it("moves the Card size slider with the gesture, and the slider steps the same ladder", () => {
+    it("draws no Card size slider — the gesture is the pick screen's only zoom (issue #1470)", () => {
       setup(view());
-      const slider = screen.getByRole("slider", { name: "Card size" });
-      expect(slider).toHaveAttribute("aria-valuetext", "100%");
+      expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+      expect(screen.queryByText("Card size")).not.toBeInTheDocument();
 
       fireEvent.wheel(scroller(), { deltaY: 100, ctrlKey: true });
-      expect(slider).toHaveAttribute("aria-valuetext", "90%");
-
-      // Three stops up from 90% in one move — walked through `zoomCards`, so it lands on a stop.
-      fireEvent.change(slider, { target: { value: "7" } });
-      expect(useAppStore.getState().cardZoom.draft).toBe(1.2);
-      expect(slider).toHaveAttribute("aria-valuetext", "120%");
-      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(228px, 1fr))");
+      expect(useAppStore.getState().cardZoom.draft).toBe(0.9);
+      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(171px, 1fr))");
     });
 
     it("sizes a Winston pile turned face up by the same zoom", () => {

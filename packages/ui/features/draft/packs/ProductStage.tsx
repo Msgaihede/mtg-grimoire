@@ -1,12 +1,12 @@
 import { useId, useMemo, useState, type JSX } from "react";
 import { PackageOpen, RotateCcw } from "lucide-react";
-import { Dropdown, MultiDropdown } from "@/components/Dropdown/Dropdown";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { ReducedPrice } from "@/components/ReducedPrice";
 import { FILTER_LABEL } from "@/components/FilterChips";
 import { BUTTON } from "@/features/settings/controls";
 import { plural } from "@/lib/counts";
 import type { BoosterSet } from "@/lib/ipc";
-import { isMarketplaceId, type Marketplace } from "@/lib/marketplace";
+import type { Currency, Marketplace } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
@@ -22,7 +22,9 @@ import {
   type CardSort,
   type Opened,
 } from "./opening";
-import { usePackMarketplaces, type MarketplaceChoice } from "./marketplaces";
+import type { PricingPlan } from "./currency";
+import { MarketplaceCombobox } from "./MarketplaceCombobox";
+import { usePackMarketplaces } from "./marketplaces";
 import { OpenedWall } from "./OpenedWall";
 import { PackFigures, type Tally } from "./PackFigures";
 import { openables, openableValue, type Openable } from "./products";
@@ -46,39 +48,34 @@ export const PRIMARY = cn(
 /** A secondary press. */
 export const SECONDARY = cn(BUTTON, "h-9 border-border bg-surface hover:border-accent/60");
 
-/**
- * What the marketplace picker's trigger says: the one marketplace by name, or how many the
- * lowest price is taken from — `MultiDropdown`'s "a count, never a value" for several.
- */
-export function marketplacesLabel(marketplaces: readonly Marketplace[]): string {
-  return marketplaces.length === 1
-    ? marketplaces[0].label
-    : `Lowest of ${marketplaces.length} marketplaces`;
+const CURRENCY_NAME: Record<Currency, string> = { usd: "dollars", eur: "euros" };
+
+/** "A", "A and B", "A, B and C". */
+function listed(names: readonly string[]): string {
+  return names.length < 2
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** The currency's sign, the row's hint — the one fact that decides whether a pick adds or replaces. */
-const CURRENCY_HINT = { usd: "USD", eur: "EUR" } as const;
-
-/** One picker row: greyed when it cannot be priced at, and a tooltip saying why or what it does. */
-function choiceOption(
-  { marketplace, disabled }: MarketplaceChoice,
-  picked: readonly Marketplace[],
-) {
-  const currency = picked[0]?.currency;
-  const title = !marketplace.priced
-    ? `${marketplace.label} has no prices this app can read.`
-    : disabled
-      ? `${marketplace.label}'s prices can't be read here.`
-      : currency !== undefined && marketplace.currency !== currency
-        ? `Prices in ${CURRENCY_HINT[marketplace.currency]} — choosing it replaces the ${CURRENCY_HINT[currency]} marketplaces, since prices in two currencies can't be compared.`
-        : undefined;
-  return {
-    value: marketplace.id,
-    label: marketplace.label,
-    hint: CURRENCY_HINT[marketplace.currency],
-    disabled,
-    title,
-  };
+/**
+ * The line under the picker when the pick names two currencies: what the figures are in and the
+ * rate they were converted at, that the rate is on its way, or which marketplaces were left out
+ * for want of one. Nothing for a pick of one currency — nothing was converted.
+ */
+export function conversionNote(picked: readonly Marketplace[], plan: PricingPlan): string | null {
+  if (plan.rate !== null) {
+    const { usdPerEur, date } = plan.rate;
+    return (
+      `Lowest of ${listed(picked.map((m) => m.label))}, in ${CURRENCY_NAME[plan.currency]} — ` +
+      `converted at €1 = $${usdPerEur.toFixed(4)}, the ECB's rate of ${date}.`
+    );
+  }
+  if (plan.waiting) return "Fetching the exchange rate…";
+  if (plan.leftOut.length > 0) {
+    const names = listed(plan.leftOut.map((m) => m.label));
+    return `${names} left out: the exchange rate could not be fetched, and prices in two currencies can't be compared without it.`;
+  }
+  return null;
 }
 
 /** "pack" for a booster, "box" for a sealed product — the words the figures speak in. */
@@ -104,7 +101,14 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
   const priceAt = usePackMarketplaces();
   const reduction = usePackReducedStore((s) => s.settings);
   const keepReduction = usePackReducedStore((s) => s.keep);
-  const { priceOf, ready, currency } = useBoosterPrices(set, priceAt.marketplaces);
+  const {
+    priceOf,
+    ready: pricesReady,
+    currency,
+  } = useBoosterPrices(set, priceAt.plan.sources, priceAt.plan.currency);
+  // A mixed pick waits for its rate, so the figures never jump from one marketplace's to two.
+  const ready = pricesReady && !priceAt.plan.waiting;
+  const note = conversionNote(priceAt.marketplaces, priceAt.plan);
   const facts = useMemo(() => new Map(set.cards.map((c) => [c.cardId, c])), [set]);
 
   const choice = options.find((o) => openableValue(o) === chosen) ?? options[0];
@@ -230,23 +234,24 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
 
         <div className="flex w-full shrink-0 flex-col gap-6 @min-[900px]/packs:w-[22rem]">
           <section aria-label="Prices" className="flex flex-col gap-3">
-            {/* The caption over the trigger, the printings bar's `Sort`: a bare "TCGplayer" would
+            {/* The caption over the box, the printings bar's `Sort`: a bare "TCGplayer" chip would
                 not say it is where the prices come from. */}
             <div className="flex flex-col gap-1.5">
-              <label id={`${pickId}-prices`} htmlFor={`${pickId}-market`} className={FILTER_LABEL}>
+              <label htmlFor={`${pickId}-market`} className={FILTER_LABEL}>
                 Prices from
               </label>
-              <MultiDropdown
+              <MarketplaceCombobox
                 id={`${pickId}-market`}
-                labelledBy={`${pickId}-prices`}
-                triggerLabel={marketplacesLabel(priceAt.marketplaces)}
-                options={priceAt.choices.map((c) => choiceOption(c, priceAt.marketplaces))}
-                selected={priceAt.marketplaces.map((m) => m.id)}
-                onToggle={(id) => {
-                  if (isMarketplaceId(id)) priceAt.toggle(id);
-                }}
-                fill
+                choices={priceAt.choices}
+                picked={priceAt.marketplaces}
+                onToggle={priceAt.toggle}
+                className="w-full"
               />
+              {note !== null && (
+                <p role="status" className="m-0 text-xs text-dim">
+                  {note}
+                </p>
+              )}
             </div>
             {/* The page's own reduced price, apart from Settings' (`reducedPick.ts`). */}
             <ReducedInputs settings={reduction} currency={currency} onChange={keepReduction} />

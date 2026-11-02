@@ -31,6 +31,9 @@ export interface CardTileProps {
   onPress?: () => void;
   /** The button's accessible name. Defaults to `name`. */
   pressLabel?: string;
+  /** Grow the art very slightly while the tile is hovered — `CardArt`'s own prop, handed on. A
+   *  wall of tiles wants it, as `CardGrid`'s do; a static tile does not. */
+  hoverZoom?: boolean;
   loading?: "eager" | "lazy";
   className?: string;
 }
@@ -64,6 +67,7 @@ export function CardTile({
   overlay,
   onPress,
   pressLabel,
+  hoverZoom = false,
   loading,
   className,
 }: CardTileProps): ReactElement {
@@ -73,6 +77,7 @@ export function CardTile({
         cardId={cardId}
         name={name}
         finish={finish}
+        hoverZoom={hoverZoom}
         loading={loading}
         // Spread only when given: an absent `remoteSrc` and a present `null` are two answers.
         {...(remoteSrc !== undefined ? { remoteSrc } : {})}

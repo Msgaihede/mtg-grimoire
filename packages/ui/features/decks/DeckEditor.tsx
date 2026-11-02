@@ -500,10 +500,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * shortfall block) are already gone by {@link tracks}: a draft deck is virtual. In their place
    * the editor draws `DraftDeckBar` — basics, Save, Export, Discard.
    *
-   * `false` until the list has answered, which is the ordinary deck's answer; see
+   * `false` until the list has answered, which is the ordinary deck's answer; and once the row is
+   * in, a deck is a draft deck only by its id **and its `syncUid`** together — deck ids are reused
+   * after a delete, and a bare id once put an ordinary deck in draft mode (issue #1467). See
    * `useIsDraftDeck`.
    */
-  const draft = useIsDraftDeck(deckId);
+  const draft = useIsDraftDeck(deckId, row);
 
   /**
    * Whether the ledger's `Game Changers` chip is pressed — **the thing that answers _which cards

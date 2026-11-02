@@ -93,15 +93,24 @@ A card opened from a foil sheet is priced foil, else nonfoil, else etched; an un
 and is drawn with an em dash. A card MTGJSON knows and this corpus does not (`inCorpus: false`) has
 no image and no price, and is never dealt into a draft.
 
-**The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a multi-select
-at the head of the right-hand column, _Prices from_, that starts at the app's marketplace
+**The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a combobox at the
+head of the right-hand column, _Prices from_ (`packs/MarketplaceCombobox.tsx`, issue #1463) — the
+picked marketplaces as chips, a search typed beside them, and under it the marketplaces it matches
+by name or currency, each pressed to add or put down — that starts at the app's marketplace
 (Settings) and is the reader's pick after that — kept per device in `localStorage`
-(`grimoire.packs.marketplaces`), never in `app_meta`, and never written back to the app's setting. `useBoosterPrices` reads
+(`grimoire.packs.marketplaces`), never in `app_meta`, and never written back to the app's setting.
+`useBoosterPrices` reads
 `printing_prices` once per picked marketplace (each its own cache entry) and takes each finish's
 lowest quote (`lowestPrices`) before the foil-else-nonfoil fallback, so one marketplace's non-foil
-never stands in for another's foil. **One currency at a time**: the app holds no exchange rate, so
-picking a marketplace in the other currency starts the pick over from it; the last picked one
-cannot be put down; Card trader (unpriced) and a feed the host cannot reach are greyed. Picking a
+never stands in for another's foil. **Dollars and euros together** (issue #1463, `packs/currency.ts`):
+a pick of one currency is priced in it, untouched; a pick of both — TCGplayer with Cardmarket — is
+priced in the app's currency (the owner's decision, 2026-11-02), the other currency's answers
+multiplied by the European Central Bank's daily rate (`packs_exchange_rate`, the desktop's
+`packs/fx.rs`) before the lowest is taken. The rate is asked only for such a pick; until it answers
+no figure is drawn, and with none at all (the ECB unreachable and nothing cached) the other
+currency's marketplaces are left out and the line under the picker says so — a euro is never
+compared with a dollar unconverted. The line also names the rate and its day when one was used.
+The last picked marketplace cannot be put down; Card trader (unpriced) and a feed the host cannot reach are greyed. Picking a
 feed that has never landed a row fetches it, as Settings does.
 
 **The reduced price is the page's own too** (`packs/reducedPick.ts`, `packs/ReducedInputs.tsx`): a
@@ -154,10 +163,18 @@ the stack and the piles face down with their counts, the active pile face up on 
 
 **The cards zoom like every other wall** (issue #1433): ctrl+wheel over a draft steps
 `cardZoom.draft`, one section for the pack, a face-up Winston pile and the pool, because they are
-one table a card is dragged across; the pick screen's **Card size** slider walks the same ladder
-through `zoomCards`, so the two controls are one number and it is remembered with the other walls'.
+one table a card is dragged across, and it is remembered with the other walls'. The gesture is
+the only control: the pick screen's **Card size** slider, which walked the same ladder, was removed
+as redundant (issue #1470).
 The pool's eight columns take the zoom as a ceiling (`minmax(0, 190px × zoom)`) so the pool still
 fits without a scroll. Open Packs' opened wall is a section of its own, `packs`.
+
+**An opened card is the app's own tile** (issue #1462): `OpenedWall` draws each card with
+`components/CardTile` — the art, and under it the `CardChin` every other wall draws, with the
+rarity, `SET · number`, the finish and the price at the page's marketplaces. A card MTGJSON knows
+and the corpus does not is the same tile with no picture and no press, its chin still naming the
+printing. It had drawn its own art-and-caption row (a rarity label and a price, no set or number)
+until a reader asked why its cards looked unlike every other wall's.
 
 A refused pick changes nothing (the session is cloned and put back on any error). A solo draft is
 saved after each change (`app_meta` `draft_session`) and can be resumed; a pod cannot.
@@ -169,12 +186,21 @@ nothing reaches the collection, which is the owner's rule. It has a **Deck** pil
 default, drawn while empty) and the deck's own Sideboard renamed **Pool** (one `side` pile per list
 is all `idx_deck_categories_kind` allows), holding the whole pool.
 
-Until the reader saves it, its id is on `app_meta` `draft_decks` (never synced), and the editor is in
+Until the reader saves it, it is on `app_meta` `draft_decks` (never synced), and the editor is in
 **draft mode**: no card search dock (neither the corpus search nor the Collection tab), no Quick Add,
 no import, no `Add to ▸ Collection/Wishlist`, and `DraftDeckBar` in their place — basics from a
 printing of the draft's sets, **Save deck** (off the list: a deck like any other), **Export** (the
 editor's own dialog) and **Discard** (deleted; refused for a deck not on the list, so a stale page
 cannot delete a saved one).
+
+**An entry is the deck's id and its `sync_uid` (`DraftDeckRef`), and a deck is a draft deck only
+while both match** (issue #1467). `decks.id` has no `AUTOINCREMENT`, so SQLite gives a deleted
+highest id to the next deck: a draft deck deleted from the gallery used to leave its bare id on the
+list, and the next deck the reader made opened in draft mode — with a **Discard** that deleted it.
+The uid is never reused, so `draft_deck::ids`, `discard` and the editor's `useIsDraftDeck` (once
+`deck_get` answers) all hold a deck to both. A legacy entry (a bare id) is dropped, the safe
+direction. The list's query key is under the decks root (`["decks", "draftDecks"]`), so every deck
+write's invalidation asks it again.
 
 ## Pods and lobby codes
 
