@@ -14,10 +14,38 @@ export function setMatches(set: BoosterSetSummary, text: string): boolean {
   return set.name.toLowerCase().includes(needle) || set.code.toLowerCase().includes(needle);
 }
 
+/** The sets of one release year, as {@link byYear} cuts them; `year` is `null` for undated sets. */
+export interface SetYear {
+  year: string | null;
+  sets: BoosterSetSummary[];
+}
+
+/**
+ * `sets` cut into runs of one release year, **in the order given** (issue #1456): a new run starts
+ * wherever the year changes, so the newest-first list `useBoosterSets` hands over becomes one run
+ * per year, and a list in any other order is never reordered — only cut. Pure, for its suite.
+ */
+export function byYear(sets: readonly BoosterSetSummary[]): SetYear[] {
+  const runs: SetYear[] = [];
+  for (const set of sets) {
+    const year = set.releaseDate?.slice(0, 4) ?? null;
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.year === year) last.sets.push(set);
+    else runs.push({ year, sets: [set] });
+  }
+  return runs;
+}
+
 /**
  * A wall of set tiles to pick one from — the Packs page's first step and the draft's pack order
  * (spec §7): a filter box, then every set as a dark tile with its keyrune symbol centred above its
- * name, in the order given (`useBoosterSets` gives newest first).
+ * name, in the order given (`useBoosterSets` gives newest first), under a divider per release year
+ * (issue #1456) — the year in the accent heading face between two rules, as the home page's
+ * activity days are headed.
+ *
+ * **Each year is a list of its own**, named by its year, inside the wall's one list (`label`): a
+ * screen reader hears "2025, list, 12 items" on entering a year. The year is a label, not a
+ * heading, because the wall sits under an `<h2>` on Open Packs and an `<h3>` in the pack order.
  *
  * **A tile is a button**, so the wall is walked with Tab and pressed with Enter or Space; `picked`
  * rings one and says so (`aria-pressed`). The filter is the grid's own unless the caller holds it
@@ -79,18 +107,11 @@ export function SetGrid({
           {sets.length === 0 ? "No sets to open yet." : `No set matches “${text.trim()}”.`}
         </p>
       ) : (
-        <ul
-          aria-label={label}
-          className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2 p-0"
-        >
-          {shown.map((set) => (
-            <li key={set.code} className="flex">
-              <SetTile
-                set={set}
-                picked={set.code === picked}
-                suggested={suggested?.includes(set.code.toLowerCase()) === true}
-                onPick={() => onPick(set)}
-              />
+        <ul aria-label={label} className="m-0 flex list-none flex-col gap-5 p-0">
+          {byYear(shown).map((run, i) => (
+            // A year can come back in a list not sorted by date (`byYear` never reorders).
+            <li key={`${run.year ?? "undated"}-${i}`}>
+              <YearRun run={run} picked={picked} suggested={suggested} onPick={onPick} />
             </li>
           ))}
         </ul>
@@ -99,8 +120,52 @@ export function SetGrid({
   );
 }
 
-/** One set: its symbol, its name, its code and year in dim mono — and *Suggested* when it is one
- *  of the sets the draft is made for. */
+/** One year's divider — its label between two rules — and its sets' tiles under it. */
+function YearRun({
+  run,
+  picked,
+  suggested,
+  onPick,
+}: {
+  run: SetYear;
+  picked: string | null;
+  suggested: readonly string[] | undefined;
+  onPick: (set: BoosterSetSummary) => void;
+}): JSX.Element {
+  const labelId = useId();
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <span aria-hidden="true" className="h-px w-3.5 bg-border" />
+        <span
+          id={labelId}
+          className="shrink-0 font-heading text-sm leading-none tabular-nums text-accent"
+        >
+          {run.year ?? "Undated"}
+        </span>
+        <span aria-hidden="true" className="h-px flex-1 bg-border" />
+      </div>
+      <ul
+        aria-labelledby={labelId}
+        className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2 p-0"
+      >
+        {run.sets.map((set) => (
+          <li key={set.code} className="flex">
+            <SetTile
+              set={set}
+              picked={set.code === picked}
+              suggested={suggested?.includes(set.code.toLowerCase()) === true}
+              onPick={() => onPick(set)}
+            />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** One set: its symbol, its name, its code in dim mono — and *Suggested* when it is one of the
+ *  sets the draft is made for. The year is the divider's, not the tile's (issue #1456). */
 function SetTile({
   set,
   picked,
@@ -112,7 +177,6 @@ function SetTile({
   suggested: boolean;
   onPick: () => void;
 }): JSX.Element {
-  const year = set.releaseDate?.slice(0, 4);
   return (
     <button
       type="button"
@@ -140,7 +204,6 @@ function SetTile({
       <span className="line-clamp-2 text-sm leading-tight">{set.name}</span>
       <span className="font-mono text-[0.6875rem] uppercase tracking-wider text-dim">
         {set.code}
-        {year !== undefined && ` · ${year}`}
       </span>
     </button>
   );
