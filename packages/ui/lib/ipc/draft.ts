@@ -147,6 +147,17 @@ export interface DraftSaved {
   updatedAt: number;
 }
 
+/**
+ * One unsaved draft deck — `grimoire_core::draft_deck::DraftDeckRef`: its id and the
+ * `decks.sync_uid` it was made with. **The pair is the identity, never the id alone** (issue
+ * #1467): deck ids are reused after a delete, so a bare id can name an ordinary deck that took a
+ * deleted draft deck's id. Hold an open deck to both (`useIsDraftDeck`).
+ */
+export interface DraftDeckRef {
+  id: number;
+  syncUid: string;
+}
+
 /** A basic land's printing the draft bar adds. */
 export interface BasicLand {
   /** `W`, `U`, `B`, `R`, `G`. */
@@ -233,8 +244,8 @@ export const draftCommands = {
    */
   draftDeckCreate: (name: string, cardIds: string[], commander: boolean) =>
     invoke<DeckRow>("draft_deck_create", { name, cardIds, commander }),
-  /** The draft decks not saved yet. */
-  draftDeckIds: () => invoke<number[]>("draft_deck_ids"),
+  /** The draft decks not saved yet, each as its id and the uid it was made with. */
+  draftDeckIds: () => invoke<DraftDeckRef[]>("draft_deck_ids"),
   /** Save: the deck leaves the unsaved list, and is a deck like any other. */
   draftDeckKeep: (deckId: number) => invoke<void>("draft_deck_keep", { deckId }),
   /** Discard: the deck is deleted. */

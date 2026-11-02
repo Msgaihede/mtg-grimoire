@@ -30,10 +30,15 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   holds, what it is worth on average and where a pack falls are `booster/`'s. Never move that math
   to Rust, and never put a price in `BoosterSet`.
 - **Open Packs prices at the page's own marketplaces** (`packs/marketplaces.ts`, issue #1446): one
-  or several of one currency, the app's marketplace until the reader picks, kept per device in
-  `localStorage` — never `app_meta`, and never written to the app's setting. A card is worth each
-  finish's lowest quote among them (`lowestPrices`); never mix currencies, and never let the pick
-  go empty.
+  or several, picked in a searchable combobox (`packs/MarketplaceCombobox.tsx`), the app's
+  marketplace until the reader picks, kept per device in `localStorage` — never `app_meta`, and
+  never written to the app's setting. A card is worth each finish's lowest quote among them
+  (`lowestPrices`), and never let the pick go empty.
+- **Two currencies meet only through the ECB's rate** (`packs/currency.ts`, issue #1463): a pick of
+  dollars and euros is priced in the app's currency, each answer multiplied by its factor
+  (`convertPrices`) before the lowest is taken. With no rate, the other currency is left out and
+  the page says so — never compare a euro with a dollar unconverted, and never convert a price
+  anywhere but this page.
 - **Open Packs' reduced price is the page's own** (`packs/reducedPick.ts`): its sell percentage and
   minimum are kept the marketplace pick's way, and never read from or written to Settings'
   collection value. The sum is `lib/collectionValue.ts`' `reducedValue`; never write a second one.
@@ -50,8 +55,13 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 - **A draft deck is built from its pool alone** (the owner's rule): it is virtual (nothing reaches
   the collection), and while it is on `draft_decks` the editor mounts no card search dock, no Quick
   Add, no import and no `Add to ▸ Collection/Wishlist`. A new way into a deck must be switched off
-  for a draft deck too. Call `rememberDraftDeck` before `openDraftDeck`, so the editor's first frame
-  is already in draft mode.
+  for a draft deck too. Call `rememberDraftDeck` (with the created `DeckRow`) before
+  `openDraftDeck`, so the editor's first frame is already in draft mode.
+- **A draft deck is its id and its `syncUid` together, never the id alone** (issue #1467). Deck ids
+  are reused after a delete, so a bare id can name an ordinary deck; the unsaved list stores
+  `DraftDeckRef`s and every reader matches both (`isDraftDeckIn`, `useIsDraftDeck(deckId, row)`,
+  `draft_deck::ids` / `discard`). Never test membership by id alone, and keep `DRAFT_DECKS_KEY`
+  under the `["decks"]` root so a deck's delete refreshes it.
 - **A lobby is a draft's, a game's or a trade's** (`LobbyState.kind`, issue #1419): this page
   draws a `draft` lobby only; a `game` lobby is the Playtesting page's and a `trade` lobby the
   Trade page's (`features/trade/lobby/`), which host and join it with the same hooks

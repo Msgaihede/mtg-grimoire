@@ -230,6 +230,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "MTGJSON booster data feeds only the desktop's Draft & Packs page",
     ),
     (
+        "packs_exchange_rate",
+        "The ECB's dollar rate converts prices for the desktop's Open Packs page alone",
+    ),
+    (
         "graphql_query",
         "The read graph (crates/grimoire-graph) is linked by the desktop alone — the owner's decision, 2026-10-29",
     ),

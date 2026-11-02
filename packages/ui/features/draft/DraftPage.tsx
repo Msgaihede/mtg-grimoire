@@ -14,7 +14,7 @@ import {
 import { useDecks } from "@/features/decks/useDecks";
 import { openDraftDeck } from "@/features/draft/navigation";
 import { PackOpener } from "@/features/draft/packs/PackOpener";
-import { useDraftDeckIds } from "@/features/draft/useDraftDecks";
+import { isDraftDeckIn, useDraftDecks } from "@/features/draft/useDraftDecks";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -224,9 +224,10 @@ function DraftHub({
     // Every pick moves it; the hub is drawn between drafts, so it is always asked again.
     staleTime: 0,
   });
-  const draftDeckIds = useDraftDeckIds();
+  const unsaved = useDraftDecks();
   const { decks } = useDecks();
-  const draftDecks = decks.filter((d) => draftDeckIds.includes(d.id));
+  // By id and uid both (issue #1467): an ordinary deck that took a deleted draft deck's id is not one.
+  const draftDecks = decks.filter((d) => isDraftDeckIn(unsaved, d));
   const live = isLive(lobby) ? lobby : null;
   const savedDraft = saved.data ?? null;
   const anything = savedDraft !== null || draftDecks.length > 0 || live !== null;

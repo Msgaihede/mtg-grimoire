@@ -124,6 +124,10 @@ _Amended 2026-11-01 (issue #1446):_ the Packs page prices at one **or several** 
 currency, picked on the page and defaulting to the reader's marketplace; each finish is the lowest
 quote among them. See [draft-and-packs.md](../../reference/draft-and-packs.md).
 
+_Amended 2026-11-02 (issue #1463):_ the pick may name both currencies. It is then priced in the
+app's currency, the other's prices converted at the ECB's daily reference rate, which the desktop
+host fetches and caches (`packs_exchange_rate`); the picker is a searchable combobox.
+
 ## 3. Opening a booster (TypeScript, `packages/ui/features/draft/booster/`)
 
 `open.ts` — `openBooster(product, rng)`: one variant by weight; for each slot, `count` cards from
@@ -270,8 +274,10 @@ collection — the owner's rule), format `limited`, named after the draft, with 
 moves cards from Pool to Deck in the editor. Basic lands are added from a strip of five (W U B R G)
 in the editor's draft bar, in a printing of the draft's own sets where the corpus has one.
 
-Until the reader **saves** it the deck is a draft deck: its id is in `app_meta` `draft_decks` (a
-JSON array; `app_meta` is never synced). The deck editor, for a deck on that list, draws no card
+Until the reader **saves** it the deck is a draft deck: its id **and its `sync_uid`** are in
+`app_meta` `draft_decks` (a JSON array of `{ id, syncUid }`; `app_meta` is never synced). Both must
+match — deck ids are reused after a delete, so an id alone could name an ordinary deck (issue
+#1467). The deck editor, for a deck on that list, draws no card
 search dock (neither the corpus search nor the collection tab), no Quick Add, no pull-from- or
 add-to-collection, and draws the draft bar: Basics, **Save deck** (takes it off the list — it is a
 deck like any other from then on), **Export** (the editor's own export dialog), **Discard** (deletes
@@ -280,7 +286,7 @@ it). The Draft page lists unsaved draft decks under *Draft in progress*.
 | Command | Args | Answers |
 | --- | --- | --- |
 | `draft_deck_create` | `name: String, cardIds: Vec<String>` | `DeckRow` |
-| `draft_deck_ids` | — | `Vec<i64>` (decks that still exist) |
+| `draft_deck_ids` | — | `Vec<DraftDeckRef>` — `{ id, syncUid }` of each deck that still exists with its uid |
 | `draft_deck_keep` | `deckId: i64` | `()` |
 | `draft_deck_discard` | `deckId: i64` | `()` |
 | `draft_basic_lands` | `setCodes: Vec<String>` | `Vec<BasicLand>` |
@@ -369,7 +375,7 @@ Draft, Sealed, Cube Draft, Pod Draft, Open Packs. A flow has a stepper: Choose �
 - **Choose**: bot difficulty; pack order (a set per booster; three for a draft, six for sealed) from
   a grid of set tiles (keyrune icon and name, newest first, filterable); for a cube, a pasted list
   (`1 Lightning Bolt` per line), seats, packs, pack size.
-- **Draft**: the pack (card images, click to choose; drag onto the pool, the Pick button or Enter to pick — issue #1434 replaced the double-click), the
+- **Draft**: the pack (card images, click to choose; double-click, drag onto the pool, the Pick button or Enter to pick — issue #1469 brought back the double-click as a real one, not #1434's second click on a chosen card), the
   round strip (P1 FRA · P2 HOB · P3 HOB, pick n / size), the pool below by mana value, Pick for me.
 - **Build**: `draft_deck_create` → the deck editor in draft mode (§5).
 - **Pod**: Create lobby (supporters) shows the code to share and the people who joined; Join lobby
