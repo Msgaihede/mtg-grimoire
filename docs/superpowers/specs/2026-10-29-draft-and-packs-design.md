@@ -274,8 +274,10 @@ collection — the owner's rule), format `limited`, named after the draft, with 
 moves cards from Pool to Deck in the editor. Basic lands are added from a strip of five (W U B R G)
 in the editor's draft bar, in a printing of the draft's own sets where the corpus has one.
 
-Until the reader **saves** it the deck is a draft deck: its id is in `app_meta` `draft_decks` (a
-JSON array; `app_meta` is never synced). The deck editor, for a deck on that list, draws no card
+Until the reader **saves** it the deck is a draft deck: its id **and its `sync_uid`** are in
+`app_meta` `draft_decks` (a JSON array of `{ id, syncUid }`; `app_meta` is never synced). Both must
+match — deck ids are reused after a delete, so an id alone could name an ordinary deck (issue
+#1467). The deck editor, for a deck on that list, draws no card
 search dock (neither the corpus search nor the collection tab), no Quick Add, no pull-from- or
 add-to-collection, and draws the draft bar: Basics, **Save deck** (takes it off the list — it is a
 deck like any other from then on), **Export** (the editor's own export dialog), **Discard** (deletes
@@ -284,7 +286,7 @@ it). The Draft page lists unsaved draft decks under *Draft in progress*.
 | Command | Args | Answers |
 | --- | --- | --- |
 | `draft_deck_create` | `name: String, cardIds: Vec<String>` | `DeckRow` |
-| `draft_deck_ids` | — | `Vec<i64>` (decks that still exist) |
+| `draft_deck_ids` | — | `Vec<DraftDeckRef>` — `{ id, syncUid }` of each deck that still exists with its uid |
 | `draft_deck_keep` | `deckId: i64` | `()` |
 | `draft_deck_discard` | `deckId: i64` | `()` |
 | `draft_basic_lands` | `setCodes: Vec<String>` | `Vec<BasicLand>` |

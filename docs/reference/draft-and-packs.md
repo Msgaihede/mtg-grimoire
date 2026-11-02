@@ -180,12 +180,21 @@ nothing reaches the collection, which is the owner's rule. It has a **Deck** pil
 default, drawn while empty) and the deck's own Sideboard renamed **Pool** (one `side` pile per list
 is all `idx_deck_categories_kind` allows), holding the whole pool.
 
-Until the reader saves it, its id is on `app_meta` `draft_decks` (never synced), and the editor is in
+Until the reader saves it, it is on `app_meta` `draft_decks` (never synced), and the editor is in
 **draft mode**: no card search dock (neither the corpus search nor the Collection tab), no Quick Add,
 no import, no `Add to ▸ Collection/Wishlist`, and `DraftDeckBar` in their place — basics from a
 printing of the draft's sets, **Save deck** (off the list: a deck like any other), **Export** (the
 editor's own dialog) and **Discard** (deleted; refused for a deck not on the list, so a stale page
 cannot delete a saved one).
+
+**An entry is the deck's id and its `sync_uid` (`DraftDeckRef`), and a deck is a draft deck only
+while both match** (issue #1467). `decks.id` has no `AUTOINCREMENT`, so SQLite gives a deleted
+highest id to the next deck: a draft deck deleted from the gallery used to leave its bare id on the
+list, and the next deck the reader made opened in draft mode — with a **Discard** that deleted it.
+The uid is never reused, so `draft_deck::ids`, `discard` and the editor's `useIsDraftDeck` (once
+`deck_get` answers) all hold a deck to both. A legacy entry (a bare id) is dropped, the safe
+direction. The list's query key is under the decks root (`["decks", "draftDecks"]`), so every deck
+write's invalidation asks it again.
 
 ## Pods and lobby codes
 

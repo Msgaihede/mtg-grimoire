@@ -55,8 +55,13 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 - **A draft deck is built from its pool alone** (the owner's rule): it is virtual (nothing reaches
   the collection), and while it is on `draft_decks` the editor mounts no card search dock, no Quick
   Add, no import and no `Add to ▸ Collection/Wishlist`. A new way into a deck must be switched off
-  for a draft deck too. Call `rememberDraftDeck` before `openDraftDeck`, so the editor's first frame
-  is already in draft mode.
+  for a draft deck too. Call `rememberDraftDeck` (with the created `DeckRow`) before
+  `openDraftDeck`, so the editor's first frame is already in draft mode.
+- **A draft deck is its id and its `syncUid` together, never the id alone** (issue #1467). Deck ids
+  are reused after a delete, so a bare id can name an ordinary deck; the unsaved list stores
+  `DraftDeckRef`s and every reader matches both (`isDraftDeckIn`, `useIsDraftDeck(deckId, row)`,
+  `draft_deck::ids` / `discard`). Never test membership by id alone, and keep `DRAFT_DECKS_KEY`
+  under the `["decks"]` root so a deck's delete refreshes it.
 - **A lobby is a draft's, a game's or a trade's** (`LobbyState.kind`, issue #1419): this page
   draws a `draft` lobby only; a `game` lobby is the Playtesting page's and a `trade` lobby the
   Trade page's (`features/trade/lobby/`), which host and join it with the same hooks

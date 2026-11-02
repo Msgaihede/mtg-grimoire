@@ -10050,7 +10050,13 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 describe("a draft deck", () => {
   const draftDeck = () =>
     detail(
-      { virtualOnly: true, formatKey: "limited", formatName: "Limited", name: "Quick Draft" },
+      {
+        virtualOnly: true,
+        formatKey: "limited",
+        formatName: "Limited",
+        name: "Quick Draft",
+        syncUid: "deck-uid-4",
+      },
       [bolt()],
     );
 
@@ -10063,8 +10069,24 @@ describe("a draft deck", () => {
     expect(screen.queryByRole("region", { name: "Draft deck" })).not.toBeInTheDocument();
   });
 
+  /**
+   * Issue #1467: deck ids are reused after a delete, so a draft deck deleted from the gallery
+   * left its id on the list for the next deck the reader made. The list names a deck by its id
+   * and uid both, and an ordinary deck carrying the id under a uid of its own is no draft deck.
+   */
+  it("draws no draft bar on an ordinary deck that took a deleted draft deck's id", async () => {
+    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "uid-of-the-deleted-draft" }]);
+    deckGet.mockResolvedValue(detail({ name: "My Elves", syncUid: "deck-uid-4" }, [bolt()]));
+    await open();
+    await waitFor(() => expect(draftDeckIds).toHaveBeenCalled());
+
+    expect(await screen.findByRole("button", { name: PANEL_TOGGLE })).toBeInTheDocument();
+    expect(screen.getByLabelText("Quick add a card")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Draft deck" })).not.toBeInTheDocument();
+  });
+
   it("mounts no search dock and no Quick Add, and draws the draft bar", async () => {
-    draftDeckIds.mockResolvedValue([4]);
+    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "deck-uid-4" }]);
     deckGet.mockResolvedValue(draftDeck());
     await open();
 
@@ -10081,7 +10103,7 @@ describe("a draft deck", () => {
   });
 
   it("adds a basic to the deck's default pile, five on a Shift-press, and toasts nothing", async () => {
-    draftDeckIds.mockResolvedValue([4]);
+    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "deck-uid-4" }]);
     deckGet.mockResolvedValue({
       ...draftDeck(),
       deck: { ...draftDeck().deck, defaultCategoryId: MAIN },
@@ -10108,7 +10130,7 @@ describe("a draft deck", () => {
   });
 
   it("opens the editor's own export dialog from the bar's Export", async () => {
-    draftDeckIds.mockResolvedValue([4]);
+    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "deck-uid-4" }]);
     deckGet.mockResolvedValue(draftDeck());
     await open();
 
@@ -10118,7 +10140,7 @@ describe("a draft deck", () => {
   });
 
   it("takes the card menu's Add to ▸ Collection and Wishlist away, and keeps Deck", async () => {
-    draftDeckIds.mockResolvedValue([4]);
+    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "deck-uid-4" }]);
     deckGet.mockResolvedValue(draftDeck());
     await open();
     await screen.findByRole("region", { name: "Draft deck" });

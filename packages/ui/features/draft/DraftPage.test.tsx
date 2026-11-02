@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -72,7 +72,7 @@ const VIEW: DraftView = {
   stack: null,
 };
 
-const DRAFT_DECK = { id: 5, name: "Hobbit Draft", cardCount: 45 } as DeckRow;
+const DRAFT_DECK = { id: 5, name: "Hobbit Draft", cardCount: 45, syncUid: "uid-5" } as DeckRow;
 
 const NOT_SUPPORTER: SupporterStatus = {
   entitled: false,
@@ -141,14 +141,28 @@ describe("DraftPage", () => {
   });
 
   it("lists an unsaved draft deck and continues building it in the editor", async () => {
-    ipcMock.draftDeckIds.mockResolvedValue([5]);
-    ipcMock.deckList.mockResolvedValue([DRAFT_DECK, { ...DRAFT_DECK, id: 6, name: "Other" }]);
+    ipcMock.draftDeckIds.mockResolvedValue([{ id: 5, syncUid: "uid-5" }]);
+    ipcMock.deckList.mockResolvedValue([
+      DRAFT_DECK,
+      { ...DRAFT_DECK, id: 6, name: "Other", syncUid: "uid-6" },
+    ]);
     setup();
     const progress = await screen.findByRole("region", { name: "Draft in progress" });
     expect(within(progress).getByText("Hobbit Draft")).toBeInTheDocument();
     expect(within(progress).queryByText("Other")).not.toBeInTheDocument();
     await userEvent.click(within(progress).getByRole("button", { name: "Continue building" }));
     expect(openDraftDeck).toHaveBeenCalledWith(5);
+  });
+
+  it("lists no ordinary deck that took a deleted draft deck's id (issue #1467)", async () => {
+    // The entry names deck 5 by the uid the draft made it with; deck 5 is now another deck.
+    ipcMock.draftDeckIds.mockResolvedValue([{ id: 5, syncUid: "uid-of-the-deleted-draft" }]);
+    ipcMock.deckList.mockResolvedValue([{ ...DRAFT_DECK, name: "My Elves" }]);
+    setup();
+    await waitFor(() => expect(ipcMock.draftDeckIds).toHaveBeenCalled());
+    expect(await screen.findByRole("region", { name: "Start new" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Draft in progress" })).not.toBeInTheDocument();
+    expect(screen.queryByText("My Elves")).not.toBeInTheDocument();
   });
 
   it("opens a mode's setup, and comes back by the trail", async () => {
