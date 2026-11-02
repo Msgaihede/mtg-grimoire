@@ -1,4 +1,5 @@
 import type { BelowMinimum, CollectionValue } from "@/lib/ipc";
+import { parsePurchasePrice } from "@/lib/prices";
 
 /**
  * The reduced price: what a reader expects to get for their cards rather than what the market
@@ -26,6 +27,39 @@ export function reducesValue(settings: CollectionValue): boolean {
  *  exactly what they were before this setting existed. */
 export function minimumOf(settings: CollectionValue): number | undefined {
   return settings.minimumValue > 0 ? settings.minimumValue : undefined;
+}
+
+/** A sell percentage as a box reads it: `70`, `70%` or `70.5`. Empty is the default (100), and
+ *  anything outside above 0 and at most 100 is `null`, a refusal. */
+export function parseSellPercent(text: string): number | null {
+  const trimmed = text.replace("%", "").trim();
+  if (trimmed === "") return DEFAULT_COLLECTION_VALUE.sellPercent;
+  const value = Number(trimmed.replace(",", "."));
+  return Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
+}
+
+/** A minimum card value as a box reads it. Empty is no minimum; an unreadable price is `null`. */
+export function parseMinimumValue(text: string): number | null {
+  if (text.trim() === "") return DEFAULT_COLLECTION_VALUE.minimumValue;
+  const value = parsePurchasePrice(text);
+  return value === undefined ? null : value;
+}
+
+/** What `values` leave under `minimum`: each priced copy strictly below it, at its own price. An
+ *  unpriced copy (`null`) is not below anything — the collection's rule, which SQL answers there. */
+export function belowMinimumOf(
+  values: Iterable<number | null>,
+  minimum: number,
+): BelowMinimum {
+  let cards = 0;
+  let value = 0;
+  for (const v of values) {
+    if (v !== null && v < minimum) {
+      cards += 1;
+      value += v;
+    }
+  }
+  return { cards, value };
 }
 
 /** Whole cents. Each line of a breakdown is rounded before the next is taken from it, so the lines

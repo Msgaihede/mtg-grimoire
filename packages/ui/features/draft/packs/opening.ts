@@ -2,7 +2,13 @@
  * The Packs page's conclusions, pure: what one press opened, what the product is worth, and the
  * order the opened cards are laid out in. The components only draw these.
  */
-import type { BoosterCard, BoosterSet } from "@/lib/ipc";
+import {
+  belowMinimumOf,
+  minimumOf,
+  reducedValue,
+  type ReducedValue,
+} from "@/lib/collectionValue";
+import type { BoosterCard, BoosterSet, CollectionValue } from "@/lib/ipc";
 import { rarityRank } from "@/lib/rarity";
 import {
   openBooster,
@@ -178,4 +184,27 @@ export function sortOpened(
 /** What the opened cards are worth together. */
 export function openedValue(opened: Opened, priceOf: PriceOf): number {
   return packValue(opened.cards, priceOf);
+}
+
+/** Each opened card's price, in the opened order — `null` for an unpriced one. */
+export function openedPrices(opened: Opened, priceOf: PriceOf): (number | null)[] {
+  return opened.cards.map((c) => priceOf(c.cardId, c.foil));
+}
+
+/**
+ * `full` at the page's own sell percentage and minimum (`reducedPick.ts`), from the prices of the
+ * copies that make it up: the collection's sum (`reducedValue`), with the minimum compared here per
+ * copy rather than in SQL. `null` where the figures reduce nothing.
+ */
+export function reducedOpening(
+  full: number,
+  prices: Iterable<number | null>,
+  settings: CollectionValue,
+): ReducedValue | null {
+  const minimum = minimumOf(settings);
+  return reducedValue(
+    full,
+    minimum === undefined ? undefined : belowMinimumOf(prices, minimum),
+    settings,
+  );
 }

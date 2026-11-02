@@ -50,6 +50,11 @@ names it; a band has no rail, so the line carries its name.
 printing's price, so a card that fell under the minimum last week counts before that and not after.
 It is not a record of what the reader had set at the time.
 
+**Open Packs has figures of its own**, not these: a sell percentage and a minimum on the page,
+kept per device in `localStorage` and never in `app_meta` ([draft-and-packs.md](draft-and-packs.md)).
+It runs the same `reducedValue`, with the minimum compared in TypeScript (`belowMinimumOf`) over
+the cards it opened, and its tooltip names the page instead of Settings (`ReducedPrice`'s `setIn`).
+
 ## `ReducedPrice`
 
 `components/ReducedPrice.tsx` draws the brackets, the dotted underline and the tooltip's breakdown.

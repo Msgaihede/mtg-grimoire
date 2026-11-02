@@ -1,9 +1,12 @@
 import { useId, useState, type JSX, type ReactNode } from "react";
+import { ReducedPrice } from "@/components/ReducedPrice";
+import type { ReducedValue } from "@/lib/collectionValue";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice, parsePurchasePrice, unreadablePriceNote } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { chanceToBeat, histogram, percentileOf } from "../booster/value";
 import type { Figures } from "./opening";
+import { PACKS_SET_IN } from "./ReducedInputs";
 import { ValueHistogram } from "./ValueHistogram";
 
 /** Bars in the distribution: enough for its shape, few enough that each is a bar and not a hair. */
@@ -31,13 +34,19 @@ export interface Tally {
   value: number;
   ev: number;
   currency: Currency;
+  /** Every priced card opened, at its own price: the reduced price is drawn from these at the
+   *  page's figures as they stand, so a minimum changed mid-session reprices the whole session. */
+  prices: number[];
+  /** Cards opened that had no price, said in the reduced price's tooltip. */
+  unpriced: number;
 }
 
 /**
  * The product's figures beside what was opened (spec §7; botbox.dev's *Expected Value & Pack
  * Statistics*): expected value in theory and over ten thousand simulated packs, the spread, the
  * median, the pack's percentile, the chance to beat what the reader paid, the distribution with the
- * pack marked on it, and the session's tally.
+ * pack marked on it, and the session's tally — its total value with the page's reduced price beside
+ * it, when one is set.
  *
  * `figures` is `null` until the prices have answered — every figure here is a sum of prices, and a
  * sum over em dashes would be a confident zero.
@@ -49,6 +58,7 @@ export function PackFigures({
   noun,
   currency,
   tally,
+  reducedTally = null,
 }: {
   figures: Figures | null;
   /** What was opened is worth this. */
@@ -59,6 +69,9 @@ export function PackFigures({
   noun: string;
   currency: Currency;
   tally: Tally;
+  /** The session's total at the page's sell percentage and minimum; `null` when they reduce
+   *  nothing. */
+  reducedTally?: ReducedValue | null;
 }): JSX.Element {
   const paidId = useId();
   const [paidText, setPaidText] = useState("");
@@ -152,7 +165,21 @@ export function PackFigures({
         <h3 className={LABEL}>This session</h3>
         <dl className="m-0 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-sm">
           <Row term="Opened">{tally.opened.toLocaleString("en-US")}</Row>
-          <Row term="Total value">{formatPrice(tally.value, tally.currency)}</Row>
+          <Row term="Total value">
+            {formatPrice(tally.value, tally.currency)}
+            {reducedTally !== null && (
+              <>
+                {" "}
+                <ReducedPrice
+                  value={reducedTally}
+                  currency={tally.currency}
+                  unpriced={tally.unpriced}
+                  setIn={PACKS_SET_IN}
+                  className="text-dim"
+                />
+              </>
+            )}
+          </Row>
           <Row term="Total expected">{formatPrice(tally.ev, tally.currency)}</Row>
         </dl>
       </section>

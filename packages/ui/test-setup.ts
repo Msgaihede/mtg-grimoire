@@ -6,6 +6,7 @@ import { resetBulkUndo } from "@/lib/bulkUndo";
 import { resetNotifications } from "@/lib/notifications";
 import { resetViewMemory } from "@/lib/viewMemory";
 import { resetPackMarketplaces } from "@/features/draft/packs/marketplacePick";
+import { resetPackReduced } from "@/features/draft/packs/reducedPick";
 
 /**
  * Every `motion` animation lands on its final value in one frame, for the whole suite.
@@ -95,6 +96,8 @@ afterEach(resetViewMemory);
 // The Packs page's marketplace pick (issue #1446) is kept in `localStorage` and a store over it:
 // a pick one test made would otherwise be what the next test's page priced at.
 afterEach(resetPackMarketplaces);
+// Its sell percentage and minimum too, kept the same way and for the same reason.
+afterEach(resetPackReduced);
 
 // `@/lib/notifications` too: a toast one test raised would otherwise be on screen, and in the
 // inbox, of the next.

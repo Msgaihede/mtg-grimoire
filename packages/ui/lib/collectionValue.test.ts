@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_COLLECTION_VALUE,
   addBelow,
+  belowMinimumOf,
   minimumOf,
+  parseMinimumValue,
+  parseSellPercent,
   reducedPoint,
   reducedValue,
   reducesValue,
@@ -76,5 +79,31 @@ describe("reducedPoint", () => {
     expect(reducedPoint(100, 40, { sellPercent: 50, minimumValue: 0 })).toBe(50);
     expect(reducedPoint(100, 40, BOTH)).toBe(42);
     expect(reducedPoint(10, 40, BOTH)).toBe(0);
+  });
+});
+
+describe("the boxes and the per-copy minimum", () => {
+  it("reads a percentage box, empty as 100 and out of bounds as a refusal", () => {
+    expect(parseSellPercent("70")).toBe(70);
+    expect(parseSellPercent(" 70,5 % ")).toBe(70.5);
+    expect(parseSellPercent("")).toBe(100);
+    expect(parseSellPercent("0")).toBeNull();
+    expect(parseSellPercent("101")).toBeNull();
+    expect(parseSellPercent("lots")).toBeNull();
+  });
+
+  it("reads a minimum box, empty as none and an unreadable price as a refusal", () => {
+    expect(parseMinimumValue("0.50")).toBe(0.5);
+    expect(parseMinimumValue("")).toBe(0);
+    expect(parseMinimumValue("-1")).toBeNull();
+  });
+
+  /** The collection's SQL rule, here over a list: strictly below, each copy at its own price, and
+   *  an unpriced copy below nothing. */
+  it("counts each priced copy strictly below the minimum", () => {
+    const below = belowMinimumOf([0.1, 0.1, 0.5, null, 9, 0.49], 0.5);
+    expect(below.cards).toBe(3);
+    expect(below.value).toBeCloseTo(0.69, 10);
+    expect(belowMinimumOf([], 0.5)).toEqual({ cards: 0, value: 0 });
   });
 });

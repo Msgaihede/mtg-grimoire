@@ -79,6 +79,11 @@ import { packValue, finishPrice } from "../booster/value";
 import { figuresOf, openOne } from "./opening";
 import { openables } from "./products";
 import { parseStored, STORAGE_KEY, usePackMarketplaceStore } from "./marketplacePick";
+import {
+  parseStored as parseReduced,
+  STORAGE_KEY as REDUCED_KEY,
+  usePackReducedStore,
+} from "./reducedPick";
 import { PackOpener } from "./PackOpener";
 
 const halved = (p: FinishPrices): FinishPrices => ({
@@ -317,6 +322,97 @@ describe("PackOpener", () => {
         expect(screen.getByText(/^Expected value/)).toHaveTextContent(expectedLine(lowest, "usd")),
       );
       expect(printingPrices).not.toHaveBeenCalledWith(expect.any(Array), "cardmarket");
+    });
+  });
+
+  /** The page's own sell percentage and minimum, apart from Settings' collection value. */
+  describe("the reduced price", () => {
+    /** The opened pack's prices as the page reads them: the land is not in the corpus. */
+    const priceOf = (id: string, foil: boolean) =>
+      id === "land" ? null : finishPrice(PRICES.get(id), foil);
+
+    /** `(full − below the minimum) × percent`, worked here rather than by the page's own helper. */
+    function reducedOf(prices: (number | null)[], percent: number, minimum: number): number {
+      const full = prices.reduce<number>((s, p) => s + (p ?? 0), 0);
+      const below = prices.reduce<number>(
+        (s, p) => s + (p !== null && p < minimum ? p : 0),
+        0,
+      );
+      return Math.round((full - below) * percent) / 100;
+    }
+
+    it("draws none until a figure is set", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await screen.findByText(/^Expected value/);
+      await user.click(screen.getByRole("button", { name: "Open" }));
+      expect(screen.queryByRole("button", { name: /^Reduced price/ })).toBeNull();
+    });
+
+    it("draws it beside the opening's total and the session's, and keeps the figures", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await screen.findByText(/^Expected value/);
+      await user.type(screen.getByLabelText("Sell at"), "50");
+      await user.type(screen.getByLabelText("Minimum"), "0.50{Enter}");
+      await user.click(screen.getByRole("button", { name: "Open" }));
+
+      const expected = openOne(SET, { kind: "booster", id: "collector", name: "" }, SEED);
+      const prices = expected.cards.map((c) => priceOf(c.cardId, c.foil));
+      // The commons, at 10¢, are under the minimum: the reduced price is not merely half.
+      expect(prices.some((p) => p !== null && p < 0.5)).toBe(true);
+      const money = formatPrice(reducedOf(prices, 50, 0.5), "usd");
+
+      const heading = screen.getByRole("heading", { name: /Total value/ });
+      expect(
+        within(heading).getByRole("button", { name: `Reduced price ${money}` }),
+      ).toBeInTheDocument();
+      // Full value stays: the reader needs both.
+      expect(heading).toHaveTextContent(formatPrice(packValue(expected.cards, priceOf), "usd"));
+      const figures = screen.getByRole("complementary", { name: "Figures" });
+      expect(
+        within(figures).getByRole("button", { name: `Reduced price ${money}` }),
+      ).toBeInTheDocument();
+
+      expect(parseReduced(window.localStorage.getItem(REDUCED_KEY))).toEqual({
+        sellPercent: 50,
+        minimumValue: 0.5,
+      });
+    });
+
+    it("opens on the figures this device remembers", async () => {
+      window.localStorage.setItem(
+        REDUCED_KEY,
+        JSON.stringify({ sellPercent: 70, minimumValue: 0 }),
+      );
+      // The store reads the device's figures once, as the window loads; this is that load.
+      usePackReducedStore.setState({
+        settings: parseReduced(window.localStorage.getItem(REDUCED_KEY)),
+      });
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      expect(await screen.findByLabelText("Sell at")).toHaveValue("70");
+      expect(screen.getByLabelText("Minimum")).toHaveValue("");
+      await screen.findByText(/^Expected value/);
+      await user.click(screen.getByRole("button", { name: "Open" }));
+
+      const expected = openOne(SET, { kind: "booster", id: "collector", name: "" }, SEED);
+      const prices = expected.cards.map((c) => priceOf(c.cardId, c.foil));
+      expect(
+        screen.getAllByRole("button", {
+          name: `Reduced price ${formatPrice(reducedOf(prices, 70, 0), "usd")}`,
+        }),
+      ).toHaveLength(2);
+    });
+
+    it("refuses a percentage out of bounds and keeps nothing", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await user.type(await screen.findByLabelText("Sell at"), "150");
+      await user.tab();
+      expect(screen.getByText("Sell at has to be above 0 and at most 100%.")).toBeInTheDocument();
+      expect(window.localStorage.getItem(REDUCED_KEY)).toBeNull();
+      expect(usePackReducedStore.getState().settings.sellPercent).toBe(100);
     });
   });
 
