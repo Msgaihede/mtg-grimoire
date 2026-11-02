@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 import { CHIN_RISE, chinHeight } from "@/lib/cardZoom";
 import { CardChin } from "./CardChin";
 
@@ -266,6 +270,71 @@ describe("CardChin", () => {
       act(() => void vi.advanceTimersByTime(TOOLTIP_OPEN_MS));
 
       expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  /**
+   * Issue #1458: an unreleased printing is marked by a red icon right after the set and number —
+   * not a chip over the art — whose tooltip and accessible name carry the release date and, when
+   * known, the day the preview image was last replaced.
+   */
+  describe("the unreleased mark", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("sits right after the printing line, red, with both dates on hover", () => {
+      render(
+        <TooltipProvider>
+          <CardChin
+            rarity="rare"
+            zoom={1}
+            setCode="tla"
+            collectorNumber="12"
+            money="$1.00"
+            unreleased={{ set: "TLA", date: "2026-11-14", imageUpdated: "2026-10-09" }}
+            seam="art"
+          />
+        </TooltipProvider>,
+      );
+      const mark = screen.getByRole("img", {
+        name: "Unreleased — out 2026-11-14 · Image updated 2026-10-09",
+      });
+      expect(mark.getAttribute("class")).toContain("text-destructive");
+      expect(mark.previousElementSibling).toBe(screen.getByText("TLA · 12"));
+      // The line gives up `flex-1` so the mark hugs it rather than the price.
+      expect(screen.getByText("TLA · 12").className).not.toContain("flex-1");
+
+      fireEvent.pointerEnter(mark);
+      act(() => void vi.advanceTimersByTime(TOOLTIP_OPEN_MS));
+      const lines = [
+        ...(document.getElementById(TOOLTIP_PANEL_ID)?.querySelectorAll(".block") ?? []),
+      ];
+      expect(lines.map((line) => line.textContent)).toEqual([
+        "Unreleased — out 2026-11-14",
+        "Image updated 2026-10-09",
+      ]);
+    });
+
+    it("says only the release date when the image's day is unknown", () => {
+      render(
+        <CardChin
+          rarity="rare"
+          zoom={1}
+          setCode="tla"
+          collectorNumber="12"
+          unreleased={{ set: "TLA", date: "2026-11-14" }}
+          seam="art"
+        />,
+      );
+      expect(screen.getByRole("img", { name: "Unreleased — out 2026-11-14" })).toBeInTheDocument();
+    });
+
+    it("draws nothing for a released printing", () => {
+      const { container } = render(
+        <CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" seam="art" />,
+      );
+      expect(container.querySelector("[data-unreleased-mark]")).toBeNull();
+      expect(screen.getByText("C21 · 179").className).toContain("flex-1");
     });
   });
 });

@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  imageUpdatedChipLabel,
   imageUpdatedDay,
   isUnreleased,
   localDay,
-  releaseChipLabel,
   unreleasedLabel,
+  unreleasedLines,
   unreleasedStamp,
 } from "./unreleased";
 
@@ -54,8 +53,13 @@ describe("unreleased", () => {
     expect(unreleasedLabel("2026-11-14")).toBe("Unreleased — out 2026-11-14");
   });
 
-  it("says the chip's words", () => {
-    expect(releaseChipLabel("2026-11-14")).toBe("Releases 2026-11-14");
-    expect(imageUpdatedChipLabel("2026-10-09")).toBe("Image updated 2026-10-09");
+  /** Issue #1458: the chin's mark is an icon, so its tooltip carries both dates. */
+  it("says the release date, then the image's day when the stamp has one", () => {
+    expect(unreleasedLines({ set: "TLA", date: "2026-11-14" })).toEqual([
+      "Unreleased — out 2026-11-14",
+    ]);
+    expect(unreleasedLines({ set: "TLA", date: "2026-11-14", imageUpdated: "2026-10-09" })).toEqual(
+      ["Unreleased — out 2026-11-14", "Image updated 2026-10-09"],
+    );
   });
 });

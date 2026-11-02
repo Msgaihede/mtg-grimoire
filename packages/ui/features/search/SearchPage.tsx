@@ -269,9 +269,10 @@ const tileTreatment = (card: CardSummary) =>
 const tileGameChanger = (card: CardSummary) => card.gameChanger;
 
 /**
- * The stamp across a result whose printing is **not out yet** — its set code and release date,
- * diagonally over the art (issue #940). The search's default row keeps these printings, which
- * are legal nowhere until their release day, so the wall has to say which ones they are.
+ * The mark on a result whose printing is **not out yet** — a red icon in the tile's chin whose
+ * tooltip says its release date and image day (issues #940, #965, #1458). The search's default row
+ * keeps these printings, which are legal nowhere until their release day, so the wall has to say
+ * which ones they are.
  *
  * Module scope for {@link tileGameChanger}'s reason, and shared with
  * the deck builder's search panel: a spoiler stamped on one wall and bare on another would be

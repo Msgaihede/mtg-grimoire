@@ -665,9 +665,9 @@ export function CardGrid<T extends GridCard>({
    */
   gameChanger?: (card: T) => boolean;
   /**
-   * A tile whose printing is **not out yet** — its set code and release date, drawn by `CardArt`
-   * as a red "Releases <date>" chip in the art's bottom-left corner (issues #940, #965). `null`
-   * draws nothing. The {@link badge} shares that corner and lifts itself above the chip.
+   * A tile whose printing is **not out yet** — its release date and image day, drawn by `CardChin`
+   * as a red icon right after the set and number, with both dates in its tooltip (issues #940,
+   * #965, #1458). `null` draws nothing; the art itself is never covered.
    *
    * A callback for {@link finish}'s reason: only a row that carries `releasedAt` can answer, and
    * absent means no tile is marked.
@@ -2988,7 +2988,6 @@ function Tile<T extends GridCard>({
             finish={tileFinish}
             treatments={tileTreatments}
             gameChanger={crowned}
-            unreleased={stamp}
             hoverZoom
           />
         </button>
@@ -3036,19 +3035,11 @@ function Tile<T extends GridCard>({
             // say, that it takes its own pointer events and opens the card. What `"bare"` drops is
             // the three classes that make a chip, because the marks inside it bring their own.
             //
-            // **Lifted over an unreleased printing's chip**, which `CardArt` draws in this same
-            // corner (issue #965). The chip is a 0.75rem scaled line plus 4px of unscaled hairline
-            // and padding, so 0.25rem of inset, the chip and 0.25rem of gap put the badge just
-            // above it, at every zoom. Two lines when it carries the image's day (issue #1214),
-            // so one more 0.75rem.
+            // It sat lifted over an unreleased printing's chip until issue #1458 moved that fact
+            // into the chin, so this corner is the badge's alone again.
             className={cn(
               "pointer-events-auto absolute empty:hidden",
-              "left-[calc(0.25rem*var(--mark-scale,1))]",
-              stamp?.imageUpdated
-                ? "bottom-[calc(2rem*var(--mark-scale,1)+4px)]"
-                : stamp
-                  ? "bottom-[calc(1.25rem*var(--mark-scale,1)+4px)]"
-                  : "bottom-[calc(0.25rem*var(--mark-scale,1))]",
+              "left-[calc(0.25rem*var(--mark-scale,1))] bottom-[calc(0.25rem*var(--mark-scale,1))]",
               badgeChrome === "chip" && [
                 "bg-bg/85",
                 "rounded-[calc(0.25rem*var(--mark-scale,1))]",
@@ -3252,6 +3243,9 @@ function Tile<T extends GridCard>({
         finish={tileFinish}
         treatments={tileTreatments}
         money={money?.(card)}
+        // A spoiler's red mark, right after the set and number (issue #1458) — the art stays
+        // clear of it.
+        unreleased={stamp}
         // **`"art"`.** `CardArt` draws its own edge and stops where this bar begins, so the chin
         // supplies all three of its own and the two read as one outline. See the prop.
         seam="art"

@@ -97,10 +97,12 @@ using it.
   until the next one (by which time a sync has given it a mask); and an upcoming set's **tokens**
   are legal nowhere *and* future-dated, so they appear too — excluding them needs `layout`, which
   is in no index. The rows carry `releasedAt` (`CardSummary`), and the walls mark an unreleased
-  printing with a red "Releases <date>" chip in the art's bottom-left corner (`UnreleasedChip` in
-  `components/CardArt.tsx`, `tileUnreleased` in `SearchPage.tsx`; it replaced issue #940's
-  diagonal stamp, which hid the art, in issue #965); the table's Name cell says
-  *Unreleased*. Whether a date is in the future is the page's call, against the reader's local
+  printing with a red icon in the chin, right after the set and number, whose tooltip says the
+  release date and the day the preview image was last updated (`UnreleasedMark` in
+  `components/CardChin.tsx`, `tileUnreleased` in `SearchPage.tsx`; issue #1458 moved it there
+  from a "Releases <date>" chip in the art's bottom-left corner, which covered power and
+  toughness — that chip had itself replaced issue #940's diagonal stamp in issue #965); the
+  table's Name cell says *Unreleased*. Whether a date is in the future is the page's call, against the reader's local
   day (`lib/unreleased.ts`).
 - **What `playableOnly` hides, measured in the shipped window 2026-08-14** (`pnpm tauri dev`,
   a **debug** build, live 116 703-printing corpus): of **107 346** paper printings, **9 032** are

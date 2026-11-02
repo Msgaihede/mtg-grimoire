@@ -509,15 +509,21 @@ describe("CardGrid", () => {
   });
 
   /**
-   * Issue #965: a printing not out yet carries a "Releases <date>" chip on its art — through the
-   * search page's own callback, so the rule tested is the one the wall runs — the chip stays out
-   * of the tile button's name, and the owned badge that shares its corner lifts above it.
+   * Issue #1458: a printing not out yet carries a red mark in its **chin**, right after the set and
+   * number — through the search page's own callback, so the rule tested is the one the wall runs.
+   * The art carries nothing, so the owned badge keeps its own corner, and the mark is a sibling of
+   * the tile's button: its words are announced, and the button is still called by the card.
    */
-  it("chips an unreleased printing's tile, and leaves a released one alone", () => {
+  it("marks an unreleased printing's chin, and leaves a released one alone", () => {
     const { container } = render(
       <CardGrid
         rows={[
-          { ...card("aaa", "Spoiled Dragon"), setCode: "tla", releasedAt: "2999-01-01" },
+          {
+            ...card("aaa", "Spoiled Dragon"),
+            setCode: "tla",
+            releasedAt: "2999-01-01",
+            imageUpdatedAt: "2998-12-01T10:00:00Z",
+          },
           { ...card("bbb", "Lightning Bolt"), releasedAt: "1993-08-05" },
         ]}
         onSelect={vi.fn()}
@@ -529,21 +535,22 @@ describe("CardGrid", () => {
       />,
     );
 
-    const chips = container.querySelectorAll("[data-unreleased-chip]");
-    expect(chips).toHaveLength(1);
-    expect(chips[0]?.textContent).toBe("Releases 2999-01-01");
-    expect(screen.getByRole("button", { name: "Spoiled Dragon" })).toContainElement(
-      chips[0] as HTMLElement,
-    );
-    expect(screen.getByRole("button", { name: "Spoiled Dragon" })).toHaveAccessibleName(
-      "Spoiled Dragon",
-    );
-    expect(screen.getByTestId("badge-aaa").parentElement?.className).toContain(
-      "bottom-[calc(1.25rem*var(--mark-scale,1)+4px)]",
-    );
-    expect(screen.getByTestId("badge-bbb").parentElement?.className).toContain(
-      "bottom-[calc(0.25rem*var(--mark-scale,1))]",
-    );
+    expect(container.querySelector("[data-unreleased-chip]")).toBeNull();
+    const marks = container.querySelectorAll("[data-unreleased-mark]");
+    expect(marks).toHaveLength(1);
+    const mark = marks[0] as HTMLElement;
+    expect(mark).toHaveAccessibleName("Unreleased — out 2999-01-01 · Image updated 2998-12-01");
+    expect(mark.getAttribute("class")).toContain("text-destructive");
+    // Right after the printing line, in the chin rather than on the art.
+    expect(mark.previousElementSibling?.textContent).toBe("TLA · 161");
+    const button = screen.getByRole("button", { name: "Spoiled Dragon" });
+    expect(button).not.toContainElement(mark);
+    expect(button).toHaveAccessibleName("Spoiled Dragon");
+    for (const id of ["aaa", "bbb"]) {
+      expect(screen.getByTestId(`badge-${id}`).parentElement?.className).toContain(
+        "bottom-[calc(0.25rem*var(--mark-scale,1))]",
+      );
+    }
   });
 
   /**

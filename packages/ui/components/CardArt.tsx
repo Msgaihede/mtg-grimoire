@@ -5,12 +5,6 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { type Treatment, treatmentTitle } from "@/lib/treatment";
-import {
-  imageUpdatedChipLabel,
-  releaseChipLabel,
-  unreleasedLabel,
-  type UnreleasedStamp,
-} from "@/lib/unreleased";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 
@@ -83,7 +77,6 @@ export function CardArt({
   finish = null,
   treatments,
   gameChanger = false,
-  unreleased = null,
   loading,
   className,
 }: {
@@ -167,17 +160,6 @@ export function CardArt({
    * column (a deck row is one, an orphan is another) must draw nothing rather than guess.
    */
   gameChanger?: boolean;
-  /**
-   * A printing that is **not out yet** — its set code and release date, drawn as the red
-   * "Releases <date>" chip in the art's bottom-left corner by {@link UnreleasedChip}, with an
-   * "Image updated <day>" line above it when the stamp carries one (issue #1214). `null` (the
-   * default) draws nothing.
-   *
-   * Derived by the caller with `unreleasedStamp` from `@/lib/unreleased`, for `finish`'s reason:
-   * only a printing-shaped row knows its date, and a frame that guessed would mark the wrong
-   * cards (issues #940, #965).
-   */
-  unreleased?: UnreleasedStamp | null;
   /**
    * The browser's own intersection gate on this frame's `<img>`. **Absent by default, which
    * emits no attribute at all** — the argued position, not an omission; see where it is passed
@@ -281,87 +263,7 @@ export function CardArt({
         </span>
       )}
 
-      {unreleased && (
-        <UnreleasedChip
-          set={unreleased.set}
-          date={unreleased.date}
-          imageUpdated={unreleased.imageUpdated}
-        />
-      )}
       <FoilOverlay finish={finish} treatments={treatments} gameChanger={gameChanger} />
-    </span>
-  );
-}
-
-/**
- * The chip on an **unreleased** printing (issue #965, replacing #940's diagonal stamp): a small
- * "Releases <date>" box in the art's bottom-left corner, sitting on the chin.
- *
- * Issue #940 drew this fact as the set code and date corner to corner in heavy type, and it hid the
- * very thing a reader opens a spoiler for — the art and the rules text. The fact still has to be
- * seen at a glance on a wall, so it is red, but it is one line in a corner: the card stays the
- * card. **It wears the deck builder's rule-break box** (`WordMark` in
- * `features/decks/CardMarks.tsx`) — red words and a red hairline on the felt rather than a filled
- * red block — so the two red corner marks in the app are one style; the words still tell them
- * apart.
- *
- * Bottom-left because it is a fact about *when*, which sits with the rest of what the chin says
- * about the printing, and because the top two corners are the printing count's and the finish
- * chip's. The search wall's owned badge shares this corner and lifts itself above the chip when
- * both are drawn — see `CardGrid`.
- *
- * Every size is one at 100% zoom multiplied by `--mark-scale`, like {@link FoilOverlay}'s chip, so
- * it stays proportionate from a 0.5× wall to a 2× one — all but the hairline border and the 1px of
- * vertical padding, which stay put like the rule-break box's. So its height is a 0.75rem scaled line
- * plus 4px, and `CardGrid` lifts the owned badge by exactly that sum when both are drawn.
- *
- * **Two lines when the image's day is known** (issue #1214): "Image updated <day>" over
- * "Releases <date>", on one box — how fresh the preview's picture is, then when the card is out.
- * The second line is another 0.75rem scaled, and `CardGrid`'s lift counts it.
- *
- * `aria-hidden` for {@link FoilOverlay}'s reason: this sits inside the tile's button, whose
- * accessible name must stay the card's. Its words are still reachable — the tooltip names the set
- * too, and the search table's Name cell says it in text. `pointer-events-auto` on the chip alone,
- * for the tooltip; a click on it bubbles to the tile's button and opens the card.
- */
-export function UnreleasedChip({
-  set,
-  date,
-  imageUpdated,
-}: {
-  set: string;
-  date: string;
-  imageUpdated?: string | undefined;
-}) {
-  const tip = useTooltip();
-  const words = `${set} · ${unreleasedLabel(date)}`;
-  return (
-    <span
-      aria-hidden="true"
-      data-unreleased-chip
-      {...tip(imageUpdated ? `${words} · ${imageUpdatedChipLabel(imageUpdated)}` : words, {
-        describes: false,
-      })}
-      className={cn(
-        "pointer-events-auto absolute select-none whitespace-nowrap",
-        "bottom-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
-        // The deck builder's rule-break box (`WordMark`'s `art` surface), class for class: the
-        // destructive hairline, the 3px radius, the felt at 85% and the 9px data face.
-        "rounded-[3px] border border-destructive/50 bg-bg/85 font-mono text-destructive",
-        "px-[calc(0.25rem*var(--mark-scale,1))] py-px",
-        "text-[calc(0.5625rem*var(--mark-scale,1))] leading-[calc(0.75rem*var(--mark-scale,1))]",
-      )}
-    >
-      {imageUpdated ? (
-        <>
-          <span className="block" data-image-updated>
-            {imageUpdatedChipLabel(imageUpdated)}
-          </span>
-          <span className="block">{releaseChipLabel(date)}</span>
-        </>
-      ) : (
-        releaseChipLabel(date)
-      )}
     </span>
   );
 }

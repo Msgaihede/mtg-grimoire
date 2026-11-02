@@ -1,10 +1,12 @@
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement, ReactNode, SVGProps } from "react";
+import { CalendarClock } from "lucide-react";
 import { FinishMark } from "@/components/FinishMark";
 import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CHIN_RISE, chinHeight } from "@/lib/cardZoom";
 import type { Finish } from "@/lib/finish";
 import type { Treatment } from "@/lib/treatment";
+import { unreleasedLines, type UnreleasedStamp } from "@/lib/unreleased";
 import { cn } from "@/lib/utils";
 
 /**
@@ -117,6 +119,21 @@ export function CardChin(
      *  button that can say so. */
     extra?: ReactNode;
     /**
+     * A printing that is **not out yet** — drawn as a red {@link UnreleasedMark} right after the
+     * printing line, whose tooltip says the release date and, when the stamp has one, the day the
+     * preview's picture was last replaced. `null` or omitted draws nothing.
+     *
+     * Derived by the caller with `unreleasedStamp` from `@/lib/unreleased`: only a printing-shaped
+     * row knows its date (issues #940, #965).
+     *
+     * **Here, and no longer on the art** (issue #1458). It was a two-line "Image updated <day> /
+     * Releases <date>" chip in the art's bottom-left corner, which sat over a creature's power and
+     * toughness and pushed the owned badge up into the art. The chin is already where the reader
+     * looks for what is true of the printing — its set, number and rarity — so an icon among them
+     * says "unreleased" without covering the card.
+     */
+    unreleased?: UnreleasedStamp | null;
+    /**
      * Whose outline the chin joins, and it is not decoration.
      *
      * * **`"card"`** — under a bordered card (the deck's stacks). `border-x` only, ridden `-mx-px`
@@ -161,6 +178,7 @@ export function CardChin(
     treatments = [],
     money,
     extra,
+    unreleased = null,
     seam,
     tone = "default",
   } = props;
@@ -180,14 +198,61 @@ export function CardChin(
       )}
     >
       <RarityGem rarity={rarity} className="ml-[calc(0.375rem*var(--mark-scale,1))]" />
-      <span {...tip(printingTitle ?? null)} className="min-w-0 flex-1 truncate">
+      {/* `flex-1` moves to the unreleased mark when there is one (as a right auto-margin), so the
+          icon sits right after the number rather than across the bar beside the price. The line
+          stays a direct child of the bar either way — stories find the bar through it. */}
+      <span
+        {...tip(printingTitle ?? null)}
+        className={cn("min-w-0 truncate", unreleased === null && "flex-1")}
+      >
         {printing ?? `${(setCode ?? "").toUpperCase()} · ${collectorNumber ?? ""}`}
       </span>
+      {unreleased !== null && <UnreleasedMark stamp={unreleased} />}
       {marked && <FinishMark finish={finish ?? "nonfoil"} treatments={treatments} />}
       {/* `!= null` and not `!== undefined`: `null` is this codebase's word for an absent price,
           and a caller holding one must get no slot rather than an empty box in the row. */}
       {money != null && <span className="shrink-0 tabular-nums text-text">{money}</span>}
       {extra}
     </span>
+  );
+}
+
+/**
+ * The chin's mark for a printing **not out yet** (issue #1458): a red calendar-and-clock glyph,
+ * the size of the finish mark, right after the set and number.
+ *
+ * Red because it is the one fact on a spoiler a reader must not miss — the card cannot be bought or
+ * played yet — and `text-destructive` is the colour the app says "not usable" in. An icon rather
+ * than words because the chin is one line on a card that can be drawn at 0.5×, already holding the
+ * set, the number, the finish and the price.
+ *
+ * **Its words are its tooltip and its accessible name**, and both carry everything the old art
+ * chip printed: the release date, then the day the preview's picture was last replaced when the
+ * corpus has one. The chin is a sibling of the tile's button, so unlike a mark on the art this
+ * name is announced rather than swallowed by the button's — `role="img"` with an `aria-label`, as
+ * `FinishMark` does, and `describes: false` for the same reason it gives.
+ */
+export function UnreleasedMark({ stamp }: { stamp: UnreleasedStamp }): ReactElement {
+  const tip = useTooltip();
+  const lines = unreleasedLines(stamp);
+  return (
+    <CalendarClock
+      role="img"
+      aria-label={lines.join(" · ")}
+      data-unreleased-mark
+      // `TooltipBinding`'s handlers are typed against `HTMLElement`, and this anchor is the lucide
+      // `<svg>` — the same cast `FinishMark` and `GameChangerMark` make.
+      {...(tip(
+        <>
+          {lines.map((line) => (
+            <span key={line} className="block">
+              {line}
+            </span>
+          ))}
+        </>,
+        { describes: false },
+      ) as SVGProps<SVGSVGElement>)}
+      className="mr-auto inline-block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-destructive"
+    />
   );
 }
