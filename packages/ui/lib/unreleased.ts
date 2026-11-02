@@ -1,12 +1,13 @@
 /**
- * Whether a printing is **not out yet**, and the chip the wall draws on one (issues #940, #965).
+ * Whether a printing is **not out yet**, and the mark the wall draws on one (issues #940, #965,
+ * #1458).
  *
  * The backend hands every result row its `releasedAt` and draws no conclusion: "unreleased" is a
  * comparison against today, and today is the reader's. The search's `playableOnly` keeps these
  * printings in the corpus by the engine's own UTC date (`filters::unreleased_sql`), so for a few
  * hours either side of midnight the two can disagree by a day — a card that is out in the
  * reader's evening and not yet in UTC, or the other way round. Neither direction hides a card
- * that exists; at worst a chip is a day early or late.
+ * that exists; at worst a mark is a day early or late.
  */
 
 /** `YYYY-MM-DD` in the reader's own time zone — the format Scryfall writes `released_at` in. */
@@ -29,7 +30,7 @@ export function isUnreleased(releasedAt: string | null, today: string = localDay
 
 /**
  * What an unreleased printing is marked with — {@link unreleasedStamp}'s answer, and the shape
- * `CardArt`'s `unreleased` prop and `CardGrid`'s takes.
+ * `CardChin`'s `unreleased` prop and `CardGrid`'s takes.
  */
 export interface UnreleasedStamp {
   /** The set code, upper-case. */
@@ -39,7 +40,7 @@ export interface UnreleasedStamp {
   /**
    * The day Scryfall last replaced the printing's images, `YYYY-MM-DD` in UTC — or absent when
    * the corpus has none (issue #1214). A preview's picture is swapped as better scans arrive, so
-   * this is how fresh the one on the tile is; the chip prints it above the release date.
+   * this is how fresh the one on the tile is; the chin's mark says it in its tooltip.
    */
   imageUpdated?: string;
 }
@@ -66,7 +67,7 @@ export function unreleasedStamp(
  * or `null` for no timestamp or one that is not ISO.
  *
  * **The UTC day, by slicing rather than by a formatter**: the timestamp is Scryfall's, written
- * in UTC, and the release date beside it is a UTC calendar date too, so the two lines of the chip
+ * in UTC, and the release date beside it is a UTC calendar date too, so the two lines of the tooltip
  * are read on one calendar. A local-zone formatter would print the day before for an evening scan
  * west of Greenwich.
  */
@@ -75,17 +76,20 @@ export function imageUpdatedDay(imageUpdatedAt: string | null | undefined): stri
   return imageUpdatedAt.slice(0, 10);
 }
 
-/** The words a chip stands for, for a tooltip or a screen reader. */
+/** The words an unreleased mark stands for, for a tooltip or a screen reader. */
 export function unreleasedLabel(releasedAt: string): string {
   return `Unreleased — out ${releasedAt}`;
 }
 
-/** The words on the card's own chip — short enough for a 0.5× tile's bottom-left corner. */
-export function releaseChipLabel(releasedAt: string): string {
-  return `Releases ${releasedAt}`;
-}
-
-/** The line the chip draws above {@link releaseChipLabel} when the image's day is known. */
-export function imageUpdatedChipLabel(day: string): string {
-  return `Image updated ${day}`;
+/**
+ * The lines the chin's unreleased mark says on hover (issue #1458): when the card is out, then —
+ * when the corpus knows it — the day its preview picture was last replaced.
+ *
+ * The mark itself is an icon and nothing else, so these are the whole of what it states; the
+ * chin joins them for the icon's accessible name too.
+ */
+export function unreleasedLines(stamp: UnreleasedStamp): string[] {
+  const lines = [unreleasedLabel(stamp.date)];
+  if (stamp.imageUpdated) lines.push(`Image updated ${stamp.imageUpdated}`);
+  return lines;
 }

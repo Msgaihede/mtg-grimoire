@@ -214,6 +214,24 @@ export const SurgeFoil: Story = {
 };
 
 /**
+ * A printing **not out yet** (issue #1458): a red icon right after the set and number, whose
+ * tooltip says the release date and the day the preview image was last replaced. It used to be a
+ * chip over the art's bottom-left corner, which covered a creature's power and toughness.
+ */
+export const Unreleased: Story = {
+  args: {
+    finish: "foil",
+    unreleased: { set: "C21", date: "2026-11-14", imageUpdated: "2026-10-09" },
+  },
+  play: async ({ canvas }) => {
+    const mark = canvas.getByRole("img", {
+      name: "Unreleased — out 2026-11-14 · Image updated 2026-10-09",
+    });
+    await expect(mark.previousElementSibling).toHaveTextContent("C21 · 179");
+  },
+};
+
+/**
  * A printing this marketplace does not quote draws an em dash rather than a `$0.00` nobody said.
  * The slot takes a node so `formatPrice` fills it and the chin never formats money itself.
  */

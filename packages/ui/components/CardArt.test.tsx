@@ -11,49 +11,6 @@ const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProv
 const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe("CardArt", () => {
-  /**
-   * Issue #965 (replacing #940's diagonal stamp): a spoiler's art is the real card's, so the wall
-   * says it is not out yet — in a red chip in the art's bottom-left corner, which leaves the art
-   * readable. Hidden from the accessible name — the tile's button must still be called by the card.
-   */
-  it("marks an unreleased printing with a release-date chip, out of the accessible name", () => {
-    const { container } = mount(
-      <CardArt
-        cardId="dragon"
-        name="Spoiled Dragon"
-        unreleased={{ set: "TLA", date: "2026-11-14" }}
-      />,
-    );
-    const chip = container.querySelector("[data-unreleased-chip]");
-    expect(chip).not.toBeNull();
-    expect(chip?.getAttribute("aria-hidden")).toBe("true");
-    expect(chip?.textContent).toBe("Releases 2026-11-14");
-    expect(chip?.className).toContain("bottom-[");
-    expect(chip?.className).toContain("left-[");
-    expect(chip?.className).toContain("text-destructive");
-    expect(chip?.className).toContain("border-destructive/50");
-    expect(container.querySelector("svg")).toBeNull();
-  });
-
-  /** Issue #1214: the day the preview's picture last changed, on a line above the release date. */
-  it("puts the image's day above the release date when the stamp carries one", () => {
-    const { container } = mount(
-      <CardArt
-        cardId="dragon"
-        name="Spoiled Dragon"
-        unreleased={{ set: "TLA", date: "2026-11-14", imageUpdated: "2026-10-09" }}
-      />,
-    );
-    const chip = container.querySelector("[data-unreleased-chip]");
-    const lines = [...(chip?.children ?? [])].map((line) => line.textContent);
-    expect(lines).toEqual(["Image updated 2026-10-09", "Releases 2026-11-14"]);
-  });
-
-  it("draws no chip without one", () => {
-    const { container } = mount(<CardArt cardId="bolt" name="Lightning Bolt" />);
-    expect(container.querySelector("[data-unreleased-chip]")).toBeNull();
-  });
-
   it("draws the card's art, named by the card", () => {
     render(<CardArt cardId="bolt" name="Lightning Bolt" />);
     expect(screen.getByRole("img", { name: "Lightning Bolt" })).toBeInTheDocument();
