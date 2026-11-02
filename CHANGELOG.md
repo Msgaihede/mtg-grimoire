@@ -30,6 +30,44 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.66.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.65.0...v0.66.0) (2026-11-02)
+
+
+### Features
+
+* **draft:** choose deck or sideboard for each pick ([d7d5f1f](https://github.com/Msgaihede/mtg-grimoire/commit/d7d5f1f398384b264850e18fee70e4e1a8bbeb09))
+* **draft:** choose deck or sideboard for each pick ([#1471](https://github.com/Msgaihede/mtg-grimoire/issues/1471)) ([e78cb85](https://github.com/Msgaihede/mtg-grimoire/commit/e78cb858a3bb14078039ab0ac21fec652b8ff737))
+* **draft:** compact side-tray view for the pick screen's pool ([969c48f](https://github.com/Msgaihede/mtg-grimoire/commit/969c48f6e1f96e7153c6b58b7de7784da10226f8))
+* **draft:** compact side-tray view for the pick screen's pool ([046074e](https://github.com/Msgaihede/mtg-grimoire/commit/046074e35ce1415b993f11c12f6ae643eb051c4b)), closes [#1474](https://github.com/Msgaihede/mtg-grimoire/issues/1474)
+* **draft:** keep an unsaved draft deck apart from the reader's decks until Save ([91ccfa0](https://github.com/Msgaihede/mtg-grimoire/commit/91ccfa07ee5cb2577f09fb3a1a2da12c65f42eaf))
+* **draft:** keep an unsaved draft deck apart from the reader's decks until Save ([63db53e](https://github.com/Msgaihede/mtg-grimoire/commit/63db53e4205e6804bb0e3c84e9eeb469272460f9)), closes [#1467](https://github.com/Msgaihede/mtg-grimoire/issues/1467)
+* **draft:** pick a card with a double-click ([a4c3b5d](https://github.com/Msgaihede/mtg-grimoire/commit/a4c3b5d1068a9e6a3e7455a600fae599d9652870))
+* **draft:** pick a card with a double-click ([#1469](https://github.com/Msgaihede/mtg-grimoire/issues/1469)) ([da9a6d9](https://github.com/Msgaihede/mtg-grimoire/commit/da9a6d99f1c165efea2116d72805ccdb0a282664))
+* **draft:** rejoin an in-progress pod draft after leaving the page ([00646d0](https://github.com/Msgaihede/mtg-grimoire/commit/00646d008587e62c5b83ee844cf0d6881e2cc1b4))
+* **draft:** rejoin an in-progress pod draft after leaving the page ([de14035](https://github.com/Msgaihede/mtg-grimoire/commit/de14035aeb80bb54b387ef289ae525164935cc62)), closes [#1468](https://github.com/Msgaihede/mtg-grimoire/issues/1468)
+* **draft:** remove the Card size slider from the pick screen ([54400dc](https://github.com/Msgaihede/mtg-grimoire/commit/54400dc8ddd2857f8565b5e16d04f041012e0992))
+* **draft:** remove the Card size slider from the pick screen ([6978fde](https://github.com/Msgaihede/mtg-grimoire/commit/6978fdec614a334a555dbcaa56bd0d2050665529)), closes [#1470](https://github.com/Msgaihede/mtg-grimoire/issues/1470)
+* **draft:** show a large card preview on hover in the pick screen ([d6bf715](https://github.com/Msgaihede/mtg-grimoire/commit/d6bf7151b52792742df35daf6ae00d033e1b585d))
+* **draft:** show a large card preview on hover in the pick screen ([3c6f79e](https://github.com/Msgaihede/mtg-grimoire/commit/3c6f79e8b77635987eaa6f543ea1a8e9093ed48d)), closes [#1472](https://github.com/Msgaihede/mtg-grimoire/issues/1472)
+* **packs:** move the price controls to the right-hand column ([411c1d8](https://github.com/Msgaihede/mtg-grimoire/commit/411c1d8df098602996d76095db8197d086a5ec3e))
+* **packs:** move the price controls to the right-hand column ([597787e](https://github.com/Msgaihede/mtg-grimoire/commit/597787e5822d7d3c015e3818fcf1e07cadb320f9)), closes [#1465](https://github.com/Msgaihede/mtg-grimoire/issues/1465)
+* **packs:** price TCGplayer and Cardmarket together, picked in a searchable combobox ([3681d3e](https://github.com/Msgaihede/mtg-grimoire/commit/3681d3e9b17bc3f382f877749a91c7a70f4120d3))
+* **packs:** price TCGplayer and Cardmarket together, picked in a searchable combobox ([c077ec0](https://github.com/Msgaihede/mtg-grimoire/commit/c077ec0db8184ed9daf1b4a5a9d144d8af2e907f)), closes [#1463](https://github.com/Msgaihede/mtg-grimoire/issues/1463)
+* **packs:** search the product picker as a combobox ([af5645e](https://github.com/Msgaihede/mtg-grimoire/commit/af5645e382dc40ad161ffda8fdd88fc946167037))
+* **packs:** search the product picker as a combobox ([#1464](https://github.com/Msgaihede/mtg-grimoire/issues/1464)) ([0512514](https://github.com/Msgaihede/mtg-grimoire/commit/051251432a1091933436e31346f713866916a3bd))
+* **packs:** searchable set picker on the Open Packs set page ([5460adb](https://github.com/Msgaihede/mtg-grimoire/commit/5460adb1294157d950789034effd760b00bdfa97))
+* **packs:** searchable set picker on the Open Packs set page ([5570ba9](https://github.com/Msgaihede/mtg-grimoire/commit/5570ba928128c26160f8e5369b9323720df72291)), closes [#1466](https://github.com/Msgaihede/mtg-grimoire/issues/1466)
+
+
+### Bug Fixes
+
+* **draft:** keep the empty pool's drop zone one card tall ([b2a771d](https://github.com/Msgaihede/mtg-grimoire/commit/b2a771d7a5395162b57eb203ca68433ce6832c5a))
+* **draft:** keep the empty pool's drop zone one card tall ([2b4ca5d](https://github.com/Msgaihede/mtg-grimoire/commit/2b4ca5d61430749e15483065ba6be43cbdf34e0b)), closes [#1473](https://github.com/Msgaihede/mtg-grimoire/issues/1473)
+* **draft:** name a draft deck by its id and uid so a reused id is never a draft deck ([69449c1](https://github.com/Msgaihede/mtg-grimoire/commit/69449c1e2fbbedbb158445b6c16c76bd45f59f36))
+* **draft:** name a draft deck by its id and uid so a reused id is never a draft deck ([5bfd8b3](https://github.com/Msgaihede/mtg-grimoire/commit/5bfd8b36f77b4da6d648199e821a4f4141fe89c0)), closes [#1467](https://github.com/Msgaihede/mtg-grimoire/issues/1467)
+* **packs:** draw opened cards with the shared CardTile and its chin ([ee4ffb0](https://github.com/Msgaihede/mtg-grimoire/commit/ee4ffb06ba14d847f585ba2915fa3095650a04b5))
+* **packs:** draw opened cards with the shared CardTile and its chin ([d89cff2](https://github.com/Msgaihede/mtg-grimoire/commit/d89cff2c4950f00e30cb042f13710193e066a97a)), closes [#1462](https://github.com/Msgaihede/mtg-grimoire/issues/1462)
+
 ## [0.65.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.64.0...v0.65.0) (2026-11-02)
 
 
