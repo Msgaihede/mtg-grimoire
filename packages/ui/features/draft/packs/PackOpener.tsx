@@ -7,6 +7,7 @@ import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useBoosterSet, useBoosterSets } from "../sets";
 import { SetGrid } from "../SetGrid";
 import { ProductStage, SECONDARY } from "./ProductStage";
+import { SetSwitcher } from "./SetSwitcher";
 
 /** The page's own name, and the trail's root word for the page above it. */
 const TITLE = "Open Packs";
@@ -19,7 +20,9 @@ const ROOT = "Draft & Packs";
  * is worth on average.
  *
  * Two steps under one page bar: the set wall, then the set's products and what was opened. The
- * trail walks back up — `Draft & Packs` is `onBack`, `Open Packs` is the set wall again.
+ * trail walks back up — `Draft & Packs` is `onBack`, `Open Packs` is the set wall again — and the
+ * set page's bar carries a searchable set picker over the same wall (`SetSwitcher`, issue #1466),
+ * so another set is one pick away without leaving the page.
  *
  * Nothing here writes: an opened pack is not added to the collection, and the session's tally is
  * window memory.
@@ -57,7 +60,11 @@ export function PackOpener({ onBack }: { onBack: () => void }): JSX.Element {
 
   return (
     <SetStage
+      // A new set is a new stage: its fetch, its products and what was opened start over.
+      key={picked.code}
       summary={picked}
+      sets={sets}
+      onPick={setPicked}
       trail={[
         root,
         { label: TITLE, name: `${TITLE}, choose another set`, onOpen: () => setPicked(null) },
@@ -77,9 +84,14 @@ export function fetchedLine(fetchedAtMs: number, nowMs: number = Date.now()): st
 /** One set's page: fetching its boosters, the host's refusal, or its products. */
 function SetStage({
   summary,
+  sets,
+  onPick,
   trail,
 }: {
   summary: BoosterSetSummary;
+  /** The wall's sets, which the bar's picker offers. */
+  sets: readonly BoosterSetSummary[];
+  onPick: (set: BoosterSetSummary) => void;
   trail: PageCrumb[];
 }): JSX.Element {
   const booster = useBoosterSet(summary.code);
@@ -95,22 +107,25 @@ function SetStage({
         title={summary.name}
         meta={set !== undefined ? fetchedLine(set.fetchedAt) : summary.code.toUpperCase()}
         actions={
-          set !== undefined && (
-            <button
-              type="button"
-              onClick={() => void booster.refresh()}
-              disabled={booster.refreshing}
-              className={SECONDARY}
-            >
-              <RefreshCw
-                className={
-                  booster.refreshing ? "size-4 animate-spin motion-reduce:animate-none" : "size-4"
-                }
-                aria-hidden="true"
-              />
-              {booster.refreshing ? "Refreshing…" : "Refresh"}
-            </button>
-          )
+          <>
+            <SetSwitcher sets={sets} value={summary.code} onPick={onPick} />
+            {set !== undefined && (
+              <button
+                type="button"
+                onClick={() => void booster.refresh()}
+                disabled={booster.refreshing}
+                className={SECONDARY}
+              >
+                <RefreshCw
+                  className={
+                    booster.refreshing ? "size-4 animate-spin motion-reduce:animate-none" : "size-4"
+                  }
+                  aria-hidden="true"
+                />
+                {booster.refreshing ? "Refreshing…" : "Refresh"}
+              </button>
+            )}
+          </>
         }
       />
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pb-6 pr-6 pt-3">
