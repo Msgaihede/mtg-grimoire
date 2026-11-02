@@ -50,8 +50,8 @@ function inPickerOrder(ids: readonly MarketplaceId[]): MarketplaceId[] {
  *
  * - **A picked one is dropped — unless it is the last.** There is always a marketplace to price
  *   at; an empty pick would be every figure on the page an em dash.
- * - **One in the selection's currency is added.**
- * - **One in the other currency replaces the selection** — see the module's note.
+ * - **Any other is added**, whatever its currency: a pick of dollars and euros is priced in one
+ *   currency through the ECB's rate (`currency.ts`, issue #1463).
  */
 export function toggleMarketplace(
   current: readonly MarketplaceId[],
@@ -60,15 +60,13 @@ export function toggleMarketplace(
   if (current.includes(id)) {
     return current.length > 1 ? current.filter((m) => m !== id) : [...current];
   }
-  const currency = MARKETPLACES[id].currency;
-  if (current.some((m) => MARKETPLACES[m].currency !== currency)) return [id];
   return inPickerOrder([...current, id]);
 }
 
 /**
  * What the page prices at: the stored pick, less any marketplace this build cannot quote or this
  * host cannot ask, or — when that leaves nothing, or the reader never picked — the app's own
- * marketplace. A pick of two currencies (a store written by hand) keeps the first one's.
+ * marketplace.
  */
 export function effectiveMarketplaces(
   stored: readonly MarketplaceId[] | null,
@@ -76,9 +74,7 @@ export function effectiveMarketplaces(
   usable: (id: MarketplaceId) => boolean,
 ): Marketplace[] {
   const kept = inPickerOrder((stored ?? []).filter((id) => MARKETPLACES[id].priced && usable(id)));
-  if (kept.length === 0) return [fallback];
-  const currency = MARKETPLACES[kept[0]].currency;
-  return kept.map((id) => MARKETPLACES[id]).filter((m) => m.currency === currency);
+  return kept.length === 0 ? [fallback] : kept.map((id) => MARKETPLACES[id]);
 }
 
 interface StoredPick {

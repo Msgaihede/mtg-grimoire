@@ -193,7 +193,7 @@ describe("the draft deck", () => {
     const ids = [db.cards[0].id, db.cards[0].id, db.cards[1].id];
     const row = h.draft_deck_create({ name: "Quick Draft", cardIds: ids });
     expect(row).toMatchObject({ name: "Quick Draft", formatKey: "limited", virtualOnly: true });
-    expect(h.draft_deck_ids()).toEqual([row.id]);
+    expect(h.draft_deck_ids()).toEqual([{ id: row.id, syncUid: row.syncUid }]);
 
     const detail = h.deck_get({ id: row.id, variant: "live" });
     expect(detail?.categories.map((c) => [c.name, c.kind])).toEqual([
@@ -226,7 +226,7 @@ describe("the draft deck", () => {
     const kept = h.draft_deck_create({ name: "Kept", cardIds: [db.cards[0].id] });
     const gone = createDraftDeck(db, writeHandlers(db), "Gone", [db.cards[1].id]);
     h.draft_deck_keep({ deckId: kept.id });
-    expect(h.draft_deck_ids()).toEqual([gone.id]);
+    expect(h.draft_deck_ids()).toEqual([{ id: gone.id, syncUid: gone.syncUid }]);
     h.draft_deck_discard({ deckId: gone.id });
     expect(h.draft_deck_ids()).toEqual([]);
     expect(db.decks.some((d) => d.id === gone.id)).toBe(false);
@@ -248,6 +248,7 @@ describe("lobbies", () => {
     expect(() => h.lobby_create()).toThrow(LOBBIES_OFF);
     expect(() => h.lobby_join()).toThrow(LOBBIES_OFF);
     expect(() => h.lobby_winston()).toThrow(LOBBIES_OFF);
+    expect(() => h.lobby_rejoin()).toThrow(LOBBIES_OFF);
     // A game's lobby is the same lobby (issue #1419), and refuses alike.
     expect(() => h.lobby_deck()).toThrow(LOBBIES_OFF);
     expect(() => h.lobby_game_start()).toThrow(LOBBIES_OFF);

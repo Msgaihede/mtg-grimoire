@@ -48,6 +48,11 @@ opens any of them.
   draft's pack order alike. `byYear` only cuts the order it is given into runs of one year, never
   re-sorts it, and the filter drops a year whose sets it hides. The year left the tiles' code line
   with it — the divider says it once.
+- **A set page switches set from its own bar** (`packs/SetSwitcher`, issue #1466): a searchable
+  single-select `Dropdown` over the same `useBoosterSets` list, in the wall's order, matched the
+  wall's way (`setMatches`, name or code). Not the search page's `SetCombobox`, which is a
+  multi-select over `list_sets`. Picking a set remounts the stage (keyed on its code), so its fetch,
+  product and opened packs start over; 190 sets need no paging.
 - **Fetched again with the card data** (`packs::spawn_refresh`): a card sync that brought a new
   bulk file (the launch's or Settings') or was forced also fetches the set list and every set file
   already cached, in the background, then emits `packs:refreshed`; the walls (`usePacksRefreshed`)
@@ -93,19 +98,35 @@ A card opened from a foil sheet is priced foil, else nonfoil, else etched; an un
 and is drawn with an em dash. A card MTGJSON knows and this corpus does not (`inCorpus: false`) has
 no image and no price, and is never dealt into a draft.
 
-**The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a multi-select
-beside the product picker, _Prices from_, that starts at the app's marketplace (Settings) and is the
-reader's pick after that — kept per device in `localStorage` (`grimoire.packs.marketplaces`), never
-in `app_meta`, and never written back to the app's setting. `useBoosterPrices` reads
+**The product picker is a combobox** (issue #1464, `packs/products.ts`' `openableMatches`): a set
+can sell a dozen boosters and sealed products, so the _Product_ dropdown is `searchable`. Typing
+keeps the products holding every word typed, in any order, case-insensitively, against the name,
+the kind (`booster` or `sealed`) and a sealed product's MTGJSON category in words (`booster box`,
+`bundle`) — "collector box" finds the collector booster box. The shell owns the query (the
+`Dropdown`'s `matches` prop), so the trigger keeps naming the picked product while a search hides it.
+
+**The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a combobox at the
+head of the right-hand column, _Prices from_ (`packs/MarketplaceCombobox.tsx`, issue #1463) — the
+picked marketplaces as chips, a search typed beside them, and under it the marketplaces it matches
+by name or currency, each pressed to add or put down — that starts at the app's marketplace
+(Settings) and is the reader's pick after that — kept per device in `localStorage`
+(`grimoire.packs.marketplaces`), never in `app_meta`, and never written back to the app's setting.
+`useBoosterPrices` reads
 `printing_prices` once per picked marketplace (each its own cache entry) and takes each finish's
 lowest quote (`lowestPrices`) before the foil-else-nonfoil fallback, so one marketplace's non-foil
-never stands in for another's foil. **One currency at a time**: the app holds no exchange rate, so
-picking a marketplace in the other currency starts the pick over from it; the last picked one
-cannot be put down; Card trader (unpriced) and a feed the host cannot reach are greyed. Picking a
+never stands in for another's foil. **Dollars and euros together** (issue #1463, `packs/currency.ts`):
+a pick of one currency is priced in it, untouched; a pick of both — TCGplayer with Cardmarket — is
+priced in the app's currency (the owner's decision, 2026-11-02), the other currency's answers
+multiplied by the European Central Bank's daily rate (`packs_exchange_rate`, the desktop's
+`packs/fx.rs`) before the lowest is taken. The rate is asked only for such a pick; until it answers
+no figure is drawn, and with none at all (the ECB unreachable and nothing cached) the other
+currency's marketplaces are left out and the line under the picker says so — a euro is never
+compared with a dollar unconverted. The line also names the rate and its day when one was used.
+The last picked marketplace cannot be put down; Card trader (unpriced) and a feed the host cannot reach are greyed. Picking a
 feed that has never landed a row fetches it, as Settings does.
 
 **The reduced price is the page's own too** (`packs/reducedPick.ts`, `packs/ReducedInputs.tsx`): a
-_Sell at_ percentage and a _Minimum_ card value under the product row, apart from Settings ›
+_Sell at_ percentage and a _Minimum_ card value under _Prices from_, apart from Settings ›
 Collection value — neither read from it nor written to it — and kept per device in `localStorage`
 (`grimoire.packs.reduced`). Set, the reduced price is drawn in brackets beside the opening's _Total
 value_ and the session's, by the collection's sum ([collection-value.md](collection-value.md)):
@@ -113,6 +134,11 @@ each priced card strictly under the minimum is taken out, then the percentage of
 session's tally keeps every priced card's price, not a reduced sum, so changing a figure mid-session
 reprices the whole session. The minimum is in whatever currency the page prices in, and nothing
 converts it. The expected value, the simulation and the histogram stay at full value.
+
+**Every price control is in the right-hand column** (issue #1465): _Prices from_, _Sell at_ and
+_Minimum_ sit above the expected value and the figures, so the product row (product, _Open_,
+_Back_) is the only band at the top and the column starts level with it. On a narrow page the
+column folds under the wall, controls first.
 
 ## The draft: phase.rs's draft-core
 
@@ -149,13 +175,33 @@ the stack and the piles face down with their counts, the active pile face up on 
 
 **The cards zoom like every other wall** (issue #1433): ctrl+wheel over a draft steps
 `cardZoom.draft`, one section for the pack, a face-up Winston pile and the pool, because they are
-one table a card is dragged across; the pick screen's **Card size** slider walks the same ladder
-through `zoomCards`, so the two controls are one number and it is remembered with the other walls'.
+one table a card is dragged across, and it is remembered with the other walls'. The gesture is
+the only control: the pick screen's **Card size** slider, which walked the same ladder, was removed
+as redundant (issue #1470).
 The pool's eight columns take the zoom as a ceiling (`minmax(0, 190px × zoom)`) so the pool still
 fits without a scroll. Open Packs' opened wall is a section of its own, `packs`.
 
+**An opened card is the app's own tile** (issue #1462): `OpenedWall` draws each card with
+`components/CardTile` — the art, and under it the `CardChin` every other wall draws, with the
+rarity, `SET · number`, the finish and the price at the page's marketplaces. A card MTGJSON knows
+and the corpus does not is the same tile with no picture and no press, its chin still naming the
+printing. It had drawn its own art-and-caption row (a rarity label and a price, no set or number)
+until a reader asked why its cards looked unlike every other wall's.
+
+**The pool is below the pack, or in a tray beside it** (issue #1474, MTG Arena's two drafting
+views): the curve of stacked cards under the pack is the default; the pack heading's **Pool**
+toggle moves it to a compact side tray (`pick/PoolTray.tsx`) — one row per card name with its
+count, in the curve's columns (mana value, then lands), a colour edge down each row, and the card's
+art after a quarter second's rest on a row (the card modal's printings dwell, `usePrintingDwell`).
+In that layout the pack and the tray scroll apart, so the tray — the drop target there — stays in
+reach under a zoomed-in pack. The choice is kept per device in `localStorage`
+(`grimoire.draft.trayLayout`), the Packs page's arrangement: it is a way of looking at this screen.
+A Winston table and the Build step keep the curve: neither has a pack heading to carry the toggle.
+`DraftCard` carries no mana cost, so a row shows none; adding one would be an IPC change for a
+glyph the column heading already says in words.
+
 **A card rested on is drawn large** (issue #1472, `pick/CardPreview.tsx`): the pack, a face-up
-Winston pile and the pool all open the card's `display` image beside the pointer once it has rested
+Winston pile and the pool's curve open the card's `display` image beside the pointer once it has rested
 on a card — the playtest board's inspect box, with its delay (`INSPECT_DELAY`), width
 (`INSPECT_WIDTH`) and placement (`placePreview`), so the two pages read a card the same way. Unlike
 the board's, the wheel does not resize it (the pick screen scrolls, and a resting pointer is over a
@@ -163,6 +209,7 @@ card nearly all the time); it is instead never smaller than half again the tile 
 `fixed` so the pick screen's scroller cannot cut it off, takes no pointer, and goes down on leaving
 the card, a press (a choice or a drag onto the pool), a scroll and Escape; a click's release rests
 anew. A tile the arrows move to opens it beside the tile, and none opens while a popup is open.
+The side tray keeps the printings dwell below: its rows are names, not tiles.
 
 A refused pick changes nothing (the session is cloned and put back on any error). A solo draft is
 saved after each change (`app_meta` `draft_session`) and can be resumed; a pod cannot.
@@ -174,12 +221,21 @@ nothing reaches the collection, which is the owner's rule. It has a **Deck** pil
 default, drawn while empty) and the deck's own Sideboard renamed **Pool** (one `side` pile per list
 is all `idx_deck_categories_kind` allows), holding the whole pool.
 
-Until the reader saves it, its id is on `app_meta` `draft_decks` (never synced), and the editor is in
+Until the reader saves it, it is on `app_meta` `draft_decks` (never synced), and the editor is in
 **draft mode**: no card search dock (neither the corpus search nor the Collection tab), no Quick Add,
 no import, no `Add to ▸ Collection/Wishlist`, and `DraftDeckBar` in their place — basics from a
 printing of the draft's sets, **Save deck** (off the list: a deck like any other), **Export** (the
 editor's own dialog) and **Discard** (deleted; refused for a deck not on the list, so a stale page
 cannot delete a saved one).
+
+**An entry is the deck's id and its `sync_uid` (`DraftDeckRef`), and a deck is a draft deck only
+while both match** (issue #1467). `decks.id` has no `AUTOINCREMENT`, so SQLite gives a deleted
+highest id to the next deck: a draft deck deleted from the gallery used to leave its bare id on the
+list, and the next deck the reader made opened in draft mode — with a **Discard** that deleted it.
+The uid is never reused, so `draft_deck::ids`, `discard` and the editor's `useIsDraftDeck` (once
+`deck_get` answers) all hold a deck to both. A legacy entry (a bare id) is dropped, the safe
+direction. The list's query key is under the decks root (`["decks", "draftDecks"]`), so every deck
+write's invalidation asks it again.
 
 ## Pods and lobby codes
 
@@ -194,6 +250,17 @@ is stored (the roster, for the lobby's life).
 The webview reaches no host but its own (the desktop CSP), so the socket is the host's: a task per
 lobby in `apps/desktop/src-tauri/src/draft/lobby.rs` that applies a guest's pick to the draft and
 sends every seat its view, and tells the page through `lobby:state` and `draft:view`.
+
+**A seat left mid-draft is taken again** (issue #1468). The lobby and the host's draft live in the
+host process, so leaving the page — another view, or a reload of the window — leaves the pod
+drafting on. The hub lists a drafting lobby under _Draft in progress_ like any other draft (where
+this seat was, when the window kept it) with **Rejoin**. The window's kept seat (`pick/current.ts`)
+opens directly; otherwise the lobby's screen calls `lobby_rejoin`: a host is answered its draft's
+name and reads its view with `draft_view`, and a guest sends the guest body `sync`, which the host
+answers by pushing the room and that seat's view (`draft:view`). A guest's draft asks the same on
+every arrival, since its view only ever arrives pushed, so a view kept from before (a pick behind,
+or still waiting on a pack that has since come) is brought up to date. Creating, joining or leaving
+a lobby forgets a pod seat kept from an earlier one.
 
 **A lobby seats a draft or a game** (`LobbyKind`, issue #1419): the Playtesting page opens the same
 lobby for a game, and the host's room tells its guests which (`LobbyRoom.kind`; a guest's

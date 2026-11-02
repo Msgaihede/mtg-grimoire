@@ -14,7 +14,7 @@ import {
 import { useDecks } from "@/features/decks/useDecks";
 import { openDraftDeck } from "@/features/draft/navigation";
 import { PackOpener } from "@/features/draft/packs/PackOpener";
-import { useDraftDeckIds } from "@/features/draft/useDraftDecks";
+import { isDraftDeckIn, useDraftDecks } from "@/features/draft/useDraftDecks";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -22,6 +22,7 @@ import {
   ipcError,
   type DraftMode,
   type DraftSaved,
+  type DraftStatus,
   type DraftView,
   type LobbyState,
 } from "@/lib/ipc";
@@ -33,7 +34,7 @@ import type { DraftRole } from "./build/BuildPanel";
 import { WinstonPiles } from "./icons";
 import { LobbyScreen } from "./lobby/LobbyScreen";
 import { isLive, lobbyFor, useLobbyState } from "./lobby/useLobby";
-import { currentDraft } from "./pick/current";
+import { currentDraft, type CurrentDraft } from "./pick/current";
 import { DraftSession, MODE_TITLE } from "./pick/DraftSession";
 import { freshDraftName } from "./setup/deal";
 import { InlineError, LABEL, PANEL, QUIET_BUTTON } from "./setup/parts";
@@ -62,8 +63,8 @@ function firstFlow(): Flow {
 
 /**
  * The Draft & Packs view (`docs/superpowers/specs/2026-10-29-draft-and-packs-design.md` §7): a hub
- * — *Draft in progress* (a saved solo draft to resume, the draft decks not saved yet, a live lobby)
- * and *Start new* (Quick Draft, Sealed, Cube Draft, Pod Draft, Commander Draft, Winston Draft,
+ * — *Draft in progress* (a saved solo draft to resume, the draft decks not saved yet, a live lobby
+ * or a drafting pod's seat to rejoin) and *Start new* (Quick Draft, Sealed, Cube Draft, Pod Draft, Commander Draft, Winston Draft,
  * Open Packs) — and the flow each starts: Choose → Draft → Build.
  *
  * **The page holds which screen is up** (`Flow`), as Playtesting holds its setup and its board:
@@ -141,16 +142,34 @@ export function DraftPage(): JSX.Element {
           }
           onDraft={toDraft}
           onLobby={() => {
-            const current = currentDraft.recall();
-            if (lobby?.phase === "drafting" && current && current.role !== "solo") {
-              setFlow({ kind: "draft", ...current });
-            } else {
-              setFlow({ kind: "lobby" });
-            }
+            // The seat this window kept, if it has one; else the lobby's screen, which takes a
+            // drafting pod's seat again (`lobby_rejoin`, issue #1468) — after a reload, or for a
+            // guest who was elsewhere when the host dealt.
+            const current = podSeat(lobby);
+            setFlow(current ? { kind: "draft", ...current } : { kind: "lobby" });
           }}
         />
       );
   }
+}
+
+/** The pod seat this window kept (`./pick/current.ts`), while `lobby` is drafting — a solo draft
+ *  is the saved row's, and a seat is no use once its lobby has stopped drafting. */
+function podSeat(lobby: LobbyState | null): CurrentDraft | null {
+  const current = currentDraft.recall();
+  return lobby?.phase === "drafting" && current && current.role !== "solo" ? current : null;
+}
+
+/** Where a draft is, in a row's words: its pack and pick, or done picking. */
+function whereOf(at: {
+  status: DraftStatus;
+  packNumber: number;
+  packCount: number;
+  pickNumber: number;
+}): string {
+  return at.status === "deckbuilding"
+    ? "Done picking"
+    : `Pack ${at.packNumber + 1} of ${at.packCount} · Pick ${at.pickNumber + 1}`;
 }
 
 type StartMode = SetupMode | "pod" | "packs";
@@ -224,9 +243,10 @@ function DraftHub({
     // Every pick moves it; the hub is drawn between drafts, so it is always asked again.
     staleTime: 0,
   });
-  const draftDeckIds = useDraftDeckIds();
+  const unsaved = useDraftDecks();
   const { decks } = useDecks();
-  const draftDecks = decks.filter((d) => draftDeckIds.includes(d.id));
+  // By id and uid both (issue #1467): an ordinary deck that took a deleted draft deck's id is not one.
+  const draftDecks = decks.filter((d) => isDraftDeckIn(unsaved, d));
   const live = isLive(lobby) ? lobby : null;
   const savedDraft = saved.data ?? null;
   const anything = savedDraft !== null || draftDecks.length > 0 || live !== null;
@@ -410,10 +430,7 @@ function SavedDraftRow({
       await queryClient.invalidateQueries({ queryKey: DRAFT_SAVED_KEY });
     });
 
-  const where =
-    saved.status === "deckbuilding"
-      ? "Done picking"
-      : `Pack ${saved.packNumber + 1} of ${saved.packCount} · Pick ${saved.pickNumber + 1}`;
+  const where = whereOf(saved);
   return (
     <ProgressRow
       icon={MODE_ICON[saved.mode]}
@@ -449,23 +466,34 @@ function SavedDraftRow({
   );
 }
 
+/**
+ * The pod this app is in. Once it drafts it is a draft in progress like any other (issue #1468):
+ * where this seat was, when the window kept it, and **Rejoin** to take the seat again — the one
+ * the window kept, or, when it lost it, through the lobby's screen (`lobby_rejoin`).
+ */
 function LobbyRow({ lobby, onReturn }: { lobby: LobbyState; onReturn: () => void }): JSX.Element {
   const people = 1 + lobby.peers.filter((p) => p.online).length;
+  const drafting = lobby.phase === "drafting";
+  const seen = podSeat(lobby)?.view ?? null;
   return (
     <ProgressRow
       icon={Users}
       title={lobby.label || `Lobby ${lobby.code}`}
-      chip={lobby.phase === "drafting" ? "Drafting" : lobby.role === "host" ? "Hosting" : "Joined"}
-      detail={`Pod Draft · code ${lobby.code} · ${plural(people, "person", "people")}${
-        lobby.role === "guest" ? ` · hosted by ${lobby.hostName}` : ""
-      }`}
+      chip={drafting ? "Drafting" : lobby.role === "host" ? "Hosting" : "Joined"}
+      detail={[
+        "Pod Draft",
+        ...(seen !== null ? [whereOf(seen)] : []),
+        `code ${lobby.code}`,
+        plural(people, "person", "people"),
+        ...(lobby.role === "guest" ? [`hosted by ${lobby.hostName}`] : []),
+      ].join(" · ")}
       actions={
         <button
           type="button"
           onClick={onReturn}
           className={cn(QUIET_BUTTON, "border-accent/60 text-accent")}
         >
-          Return
+          {drafting ? "Rejoin" : "Return"}
         </button>
       }
     />

@@ -32,6 +32,45 @@ export function poolColumns(pool: readonly DraftCard[]): Record<PoolColumn, Draf
   return out;
 }
 
+/** One line of the side tray: a card name and how many copies of it the pool holds. */
+export interface PoolRow {
+  name: string;
+  /** The printing first picked under this name — what the row's preview draws. */
+  cardId: string;
+  count: number;
+  colors: readonly string[];
+}
+
+/**
+ * The pool as the side tray lists it (issue #1474): the same columns as the curve, in the same
+ * order, each a list of names with a count — so two copies of a common are one line, as on a
+ * decklist — sorted by name within a column, since a list is read by name and the curve already
+ * keeps pick order. Columns holding nothing are left out: a list has no curve to draw.
+ */
+export function poolRows(
+  pool: readonly DraftCard[],
+): { column: PoolColumn; count: number; rows: PoolRow[] }[] {
+  const columns = poolColumns(pool);
+  return POOL_COLUMNS.flatMap((column) => {
+    const cards = columns[column];
+    if (cards.length === 0) return [];
+    const byName = new Map<string, PoolRow>();
+    for (const card of cards) {
+      const row = byName.get(card.name);
+      if (row === undefined) {
+        byName.set(card.name, {
+          name: card.name,
+          cardId: card.cardId,
+          count: 1,
+          colors: card.colors,
+        });
+      } else row.count += 1;
+    }
+    const rows = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return [{ column, count: cards.length, rows }];
+  });
+}
+
 /** How the pack's cards are laid out: rarity high to low (the default, issue #1432), or as dealt. */
 export type PackSort = "rarity" | "dealt";
 

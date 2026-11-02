@@ -675,6 +675,7 @@ pub fn run() {
             draft::lobby::lobby_state,
             draft::lobby::lobby_leave,
             draft::lobby::lobby_start,
+            draft::lobby::lobby_rejoin,
             draft::lobby::lobby_pick,
             draft::lobby::lobby_winston,
             draft::lobby::lobby_kick,
@@ -685,6 +686,7 @@ pub fn run() {
             draft::lobby::lobby_trade_accept,
             packs::packs_booster_set,
             packs::packs_booster_sets,
+            packs::fx::packs_exchange_rate,
             // The read graph: one document in, one GraphQL response out.
             graph::graphql_query,
             // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.

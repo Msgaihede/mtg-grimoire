@@ -1,4 +1,4 @@
-import { useMemo, type JSX } from "react";
+import { Fragment, useMemo, type JSX } from "react";
 import { CardArt } from "@/components/CardArt";
 import { scaled } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
@@ -40,6 +40,10 @@ const POOL_COLUMN_WIDTH = 190;
  * #1433): the eight columns share the row equally up to `POOL_COLUMN_WIDTH` at the reader's zoom,
  * so zooming out shrinks the pool and zooming in grows it until the row is full — past that a
  * column would push the lands off the side, and the pool's whole point is fitting without a scroll.
+ *
+ * **The pool is never shorter than one card** (issue #1473): it is where a card from the pack is
+ * dropped, so an empty pool draws its columns and a row one card tall — a column's width at 5:7 —
+ * with the hint over it, and the first pick changes nothing about where the pool can be hit.
  */
 export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.draft);
@@ -56,47 +60,64 @@ export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Eleme
         </span>
         <ColorTally tally={tally} />
       </div>
-      {pool.length === 0 ? (
-        <p className="m-0 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-dim">
-          The cards you pick land here, by mana value.
-        </p>
-      ) : (
-        <div
-          className="grid gap-3"
-          style={{
-            gridTemplateColumns: `repeat(${POOL_COLUMNS.length}, minmax(0, ${scaled(POOL_COLUMN_WIDTH, zoom)}px))`,
-          }}
-        >
-          {POOL_COLUMNS.map((column) => {
-            const cards = columns[column];
-            return (
-              <div key={column} className="flex min-w-0 flex-col gap-1.5">
-                <h4 className={cn(LABEL, "flex items-baseline justify-between")}>
-                  <span>{COLUMN_TITLE[column]}</span>
-                  <span className="font-mono tabular-nums">{cards.length}</span>
-                </h4>
-                <ul
-                  aria-label={`${column === "lands" ? "Lands" : `Mana value ${column}`}: ${plural(cards.length, "card")}`}
-                  className="m-0 flex list-none flex-col p-0"
-                >
-                  {cards.map((card) => (
-                    <li
-                      key={card.instanceId}
-                      // Every card after the first is pulled up over the one before until only
-                      // that one's title bar shows: a 5:7 card is 140% of its width tall, and
-                      // −122% leaves 18% — the name line — in sight.
-                      className="[&:not(:first-child)]:-mt-[122%]"
-                      {...preview.tileProps(card)}
-                    >
-                      <CardArt cardId={card.cardId} name={card.name} />
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <div
+        className="grid grid-rows-[auto_auto] gap-x-3 gap-y-1.5"
+        style={{
+          gridTemplateColumns: `repeat(${POOL_COLUMNS.length}, minmax(0, ${scaled(POOL_COLUMN_WIDTH, zoom)}px))`,
+        }}
+      >
+        {POOL_COLUMNS.map((column, index) => {
+          const cards = columns[column];
+          // Every part is placed by hand: the empty pool's hint lies over the cards' row, and
+          // only items with a definite cell may share one.
+          const at = index + 1;
+          return (
+            <Fragment key={column}>
+              <h4
+                className={cn(LABEL, "flex min-w-0 items-baseline justify-between")}
+                style={{ gridColumn: at, gridRow: 1 }}
+              >
+                <span>{COLUMN_TITLE[column]}</span>
+                <span className="font-mono tabular-nums">{cards.length}</span>
+              </h4>
+              <ul
+                aria-label={`${column === "lands" ? "Lands" : `Mana value ${column}`}: ${plural(cards.length, "card")}`}
+                className="m-0 flex min-w-0 list-none flex-col p-0"
+                style={{ gridColumn: at, gridRow: 2 }}
+              >
+                {cards.map((card) => (
+                  <li
+                    key={card.instanceId}
+                    // Every card after the first is pulled up over the one before until only
+                    // that one's title bar shows: a 5:7 card is 140% of its width tall, and
+                    // −122% leaves 18% — the name line — in sight.
+                    className="[&:not(:first-child)]:-mt-[122%]"
+                    {...preview.tileProps(card)}
+                  >
+                    <CardArt cardId={card.cardId} name={card.name} />
+                  </li>
+                ))}
+              </ul>
+            </Fragment>
+          );
+        })}
+        {pool.length === 0 && (
+          <>
+            {/* One column's card, unseen: it holds the cards' row a card tall at any zoom. */}
+            <div
+              aria-hidden="true"
+              className="aspect-[5/7]"
+              style={{ gridColumn: 1, gridRow: 2 }}
+            />
+            <p
+              className="m-0 flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-dim"
+              style={{ gridColumn: "1 / -1", gridRow: 2 }}
+            >
+              The cards you pick land here, by mana value.
+            </p>
+          </>
+        )}
+      </div>
       <CardPreview shown={preview.shown} />
     </section>
   );
