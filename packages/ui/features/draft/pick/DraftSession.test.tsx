@@ -179,14 +179,38 @@ describe("DraftSession", () => {
     expect(holder).toHaveStyle({ gridRow: "2" });
   });
 
-  it("chooses with a click and picks with the Pick button, never with a double-click", async () => {
+  it("chooses with a click and picks with the Pick button", async () => {
     ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
     setup(view());
     const shock = within(pack()).getByRole("button", { name: "Shock" });
-    await userEvent.dblClick(shock);
+    await userEvent.click(shock);
     expect(shock).toHaveAttribute("aria-pressed", "true");
     expect(ipcMock.draftPick).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Pick Shock" }));
+    expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
+  });
+
+  it("picks a double-clicked card, through draft_pick (issue #1469)", async () => {
+    ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+    setup(view());
+    await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
+    expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Opt#0.0.0"]);
+  });
+
+  it("never picks with a later click on the chosen card — only a double-click does", async () => {
+    setup(view());
+    const shock = within(pack()).getByRole("button", { name: "Shock" });
+    // Two separate clicks, not one double-click: the second only chooses the card again.
+    await userEvent.click(shock);
+    await userEvent.click(shock);
+    expect(shock).toHaveAttribute("aria-pressed", "true");
+    expect(ipcMock.draftPick).not.toHaveBeenCalled();
+  });
+
+  it("picks once on a triple-click", async () => {
+    ipcMock.draftPick.mockReturnValue(new Promise(() => {}));
+    setup(view());
+    await userEvent.tripleClick(within(pack()).getByRole("button", { name: "Shock" }));
     expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
   });
 
@@ -396,6 +420,22 @@ describe("DraftSession", () => {
       expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, [
         "Shock#0.0.0",
         "Duress#0.0.0",
+      ]);
+    });
+
+    it("picks the chosen card with the one double-clicked", async () => {
+      ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+      setup(three());
+      const duress = within(pack()).getByRole("button", { name: "Duress" });
+      // Double-clicked alone, a card is not a whole pick: it stays chosen.
+      await userEvent.dblClick(duress);
+      expect(duress).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByText("1 of 2 chosen")).toBeInTheDocument();
+      expect(ipcMock.draftPick).not.toHaveBeenCalled();
+      await userEvent.dblClick(within(pack()).getByRole("button", { name: "Shock" }));
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, [
+        "Duress#0.0.0",
+        "Shock#0.0.0",
       ]);
     });
 

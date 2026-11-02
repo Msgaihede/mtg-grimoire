@@ -1,4 +1,13 @@
-import { useEffect, useId, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { Hourglass, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
@@ -47,15 +56,16 @@ export function picksNeeded(view: DraftView): number {
  * One pick: the round strip and the table, the pack as a wall of cards, and the pool below — or,
  * in a Winston draft (`view.stack`), the shared stack and its three piles in place of the pack.
  *
- * **A card is picked by dragging it onto the pool** (issue #1434, which replaced the second click
- * on a chosen card — a double-click no longer picks). A click chooses, and the Pick button picks
- * the chosen card. The keyboard walks the pack with the arrows and picks with Enter (said in the
- * hint under the pack; no global chord is taken). While the table catches up the pack is replaced
- * by a sentence saying so.
+ * **A card is picked three ways**: by dragging it onto the pool (issue #1434), by double-clicking
+ * it (issue #1469), or by choosing it with a click and pressing Pick. A double-click is two clicks
+ * within the system's double-click delay — never a second, later click on the chosen card, which
+ * #1434 removed because it picked cards the reader only meant to look at again. The keyboard walks
+ * the pack with the arrows and picks with Enter (said in the hint under the pack; no global chord
+ * is taken). While the table catches up the pack is replaced by a sentence saying so.
  *
  * **A pick of two** (a Commander draft, `picksPerStep: 2`) chooses two cards, each click toggling
  * one, and picks them together — with the Pick button, Enter once both are chosen, or by dragging
- * one onto the pool while the other is chosen (`pickDrag.ts`' `carriedPick`).
+ * or double-clicking one while the other is chosen (`pickDrag.ts`' `carriedPick`).
  *
  * **The pack is laid out by rarity, mythic first** (issue #1432), a rarity's cards in the order they
  * were dealt; the Sort menu offers the dealt order instead, kept for the window's life.
@@ -220,6 +230,10 @@ export function PickScreen({
  * click past `need` lets the oldest choice go — the arrows only move the caret, and Enter picks
  * once `need` are chosen (before then it is the focused tile's own press, which toggles it).
  *
+ * A double-click's second click (`detail` 2 — the system's delay decides) does not toggle: it picks
+ * what a drag of that card would (`carriedPick`), or, short of a whole pick, leaves the card chosen.
+ * A third click in a row does nothing, so a triple-click never picks twice.
+ *
  * Every tile is a drag source carrying the pick it would make (`carriedPick`); the pool,
  * `PickScreen`'s, is where it is let go.
  */
@@ -281,9 +295,18 @@ function PackWall({
     if (picked.length === need) onPick(picked);
   };
 
-  const press = (index: number) => {
+  const press = (index: number, clicks: number) => {
     const id = pack[index]?.instanceId;
     if (id === undefined) return;
+    // A double-click's second click picks. A keyboard's press carries no count (0) and a single
+    // click 1, so only the mouse's quick pair reaches here — never a later click on a chosen card.
+    if (clicks >= 2) {
+      if (clicks > 2) return;
+      const ids = carriedPick(chosen, id, need);
+      setChosen(ids);
+      confirm(ids);
+      return;
+    }
     if (need === 1) {
       setChosen([id]);
       return;
@@ -364,7 +387,7 @@ function PackWall({
                 onFocus={() => {
                   caret.current = index;
                 }}
-                onClick={() => press(index)}
+                onClick={(event: MouseEvent<HTMLButtonElement>) => press(index, event.detail)}
                 className={cn("group block w-full rounded-lg", PRESS, FOCUS)}
               >
                 <CardArt cardId={c.cardId} name={c.name} selected={selected} hoverZoom />
@@ -384,8 +407,8 @@ function PackWall({
         )}
         <p className="m-0 text-xs text-dim">
           {need === 1
-            ? "Drag a card onto your pool to pick it · Click to choose · ← → ↑ ↓ move · Enter picks"
-            : `Click ${need} cards to choose them, or drag the last onto your pool · ← → ↑ ↓ move · Enter picks once ${need} are chosen`}
+            ? "Double-click or drag a card onto your pool to pick it · Click to choose · ← → ↑ ↓ move · Enter picks"
+            : `Click ${need} cards to choose them, then double-click or drag the last onto your pool · ← → ↑ ↓ move · Enter picks once ${need} are chosen`}
         </p>
       </div>
     </div>
