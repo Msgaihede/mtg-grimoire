@@ -154,6 +154,16 @@ through `zoomCards`, so the two controls are one number and it is remembered wit
 The pool's eight columns take the zoom as a ceiling (`minmax(0, 190px × zoom)`) so the pool still
 fits without a scroll. Open Packs' opened wall is a section of its own, `packs`.
 
+**A card rested on is drawn large** (issue #1472, `pick/CardPreview.tsx`): the pack, a face-up
+Winston pile and the pool all open the card's `display` image beside the pointer once it has rested
+on a card — the playtest board's inspect box, with its delay (`INSPECT_DELAY`), width
+(`INSPECT_WIDTH`) and placement (`placePreview`), so the two pages read a card the same way. Unlike
+the board's, the wheel does not resize it (the pick screen scrolls, and a resting pointer is over a
+card nearly all the time); it is instead never smaller than half again the tile under it. It is
+`fixed` so the pick screen's scroller cannot cut it off, takes no pointer, and goes down on leaving
+the card, a press (a choice or a drag onto the pool), a scroll and Escape; a click's release rests
+anew. A tile the arrows move to opens it beside the tile, and none opens while a popup is open.
+
 A refused pick changes nothing (the session is cloned and put back on any error). A solo draft is
 saved after each change (`app_meta` `draft_session`) and can be resumed; a pod cannot.
 

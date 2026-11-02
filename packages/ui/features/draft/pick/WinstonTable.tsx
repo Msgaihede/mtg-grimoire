@@ -8,6 +8,7 @@ import type { DraftView, WinstonView } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
+import { CardPreview, useCardPreview } from "./CardPreview";
 
 /** A face-up pile's tile width at 100%, px — sized by the draft's zoom, as the pack is. */
 const PILE_TILE_WIDTH = 150;
@@ -55,6 +56,8 @@ export function WinstonTable({
   const last = active !== null && active === stack.piles.length - 1;
   const turnSeat = view.seats[stack.turnSeat];
   const who = turnSeat?.name ?? `Seat ${stack.turnSeat + 1}`;
+  // The pile's cards, large under a resting pointer (issue #1472) — as the pack's are.
+  const preview = useCardPreview();
 
   return (
     <section aria-labelledby={headingId} className="flex flex-col gap-4">
@@ -119,11 +122,12 @@ export function WinstonTable({
             }}
           >
             {pile.cards.map((c) => (
-              <li key={c.instanceId}>
+              <li key={c.instanceId} {...preview.tileProps(c)}>
                 <CardArt cardId={c.cardId} name={c.name} hoverZoom />
               </li>
             ))}
           </ul>
+          <CardPreview shown={preview.shown} />
           <div className="flex flex-wrap items-center gap-3">
             <PrimaryButton
               ready={pile.cards.length > 0 || pile.count > 0}

@@ -71,7 +71,7 @@ const PREVIEW_GAP = 4;
  * Every layer this has to be exclusive with is a *popup*, and every popup trigger in this app
  * pairs the two attributes (`AddToCollection`, `SetCombobox`, both row menus, both panels).
  */
-const OPEN_POPUP = '[aria-haspopup][aria-expanded="true"]';
+export const OPEN_POPUP = '[aria-haspopup][aria-expanded="true"]';
 
 /** The printing whose art is on screen, and the row it hangs off. */
 interface Shown {

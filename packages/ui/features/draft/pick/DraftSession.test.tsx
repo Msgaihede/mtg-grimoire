@@ -30,6 +30,7 @@ vi.mock("@/features/draft/navigation", () => ({ openDraftDeck }));
 
 import type { DraftRole } from "../build/BuildPanel";
 import { DraftSession } from "./DraftSession";
+import { INSPECT_DELAY } from "@/features/playtesting/table/Inspect";
 
 function card(name: string, over: Partial<DraftCard> = {}): DraftCard {
   return {
@@ -164,6 +165,31 @@ describe("DraftSession", () => {
     expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
     expect(await screen.findByRole("heading", { name: "Pack 1 · Pick 2" })).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Mana value 1: 1 card" })).toBeInTheDocument();
+  });
+
+  it("draws a pack card or a pool card large once the pointer rests on it (issue #1472)", () => {
+    vi.useFakeTimers();
+    try {
+      setup(view({ pool: [card("Bolt", { cardId: "id-bolt" })] }));
+      const preview = () => screen.queryByTestId("draft-card-preview");
+      const src = () => preview()?.querySelector("img")?.getAttribute("src") ?? "";
+
+      const tile = within(pack()).getByRole("button", { name: "Shock" });
+      fireEvent.pointerEnter(tile);
+      act(() => vi.advanceTimersByTime(INSPECT_DELAY));
+      expect(src()).toContain("id-Shock");
+      fireEvent.pointerLeave(tile);
+      expect(preview()).toBeNull();
+
+      const pooled = within(screen.getByRole("list", { name: "Mana value 1: 1 card" })).getByRole(
+        "listitem",
+      );
+      fireEvent.pointerEnter(pooled);
+      act(() => vi.advanceTimersByTime(INSPECT_DELAY));
+      expect(src()).toContain("id-bolt");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("chooses with a click and picks with the Pick button, never with a double-click", async () => {

@@ -7,6 +7,7 @@ import { useAppStore } from "@/lib/store";
 import { MANA_FILL, MANA_KEYS, MANA_LABEL, manaSymbolClass } from "@/lib/mana";
 import { cn } from "@/lib/utils";
 import { LABEL } from "../setup/parts";
+import { CardPreview, useCardPreview } from "./CardPreview";
 import { colorTally, POOL_COLUMNS, poolColumns, type PoolColumn } from "./pool";
 
 const COLUMN_TITLE: Record<PoolColumn, string> = {
@@ -44,6 +45,8 @@ export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Eleme
   const zoom = useAppStore((s) => s.cardZoom.draft);
   const columns = useMemo(() => poolColumns(pool), [pool]);
   const tally = useMemo(() => colorTally(pool), [pool]);
+  // A stacked card shows only its name strip; resting on it draws it whole (issue #1472).
+  const preview = useCardPreview();
   return (
     <section aria-label="Your pool" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
@@ -83,6 +86,7 @@ export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Eleme
                       // that one's title bar shows: a 5:7 card is 140% of its width tall, and
                       // −122% leaves 18% — the name line — in sight.
                       className="[&:not(:first-child)]:-mt-[122%]"
+                      {...preview.tileProps(card)}
                     >
                       <CardArt cardId={card.cardId} name={card.name} />
                     </li>
@@ -93,6 +97,7 @@ export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Eleme
           })}
         </div>
       )}
+      <CardPreview shown={preview.shown} />
     </section>
   );
 }
