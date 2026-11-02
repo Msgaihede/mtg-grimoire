@@ -30,6 +30,30 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.65.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.64.0...v0.65.0) (2026-11-02)
+
+
+### Features
+
+* **cards:** mark an unreleased printing with a red icon in the card chin ([4717da2](https://github.com/Msgaihede/mtg-grimoire/commit/4717da28b1a5e0ad952cd960d6d7aa2c3c855efc))
+* **cards:** mark an unreleased printing with a red icon in the card chin ([574776e](https://github.com/Msgaihede/mtg-grimoire/commit/574776e2af04f592883fae142ebbaf882a9a6bb5)), closes [#1458](https://github.com/Msgaihede/mtg-grimoire/issues/1458)
+* **collection:** add a reduced price from a sell percentage and minimum value ([#1457](https://github.com/Msgaihede/mtg-grimoire/issues/1457)) ([c3d374f](https://github.com/Msgaihede/mtg-grimoire/commit/c3d374f33543b11abe90f6d86a78d23420171e9d))
+* **draft:** divide the set wall by release year ([f1e8ee1](https://github.com/Msgaihede/mtg-grimoire/commit/f1e8ee1ef0614cdcc761ba50f60e31a2509c9af2))
+* **draft:** divide the set wall by release year ([049f78c](https://github.com/Msgaihede/mtg-grimoire/commit/049f78ce313c4746100e5368993f240902b35898)), closes [#1456](https://github.com/Msgaihede/mtg-grimoire/issues/1456)
+* **draft:** price Open Packs at several marketplaces, lowest wins ([1b3503f](https://github.com/Msgaihede/mtg-grimoire/commit/1b3503f08f668af1aa524b901bce57b4b200408b))
+* **draft:** price Open Packs at several marketplaces, lowest wins ([934501d](https://github.com/Msgaihede/mtg-grimoire/commit/934501d8836e73c13827bcb9c823aa80ff8f7ebf)), closes [#1446](https://github.com/Msgaihede/mtg-grimoire/issues/1446)
+* **packs:** a sell percentage and minimum of Open Packs' own ([#1461](https://github.com/Msgaihede/mtg-grimoire/issues/1461)) ([35fc211](https://github.com/Msgaihede/mtg-grimoire/commit/35fc2115daa2523cf521550ff741499a432335c3))
+* **packs:** show the simulated distribution as percentages, not counts ([a7b27a3](https://github.com/Msgaihede/mtg-grimoire/commit/a7b27a3c68133e3f3e767a09534b5e2a360a0792))
+* **packs:** show the simulated distribution as percentages, not counts ([3db4972](https://github.com/Msgaihede/mtg-grimoire/commit/3db49727b5aaebab201fe5df49b6bbf53e598ada)), closes [#1451](https://github.com/Msgaihede/mtg-grimoire/issues/1451)
+* **scanner:** retrain the Neural models (2026-11) ([05a8a1d](https://github.com/Msgaihede/mtg-grimoire/commit/05a8a1d3df394433c45e719dca31c3df6793ce84))
+* **scanner:** retrain the Neural models (2026-11) ([53f372b](https://github.com/Msgaihede/mtg-grimoire/commit/53f372b6e45b2a4cbdb163231d14b1e87edb1a10))
+
+
+### Bug Fixes
+
+* **playtest:** the attacker divides its combat damage among its blockers ([640a387](https://github.com/Msgaihede/mtg-grimoire/commit/640a387a22848cfa89fd972628e618775d756ce1))
+* **playtest:** the attacker divides its combat damage among its blockers ([7afc06a](https://github.com/Msgaihede/mtg-grimoire/commit/7afc06aab34c66f518b27e5b6bcde051281818d8)), closes [#1448](https://github.com/Msgaihede/mtg-grimoire/issues/1448)
+
 ## [0.64.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.63.0...v0.64.0) (2026-10-31)
 
 
