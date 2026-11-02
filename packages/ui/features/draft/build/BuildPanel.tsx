@@ -66,7 +66,7 @@ export function BuildPanel({
         // See the component's doc: the deck is made, and nothing the reader did is lost.
       }
       // On the cached list before the editor opens, so its first frame is already in draft mode.
-      rememberDraftDeck(queryClient, row.id);
+      rememberDraftDeck(queryClient, row);
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
       onBuilt?.();
       notify.success(`Built “${row.name}” from a ${view.pool.length}-card pool`);

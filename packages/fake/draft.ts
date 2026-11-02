@@ -35,6 +35,7 @@ import type {
   DeckRow,
   DeckVariant,
   DraftCard,
+  DraftDeckRef,
   DraftSaved,
   DraftSetup,
   DraftView,
@@ -117,8 +118,12 @@ const WINSTON_PILES = 3;
 
 interface DraftWorld {
   draft: DraftState | null;
-  /** `app_meta` `draft_decks`: the decks a draft made and the reader has not saved. */
-  draftDecks: number[];
+  /**
+   * `app_meta` `draft_decks`: the decks a draft made and the reader has not saved, each by its id
+   * and the uid it was made with (issue #1467). This fake's deck uid is derived from the id, so it
+   * cannot tell a reused id from the deck that had it — `draft_deck.rs`' tests hold that half.
+   */
+  draftDecks: DraftDeckRef[];
 }
 
 const WORLDS = new WeakMap<FakeDb, DraftWorld>();
@@ -612,7 +617,7 @@ export function createDraftDeck(
       quantity,
     });
   }
-  worldOf(db).draftDecks.push(row.id);
+  if (row.syncUid !== null) worldOf(db).draftDecks.push({ id: row.id, syncUid: row.syncUid });
   return row;
 }
 
@@ -709,22 +714,22 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
     draft_deck_create: (args: { name: string; cardIds: string[]; commander?: boolean }): DeckRow =>
       createDraftDeck(db, writes, args.name, args.cardIds, args.commander === true),
     /** Only the decks that still exist — a draft deck deleted from the gallery leaves the list. */
-    draft_deck_ids: (): number[] => {
+    draft_deck_ids: (): DraftDeckRef[] => {
       const world = worldOf(db);
-      world.draftDecks = world.draftDecks.filter((id) => db.decks.some((d) => d.id === id));
-      return [...world.draftDecks];
+      world.draftDecks = world.draftDecks.filter((e) => db.decks.some((d) => d.id === e.id));
+      return world.draftDecks.map((e) => ({ ...e }));
     },
     draft_deck_keep: (args: { deckId: number }): void => {
       const world = worldOf(db);
-      world.draftDecks = world.draftDecks.filter((id) => id !== args.deckId);
+      world.draftDecks = world.draftDecks.filter((e) => e.id !== args.deckId);
     },
     draft_deck_discard: (args: { deckId: number }): void => {
       const world = worldOf(db);
-      if (!world.draftDecks.includes(args.deckId)) {
+      if (!world.draftDecks.some((e) => e.id === args.deckId)) {
         throw new Error("That deck is not a draft deck any more.");
       }
       writes.deck_delete({ id: args.deckId });
-      world.draftDecks = world.draftDecks.filter((id) => id !== args.deckId);
+      world.draftDecks = world.draftDecks.filter((e) => e.id !== args.deckId);
     },
     draft_basic_lands: (args: { setCodes: string[] }): BasicLand[] => basicLands(db, args.setCodes),
 
