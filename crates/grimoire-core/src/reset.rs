@@ -377,8 +377,11 @@ pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
             crate::collection_folders::refile_entry(&tx, entry, removed)?;
         }
     }
+    // **Not an unsaved draft deck** (user schema v69): a draft is the Draft & Packs page's until
+    // the reader saves it — in no deck list, no count and no sync — so a press that clears *your
+    // decks* does not reach it. Draft decks are virtual, so the group refile above never saw one.
     let decks = tx
-        .execute("DELETE FROM decks", [])
+        .execute("DELETE FROM decks WHERE draft = 0", [])
         .map_err(|e| e.to_string())?;
     let folders = tx
         .execute("DELETE FROM deck_folders", [])
@@ -390,8 +393,17 @@ pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
     // otherwise open the Labels dialog onto forty labels attached to nothing, with no deck left
     // to reach them from. Nothing else in the app can hold a label, so this is exact rather than
     // a guess — a label is only ever worn by a `deck_cards` row, and there are none left.
-    tx.execute("DELETE FROM deck_labels", [])
-        .map_err(|e| e.to_string())?;
+    //
+    // **Except a label a surviving draft deck's card still wears** — the one row the sentence
+    // above no longer covers since drafts outlive this press. `deck_cards.label_id` is
+    // `ON DELETE SET NULL`, so sweeping it would strip the draft's card of its label behind the
+    // reader's back.
+    tx.execute(
+        "DELETE FROM deck_labels
+          WHERE id NOT IN (SELECT label_id FROM deck_cards WHERE label_id IS NOT NULL)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
 
     Ok(DecksCleared {
@@ -869,6 +881,51 @@ mod tests {
         ] {
             assert_eq!(count(&conn, table), 0, "{table} should have been cleared");
         }
+    }
+
+    /// **An unsaved draft deck is not one of the reader's decks yet** (user schema v69, issue
+    /// #1467): the clear leaves it, its piles and cards, and the label its card wears.
+    #[test]
+    fn clearing_the_decks_leaves_an_unsaved_draft_deck_and_its_label() {
+        let conn = db();
+        seed(&conn);
+        let draft = crate::deck::create_deck_with(
+            &conn,
+            &crate::deck::DeckInput {
+                name: "Quick Draft".to_owned(),
+                virtual_only: Some(true),
+                ..Default::default()
+            },
+            true,
+        )
+        .unwrap()
+        .id;
+        conn.execute_batch(&format!(
+            "INSERT INTO deck_labels (id, name, name_key, color, created_at, updated_at)
+             VALUES (7, 'Ramp', 'ramp', 'green', 0, 0), (8, 'Gone', 'gone', 'red', 0, 0);
+             INSERT INTO deck_categories (id, deck_id, name, kind, sort_order, created_at, updated_at)
+             VALUES (70, {draft}, 'Pool', 'side', 9, 0, 0);
+             INSERT INTO deck_cards
+                (id, deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                 name, quantity, label_id, created_at, updated_at)
+             VALUES (70, {draft}, 70, 'live', 'a', 'lea', '1', 'en', 'Shock', 1, 7, 0, 0);"
+        ))
+        .unwrap();
+
+        let out = clear_decks(&conn).unwrap();
+
+        assert_eq!(out.decks, 1, "the seeded deck, not the draft");
+        assert_eq!(count(&conn, "decks"), 1);
+        assert_eq!(
+            count(&conn, &format!("decks WHERE id = {draft} AND draft = 1")),
+            1
+        );
+        assert_eq!(count(&conn, "deck_cards WHERE id = 70 AND label_id = 7"), 1);
+        assert_eq!(
+            count(&conn, "deck_labels"),
+            1,
+            "only the label nothing wears goes"
+        );
     }
 
     /// **The collection is not a deck's to take**, and schema v25 made that a sharper claim than

@@ -1195,6 +1195,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],

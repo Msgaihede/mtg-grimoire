@@ -8,15 +8,14 @@ import { useNotifications } from "@/lib/notifications";
 const draftBasicLands = vi.hoisted(() => vi.fn());
 const draftDeckKeep = vi.hoisted(() => vi.fn());
 const draftDeckDiscard = vi.hoisted(() => vi.fn());
-const draftDeckIds = vi.hoisted(() => vi.fn());
+const draftDeckList = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { draftBasicLands, draftDeckKeep, draftDeckDiscard, draftDeckIds },
+  ipc: { draftBasicLands, draftDeckKeep, draftDeckDiscard, draftDeckList },
 }));
 
 import { BASICS_SHIFT_COPIES, DraftDeckBar } from "./DraftDeckBar";
 import { openDraftDeck } from "../navigation";
-import { DRAFT_DECKS_KEY } from "../useDraftDecks";
 
 const BASICS = [
   { color: "W", name: "Plains", cardId: "plains-fdn" },
@@ -29,7 +28,6 @@ function draw(props: Partial<Parameters<typeof DraftDeckBar>[0]> = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  client.setQueryData([...DRAFT_DECKS_KEY], [{ id: 7, syncUid: "deck-uid-7" }]);
   const onAddBasic = vi.fn();
   const onExport = vi.fn();
   render(
@@ -51,8 +49,9 @@ beforeEach(() => {
   draftBasicLands.mockReset().mockResolvedValue(BASICS);
   draftDeckKeep.mockReset().mockResolvedValue(undefined);
   draftDeckDiscard.mockReset().mockResolvedValue(undefined);
-  draftDeckIds.mockReset().mockResolvedValue([]);
+  draftDeckList.mockReset().mockResolvedValue([]);
   useNotifications.setState({ notices: [], toasts: [] });
+  useAppStore.setState(useAppStore.getInitialState());
   openDraftDeck(7);
 });
 
@@ -115,9 +114,10 @@ describe("DraftDeckBar", () => {
     expect(onAddBasic).not.toHaveBeenCalled();
   });
 
-  it("saves the deck and says so", async () => {
+  it("saves the deck, says so, and opens it in the Decks view's editor", async () => {
     const user = userEvent.setup();
     draw();
+    expect(useAppStore.getState()).toMatchObject({ activeView: "draft", draftDeckId: 7 });
 
     await user.click(screen.getByRole("button", { name: "Save deck" }));
 
@@ -128,9 +128,16 @@ describe("DraftDeckBar", () => {
         title: "Saved “Quick Draft” to your decks",
       }),
     );
+    // A deck like any other now: its editor is the Decks view's, and the Draft view's is closed,
+    // so a later visit to Draft & Packs lands on its page.
+    expect(useAppStore.getState()).toMatchObject({
+      activeView: "decks",
+      openDeckId: 7,
+      draftDeckId: null,
+    });
   });
 
-  it("says a refused save as an error", async () => {
+  it("says a refused save as an error, and stays on the draft deck", async () => {
     draftDeckKeep.mockRejectedValue("The database is busy");
     const user = userEvent.setup();
     draw();
@@ -143,6 +150,7 @@ describe("DraftDeckBar", () => {
         body: "The database is busy",
       }),
     );
+    expect(useAppStore.getState()).toMatchObject({ activeView: "draft", draftDeckId: 7 });
   });
 
   it("hands Export to the editor's dialog, with the button to come back to", async () => {
@@ -164,10 +172,10 @@ describe("DraftDeckBar", () => {
 
     expect(screen.queryByRole("group", { name: "Discard Quick Draft" })).not.toBeInTheDocument();
     expect(draftDeckDiscard).not.toHaveBeenCalled();
-    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(useAppStore.getState()).toMatchObject({ activeView: "draft", draftDeckId: 7 });
   });
 
-  it("discards the deck, says so, and goes back to the Draft page with no deck parked", async () => {
+  it("discards the deck, says so, and goes back to the Draft page", async () => {
     const user = userEvent.setup();
     draw();
 
@@ -175,9 +183,10 @@ describe("DraftDeckBar", () => {
     await user.click(screen.getByRole("button", { name: "Discard deck" }));
 
     await waitFor(() => expect(draftDeckDiscard).toHaveBeenCalledWith(7));
-    await waitFor(() => expect(useAppStore.getState().activeView).toBe("draft"));
+    await waitFor(() => expect(useAppStore.getState().draftDeckId).toBeNull());
+    expect(useAppStore.getState().activeView).toBe("draft");
+    // Nothing of the Decks view's was touched: a draft deck was never open there.
     expect(useAppStore.getState().openDeckId).toBeNull();
-    // Closed before the view changed, so coming back to Decks opens the gallery, not a gone deck.
     expect(useAppStore.getState().parkedDeckId).toBeNull();
     expect(useNotifications.getState().notices[0]).toMatchObject({
       tone: "info",

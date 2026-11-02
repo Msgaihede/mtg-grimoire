@@ -33,12 +33,7 @@ import { MARKETPLACE_FEEDS_KEY, MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { makeFit, spanPx, type WidgetFit } from "../fit";
 import { deckListKey, deckValuesKey } from "../keys";
 import type { Density } from "../widgetSettings";
-import {
-  DecksWidget,
-  DecksWidgetSettings,
-  deckScope,
-  decksToShow,
-} from "./DecksWidget";
+import { DecksWidget, DecksWidgetSettings, deckScope, decksToShow } from "./DecksWidget";
 
 let nextId = 1;
 
@@ -79,6 +74,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     curveCreatures: false,
     todosOpen: false,
     syncUid: null,
+    draft: false,
     ...over,
   };
 }
@@ -404,9 +400,10 @@ describe("DecksWidget", () => {
      * cover is drawn whatever the switch says, because a 34px frame would leave the name nothing.
      */
     it("moves the value under the name on a two-cell tile, with no cover", () => {
-      seed([deck({ id: 1, name: "Burn", formatName: "Modern", cardCount: 60 })], [
-        value({ deckId: 1, value: 120 }),
-      ]);
+      seed(
+        [deck({ id: 1, name: "Burn", formatName: "Modern", cardCount: 60 })],
+        [value({ deckId: 1, value: 120 })],
+      );
 
       draw(null, { fit: fitFor(2, 3) });
 
@@ -502,7 +499,9 @@ describe("DecksWidget", () => {
 
       draw();
 
-      expect(screen.getByText(/No decks found\. Build a deck on the Decks page/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/No decks found\. Build a deck on the Decks page/),
+      ).toBeInTheDocument();
     });
 
     /** Its own sentence: a reader with decks whose every pin has gone is not a reader with no
@@ -611,9 +610,7 @@ describe("DecksWidget", () => {
       await user.click(screen.getByRole("button", { name: "Decks to pin" }));
       await user.click(screen.getByRole("option", { name: /Affinity/ }));
 
-      await waitFor(() =>
-        expect(onConfig).toHaveBeenCalledWith({ deckIds: [4], scope: "pinned" }),
-      );
+      await waitFor(() => expect(onConfig).toHaveBeenCalledWith({ deckIds: [4], scope: "pinned" }));
     });
 
     /** A second pin lands at the **end**, which is what makes the stored order the reader's. */

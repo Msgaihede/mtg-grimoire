@@ -1556,6 +1556,32 @@ that is so. Everywhere else the key is a rowid the far device assigns itself; th
 `(namespace, tag_id)`, both `NOT NULL`, and an op without them is an op the far device cannot
 turn into a row at all.
 
+**An unsaved draft deck is not captured, and nor is any row under it** (user schema v69,
+`decks.draft = 1`: Draft & Packs' "Build deck" before the reader presses **Save deck**). Until it
+is saved a draft is this device's alone — never synced, and discarded without ever having left.
+`capture::outside_drafts` derives the fence from the specs rather than from a list: the deck,
+and every table whose parent chain reaches it — the nine that name a deck, `deck_note_cards`
+through its note (a row wholly a deck's); `collection_entries` stays outside, because a deck's
+folder can be the deck's while the cardboard in it is the reader's. The condition gates **the
+op, never the uid mint**: a draft's rows are named like any other, because the uid is how the
+draft is known and what the save sends, and a row left nameless would put a NULL into
+`sync_ops.uid NOT NULL` at its first captured edit. `draft` is on no spec, so the save's
+`UPDATE decks SET draft = 0` names no watched column, and the deck's update trigger is gated on
+`OLD.draft = 0` as well. ⚠️ **A child asks its deck, so a cascade cannot ask**: `ON DELETE
+CASCADE` deletes the deck before its children's `AFTER DELETE` triggers fire, they find no draft,
+and each would write a `del` for a row no peer has heard of — so `deck::delete_deck` runs a draft
+deck's whole delete inside `capture::suppressed`
+(`a_draft_decks_delete_needs_suppressing_and_then_records_nothing` holds both halves). **Saving
+announces the subtree**: `draft_deck::keep` clears the flag and calls `capture::announce_deck` in
+one transaction, which writes the insert trigger's whole `put` for the deck and every fenced row
+— parents first in `apply::order_of`'s rank, **one row per statement** (one statement reads the
+clock once, so a multi-row `INSERT … SELECT` stamps every row alike and `merge::fold` keeps one
+of them), behind the apply guard and the group's cross join like any trigger, skipping a row with
+no uid as the baseline does. And **`baseline::build` reads under the same condition**, so a peer
+that pairs while a draft is open is never offered it. A rewind past v69 drops the 28 triggers that
+read `decks.draft` before the column (`schema::fixtures::UNDO_V69`); SQLite refuses to drop a
+column a trigger names.
+
 ---
 
 ## A write every device derives for itself must not be captured

@@ -116,6 +116,7 @@ const DECK: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -214,7 +215,12 @@ const BOLT: DeckCard = {
   ownedQuantity: 2,
 };
 
-const DETAIL: DeckDetail = { deck: DECK, cards: [BOLT], categories: [MAIN, SIDE, MAYBE], labels: [] };
+const DETAIL: DeckDetail = {
+  deck: DECK,
+  cards: [BOLT],
+  categories: [MAIN, SIDE, MAYBE],
+  labels: [],
+};
 
 let client: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
@@ -382,7 +388,12 @@ describe("useDeck", () => {
     await result.current.addCard.mutateAsync({ cardId: "p2", categoryId: SIDE.id, quantity: 1 });
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "theory", null, 1);
 
-    await result.current.moveCard.mutateAsync({ cardId: "p2", from: SIDE.id, to: MAIN.id, finish: null });
+    await result.current.moveCard.mutateAsync({
+      cardId: "p2",
+      from: SIDE.id,
+      to: MAIN.id,
+      finish: null,
+    });
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, null, "theory", null);
 
     // The clear is variant-scoped like the rest: it names the list the hook is reading, which
@@ -613,7 +624,12 @@ describe("useDeck", () => {
     });
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, null, "live", null, 1);
 
-    await result.current.moveCard.mutateAsync({ cardId: "p2", from: MAYBE.id, to: SIDE.id, finish: null });
+    await result.current.moveCard.mutateAsync({
+      cardId: "p2",
+      from: MAYBE.id,
+      to: SIDE.id,
+      finish: null,
+    });
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, SIDE.id, null, "live", null);
   });
 
@@ -848,7 +864,15 @@ describe("useDeck", () => {
     });
 
     expect(answer).toEqual({ moved: true, category: "Uncategorized", categoryId: 77 });
-    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Uncategorized", "live", null);
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "p2",
+      MAIN.id,
+      null,
+      "Uncategorized",
+      "live",
+      null,
+    );
   });
 
   /** And a card **already** in that pile is the one press that still writes nothing — the only
@@ -1450,10 +1474,20 @@ describe("useDeck", () => {
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    await result.current.setLabel.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, labelId: 8 });
+    await result.current.setLabel.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      labelId: 8,
+    });
     expect(deckCardSetLabel).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 8);
 
-    await result.current.setLabel.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, labelId: null });
+    await result.current.setLabel.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      labelId: null,
+    });
     expect(deckCardSetLabel).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, null);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
@@ -1725,9 +1759,7 @@ describe("the query keys the press and the dialog share", () => {
     const wishes = [{ id: 7, quantity: 3, folderId: null, folderName: null }];
     deckQuickAddWishes.mockResolvedValue(wishes);
 
-    await expect(
-      client.fetchQuery(quickAddWishesQuery("p1", "etched")),
-    ).resolves.toBe(wishes);
+    await expect(client.fetchQuery(quickAddWishesQuery("p1", "etched"))).resolves.toBe(wishes);
     expect(deckQuickAddWishes).toHaveBeenCalledWith("p1", "etched");
     // And it landed where the key says, so a second press pays nothing.
     expect(client.getQueryData(["wishlist", "forPrinting", "p1", "etched"])).toBe(wishes);

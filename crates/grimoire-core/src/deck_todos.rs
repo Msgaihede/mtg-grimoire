@@ -308,13 +308,16 @@ pub fn delete_list(conn: &Connection, deck_id: i64, id: i64) -> Result<(), Strin
 /// return. **An empty body is left out** and an empty *title* is not: a list with nothing in it
 /// has nothing for the widget to draw, while an untitled list with to-dos is drawn as
 /// `Untitled list`.
+///
+/// **No unsaved draft deck's lists** ([`crate::deck::DeckRow::draft`]): the widget names decks
+/// the reader can open from the Decks page, and a draft is not one of them until it is saved.
 pub fn every_list(conn: &Connection) -> Result<Vec<DeckTodoListEntry>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT l.id, l.deck_id, d.name, d.archived, d.todos_open, l.title, l.body,
                     l.sort_order, l.updated_at
                FROM deck_todo_lists l JOIN decks d ON d.id = l.deck_id
-              WHERE l.body <> ''
+              WHERE l.body <> '' AND d.draft = 0
               ORDER BY l.updated_at DESC, l.id",
         )
         .map_err(|e| e.to_string())?;

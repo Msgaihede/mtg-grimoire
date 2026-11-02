@@ -2,7 +2,6 @@ import { useId, useMemo, useState, type JSX } from "react";
 import { Hammer } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { openDraftDeck } from "@/features/draft/navigation";
-import { rememberDraftDeck } from "@/features/draft/useDraftDecks";
 import { plural } from "@/lib/counts";
 import { ipc, ipcError, type DraftView } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
@@ -16,7 +15,7 @@ export type DraftRole = "solo" | "host" | "guest";
 
 /**
  * The Build step: what the pool holds, a name for the deck, and the press that turns the pool
- * into a deck in the deck editor's draft mode (spec §5) — a **virtual** Limited deck whose Pool
+ * into a deck in the deck editor's draft mode, opened in this view (spec §5) — a **virtual** Limited deck whose Pool
  * holds every card drafted, never the collection's. A Commander draft's (`view.commanders > 0`,
  * spec §4a) is a Casual deck with a Commander pile beside Deck and Pool, built with
  * `draft_deck_create`'s `commander` flag.
@@ -65,8 +64,9 @@ export function BuildPanel({
       } catch {
         // See the component's doc: the deck is made, and nothing the reader did is lost.
       }
-      // On the cached list before the editor opens, so its first frame is already in draft mode.
-      rememberDraftDeck(queryClient, row);
+      // The decks root holds *Draft in progress* (`DRAFT_DECKS_KEY`). Nothing is seeded for the
+      // editor: it opens in the Draft view (`host="draft"`), which is draft mode from its first
+      // frame, and the row's own `draft` flag decides from `deck_get` on.
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
       onBuilt?.();
       notify.success(`Built “${row.name}” from a ${view.pool.length}-card pool`);

@@ -1,16 +1,17 @@
 //! **The deck a drafted pool becomes** — `grimoire_core::draft_deck`'s commands: a virtual
-//! Limited deck holding the pool, on the unsaved list until the reader saves or discards it, and
-//! the five basics the editor's draft bar adds. Every write goes through `with_write`, as every
-//! other deck write does, so the other windows and the mirror hear of it.
+//! Limited deck holding the pool, an unsaved draft deck (`decks.draft`) until the reader saves or
+//! discards it, and the five basics the editor's draft bar adds. Every write goes through
+//! `with_write`, as every other deck write does, so the other windows hear of it — and saving
+//! needs the write connection anyway, since it announces the deck to the sync group.
 
 use std::sync::Arc;
 
 use grimoire_core::deck::DeckRow;
-use grimoire_core::draft_deck::{self, BasicLand, DraftDeckRef};
+use grimoire_core::draft_deck::{self, BasicLand};
 
 use crate::sync::{lock_db_read, with_write, AppState};
 
-/// The pool as a virtual Limited deck named `name`, on the unsaved list. A repeated id is that
+/// The pool as a virtual Limited deck named `name`, an unsaved draft deck. A repeated id is that
 /// many copies. With `commander` — a Commander draft's pool — the deck is Casual and has an empty
 /// Commander pile beside Deck and Pool.
 #[tauri::command]
@@ -30,14 +31,13 @@ pub async fn draft_deck_create(
     .map_err(|e| format!("The draft deck could not be made: {e}"))?
 }
 
-/// The draft decks not saved yet that still exist with the uid they were made with, oldest
-/// first — each as its id and `sync_uid`, so the editor can hold the deck it has open to both.
+/// The unsaved draft decks, oldest first, as the rows `deck_list` leaves out.
 #[tauri::command(async)]
-pub fn draft_deck_ids(state: tauri::State<'_, Arc<AppState>>) -> Vec<DraftDeckRef> {
-    draft_deck::ids(&lock_db_read(state.inner()))
+pub fn draft_deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<DeckRow>, String> {
+    draft_deck::list(&lock_db_read(state.inner()))
 }
 
-/// Save: the deck leaves the unsaved list and is a deck like any other.
+/// Save: the deck is a deck like any other — listed, and sent to the sync group whole.
 #[tauri::command]
 pub async fn draft_deck_keep(
     state: tauri::State<'_, Arc<AppState>>,
@@ -51,7 +51,8 @@ pub async fn draft_deck_keep(
     .map_err(|e| format!("The draft deck could not be saved: {e}"))?
 }
 
-/// Discard: the draft deck is deleted. Refused for a deck not on the unsaved list.
+/// Discard: the draft deck is deleted, never having left this device. Refused for a deck that is
+/// not an unsaved draft deck.
 #[tauri::command]
 pub async fn draft_deck_discard(
     state: tauri::State<'_, Arc<AppState>>,

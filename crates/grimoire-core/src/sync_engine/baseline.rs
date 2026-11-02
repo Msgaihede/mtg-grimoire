@@ -127,6 +127,11 @@ fn stamp_column(table: &str) -> &'static str {
 /// which must not be announced — this clause is what keeps them out. An op carrying an empty
 /// name would be worse than a missing row — every device would file every anonymous row under
 /// one uid.
+///
+/// **And an unsaved draft deck is left out, with every row under it** — the fence the capture
+/// triggers write under ([`capture::outside_drafts`](super::capture::outside_drafts)), read here
+/// with the same condition, so a peer that pairs while a draft is open is never offered what no
+/// op ever told it about. Saving the deck announces it ([`super::capture::announce_deck`]).
 fn select_for(spec: &Spec) -> String {
     let mut cols: Vec<String> = vec!["t.sync_uid".to_owned()];
     for f in spec.fields {
@@ -148,8 +153,11 @@ fn select_for(spec: &Spec) -> String {
         .map(|k| format!("t.{k}"))
         .collect::<Vec<_>>()
         .join(", ");
+    let drafts = super::capture::outside_drafts(spec, "t")
+        .map(|keep| format!(" AND {keep}"))
+        .unwrap_or_default();
     format!(
-        "SELECT {} FROM {} t WHERE t.sync_uid IS NOT NULL ORDER BY {order}",
+        "SELECT {} FROM {} t WHERE t.sync_uid IS NOT NULL{drafts} ORDER BY {order}",
         cols.join(", "),
         spec.table
     )
@@ -898,5 +906,68 @@ mod tests {
         .unwrap();
         let h = horizon(&conn, "dev-a").unwrap();
         assert_eq!(h.seen.get("dev-c").map(|s| (s.ms, s.ctr)), Some((500, 3)));
+    }
+
+    /// **An unsaved draft deck is never offered to a peer, and neither is a row under it** — not
+    /// its category, not its note, not the card that note holds, which is reached through the
+    /// note rather than the deck. The deck beside it, saved, is offered whole, and so is the
+    /// draft once the reader saves it.
+    #[test]
+    fn a_draft_deck_and_its_rows_are_left_out_until_it_is_saved() {
+        let conn = paired("dev-a");
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, draft, created_at, updated_at)
+                 VALUES (1, 'Draft', 'limited', 1, 0, 0), (2, 'Burn', 'modern', 0, 0, 0);
+             INSERT INTO deck_categories
+                 (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+                 VALUES (1, 'Ramp', 'main', 1, 0, 0, 0), (2, 'Burn', 'main', 1, 0, 0, 0);
+             INSERT INTO deck_notes (id, deck_id, title, sort_order, created_at, updated_at)
+                 VALUES (1, 1, 'Plan', 0, 0, 0);
+             INSERT INTO deck_note_cards (note_id, oracle_id, created_at, updated_at)
+                 VALUES (1, 'o-bolt', 0, 0);",
+        )
+        .unwrap();
+        let draft_uids: BTreeSet<String> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT sync_uid FROM decks WHERE id = 1
+                     UNION ALL SELECT sync_uid FROM deck_categories WHERE deck_id = 1
+                     UNION ALL SELECT sync_uid FROM deck_notes
+                     UNION ALL SELECT sync_uid FROM deck_note_cards",
+                )
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.map(Result::unwrap).collect()
+        };
+        assert_eq!(draft_uids.len(), 4, "every draft row is still named");
+
+        let offered = |conn: &Connection| -> Vec<(String, String)> {
+            build(conn, "dev-a")
+                .unwrap()
+                .into_iter()
+                .filter(|o| o.table.starts_with("deck"))
+                .map(|o| (o.table, o.uid))
+                .collect()
+        };
+        let ops = offered(&conn);
+        assert!(
+            ops.iter().all(|(_, uid)| !draft_uids.contains(uid)),
+            "a draft row reached the baseline: {ops:?}"
+        );
+        let tables: Vec<&str> = ops.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(
+            tables,
+            ["decks", "deck_categories"],
+            "the saved deck beside it is offered whole"
+        );
+
+        conn.execute("UPDATE decks SET draft = 0 WHERE id = 1", [])
+            .unwrap();
+        let ops = offered(&conn);
+        let saved: BTreeSet<String> = ops.into_iter().map(|(_, uid)| uid).collect();
+        assert!(
+            draft_uids.is_subset(&saved),
+            "a saved draft is offered like any deck"
+        );
     }
 }

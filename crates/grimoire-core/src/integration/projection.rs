@@ -864,6 +864,11 @@ pub(crate) fn wishlist_entries(
 }
 
 /// Which decks a read takes.
+///
+/// **Never an unsaved draft deck, in either arm** ([`crate::deck::DeckRow::draft`]): a draft is
+/// the reader's alone until it is saved — no integration reads it, and a share of one is refused
+/// as a deck that is not there (`share::deck`'s `DECK_NOT_FOUND`), which is what it is to anyone
+/// but this device.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum DeckScope<'a> {
     /// Every deck with a uid — the projection's.
@@ -875,8 +880,16 @@ pub(crate) enum DeckScope<'a> {
 pub(crate) fn decks(conn: &Connection, scope: DeckScope<'_>) -> Result<Vec<DeckRow>, String> {
     use crate::image_uri::{for_face, is_fetchable, FACE_COLUMN, TOP_LEVEL_COLUMN};
     let (filter, order, uid) = match scope {
-        DeckScope::Whole => ("coalesce(d.sync_uid, '') <> ''", "d.sync_uid", None),
-        DeckScope::Uid(uid) => ("d.sync_uid = ?1 AND ?1 <> ''", "d.id", Some(uid)),
+        DeckScope::Whole => (
+            "coalesce(d.sync_uid, '') <> '' AND d.draft = 0",
+            "d.sync_uid",
+            None,
+        ),
+        DeckScope::Uid(uid) => (
+            "d.sync_uid = ?1 AND ?1 <> '' AND d.draft = 0",
+            "d.id",
+            Some(uid),
+        ),
     };
     // The cover is the cover printing's front-face `art` crop, held to the rules every published
     // picture is ([`for_face`], [`is_fetchable`]), with its illustrator beside it. A deck with no
@@ -928,7 +941,8 @@ pub(crate) fn decks(conn: &Connection, scope: DeckScope<'_>) -> Result<Vec<DeckR
 /// Which deck cards a read takes. The live list either way.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum DeckCardScope {
-    /// Every live row with a uid, of every deck with one — the projection's.
+    /// Every live row with a uid, of every deck with one that is not an unsaved draft deck — the
+    /// projection's, [`DeckScope::Whole`]'s decks.
     Whole,
     /// One deck's live list (a local id), in the editor's Categories order — a deck share's.
     Deck(i64),
@@ -950,7 +964,7 @@ pub(crate) fn deck_cards(
     let image = crate::image_uri::front_face_selects("c").join(", ");
     let (filter, order, deck) = match scope {
         DeckCardScope::Whole => (
-            "coalesce(dc.sync_uid, '') <> '' AND coalesce(d.sync_uid, '') <> ''",
+            "coalesce(dc.sync_uid, '') <> '' AND coalesce(d.sync_uid, '') <> '' AND d.draft = 0",
             "dc.sync_uid",
             None,
         ),
@@ -1796,6 +1810,10 @@ mod tests {
                 (
                     "tags",
                     Absent("deck tags: absent from the format, never a switch"),
+                ),
+                (
+                    "draft",
+                    Absent("the filter: an unsaved draft deck is never projected"),
                 ),
             ],
         ),

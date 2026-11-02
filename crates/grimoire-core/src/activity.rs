@@ -232,9 +232,14 @@ pub fn prune(conn: &Connection) -> rusqlite::Result<usize> {
 /// `NULL AS deck_id` on the first arm and `'deck' AS scope` on the second are what make the two
 /// shapes one shape. A compound `SELECT` takes its result-column names from its **first** arm,
 /// which is why the `ORDER BY` below can name `at` and `id` at all.
+///
+/// **An unsaved draft deck's history is left out of the deck arm** ([`crate::deck::DeckRow::draft`]):
+/// the feed is the reader's decks, and a draft is not one of them until it is saved — from then
+/// on its rows, the ones written while it was a draft among them, are the feed's like any deck's.
 const FEED_SELECT: &str = "SELECT id, at, scope, kind, NULL AS deck_id, card_id, card_name, payload, delta FROM activity
              UNION ALL
              SELECT id, at, 'deck' AS scope, kind, deck_id, card_id, card_name, payload, delta FROM deck_audit
+              WHERE deck_id NOT IN (SELECT id FROM decks WHERE draft = 1)
              ORDER BY at DESC, id DESC LIMIT ?1";
 
 /// One row of [`FEED_SELECT`], in its column order.

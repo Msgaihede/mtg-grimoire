@@ -392,7 +392,9 @@ function cap(name: string): string {
  * nesting under it**: `App.tsx` renders `openDeckId === null ? <DecksPage/> : <DeckEditor/>`, so
  * a `decks` section under an open editor would list chords for a page that is not on screen.
  * **The board against the goldfish replaces the editor the same way** (`goldfish`, the store's
- * board open over the open deck), so its section is drawn instead of the editor's.
+ * board open over the open deck), so its section is drawn instead of the editor's. And the Draft
+ * view's editor on a draft deck (`draftDeckId`) replaces the Draft page's section with the
+ * editor's.
  *
  * Two fields already in the store and no registration machinery — a scope that registered itself
  * on mount would be a second source of truth about what is drawn, and the store already answers
@@ -403,8 +405,12 @@ export function activeScopes(s: {
   openDeckId: number | null;
   /** The board, against the goldfish, is drawn over the open deck. */
   goldfish?: boolean;
+  /** The draft deck open in Draft & Packs' own editor (the store's `draftDeckId`). */
+  draftDeckId?: number | null;
 }): readonly ShortcutScope[] {
   if (s.openDeckId !== null && s.goldfish === true) return ["global", "goldfish"];
+  // The Draft view draws the same editor over a draft deck, in place of its page.
+  if (s.activeView === "draft" && (s.draftDeckId ?? null) !== null) return ["global", "deckEditor"];
   return ["global", s.openDeckId !== null ? "deckEditor" : s.activeView];
 }
 

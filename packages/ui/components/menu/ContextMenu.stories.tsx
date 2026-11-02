@@ -206,9 +206,39 @@ function cardDeps(act: Act, wishlistFolders: readonly WishlistFolder[] = []): Ca
  * of them), and the nesting itself.
  */
 const WISH_FOLDERS: WishlistFolder[] = [
-  { rules: [], id: 1, parentId: null, name: "Ordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null },
-  { rules: [], id: 2, parentId: 1, name: "Backordered", sortOrder: 0, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null },
-  { rules: [], id: 3, parentId: null, name: "Someday", sortOrder: 1, managedDeckId: null, managedTokens: false, syncUid: null, managedDeckUid: null },
+  {
+    rules: [],
+    id: 1,
+    parentId: null,
+    name: "Ordered",
+    sortOrder: 0,
+    managedDeckId: null,
+    managedTokens: false,
+    syncUid: null,
+    managedDeckUid: null,
+  },
+  {
+    rules: [],
+    id: 2,
+    parentId: 1,
+    name: "Backordered",
+    sortOrder: 0,
+    managedDeckId: null,
+    managedTokens: false,
+    syncUid: null,
+    managedDeckUid: null,
+  },
+  {
+    rules: [],
+    id: 3,
+    parentId: null,
+    name: "Someday",
+    sortOrder: 1,
+    managedDeckId: null,
+    managedTokens: false,
+    syncUid: null,
+    managedDeckUid: null,
+  },
 ];
 
 /** The command zone, and a pile the reader made and dragged to the end of their own order. Named
@@ -335,6 +365,7 @@ const DECK: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -592,8 +623,7 @@ export const AddToWishlistFolders: Story = {
 
     await userEvent.click(wishlist);
     await waitFor(
-      async () =>
-        await expect(canvas.getByRole("menuitem", { name: "Someday" })).toBeVisible(),
+      async () => await expect(canvas.getByRole("menuitem", { name: "Someday" })).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
     // The root first, then the two top-level drawers in the reader's own `sortOrder` — and
@@ -608,8 +638,7 @@ export const AddToWishlistFolders: Story = {
     await expect(ordered).toHaveAttribute("aria-haspopup", "menu");
     await userEvent.click(ordered);
     await waitFor(
-      async () =>
-        await expect(canvas.getByRole("menuitem", { name: "Backordered" })).toBeVisible(),
+      async () => await expect(canvas.getByRole("menuitem", { name: "Backordered" })).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
     const inside = canvas.getAllByRole("menu");
@@ -1042,11 +1071,7 @@ export const PredefinedZone: Story = {
 export const EmptyPileCannotBeCleared: Story = {
   args: {
     label: "Ramp",
-    build: (act) =>
-      buildCategoryMenu(
-        { ...RAMP_PILE, cardCount: 0 },
-        categoryDeps(act),
-      ),
+    build: (act) => buildCategoryMenu({ ...RAMP_PILE, cardCount: 0 }, categoryDeps(act)),
   },
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);

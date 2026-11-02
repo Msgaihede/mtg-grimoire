@@ -6,7 +6,7 @@ import type { DeckRow, DraftSaved, DraftView, LobbyState, SupporterStatus } from
 
 const ipcMock = vi.hoisted(() => ({
   draftSaved: vi.fn(),
-  draftDeckIds: vi.fn(),
+  draftDeckList: vi.fn(),
   deckList: vi.fn(),
   lobbyState: vi.fn(),
   onLobbyState: vi.fn(),
@@ -72,7 +72,13 @@ const VIEW: DraftView = {
   stack: null,
 };
 
-const DRAFT_DECK = { id: 5, name: "Hobbit Draft", cardCount: 45, syncUid: "uid-5" } as DeckRow;
+const DRAFT_DECK = {
+  id: 5,
+  name: "Hobbit Draft",
+  cardCount: 45,
+  syncUid: "uid-5",
+  draft: true,
+} as DeckRow;
 
 const NOT_SUPPORTER: SupporterStatus = {
   entitled: false,
@@ -84,7 +90,7 @@ const NOT_SUPPORTER: SupporterStatus = {
 beforeEach(() => {
   for (const fn of Object.values(ipcMock)) fn.mockReset();
   ipcMock.draftSaved.mockResolvedValue(null);
-  ipcMock.draftDeckIds.mockResolvedValue([]);
+  ipcMock.draftDeckList.mockResolvedValue([]);
   ipcMock.deckList.mockResolvedValue([]);
   ipcMock.lobbyState.mockResolvedValue(null);
   ipcMock.onLobbyState.mockReturnValue(() => {});
@@ -141,28 +147,24 @@ describe("DraftPage", () => {
   });
 
   it("lists an unsaved draft deck and continues building it in the editor", async () => {
-    ipcMock.draftDeckIds.mockResolvedValue([{ id: 5, syncUid: "uid-5" }]);
-    ipcMock.deckList.mockResolvedValue([
-      DRAFT_DECK,
-      { ...DRAFT_DECK, id: 6, name: "Other", syncUid: "uid-6" },
-    ]);
+    ipcMock.draftDeckList.mockResolvedValue([DRAFT_DECK]);
     setup();
     const progress = await screen.findByRole("region", { name: "Draft in progress" });
     expect(within(progress).getByText("Hobbit Draft")).toBeInTheDocument();
-    expect(within(progress).queryByText("Other")).not.toBeInTheDocument();
+    expect(within(progress).getByText("45 cards · not saved yet")).toBeInTheDocument();
     await userEvent.click(within(progress).getByRole("button", { name: "Continue building" }));
     expect(openDraftDeck).toHaveBeenCalledWith(5);
   });
 
-  it("lists no ordinary deck that took a deleted draft deck's id (issue #1467)", async () => {
-    // The entry names deck 5 by the uid the draft made it with; deck 5 is now another deck.
-    ipcMock.draftDeckIds.mockResolvedValue([{ id: 5, syncUid: "uid-of-the-deleted-draft" }]);
-    ipcMock.deckList.mockResolvedValue([{ ...DRAFT_DECK, name: "My Elves" }]);
+  it("lists draft_deck_list's rows and never reads the reader's decks for them", async () => {
+    // `deck_list` never answers a draft deck, so the hub has nothing of the gallery's to filter.
+    ipcMock.deckList.mockResolvedValue([{ ...DRAFT_DECK, name: "My Elves", draft: false }]);
     setup();
-    await waitFor(() => expect(ipcMock.draftDeckIds).toHaveBeenCalled());
+    await waitFor(() => expect(ipcMock.draftDeckList).toHaveBeenCalled());
     expect(await screen.findByRole("region", { name: "Start new" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Draft in progress" })).not.toBeInTheDocument();
     expect(screen.queryByText("My Elves")).not.toBeInTheDocument();
+    expect(ipcMock.deckList).not.toHaveBeenCalled();
   });
 
   it("opens a mode's setup, and comes back by the trail", async () => {

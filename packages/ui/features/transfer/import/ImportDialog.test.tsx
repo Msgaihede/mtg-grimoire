@@ -166,6 +166,7 @@ const DECK: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -843,9 +844,7 @@ describe("the import dialog", () => {
     // And where that cardboard goes, which is the other half of what the press does — issue
     // #336. The label above is asserted verbatim, so the sentence being a note under the radios
     // rather than a second clause on the radio's own name is pinned by the two lines together.
-    expect(
-      screen.getByText("Any copies you own go back to Recently removed."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Any copies you own go back to Recently removed.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
     await waitFor(() =>
@@ -1086,10 +1085,7 @@ describe("the import dialog", () => {
    * file that would not read. Both sentences are the crate's own.
    */
   it.each([
-    [
-      "the file",
-      "That file is over 8 MB. An import is text; this reads at most 8 MB.",
-    ],
+    ["the file", "That file is over 8 MB. An import is text; this reads at most 8 MB."],
     ["the picker", "The file picker could not be opened — task 7 panicked"],
   ])("shows %s refusing, in the backend's words, beside the button", async (_, refusal) => {
     importPickFile.mockRejectedValue(refusal);

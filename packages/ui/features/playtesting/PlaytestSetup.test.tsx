@@ -53,6 +53,7 @@ function deck(over: Partial<DeckRow> & Pick<DeckRow, "id" | "name">): DeckRow {
     curveCreatures: false,
     todosOpen: false,
     syncUid: null,
+    draft: false,
     defaultCategoryId: 0,
     bracket: 0,
     tags: [],

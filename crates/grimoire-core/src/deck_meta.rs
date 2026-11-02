@@ -1574,6 +1574,11 @@ pub fn labels_of_decks(
 /// `LEFT JOIN`, so a label worn by nothing is a row with two zeroes rather than a row that is
 /// not there. That is the whole reason a reader can make a label in the Labels dialog before any
 /// card wears it and still find it afterwards.
+///
+/// **An unsaved draft deck's cards are not counted** ([`crate::deck::DeckRow::draft`]): the
+/// counts say how many of the reader's decks wear a label, and a draft is not one of them until
+/// it is saved. The filter sits in the join's `ON`, for the `LEFT JOIN`'s reason above — a label
+/// worn only in a draft is still a row, with two zeroes. [`read_global_label`] counts the same.
 pub fn list_all_labels(conn: &Connection) -> Result<Vec<GlobalLabel>, String> {
     let mut stmt = conn
         .prepare(
@@ -1581,7 +1586,9 @@ pub fn list_all_labels(conn: &Connection) -> Result<Vec<GlobalLabel>, String> {
                     coalesce(sum(dc.quantity), 0),
                     count(DISTINCT dc.deck_id)
                FROM deck_labels t
-               LEFT JOIN deck_cards dc ON dc.label_id = t.id
+               LEFT JOIN deck_cards dc
+                      ON dc.label_id = t.id
+                     AND dc.deck_id NOT IN (SELECT id FROM decks WHERE draft = 1)
               GROUP BY t.id, t.name, t.color
               ORDER BY coalesce(sum(dc.quantity), 0) DESC, t.name",
         )
@@ -1614,7 +1621,9 @@ fn read_global_label(conn: &Connection, id: i64) -> Result<Option<GlobalLabel>, 
                 coalesce(sum(dc.quantity), 0),
                 count(DISTINCT dc.deck_id)
            FROM deck_labels t
-           LEFT JOIN deck_cards dc ON dc.label_id = t.id
+           LEFT JOIN deck_cards dc
+                  ON dc.label_id = t.id
+                 AND dc.deck_id NOT IN (SELECT id FROM decks WHERE draft = 1)
           WHERE t.id = ?1
           GROUP BY t.id, t.name, t.color",
         params![id],

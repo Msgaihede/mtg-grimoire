@@ -174,6 +174,14 @@ export interface DeckEditorHeaderProps {
    * corpus. Export stays. Absent is `true`.
    */
   importable?: boolean;
+  /**
+   * **A host's own way back, in place of the `Decks › <drawers>` trail** — the trail is then this
+   * one crumb, which is the close ({@link closeDeck}, with {@link backRef}). Draft & Packs' editor
+   * on an unsaved draft deck passes `Draft & Packs`, named `Back to Draft & Packs`: such a deck is
+   * in no drawer and in no deck list, so a `Decks` crumb would name a view it is not in. Held still
+   * by the editor, because this header is memoised. Absent or `null` is the Decks view's trail.
+   */
+  hostCrumb?: { label: string; name: string } | null;
 }
 
 /** Stable identity for a deck at the top level, so the memoised header is not redrawn for it. */
@@ -196,6 +204,7 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
   importable = true,
   share = null,
   folders = NO_FOLDERS,
+  hostCrumb = null,
 }: DeckEditorHeaderProps) {
   const tip = useTooltip();
   const showDeckFolder = useAppStore((s) => s.showDeckFolder);
@@ -217,15 +226,17 @@ export const DeckEditorHeader = memo(function DeckEditorHeader({
    */
   const parent = folders.length > 0 ? folders[folders.length - 1] : undefined;
   const trail: PageCrumb[] =
-    parent === undefined
-      ? [{ label: "Decks", name: "Back to decks", onOpen: closeDeck, ref: backRef }]
-      : [
-          { label: "Decks", name: "Back to all decks", onOpen: () => setActiveView("decks") },
-          ...folders
-            .slice(0, -1)
-            .map((folder) => ({ label: folder.name, onOpen: () => showDeckFolder(folder.id) })),
-          { label: parent.name, name: `Back to ${parent.name}`, onOpen: closeDeck, ref: backRef },
-        ];
+    hostCrumb !== null
+      ? [{ label: hostCrumb.label, name: hostCrumb.name, onOpen: closeDeck, ref: backRef }]
+      : parent === undefined
+        ? [{ label: "Decks", name: "Back to decks", onOpen: closeDeck, ref: backRef }]
+        : [
+            { label: "Decks", name: "Back to all decks", onOpen: () => setActiveView("decks") },
+            ...folders
+              .slice(0, -1)
+              .map((folder) => ({ label: folder.name, onOpen: () => showDeckFolder(folder.id) })),
+            { label: parent.name, name: `Back to ${parent.name}`, onOpen: closeDeck, ref: backRef },
+          ];
   return (
     <>
       {/**

@@ -103,9 +103,7 @@ const CATEGORIES: DeckCategory[] = [
 ];
 
 /** Whatever the shared hook's label reads answer — see the mock's doc. */
-const LABELS: DeckLabel[] = [
-  { id: 10, name: "Cut candidate", color: "ember", cardCount: 3 },
-];
+const LABELS: DeckLabel[] = [{ id: 10, name: "Cut candidate", color: "ember", cardCount: 3 }];
 const SUGGESTIONS: GlobalLabel[] = [
   { id: 11, name: "Budget swap", color: "moss", cardCount: 4, deckCount: 2 },
 ];
@@ -148,6 +146,7 @@ const DECK_ROW: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -744,9 +743,9 @@ describe("categories", () => {
     // while this row silently read "—": the default `choice` is still the picked category's
     // *id*, so a `value` keyed on `name` instead matches no option, and the trigger draws its
     // em-dash placeholder on a destructive confirmation with nobody the wiser.
-    expect(
-      within(dialog).getByRole("button", { name: "Its 12 cards" }),
-    ).toHaveTextContent("move to “Commander”");
+    expect(within(dialog).getByRole("button", { name: "Its 12 cards" })).toHaveTextContent(
+      "move to “Commander”",
+    );
     expect(within(dialog).getByText(/will move to “Commander”\./)).toBeInTheDocument();
     // A pile belongs to one list, so there is never a sentence about a second one.
     expect(within(dialog).queryByText(/both the theory and actual lists/)).not.toBeInTheDocument();
@@ -814,7 +813,9 @@ describe("categories", () => {
     await pickOption(user, "Its 3 cards", "go with it");
 
     expect(
-      within(dialog).getByText(/will be removed\. The theory list doesn't use your collection, so no cards are moved/),
+      within(dialog).getByText(
+        /will be removed\. The theory list doesn't use your collection, so no cards are moved/,
+      ),
     ).toBeInTheDocument();
     expect(within(dialog).queryByText(/Recently removed/)).not.toBeInTheDocument();
   });

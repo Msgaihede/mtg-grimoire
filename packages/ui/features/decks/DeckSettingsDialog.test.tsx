@@ -79,6 +79,7 @@ const BURN: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -650,6 +651,26 @@ describe("DeckSettingsDialog", () => {
    * *to* theory pours the live list into the plan, so that moment is one a card write can land
    * in. `toHaveBeenCalledTimes(1)` is the half of this that no patch-shape assertion covers.
    */
+  /** An unsaved draft deck stays virtual until Save (`deck::DRAFT_STAYS_VIRTUAL`): the control
+   *  says so in place of a press the host could only refuse. */
+  it("holds a draft deck's kind still and says why", async () => {
+    deckGet.mockResolvedValue(detail({ virtualOnly: true, draft: true }));
+    open();
+    await loaded();
+
+    const group = screen.getByRole("group", { name: "Deck kind" });
+    expect(within(group).getByRole("button", { name: "Virtual" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    for (const kind of ["Regular", "Theory + Actual", "Virtual"]) {
+      expect(within(group).getByRole("button", { name: kind })).toBeDisabled();
+    }
+    expect(screen.getByText("A draft deck stays virtual until it is saved.")).toBeInTheDocument();
+    await userEvent.click(within(group).getByRole("button", { name: "Regular" }));
+    expect(deckUpdate).not.toHaveBeenCalled();
+  });
+
   it("writes the deck's kind as one patch carrying both columns", async () => {
     open();
     await loaded();
@@ -950,7 +971,10 @@ describe("DeckSettingsDialog", () => {
 
     // The plan goes; the rows it held do not, which is what the kind control's own caption
     // promises.
-    deckGet.mockResolvedValue({ ...withPlan(), deck: { ...withPlan().deck, theoryEnabled: false } });
+    deckGet.mockResolvedValue({
+      ...withPlan(),
+      deck: { ...withPlan().deck, theoryEnabled: false },
+    });
     await userEvent.click(
       within(screen.getByRole("group", { name: "Deck kind" })).getByRole("button", {
         name: "Regular",
@@ -1019,9 +1043,7 @@ describe("DeckSettingsDialog", () => {
 
     await waitFor(() => expect(deckClear).toHaveBeenCalledWith(4, "theory"));
     expect(deckClear).toHaveBeenCalledTimes(1);
-    await waitFor(() =>
-      expect(screen.queryByRole("group", { name: /^Clear the/ })).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByRole("group", { name: /^Clear the/ })).toBeNull());
     // Cards left a deck: one receipt, with the count the command answered.
     expect(useNotifications.getState().notices).toMatchObject([
       { title: "Removed 7 cards from “Burn”’s theory list", tone: "success" },
@@ -1214,9 +1236,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Pull owned cards…" }),
-    );
+    await userEvent.click(await screen.findByRole("button", { name: "Pull owned cards…" }));
 
     const pull = await screen.findByRole("dialog", { name: "Pull from collection" });
     expect(await within(pull).findByText("Database is busy.")).toBeInTheDocument();
@@ -1229,9 +1249,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Pull owned cards…" }),
-    );
+    await userEvent.click(await screen.findByRole("button", { name: "Pull owned cards…" }));
 
     expect(await screen.findByRole("dialog", { name: "Pull from collection" })).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Deck settings" })).toBeInTheDocument();
@@ -1251,9 +1269,7 @@ describe("DeckSettingsDialog", () => {
     const { onDismiss } = open();
     await loaded();
 
-    await user.click(
-      await screen.findByRole("button", { name: "Pull owned cards…" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Pull owned cards…" }));
     await screen.findByRole("dialog", { name: "Pull from collection" });
 
     await user.keyboard("{Escape}");
@@ -1310,17 +1326,13 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    await user.click(
-      await screen.findByRole("button", { name: "Pull owned cards…" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "Pull owned cards…" }));
     // Two dialogs are open, and each has a "Close"; the pull's is the one drawn last.
     const closes = await screen.findAllByRole("button", { name: "Close" });
     await user.click(closes[closes.length - 1]);
 
     await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Pull owned cards…" }),
-      ).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "Pull owned cards…" })).toHaveFocus(),
     );
   });
 
@@ -1338,9 +1350,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    await userEvent.click(
-      await screen.findByRole("button", { name: "Pull owned cards…" }),
-    );
+    await userEvent.click(await screen.findByRole("button", { name: "Pull owned cards…" }));
     await userEvent.click(await screen.findByRole("button", { name: "Pull 3 copies" }));
 
     await waitFor(() =>
@@ -1395,9 +1405,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     expect(screen.getByText("Fill this deck from your collection")).toBeInTheDocument();
-    expect(
-      await screen.findByRole("button", { name: /Pull owned cards/ }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Pull owned cards/ })).toBeInTheDocument();
     await waitFor(() => expect(deckPullPlan).toHaveBeenCalledWith(4));
   });
 

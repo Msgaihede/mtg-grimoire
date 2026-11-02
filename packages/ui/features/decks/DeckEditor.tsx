@@ -127,7 +127,7 @@ import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
 import { DraftDeckBar } from "@/features/draft/deck/DraftDeckBar";
 import { withoutCollectionAdds } from "@/features/draft/deck/draftMenu";
-import { useIsDraftDeck } from "@/features/draft/useDraftDecks";
+import { returnToDraftPage } from "@/features/draft/navigation";
 import { validateForMarks } from "./validation/engine";
 import { sameViolations, violationsBySlot } from "./violations";
 
@@ -276,6 +276,9 @@ const NOTHING_PICKED: DeckCard[] = [];
  */
 type TokenPicking = { kind: "swap"; entryKey: string } | { kind: "add" } | null;
 
+/** The Draft view's editor's one crumb back — held still for the memoised header. */
+const DRAFT_CRUMB = { label: "Draft & Packs", name: "Back to Draft & Packs" } as const;
+
 /**
  * One deck, open for editing.
  *
@@ -310,7 +313,21 @@ type TokenPicking = { kind: "swap"; entryKey: string } | { kind: "add" } | null;
  * every overlay and the `Layer` union, `useDeckDrops` every write a drop makes, and
  * `useDeckKeyboard` the two window bindings.
  */
-export function DeckEditor({ deckId }: { deckId: number }) {
+export function DeckEditor({
+  deckId,
+  host = "decks",
+}: {
+  deckId: number;
+  /**
+   * Which view the editor is drawn in. `"decks"` (absent) is the Decks view's second state, the
+   * editor every deck opens in. **`"draft"` is Draft & Packs' own editor on an unsaved draft deck**
+   * (`App.tsx` while the store's `draftDeckId` names one): such a deck is apart from the reader's
+   * decks until Save, so it is not edited in their view. The host decides two things: the way
+   * back (`Draft & Packs ›` to the Draft page, for the crumb and Escape alike), and the draft mode
+   * before `deck_get` answers ({@link draft}) — once the row is in, the row decides that.
+   */
+  host?: "decks" | "draft";
+}) {
   // Live until the deck row says otherwise, which it does on the first read — a deck nobody has
   // switched remembers `"live"` too, so this is the same answer arriving twice rather than a
   // guess the restore has to correct.
@@ -375,7 +392,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * confirmation, a last write flushed, a note left for the gallery — is written here and both
    * paths get it.
    */
-  const closeDeck = useCallback(() => setOpenDeckId(null), [setOpenDeckId]);
+  const closeDeck = useCallback(
+    () => (host === "draft" ? returnToDraftPage() : setOpenDeckId(null)),
+    [host, setOpenDeckId],
+  );
   /**
    * **To the game board against the goldfish**, dealt from the list on screen — the Decks view's
    * third state (`store.ts`' `goldfish`), drawn by `App.tsx` in this editor's place until the
@@ -409,6 +429,25 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   useDismissOnEscape({ layer: "navigation", onDismiss: closeDeck });
 
   const row = deck.deck;
+
+  /**
+   * **A draft deck** (Draft & Packs, spec §5): a deck a draft made from its pool, its row's
+   * `draft` flag set until the reader saves it. It is built from the Pool alone — the owner's rule is
+   * *without the collection and without the global search* — so this flag takes away every way a
+   * card arrives from either: the docked search panel (its corpus search and its Collection tab),
+   * Quick Add (the toolbar's and the undocked bar's), and the card menu's `Add to ▸ Collection` /
+   * `Wishlist` rows. The collection-reading surfaces (pull, add missing, `Collection ▸`, the
+   * shortfall block) are already gone by {@link tracks}: a draft deck is virtual. In their place
+   * the editor draws `DraftDeckBar` — basics, Save, Export, Discard.
+   *
+   * **The row's `draft` flag is the only answer once `deck_get` has given one** (`DeckRow.draft`)
+   * — never a list of ids beside the decks, which once put an ordinary deck that took a deleted
+   * draft deck's id into draft mode (issue #1467). **Before the row is in, the {@link host}
+   * answers**: a draft deck is opened only in the Draft view's editor (`openDraftDeck`) and every
+   * other deck only in the Decks view's, so a fresh draft deck's first frame is already free of the
+   * search dock with nothing seeded in a cache, and an ordinary deck never draws it for a beat.
+   */
+  const draft = row !== null ? row.draft : host === "draft";
   /**
    * What the header's Share control publishes (issue #1032) — held still on the two fields it
    * reads, because the header is memoised and a fresh target per render would redraw it.
@@ -435,9 +474,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [deckFolders, folderId]);
   const shareName = row?.name ?? null;
   const shareUid = row?.syncUid ?? null;
+  // A draft deck has no Share control: it is apart from the reader's decks until Save, and the
+  // host refuses to publish one (`share/deck.rs`' not-found).
   const share = useMemo(
-    () => deckShareTarget(shareName === null ? null : { name: shareName, syncUid: shareUid }),
-    [shareName, shareUid],
+    () =>
+      draft
+        ? null
+        : deckShareTarget(shareName === null ? null : { name: shareName, syncUid: shareUid }),
+    [draft, shareName, shareUid],
   );
   const spec = row ? formatSpecFor(row.formatKey) : null;
   /** The deck's description as its band draws it, or `null` — which draws no band (issue #912). */
@@ -489,23 +533,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * than more.
    */
   const tracks = row !== null && tracksCollection(row);
-
-  /**
-   * **A draft deck** (Draft & Packs, spec §5): a deck a draft made from its pool, on `app_meta`'s
-   * unsaved list until the reader saves it. It is built from the Pool alone — the owner's rule is
-   * *without the collection and without the global search* — so this flag takes away every way a
-   * card arrives from either: the docked search panel (its corpus search and its Collection tab),
-   * Quick Add (the toolbar's and the undocked bar's), and the card menu's `Add to ▸ Collection` /
-   * `Wishlist` rows. The collection-reading surfaces (pull, add missing, `Collection ▸`, the
-   * shortfall block) are already gone by {@link tracks}: a draft deck is virtual. In their place
-   * the editor draws `DraftDeckBar` — basics, Save, Export, Discard.
-   *
-   * `false` until the list has answered, which is the ordinary deck's answer; and once the row is
-   * in, a deck is a draft deck only by its id **and its `syncUid`** together — deck ids are reused
-   * after a delete, and a bare id once put an ordinary deck in draft mode (issue #1467). See
-   * `useIsDraftDeck`.
-   */
-  const draft = useIsDraftDeck(deckId, row);
 
   /**
    * Whether the ledger's `Game Changers` chip is pressed — **the thing that answers _which cards
@@ -3592,9 +3619,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         tightHeader={tightHeader}
         wideHeader={wideHeader}
         settingsIcon={settingsIcon}
-        openGoldfish={playtests ? openGoldfish : undefined}
+        // No goldfish for a draft deck: the board is the Decks view's third state, and a draft
+        // deck's editor is the Draft view's.
+        openGoldfish={playtests && !draft ? openGoldfish : undefined}
         share={share}
         importable={!draft}
+        hostCrumb={host === "draft" ? DRAFT_CRUMB : null}
       />
 
       {/* **The ledger is a thin row, 6px off the rules either side of it** (the owner's note,
