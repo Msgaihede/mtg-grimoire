@@ -13,9 +13,13 @@ describe("toggleMarketplace", () => {
     expect(toggleMarketplace(["tcgplayer"], "tcgplayer")).toEqual(["tcgplayer"]);
   });
 
-  it("starts over from one in the other currency rather than mixing dollars and euros", () => {
-    expect(toggleMarketplace(["tcgplayer", "manapool"], "cardmarket")).toEqual(["cardmarket"]);
-    expect(toggleMarketplace(["cardmarket"], "cardkingdom")).toEqual(["cardkingdom"]);
+  it("adds one in the other currency beside the pick, dollars and euros together", () => {
+    expect(toggleMarketplace(["tcgplayer", "manapool"], "cardmarket")).toEqual([
+      "tcgplayer",
+      "cardmarket",
+      "manapool",
+    ]);
+    expect(toggleMarketplace(["cardmarket"], "cardkingdom")).toEqual(["cardmarket", "cardkingdom"]);
   });
 });
 
@@ -48,9 +52,9 @@ describe("effectiveMarketplaces", () => {
     ]);
   });
 
-  it("keeps one currency from a store that names two", () => {
+  it("keeps a pick of two currencies whole", () => {
     expect(effectiveMarketplaces(["cardmarket", "tcgplayer"], MARKETPLACES.tcgplayer, all)).toEqual(
-      [MARKETPLACES.tcgplayer],
+      [MARKETPLACES.tcgplayer, MARKETPLACES.cardmarket],
     );
   });
 });

@@ -124,6 +124,10 @@ _Amended 2026-11-01 (issue #1446):_ the Packs page prices at one **or several** 
 currency, picked on the page and defaulting to the reader's marketplace; each finish is the lowest
 quote among them. See [draft-and-packs.md](../../reference/draft-and-packs.md).
 
+_Amended 2026-11-02 (issue #1463):_ the pick may name both currencies. It is then priced in the
+app's currency, the other's prices converted at the ECB's daily reference rate, which the desktop
+host fetches and caches (`packs_exchange_rate`); the picker is a searchable combobox.
+
 ## 3. Opening a booster (TypeScript, `packages/ui/features/draft/booster/`)
 
 `open.ts` — `openBooster(product, rng)`: one variant by weight; for each slot, `count` cards from

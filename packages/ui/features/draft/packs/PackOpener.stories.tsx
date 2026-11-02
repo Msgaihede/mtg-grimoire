@@ -163,3 +163,18 @@ export const Reduced: Story = {
     ).toHaveLength(2);
   },
 };
+
+/** Issue #1463: TCGplayer and Cardmarket picked in the combobox — searched for by typing — and
+ *  priced together in the app's dollars, Cardmarket's euros converted at the ECB's rate. */
+export const TwoCurrencies: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Sets to open" });
+    await userEvent.click(within(wall).getAllByRole("button")[0]);
+    const box = await canvas.findByRole("combobox", { name: "Prices from" });
+    await userEvent.type(box, "cardm{Enter}");
+    const chips = canvas.getByRole("list", { name: "Marketplaces priced at" });
+    await expect(within(chips).getAllByRole("listitem")).toHaveLength(2);
+    await expect(await canvas.findByText(/converted at €1 = \$1\.0800/)).toBeVisible();
+  },
+};
