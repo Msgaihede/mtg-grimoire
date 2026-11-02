@@ -73,6 +73,28 @@ export const Drafting: Story = {
   },
 };
 
+/**
+ * The pool in the side tray (issue #1474): one pick made, then the Pool toggle moved to the side —
+ * the pack keeps the room, and the pool is a list of names beside it.
+ */
+export const DraftingSideTray: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await startFromHub(canvasElement, /^Quick Draft/);
+    const pack = await canvas.findByRole("list", { name: "Pack" }, { timeout: 5000 });
+    const card = within(pack).getAllByRole("button")[0];
+    await userEvent.click(card);
+    await userEvent.click(
+      canvas.getByRole("button", { name: `Pick ${card.getAttribute("aria-label")}` }),
+    );
+    await userEvent.click(await canvas.findByRole("button", { name: "Pool beside the pack" }));
+    const pool = await canvas.findByRole("region", { name: "Your pool" });
+    await waitFor(() => expect(within(pool).getByText("1 card")).toBeVisible());
+    await expect(within(pool).queryAllByRole("img")).toHaveLength(0);
+    await expect(within(pool).getByText("1×")).toBeVisible();
+  },
+};
+
 /** A Commander draft round you and three bots: two cards chosen, and picked together. */
 export const CommanderDraft: Story = {
   play: async ({ canvasElement }) => {

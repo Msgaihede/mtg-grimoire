@@ -8,6 +8,7 @@ import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { pickOption } from "@/test-dropdown";
 import { boxed, pointerDrag } from "@/test-drag";
+import { parseStored, STORAGE_KEY as TRAY_LAYOUT_KEY, useDraftTrayLayout } from "./trayLayout";
 
 const ipcMock = vi.hoisted(() => ({
   draftPick: vi.fn(),
@@ -19,6 +20,7 @@ const ipcMock = vi.hoisted(() => ({
   lobbyPick: vi.fn(),
   lobbyWinston: vi.fn(),
   lobbyLeave: vi.fn(),
+  lobbyRejoin: vi.fn(),
   onDraftView: vi.fn(),
 }));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -112,6 +114,7 @@ let push: (v: DraftView) => void = () => {};
 beforeEach(() => {
   for (const fn of Object.values(ipcMock)) fn.mockReset();
   ipcMock.draftView.mockResolvedValue(null);
+  ipcMock.lobbyRejoin.mockResolvedValue(null);
   ipcMock.onDraftView.mockImplementation((cb: (v: DraftView) => void) => {
     push = cb;
     return () => {};
@@ -166,14 +169,51 @@ describe("DraftSession", () => {
     expect(screen.getByRole("list", { name: "Mana value 1: 1 card" })).toBeInTheDocument();
   });
 
-  it("chooses with a click and picks with the Pick button, never with a double-click", async () => {
+  it("draws an empty pool a card tall, its columns under the hint (issue #1473)", () => {
+    setup(view());
+    const pool = screen.getByRole("region", { name: "Your pool" });
+    // Every column is drawn before the first pick, so the first card moves nothing.
+    expect(within(pool).getByRole("list", { name: "Mana value 0: 0 cards" })).toBeInTheDocument();
+    expect(within(pool).getByRole("list", { name: "Lands: 0 cards" })).toBeInTheDocument();
+    const hint = within(pool).getByText("The cards you pick land here, by mana value.");
+    expect(hint).toHaveStyle({ gridRow: "2" });
+    // jsdom lays nothing out: the row's height is held by one column's card, 5:7, in that row.
+    const holder = hint.parentElement!.querySelector('[aria-hidden="true"].aspect-\\[5\\/7\\]');
+    expect(holder).toHaveStyle({ gridRow: "2" });
+  });
+
+  it("chooses with a click and picks with the Pick button", async () => {
     ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
     setup(view());
     const shock = within(pack()).getByRole("button", { name: "Shock" });
-    await userEvent.dblClick(shock);
+    await userEvent.click(shock);
     expect(shock).toHaveAttribute("aria-pressed", "true");
     expect(ipcMock.draftPick).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "Pick Shock" }));
+    expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
+  });
+
+  it("picks a double-clicked card, through draft_pick (issue #1469)", async () => {
+    ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+    setup(view());
+    await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
+    expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Opt#0.0.0"]);
+  });
+
+  it("never picks with a later click on the chosen card — only a double-click does", async () => {
+    setup(view());
+    const shock = within(pack()).getByRole("button", { name: "Shock" });
+    // Two separate clicks, not one double-click: the second only chooses the card again.
+    await userEvent.click(shock);
+    await userEvent.click(shock);
+    expect(shock).toHaveAttribute("aria-pressed", "true");
+    expect(ipcMock.draftPick).not.toHaveBeenCalled();
+  });
+
+  it("picks once on a triple-click", async () => {
+    ipcMock.draftPick.mockReturnValue(new Promise(() => {}));
+    setup(view());
+    await userEvent.tripleClick(within(pack()).getByRole("button", { name: "Shock" }));
     expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
   });
 
@@ -257,6 +297,23 @@ describe("DraftSession", () => {
     expect(screen.getByText("Waiting for the table…")).toBeInTheDocument();
     act(() => push(view({ pickNumber: 1 })));
     expect(screen.getByRole("heading", { name: "Pack 1 · Pick 2" })).toBeInTheDocument();
+  });
+
+  it("asks the host again for a guest's view on arrival, and takes the one it pushes", async () => {
+    // Issue #1468: the guest was elsewhere, or reloaded, and the view kept is still waiting on a
+    // pack the host has since passed.
+    setup(view({ mode: "pod", waiting: true }), "guest", null);
+    expect(screen.getByText("Waiting for the table…")).toBeInTheDocument();
+    await waitFor(() => expect(ipcMock.lobbyRejoin).toHaveBeenCalledOnce());
+    expect(ipcMock.draftView).not.toHaveBeenCalled();
+    act(() => push(view({ mode: "pod", pickNumber: 1 })));
+    expect(screen.getByRole("heading", { name: "Pack 1 · Pick 2" })).toBeInTheDocument();
+  });
+
+  it("asks nothing of the lobby for a draft this app runs", async () => {
+    setup(view(), "host", 42);
+    await waitFor(() => expect(ipcMock.draftView).toHaveBeenCalledWith(42));
+    expect(ipcMock.lobbyRejoin).not.toHaveBeenCalled();
   });
 
   it("sends a guest's pick to the host and waits for its push", async () => {
@@ -386,6 +443,22 @@ describe("DraftSession", () => {
       ]);
     });
 
+    it("picks the chosen card with the one double-clicked", async () => {
+      ipcMock.draftPick.mockResolvedValue(view({ pickNumber: 1 }));
+      setup(three());
+      const duress = within(pack()).getByRole("button", { name: "Duress" });
+      // Double-clicked alone, a card is not a whole pick: it stays chosen.
+      await userEvent.dblClick(duress);
+      expect(duress).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByText("1 of 2 chosen")).toBeInTheDocument();
+      expect(ipcMock.draftPick).not.toHaveBeenCalled();
+      await userEvent.dblClick(within(pack()).getByRole("button", { name: "Shock" }));
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, [
+        "Duress#0.0.0",
+        "Shock#0.0.0",
+      ]);
+    });
+
     it("sends a guest's two cards to the host", async () => {
       ipcMock.lobbyPick.mockResolvedValue(undefined);
       setup({ ...three(), mode: "pod", podFormat: "commander" }, "guest", null);
@@ -484,8 +557,7 @@ describe("DraftSession", () => {
       setup(view({ pool: [card("Bolt")] }));
       expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(190px, 1fr))");
       const pool = () =>
-        screen.getByRole("list", { name: "Mana value 1: 1 card" }).parentElement!
-          .parentElement as HTMLElement;
+        screen.getByRole("list", { name: "Mana value 1: 1 card" }).parentElement as HTMLElement;
       expect(tileWidth(pool())).toBe("repeat(8, minmax(0, 190px))");
 
       fireEvent.wheel(scroller(), { deltaY: -100, ctrlKey: true });
@@ -506,19 +578,14 @@ describe("DraftSession", () => {
       expect(useAppStore.getState().cardZoom.draft).toBe(DEFAULT_ZOOM);
     });
 
-    it("moves the Card size slider with the gesture, and the slider steps the same ladder", () => {
+    it("draws no Card size slider — the gesture is the pick screen's only zoom (issue #1470)", () => {
       setup(view());
-      const slider = screen.getByRole("slider", { name: "Card size" });
-      expect(slider).toHaveAttribute("aria-valuetext", "100%");
+      expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+      expect(screen.queryByText("Card size")).not.toBeInTheDocument();
 
       fireEvent.wheel(scroller(), { deltaY: 100, ctrlKey: true });
-      expect(slider).toHaveAttribute("aria-valuetext", "90%");
-
-      // Three stops up from 90% in one move — walked through `zoomCards`, so it lands on a stop.
-      fireEvent.change(slider, { target: { value: "7" } });
-      expect(useAppStore.getState().cardZoom.draft).toBe(1.2);
-      expect(slider).toHaveAttribute("aria-valuetext", "120%");
-      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(228px, 1fr))");
+      expect(useAppStore.getState().cardZoom.draft).toBe(0.9);
+      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(171px, 1fr))");
     });
 
     it("sizes a Winston pile turned face up by the same zoom", () => {
@@ -527,6 +594,93 @@ describe("DraftSession", () => {
       expect(tileWidth(screen.getByRole("list", { name: "Pile 1" }))).toBe(
         "repeat(auto-fill, minmax(75px, 1fr))",
       );
+    });
+  });
+
+  describe("the pool's layout (issue #1474)", () => {
+    const layoutButton = (name: "Pool below the pack" | "Pool beside the pack") =>
+      within(screen.getByRole("group", { name: "Pool layout" })).getByRole("button", { name });
+    const drafted = () =>
+      view({
+        pool: [
+          card("Shock"),
+          card("Opt", { colors: ["U"] }),
+          card("Shock", { instanceId: "Shock#0.1.0" }),
+          card("Mountain", { typeLine: "Basic Land — Mountain", cmc: 0, colors: [] }),
+          card("Fireball", { cmc: 1 }),
+        ],
+      });
+
+    it("draws the pool below the pack by default", () => {
+      setup(drafted());
+      expect(layoutButton("Pool below the pack")).toHaveAttribute("aria-pressed", "true");
+      expect(layoutButton("Pool beside the pack")).toHaveAttribute("aria-pressed", "false");
+      const pool = screen.getByRole("region", { name: "Your pool" });
+      // The curve: every mana value's column is drawn, empty or not, one card art a pick.
+      expect(within(pool).getByRole("list", { name: "Mana value 3: 0 cards" })).toBeInTheDocument();
+      expect(within(pool).getAllByRole("img")).toHaveLength(5);
+    });
+
+    it("lists the pool by name in a side tray on request, and keeps the choice", async () => {
+      const user = userEvent.setup();
+      setup(drafted());
+      await user.click(layoutButton("Pool beside the pack"));
+      expect(layoutButton("Pool beside the pack")).toHaveAttribute("aria-pressed", "true");
+      expect(window.localStorage.getItem(TRAY_LAYOUT_KEY)).toBe("side");
+
+      const pool = screen.getByRole("region", { name: "Your pool" });
+      expect(within(pool).queryAllByRole("img")).toHaveLength(0);
+      // Only the columns holding cards, a name once with its count, by name within a column.
+      const lists = within(pool)
+        .getAllByRole("list")
+        .filter((l) => l.getAttribute("aria-label") !== "Colours in your pool");
+      expect(lists.map((l) => l.getAttribute("aria-label"))).toEqual([
+        "Mana value 1: 4 cards",
+        "Lands: 1 card",
+      ]);
+      expect(
+        within(lists[0]!)
+          .getAllByRole("listitem")
+          .map((li) => li.textContent),
+      ).toEqual(["1×Fireball", "1×Opt", "2×Shock"]);
+      expect(within(pool).getByText("5 cards")).toBeInTheDocument();
+      // The pack is still there to pick from.
+      expect(within(pack()).getAllByRole("button")).toHaveLength(2);
+
+      await user.click(layoutButton("Pool below the pack"));
+      expect(window.localStorage.getItem(TRAY_LAYOUT_KEY)).toBe("bottom");
+      expect(screen.getAllByRole("img").length).toBeGreaterThan(5);
+    });
+
+    it("opens on the tray where the device last left it", () => {
+      window.localStorage.setItem(TRAY_LAYOUT_KEY, "side");
+      // The store reads the device once, as the module loads: a stored choice is what it holds.
+      useDraftTrayLayout.setState({
+        layout: parseStored(window.localStorage.getItem(TRAY_LAYOUT_KEY)),
+      });
+      setup(drafted());
+      expect(layoutButton("Pool beside the pack")).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("list", { name: "Lands: 1 card" })).toBeInTheDocument();
+    });
+
+    it("picks a card dragged onto the side tray", async () => {
+      useDraftTrayLayout.getState().keep("side");
+      ipcMock.draftPick.mockResolvedValue(
+        view({ pickNumber: 1, pack: [card("Opt")], pool: [card("Shock")] }),
+      );
+      setup(view());
+      expect(screen.getByText("The cards you pick land here, by mana value.")).toBeInTheDocument();
+      await dragToPool("Shock");
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
+      expect(await screen.findByRole("list", { name: "Mana value 1: 1 card" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Your pool" }).closest("aside")).not.toBeNull();
+    });
+
+    it("keeps a Winston table's pool underneath, with no toggle", () => {
+      useDraftTrayLayout.getState().keep("side");
+      setup(winston({ pool: [card("Shock")] }));
+      expect(screen.queryByRole("group", { name: "Pool layout" })).not.toBeInTheDocument();
+      expect(screen.getByRole("list", { name: "Mana value 3: 0 cards" })).toBeInTheDocument();
     });
   });
 });
