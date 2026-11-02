@@ -881,6 +881,18 @@ export interface FakeDeck {
    */
   tags?: string[];
   updatedAt: number;
+  /**
+   * `decks.draft` (user schema v69): **an unsaved draft deck** — one Draft & Packs' *Build deck*
+   * made (`draft.ts`' `createDraftDeck`) and the reader has not saved. Optional for
+   * {@link separateXGroup}'s reason (`NOT NULL DEFAULT 0`), and {@link toDeckRow} resolves the
+   * absence to `false`.
+   *
+   * **Apart from the reader's decks until Save**, the crate's rule mirrored here: `deck_list` never
+   * answers one, and nor does any read that counts or lists decks — {@link savedDecks} and
+   * {@link isDraftDeck} are this file's two spellings of it. `deck_get` answers it, with the flag;
+   * `draft_deck_list` answers only these. Not copied by a duplicate, and not an undo field.
+   */
+  draft?: boolean;
 }
 
 /**
@@ -8584,7 +8596,25 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // Issue #1032's share key — {@link fakeDeckUid}, the one spelling the managed wishlist's
     // `managedDeckUid` already uses, so a deck and its managed folder agree on whose they are.
     syncUid: fakeDeckUid(d.id),
+    // v69's, `?? false` for `draft INTEGER NOT NULL DEFAULT 0` — appended last, as `DECK_SELECT`
+    // reads it.
+    draft: d.draft ?? false,
   };
+}
+
+/**
+ * The reader's decks — every deck but an unsaved draft deck ({@link FakeDeck.draft}), the crate's
+ * `d.draft = 0`. Every read that lists or counts decks starts here, so a draft deck is apart from
+ * them until it is saved.
+ */
+export function savedDecks(db: FakeDb): FakeDeck[] {
+  return db.decks.filter((d) => d.draft !== true);
+}
+
+/** Whether `deckId` names an unsaved draft deck — the crate's `deck_id NOT IN (SELECT id FROM
+ *  decks WHERE draft = 1)`, for reads that walk a deck's child rows rather than its row. */
+export function isDraftDeck(db: FakeDb, deckId: number): boolean {
+  return db.decks.some((d) => d.id === deckId && d.draft === true);
 }
 
 /**
@@ -8781,7 +8811,9 @@ function toDeckLabel(
  * has used yet, which is the row this list can answer and `deck_label_list` never can.
  */
 function toGlobalLabel(db: FakeDb, t: FakeDeckLabel): GlobalLabel {
-  const wearing = db.deckCards.filter((dc) => dc.labelId === t.id);
+  // A label's counts are the reader's decks' — never an unsaved draft deck's rows
+  // (`list_all_labels` and `read_global_label`'s `NOT IN (… draft = 1)`).
+  const wearing = db.deckCards.filter((dc) => dc.labelId === t.id && !isDraftDeck(db, dc.deckId));
   return {
     id: t.id,
     name: t.name,
@@ -9001,6 +9033,9 @@ function decksPlaying(db: FakeDb, keys: readonly string[]): number[] {
   const have = new Map<number, Set<string>>();
   for (const dc of db.deckCards) {
     if (dc.variant !== LIVE) continue;
+    // An unsaved draft deck plays nothing the reader's decks are asked about (`decks_playing`'s
+    // `d.draft = 0`) — so `card_holdings`' "in decks" leaves it out too.
+    if (isDraftDeck(db, dc.deckId)) continue;
     const key = playedKey(db, dc.cardId);
     if (!wanted.has(key)) continue;
     const hit = have.get(dc.deckId);
@@ -11665,9 +11700,10 @@ export function readHandlers(db: FakeDb) {
       );
     },
 
-    /** `deck::list_decks`: archived last, most recently touched first. */
+    /** `deck::list_decks`: archived last, most recently touched first — and **never an unsaved
+     *  draft deck** ({@link savedDecks}), which only `draft_deck_list` and `deck_get` answer. */
     deck_list: (): DeckRow[] =>
-      [...db.decks]
+      savedDecks(db)
         .sort(
           (a, b) =>
             Number(a.archived) - Number(b.archived) || b.updatedAt - a.updatedAt || b.id - a.id,
@@ -11707,7 +11743,7 @@ export function readHandlers(db: FakeDb) {
     deck_pip_costs: (): DeckPipCosts[] => {
       const byDeck = new Map<number, Map<string, number>>();
       for (const dc of db.deckCards) {
-        if (dc.variant !== LIVE) continue;
+        if (dc.variant !== LIVE || isDraftDeck(db, dc.deckId)) continue;
         const category = categoryById(db, dc.categoryId);
         if (category === undefined || !category.isActive) continue;
         if (!SIZE_KINDS.includes(category.kind)) continue;
@@ -11758,7 +11794,8 @@ export function readHandlers(db: FakeDb) {
      */
     deck_values: (args: { marketplace?: MarketplaceId }): DeckValue[] => {
       const mp = marketplaceOf(args.marketplace);
-      return [...db.decks]
+      // Every *saved* deck: an unsaved draft deck is in no gallery to be valued on.
+      return savedDecks(db)
         .sort((a, b) => a.id - b.id)
         .map((d) => {
           const row: DeckValue = { deckId: d.id, value: null, unpriced: 0 };
@@ -12010,9 +12047,10 @@ export function readHandlers(db: FakeDb) {
           // A note whose deck has gone cannot survive the cascade, so this drops nothing in a world
           // the writes made — it is what stops a hand-written one drawing a note under a blank
           // heading, which is `deck_tokens`' `flatMap` and its argument.
+          // And an unsaved draft deck's note is not the reader's deck's (`d.draft = 0`).
           .flatMap((note) => {
             const deck = db.decks.find((d) => d.id === note.deckId);
-            return deck === undefined ? [] : [{ note, deck }];
+            return deck === undefined || deck.draft === true ? [] : [{ note, deck }];
           })
           .sort(
             (a, b) =>
@@ -12066,9 +12104,10 @@ export function readHandlers(db: FakeDb) {
         .filter((l) => l.body !== "")
         // A list whose deck has gone cannot survive the cascade; this drops nothing in a world the
         // writes made, and stops a hand-written orphan drawing under a blank deck name.
+        // An unsaved draft deck's lists are left out too (`every_list`'s `d.draft = 0`).
         .flatMap((list) => {
           const deck = db.decks.find((d) => d.id === list.deckId);
-          return deck === undefined ? [] : [{ list, deck }];
+          return deck === undefined || deck.draft === true ? [] : [{ list, deck }];
         })
         .sort((a, b) => b.list.updatedAt - a.list.updatedAt || a.list.id - b.list.id)
         .map(({ list, deck }) => ({
@@ -12251,17 +12290,20 @@ export function readHandlers(db: FakeDb) {
           payload: a.payload,
           delta: a.delta,
         })),
-        ...db.deckAudit.map((a) => ({
-          id: a.id,
-          at: a.at,
-          scope: "deck",
-          kind: a.kind,
-          deckId: a.deckId,
-          cardId: a.cardId,
-          cardName: a.cardName,
-          payload: a.payload,
-          delta: a.delta,
-        })),
+        // An unsaved draft deck's history is not the reader's feed (`FEED_SELECT`'s deck arm).
+        ...db.deckAudit
+          .filter((a) => !isDraftDeck(db, a.deckId))
+          .map((a) => ({
+            id: a.id,
+            at: a.at,
+            scope: "deck",
+            kind: a.kind,
+            deckId: a.deckId,
+            cardId: a.cardId,
+            cardName: a.cardName,
+            payload: a.payload,
+            delta: a.delta,
+          })),
       ];
       return feed.sort((a, b) => b.at - a.at || b.id - a.id).slice(0, limit);
     },
@@ -13375,7 +13417,9 @@ export function readHandlers(db: FakeDb) {
       const theory = args.compare === "theory";
       const substitutes = theory && args.theoryMatch === "missing";
       const active = (dc: FakeDeckCard) => categoryById(db, dc.categoryId)?.isActive === true;
-      return [...db.decks]
+      // `Compare::decks()` — the reader's decks, never an unsaved draft deck (which is virtual and
+      // keeps no plan, so the kind filter would drop it too; the crate says it outright).
+      return savedDecks(db)
         .filter((d) => (theory ? d.theoryEnabled : !d.virtualOnly))
         .sort((a, b) => a.id - b.id)
         .map((d): DeckCompletion => {
@@ -13834,7 +13878,9 @@ export function readHandlers(db: FakeDb) {
       // never *every deck*: the reader chose a set and it is empty.
       const chosen = args.scope === "chosen";
       const picked = new Set(chosen ? (args.deckIds ?? []) : []);
-      const watched = db.decks.filter(
+      // The reader's decks only — an unsaved draft deck is watched by no scope, `chosen` included
+      // (`watched_cte`'s `d.draft = 0`), so `decksWatched` never counts one either.
+      const watched = savedDecks(db).filter(
         (d) => (!chosen || picked.has(d.id)) && (args.includeVirtual || !d.virtualOnly),
       );
       const watchedIds = new Set(watched.map((d) => d.id));
@@ -13957,7 +14003,8 @@ export function readHandlers(db: FakeDb) {
     scan_sounds: (): ScanSounds => throughJson(db.scanSounds ?? DEFAULT_SCAN_SOUNDS),
 
     /** `collection_value::stored`: the row, or the defaults, which are no reduced price. */
-    collection_value: (): CollectionValue => throughJson(db.collectionValue ?? DEFAULT_COLLECTION_VALUE),
+    collection_value: (): CollectionValue =>
+      throughJson(db.collectionValue ?? DEFAULT_COLLECTION_VALUE),
 
     start_view: (): string =>
       db.startView !== null && db.startView.trim() !== "" ? db.startView : DEFAULT_START_VIEW,
@@ -14626,7 +14673,14 @@ function checkCustomWidget(args: {
     throw refuse("A widget is 2 to 12 cells wide.");
   if (!Number.isInteger(args.h) || args.h < 2 || args.h > 8)
     throw refuse("A widget is 2 to 8 cells tall.");
-  return { name, description, query: args.query, spec: structuredClone(spec), w: args.w, h: args.h };
+  return {
+    name,
+    description,
+    query: args.query,
+    spec: structuredClone(spec),
+    w: args.w,
+    h: args.h,
+  };
 }
 /**
  * `deck_todos::TODOS_CHANGED` (user schema v58, kept by v59) — what a **compare-and-set** write
@@ -14784,6 +14838,10 @@ const THEORY_HOLDS_NOTHING = "A theory list is a plan, and a plan holds no cards
  * handlers say it here, and a sentence spelled nine times is a sentence that will be spelled
  * nine ways.
  */
+/** `deck::DRAFT_STAYS_VIRTUAL`, verbatim — {@link writeHandlers.deck_update}'s answer to a kind
+ *  change on an unsaved draft deck ({@link FakeDeck.draft}). */
+export const DRAFT_STAYS_VIRTUAL = "A draft deck stays virtual until it is saved.";
+
 const VIRTUAL_HOLDS_NOTHING =
   "A virtual deck keeps no cardboard, so it has nothing to compare with your collection.";
 const NOT_THAT_MANY = "There are not that many copies to move.";
@@ -15292,7 +15350,9 @@ function isAbsolutePath(path: string): boolean {
  */
 function mirrorFileCount(db: FakeDb): number {
   const FORMATS = 7;
-  const decks = db.decks.length + db.decks.filter((d) => d.theoryEnabled).length;
+  // The mirror writes the reader's decks — never an unsaved draft deck (which keeps no plan).
+  const saved = savedDecks(db);
+  const decks = saved.length + saved.filter((d) => d.theoryEnabled).length;
   const lists = 1 + db.collectionFolders.length + 1 + db.wishlistFolders.length;
   return FORMATS * (decks + lists) + 1;
 }
@@ -21069,6 +21129,15 @@ export function writeHandlers(db: FakeDb) {
       // the whole point — see {@link deckKind}, where the pair and the tie-break are argued.
       const [theoryEnabled, virtualOnly] = deckKind(patch);
       const deck = requireDeck(db, args.id);
+      // `deck::DRAFT_STAYS_VIRTUAL`: an unsaved draft deck's kind is fixed until Save — refused
+      // only for a patch that would *move* a flag, as the crate does.
+      if (
+        deck.draft === true &&
+        ((theoryEnabled !== undefined && theoryEnabled !== deck.theoryEnabled) ||
+          (virtualOnly !== undefined && virtualOnly !== deck.virtualOnly))
+      ) {
+        throw refuse(DRAFT_STAYS_VIRTUAL);
+      }
       const before = { ...deck };
       const field = (key: string, from: unknown, to: unknown) =>
         record(db, deck.id, DECK_LEVEL, "deck", null, { field: key, from, to }, 0);
@@ -21654,6 +21723,8 @@ export function writeHandlers(db: FakeDb) {
         // brought its original's lists would put every open to-do in the home widget twice, and
         // ticking one would leave its twin open; a copy with no list starts with its band shut.
         todosOpen: false,
+        // `duplicate_deck` never copies `draft`: a copy is one of the reader's decks.
+        draft: false,
         updatedAt: stamp(db),
       };
       db.decks.push(copy);
@@ -23920,24 +23991,32 @@ export function writeHandlers(db: FakeDb) {
         }
         db.collectionFolders = db.collectionFolders.filter((f) => !groupIds.has(f.id));
       }
-      db.decks = [];
+      // **An unsaved draft deck survives** (user schema v69, issue #1467): it is the Draft &
+      // Packs page's until saved, so a press that clears the reader's decks does not reach it —
+      // `DELETE FROM decks WHERE draft = 0`. Everything below keeps the drafts' own rows, and the
+      // labels their cards wear (`deck_labels` is swept by name, except those).
+      const kept = new Set(db.decks.filter((d) => d.draft === true).map((d) => d.id));
+      const keeps = (row: { deckId: number }) => kept.has(row.deckId);
+      db.decks = db.decks.filter((d) => kept.has(d.id));
       db.deckFolders = [];
-      db.deckCards = [];
-      db.deckCategories = [];
-      db.deckLabels = [];
-      db.deckTokens = [];
-      db.deckTokenPrintings = [];
-      // Both note tables, and they are one line each here because there is no deck left for
-      // either to hang off: `deck_notes.deck_id` CASCADEs from the rows above and
-      // `deck_note_cards.note_id` CASCADEs from those. The two-hop dance
-      // {@link writeHandlers.deck_delete} has to do is only needed when *some* decks survive.
-      db.deckNotes = [];
-      db.deckNoteCards = [];
+      for (const d of db.decks) d.folderId = null;
+      db.deckCards = db.deckCards.filter(keeps);
+      db.deckCategories = db.deckCategories.filter(keeps);
+      const worn = new Set(db.deckCards.map((c) => c.labelId).filter((id) => id !== null));
+      db.deckLabels = db.deckLabels.filter((l) => worn.has(l.id));
+      db.deckTokens = db.deckTokens.filter(keeps);
+      db.deckTokenPrintings = db.deckTokenPrintings.filter(keeps);
+      // Both note tables: `deck_notes.deck_id` CASCADEs from the decks above and
+      // `deck_note_cards.note_id` CASCADEs from those — the two-hop dance
+      // {@link writeHandlers.deck_delete} does, since a draft's notes survive.
+      db.deckNotes = db.deckNotes.filter(keeps);
+      const notes = new Set(db.deckNotes.map((n) => n.id));
+      db.deckNoteCards = db.deckNoteCards.filter((c) => notes.has(c.noteId));
       // `deck_todo_lists.deck_id` CASCADEs from the decks above (user schema v59).
-      db.deckTodoLists = [];
-      db.deckAudit = [];
-      db.deckUndo = [];
-      return { decks, folders };
+      db.deckTodoLists = db.deckTodoLists.filter(keeps);
+      db.deckAudit = db.deckAudit.filter(keeps);
+      db.deckUndo = db.deckUndo.filter(keeps);
+      return { decks: decks - kept.size, folders };
     },
 
     /**
@@ -25755,7 +25834,8 @@ export function writeHandlers(db: FakeDb) {
             db.collectionFolders.length +
             db.wishlistEntries.length +
             db.wishlistFolders.length +
-            db.decks.length +
+            // `baseline` skips an unsaved draft deck (its child rows are not walked out here).
+            savedDecks(db).length +
             db.deckFolders.length +
             db.deckCategories.length +
             db.deckLabels.length +
@@ -28767,7 +28847,7 @@ export function allHandlers(db: FakeDb) {
     // Draft & Packs (2026-10-29): boosters, the draft against bots that take the first card, the
     // draft deck, and lobbies that refuse. Its deck writes are this world's own, unjournalled —
     // a draft deck's birth is `deck_create`'s, which records no undo step either.
-    ...draftHandlers(db, writeHandlers(db)),
+    ...draftHandlers(db, writeHandlers(db), (deck) => toDeckRow(db, deck)),
     ...windowHandlers(),
     ...pluginHandlers(),
     // The read graph (2026-10-29): the desktop answers from SQLite, this world from the page's

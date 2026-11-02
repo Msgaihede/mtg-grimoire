@@ -196,7 +196,6 @@ const tokenPrintings = vi.hoisted(() => vi.fn());
 // Draft & Packs (spec §5): the unsaved draft decks — what decides whether the editor draws its
 // draft mode — and the draft bar's basics read. Every open asks the first, so it is answered
 // with no draft decks unless a case says otherwise.
-const draftDeckIds = vi.hoisted(() => vi.fn());
 const draftBasicLands = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -317,7 +316,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // function`, and every `getByRole("alert")` in this file starts finding whatever that
     // control draws for a refused read.
     wishlistFolderList: vi.fn().mockResolvedValue([]),
-    draftDeckIds,
     draftBasicLands,
     draftDeckKeep: vi.fn().mockResolvedValue(undefined),
     draftDeckDiscard: vi.fn().mockResolvedValue(undefined),
@@ -431,6 +429,7 @@ const DECK: DeckRow = {
   // new, so a shut default takes nothing from anybody.
   todosOpen: false,
   syncUid: null,
+  draft: false,
   // Schema v16, and `0` is `AUTO_CATEGORY` — the column's own default and the state every deck
   // is born in: an add that names no pile is filed by what the card does. A test about the
   // setting overrides it through `detail()`, which is the *only* way to move it now — it was a
@@ -934,7 +933,6 @@ function viewport(px: number) {
 
 beforeEach(() => {
   resetRowIds();
-  draftDeckIds.mockReset().mockResolvedValue([]);
   draftBasicLands.mockReset().mockResolvedValue([]);
   useAppStore.setState({
     activeView: "decks",
@@ -10043,9 +10041,11 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 });
 
 /**
- * **The draft mode** (Draft & Packs, spec §5): a deck on the unsaved draft list is built from its
+ * **The draft mode** (Draft & Packs, spec §5): a deck whose row says `draft` is built from its
  * Pool alone, so the editor mounts no docked card search (neither tab), no Quick Add, and draws
  * the draft bar in their place. An ordinary deck is the control case: everything is where it was.
+ * **The row decides once it is in; before that, the `host`** — Draft & Packs' own editor
+ * (`host="draft"`) is the only one a draft deck is opened in, and it has a way back of its own.
  */
 describe("a draft deck", () => {
   const draftDeck = () =>
@@ -10056,29 +10056,37 @@ describe("a draft deck", () => {
         formatName: "Limited",
         name: "Quick Draft",
         syncUid: "deck-uid-4",
+        draft: true,
       },
       [bolt()],
     );
 
+  async function openInDraft() {
+    const view = wrap(<DeckEditor deckId={4} host="draft" />);
+    await screen.findByLabelText("Deck name");
+    return view;
+  }
+
+  beforeEach(() => {
+    useAppStore.setState(useAppStore.getInitialState());
+  });
+
   it("keeps the search dock and Quick Add on an ordinary deck, and draws no draft bar", async () => {
     await open();
-    await waitFor(() => expect(draftDeckIds).toHaveBeenCalled());
 
     expect(await screen.findByRole("button", { name: PANEL_TOGGLE })).toBeInTheDocument();
     expect(screen.getByLabelText("Quick add a card")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Draft deck" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Goldfish this deck" })).toBeInTheDocument();
   });
 
   /**
-   * Issue #1467: deck ids are reused after a delete, so a draft deck deleted from the gallery
-   * left its id on the list for the next deck the reader made. The list names a deck by its id
-   * and uid both, and an ordinary deck carrying the id under a uid of its own is no draft deck.
+   * The row is the only truth once it is in (issue #1467's reused id has nowhere to bite): an
+   * ordinary deck draws no draft mode even in the Draft view's editor.
    */
-  it("draws no draft bar on an ordinary deck that took a deleted draft deck's id", async () => {
-    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "uid-of-the-deleted-draft" }]);
+  it("draws no draft bar on a deck whose row says it is not a draft, whatever the host", async () => {
     deckGet.mockResolvedValue(detail({ name: "My Elves", syncUid: "deck-uid-4" }, [bolt()]));
-    await open();
-    await waitFor(() => expect(draftDeckIds).toHaveBeenCalled());
+    await openInDraft();
 
     expect(await screen.findByRole("button", { name: PANEL_TOGGLE })).toBeInTheDocument();
     expect(screen.getByLabelText("Quick add a card")).toBeInTheDocument();
@@ -10086,7 +10094,6 @@ describe("a draft deck", () => {
   });
 
   it("mounts no search dock and no Quick Add, and draws the draft bar", async () => {
-    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "deck-uid-4" }]);
     deckGet.mockResolvedValue(draftDeck());
     await open();
 
@@ -10100,10 +10107,65 @@ describe("a draft deck", () => {
     // A pasted list would bring in any card of the corpus: no Import, and Export stays.
     expect(screen.queryByRole("button", { name: "Import cards" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Export deck" })).toBeInTheDocument();
+    // No game board: the goldfish is the Decks view's third state.
+    expect(screen.queryByRole("button", { name: "Goldfish this deck" })).not.toBeInTheDocument();
+  });
+
+  it("is in draft mode from its first frame in the Draft view, before deck_get answers", async () => {
+    let answer: (value: unknown) => void = () => {};
+    deckGet.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    wrap(<DeckEditor deckId={4} host="draft" />);
+
+    // The host decides while the row is out: no dock, no Quick Add, and the way back is Draft's.
+    expect(screen.getByRole("button", { name: "Back to Draft & Packs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: PANEL_TOGGLE })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Quick add a card/)).not.toBeInTheDocument();
+
+    answer(draftDeck());
+    expect(await screen.findByRole("region", { name: "Draft deck" })).toBeInTheDocument();
+  });
+
+  it("goes back to Draft & Packs by its one crumb, and by Escape the same way", async () => {
+    deckGet.mockResolvedValue(draftDeck());
+    useAppStore.setState({ activeView: "draft", draftDeckId: 4 });
+    await openInDraft();
+
+    const trail = within(screen.getByRole("navigation", { name: "Page trail" }));
+    expect(trail.queryByRole("button", { name: /decks/i })).toBeNull();
+
+    screen.getByRole("button", { name: /^Lightning Bolt/ }).focus();
+    await userEvent.keyboard("{Escape}");
+    expect(useAppStore.getState()).toMatchObject({ activeView: "draft", draftDeckId: null });
+
+    useAppStore.setState({ draftDeckId: 4 });
+    await userEvent.click(trail.getByRole("button", { name: "Back to Draft & Packs" }));
+    expect(useAppStore.getState()).toMatchObject({
+      activeView: "draft",
+      draftDeckId: null,
+      // The Decks view was never involved: nothing parked, nothing to hand the caret back to.
+      openDeckId: null,
+      parkedDeckId: null,
+      returnToDeckId: null,
+    });
+  });
+
+  it("moves to the Decks view's editor on that deck once it is saved", async () => {
+    deckGet.mockResolvedValue(draftDeck());
+    useAppStore.setState({ activeView: "draft", draftDeckId: 4 });
+    await openInDraft();
+
+    const bar = await screen.findByRole("region", { name: "Draft deck" });
+    await userEvent.click(within(bar).getByRole("button", { name: "Save deck" }));
+    await waitFor(() =>
+      expect(useAppStore.getState()).toMatchObject({
+        activeView: "decks",
+        openDeckId: 4,
+        draftDeckId: null,
+      }),
+    );
   });
 
   it("adds a basic to the deck's default pile, five on a Shift-press, and toasts nothing", async () => {
-    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "deck-uid-4" }]);
     deckGet.mockResolvedValue({
       ...draftDeck(),
       deck: { ...draftDeck().deck, defaultCategoryId: MAIN },
@@ -10130,7 +10192,6 @@ describe("a draft deck", () => {
   });
 
   it("opens the editor's own export dialog from the bar's Export", async () => {
-    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "deck-uid-4" }]);
     deckGet.mockResolvedValue(draftDeck());
     await open();
 
@@ -10140,7 +10201,6 @@ describe("a draft deck", () => {
   });
 
   it("takes the card menu's Add to ▸ Collection and Wishlist away, and keeps Deck", async () => {
-    draftDeckIds.mockResolvedValue([{ id: 4, syncUid: "deck-uid-4" }]);
     deckGet.mockResolvedValue(draftDeck());
     await open();
     await screen.findByRole("region", { name: "Draft deck" });

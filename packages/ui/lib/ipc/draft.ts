@@ -147,17 +147,6 @@ export interface DraftSaved {
   updatedAt: number;
 }
 
-/**
- * One unsaved draft deck — `grimoire_core::draft_deck::DraftDeckRef`: its id and the
- * `decks.sync_uid` it was made with. **The pair is the identity, never the id alone** (issue
- * #1467): deck ids are reused after a delete, so a bare id can name an ordinary deck that took a
- * deleted draft deck's id. Hold an open deck to both (`useIsDraftDeck`).
- */
-export interface DraftDeckRef {
-  id: number;
-  syncUid: string;
-}
-
 /** A basic land's printing the draft bar adds. */
 export interface BasicLand {
   /** `W`, `U`, `B`, `R`, `G`. */
@@ -248,15 +237,19 @@ export const draftCommands = {
   draftResume: (draft: number) => invoke<DraftView>("draft_resume", { draft }),
 
   /**
-   * The pool as a virtual deck, in the draft's unsaved list: `cardIds` (the sideboard) in its
-   * Pool and each of `deck` in its own pile (issue #1471). Limited, or with `commander` a Casual
-   * deck with a Commander pile (a Commander draft's 60 cards and its commander).
+   * The pool as a virtual deck, made a draft deck (its row says `draft`): `cardIds` (the
+   * sideboard) in its Pool and each of `deck` in its own pile (issue #1471). Limited, or with
+   * `commander` a Casual deck with a Commander pile (a Commander draft's 60 cards and its
+   * commander).
    */
   draftDeckCreate: (name: string, cardIds: string[], deck: DraftDeckCard[], commander: boolean) =>
     invoke<DeckRow>("draft_deck_create", { name, cardIds, deck, commander }),
-  /** The draft decks not saved yet, each as its id and the uid it was made with. */
-  draftDeckIds: () => invoke<DraftDeckRef[]>("draft_deck_ids"),
-  /** Save: the deck leaves the unsaved list, and is a deck like any other. */
+  /**
+   * The draft decks not saved yet — every deck whose row says `draft`, oldest first. The only read
+   * that answers them besides `deck_get`: `deck_list` leaves them out.
+   */
+  draftDeckList: () => invoke<DeckRow[]>("draft_deck_list"),
+  /** Save: the deck's `draft` flag is cleared, and it is a deck like any other from then on. */
   draftDeckKeep: (deckId: number) => invoke<void>("draft_deck_keep", { deckId }),
   /** Discard: the deck is deleted. */
   draftDeckDiscard: (deckId: number) => invoke<void>("draft_deck_discard", { deckId }),

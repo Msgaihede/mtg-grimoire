@@ -1490,6 +1490,26 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   list. The byte-identity figure went **101 → 102** (41 tables, 58 indexes, 3 autoindexes),
   `UNDO_V68` heads every rewind chain, and the rung creates it empty.
   [generated-widgets.md](generated-widgets.md)'s *Stored custom widgets (Rust)* is the record.
+  **v69 adds `decks.draft`, the unsaved draft deck's flag** (2026-11-02, issue #1467) —
+  `INTEGER NOT NULL DEFAULT 0`, appended last, 1 on the deck Draft & Packs' *Build deck* makes
+  until the reader presses *Save deck*. **The flag is what keeps a draft separate**: out of every
+  deck list, search, picker, home widget, mirror, share and integration, and **off sync** — the
+  capture triggers of `decks` and of every table whose parent chain reaches it emit nothing for a
+  draft's rows (the uid mint still runs), a discard deletes it under suppressed capture, and the
+  save clears the flag and announces the whole subtree as if newly created. Not itself a synced
+  field, not on any history row or undo list, not carried by `duplicate_deck`. **The rung also
+  deletes `app_meta` `draft_decks`**, the retired list of unsaved draft decks, and **backfills
+  nothing from it**: the decks that list named were captured when they were made and their peers
+  hold them, so marking them drafts now would hide them on one device alone and re-announce them
+  on a save, doubling every counter delta their rows carry. One `ADD COLUMN`, no index, no table,
+  so neither figure at the top of this page moves. **`UNDO_V69`** heads every rewind chain and is
+  `UNDO_V62`'s ⚠️ ten tables wide: it drops the three capture triggers of `decks`,
+  `collection_folders`, `deck_audit`, `deck_cards`, `deck_categories`, `deck_notes`,
+  `deck_note_cards`, `deck_todo_lists`, `deck_token_printings` and `deck_tokens` before the column,
+  because those triggers read `decks.draft` and SQLite refuses a `DROP COLUMN` a trigger names.
+  Two fixtures moved with it: `a_rewind_from_v59_lands_on_v58s_exact_shape` and
+  `v62_gives_every_deck_an_empty_tag_list_behind_a_json_check` read head's `decks` tail as ending
+  in `draft`. [decks-storage.md](decks-storage.md)'s *Draft decks* has the readers.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

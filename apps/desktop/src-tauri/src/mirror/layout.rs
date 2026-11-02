@@ -667,6 +667,9 @@ mod tests {
             // Issue #1032's share key, none as a deck that was never captured carries it — here
             // for `bracket`'s reason. The mirror names its files by name, never by uid.
             sync_uid: None,
+            // User schema v69's draft flag, `false` as every deck the mirror is handed carries it:
+            // `list_decks` leaves an unsaved draft deck out, so no draft ever reaches the layout.
+            draft: false,
         }
     }
 

@@ -69,6 +69,21 @@ describe("DeckEditorHeader's page bar", () => {
     expect(props.closeDeck).toHaveBeenCalledOnce();
   });
 
+  it("draws a host's own crumb in place of the Decks trail — Draft & Packs' editor", async () => {
+    const props = header({
+      hostCrumb: { label: "Draft & Packs", name: "Back to Draft & Packs" },
+      // A trail of drawers would be ignored: a draft deck is in no deck list and no drawer.
+      folders: [{ id: 2, name: "Otters" }],
+    });
+    const trail = within(screen.getByRole("navigation", { name: "Page trail" }));
+    const back = trail.getByRole("button", { name: "Back to Draft & Packs" });
+    expect(back).toHaveTextContent("Draft & Packs");
+    expect(props.backRef.current).toBe(back);
+    expect(trail.queryByRole("button", { name: /decks|Otters/i })).toBeNull();
+    await userEvent.click(back);
+    expect(props.closeDeck).toHaveBeenCalledOnce();
+  });
+
   it("draws the crumb alone, with no actions, before the deck has answered", () => {
     header({ name: null });
     expect(screen.getByRole("button", { name: "Back to decks" })).toBeInTheDocument();

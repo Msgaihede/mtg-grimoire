@@ -176,6 +176,7 @@ export function Caps({ shortcut }: { shortcut: Shortcut }) {
 function KeyMapTabs() {
   const activeView = useAppStore((s) => s.activeView);
   const openDeckId = useAppStore((s) => s.openDeckId);
+  const draftDeckId = useAppStore((s) => s.draftDeckId);
   // `App.tsx`'s own test for the board being the page drawn: a board left over another deck is not.
   const goldfish = useAppStore((s) => s.goldfish !== null && s.goldfish.deckId === s.openDeckId);
   const [tab, setTab] = useState<KeyMapTab>("shortcuts");
@@ -285,7 +286,7 @@ function KeyMapTabs() {
 
       {tab === "shortcuts" ? (
         <div role="tabpanel" id={panelDomId("shortcuts")} aria-labelledby={tabDomId("shortcuts")}>
-          {activeScopes({ activeView, openDeckId, goldfish }).map((scope) => {
+          {activeScopes({ activeView, openDeckId, goldfish, draftDeckId }).map((scope) => {
             const rows = SHORTCUTS[scope];
             // **A scope with nothing in it draws nothing — not a heading over a gap.** Every
             // view but Playtesting is in that state today — `deckEditor` is a scope of its own and

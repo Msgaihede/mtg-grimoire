@@ -30,6 +30,9 @@ const ROOT_NAME = "All decks";
  *  a dialog that is still loading. */
 const NO_TAGS: readonly string[] = [];
 
+/** `deck::DRAFT_STAYS_VIRTUAL`'s words — what the host answers a kind change on a draft deck. */
+const DRAFT_STAYS_VIRTUAL = "A draft deck stays virtual until it is saved.";
+
 export interface DeckSettingsDialogProps {
   deckId: number;
   open: boolean;
@@ -539,7 +542,8 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
     // which is why this needs no `deckSetFolder`-shaped escape below it: `AUTO_CATEGORY` is a
     // number the patch can carry, so "back to filing by what the card does" is an ordinary
     // write. See `DeckPatch.defaultCategoryId`.
-    if (patch.defaultCategoryId !== undefined) update({ defaultCategoryId: patch.defaultCategoryId });
+    if (patch.defaultCategoryId !== undefined)
+      update({ defaultCategoryId: patch.defaultCategoryId });
     // The whole list, one write per tag added or removed — the field never reports a no-op, so
     // every call here is a change. **`[]` is a value**: a deck whose last chip was removed sends
     // an empty list, which `deck_update` reads as "no tags" and not as "leave it". The list is
@@ -548,8 +552,8 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
       const next = [...patch.tags];
       setSentTags({ tags: next, settledAt: null });
       writeTags.mutate(next, {
-          // The readback is the list as stored — tidied by Rust — so the chips show that
-          // rather than what was sent, from the moment the write lands.
+        // The readback is the list as stored — tidied by Rust — so the chips show that
+        // rather than what was sent, from the moment the write lands.
         onSuccess: (saved) => setSentTags({ tags: saved.tags, settledAt: Date.now() }),
         onError: () => setSentTags(null),
       });
@@ -598,11 +602,7 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
           Couldn't load the deck — {readFailure}
         </p>
       )}
-      {gone && (
-        <p className="text-sm text-dim">
-          This deck was deleted.
-        </p>
-      )}
+      {gone && <p className="text-sm text-dim">This deck was deleted.</p>}
 
       {row && (
         <>
@@ -644,6 +644,9 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
             // them to, which the create dialog has not.
             tagsInUse={inUse}
             focusTags={focus === "tags"}
+            // An unsaved draft deck stays virtual until Save — the host's `DRAFT_STAYS_VIRTUAL`
+            // refusal, said before the press rather than after it.
+            kindLocked={row.draft ? DRAFT_STAYS_VIRTUAL : null}
             folders={{
               paths,
               unread: folders.query.isError ? ipcError(folders.query.error) : null,
@@ -713,9 +716,7 @@ function Settings({ deckId, focus }: { deckId: number; focus?: "tags" }) {
                   disabled={nothingToPull}
                   onClick={() => setImporting(true)}
                 >
-                  {nothingToPull
-                    ? "Pull owned cards… (nothing to pull)"
-                    : "Pull owned cards…"}
+                  {nothingToPull ? "Pull owned cards… (nothing to pull)" : "Pull owned cards…"}
                 </RowAction>
               </div>
             </div>

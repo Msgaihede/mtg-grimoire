@@ -565,6 +565,11 @@ pub const TABLES: [Spec; 18] = [
             // there is no value a newer build could send that this one defers: any JSON lands,
             // and `deck::read_tags` reads what it can of it.
             "tags",
+            // **User schema v69's `draft` is deliberately not here, and must never be.** It says
+            // the deck is an unsaved draft *on this device*: [`outside_drafts`] keeps every op
+            // about it here until it is saved, and [`announce_deck`] sends it then, with the flag
+            // already `0`. On this list it would also be watched, and the save's own
+            // `UPDATE decks SET draft = 0` would fire the update trigger it is meant to miss.
         ],
         counters: &[],
         parents: &[
@@ -854,20 +859,137 @@ fn something_moved(spec: &Spec) -> String {
     }
 }
 
-/// The `INSERT INTO sync_ops … SELECT` every trigger ends with.
+/// The three rows every op is joined against: the clock it is stamped from, the device that
+/// wrote it, and the group it is for.
 ///
 /// The cross join is what makes an unpaired device record nothing: `sync_group` is empty until
 /// pairing, and a join against an empty table produces no row. It is also why the v29 rung and
 /// `USER_SEED_SQL` both seed `sync_clock` — that one is joined too, and an empty clock would
 /// silence a *paired* device just as completely, with nothing anywhere to say so.
-fn emit(table: &str, uid: &str, kind: &str, fields: &str, counters: &str, parents: &str) -> String {
+const JOINED: &str = "sync_clock c, sync_identity i, sync_group g";
+
+/// `INSERT INTO sync_ops … SELECT <one op> FROM` — the head [`emit`] and [`announce_deck`] share,
+/// so a trigger's op and an announced one cannot drift apart column by column.
+fn op_head(
+    table: &str,
+    uid: &str,
+    kind: &str,
+    fields: &str,
+    counters: &str,
+    parents: &str,
+) -> String {
     format!(
         "INSERT INTO sync_ops
              (tbl, uid, kind, fields, counters, parents, hlc_ms, hlc_ctr, device_id)
          SELECT '{table}', {uid}, '{kind}', {fields}, {counters}, {parents},
                 {STAMP_MS}, {STAMP_CTR}, i.device_id
-           FROM sync_clock c, sync_identity i, sync_group g;"
+           FROM"
     )
+}
+
+/// The `INSERT INTO sync_ops … SELECT` every trigger ends with, over [`JOINED`].
+///
+/// `gate` is a condition the op is written under, beside the trigger's `WHEN`: today only
+/// [`outside_drafts`], which is why it sits on this statement and not on the trigger — the insert
+/// trigger's uid mint must run whatever it says.
+fn emit(
+    table: &str,
+    uid: &str,
+    kind: &str,
+    fields: &str,
+    counters: &str,
+    parents: &str,
+    gate: Option<&str>,
+) -> String {
+    let head = op_head(table, uid, kind, fields, counters, parents);
+    match gate {
+        Some(gate) => format!("{head} {JOINED} WHERE {gate};"),
+        None => format!("{head} {JOINED};"),
+    }
+}
+
+/// The parent edges from a row of `spec` up to the deck it belongs to, nearest first — or `None`
+/// for a table no deck owns. **Read off [`TABLES`] rather than listed**, [`parent_tables`]' rule,
+/// so a table that grows a deck parent is inside a draft's fence the day its spec says so.
+///
+/// A row belongs to a deck when it names one (`deck_cards.deck_id`), or names a row that is
+/// **wholly** a deck's — one whose spec has that one parent and nothing else, as `deck_notes` has,
+/// so `deck_note_cards` is reached through its note. `collection_folders` is not such a row: it
+/// has a parent of its own besides the deck, and `deck_id` is nullable, so a folder can belong to
+/// a deck while the cards filed in it never do — they are the reader's cardboard, and
+/// `collection_entries` stays outside every deck. Self-references and the one soft parent
+/// (`decks.default_category_id`, which points *down* the tree) are not walked.
+///
+/// At head that is nine tables under `decks`: `collection_folders`, `deck_audit`, `deck_cards`,
+/// `deck_categories`, `deck_notes`, `deck_note_cards`, `deck_todo_lists`, `deck_token_printings`
+/// and `deck_tokens` — held by `the_draft_fence_is_the_deck_and_the_nine_tables_under_it`.
+fn deck_path(spec: &Spec) -> Option<Vec<&'static Parent>> {
+    if let Some(p) = spec.parents.iter().find(|p| p.table == "decks" && !p.soft) {
+        return Some(vec![p]);
+    }
+    for p in spec.parents {
+        if p.soft || p.table == spec.table {
+            continue;
+        }
+        let Some(owner) = TABLES.iter().find(|s| s.table == p.table) else {
+            continue;
+        };
+        if owner.parents.len() != 1 {
+            continue;
+        }
+        if let Some(rest) = deck_path(owner) {
+            let mut path = vec![p];
+            path.extend(rest);
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// `EXISTS (…)`: the row `row` names lies under a deck for which `deck` holds — `deck` is a
+/// condition on that deck's columns, written bare (`draft = 1`, `id = ?1`).
+///
+/// One join per hop of `path`, under aliases (`gate1`…) nothing around it uses: the triggers'
+/// own `c`, `i` and `g`, and [`super::baseline`]'s `t` and `p`.
+fn under_deck(path: &[&Parent], row: &str, deck: &str) -> String {
+    let mut from = String::new();
+    for (i, p) in path.iter().enumerate() {
+        let n = i + 1;
+        if i == 0 {
+            from.push_str(&format!("{} gate{n}", p.table));
+        } else {
+            from.push_str(&format!(
+                " JOIN {} gate{n} ON gate{n}.id = gate{i}.{}",
+                p.table, p.col
+            ));
+        }
+    }
+    format!(
+        "EXISTS (SELECT 1 FROM {from} WHERE gate1.id = {row}.{col} AND gate{last}.{deck})",
+        col = path[0].col,
+        last = path.len()
+    )
+}
+
+/// **The condition under which a row of `spec` is outside every unsaved draft deck** (user schema
+/// v69's `decks.draft`), as SQL over the row alias `row` — or `None` for a table no deck owns,
+/// which is every row outside a deck and so always outside a draft.
+///
+/// A draft deck — Draft & Packs' "Build deck", before the reader presses **Save deck** — is this
+/// device's alone: no op for the deck or any row under it, a baseline that leaves it out, and,
+/// when it is discarded, a delete that never left the device either. The capture triggers write
+/// their op under this condition and [`super::baseline`] reads under it; saving the deck is
+/// [`announce_deck`]'s.
+///
+/// **A child asks its deck, so it cannot ask a deck that is gone.** Through `ON DELETE CASCADE`
+/// the deck's row is deleted before its children's `AFTER DELETE` triggers fire, so they find no
+/// draft and would each write a `del` for a row no other device ever heard of. That is not
+/// answered in SQL: `deck::delete_deck` runs a draft deck's whole delete inside [`suppressed`].
+pub(crate) fn outside_drafts(spec: &Spec, row: &str) -> Option<String> {
+    if spec.table == "decks" {
+        return Some(format!("{row}.draft = 0"));
+    }
+    deck_path(spec).map(|path| format!("NOT {}", under_deck(&path, row, "draft = 1")))
 }
 
 fn key_match(spec: &Spec, row: &str) -> String {
@@ -885,9 +1007,16 @@ fn key_match(spec: &Spec, row: &str) -> String {
 /// it wrote in the meantime is anonymous. `schema::mint_missing_uids` exists for the three
 /// creation paths that are not this trigger, and between them every row in the file has a name
 /// at all times.
+///
+/// **It runs for a draft deck's rows too, and only the `put` is gated** ([`outside_drafts`]).
+/// A draft's row is named like any other because a name is what it is known by: the draft's
+/// identity on the page, and the uid [`announce_deck`] sends when it is saved. And a nameless row
+/// could never be captured again — its first edit after the save would put a NULL into
+/// `sync_ops.uid NOT NULL`, a write that fails on every press from then on.
 fn insert_trigger(spec: &Spec) -> String {
     let t = spec.table;
     let key = key_match(spec, "NEW");
+    let gate = outside_drafts(spec, "NEW");
     let body = emit(
         t,
         &format!("(SELECT sync_uid FROM {t} WHERE {key})"),
@@ -895,6 +1024,7 @@ fn insert_trigger(spec: &Spec) -> String {
         &all_fields(spec),
         &counter_object(spec, None),
         &all_parents(spec),
+        gate.as_deref(),
     );
     format!(
         "DROP TRIGGER IF EXISTS sync_ins_{t};
@@ -917,10 +1047,22 @@ fn insert_trigger(spec: &Spec) -> String {
 /// and removing both makes one insert write two ops. Both stay: the `OF` clause is the cheaper
 /// of the two, and the `WHEN` is the only one of them that can also see
 /// `UPDATE decks SET description = description`.
+///
+/// **A deck's update is gated on both sides of the write**: on `NEW.draft = 0` so a draft's edits
+/// stay here, and on `OLD.draft = 0` so the press that saves one does not leak a sparse op ahead
+/// of [`announce_deck`]'s whole one. `draft` itself is on no spec — it is a fact about this
+/// device — so `UPDATE decks SET draft = 0` names no watched column and fires nothing at all.
 fn update_trigger(spec: &Spec) -> String {
     let t = spec.table;
     let watched = spec.watched().join(", ");
     let moved = something_moved(spec);
+    let gate = if t == "decks" {
+        outside_drafts(spec, "NEW")
+            .zip(outside_drafts(spec, "OLD"))
+            .map(|(new, old)| format!("{new} AND {old}"))
+    } else {
+        outside_drafts(spec, "NEW")
+    };
     let body = emit(
         t,
         "NEW.sync_uid",
@@ -928,6 +1070,7 @@ fn update_trigger(spec: &Spec) -> String {
         &changed_fields(spec),
         &counter_object(spec, Some("OLD")),
         &changed_parents(spec),
+        gate.as_deref(),
     );
     format!(
         "DROP TRIGGER IF EXISTS sync_upd_{t};
@@ -940,8 +1083,12 @@ fn update_trigger(spec: &Spec) -> String {
 }
 
 /// The delete trigger: a `del` op, and nothing else in it.
+///
+/// Gated on the deleted row's draft — but a cascade from a draft deck's own delete finds its
+/// deck already gone, which [`outside_drafts`] says and `deck::delete_deck` answers.
 fn delete_trigger(spec: &Spec) -> String {
     let t = spec.table;
+    let gate = outside_drafts(spec, "OLD");
     let body = emit(
         t,
         "OLD.sync_uid",
@@ -949,6 +1096,7 @@ fn delete_trigger(spec: &Spec) -> String {
         "json_object()",
         "json_object()",
         "json_object()",
+        gate.as_deref(),
     );
     format!(
         "DROP TRIGGER IF EXISTS sync_del_{t};
@@ -1038,6 +1186,120 @@ pub fn install(conn: &Connection) -> rusqlite::Result<()> {
         conn.execute_batch(&gone_trigger(table))?;
     }
     conn.execute_batch(CLOCK_TRIGGER)
+}
+
+/// **Saving a draft deck: one whole `put` for the deck and for every row under it**, as though
+/// each had just been inserted — which, to every other device, it has.
+///
+/// Called by `draft_deck::keep` inside the save's own transaction, straight after
+/// `UPDATE decks SET draft = 0` (which records nothing: [`update_trigger`] says why). Until then
+/// [`outside_drafts`] kept every op about the deck on this device, so a sparse edit made after the
+/// save would name a row no peer has; this is what gives them the row first.
+///
+/// * **The rows are the fence's own**: the deck, and every row of a table [`deck_path`] reaches
+///   it from — a `collection_folders` row by its `deck_id`, a `deck_note_cards` row through its
+///   note — so what the triggers held back and what is announced cannot differ by a table.
+/// * **Parents first**, in [`super::apply::order_of`]'s rank (then by key), [`super::baseline`]'s
+///   reason: an order `apply` disagrees with defers every child on the far device's first pull.
+/// * **One row per statement**, never one `INSERT … SELECT` over the subtree. A statement reads
+///   `sync_clock` once, so a multi-row one would stamp every row alike, and `merge::fold` takes
+///   two ops with one stamp for one op — the rest of the deck would be dropped as a duplicate
+///   (measured). Between statements `sync_ops_clock` has moved the clock, so each stamp is new.
+/// * **The insert trigger's op, field for field**: [`all_fields`], [`counter_object`] with no
+///   `OLD` (a counter's whole value is its delta, as on an insert) and [`all_parents`], over the
+///   row aliased `NEW`, and [`JOINED`]'s cross join — so an unpaired device writes nothing — and
+///   [`GUARD`], so nothing is announced while an apply holds it.
+/// * **A row with no `sync_uid` is skipped, not named here.** Every row of a draft was named by
+///   the insert trigger, so a nameless one was written behind [`suppressed`] on purpose, and
+///   [`super::baseline`] leaves those out by the same test.
+///
+/// All or nothing, inside a savepoint of its own. An `Err` for a deck that does not exist, or is
+/// still a draft — announcing one would be the leak this whole fence exists to prevent.
+pub fn announce_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
+    use rusqlite::OptionalExtension;
+    let draft: Option<i64> = conn
+        .query_row("SELECT draft FROM decks WHERE id = ?1", [deck_id], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match draft {
+        None => return Err(format!("There is no deck {deck_id} to announce.")),
+        Some(0) => {}
+        Some(_) => return Err(format!("Deck {deck_id} is still a draft.")),
+    }
+
+    let mut ranked: Vec<(u8, &Spec, Option<Vec<&'static Parent>>)> = Vec::new();
+    for spec in &TABLES {
+        let path = deck_path(spec);
+        if spec.table != "decks" && path.is_none() {
+            continue;
+        }
+        let rank = super::apply::order_of(spec.table)
+            .ok_or_else(|| format!("no parents-first rank for {}", spec.table))?;
+        ranked.push((rank, spec, path));
+    }
+    ranked.sort_by_key(|(rank, ..)| *rank);
+
+    conn.execute_batch("SAVEPOINT announce_deck")
+        .map_err(|e| e.to_string())?;
+    let announced = (|| -> rusqlite::Result<()> {
+        for (_, spec, path) in &ranked {
+            let t = spec.table;
+            let keys = spec
+                .keys
+                .iter()
+                .map(|k| format!("r.{k}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mine = match path {
+                Some(path) => under_deck(path, "r", "id = ?1"),
+                None => "r.id = ?1".to_owned(),
+            };
+            let mut rows = conn.prepare(&format!(
+                "SELECT {keys} FROM {t} r
+                  WHERE r.sync_uid IS NOT NULL AND {mine}
+                  ORDER BY {keys}"
+            ))?;
+            let found: Vec<Vec<rusqlite::types::Value>> = rows
+                .query_map([deck_id], |r| {
+                    (0..spec.keys.len()).map(|i| r.get(i)).collect()
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+
+            let matched = spec
+                .keys
+                .iter()
+                .enumerate()
+                .map(|(i, k)| format!("NEW.{k} = ?{}", i + 1))
+                .collect::<Vec<_>>()
+                .join(" AND ");
+            let head = op_head(
+                t,
+                "NEW.sync_uid",
+                "put",
+                &all_fields(spec),
+                &counter_object(spec, None),
+                &all_parents(spec),
+            );
+            let mut put = conn.prepare(&format!(
+                "{head} {t} AS NEW, {JOINED} WHERE {matched} AND {GUARD}"
+            ))?;
+            for key in found {
+                put.execute(rusqlite::params_from_iter(key))?;
+            }
+        }
+        Ok(())
+    })();
+    match announced {
+        Ok(()) => conn
+            .execute_batch("RELEASE announce_deck")
+            .map_err(|e| e.to_string()),
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO announce_deck; RELEASE announce_deck");
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Read one `sync_ops` row as an [`Op`](super::merge::Op).
@@ -2670,6 +2932,387 @@ mod tests {
                 .any(|(tbl, kind, ..)| tbl == "collection_entries" && kind == "put"),
             "an ordinary edit after the relaunch was not captured: {:?}",
             ops(&conn)
+        );
+    }
+
+    /// The nine tables under a deck, in [`TABLES`] order, and the one row of each [`draft_deck`]
+    /// seeds.
+    const UNDER_A_DECK: [&str; 9] = [
+        "collection_folders",
+        "deck_audit",
+        "deck_cards",
+        "deck_categories",
+        "deck_note_cards",
+        "deck_notes",
+        "deck_todo_lists",
+        "deck_token_printings",
+        "deck_tokens",
+    ];
+
+    /// A deck with one row in every table under it, every row id `deck * 100 + 1` — and the
+    /// deck's default category set, so the soft parent is exercised too. `draft` is the v69 flag,
+    /// written at insert time as `deck::create_deck_with` writes it.
+    fn draft_deck(conn: &Connection, deck: i64, draft: bool) {
+        let r = deck * 100 + 1;
+        let draft = i64::from(draft);
+        conn.execute_batch(&format!(
+            "INSERT INTO decks (id, name, format_key, draft, created_at, updated_at)
+                 VALUES ({deck}, 'Deck {deck}', 'limited', {draft}, 0, 0);
+             INSERT INTO deck_categories
+                 (id, deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+                 VALUES ({r}, {deck}, 'Main', 'main', 1, 0, 0, 0);
+             UPDATE decks SET default_category_id = {r} WHERE id = {deck};
+             INSERT INTO deck_cards
+                 (id, deck_id, category_id, card_id, set_code, collector_number, name, quantity,
+                  created_at, updated_at)
+                 VALUES ({r}, {deck}, {r}, 'c-bolt', 'lea', '1', 'Lightning Bolt', 2, 0, 0);
+             INSERT INTO deck_audit (id, deck_id, at, kind, payload, delta)
+                 VALUES ({r}, {deck}, 0, 'add', '{{}}', 2);
+             INSERT INTO deck_notes (id, deck_id, title, body, sort_order, created_at, updated_at)
+                 VALUES ({r}, {deck}, 'Plan', 'Go wide', 0, 0, 0);
+             INSERT INTO deck_note_cards (id, note_id, oracle_id, created_at, updated_at)
+                 VALUES ({r}, {r}, 'o-bolt', 0, 0);
+             INSERT INTO deck_todo_lists (id, deck_id, title, body, created_at, updated_at)
+                 VALUES ({r}, {deck}, 'To-do', '- [ ] sleeve', 0, 0);
+             INSERT INTO deck_tokens (id, deck_id, oracle_id, quantity, state, created_at, updated_at)
+                 VALUES ({r}, {deck}, 'o-treasure', 2, 'manual', 0, 0);
+             INSERT INTO deck_token_printings
+                 (id, deck_id, variant, oracle_id, card_id, finish, quantity, created_at, updated_at)
+                 VALUES ({r}, {deck}, 'live', 'o-treasure', 'p-treasure', 'nonfoil', 2, 0, 0);
+             INSERT INTO collection_folders
+                 (id, name, kind, deck_id, sort_order, created_at, updated_at)
+                 VALUES ({r}, 'Deck {deck}', 'deck', {deck}, 0, 0, 0);"
+        ))
+        .unwrap();
+    }
+
+    /// `(table, uid)` for the deck and each row [`draft_deck`] seeded under it, every uid
+    /// required — a draft's rows are named like any other.
+    fn deck_rows(conn: &Connection, deck: i64) -> Vec<(String, String)> {
+        let mut out = vec![(
+            "decks".to_owned(),
+            conn.query_row("SELECT sync_uid FROM decks WHERE id = ?1", [deck], |r| {
+                r.get::<_, String>(0)
+            })
+            .expect("a draft deck must still be named"),
+        )];
+        for t in UNDER_A_DECK {
+            let uid: String = conn
+                .query_row(
+                    &format!("SELECT sync_uid FROM {t} WHERE id = ?1"),
+                    [deck * 100 + 1],
+                    |r| r.get(0),
+                )
+                .unwrap_or_else(|e| panic!("{t} row of deck {deck} has no uid: {e}"));
+            out.push((t.to_owned(), uid));
+        }
+        out
+    }
+
+    /// One `sync_ops` row: `(tbl, uid, kind, parents, (hlc_ms, hlc_ctr))`.
+    type FullOp = (String, String, String, String, (i64, i64));
+
+    /// Every op, in `seq` order.
+    fn full_ops(conn: &Connection) -> Vec<FullOp> {
+        let mut s = conn
+            .prepare("SELECT tbl, uid, kind, parents, hlc_ms, hlc_ctr FROM sync_ops ORDER BY seq")
+            .unwrap();
+        s.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                (r.get(4)?, r.get(5)?),
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    /// **The fence is derived, and this is what it derives to**: the deck and the nine tables
+    /// under it, `deck_note_cards` reached through its note and `collection_entries` left out —
+    /// a deck's folder is the deck's, the cardboard in it is the reader's. The trigger names are
+    /// the ones a schema rewind past v69 has to drop before `DROP COLUMN draft` (`UNDO_V69`):
+    /// SQLite refuses to drop a column a trigger names.
+    ///
+    /// And `draft` is on no spec: it is a fact about this device, and watched it would make the
+    /// save's own `UPDATE decks SET draft = 0` an op.
+    #[test]
+    fn the_draft_fence_is_the_deck_and_the_nine_tables_under_it() {
+        let fenced: Vec<&str> = TABLES
+            .iter()
+            .filter(|s| outside_drafts(s, "NEW").is_some())
+            .map(|s| s.table)
+            .collect();
+        let mut want = vec!["decks"];
+        want.extend(UNDER_A_DECK);
+        let mut got = fenced.clone();
+        got.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(got, want);
+
+        let decks = TABLES.iter().find(|s| s.table == "decks").unwrap();
+        assert!(
+            !decks.watched().contains(&"draft"),
+            "decks.draft must never be a synced column"
+        );
+
+        let conn = db();
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                  WHERE type = 'trigger' AND sql LIKE '%draft%' ORDER BY name",
+            )
+            .unwrap();
+        let named: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let mut expected: Vec<String> = Vec::new();
+        for t in &want {
+            expected.push(format!("sync_ins_{t}"));
+            if *t != "deck_audit" {
+                expected.push(format!("sync_upd_{t}"));
+                expected.push(format!("sync_del_{t}"));
+            }
+        }
+        expected.sort_unstable();
+        assert_eq!(named, expected, "the triggers that read decks.draft");
+    }
+
+    /// **A draft deck's writes stay on this device, every one of them** — the deck's insert, its
+    /// edits, the rows under it on every table, their edits and their deletes, `deck_note_cards`
+    /// through its note — **and every row is still named**, because only the op is gated and
+    /// never the mint.
+    #[test]
+    fn a_draft_decks_rows_record_no_ops_and_are_still_named() {
+        let conn = db();
+        draft_deck(&conn, 1, true);
+        assert_eq!(deck_rows(&conn, 1).len(), 10);
+        assert!(ops(&conn).is_empty(), "a draft's inserts: {:?}", ops(&conn));
+
+        conn.execute_batch(
+            "UPDATE decks SET name = 'Renamed', tags = '[\"Draft\"]' WHERE id = 1;
+             UPDATE deck_categories SET name = 'Spells' WHERE id = 101;
+             UPDATE deck_cards SET quantity = 3, finish = 'foil' WHERE id = 101;
+             UPDATE deck_audit SET card_name = 'x' WHERE id = 101;
+             UPDATE deck_notes SET body = 'Go tall' WHERE id = 101;
+             UPDATE deck_note_cards SET oracle_id = 'o-shock' WHERE id = 101;
+             UPDATE deck_todo_lists SET body = '- [x] sleeve' WHERE id = 101;
+             UPDATE deck_tokens SET quantity = 4 WHERE id = 101;
+             UPDATE deck_token_printings SET quantity = 4 WHERE id = 101;
+             UPDATE collection_folders SET name = 'Renamed' WHERE id = 101;",
+        )
+        .unwrap();
+        assert!(ops(&conn).is_empty(), "a draft's edits: {:?}", ops(&conn));
+
+        conn.execute_batch(
+            "DELETE FROM deck_note_cards WHERE id = 101;
+             DELETE FROM deck_notes WHERE id = 101;
+             DELETE FROM deck_cards WHERE id = 101;
+             DELETE FROM deck_todo_lists WHERE id = 101;
+             DELETE FROM deck_token_printings WHERE id = 101;
+             DELETE FROM deck_tokens WHERE id = 101;
+             DELETE FROM collection_folders WHERE id = 101;",
+        )
+        .unwrap();
+        assert!(ops(&conn).is_empty(), "a draft's deletes: {:?}", ops(&conn));
+    }
+
+    /// The fence is the draft's and nobody else's: an ordinary deck beside one records its
+    /// insert, every row under it and every edit, exactly as before v69.
+    #[test]
+    fn an_ordinary_deck_beside_a_draft_is_captured_as_before() {
+        let conn = db();
+        draft_deck(&conn, 1, true);
+        draft_deck(&conn, 2, false);
+        let rows = deck_rows(&conn, 2);
+        let got: Vec<(String, String)> = full_ops(&conn)
+            .into_iter()
+            .filter(|o| o.2 == "put")
+            .map(|o| (o.0, o.1))
+            .collect();
+        for row in &rows {
+            assert!(got.contains(row), "{row:?} was not captured: {got:?}");
+        }
+        let drafted = deck_rows(&conn, 1);
+        assert!(
+            got.iter().all(|o| !drafted.contains(o)),
+            "a draft row was captured: {got:?}"
+        );
+
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute_batch(
+            "UPDATE deck_cards SET quantity = 3 WHERE id = 201;
+             UPDATE deck_note_cards SET oracle_id = 'o-shock' WHERE id = 201;
+             UPDATE decks SET name = 'Renamed' WHERE id = 2;
+             DELETE FROM deck_todo_lists WHERE id = 201;",
+        )
+        .unwrap();
+        let kinds: Vec<(String, String)> = ops(&conn).into_iter().map(|o| (o.0, o.1)).collect();
+        assert_eq!(
+            kinds,
+            [
+                ("deck_cards".to_owned(), "put".to_owned()),
+                ("deck_note_cards".to_owned(), "put".to_owned()),
+                ("decks".to_owned(), "put".to_owned()),
+                ("deck_todo_lists".to_owned(), "del".to_owned()),
+            ]
+        );
+    }
+
+    /// **Saving a draft is the deck arriving whole**: the flag's own write records nothing, and
+    /// [`announce_deck`] then writes one complete `put` per row — parents first in `apply`'s
+    /// order, every stamp distinct (one stamp twice is one op to `merge::fold`), the deck's
+    /// fields whole without `draft`, a counter as its value, every parent by uid. Nothing of the
+    /// deck beside it, and an edit after the save is an ordinary sparse op.
+    #[test]
+    fn saving_a_draft_announces_its_whole_subtree_parents_first() {
+        let conn = db();
+        draft_deck(&conn, 1, true);
+        draft_deck(&conn, 2, false);
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute("UPDATE decks SET draft = 0 WHERE id = 1", [])
+            .unwrap();
+        assert!(ops(&conn).is_empty(), "the save's own write leaked an op");
+
+        announce_deck(&conn, 1).unwrap();
+        let got = full_ops(&conn);
+        let rows = deck_rows(&conn, 1);
+        assert_eq!(got.len(), rows.len(), "one put per row: {got:?}");
+        assert!(got.iter().all(|o| o.2 == "put"));
+        let mut announced: Vec<(String, String)> =
+            got.iter().map(|o| (o.0.clone(), o.1.clone())).collect();
+        let mut want = rows.clone();
+        announced.sort();
+        want.sort();
+        assert_eq!(announced, want, "exactly the deck and its rows");
+
+        let ranks: Vec<u8> = got
+            .iter()
+            .map(|o| super::super::apply::order_of(&o.0).unwrap())
+            .collect();
+        assert!(
+            ranks.windows(2).all(|w| w[0] <= w[1]),
+            "not parents first: {ranks:?}"
+        );
+        let stamps: std::collections::BTreeSet<(i64, i64)> = got.iter().map(|o| o.4).collect();
+        assert_eq!(
+            stamps.len(),
+            got.len(),
+            "every announced op needs its own stamp"
+        );
+
+        let uid = |t: &str| rows.iter().find(|r| r.0 == t).unwrap().1.clone();
+        let parents = |t: &str| -> serde_json::Value {
+            serde_json::from_str(&got.iter().find(|o| o.0 == t).unwrap().3).unwrap()
+        };
+        assert_eq!(
+            parents("deck_cards")["deck"],
+            serde_json::json!(uid("decks"))
+        );
+        assert_eq!(
+            parents("deck_cards")["category"],
+            serde_json::json!(uid("deck_categories"))
+        );
+        assert_eq!(
+            parents("deck_note_cards")["note"],
+            serde_json::json!(uid("deck_notes"))
+        );
+        assert_eq!(
+            parents("decks")["default_category"],
+            serde_json::json!(uid("deck_categories"))
+        );
+        let all = ops(&conn);
+        let field = |t: &str| -> (serde_json::Value, serde_json::Value) {
+            let o = all.iter().find(|o| o.0 == t).unwrap();
+            (
+                serde_json::from_str(&o.2).unwrap(),
+                serde_json::from_str(&o.3).unwrap(),
+            )
+        };
+        let (deck, _) = field("decks");
+        assert_eq!(deck["name"], serde_json::json!("Deck 1"));
+        assert!(deck.get("draft").is_none(), "draft travelled: {deck}");
+        assert!(deck.get("tags").is_some(), "the deck's fields are whole");
+        let (_, counters) = field("deck_cards");
+        assert_eq!(
+            counters["quantity"],
+            serde_json::json!(2),
+            "a counter's value"
+        );
+
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE deck_cards SET quantity = 3 WHERE id = 101", [])
+            .unwrap();
+        let after = ops(&conn);
+        assert_eq!(after.len(), 1, "a saved deck is captured like any other");
+        assert_eq!(after[0].3, r#"{"quantity":1}"#);
+    }
+
+    /// `announce_deck` writes only where a trigger would: nothing while an apply holds the guard,
+    /// nothing on a device in no group — and it refuses a deck that is still a draft, or none.
+    #[test]
+    fn announcing_follows_the_triggers_rules_and_refuses_a_draft() {
+        let conn = db();
+        draft_deck(&conn, 1, true);
+        assert!(
+            announce_deck(&conn, 1).is_err(),
+            "a draft must not be announced"
+        );
+        assert!(announce_deck(&conn, 9).is_err());
+        assert!(ops(&conn).is_empty());
+
+        conn.execute("UPDATE decks SET draft = 0 WHERE id = 1", [])
+            .unwrap();
+        suppressed(&conn, || announce_deck(&conn, 1)).unwrap();
+        assert!(ops(&conn).is_empty(), "announced behind the apply guard");
+
+        let unpaired = crate::schema::memory_pair();
+        install(&unpaired).unwrap();
+        draft_deck(&unpaired, 1, true);
+        unpaired
+            .execute("UPDATE decks SET draft = 0 WHERE id = 1", [])
+            .unwrap();
+        announce_deck(&unpaired, 1).unwrap();
+        assert!(
+            ops(&unpaired).is_empty(),
+            "an unpaired device writes nothing"
+        );
+    }
+
+    /// **A draft deck's delete records nothing inside [`suppressed`] — and records its children's
+    /// deletes outside it**, which is why `deck::delete_deck` suppresses one. The deck's own
+    /// trigger sees `OLD.draft`, but `ON DELETE CASCADE` deletes the deck first, so each child's
+    /// trigger asks for a deck that is no longer there.
+    #[test]
+    fn a_draft_decks_delete_needs_suppressing_and_then_records_nothing() {
+        let conn = db();
+        draft_deck(&conn, 1, true);
+        suppressed(&conn, || {
+            conn.execute("DELETE FROM decks WHERE id = 1", []).unwrap();
+        });
+        assert!(ops(&conn).is_empty(), "{:?}", ops(&conn));
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM deck_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "the cascade still ran");
+
+        draft_deck(&conn, 3, true);
+        conn.execute("DELETE FROM decks WHERE id = 3", []).unwrap();
+        let leaked = ops(&conn);
+        assert!(
+            leaked.iter().all(|o| o.0 != "decks"),
+            "the deck's own delete is gated: {leaked:?}"
+        );
+        assert!(
+            leaked.iter().any(|o| o.1 == "del"),
+            "the cascade caveat no longer holds — `delete_deck`'s suppression and this test's \
+             reason can be revisited: {leaked:?}"
         );
     }
 }

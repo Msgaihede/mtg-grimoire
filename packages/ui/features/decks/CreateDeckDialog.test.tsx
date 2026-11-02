@@ -81,6 +81,7 @@ const MADE: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -360,10 +361,7 @@ describe("the create deck dialog", () => {
 
     await panel();
     expect(screen.getByRole("group", { name: "Deck kind" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Regular" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getByRole("button", { name: "Regular" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText(DECK_KIND_HINT.regular)).toBeInTheDocument();
     // The two rows this host really does withhold, for their own reason — so the assertion above
     // is about the group being drawn rather than about the panel being fully populated.
@@ -389,10 +387,7 @@ describe("the create deck dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Theory + Actual" }));
     await userEvent.click(screen.getByRole("button", { name: "Virtual" }));
 
-    expect(screen.getByRole("button", { name: "Virtual" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getByRole("button", { name: "Virtual" })).toHaveAttribute("aria-pressed", "true");
     // The caption follows the press, which is the only thing on this panel that says what the
     // kind costs — no collection, no wishlist.
     expect(screen.getByText(DECK_KIND_HINT.virtual)).toBeInTheDocument();

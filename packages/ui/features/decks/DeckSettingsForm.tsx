@@ -255,6 +255,14 @@ export interface DeckSettingsFormProps {
   /** Put the caret in the Tags field as it mounts — `DeckSettingsDialog`'s `focus="tags"`. Means
    *  nothing without {@link DeckSettingsFormProps.tagsInUse}, which is what draws the field. */
   focusTags?: boolean;
+  /**
+   * **Why the deck's kind cannot be changed here, or absent when it can.** Set, the Deck kind
+   * group draws its kind with every press disabled and this sentence in place of the kind's hint.
+   * The edit host passes `DRAFT_STAYS_VIRTUAL`'s words for an unsaved draft deck (`DeckRow.draft`):
+   * it is built from its pool alone and stays virtual until Save, and the host refuses any other
+   * kind for it — a press that could only be refused is not offered.
+   */
+  kindLocked?: string | null;
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -314,6 +322,7 @@ export function DeckSettingsForm({
   canSetTheoryMarks = false,
   tagsInUse,
   focusTags = false,
+  kindLocked = null,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -368,6 +377,7 @@ export function DeckSettingsForm({
             // out of the database. The patch goes straight into `onChange`, so the edit host's
             // single `deckUpdate` carries the pair and the create host's draft holds it.
             onPick={(kind) => onChange(deckKindPatch(kind))}
+            locked={kindLocked}
             id={idPrefix}
           />
           {/* **Two gates, and they are two different questions.** `theoryEnabled` is *is there a
@@ -698,10 +708,13 @@ function DefaultCategoryRow({
 function DeckKindGroup({
   kind,
   onPick,
+  locked,
   id,
 }: {
   kind: DeckKind;
   onPick: (kind: DeckKind) => void;
+  /** {@link DeckSettingsFormProps.kindLocked}: every press disabled, and this said instead. */
+  locked: string | null;
   id: string;
 }) {
   return (
@@ -735,12 +748,19 @@ function DeckKindGroup({
             // included. A group of three toggles of which exactly one is on is what
             // `aria-pressed` says; pressing the kind the deck already is calls back with
             // that kind, and both hosts' writes are a no-op on a patch that changes nothing.
+            // The one exception is a deck whose kind is fixed ({@link locked}): an unsaved draft
+            // deck, which the host refuses any other kind for.
             aria-pressed={k === kind}
+            disabled={locked !== null}
             onClick={() => onPick(k)}
             className={cn(
               "h-8 px-2.5 text-xs",
               "transition-colors duration-150 motion-reduce:transition-none",
-              k === kind ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
+              k === kind
+                ? "bg-accent font-medium text-accent-fg"
+                : locked !== null
+                  ? "text-dim opacity-50"
+                  : "text-dim hover:text-text",
               FOCUS,
             )}
           >
@@ -753,7 +773,9 @@ function DeckKindGroup({
           made, and a reader who has pressed a button is asking what they just did.
           {@link DECK_KIND_HINT} is those words' one home, so no surface can come to
           describe a kind differently from this one. */}
-      <p className="mt-1 text-[0.6875rem] leading-snug text-dim">{DECK_KIND_HINT[kind]}</p>
+      <p className="mt-1 text-[0.6875rem] leading-snug text-dim">
+        {locked ?? DECK_KIND_HINT[kind]}
+      </p>
     </div>
   );
 }

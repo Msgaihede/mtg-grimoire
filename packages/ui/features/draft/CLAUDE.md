@@ -21,7 +21,7 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 | `pick/`                                      | The pick screen (one or two cards a pick; the pack by rarity or as dealt), the Winston table, the pool as Deck and Sideboard (`PoolZones`, `split.ts`) under the pack or in side trays (`trayLayout.ts`)                 |
 | `build/`                                     | The hand-over from a finished draft to a draft deck                                                                                                                                                                      |
 | `lobby/`                                     | Pod drafts: create (a supporter's), join by code, the host's room (format and seats) and the guest's                                                                                                                     |
-| `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode: `DraftDeckBar`, the unsaved list, opening a draft deck                                                                                                                                     |
+| `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode (`DraftDeckBar`), the unsaved draft decks (`draft_deck_list`), and the way in and out: `openDraftDeck`, `returnToDraftPage`, `openSavedDeck`                                                |
 
 ## Binding rules
 
@@ -53,15 +53,21 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 - **Seeded randomness only** (`booster/rng.ts`): tests are exact, and the Packs figures do not move
   between presses.
 - **A draft deck is built from its pool alone** (the owner's rule): it is virtual (nothing reaches
-  the collection), and while it is on `draft_decks` the editor mounts no card search dock, no Quick
-  Add, no import and no `Add to ▸ Collection/Wishlist`. A new way into a deck must be switched off
-  for a draft deck too. Call `rememberDraftDeck` (with the created `DeckRow`) before
-  `openDraftDeck`, so the editor's first frame is already in draft mode.
-- **A draft deck is its id and its `syncUid` together, never the id alone** (issue #1467). Deck ids
-  are reused after a delete, so a bare id can name an ordinary deck; the unsaved list stores
-  `DraftDeckRef`s and every reader matches both (`isDraftDeckIn`, `useIsDraftDeck(deckId, row)`,
-  `draft_deck::ids` / `discard`). Never test membership by id alone, and keep `DRAFT_DECKS_KEY`
-  under the `["decks"]` root so a deck's delete refreshes it.
+  the collection, and its kind cannot change until Save — `DRAFT_STAYS_VIRTUAL`), and while its
+  row says `draft` the editor mounts no card search dock, no Quick Add, no import, no
+  `Add to ▸ Collection/Wishlist`, no Share and no goldfish. A new way into a deck must be switched
+  off for a draft deck too.
+- **The row's `draft` flag is the only truth** (`DeckRow.draft`, user schema v69). Never keep a
+  list of draft deck ids beside the decks (issue #1467: ids are reused after a delete). The editor
+  reads `row.draft` once `deck_get` answers; _Draft in progress_ lists `draft_deck_list`'s rows
+  (`useDraftDecks`). Keep `DRAFT_DECKS_KEY` under the `["decks"]` root so every deck write asks it
+  again.
+- **A draft deck is apart from the reader's decks until Save**: `deck_list` never answers one (nor
+  any count, picker, widget, mirror, share or sync), so never filter one out on this side and never
+  open one in the Decks view. Its editor is the Draft view's (`openDraftDeck` → the store's
+  `draftDeckId` → `DeckEditor host="draft"`, a `Draft & Packs ›` crumb that is the close);
+  Discard and the crumb are `returnToDraftPage`; Save toasts, then `openSavedDeck` moves to the
+  Decks view's editor on that deck.
 - **Deck or sideboard is the page's** (`pick/split.ts`, issue #1471): which picks are on the
   sideboard is held by `instanceId`, kept per device in `localStorage`, and never sent to the
   engine; a pick's list is applied only once the pick is taken. At Build, the deck's cards are

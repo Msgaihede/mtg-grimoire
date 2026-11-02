@@ -421,6 +421,22 @@ describe("activeScopes", () => {
     ]);
   });
 
+  it("draws the editor's section for Draft & Packs' editor on a draft deck, and only there", () => {
+    expect(activeScopes({ activeView: "draft", openDeckId: null, draftDeckId: 9 })).toEqual([
+      "global",
+      "deckEditor",
+    ]);
+    expect(activeScopes({ activeView: "draft", openDeckId: null, draftDeckId: null })).toEqual([
+      "global",
+      "draft",
+    ]);
+    // A draft deck left open behind another view is not on screen.
+    expect(activeScopes({ activeView: "search", openDeckId: null, draftDeckId: 9 })).toEqual([
+      "global",
+      "search",
+    ]);
+  });
+
   it("treats deck 0 as an open deck rather than as nothing open", () => {
     expect(activeScopes({ activeView: "decks", openDeckId: 0 })).toEqual(["global", "deckEditor"]);
   });

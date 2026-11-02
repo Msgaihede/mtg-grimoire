@@ -274,19 +274,35 @@ collection — the owner's rule), format `limited`, named after the draft, with 
 moves cards from Pool to Deck in the editor. Basic lands are added from a strip of five (W U B R G)
 in the editor's draft bar, in a printing of the draft's own sets where the corpus has one.
 
-Until the reader **saves** it the deck is a draft deck: its id **and its `sync_uid`** are in
-`app_meta` `draft_decks` (a JSON array of `{ id, syncUid }`; `app_meta` is never synced). Both must
-match — deck ids are reused after a delete, so an id alone could name an ordinary deck (issue
-#1467). The deck editor, for a deck on that list, draws no card
-search dock (neither the corpus search nor the collection tab), no Quick Add, no pull-from- or
-add-to-collection, and draws the draft bar: Basics, **Save deck** (takes it off the list — it is a
-deck like any other from then on), **Export** (the editor's own export dialog), **Discard** (deletes
-it). The Draft page lists unsaved draft decks under *Draft in progress*.
+Until the reader **saves** it the deck is an **unsaved draft deck**, and nobody else's (the owner's
+decision, 2026-11-02): `decks.draft = 1` (user schema v69, `DeckRow.draft`), written by the INSERT
+that makes it (`deck::create_deck_with(conn, input, true)`). The flag on the row is the only truth;
+the `app_meta` `draft_decks` list of `{ id, syncUid }` it replaced (issue #1467) is deleted by the
+rung, and the decks it named are not flagged — they had already synced.
+
+- **Separate from the reader's decks.** `deck_list` leaves it out, and with it every deck list,
+  search, picker, home widget, the mirror, and the cross-deck readers (decks playing a card, deck
+  values and pips, label counts, a card's notes, to-dos, completion, New printings, the activity
+  feed). `deck_get` answers it by id with `draft: true`.
+- **Never synced until saved.** No capture op for the deck or any row under it, no baseline row, no
+  projection row, no share (`DECK_NOT_FOUND`). **Save deck** clears the flag and announces the whole
+  subtree as if newly created (`capture::announce_deck`), in one transaction. **Discard** deletes it
+  with capture suppressed — it never left the device — and is refused (`NOT_A_DRAFT_DECK`) for any
+  deck whose row does not say `draft = 1`.
+- **Virtual until saved**: `deck_update` refuses to change `virtualOnly` or `theoryEnabled` on a
+  draft (`DRAFT_STAYS_VIRTUAL`). `duplicate_deck` never copies the flag.
+
+**The editor for a draft deck opens inside the Draft & Packs page** (view `draft`, with a **Draft &
+Packs ›** breadcrumb), not in the Decks view. It draws no card search dock (neither the corpus
+search nor the collection tab), no Quick Add, no pull-from- or add-to-collection, and draws the
+draft bar: Basics, **Save deck** (a deck like any other from then on; the reader is moved to the
+Decks view's editor on it), **Export** (the editor's own export dialog), **Discard** (deletes it).
+The Draft page lists unsaved draft decks under *Draft in progress*.
 
 | Command | Args | Answers |
 | --- | --- | --- |
-| `draft_deck_create` | `name: String, cardIds: Vec<String>` | `DeckRow` |
-| `draft_deck_ids` | — | `Vec<DraftDeckRef>` — `{ id, syncUid }` of each deck that still exists with its uid |
+| `draft_deck_create` | `name: String, cardIds: Vec<String>, deck: Vec<DraftDeckCard>, commander: bool` | `DeckRow` (`draft: true`) |
+| `draft_deck_list` | — | `Vec<DeckRow>` — every unsaved draft deck, oldest first |
 | `draft_deck_keep` | `deckId: i64` | `()` |
 | `draft_deck_discard` | `deckId: i64` | `()` |
 | `draft_basic_lands` | `setCodes: Vec<String>` | `Vec<BasicLand>` |

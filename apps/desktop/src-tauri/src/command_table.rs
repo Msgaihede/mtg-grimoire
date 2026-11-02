@@ -154,7 +154,7 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "Draft & Packs is desktop-only: the deck a drafted pool becomes is made from this host's draft page",
     ),
     (
-        "draft_deck_ids",
+        "draft_deck_list",
         "Draft & Packs is desktop-only: the deck a drafted pool becomes is made from this host's draft page",
     ),
     (

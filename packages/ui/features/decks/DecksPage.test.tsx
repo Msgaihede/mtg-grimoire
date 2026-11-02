@@ -154,6 +154,7 @@ const BURN: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -410,9 +411,7 @@ beforeEach(() => {
   deckLastFormat.mockReset().mockResolvedValue(null);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
-  importResolve
-    .mockReset()
-    .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
+  importResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 1 });
   importPickFile.mockReset().mockResolvedValue(null);
   syncStatus.mockReset().mockResolvedValue(SYNCED);
@@ -646,10 +645,7 @@ describe("DecksPage", () => {
    * about a cover, and a build that hid every picture would pass a single-deck version of this.
    */
   it("draws the crop only where there is an illustrator to name", async () => {
-    deckList.mockResolvedValue([
-      BURN,
-      { ...BURN, id: 5, name: "Sunday burn", coverArtist: null },
-    ]);
+    deckList.mockResolvedValue([BURN, { ...BURN, id: 5, name: "Sunday burn", coverArtist: null }]);
 
     wrap(<DecksPage />);
 
@@ -1037,9 +1033,7 @@ describe("DecksPage", () => {
       // is read at a glance rather than at the end of a string. Both halves are asserted,
       // because a bracket that vanished from the caption and never arrived on the art would
       // leave this case green over a fact the tile stopped telling.
-      expect(within(commander).getByText(/^Commander ·/)).toHaveTextContent(
-        "Commander · 40 cards",
-      );
+      expect(within(commander).getByText(/^Commander ·/)).toHaveTextContent("Commander · 40 cards");
       // `uppercase` is `text-transform`, so the pill's `textContent` is still the mixed-case
       // label `DecksPage` handed the tile — a query for `BRACKET 3` would find nothing.
       expect(within(commander).getByText("Bracket 3")).toBeInTheDocument();
@@ -1100,10 +1094,11 @@ describe("DecksPage", () => {
 
       const altar = await screen.findByRole("button", { name: /^Altar/ });
       const row = within(altar.closest("li")!).getByRole("list", { name: "Tags" });
-      expect(within(row).getAllByRole("listitem").map((tag) => tag.textContent)).toEqual([
-        "No Gamechangers",
-        "Budget",
-      ]);
+      expect(
+        within(row)
+          .getAllByRole("listitem")
+          .map((tag) => tag.textContent),
+      ).toEqual(["No Gamechangers", "Budget"]);
       expect(altar).not.toContainElement(row);
       expect(altar).not.toHaveTextContent("Budget");
 
@@ -1163,9 +1158,9 @@ describe("DecksPage", () => {
       const row = within(commander).getByRole("list", { name: "Tags" });
       expect(within(commander).queryByText(/Bracket/)).not.toBeInTheDocument();
       await waitFor(() =>
-        expect(
-          row.classList.contains("bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]"),
-        ).toBe(true),
+        expect(row.classList.contains("bottom-[calc(1.625rem*var(--mark-scale,1)_+_2px)]")).toBe(
+          true,
+        ),
       );
     });
 
@@ -1826,18 +1821,21 @@ describe("DecksPage", () => {
   it.each([
     ["Cancel", async () => userEvent.click(screen.getByRole("button", { name: "Cancel" }))],
     ["Escape", async () => userEvent.keyboard("{Escape}")],
-  ])("hands the caret back to the tile when a menu-raised delete is dropped (%s)", async (_, go) => {
-    wrap(<DecksPage />);
-    const tile = await tileFor("Burn");
+  ])(
+    "hands the caret back to the tile when a menu-raised delete is dropped (%s)",
+    async (_, go) => {
+      wrap(<DecksPage />);
+      const tile = await tileFor("Burn");
 
-    await rightClick(tile);
-    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
-    await screen.findByRole("dialog", { name: /delete burn/i });
-    await go();
+      await rightClick(tile);
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
+      await screen.findByRole("dialog", { name: /delete burn/i });
+      await go();
 
-    expect(document.activeElement).toBe(tile);
-    expect(deckDelete).not.toHaveBeenCalled();
-  });
+      expect(document.activeElement).toBe(tile);
+      expect(deckDelete).not.toHaveBeenCalled();
+    },
+  );
 
   it("hands the caret back to the tile when a menu-raised rename is dropped", async () => {
     wrap(<DecksPage />);
@@ -2727,11 +2725,7 @@ async function upTile(label: string): Promise<HTMLElement> {
 }
 
 /** Pick a folder up, carry it over another one, let go at one of the three landings. */
-async function dropOn(
-  source: HTMLElement,
-  target: HTMLElement,
-  at: { x: number; y: number },
-) {
+async function dropOn(source: HTMLElement, target: HTMLElement, at: { x: number; y: number }) {
   // A folder dropped on itself is a real gesture and the two arguments are then one element, so
   // the target keeps the box it was picked up from rather than being moved out from under the
   // pointer.
@@ -3134,10 +3128,11 @@ describe("the wall's way up", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^Legends folder, / }));
     expect(await screen.findByRole("heading", { name: "Legends" })).toBeInTheDocument();
     const trail = screen.getByRole("navigation", { name: "Page trail" });
-    expect(within(trail).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Decks",
-      "Commander",
-    ]);
+    expect(
+      within(trail)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Decks", "Commander"]);
 
     await userEvent.click(within(trail).getByRole("button", { name: "Commander" }));
     expect(await screen.findByRole("heading", { name: "Commander" })).toBeInTheDocument();

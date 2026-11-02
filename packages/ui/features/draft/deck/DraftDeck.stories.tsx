@@ -7,9 +7,9 @@ import { ipc } from "@/lib/ipc";
 
 /**
  * A drafted pool in the deck editor's draft mode (spec §5): the deck is made the way the Build
- * panel makes it — `draft_deck_create` with a pool of the fake corpus — and opened in the real
- * `DeckEditor`, which finds it on the unsaved draft list and draws the draft bar in place of the
- * card search dock and Quick Add.
+ * panel makes it — `draft_deck_create` with a pool of the fake corpus, its row saying `draft` —
+ * and opened in the real `DeckEditor` as Draft & Packs opens it (`host="draft"`), which draws the
+ * `Draft & Packs ›` crumb and the draft bar in place of the card search dock and Quick Add.
  */
 function DraftDeck({ commander }: { commander: boolean }) {
   const made = useQuery({
@@ -30,7 +30,7 @@ function DraftDeck({ commander }: { commander: boolean }) {
   return (
     <div className="flex h-full min-h-0">
       <div className="min-w-0 flex-1">
-        {made.data && <DeckEditor key={made.data.id} deckId={made.data.id} />}
+        {made.data && <DeckEditor key={made.data.id} deckId={made.data.id} host="draft" />}
       </div>
       <CardDetailModal />
     </div>
@@ -61,6 +61,7 @@ export const Limited: Story = {
       await canvas.findByRole("region", { name: "Draft deck" }, { timeout: 5000 }),
     ).toBeVisible();
     await expect(canvas.queryByRole("button", { name: "Import cards" })).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Back to Draft & Packs" })).toBeVisible();
   },
 };
 

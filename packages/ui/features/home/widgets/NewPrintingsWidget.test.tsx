@@ -176,6 +176,7 @@ function deckRow(over: Partial<DeckRow> & { id: number; name: string }): DeckRow
     curveCreatures: false,
     todosOpen: false,
     syncUid: null,
+    draft: false,
     ...over,
   };
 }
@@ -222,7 +223,13 @@ function widgetOf(config: unknown = null, fit: WidgetFit = ROOMY): HomeWidget {
 /** The box a card is told it is drawn in, at the grid's own target cell — so "a two-cell tile" is
  *  a two-cell tile in pixels too, and the fitting arithmetic below is the page's. */
 function fitFor(w: number, h: number): WidgetFit {
-  return makeFit({ w, h, widthPx: spanPx(w, 104), heightPx: spanPx(h, 104), density: "comfortable" });
+  return makeFit({
+    w,
+    h,
+    widthPx: spanPx(w, 104),
+    heightPx: spanPx(h, 104),
+    density: "comfortable",
+  });
 }
 
 /**
@@ -579,9 +586,7 @@ describe("what a card has room for", () => {
     // days.
     expect(screen.getByText("August 2026")).toBeInTheDocument();
     expect(screen.queryByText("September 2026")).toBeNull();
-    expect(
-      screen.getByText("Nothing before 28 August in this period."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Nothing before 28 August in this period.")).toBeInTheDocument();
   });
 
   /**
@@ -637,9 +642,7 @@ describe("what a card has room for", () => {
     draw();
 
     await screen.findByText("Sol Ring");
-    expect(screen.getByRole("heading", { level: 4 })).toHaveAccessibleName(
-      "Friday 18 September",
-    );
+    expect(screen.getByRole("heading", { level: 4 })).toHaveAccessibleName("Friday 18 September");
     // The count is still on screen — it moved out of the name, not off the card.
     expect(screen.getByText("2")).toBeVisible();
   });
@@ -824,7 +827,10 @@ describe("the printing dialog", () => {
         oldest: SEP18,
       }),
     );
-    deckList.mockResolvedValue([deckRow({ id: 4, name: "Atraxa" }), deckRow({ id: 9, name: "Edgar" })]);
+    deckList.mockResolvedValue([
+      deckRow({ id: 4, name: "Atraxa" }),
+      deckRow({ id: 9, name: "Edgar" }),
+    ]);
   }
 
   /**
@@ -1043,7 +1049,12 @@ describe("the printing dialog", () => {
       answer({
         printings: [
           printing({ printingId: "sld-1", releasedAt: SEP18 }),
-          printing({ printingId: "cmm-1", releasedAt: SEP18, name: "Arcane Signet", setCode: "cmm" }),
+          printing({
+            printingId: "cmm-1",
+            releasedAt: SEP18,
+            name: "Arcane Signet",
+            setCode: "cmm",
+          }),
         ],
         oldest: SEP18,
       }),
