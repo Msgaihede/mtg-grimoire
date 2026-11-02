@@ -18,7 +18,7 @@
  * a story's `installWorld` makes a fresh `FakeDb`, so a draft never outlives its story and no
  * field is added to the world's own table.
  *
- * **Lobbies refuse** (`LOBBIES_OFF`), `lobby_winston` with them, — the fake has no relay and no second app to meet in one —
+ * **Lobbies refuse** (`LOBBIES_OFF`), `lobby_winston` and `lobby_rejoin` with them, — the fake has no relay and no second app to meet in one —
  * except the two reads a page makes on arrival, which answer *no lobby*. A game's lobby (the
  * Playtesting page's, issue #1419) is the same lobby, so its three commands — `lobby_deck`,
  * `lobby_game_start`, `lobby_act` — are here and refuse alike, and so are a trade's two
@@ -737,6 +737,9 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
     lobby_state: (): LobbyState | null => null,
     lobby_leave: (): void => {},
     lobby_start: (): DraftView => {
+      throw new Error(LOBBIES_OFF);
+    },
+    lobby_rejoin: (): number | null => {
       throw new Error(LOBBIES_OFF);
     },
     lobby_pick: (): void => {

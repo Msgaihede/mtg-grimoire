@@ -185,6 +185,17 @@ The webview reaches no host but its own (the desktop CSP), so the socket is the 
 lobby in `apps/desktop/src-tauri/src/draft/lobby.rs` that applies a guest's pick to the draft and
 sends every seat its view, and tells the page through `lobby:state` and `draft:view`.
 
+**A seat left mid-draft is taken again** (issue #1468). The lobby and the host's draft live in the
+host process, so leaving the page — another view, or a reload of the window — leaves the pod
+drafting on. The hub lists a drafting lobby under _Draft in progress_ like any other draft (where
+this seat was, when the window kept it) with **Rejoin**. The window's kept seat (`pick/current.ts`)
+opens directly; otherwise the lobby's screen calls `lobby_rejoin`: a host is answered its draft's
+name and reads its view with `draft_view`, and a guest sends the guest body `sync`, which the host
+answers by pushing the room and that seat's view (`draft:view`). A guest's draft asks the same on
+every arrival, since its view only ever arrives pushed, so a view kept from before (a pick behind,
+or still waiting on a pack that has since come) is brought up to date. Creating, joining or leaving
+a lobby forgets a pod seat kept from an earlier one.
+
 **A lobby seats a draft or a game** (`LobbyKind`, issue #1419): the Playtesting page opens the same
 lobby for a game, and the host's room tells its guests which (`LobbyRoom.kind`; a guest's
 `LobbyState.kind` is `null` until it does). A game's lobby carries each guest's deck name beside

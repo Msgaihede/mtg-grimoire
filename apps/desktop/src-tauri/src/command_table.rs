@@ -190,6 +190,10 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
     ),
     (
+        "lobby_rejoin",
+        "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
+    ),
+    (
         "lobby_pick",
         "Draft & Packs is desktop-only: a pod's lobby seats phase.rs's draft, which this host alone links",
     ),

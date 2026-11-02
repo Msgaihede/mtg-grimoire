@@ -258,6 +258,10 @@ export const draftCommands = {
   /** The host deals the pod's draft. */
   lobbyStart: (setup: DraftSetup, draft: number) =>
     invoke<DraftView>("lobby_start", { setup, draft }),
+  /** Take this app's seat at the pod's draft again, for a page that lost it (issue #1468): a host
+   *  is answered its draft's name (`draftView` answers its view); a guest asks the host again and
+   *  is answered `null`, its view arriving as `draft:view`. */
+  lobbyRejoin: () => invoke<number | null>("lobby_rejoin"),
   /** A guest's pick; the view arrives as `draft:view`. */
   lobbyPick: (cardInstanceIds: string[]) => invoke<void>("lobby_pick", { cardInstanceIds }),
   /** A guest's Winston turn; the view arrives as `draft:view`. */
