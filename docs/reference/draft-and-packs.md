@@ -43,6 +43,11 @@ opens any of them.
   Measured 2026-10-30: 190 sets; against 17 sampled per-set files the rule matched the `booster`
   block every time, and the one set it leaves out that has pack references at all is `sld` (Secret
   Lair's bonus sheets, sold in a box).
+- **The wall is divided by release year** (`SetGrid`'s `byYear`, issue #1456): newest first, each
+  year a list of its own under a divider (the year between two rules), on Open Packs and in a
+  draft's pack order alike. `byYear` only cuts the order it is given into runs of one year, never
+  re-sorts it, and the filter drops a year whose sets it hides. The year left the tiles' code line
+  with it — the divider says it once.
 - **Fetched again with the card data** (`packs::spawn_refresh`): a card sync that brought a new
   bulk file (the launch's or Settings') or was forced also fetches the set list and every set file
   already cached, in the background, then emits `packs:refreshed`; the walls (`usePacksRefreshed`)
