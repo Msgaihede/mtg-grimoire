@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type JSX, type KeyboardEve
 import { Hourglass, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
-import { formatZoom, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
+import { scaled } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
 import { dndDraggable, useDndDropTarget } from "@/lib/dndTarget";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -19,18 +19,13 @@ import { RoundStrip, SeatsStrip } from "./TableStrip";
 import { WinstonTable } from "./WinstonTable";
 
 /**
- * The pack's tile width at 100%, px — the size the pack opened at when its slider held pixels.
+ * The pack's tile width at 100%, px.
  *
- * The size itself is `cardZoom.draft` (issue #1433): ctrl+wheel over the draft and the Card size
- * slider step the same ladder every other card wall is sized on, so the two controls cannot
- * disagree and the size outlives the session as the other walls' do.
+ * The size itself is `cardZoom.draft` (issue #1433): ctrl+wheel over the draft steps the same
+ * ladder every other card wall is sized on, and the size outlives the session as the other walls'
+ * does. The gesture is the only control — the pick screen's Card size slider went with issue #1470.
  */
 export const PACK_TILE_WIDTH = 190;
-
-/** Where `zoom` stands on {@link ZOOM_STEPS} — the slider's value. The store holds only stops. */
-function stopOf(zoom: number): number {
-  return Math.max(0, (ZOOM_STEPS as readonly number[]).indexOf(zoom));
-}
 
 const SORTS: { value: PackSort; label: string }[] = [
   { value: "rarity", label: "Rarity" },
@@ -87,14 +82,7 @@ export function PickScreen({
   winstonSent?: boolean;
 }): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.draft);
-  /** The slider moved to stop `to`: walk there through `zoomCards`, the zoom's one door, so the
-   *  slider is a gesture like the wheel's — on the ladder, and the badge says where it landed. */
-  const zoomTo = (to: number) => {
-    const { zoomCards } = useAppStore.getState();
-    const direction = to > stopOf(zoom) ? 1 : -1;
-    for (let at = stopOf(zoom); at !== to; at += direction) zoomCards("draft", direction);
-  };
-  const scaleId = useId();
+  const headingId = useId();
   const [sort, setSortState] = useState<PackSort>(() => sortMemory.recall() ?? "rarity");
   const setSort = (value: PackSort) => {
     sortMemory.keep(value);
@@ -145,10 +133,10 @@ export function PickScreen({
         <SeatsStrip view={view} />
       </div>
 
-      <section aria-labelledby={`${scaleId}-pack`} className="flex flex-col gap-3">
+      <section aria-labelledby={`${headingId}-pack`} className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           <h3
-            id={`${scaleId}-pack`}
+            id={`${headingId}-pack`}
             className="m-0 font-heading text-lg font-semibold leading-none"
           >
             Pack {view.packNumber + 1} · Pick {view.pickNumber + 1}
@@ -162,30 +150,16 @@ export function PickScreen({
             </span>
           )}
           <div className="ml-auto flex flex-wrap items-center gap-3">
-            <span id={`${scaleId}-sort-label`} className={LABEL}>
+            <span id={`${headingId}-sort-label`} className={LABEL}>
               Sort
             </span>
             <Dropdown
-              id={`${scaleId}-sort`}
-              labelledBy={`${scaleId}-sort-label`}
+              id={`${headingId}-sort`}
+              labelledBy={`${headingId}-sort-label`}
               size="sm"
               value={sort}
               onChange={(v) => setSort(v as PackSort)}
               options={SORTS}
-            />
-            <label htmlFor={scaleId} className={LABEL}>
-              Card size
-            </label>
-            <input
-              id={scaleId}
-              type="range"
-              min={0}
-              max={ZOOM_STEPS.length - 1}
-              step={1}
-              value={stopOf(zoom)}
-              aria-valuetext={formatZoom(zoom)}
-              onChange={(e) => zoomTo(Number(e.target.value))}
-              className="w-32 accent-accent"
             />
             {onAutoPick !== undefined && (
               <button

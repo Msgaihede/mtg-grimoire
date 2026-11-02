@@ -157,8 +157,9 @@ the stack and the piles face down with their counts, the active pile face up on 
 
 **The cards zoom like every other wall** (issue #1433): ctrl+wheel over a draft steps
 `cardZoom.draft`, one section for the pack, a face-up Winston pile and the pool, because they are
-one table a card is dragged across; the pick screen's **Card size** slider walks the same ladder
-through `zoomCards`, so the two controls are one number and it is remembered with the other walls'.
+one table a card is dragged across, and it is remembered with the other walls'. The gesture is
+the only control: the pick screen's **Card size** slider, which walked the same ladder, was removed
+as redundant (issue #1470).
 The pool's eight columns take the zoom as a ceiling (`minmax(0, 190px × zoom)`) so the pool still
 fits without a scroll. Open Packs' opened wall is a section of its own, `packs`.
 
