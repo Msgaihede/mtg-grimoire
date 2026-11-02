@@ -903,12 +903,11 @@ mod tests {
         conn.execute_batch(&format!(
             "INSERT INTO deck_labels (id, name, name_key, color, created_at, updated_at)
              VALUES (7, 'Ramp', 'ramp', 'green', 0, 0), (8, 'Gone', 'gone', 'red', 0, 0);
-             INSERT INTO deck_categories (id, deck_id, name, kind, sort_order, created_at, updated_at)
-             VALUES (70, {draft}, 'Pool', 'side', 9, 0, 0);
              INSERT INTO deck_cards
                 (id, deck_id, category_id, variant, card_id, set_code, collector_number, lang,
                  name, quantity, label_id, created_at, updated_at)
-             VALUES (70, {draft}, 70, 'live', 'a', 'lea', '1', 'en', 'Shock', 1, 7, 0, 0);"
+             SELECT 70, {draft}, id, 'live', 'a', 'lea', '1', 'en', 'Shock', 1, 7, 0, 0
+               FROM deck_categories WHERE deck_id = {draft} AND variant = 'live' AND kind = 'side';"
         ))
         .unwrap();
 
