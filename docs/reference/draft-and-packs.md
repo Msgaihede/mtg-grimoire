@@ -93,15 +93,23 @@ A card opened from a foil sheet is priced foil, else nonfoil, else etched; an un
 and is drawn with an em dash. A card MTGJSON knows and this corpus does not (`inCorpus: false`) has
 no image and no price, and is never dealt into a draft.
 
-**The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a multi-select
-beside the product picker, _Prices from_, that starts at the app's marketplace (Settings) and is the
+**The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a combobox
+beside the product picker, _Prices from_ (`packs/MarketplaceCombobox.tsx`, issue #1463) — the
+picked marketplaces as chips, a search typed beside them, and under it the marketplaces it matches
+by name or currency, each pressed to add or put down — that starts at the app's marketplace (Settings) and is the
 reader's pick after that — kept per device in `localStorage` (`grimoire.packs.marketplaces`), never
 in `app_meta`, and never written back to the app's setting. `useBoosterPrices` reads
 `printing_prices` once per picked marketplace (each its own cache entry) and takes each finish's
 lowest quote (`lowestPrices`) before the foil-else-nonfoil fallback, so one marketplace's non-foil
-never stands in for another's foil. **One currency at a time**: the app holds no exchange rate, so
-picking a marketplace in the other currency starts the pick over from it; the last picked one
-cannot be put down; Card trader (unpriced) and a feed the host cannot reach are greyed. Picking a
+never stands in for another's foil. **Dollars and euros together** (issue #1463, `packs/currency.ts`):
+a pick of one currency is priced in it, untouched; a pick of both — TCGplayer with Cardmarket — is
+priced in the app's currency (the owner's decision, 2026-11-02), the other currency's answers
+multiplied by the European Central Bank's daily rate (`packs_exchange_rate`, the desktop's
+`packs/fx.rs`) before the lowest is taken. The rate is asked only for such a pick; until it answers
+no figure is drawn, and with none at all (the ECB unreachable and nothing cached) the other
+currency's marketplaces are left out and the line under the picker says so — a euro is never
+compared with a dollar unconverted. The line also names the rate and its day when one was used.
+The last picked marketplace cannot be put down; Card trader (unpriced) and a feed the host cannot reach are greyed. Picking a
 feed that has never landed a row fetches it, as Settings does.
 
 **The reduced price is the page's own too** (`packs/reducedPick.ts`, `packs/ReducedInputs.tsx`): a
