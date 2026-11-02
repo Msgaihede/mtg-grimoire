@@ -93,6 +93,13 @@ A card opened from a foil sheet is priced foil, else nonfoil, else etched; an un
 and is drawn with an em dash. A card MTGJSON knows and this corpus does not (`inCorpus: false`) has
 no image and no price, and is never dealt into a draft.
 
+**The product picker is a combobox** (issue #1464, `packs/products.ts`' `openableMatches`): a set
+can sell a dozen boosters and sealed products, so the _Product_ dropdown is `searchable`. Typing
+keeps the products holding every word typed, in any order, case-insensitively, against the name,
+the kind (`booster` or `sealed`) and a sealed product's MTGJSON category in words (`booster box`,
+`bundle`) — "collector box" finds the collector booster box. The shell owns the query (the
+`Dropdown`'s `matches` prop), so the trigger keeps naming the picked product while a search hides it.
+
 **The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a combobox at the
 head of the right-hand column, _Prices from_ (`packs/MarketplaceCombobox.tsx`, issue #1463) — the
 picked marketplaces as chips, a search typed beside them, and under it the marketplaces it matches

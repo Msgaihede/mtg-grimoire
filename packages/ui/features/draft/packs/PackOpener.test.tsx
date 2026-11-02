@@ -14,7 +14,7 @@ import { PRICES, PRODUCT, SET as FIXTURE } from "../booster/fixture";
 import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
-import { pickOption } from "@/test-dropdown";
+import { openDropdown, pickOption } from "@/test-dropdown";
 
 /** Every card the fixture's sheets name, in the corpus, but for one MTGJSON alone knows. */
 const CARDS: BoosterCard[] = [
@@ -229,6 +229,24 @@ describe("PackOpener", () => {
     // Five boosters of seven, and the bundle's promo.
     expect(within(wall).getAllByRole("listitem")).toHaveLength(36);
     expect(screen.getByText(/3 items in it could not be opened/)).toBeInTheDocument();
+  });
+
+  /** Issue #1464: the product picker is a combobox — type to narrow, pick from what is left. */
+  it("searches the products by name, kind and category", async () => {
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+    await screen.findByText(/^Expected value/);
+    // Named: the marketplace picker beside it is a combobox of its own.
+    await openDropdown(user, "Product");
+    await user.type(screen.getByRole("combobox", { name: "Search products" }), "sealed bundle");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Test Bundle"),
+    ]);
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Product" })).toHaveTextContent("Test Bundle");
+    await openDropdown(user, "Product");
+    await user.type(screen.getByRole("combobox", { name: "Search products" }), "nothing like it");
+    expect(screen.getByText("No product matches.")).toBeInTheDocument();
   });
 
   it("says the host's refusal and retries", async () => {
