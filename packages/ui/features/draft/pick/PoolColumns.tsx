@@ -9,6 +9,7 @@ import { MANA_FILL, MANA_KEYS, MANA_LABEL, manaSymbolClass } from "@/lib/mana";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { LABEL } from "../setup/parts";
+import { CardPreview, useCardPreview } from "./CardPreview";
 import { colorTally, POOL_COLUMNS, poolColumns, type PoolColumn } from "./pool";
 import type { Destination } from "./split";
 
@@ -70,6 +71,8 @@ export function PoolColumns({
   const zoom = useAppStore((s) => s.cardZoom.draft);
   const columns = useMemo(() => poolColumns(pool), [pool]);
   const tally = useMemo(() => colorTally(pool), [pool]);
+  // A stacked card shows only its name strip; resting on it draws it whole (issue #1472).
+  const preview = useCardPreview();
   const movable = moveTo !== undefined && onMove !== undefined;
   return (
     <section aria-label={title} className="flex flex-col gap-3">
@@ -112,6 +115,7 @@ export function PoolColumns({
                     // that one's title bar shows: a 5:7 card is 140% of its width tall, and
                     // −122% leaves 18% — the name line — in sight.
                     className="[&:not(:first-child)]:-mt-[122%]"
+                    {...preview.tileProps(card)}
                   >
                     {movable ? (
                       <button
@@ -149,6 +153,7 @@ export function PoolColumns({
           </>
         )}
       </div>
+      <CardPreview shown={preview.shown} />
     </section>
   );
 }

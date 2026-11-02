@@ -21,6 +21,7 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { InlineError, LABEL, PANEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
+import { CardPreview, useCardPreview } from "./CardPreview";
 import { carriedPick, pickDragData, type PickDrag } from "./pickDrag";
 import { sortPack, type PackSort } from "./pool";
 import { PoolZones } from "./PoolZones";
@@ -358,6 +359,8 @@ function PackWall({
   useEffect(() => {
     chosenNow.current = chosen;
   });
+  // The card a pointer rests on, large (issue #1472) — the playtest board's inspect box.
+  const preview = useCardPreview();
 
   useEffect(() => {
     const stops = tiles.current.slice(0, pack.length).flatMap((element, index) =>
@@ -466,6 +469,7 @@ function PackWall({
       >
         {pack.map((c, index) => {
           const selected = chosen.includes(c.instanceId);
+          const previewProps = preview.tileProps(c);
           return (
             <li key={c.instanceId}>
               <button
@@ -475,8 +479,10 @@ function PackWall({
                 type="button"
                 aria-pressed={selected}
                 aria-label={c.name}
-                onFocus={() => {
+                {...previewProps}
+                onFocus={(e) => {
                   caret.current = index;
+                  previewProps.onFocus?.(e);
                 }}
                 onClick={(event: MouseEvent<HTMLButtonElement>) => press(index, event.detail)}
                 className={cn("group block w-full rounded-lg", PRESS, FOCUS)}
@@ -487,6 +493,7 @@ function PackWall({
           );
         })}
       </ul>
+      <CardPreview shown={preview.shown} />
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <PrimaryButton ready={full} busy={busy} onPress={() => confirm(chosen)}>
           {label}
@@ -509,8 +516,8 @@ function PackWall({
         )}
         <p className="m-0 text-xs text-dim">
           {need === 1
-            ? "Double-click a card to pick it into your deck, or drag it onto your deck or sideboard · Click to choose · ← → ↑ ↓ move · Enter picks into the deck, Shift+Enter into the sideboard"
-            : `Click ${need} cards to choose them, then double-click the last or drag it onto your deck or sideboard · ← → ↑ ↓ move · Enter picks once ${need} are chosen, Shift+Enter into the sideboard`}
+            ? "Double-click a card to pick it into your deck, or drag it onto your deck or sideboard · Click to choose · ← → ↑ ↓ move · Enter picks into the deck, Shift+Enter into the sideboard · Rest on a card to see it large"
+            : `Click ${need} cards to choose them, then double-click the last or drag it onto your deck or sideboard · ← → ↑ ↓ move · Enter picks once ${need} are chosen, Shift+Enter into the sideboard · Rest on a card to see it large`}
         </p>
       </div>
     </div>
