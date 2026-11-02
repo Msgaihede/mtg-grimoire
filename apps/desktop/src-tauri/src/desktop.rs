@@ -675,6 +675,7 @@ pub fn run() {
             draft::lobby::lobby_state,
             draft::lobby::lobby_leave,
             draft::lobby::lobby_start,
+            draft::lobby::lobby_rejoin,
             draft::lobby::lobby_pick,
             draft::lobby::lobby_winston,
             draft::lobby::lobby_kick,

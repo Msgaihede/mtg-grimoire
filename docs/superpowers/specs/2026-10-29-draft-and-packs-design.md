@@ -344,6 +344,7 @@ host → guest: `{"v":1,"kind":"room","room":LobbyRoom}`, `{"v":1,"kind":"view",
 | `lobby_state` | — | `Option<LobbyState>` |
 | `lobby_leave` | — | `()` (a host closes the lobby; ends a pod draft) |
 | `lobby_start` | `setup: DraftSetup, draft: u64` | `DraftView` (host; `setup.seats[*].peer` names each guest's seat) |
+| `lobby_rejoin` | — | `Option<u64>` (a seat the page lost, issue #1468: the host's draft name; a guest sends `sync` and is answered `None`) |
 | `lobby_pick` | `cardInstanceIds: Vec<String>` | `()` (guest; the view arrives as `draft:view`) |
 | `lobby_kick` | `peer: String` | `()` (host, before the start) |
 

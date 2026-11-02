@@ -69,5 +69,9 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 - **Hosting a pod is a supporter's; joining is anybody's.** The page reads the membership the way
   `useMaySendScans` does (`useMayHostPod`); the host refuses a device that is not entitled, and the
   relay mints tokens only for an entitled membership.
+- **A drafting pod is a draft in progress** (issue #1468): the hub lists it with **Rejoin**, which
+  opens the seat this window kept (`pick/current.ts`) or else the lobby's screen, which takes the
+  seat again through `lobby_rejoin`. A guest's draft asks it on every arrival — a guest's view only
+  ever arrives pushed. Never route a drafting lobby to a screen that waits without asking.
 - **Every pushed view is filtered** (`pick/pool.ts`' `acceptsView`): a `draft:view` for another seat
   or an older step is dropped.

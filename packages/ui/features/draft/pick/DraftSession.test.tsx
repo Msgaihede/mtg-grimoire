@@ -19,6 +19,7 @@ const ipcMock = vi.hoisted(() => ({
   lobbyPick: vi.fn(),
   lobbyWinston: vi.fn(),
   lobbyLeave: vi.fn(),
+  lobbyRejoin: vi.fn(),
   onDraftView: vi.fn(),
 }));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -112,6 +113,7 @@ let push: (v: DraftView) => void = () => {};
 beforeEach(() => {
   for (const fn of Object.values(ipcMock)) fn.mockReset();
   ipcMock.draftView.mockResolvedValue(null);
+  ipcMock.lobbyRejoin.mockResolvedValue(null);
   ipcMock.onDraftView.mockImplementation((cb: (v: DraftView) => void) => {
     push = cb;
     return () => {};
@@ -294,6 +296,23 @@ describe("DraftSession", () => {
     expect(screen.getByText("Waiting for the table…")).toBeInTheDocument();
     act(() => push(view({ pickNumber: 1 })));
     expect(screen.getByRole("heading", { name: "Pack 1 · Pick 2" })).toBeInTheDocument();
+  });
+
+  it("asks the host again for a guest's view on arrival, and takes the one it pushes", async () => {
+    // Issue #1468: the guest was elsewhere, or reloaded, and the view kept is still waiting on a
+    // pack the host has since passed.
+    setup(view({ mode: "pod", waiting: true }), "guest", null);
+    expect(screen.getByText("Waiting for the table…")).toBeInTheDocument();
+    await waitFor(() => expect(ipcMock.lobbyRejoin).toHaveBeenCalledOnce());
+    expect(ipcMock.draftView).not.toHaveBeenCalled();
+    act(() => push(view({ mode: "pod", pickNumber: 1 })));
+    expect(screen.getByRole("heading", { name: "Pack 1 · Pick 2" })).toBeInTheDocument();
+  });
+
+  it("asks nothing of the lobby for a draft this app runs", async () => {
+    setup(view(), "host", 42);
+    await waitFor(() => expect(ipcMock.draftView).toHaveBeenCalledWith(42));
+    expect(ipcMock.lobbyRejoin).not.toHaveBeenCalled();
   });
 
   it("sends a guest's pick to the host and waits for its push", async () => {
