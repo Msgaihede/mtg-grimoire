@@ -48,6 +48,11 @@ opens any of them.
   draft's pack order alike. `byYear` only cuts the order it is given into runs of one year, never
   re-sorts it, and the filter drops a year whose sets it hides. The year left the tiles' code line
   with it — the divider says it once.
+- **A set page switches set from its own bar** (`packs/SetSwitcher`, issue #1466): a searchable
+  single-select `Dropdown` over the same `useBoosterSets` list, in the wall's order, matched the
+  wall's way (`setMatches`, name or code). Not the search page's `SetCombobox`, which is a
+  multi-select over `list_sets`. Picking a set remounts the stage (keyed on its code), so its fetch,
+  product and opened packs start over; 190 sets need no paging.
 - **Fetched again with the card data** (`packs::spawn_refresh`): a card sync that brought a new
   bulk file (the launch's or Settings') or was forced also fetches the set list and every set file
   already cached, in the background, then emits `packs:refreshed`; the walls (`usePacksRefreshed`)

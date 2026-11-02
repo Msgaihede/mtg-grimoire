@@ -524,6 +524,35 @@ describe("PackOpener", () => {
     });
   });
 
+  /** Issue #1466: another set from the set page's bar, searched by name or code. */
+  it("switches to another set from the bar's searchable set picker", async () => {
+    const NEXT: BoosterSetSummary = { code: "nxt", name: "Next Set", releaseDate: "2026-02-01" };
+    // Queued before the first render's fetch; a `Once` answer outranks setup's default.
+    packsBoosterSets.mockResolvedValueOnce([SUMMARY, NEXT]);
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+    await screen.findByText(/^Expected value/);
+
+    const trigger = screen.getByRole("button", { name: "Set" });
+    expect(trigger).toHaveTextContent("Test Set");
+    // The page holds other comboboxes (the product and marketplace pickers): type into this one's.
+    await openDropdown(user, "Set");
+    await user.type(screen.getByRole("combobox", { name: "Search sets" }), "NXT");
+    // The code finds it, as the wall's filter does; the page's own set is filtered out.
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Next Set"),
+    ]);
+    await user.click(screen.getByRole("option", { name: /Next Set/ }));
+
+    expect(packsBoosterSet).toHaveBeenCalledWith("nxt", false);
+    expect(await screen.findByRole("heading", { name: "Next Set" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set" })).toHaveTextContent("Next Set");
+    // The trail still walks back to the wall from the new set.
+    expect(
+      screen.getByRole("button", { name: /Open Packs, choose another set/ }),
+    ).toBeInTheDocument();
+  });
+
   it("walks back up the trail", async () => {
     const { user, onBack } = setup();
     await user.click(await screen.findByRole("button", { name: /Test Set/ }));
