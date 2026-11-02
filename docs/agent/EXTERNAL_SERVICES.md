@@ -36,6 +36,7 @@ construction).
 - [Scryfall and the price feeds](#scryfall-and-the-price-feeds)
 - [Scryfall's Tagger datasets](#scryfalls-tagger-datasets)
 - [Commander Spellbook's combo feed](#commander-spellbooks-combo-feed)
+- [The ECB's exchange rate](#the-ecbs-exchange-rate)
 - [The scanner's files, from nowhere but the app](#the-scanners-files-from-nowhere-but-the-app)
 - [Sync and the hosted relay](#sync-and-the-hosted-relay)
 - [Entitlements, removal and leaving](#entitlements-removal-and-leaving)
@@ -91,6 +92,18 @@ pile hold_. Two questions, never one statement — and the card side is why `com
 prose columns (**corpus schema 2**, the corpus ladder's first rung ever) and why "this card is in
 no combo" and "we have never downloaded the list" have to be two different sentences.
 [commander-brackets.md](../reference/commander-brackets.md) has every measurement.
+
+## The ECB's exchange rate
+
+**The European Central Bank's daily euro reference rates are the one source of a dollar-to-euro
+rate, and Open Packs is their one reader** (issue #1463, 2026-11-02). `eurofxref-daily.xml` is
+public, keyless and about 1.6 KB; the desktop host fetches it (`packs::fx`) only when a reader's
+Open Packs pick names marketplaces of both currencies — TCGplayer with Cardmarket — and keeps it
+six hours under the data folder. **Optional in the price feeds' sense**: nothing is asked until
+that pick is made, a stale copy is used when the ECB cannot be reached, and with no copy the page
+prices at the app's currency's marketplaces alone and says the others were left out. The ECB sets
+the rate once each working day, around 16:00 CET. The webview never asks it; no hosting policy
+names it.
 
 ## The scanner's files, from nowhere but the app
 

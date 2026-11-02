@@ -133,6 +133,20 @@ export interface BoosterCard {
   inCorpus: boolean;
 }
 
+/**
+ * One euro in dollars, as the European Central Bank published it — the desktop's
+ * `packs::fx::ExchangeRate`. Open Packs alone reads it, to take the lowest of a dollar
+ * marketplace's price and a euro one's (issue #1463); no other surface converts a price.
+ */
+export interface ExchangeRate {
+  /** Dollars to one euro — `1.0812`. */
+  usdPerEur: number;
+  /** `YYYY-MM-DD`: the working day the ECB set the rate on. */
+  date: string;
+  /** Milliseconds: when the host fetched it. */
+  fetchedAt: number;
+}
+
 export const packCommands = {
   /**
    * The sets MTGJSON sells booster packs of, from its set list — fetched the first time and
@@ -151,4 +165,9 @@ export const packCommands = {
    */
   packsBoosterSet: (setCode: string, refresh: boolean) =>
     invoke<BoosterSet>("packs_booster_set", { setCode, refresh }),
+  /**
+   * The ECB's daily dollar rate: fetched the first time, cached for six hours, and a stale copy
+   * used when the ECB cannot be reached. Rejects in one sentence when there is neither.
+   */
+  packsExchangeRate: () => invoke<ExchangeRate>("packs_exchange_rate"),
 };

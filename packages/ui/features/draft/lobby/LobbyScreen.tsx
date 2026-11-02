@@ -17,6 +17,7 @@ import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import type { DraftRole } from "../build/BuildPanel";
+import { currentDraft } from "../pick/current";
 import {
   COMMANDER_DECK_SIZE,
   COMMANDER_SETS,
@@ -104,10 +105,36 @@ export function LobbyScreen({
   const role = lobby?.role ?? null;
   const phase = lobby?.phase ?? null;
 
+  const hostOnline = lobby?.hostOnline ?? false;
+
   useEffect(() => {
     if (role !== "guest" || phase === "closed") return;
     return ipc.onDraftView((view) => onDraft(null, view, "guest"));
   }, [role, phase, onDraft]);
+
+  // A pod drafting with this screen up is a seat left behind (issue #1468): the reader went to
+  // another view or reloaded the window while the table picked on, and the page lost its draft.
+  // The seat is taken again — a host by its draft's name, a guest by asking the host to push its
+  // view once more (heard just above), again when a host who dropped is back to answer.
+  const [rejoinError, setRejoinError] = useState<string | null>(null);
+  useEffect(() => {
+    if (phase !== "drafting" || role === null) return;
+    if (role === "guest" && !hostOnline) return;
+    let live = true;
+    ipc
+      .lobbyRejoin()
+      .then(async (draft) => {
+        if (draft === null) return;
+        const view = await ipc.draftView(draft);
+        if (live) onDraft(draft, view, "host");
+      })
+      .catch((e: unknown) => {
+        if (live) setRejoinError(ipcError(e));
+      });
+    return () => {
+      live = false;
+    };
+  }, [role, phase, hostOnline, onDraft]);
 
   const live = lobby !== null && lobby.phase !== "closed";
   return (
@@ -119,6 +146,7 @@ export function LobbyScreen({
         meta={live ? `Lobby ${lobby.code}` : undefined}
         actions={live ? <LeaveButton host={lobby.role === "host"} /> : undefined}
       />
+      <InlineError message={live ? rejoinError : null} />
       {!live ? (
         <LobbyDoor closed={lobby} />
       ) : lobby.role === "host" ? (
@@ -128,6 +156,13 @@ export function LobbyScreen({
       )}
     </section>
   );
+}
+
+/** A pod seat this window kept from an earlier lobby is that lobby's: a new lobby, or none, must
+ *  not rejoin it (the hub's *Rejoin*). A solo draft stays. */
+function forgetPodSeat(): void {
+  const current = currentDraft.recall();
+  if (current && current.role !== "solo") currentDraft.keep(null);
 }
 
 function LeaveButton({ host }: { host: boolean }): JSX.Element {
@@ -140,7 +175,10 @@ function LeaveButton({ host }: { host: boolean }): JSX.Element {
         type="button"
         onClick={() => {
           ipc.lobbyLeave().then(
-            () => client.setQueryData(LOBBY_KEY, null),
+            () => {
+              forgetPodSeat();
+              client.setQueryData(LOBBY_KEY, null);
+            },
             (e: unknown) => setError(ipcError(e)),
           );
         }}
@@ -177,6 +215,7 @@ function LobbyDoor({ closed }: { closed: LobbyState | null }): JSX.Element {
         which === "create"
           ? await ipc.lobbyCreate(name.trim(), "draft")
           : await ipc.lobbyJoin(code, name.trim());
+      forgetPodSeat();
       client.setQueryData(LOBBY_KEY, state);
     } catch (e) {
       setError(ipcError(e));

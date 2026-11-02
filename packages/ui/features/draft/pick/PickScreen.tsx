@@ -1,8 +1,18 @@
-import { useEffect, useId, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
-import { Hourglass, WandSparkles } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
+import { Hourglass, PanelBottom, PanelRight, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
-import { formatZoom, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
+import { scaled } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
 import { dndDraggable } from "@/lib/dndTarget";
 import type { DraftCard, DraftView } from "@/lib/ipc";
@@ -10,27 +20,23 @@ import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
-import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
+import { InlineError, LABEL, PANEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
 import { carriedPick, pickDragData, type PickDrag } from "./pickDrag";
 import { sortPack, type PackSort } from "./pool";
 import { PoolZones } from "./PoolZones";
 import type { Destination } from "./split";
 import { RoundStrip, SeatsStrip } from "./TableStrip";
+import { useDraftTrayLayout, type DraftTrayLayout } from "./trayLayout";
 import { WinstonTable } from "./WinstonTable";
 
 /**
- * The pack's tile width at 100%, px — the size the pack opened at when its slider held pixels.
+ * The pack's tile width at 100%, px.
  *
- * The size itself is `cardZoom.draft` (issue #1433): ctrl+wheel over the draft and the Card size
- * slider step the same ladder every other card wall is sized on, so the two controls cannot
- * disagree and the size outlives the session as the other walls' do.
+ * The size itself is `cardZoom.draft` (issue #1433): ctrl+wheel over the draft steps the same
+ * ladder every other card wall is sized on, and the size outlives the session as the other walls'
+ * does. The gesture is the only control — the pick screen's Card size slider went with issue #1470.
  */
 export const PACK_TILE_WIDTH = 190;
-
-/** Where `zoom` stands on {@link ZOOM_STEPS} — the slider's value. The store holds only stops. */
-function stopOf(zoom: number): number {
-  return Math.max(0, (ZOOM_STEPS as readonly number[]).indexOf(zoom));
-}
 
 const SORTS: { value: PackSort; label: string }[] = [
   { value: "rarity", label: "Rarity" },
@@ -52,23 +58,32 @@ export function picksNeeded(view: DraftView): number {
  * One pick: the round strip and the table, the pack as a wall of cards, and the pool below — or,
  * in a Winston draft (`view.stack`), the shared stack and its three piles in place of the pack.
  *
- * **A card is picked by dragging it onto the pool** (issue #1434, which replaced the second click
- * on a chosen card — a double-click no longer picks). A click chooses, and the Pick button picks
- * the chosen card. The keyboard walks the pack with the arrows and picks with Enter (said in the
- * hint under the pack; no global chord is taken). While the table catches up the pack is replaced
- * by a sentence saying so.
+ * **A card is picked three ways**: by dragging it onto the pool (issue #1434), by double-clicking
+ * it (issue #1469), or by choosing it with a click and pressing Pick. A double-click is two clicks
+ * within the system's double-click delay — never a second, later click on the chosen card, which
+ * #1434 removed because it picked cards the reader only meant to look at again. The keyboard walks
+ * the pack with the arrows and picks with Enter (said in the hint under the pack; no global chord
+ * is taken). While the table catches up the pack is replaced by a sentence saying so.
  *
  * **A pick of two** (a Commander draft, `picksPerStep: 2`) chooses two cards, each click toggling
  * one, and picks them together — with the Pick button, Enter once both are chosen, or by dragging
- * one onto the pool while the other is chosen (`pickDrag.ts`' `carriedPick`).
+ * or double-clicking one while the other is chosen (`pickDrag.ts`' `carriedPick`).
  *
  * **The pack is laid out by rarity, mythic first** (issue #1432), a rarity's cards in the order they
  * were dealt; the Sort menu offers the dealt order instead, kept for the window's life.
  *
+ * **The pool is under the pack, or in a tray beside it** (issue #1474, `trayLayout.ts`): the curve
+ * of stacked cards (`PoolColumns`, the default) or a compact list of names (`PoolTray`) — MTG
+ * Arena's two drafting views — switched by the Pool toggle in the pack's heading row and kept per
+ * device. Beside the pack, the pack and the tray scroll apart, so the tray (the drop target) stays
+ * in reach however far down a zoomed-in pack the reader is; `DraftSession` hands the screen its
+ * whole height for it. A Winston table keeps its pool underneath — it has no pack heading to carry
+ * the toggle, and its piles are the width of the room.
+ *
  * **A pick goes to the deck or the sideboard** (issue #1471, Arena's two lists): the pool is drawn
- * as both (`PoolZones`), a card dropped on either is picked into it, the Pick button and Enter pick
- * into the deck, and *To sideboard* and Shift+Enter into the sideboard. A press on a picked card
- * sends it to the other list.
+ * as both, in either layout (`PoolZones`); a card dropped on either is picked into it, a
+ * double-click, the Pick button and Enter pick into the deck, and *To sideboard* and Shift+Enter
+ * into the sideboard. A press on a picked card sends it to the other list.
  */
 export function PickScreen({
   view,
@@ -98,14 +113,8 @@ export function PickScreen({
   onMove?: (card: DraftCard, to: Destination) => void;
 }): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.draft);
-  /** The slider moved to stop `to`: walk there through `zoomCards`, the zoom's one door, so the
-   *  slider is a gesture like the wheel's — on the ladder, and the badge says where it landed. */
-  const zoomTo = (to: number) => {
-    const { zoomCards } = useAppStore.getState();
-    const direction = to > stopOf(zoom) ? 1 : -1;
-    for (let at = stopOf(zoom); at !== to; at += direction) zoomCards("draft", direction);
-  };
-  const scaleId = useId();
+  const headingId = useId();
+  const layout = useDraftTrayLayout((s) => s.layout);
   const [sort, setSortState] = useState<PackSort>(() => sortMemory.recall() ?? "rarity");
   const setSort = (value: PackSort) => {
     sortMemory.keep(value);
@@ -145,98 +154,162 @@ export function PickScreen({
     );
   }
 
-  return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <RoundStrip view={view} />
-        <SeatsStrip view={view} />
+  const strips = (
+    <div className="flex flex-col gap-3">
+      <RoundStrip view={view} />
+      <SeatsStrip view={view} />
+    </div>
+  );
+
+  const packSection = (
+    <section aria-labelledby={`${headingId}-pack`} className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        <h3
+          id={`${headingId}-pack`}
+          className="m-0 font-heading text-lg font-semibold leading-none"
+        >
+          Pack {view.packNumber + 1} · Pick {view.pickNumber + 1}
+        </h3>
+        {!waiting && (
+          <span className="font-mono text-sm tabular-nums text-dim">{view.pack.length} left</span>
+        )}
+        {!waiting && need > 1 && (
+          <span className="rounded-full border border-accent/50 bg-accent/10 px-2.5 text-xs leading-6 text-accent">
+            Choose {need}
+          </span>
+        )}
+        <div className="ml-auto flex flex-wrap items-center gap-3">
+          <TrayToggle layout={layout} />
+          <span id={`${headingId}-sort-label`} className={LABEL}>
+            Sort
+          </span>
+          <Dropdown
+            id={`${headingId}-sort`}
+            labelledBy={`${headingId}-sort-label`}
+            size="sm"
+            value={sort}
+            onChange={(v) => setSort(v as PackSort)}
+            options={SORTS}
+          />
+          {onAutoPick !== undefined && (
+            <button
+              type="button"
+              aria-disabled={waiting || busy}
+              onClick={() => {
+                if (!waiting && !busy) onAutoPick();
+              }}
+              className={QUIET_BUTTON}
+            >
+              <WandSparkles className="size-4" aria-hidden="true" />
+              Pick for me
+            </button>
+          )}
+        </div>
       </div>
 
-      <section aria-labelledby={`${scaleId}-pack`} className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <h3
-            id={`${scaleId}-pack`}
-            className="m-0 font-heading text-lg font-semibold leading-none"
-          >
-            Pack {view.packNumber + 1} · Pick {view.pickNumber + 1}
-          </h3>
-          {!waiting && (
-            <span className="font-mono text-sm tabular-nums text-dim">{view.pack.length} left</span>
-          )}
-          {!waiting && need > 1 && (
-            <span className="rounded-full border border-accent/50 bg-accent/10 px-2.5 text-xs leading-6 text-accent">
-              Choose {need}
-            </span>
-          )}
-          <div className="ml-auto flex flex-wrap items-center gap-3">
-            <span id={`${scaleId}-sort-label`} className={LABEL}>
-              Sort
-            </span>
-            <Dropdown
-              id={`${scaleId}-sort`}
-              labelledBy={`${scaleId}-sort-label`}
-              size="sm"
-              value={sort}
-              onChange={(v) => setSort(v as PackSort)}
-              options={SORTS}
-            />
-            <label htmlFor={scaleId} className={LABEL}>
-              Card size
-            </label>
-            <input
-              id={scaleId}
-              type="range"
-              min={0}
-              max={ZOOM_STEPS.length - 1}
-              step={1}
-              value={stopOf(zoom)}
-              aria-valuetext={formatZoom(zoom)}
-              onChange={(e) => zoomTo(Number(e.target.value))}
-              className="w-32 accent-accent"
-            />
-            {onAutoPick !== undefined && (
-              <button
-                type="button"
-                aria-disabled={waiting || busy}
-                onClick={() => {
-                  if (!waiting && !busy) onAutoPick();
-                }}
-                className={QUIET_BUTTON}
-              >
-                <WandSparkles className="size-4" aria-hidden="true" />
-                Pick for me
-              </button>
-            )}
-          </div>
+      {waiting ? (
+        <div
+          role="status"
+          className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-6 py-16 text-center"
+        >
+          <Hourglass className="size-6 text-accent" aria-hidden="true" />
+          <p className="m-0 text-sm">Waiting for the table…</p>
+          <p className="m-0 font-mono text-xs tabular-nums text-dim">
+            {picked} of {view.seats.length} have picked
+          </p>
         </div>
+      ) : (
+        <PackWall
+          // A new pack is a new wall: the choice made in the last one does not carry over.
+          key={`${view.packNumber}.${view.pickNumber}`}
+          pack={sorted}
+          need={need}
+          width={scaled(PACK_TILE_WIDTH, zoom)}
+          busy={busy}
+          onPick={onPick}
+        />
+      )}
+      <InlineError message={error} />
+    </section>
+  );
 
-        {waiting ? (
-          <div
-            role="status"
-            className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-6 py-16 text-center"
-          >
-            <Hourglass className="size-6 text-accent" aria-hidden="true" />
-            <p className="m-0 text-sm">Waiting for the table…</p>
-            <p className="m-0 font-mono text-xs tabular-nums text-dim">
-              {picked} of {view.seats.length} have picked
-            </p>
-          </div>
-        ) : (
-          <PackWall
-            // A new pack is a new wall: the choice made in the last one does not carry over.
-            key={`${view.packNumber}.${view.pickNumber}`}
-            pack={sorted}
-            need={need}
-            width={scaled(PACK_TILE_WIDTH, zoom)}
-            busy={busy}
-            onPick={onPick}
+  if (layout === "side") {
+    return (
+      <div className="flex min-h-0 flex-1 gap-5">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 overflow-y-auto pb-8 pr-1">
+          {strips}
+          {packSection}
+        </div>
+        {/* The trays — Deck and Sideboard — are where a card from the pack is dropped to pick it.
+            Keyed by the layout, so a switch registers the drop targets on the new elements. */}
+        <aside className={cn(PANEL, "mb-3 flex min-h-0 w-72 shrink-0 flex-col p-3")}>
+          <PoolZones
+            key="side"
+            layout="side"
+            pool={view.pool}
+            sideboard={sideboard}
+            onMove={onMove}
+            drop={drop}
           />
-        )}
-        <InlineError message={error} />
-      </section>
+        </aside>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-6">
+      {strips}
+      {packSection}
 
       {/* The pool — Deck and Sideboard — is where a card from the pack is dropped to pick it. */}
-      <PoolZones pool={view.pool} sideboard={sideboard} onMove={onMove} drop={drop} />
+      <PoolZones key="bottom" pool={view.pool} sideboard={sideboard} onMove={onMove} drop={drop} />
+    </div>
+  );
+}
+
+/** The two layouts in the order the toggle draws them, and the words for each. */
+const TRAY_LAYOUTS = [
+  { id: "bottom", label: "Pool below the pack", Icon: PanelBottom },
+  { id: "side", label: "Pool beside the pack", Icon: PanelRight },
+] as const satisfies readonly { id: DraftTrayLayout; label: string; Icon: typeof PanelBottom }[];
+
+/**
+ * Where the pool is drawn — under the pack or in a tray beside it (issue #1474). Two icon squares
+ * in one bordered group, the pressed one filled the way `Segmented`'s are: two glyphs of a window
+ * with its panel at the bottom or the side say which is which at a glance on a row that is already
+ * full of words, and the tooltip and the name say it in words.
+ */
+function TrayToggle({ layout }: { layout: DraftTrayLayout }): JSX.Element {
+  const tip = useTooltip();
+  const keep = useDraftTrayLayout((s) => s.keep);
+  return (
+    <div
+      role="group"
+      aria-label="Pool layout"
+      className="flex overflow-hidden rounded-md border border-border"
+    >
+      {TRAY_LAYOUTS.map(({ id, label, Icon }) => {
+        const pressed = layout === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={pressed}
+            aria-label={label}
+            // `describes: false`: identical to the `aria-label` above.
+            {...tip(label, { describes: false })}
+            onClick={() => keep(id)}
+            className={cn(
+              "inline-flex size-9 items-center justify-center",
+              "transition-colors duration-150 motion-reduce:transition-none",
+              pressed ? "bg-accent text-accent-fg" : "text-dim hover:text-text",
+              FOCUS,
+            )}
+          >
+            <Icon className="size-4" aria-hidden="true" />
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -247,6 +320,10 @@ export function PickScreen({
  * With `need` 1 a click chooses. With more, a click toggles a card in or out of the choice — a
  * click past `need` lets the oldest choice go — the arrows only move the caret, and Enter picks
  * once `need` are chosen (before then it is the focused tile's own press, which toggles it).
+ *
+ * A double-click's second click (`detail` 2 — the system's delay decides) does not toggle: it picks
+ * what a drag of that card would (`carriedPick`), or, short of a whole pick, leaves the card chosen.
+ * A third click in a row does nothing, so a triple-click never picks twice.
  *
  * Every tile is a drag source carrying the pick it would make (`carriedPick`); the pool,
  * `PickScreen`'s, is where it is let go.
@@ -309,9 +386,18 @@ function PackWall({
     if (picked.length === need) onPick(picked, to);
   };
 
-  const press = (index: number) => {
+  const press = (index: number, clicks: number) => {
     const id = pack[index]?.instanceId;
     if (id === undefined) return;
+    // A double-click's second click picks. A keyboard's press carries no count (0) and a single
+    // click 1, so only the mouse's quick pair reaches here — never a later click on a chosen card.
+    if (clicks >= 2) {
+      if (clicks > 2) return;
+      const ids = carriedPick(chosen, id, need);
+      setChosen(ids);
+      confirm(ids);
+      return;
+    }
     if (need === 1) {
       setChosen([id]);
       return;
@@ -392,7 +478,7 @@ function PackWall({
                 onFocus={() => {
                   caret.current = index;
                 }}
-                onClick={() => press(index)}
+                onClick={(event: MouseEvent<HTMLButtonElement>) => press(index, event.detail)}
                 className={cn("group block w-full rounded-lg", PRESS, FOCUS)}
               >
                 <CardArt cardId={c.cardId} name={c.name} selected={selected} hoverZoom />
@@ -423,8 +509,8 @@ function PackWall({
         )}
         <p className="m-0 text-xs text-dim">
           {need === 1
-            ? "Drag a card onto your deck or sideboard to pick it · Click to choose · ← → ↑ ↓ move · Enter picks into the deck, Shift+Enter into the sideboard"
-            : `Click ${need} cards to choose them, or drag the last onto your deck or sideboard · ← → ↑ ↓ move · Enter picks once ${need} are chosen, Shift+Enter into the sideboard`}
+            ? "Double-click a card to pick it into your deck, or drag it onto your deck or sideboard · Click to choose · ← → ↑ ↓ move · Enter picks into the deck, Shift+Enter into the sideboard"
+            : `Click ${need} cards to choose them, then double-click the last or drag it onto your deck or sideboard · ← → ↑ ↓ move · Enter picks once ${need} are chosen, Shift+Enter into the sideboard`}
         </p>
       </div>
     </div>

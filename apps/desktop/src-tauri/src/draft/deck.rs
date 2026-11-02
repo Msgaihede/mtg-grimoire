@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use grimoire_core::deck::DeckRow;
-use grimoire_core::draft_deck::{self, BasicLand, DraftDeckCard};
+use grimoire_core::draft_deck::{self, BasicLand, DraftDeckCard, DraftDeckRef};
 
 use crate::sync::{lock_db_read, with_write, AppState};
 
@@ -32,9 +32,10 @@ pub async fn draft_deck_create(
     .map_err(|e| format!("The draft deck could not be made: {e}"))?
 }
 
-/// The draft decks not saved yet that still exist, oldest first.
+/// The draft decks not saved yet that still exist with the uid they were made with, oldest
+/// first — each as its id and `sync_uid`, so the editor can hold the deck it has open to both.
 #[tauri::command(async)]
-pub fn draft_deck_ids(state: tauri::State<'_, Arc<AppState>>) -> Vec<i64> {
+pub fn draft_deck_ids(state: tauri::State<'_, Arc<AppState>>) -> Vec<DraftDeckRef> {
     draft_deck::ids(&lock_db_read(state.inner()))
 }
 

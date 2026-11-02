@@ -29,7 +29,7 @@ function draw(props: Partial<Parameters<typeof DraftDeckBar>[0]> = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  client.setQueryData([...DRAFT_DECKS_KEY], [7]);
+  client.setQueryData([...DRAFT_DECKS_KEY], [{ id: 7, syncUid: "deck-uid-7" }]);
   const onAddBasic = vi.fn();
   const onExport = vi.fn();
   render(

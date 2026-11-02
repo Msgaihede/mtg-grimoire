@@ -147,6 +147,17 @@ export interface DraftSaved {
   updatedAt: number;
 }
 
+/**
+ * One unsaved draft deck — `grimoire_core::draft_deck::DraftDeckRef`: its id and the
+ * `decks.sync_uid` it was made with. **The pair is the identity, never the id alone** (issue
+ * #1467): deck ids are reused after a delete, so a bare id can name an ordinary deck that took a
+ * deleted draft deck's id. Hold an open deck to both (`useIsDraftDeck`).
+ */
+export interface DraftDeckRef {
+  id: number;
+  syncUid: string;
+}
+
 /** A basic land's printing the draft bar adds. */
 export interface BasicLand {
   /** `W`, `U`, `B`, `R`, `G`. */
@@ -243,8 +254,8 @@ export const draftCommands = {
    */
   draftDeckCreate: (name: string, cardIds: string[], deck: DraftDeckCard[], commander: boolean) =>
     invoke<DeckRow>("draft_deck_create", { name, cardIds, deck, commander }),
-  /** The draft decks not saved yet. */
-  draftDeckIds: () => invoke<number[]>("draft_deck_ids"),
+  /** The draft decks not saved yet, each as its id and the uid it was made with. */
+  draftDeckIds: () => invoke<DraftDeckRef[]>("draft_deck_ids"),
   /** Save: the deck leaves the unsaved list, and is a deck like any other. */
   draftDeckKeep: (deckId: number) => invoke<void>("draft_deck_keep", { deckId }),
   /** Discard: the deck is deleted. */
@@ -268,6 +279,10 @@ export const draftCommands = {
   /** The host deals the pod's draft. */
   lobbyStart: (setup: DraftSetup, draft: number) =>
     invoke<DraftView>("lobby_start", { setup, draft }),
+  /** Take this app's seat at the pod's draft again, for a page that lost it (issue #1468): a host
+   *  is answered its draft's name (`draftView` answers its view); a guest asks the host again and
+   *  is answered `null`, its view arriving as `draft:view`. */
+  lobbyRejoin: () => invoke<number | null>("lobby_rejoin"),
   /** A guest's pick; the view arrives as `draft:view`. */
   lobbyPick: (cardInstanceIds: string[]) => invoke<void>("lobby_pick", { cardInstanceIds }),
   /** A guest's Winston turn; the view arrives as `draft:view`. */

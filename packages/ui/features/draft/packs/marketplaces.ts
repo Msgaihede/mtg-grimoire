@@ -12,11 +12,11 @@
  * device sync carries, and a way of looking at one page is this machine's. A host that refuses the
  * store (a private window) keeps it for the session, and an unreadable value is no pick at all.
  *
- * **One currency at a time.** The app holds no exchange rate, so "the lowest of $2 and €1.80" is
- * not a sum this page can do. Picking a marketplace in the other currency therefore starts the
- * selection over from it rather than adding it — the same rule the session's tally keeps
- * (`ProductStage`'s `tallyMemory`: a switch of currency starts it over rather than adding dollars
- * to euros).
+ * **Dollars and euros together** (issue #1463). A pick of both is priced in the app's currency,
+ * the other currency's prices converted at the European Central Bank's daily rate, which the
+ * desktop host fetches only once such a pick is made (`packs_exchange_rate`). Which prices are
+ * converted and by what is `currency.ts`' answer; this hook only asks for the rate when it is
+ * needed.
  */
 import {
   MARKETPLACE_LIST,
@@ -24,7 +24,10 @@ import {
   type Marketplace,
   type MarketplaceId,
 } from "@/lib/marketplace";
+import { useQuery } from "@tanstack/react-query";
+import { ipc, ipcError } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { isMixed, pricingPlan, type PricingPlan, type RateState } from "./currency";
 import {
   effectiveMarketplaces,
   toggleMarketplace,
@@ -45,8 +48,29 @@ export interface MarketplaceChoice {
  * reason: the reader has just asked for prices this app does not have. Only on a status the app
  * has read, and only for a feed that has never landed a row.
  */
+/** The rate's cache entry. Not under `["cards", "prices"]`: a price feed's refresh moves no rate. */
+export const EXCHANGE_RATE_KEY = ["packs", "exchange-rate"] as const;
+
+/**
+ * The ECB's dollar rate, asked only while `needed` — a pick of two currencies. Kept an hour in
+ * the page's cache; the host keeps the file six.
+ */
+export function useExchangeRate(needed: boolean): RateState {
+  const query = useQuery({
+    queryKey: EXCHANGE_RATE_KEY,
+    queryFn: () => ipc.packsExchangeRate(),
+    enabled: needed,
+    staleTime: 60 * 60 * 1000,
+    retry: false,
+  });
+  if (query.data !== undefined) return { status: "ready", rate: query.data };
+  if (query.isError) return { status: "failed", reason: ipcError(query.error) };
+  return { status: "loading" };
+}
+
 export function usePackMarketplaces(): {
   marketplaces: Marketplace[];
+  plan: PricingPlan;
   choices: MarketplaceChoice[];
   toggle: (id: MarketplaceId) => void;
 } {
@@ -57,6 +81,8 @@ export function usePackMarketplaces(): {
   const feedOf = (id: MarketplaceId) => feeds.find((f) => f.marketplace.id === id);
   const usable = (id: MarketplaceId) => feedOf(id)?.reachable !== false;
   const marketplaces = effectiveMarketplaces(stored, marketplace, usable);
+  const rate = useExchangeRate(isMixed(marketplaces));
+  const plan = pricingPlan(marketplaces, marketplace.currency, rate);
   const choices = MARKETPLACE_LIST.map((m) => ({
     marketplace: m,
     disabled: !m.priced || !usable(m.id),
@@ -71,5 +97,5 @@ export function usePackMarketplaces(): {
     if (!current.includes(id) && status !== null && (status.rowCount ?? 0) === 0) refresh(id);
   };
 
-  return { marketplaces, choices, toggle };
+  return { marketplaces, plan, choices, toggle };
 }
