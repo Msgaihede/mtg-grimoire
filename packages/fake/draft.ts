@@ -39,6 +39,7 @@ import type {
   DraftSetup,
   DraftView,
   EntryChange,
+  ExchangeRate,
   LobbyState,
   PlaytestStep,
   SealedProduct,
@@ -644,6 +645,12 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
     packs_booster_sets: (): BoosterSetSummary[] => fakeBoosterSets(db),
     packs_booster_set: (args: { setCode: string; refresh: boolean }): BoosterSet =>
       fakeBoosterSet(db, args.setCode),
+    // The ECB's rate as the desktop host answers it — a fixed one, so the stories' figures hold.
+    packs_exchange_rate: (): ExchangeRate => ({
+      usdPerEur: 1.08,
+      date: "2026-10-30",
+      fetchedAt: Date.UTC(2026, 9, 30, 15),
+    }),
 
     draft_start: (args: { setup: DraftSetup; draft: number }): DraftView => {
       const state = startDraft(db, args.setup, args.draft);

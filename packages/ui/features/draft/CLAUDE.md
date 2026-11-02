@@ -30,10 +30,15 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   holds, what it is worth on average and where a pack falls are `booster/`'s. Never move that math
   to Rust, and never put a price in `BoosterSet`.
 - **Open Packs prices at the page's own marketplaces** (`packs/marketplaces.ts`, issue #1446): one
-  or several of one currency, the app's marketplace until the reader picks, kept per device in
-  `localStorage` — never `app_meta`, and never written to the app's setting. A card is worth each
-  finish's lowest quote among them (`lowestPrices`); never mix currencies, and never let the pick
-  go empty.
+  or several, picked in a searchable combobox (`packs/MarketplaceCombobox.tsx`), the app's
+  marketplace until the reader picks, kept per device in `localStorage` — never `app_meta`, and
+  never written to the app's setting. A card is worth each finish's lowest quote among them
+  (`lowestPrices`), and never let the pick go empty.
+- **Two currencies meet only through the ECB's rate** (`packs/currency.ts`, issue #1463): a pick of
+  dollars and euros is priced in the app's currency, each answer multiplied by its factor
+  (`convertPrices`) before the lowest is taken. With no rate, the other currency is left out and
+  the page says so — never compare a euro with a dollar unconverted, and never convert a price
+  anywhere but this page.
 - **Open Packs' reduced price is the page's own** (`packs/reducedPick.ts`): its sell percentage and
   minimum are kept the marketplace pick's way, and never read from or written to Settings'
   collection value. The sum is `lib/collectionValue.ts`' `reducedValue`; never write a second one.
