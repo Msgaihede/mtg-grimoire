@@ -506,19 +506,14 @@ describe("DraftSession", () => {
       expect(useAppStore.getState().cardZoom.draft).toBe(DEFAULT_ZOOM);
     });
 
-    it("moves the Card size slider with the gesture, and the slider steps the same ladder", () => {
+    it("draws no Card size slider — the gesture is the pick screen's only zoom (issue #1470)", () => {
       setup(view());
-      const slider = screen.getByRole("slider", { name: "Card size" });
-      expect(slider).toHaveAttribute("aria-valuetext", "100%");
+      expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+      expect(screen.queryByText("Card size")).not.toBeInTheDocument();
 
       fireEvent.wheel(scroller(), { deltaY: 100, ctrlKey: true });
-      expect(slider).toHaveAttribute("aria-valuetext", "90%");
-
-      // Three stops up from 90% in one move — walked through `zoomCards`, so it lands on a stop.
-      fireEvent.change(slider, { target: { value: "7" } });
-      expect(useAppStore.getState().cardZoom.draft).toBe(1.2);
-      expect(slider).toHaveAttribute("aria-valuetext", "120%");
-      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(228px, 1fr))");
+      expect(useAppStore.getState().cardZoom.draft).toBe(0.9);
+      expect(tileWidth(pack())).toBe("repeat(auto-fill, minmax(171px, 1fr))");
     });
 
     it("sizes a Winston pile turned face up by the same zoom", () => {
