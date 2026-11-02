@@ -320,6 +320,31 @@ describe("Dropdown search", () => {
     ]);
   });
 
+  it("keeps the rows a caller's own matcher keeps, and the trigger its picked row", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown
+        label="Format"
+        value="modern"
+        onChange={vi.fn()}
+        options={FORMATS}
+        searchable
+        // Every typed word as a prefix of the value — nothing the default label test would do.
+        matches={(o, q) =>
+          q
+            .split(/\s+/)
+            .filter(Boolean)
+            .every((w) => o.value.startsWith(w))
+        }
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.type(screen.getByRole("combobox"), "st");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Standard"]);
+    // Modern is filtered out of the panel, not out of the trigger.
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
+  });
+
   it("filters nothing when the caller controls the query", async () => {
     const user = userEvent.setup();
     const onQueryChange = vi.fn();

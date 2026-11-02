@@ -65,6 +65,18 @@ export type SharedProps = {
    * @default "Search"
    */
   searchLabel?: string;
+  /**
+   * What an **uncontrolled** search keeps a row by — `true` keeps it. Defaults to a
+   * case-insensitive substring of `label`, which is all a plain select needs.
+   *
+   * For a caller whose rows are found by more than their label (Open Packs' products: every word
+   * typed, against the name, the kind and the sealed category — "collector box"), while the shell
+   * still owns the query and the trigger still reads the picked row from the whole of `options`.
+   * Filtering `options` from outside instead would draw the placeholder on the trigger whenever
+   * the query hid the picked row. Ignored when `query` is supplied: a controlled caller has
+   * already filtered.
+   */
+  matches?: (option: DropdownOption, query: string) => boolean;
   /** Controlled: the caller filters. */
   query?: string;
   onQueryChange?: (query: string) => void;
@@ -101,6 +113,11 @@ export type SharedProps = {
   onOpen?: () => void;
 };
 
+/** The uncontrolled search's default match: the trimmed query, case-insensitively, in `label`. */
+function labelContains(option: DropdownOption, query: string): boolean {
+  return option.label.toLowerCase().includes(query.trim().toLowerCase());
+}
+
 /** What the trigger draws when `value` matches nothing in `options`. */
 const DEFAULT_PLACEHOLDER = "—";
 
@@ -132,8 +149,9 @@ function openingIndex(options: readonly DropdownOption[], value: string): number
 /**
  * The first **enabled** row whose label begins with the typed characters, case-insensitively —
  * the buffered type-ahead's matcher, used both closed (the trigger) and open (a non-`searchable`
- * listbox). **Not** what a `searchable` box's own query matches by — that is a substring test
- * against `label`, computed inline where `drawn` is built.
+ * listbox). **Not** what a `searchable` box's own query matches by — that is the `matches` prop
+ * (by default {@link labelContains}, a substring test against `label`), applied where `drawn` is
+ * built.
  */
 function typeAheadIndex(options: readonly DropdownOption[], char: string): number {
   const needle = char.toLowerCase();
@@ -288,6 +306,7 @@ function DropdownShell(props: ShellProps) {
     searchable = false,
     searchPlaceholder,
     searchLabel = "Search",
+    matches = labelContains,
     query,
     onQueryChange,
     emptyLine = "No matches.",
@@ -354,14 +373,11 @@ function DropdownShell(props: ShellProps) {
   // Controlled vs uncontrolled search. A caller that supplies `query` has already filtered with
   // its own idea of a match — the set picker's is name-contains, code-prefix and a three-level
   // rank — and a second substring test here would silently re-cut a list that was deliberately
-  // ordered. Uncontrolled, the shell does the one thing every plain select needs: a
-  // case-insensitive substring match on the label.
+  // ordered. Uncontrolled, the shell keeps the rows `matches` keeps — by default the one thing
+  // every plain select needs, a case-insensitive substring match on the label.
   const controlled = query !== undefined;
   const q = query ?? localQuery;
-  const drawn =
-    searchable && !controlled
-      ? options.filter((o) => o.label.toLowerCase().includes(q.trim().toLowerCase()))
-      : options;
+  const drawn = searchable && !controlled ? options.filter((o) => matches(o, q)) : options;
 
   // The row the cursor is on, resolved against the list on this render. Read this, never
   // `activeIndex` itself, everywhere below — every case a stored index can get wrong is settled

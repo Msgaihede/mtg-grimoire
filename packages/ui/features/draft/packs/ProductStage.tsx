@@ -25,7 +25,7 @@ import {
 import { usePackMarketplaces, type MarketplaceChoice } from "./marketplaces";
 import { OpenedWall } from "./OpenedWall";
 import { PackFigures, type Tally } from "./PackFigures";
-import { openables, openableValue, type Openable } from "./products";
+import { openableMatches, openables, openableValue, type Openable } from "./products";
 import { PACKS_SET_IN, ReducedInputs } from "./ReducedInputs";
 import { usePackReducedStore } from "./reducedPick";
 
@@ -96,6 +96,7 @@ function nouns(openable: Openable): { noun: string; unit: string } {
 export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
   const pickId = useId();
   const options = useMemo(() => openables(set), [set]);
+  const byValue = useMemo(() => new Map(options.map((o) => [openableValue(o), o])), [options]);
   const [chosen, setChosen] = useState(() => (options[0] ? openableValue(options[0]) : ""));
   const [opened, setOpened] = useState<Opened | null>(null);
   const [sort, setSort] = useState<CardSort>("price");
@@ -152,6 +153,9 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
         <label id={`${pickId}-label`} htmlFor={pickId} className="sr-only">
           Product
         </label>
+        {/* Searchable (issue #1464): a set can sell a dozen boosters and boxes, and typing
+            "collector box" is quicker than reading them. The shell owns the query; the match is
+            the products' own (`openableMatches`) — every word, against name, kind and category. */}
         <Dropdown
           id={pickId}
           labelledBy={`${pickId}-label`}
@@ -162,6 +166,14 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
             label: o.name,
             hint: o.kind === "booster" ? "Booster" : "Sealed",
           }))}
+          searchable
+          searchLabel="Search products"
+          searchPlaceholder="Search packs and boxes"
+          emptyLine="No product matches."
+          matches={(option, query) => {
+            const product = byValue.get(option.value);
+            return product !== undefined && openableMatches(product, query);
+          }}
           className="min-w-64 max-w-[28rem]"
         />
         {/* The caption beside the trigger, the printings bar's `Sort`: a bare "TCGplayer" in a row

@@ -45,3 +45,25 @@ export function openables(set: BoosterSet): Openable[] {
 export function openableValue(o: Openable): string {
   return `${o.kind}:${o.id}`;
 }
+
+/**
+ * The words an {@link Openable} is found by in the product picker's search: its name, what kind
+ * of thing it is ("booster", or "sealed") and a sealed product's MTGJSON category in words
+ * ("booster_case" → "booster case"). Lower-cased.
+ */
+function openableWords(o: Openable): string {
+  const kind = o.kind === "booster" ? "booster" : "sealed";
+  const category = o.kind === "sealed" && o.category !== null ? o.category.replace(/_/g, " ") : "";
+  return `${o.name} ${kind} ${category}`.toLowerCase();
+}
+
+/**
+ * Whether `o` answers the product picker's search: every whitespace-separated word of `query`,
+ * case-insensitively, somewhere in its words ({@link openableWords}) — so "collector box" finds
+ * "… Collector Booster Box" and "sealed" every sealed product. A blank query keeps every product.
+ */
+export function openableMatches(o: Openable, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const haystack = openableWords(o);
+  return words.every((w) => haystack.includes(w));
+}
