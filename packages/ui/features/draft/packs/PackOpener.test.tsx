@@ -178,9 +178,11 @@ describe("PackOpener", () => {
     expect(screen.getByRole("heading", { name: /Total value/ })).toHaveTextContent(
       formatPrice(total, "usd"),
     );
-    // The land is MTGJSON's alone here: a name tile, not a button.
+    // The land is MTGJSON's alone here: a tile with no picture, not a button.
     expect(within(wall).getByText("Card land")).toBeInTheDocument();
     expect(within(wall).queryByRole("button", { name: /Card land/ })).toBeNull();
+    // Issue #1462: every tile is the app's own, its chin naming the printing — the land's too.
+    expect(within(wall).getAllByText("TST · 1")).toHaveLength(7);
 
     const figures = screen.getByRole("complementary", { name: "Figures" });
     expect(within(figures).getByText("Theoretical").nextSibling).toHaveTextContent(

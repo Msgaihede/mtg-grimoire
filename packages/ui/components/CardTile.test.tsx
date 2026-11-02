@@ -50,6 +50,18 @@ describe("CardTile", () => {
     expect(screen.getByText("Any printing")).toBeInTheDocument();
   });
 
+  it("hands the hover zoom on to the art, and only when asked", () => {
+    const { unmount } = draw(<CardTile {...BOLT} />);
+    expect(screen.getByRole("img", { name: "Lightning Bolt" }).className).not.toMatch(
+      /group-hover:scale/,
+    );
+    unmount();
+    draw(<CardTile {...BOLT} hoverZoom />);
+    expect(screen.getByRole("img", { name: "Lightning Bolt" }).className).toMatch(
+      /group-hover:scale/,
+    );
+  });
+
   it("draws what it is handed over the art", () => {
     draw(<CardTile {...BOLT} overlay={<span>four</span>} />);
     expect(screen.getByText("four")).toBeInTheDocument();
