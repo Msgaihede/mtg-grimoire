@@ -1,50 +1,72 @@
 {
   "about": "What the files in this folder scored when they were trained, by network. neural-deliver.yml compares a new run against it in the pull request and rewrites it with the run it delivers (crates/card-neural/train/update_readme.py). Not read by the app.",
   "embedder": {
-    "run": "qd-mnv4-e",
-    "where": "scanner lab",
-    "finished_at": null,
-    "git_sha": null,
-    "looks": 70402,
+    "run": "2026-11",
+    "where": "modal",
+    "finished_at": "2026-11-01T04:58:57Z",
+    "git_sha": "817165ad6a6049e146ef567b90f79291d29a2383",
+    "looks": 71368,
     "metrics": {
-      "retrieval_top1": 0.9997,
-      "epochs": 30
+      "retrieval_top1": 1.0,
+      "epochs": 30,
+      "views_per_s": 1057,
+      "usd": 1.2283
     }
   },
   "detector": {
-    "run": "det-a",
-    "where": "scanner lab",
-    "finished_at": null,
-    "git_sha": null,
+    "run": "2026-11",
+    "where": "modal",
+    "finished_at": "2026-11-01T04:58:57Z",
+    "git_sha": "817165ad6a6049e146ef567b90f79291d29a2383",
     "metrics": {
-      "found": 0.993,
-      "corner_err": 0.0277,
-      "corner_err_p90": 0.0483,
-      "wrong_way": 0.0033,
-      "steps": 30000
+      "found": 0.9930851063829788,
+      "corner_err": 0.027722418011322008,
+      "corner_err_p90": 0.045807896356170656,
+      "wrong_way": 0.006427423674343867,
+      "scenes_per_s": 816,
+      "steps": 30000,
+      "usd": 1.313
     }
   },
   "symbol": {
-    "run": "ev-symbol-3",
-    "where": "scanner lab",
-    "finished_at": null,
-    "git_sha": null,
-    "classes": 1999,
+    "run": "2026-11",
+    "where": "modal",
+    "finished_at": "2026-11-01T04:58:57Z",
+    "git_sha": "817165ad6a6049e146ef567b90f79291d29a2383",
+    "classes": 2001,
     "metrics": {
-      "within_top1": 0.927,
-      "epochs": 16
+      "within_top1": 0.934,
+      "epochs": 12,
+      "classes": 2001,
+      "views_per_s": 726,
+      "usd": 1.2204
     }
   },
   "band": {
-    "run": "ev-band-2",
-    "where": "scanner lab",
-    "finished_at": null,
-    "git_sha": null,
-    "classes": 107109,
+    "run": "2026-11",
+    "where": "modal",
+    "finished_at": "2026-11-01T04:58:57Z",
+    "git_sha": "817165ad6a6049e146ef567b90f79291d29a2383",
+    "classes": 108168,
     "metrics": {
-      "within_top1": 0.946,
-      "epochs": 20
+      "within_top1": 0.95,
+      "epochs": 14,
+      "classes": 108168,
+      "views_per_s": 687,
+      "usd": 1.2755
     }
   },
-  "last_run": null
+  "last_run": {
+    "run": "2026-11",
+    "where": "modal",
+    "finished_at": "2026-11-01T04:58:57Z",
+    "git_sha": "817165ad6a6049e146ef567b90f79291d29a2383",
+    "retrained": [
+      "embedder",
+      "detector",
+      "symbol",
+      "band"
+    ],
+    "spend_usd": 5.0682
+  }
 }
