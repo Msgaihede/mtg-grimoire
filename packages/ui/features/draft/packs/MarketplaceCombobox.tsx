@@ -43,6 +43,8 @@ export interface MarketplaceComboboxProps {
   picked: readonly Marketplace[];
   /** A press on a row, a chip's ✕ or Backspace — the page decides what it does to the pick. */
   onToggle: (id: MarketplaceId) => void;
+  /** On the root — its width. Defaults to `w-72`. */
+  className?: string;
 }
 
 /**
@@ -70,6 +72,7 @@ export function MarketplaceCombobox({
   choices,
   picked,
   onToggle,
+  className = "w-72",
 }: MarketplaceComboboxProps): JSX.Element {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -113,7 +116,7 @@ export function MarketplaceCombobox({
   return (
     <div
       ref={rootRef}
-      className="relative w-72 max-w-full"
+      className={cn("relative max-w-full", className)}
       onBlur={(e) => {
         if (rootRef.current?.contains(e.relatedTarget)) return;
         setOpen(false);
