@@ -301,7 +301,7 @@ The Draft page lists unsaved draft decks under *Draft in progress*.
 
 | Command | Args | Answers |
 | --- | --- | --- |
-| `draft_deck_create` | `name: String, cardIds: Vec<String>, commander: bool` | `DeckRow` (`draft: true`) |
+| `draft_deck_create` | `name: String, cardIds: Vec<String>, deck: Vec<DraftDeckCard>, commander: bool` | `DeckRow` (`draft: true`) |
 | `draft_deck_list` | — | `Vec<DeckRow>` — every unsaved draft deck, oldest first |
 | `draft_deck_keep` | `deckId: i64` | `()` |
 | `draft_deck_discard` | `deckId: i64` | `()` |
@@ -360,6 +360,7 @@ host → guest: `{"v":1,"kind":"room","room":LobbyRoom}`, `{"v":1,"kind":"view",
 | `lobby_state` | — | `Option<LobbyState>` |
 | `lobby_leave` | — | `()` (a host closes the lobby; ends a pod draft) |
 | `lobby_start` | `setup: DraftSetup, draft: u64` | `DraftView` (host; `setup.seats[*].peer` names each guest's seat) |
+| `lobby_rejoin` | — | `Option<u64>` (a seat the page lost, issue #1468: the host's draft name; a guest sends `sync` and is answered `None`) |
 | `lobby_pick` | `cardInstanceIds: Vec<String>` | `()` (guest; the view arrives as `draft:view`) |
 | `lobby_kick` | `peer: String` | `()` (host, before the start) |
 

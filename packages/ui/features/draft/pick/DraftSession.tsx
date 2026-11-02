@@ -8,7 +8,9 @@ import { FlowBar, QUIET_BUTTON } from "../setup/parts";
 import { currentDraft } from "./current";
 import { PickScreen } from "./PickScreen";
 import { acceptsView } from "./pool";
-import { PoolColumns } from "./PoolColumns";
+import { PoolZones } from "./PoolZones";
+import { keepSideboard, recallSideboard, resetSideboard, sendTo, type Destination } from "./split";
+import { useDraftTrayLayout } from "./trayLayout";
 
 export const MODE_TITLE: Record<DraftMode, string> = {
   quick: "Quick Draft",
@@ -47,8 +49,16 @@ export function winstonTurn(view: DraftView): string | null {
  * `lobby_winston` is answered by the push — and until that push the turn it was sent on is held
  * (`winstonSent`), so a second press cannot decline the next pile by accident.
  *
- * Going back to the hub keeps the draft (`./current.ts`; a solo draft is saved by the host too);
- * *Abandon* puts a solo draft away, *Leave pod* leaves the lobby.
+ * Going back to the hub keeps the draft (`./current.ts`; a solo draft is saved by the host too),
+ * and coming back to it asks again for the view this seat missed meanwhile — `draft_view` for a
+ * draft this app runs, `lobby_rejoin` (the host's push) for a guest's. *Abandon* puts a solo
+ * draft away, *Leave pod* leaves the lobby.
+ *
+ * **Which picks are on the sideboard is this component's** (issue #1471, `./split.ts`): a pick's
+ * list is applied once the pick is taken — the host's answer, or a guest's send — so a refused
+ * pick leaves nothing behind; a press on a picked card moves it, through the Build step too. It is
+ * kept per device as it changes, started over by a draft that opens with an empty pool, and
+ * forgotten when the draft is put away.
  */
 export function DraftSession({
   draft,
@@ -65,6 +75,13 @@ export function DraftSession({
   notice?: string | null;
 }): JSX.Element {
   const [view, setView] = useState<DraftView | null>(initial);
+  const [sideboard, setSideboard] = useState<string[]>(() =>
+    initial !== null && initial.pool.length === 0 ? [] : recallSideboard(),
+  );
+  useEffect(() => keepSideboard(sideboard), [sideboard]);
+  const send = (ids: readonly string[], to: Destination) =>
+    setSideboard((cur) => sendTo(cur, ids, to));
+  const move = (card: DraftCard, to: Destination) => send([card.instanceId], to);
   // Ctrl+wheel anywhere over the draft steps its cards (issue #1433) — the pack, a Winston pile and
   // the pool, which all read `cardZoom.draft`. The scroll container rather than one wall, so a
   // gesture over the gaps between them is caught too and is never WebView2's page zoom.
@@ -112,6 +129,17 @@ export function DraftSession({
     };
   }, [draft, role]);
 
+  // A guest is never answered a view on demand — it only arrives pushed — so a guest arriving
+  // asks the host to push it again (`lobby_rejoin`, issue #1468): the views the host sent while
+  // the reader was on another view, or before a reload, went by with no one listening, and the
+  // one kept may be a pick behind (or still waiting on a pack that has since come).
+  useEffect(() => {
+    if (role !== "guest") return;
+    ipc.lobbyRejoin().catch(() => {
+      // A lobby that closed says so over the draft (`notice`); the view on screen stays.
+    });
+  }, [role]);
+
   const run = async (work: () => Promise<void>) => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -130,12 +158,13 @@ export function DraftSession({
   /** The Winston turn a guest's decision went out on — the buttons stay down until it moves. */
   const [winstonSentOn, setWinstonSentOn] = useState<string | null>(null);
 
-  const pick = (cards: DraftCard[]) =>
+  const pick = (cards: DraftCard[], to: Destination) =>
     void run(async () => {
       const ids = cards.map((c) => c.instanceId);
       if (role === "guest" || draft === null) {
         const at = view;
         await ipc.lobbyPick(ids);
+        send(ids, to);
         // Drawn as waiting until the host's push — unless that push has already landed.
         setView((cur) =>
           cur !== null &&
@@ -148,7 +177,9 @@ export function DraftSession({
         );
         return;
       }
-      setView(await ipc.draftPick(draft, ids));
+      const next = await ipc.draftPick(draft, ids);
+      send(ids, to);
+      setView(next);
     });
 
   const decide = (pile: number, take: boolean) =>
@@ -175,10 +206,16 @@ export function DraftSession({
       if (role === "solo" && draft !== null) await ipc.draftEnd(draft);
       else await ipc.lobbyLeave();
       currentDraft.keep(null);
+      resetSideboard();
       onBack();
     });
 
   const building = view?.status === "deckbuilding";
+  // The pool in a tray beside the pack (issue #1474): the pick screen splits the height between
+  // the pack's scroller and the tray's, so this box gives it the whole height and scrolls nothing
+  // itself. A Winston table and the Build step keep the pool underneath, in this one scroller.
+  const layout = useDraftTrayLayout((s) => s.layout);
+  const sideTray = layout === "side" && view !== null && !building && view.stack === null;
 
   return (
     <section className="flex h-full min-h-0 flex-col">
@@ -208,7 +245,13 @@ export function DraftSession({
           </button>
         }
       />
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pb-8 pt-3 pr-1">
+      <div
+        ref={scrollRef}
+        className={cn(
+          "min-h-0 flex-1 pt-3",
+          sideTray ? "flex flex-col overflow-hidden" : "overflow-y-auto pb-8 pr-1",
+        )}
+      >
         {notice !== null && (
           <p
             role="status"
@@ -227,9 +270,13 @@ export function DraftSession({
               view={view}
               draft={draft}
               role={role}
-              onBuilt={() => currentDraft.keep(null)}
+              sideboard={sideboard}
+              onBuilt={() => {
+                currentDraft.keep(null);
+                resetSideboard();
+              }}
             />
-            <PoolColumns pool={view.pool} />
+            <PoolZones pool={view.pool} sideboard={sideboard} onMove={move} />
           </div>
         ) : (
           <PickScreen
@@ -240,6 +287,8 @@ export function DraftSession({
             onAutoPick={autoPick}
             onWinston={decide}
             winstonSent={winstonSentOn !== null && winstonSentOn === winstonTurn(view)}
+            sideboard={sideboard}
+            onMove={move}
           />
         )}
       </div>

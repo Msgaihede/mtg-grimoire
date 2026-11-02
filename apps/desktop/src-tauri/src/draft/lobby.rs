@@ -172,6 +172,7 @@ const NOT_A_POD: &str = "A lobby's draft is a pod draft.";
 const NOT_IN_LOBBY: &str = "A seat names someone who is not in the lobby.";
 const NOT_SEATED: &str = "That guest has no seat at the table.";
 const NOT_A_DRAFT_LOBBY: &str = "This lobby is for a game, not a draft.";
+const NO_POD: &str = "This lobby has no draft under way.";
 const NOT_A_GAME_LOBBY: &str = "This lobby is for a draft, not a game.";
 const GUEST_ONLY_DECK: &str = "Only a guest sends its deck through the lobby.";
 const GUEST_ONLY_ACT: &str = "Only a guest plays its seat through the lobby.";
@@ -671,6 +672,24 @@ pub fn react(state: &mut LobbyState, heard: Heard) -> Vec<Act> {
             _ => Vec::new(),
         },
         _ => Vec::new(),
+    }
+}
+
+/// What a page that lost its seat at the pod's draft is answered (issue #1468) — the reader went
+/// to another view, or the window was reloaded, while the pod drafted on: a host the name of the
+/// draft it runs (`draft`, whose view `draft_view` answers), a guest `None`, for it asks the host
+/// for its seat's view again (`sync`) and the view arrives as `draft:view`. A guest whose lobby's
+/// kind is not known yet may ask: the room that says it is what the `sync` answers first.
+pub fn rejoin(state: &LobbyState, draft: Option<u64>) -> Result<Option<u64>, &'static str> {
+    if state.phase == LobbyPhase::Closed {
+        return Err(NO_LOBBY);
+    }
+    if state.kind.is_some_and(|kind| kind != LobbyKind::Draft) {
+        return Err(NO_POD);
+    }
+    match state.role {
+        LobbyRole::Host => draft.map(Some).ok_or(NO_POD),
+        LobbyRole::Guest => Ok(None),
     }
 }
 
@@ -1701,6 +1720,19 @@ pub async fn lobby_start(
     Ok(outcome.view)
 }
 
+/// Take this app's seat at the pod's draft again ([`rejoin`]): a host is answered its draft's
+/// name, a guest sends `sync` and is answered `None` — its view arrives as `draft:view`.
+#[tauri::command]
+pub fn lobby_rejoin(lobby: tauri::State<'_, LobbySlot>) -> Result<Option<u64>, String> {
+    let held = lock(&lobby.0);
+    let live = held.as_ref().ok_or(NO_LOBBY)?;
+    let draft = rejoin(&live.state, live.draft)?;
+    if draft.is_none() {
+        live.send(guest_frame(&sync_body()));
+    }
+    Ok(draft)
+}
+
 /// A guest's pick of `card_instance_ids`, sent to the host; the view arrives as `draft:view`.
 #[tauri::command]
 pub fn lobby_pick(
@@ -2347,6 +2379,30 @@ mod tests {
         // A host never acts on what only a guest is sent.
         assert!(react(&mut open, Heard::Host(false)).is_empty());
         assert!(open.host_online);
+    }
+
+    #[test]
+    fn a_seat_left_mid_draft_is_taken_again_by_name_for_a_host_and_by_a_sync_for_a_guest() {
+        // Issue #1468: a host is told the draft it runs; one that has not started has none.
+        let host = state(LobbyRole::Host, LobbyPhase::Drafting);
+        assert_eq!(rejoin(&host, Some(7)), Ok(Some(7)));
+        assert_eq!(rejoin(&host, None), Err(NO_POD));
+        // A guest asks the host again, its view pushed — while the socket reconnects too, and
+        // before the room has said what the lobby seats.
+        let mut guest = state(LobbyRole::Guest, LobbyPhase::Drafting);
+        assert_eq!(rejoin(&guest, None), Ok(None));
+        guest.phase = LobbyPhase::Connecting;
+        assert_eq!(rejoin(&guest, None), Ok(None));
+        guest.kind = None;
+        assert_eq!(rejoin(&guest, None), Ok(None));
+        // A closed lobby is none to rejoin, and a game's or a trade's has no draft.
+        guest.phase = LobbyPhase::Closed;
+        assert_eq!(rejoin(&guest, None), Err(NO_LOBBY));
+        for kind in [LobbyKind::Game, LobbyKind::Trade] {
+            let mut other = state(LobbyRole::Host, LobbyPhase::Playing);
+            other.kind = Some(kind);
+            assert_eq!(rejoin(&other, Some(7)), Err(NO_POD));
+        }
     }
 
     #[test]

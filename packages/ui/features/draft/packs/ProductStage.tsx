@@ -27,7 +27,7 @@ import { MarketplaceCombobox } from "./MarketplaceCombobox";
 import { usePackMarketplaces } from "./marketplaces";
 import { OpenedWall } from "./OpenedWall";
 import { PackFigures, type Tally } from "./PackFigures";
-import { openables, openableValue, type Openable } from "./products";
+import { openableMatches, openables, openableValue, type Openable } from "./products";
 import { PACKS_SET_IN, ReducedInputs } from "./ReducedInputs";
 import { usePackReducedStore } from "./reducedPick";
 
@@ -87,12 +87,14 @@ function nouns(openable: Openable): { noun: string; unit: string } {
 
 /**
  * One set picked: choose a product, open it, and read what it was worth against what it is worth
- * on average. The wall is on the left and the figures beside it; on a narrow page (the
- * `@container`'s width, not the window's) the figures go under the wall.
+ * on average. The product row and the wall are on the left; the price controls and the figures
+ * are in the column beside them; on a narrow page (the `@container`'s width, not the window's)
+ * that column goes under the wall.
  */
 export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
   const pickId = useId();
   const options = useMemo(() => openables(set), [set]);
+  const byValue = useMemo(() => new Map(options.map((o) => [openableValue(o), o])), [options]);
   const [chosen, setChosen] = useState(() => (options[0] ? openableValue(options[0]) : ""));
   const [opened, setOpened] = useState<Opened | null>(null);
   const [sort, setSort] = useState<CardSort>("price");
@@ -151,66 +153,55 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
     shownTally.opened === 0 ? null : reducedOpening(shownTally.value, shownTally.prices, reduction);
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-center gap-2">
-        <label id={`${pickId}-label`} htmlFor={pickId} className="sr-only">
-          Product
-        </label>
-        <Dropdown
-          id={pickId}
-          labelledBy={`${pickId}-label`}
-          value={chosen}
-          onChange={setChosen}
-          options={options.map((o) => ({
-            value: openableValue(o),
-            label: o.name,
-            hint: o.kind === "booster" ? "Booster" : "Sealed",
-          }))}
-          className="min-w-64 max-w-[28rem]"
-        />
-        {/* The caption beside the trigger, the printings bar's `Sort`: a bare "TCGplayer" in a row
-            of buttons would not say it is where the prices come from. */}
-        <label htmlFor={`${pickId}-market`} className={FILTER_LABEL}>
-          Prices from
-        </label>
-        <MarketplaceCombobox
-          id={`${pickId}-market`}
-          choices={priceAt.choices}
-          picked={priceAt.marketplaces}
-          onToggle={priceAt.toggle}
-        />
-        <button type="button" onClick={open} className={PRIMARY}>
-          <PackageOpen className="size-4" aria-hidden="true" />
-          {opened === null ? "Open" : "Open another"}
-        </button>
-        {opened !== null && (
-          <button type="button" onClick={() => setOpened(null)} className={SECONDARY}>
-            <RotateCcw className="size-4" aria-hidden="true" />
-            Back
-          </button>
-        )}
-        {opened === null && figures !== null && (
-          <p className="m-0 text-sm text-dim">
-            Expected value{" "}
-            <span className="font-mono tabular-nums text-text">
-              {formatPrice(figures.ev, currency)}
-            </span>
-          </p>
-        )}
-      </div>
-      {note !== null && (
-        <p role="status" className="-mt-3 text-xs text-dim">
-          {note}
-        </p>
-      )}
-      {/* The page's own reduced price, apart from Settings' (`reducedPick.ts`). Under the row
-          rather than in it: the row is already the product, its prices and the press. */}
-      <ReducedInputs settings={reduction} currency={currency} onChange={keepReduction} />
+    // Two columns from the top (issue #1465): the product row and what was opened on the left, and
+    // on the right everything that decides a price — the marketplaces, Sell at and Minimum — above
+    // the figures those prices make. On a narrow page (the `@container`'s width, not the window's)
+    // the right column goes under the left.
+    <div className="@container/packs">
+      <div className="flex flex-col gap-6 @min-[900px]/packs:flex-row">
+        <div className="flex min-w-0 flex-1 flex-col gap-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <label id={`${pickId}-label`} htmlFor={pickId} className="sr-only">
+              Product
+            </label>
+            {/* Searchable (issue #1464): a set can sell a dozen boosters and boxes, and typing
+                "collector box" is quicker than reading them. The shell owns the query; the match
+                is the products' own (`openableMatches`) — every word, against name, kind and
+                category. */}
+            <Dropdown
+              id={pickId}
+              labelledBy={`${pickId}-label`}
+              value={chosen}
+              onChange={setChosen}
+              options={options.map((o) => ({
+                value: openableValue(o),
+                label: o.name,
+                hint: o.kind === "booster" ? "Booster" : "Sealed",
+              }))}
+              searchable
+              searchLabel="Search products"
+              searchPlaceholder="Search packs and boxes"
+              emptyLine="No product matches."
+              matches={(option, query) => {
+                const product = byValue.get(option.value);
+                return product !== undefined && openableMatches(product, query);
+              }}
+              className="min-w-64 max-w-[28rem]"
+            />
+            <button type="button" onClick={open} className={PRIMARY}>
+              <PackageOpen className="size-4" aria-hidden="true" />
+              {opened === null ? "Open" : "Open another"}
+            </button>
+            {opened !== null && (
+              <button type="button" onClick={() => setOpened(null)} className={SECONDARY}>
+                <RotateCcw className="size-4" aria-hidden="true" />
+                Back
+              </button>
+            )}
+          </div>
 
-      {opened !== null && (
-        <div className="@container/packs">
-          <div className="flex flex-col gap-6 @min-[900px]/packs:flex-row">
-            <section aria-label="What you opened" className="flex min-w-0 flex-1 flex-col gap-3">
+          {opened !== null && (
+            <section aria-label="What you opened" className="flex min-w-0 flex-col gap-3">
               <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
                 <h3 className="m-0 text-base font-semibold">
                   Total value{" "}
@@ -251,20 +242,58 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
                 onSort={setSort}
               />
             </section>
-            <div className="w-full shrink-0 @min-[900px]/packs:w-[22rem]">
-              <PackFigures
-                figures={figures}
-                value={value}
-                noun={words.noun}
-                unit={words.unit}
-                currency={currency}
-                tally={shownTally}
-                reducedTally={reducedTally}
-              />
-            </div>
-          </div>
+          )}
         </div>
-      )}
+
+        <div className="flex w-full shrink-0 flex-col gap-6 @min-[900px]/packs:w-[22rem]">
+          <section aria-label="Prices" className="flex flex-col gap-3">
+            {/* The caption over the box, the printings bar's `Sort`: a bare "TCGplayer" chip would
+                not say it is where the prices come from. */}
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={`${pickId}-market`} className={FILTER_LABEL}>
+                Prices from
+              </label>
+              <MarketplaceCombobox
+                id={`${pickId}-market`}
+                choices={priceAt.choices}
+                picked={priceAt.marketplaces}
+                onToggle={priceAt.toggle}
+                className="w-full"
+              />
+              {note !== null && (
+                <p role="status" className="m-0 text-xs text-dim">
+                  {note}
+                </p>
+              )}
+            </div>
+            {/* The page's own reduced price, apart from Settings' (`reducedPick.ts`). */}
+            <ReducedInputs settings={reduction} currency={currency} onChange={keepReduction} />
+          </section>
+
+          {opened !== null ? (
+            <PackFigures
+              figures={figures}
+              value={value}
+              noun={words.noun}
+              unit={words.unit}
+              currency={currency}
+              tally={shownTally}
+              reducedTally={reducedTally}
+            />
+          ) : (
+            figures !== null && (
+              // One line, the label a bare text node of it: the line reads "Expected value $3.73"
+              // whole, as it did in the product row.
+              <p className="m-0 flex items-baseline justify-between gap-4 text-sm text-dim">
+                Expected value{" "}
+                <span className="font-mono tabular-nums text-text">
+                  {formatPrice(figures.ev, currency)}
+                </span>
+              </p>
+            )
+          )}
+        </div>
+      </div>
     </div>
   );
 }

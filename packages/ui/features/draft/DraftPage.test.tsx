@@ -18,6 +18,7 @@ const ipcMock = vi.hoisted(() => ({
   packsBoosterSets: vi.fn(),
   onPacksRefreshed: vi.fn(),
   lobbyCreate: vi.fn(),
+  lobbyRejoin: vi.fn(),
 }));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -27,6 +28,7 @@ const openDraftDeck = vi.hoisted(() => vi.fn());
 vi.mock("@/features/draft/navigation", () => ({ openDraftDeck }));
 
 import { DraftPage } from "./DraftPage";
+import { currentDraft } from "./pick/current";
 
 const SAVED: DraftSaved = {
   label: "Foundations · The Hobbit",
@@ -98,6 +100,7 @@ beforeEach(() => {
   ipcMock.draftView.mockResolvedValue(null);
   ipcMock.syncSupporterStatus.mockResolvedValue(NOT_SUPPORTER);
   ipcMock.packsBoosterSets.mockResolvedValue([]);
+  ipcMock.lobbyRejoin.mockResolvedValue(null);
   openDraftDeck.mockReset();
 });
 
@@ -223,5 +226,57 @@ describe("DraftPage", () => {
     await userEvent.click(within(progress).getByRole("button", { name: "Return" }));
     expect(screen.getByText("Waiting for Ada to start the draft.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Leave lobby" })).toBeInTheDocument();
+  });
+
+  describe("a drafting pod (issue #1468)", () => {
+    const POD: LobbyState = {
+      role: "host",
+      kind: "draft",
+      code: "K7QX2M",
+      phase: "drafting",
+      name: "Ada",
+      hostName: "Ada",
+      hostOnline: true,
+      peers: [{ peer: "p1", name: "Bea", online: true, deck: null }],
+      label: "The Hobbit",
+      closedReason: null,
+      trade: null,
+    };
+
+    it("is a draft in progress, and Rejoin takes a seat the window lost again", async () => {
+      ipcMock.lobbyState.mockResolvedValue(POD);
+      ipcMock.lobbyRejoin.mockResolvedValue(7);
+      ipcMock.draftView.mockResolvedValue({ ...VIEW, mode: "pod", pickNumber: 4 });
+      setup();
+      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      expect(within(progress).getByText("Drafting")).toBeInTheDocument();
+      expect(within(progress).getByText("Pod Draft · code K7QX2M · 2 people")).toBeInTheDocument();
+      await userEvent.click(within(progress).getByRole("button", { name: "Rejoin" }));
+      expect(await screen.findByRole("heading", { name: "Pack 2 · Pick 5" })).toBeInTheDocument();
+      expect(ipcMock.lobbyRejoin).toHaveBeenCalledOnce();
+      expect(ipcMock.draftView).toHaveBeenCalledWith(7);
+    });
+
+    it("says where a guest's kept seat was, and Rejoin opens it", async () => {
+      currentDraft.keep({
+        draft: null,
+        role: "guest",
+        view: { ...VIEW, mode: "pod", packNumber: 1, pickNumber: 2 },
+      });
+      ipcMock.lobbyState.mockResolvedValue({ ...POD, role: "guest", name: "Bea" });
+      setup();
+      // A seat the window kept opens on its pick, not the hub.
+      expect(await screen.findByRole("heading", { name: "Pack 2 · Pick 3" })).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Back to Draft & Packs" }));
+      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      expect(
+        within(progress).getByText(
+          "Pod Draft · Pack 2 of 3 · Pick 3 · code K7QX2M · 2 people · hosted by Ada",
+        ),
+      ).toBeInTheDocument();
+      await userEvent.click(within(progress).getByRole("button", { name: "Rejoin" }));
+      expect(await screen.findByRole("heading", { name: "Pack 2 · Pick 3" })).toBeInTheDocument();
+      expect(ipcMock.lobbyRejoin).toHaveBeenCalled();
+    });
   });
 });

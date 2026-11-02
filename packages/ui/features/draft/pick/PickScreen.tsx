@@ -8,23 +8,25 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { Hourglass, WandSparkles } from "lucide-react";
+import { Hourglass, PanelBottom, PanelRight, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { scaled } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
-import { dndDraggable, useDndDropTarget } from "@/lib/dndTarget";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { dndDraggable } from "@/lib/dndTarget";
 import type { DraftCard, DraftView } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
-import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
-import { carriedPick, pickDragData, readPickDrag, type PickDrag } from "./pickDrag";
+import { InlineError, LABEL, PANEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
+import { carriedPick, pickDragData, type PickDrag } from "./pickDrag";
 import { sortPack, type PackSort } from "./pool";
-import { PoolColumns } from "./PoolColumns";
+import { PoolZones } from "./PoolZones";
+import type { Destination } from "./split";
 import { RoundStrip, SeatsStrip } from "./TableStrip";
+import { useDraftTrayLayout, type DraftTrayLayout } from "./trayLayout";
 import { WinstonTable } from "./WinstonTable";
 
 /**
@@ -69,6 +71,19 @@ export function picksNeeded(view: DraftView): number {
  *
  * **The pack is laid out by rarity, mythic first** (issue #1432), a rarity's cards in the order they
  * were dealt; the Sort menu offers the dealt order instead, kept for the window's life.
+ *
+ * **The pool is under the pack, or in a tray beside it** (issue #1474, `trayLayout.ts`): the curve
+ * of stacked cards (`PoolColumns`, the default) or a compact list of names (`PoolTray`) — MTG
+ * Arena's two drafting views — switched by the Pool toggle in the pack's heading row and kept per
+ * device. Beside the pack, the pack and the tray scroll apart, so the tray (the drop target) stays
+ * in reach however far down a zoomed-in pack the reader is; `DraftSession` hands the screen its
+ * whole height for it. A Winston table keeps its pool underneath — it has no pack heading to carry
+ * the toggle, and its piles are the width of the room.
+ *
+ * **A pick goes to the deck or the sideboard** (issue #1471, Arena's two lists): the pool is drawn
+ * as both, in either layout (`PoolZones`); a card dropped on either is picked into it, a
+ * double-click, the Pick button and Enter pick into the deck, and *To sideboard* and Shift+Enter
+ * into the sideboard. A press on a picked card sends it to the other list.
  */
 export function PickScreen({
   view,
@@ -78,21 +93,28 @@ export function PickScreen({
   onAutoPick,
   onWinston,
   winstonSent = false,
+  sideboard = [],
+  onMove,
 }: {
   view: DraftView;
   busy: boolean;
   error: string | null;
-  /** The cards picked — one, or `picksPerStep` of them. */
-  onPick: (cards: DraftCard[]) => void;
+  /** The cards picked — one, or `picksPerStep` of them — and the list they go to. */
+  onPick: (cards: DraftCard[], to: Destination) => void;
   /** The bots' choice for the reader — absent where the host's app makes the picks (a guest). */
   onAutoPick?: () => void;
   /** A Winston turn: take the pile, or decline it. */
   onWinston?: (pile: number, take: boolean) => void;
   /** This turn's decision is sent and its answer not in yet (a guest's, until the host's push). */
   winstonSent?: boolean;
+  /** The pool's cards on the sideboard, by `instanceId` — every other one is the deck's. */
+  sideboard?: readonly string[];
+  /** A picked card sent to the other list. */
+  onMove?: (card: DraftCard, to: Destination) => void;
 }): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.draft);
   const headingId = useId();
+  const layout = useDraftTrayLayout((s) => s.layout);
   const [sort, setSortState] = useState<PackSort>(() => sortMemory.recall() ?? "rarity");
   const setSort = (value: PackSort) => {
     sortMemory.keep(value);
@@ -107,17 +129,13 @@ export function PickScreen({
   /** The pack's cards a drag carries, or fewer when one has left the pack since it was lifted. */
   const carried = (drag: PickDrag): DraftCard[] =>
     drag.ids.flatMap((id) => view.pack.find((c) => c.instanceId === id) ?? []);
-  const poolRef = useRef<HTMLDivElement>(null);
-  const { armed, over } = useDndDropTarget({
-    ref: poolRef,
-    read: readPickDrag,
-    canDrop: (drag) =>
+  // A pick cannot be taken back, so it is the pointer's decision — `PoolZones`' targets take a
+  // drop only where the pointer is let go, never where the carried card's corner overlaps them.
+  const drop = {
+    canDrop: (drag: PickDrag) =>
       !busy && !waiting && drag.ids.length === need && carried(drag).length === need,
-    onDrop: (drag) => onPick(carried(drag)),
-    // A pick cannot be taken back, so it is the pointer's decision — never the carried card's
-    // corner overlapping the pool while the pointer is still over the pack.
-    pointerOnly: true,
-  });
+    onDrop: (drag: PickDrag, to: Destination) => onPick(carried(drag), to),
+  };
 
   if (view.stack !== null) {
     return (
@@ -131,94 +149,167 @@ export function PickScreen({
           onDecide={(pile, take) => onWinston?.(pile, take)}
           onAutoPick={onAutoPick}
         />
-        <PoolColumns pool={view.pool} />
+        <PoolZones pool={view.pool} sideboard={sideboard} onMove={onMove} />
+      </div>
+    );
+  }
+
+  const strips = (
+    <div className="flex flex-col gap-3">
+      <RoundStrip view={view} />
+      <SeatsStrip view={view} />
+    </div>
+  );
+
+  const packSection = (
+    <section aria-labelledby={`${headingId}-pack`} className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        <h3
+          id={`${headingId}-pack`}
+          className="m-0 font-heading text-lg font-semibold leading-none"
+        >
+          Pack {view.packNumber + 1} · Pick {view.pickNumber + 1}
+        </h3>
+        {!waiting && (
+          <span className="font-mono text-sm tabular-nums text-dim">{view.pack.length} left</span>
+        )}
+        {!waiting && need > 1 && (
+          <span className="rounded-full border border-accent/50 bg-accent/10 px-2.5 text-xs leading-6 text-accent">
+            Choose {need}
+          </span>
+        )}
+        <div className="ml-auto flex flex-wrap items-center gap-3">
+          <TrayToggle layout={layout} />
+          <span id={`${headingId}-sort-label`} className={LABEL}>
+            Sort
+          </span>
+          <Dropdown
+            id={`${headingId}-sort`}
+            labelledBy={`${headingId}-sort-label`}
+            size="sm"
+            value={sort}
+            onChange={(v) => setSort(v as PackSort)}
+            options={SORTS}
+          />
+          {onAutoPick !== undefined && (
+            <button
+              type="button"
+              aria-disabled={waiting || busy}
+              onClick={() => {
+                if (!waiting && !busy) onAutoPick();
+              }}
+              className={QUIET_BUTTON}
+            >
+              <WandSparkles className="size-4" aria-hidden="true" />
+              Pick for me
+            </button>
+          )}
+        </div>
+      </div>
+
+      {waiting ? (
+        <div
+          role="status"
+          className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-6 py-16 text-center"
+        >
+          <Hourglass className="size-6 text-accent" aria-hidden="true" />
+          <p className="m-0 text-sm">Waiting for the table…</p>
+          <p className="m-0 font-mono text-xs tabular-nums text-dim">
+            {picked} of {view.seats.length} have picked
+          </p>
+        </div>
+      ) : (
+        <PackWall
+          // A new pack is a new wall: the choice made in the last one does not carry over.
+          key={`${view.packNumber}.${view.pickNumber}`}
+          pack={sorted}
+          need={need}
+          width={scaled(PACK_TILE_WIDTH, zoom)}
+          busy={busy}
+          onPick={onPick}
+        />
+      )}
+      <InlineError message={error} />
+    </section>
+  );
+
+  if (layout === "side") {
+    return (
+      <div className="flex min-h-0 flex-1 gap-5">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 overflow-y-auto pb-8 pr-1">
+          {strips}
+          {packSection}
+        </div>
+        {/* The trays — Deck and Sideboard — are where a card from the pack is dropped to pick it.
+            Keyed by the layout, so a switch registers the drop targets on the new elements. */}
+        <aside className={cn(PANEL, "mb-3 flex min-h-0 w-72 shrink-0 flex-col p-3")}>
+          <PoolZones
+            key="side"
+            layout="side"
+            pool={view.pool}
+            sideboard={sideboard}
+            onMove={onMove}
+            drop={drop}
+          />
+        </aside>
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <RoundStrip view={view} />
-        <SeatsStrip view={view} />
-      </div>
+      {strips}
+      {packSection}
 
-      <section aria-labelledby={`${headingId}-pack`} className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-          <h3
-            id={`${headingId}-pack`}
-            className="m-0 font-heading text-lg font-semibold leading-none"
-          >
-            Pack {view.packNumber + 1} · Pick {view.pickNumber + 1}
-          </h3>
-          {!waiting && (
-            <span className="font-mono text-sm tabular-nums text-dim">{view.pack.length} left</span>
-          )}
-          {!waiting && need > 1 && (
-            <span className="rounded-full border border-accent/50 bg-accent/10 px-2.5 text-xs leading-6 text-accent">
-              Choose {need}
-            </span>
-          )}
-          <div className="ml-auto flex flex-wrap items-center gap-3">
-            <span id={`${headingId}-sort-label`} className={LABEL}>
-              Sort
-            </span>
-            <Dropdown
-              id={`${headingId}-sort`}
-              labelledBy={`${headingId}-sort-label`}
-              size="sm"
-              value={sort}
-              onChange={(v) => setSort(v as PackSort)}
-              options={SORTS}
-            />
-            {onAutoPick !== undefined && (
-              <button
-                type="button"
-                aria-disabled={waiting || busy}
-                onClick={() => {
-                  if (!waiting && !busy) onAutoPick();
-                }}
-                className={QUIET_BUTTON}
-              >
-                <WandSparkles className="size-4" aria-hidden="true" />
-                Pick for me
-              </button>
+      {/* The pool — Deck and Sideboard — is where a card from the pack is dropped to pick it. */}
+      <PoolZones key="bottom" pool={view.pool} sideboard={sideboard} onMove={onMove} drop={drop} />
+    </div>
+  );
+}
+
+/** The two layouts in the order the toggle draws them, and the words for each. */
+const TRAY_LAYOUTS = [
+  { id: "bottom", label: "Pool below the pack", Icon: PanelBottom },
+  { id: "side", label: "Pool beside the pack", Icon: PanelRight },
+] as const satisfies readonly { id: DraftTrayLayout; label: string; Icon: typeof PanelBottom }[];
+
+/**
+ * Where the pool is drawn — under the pack or in a tray beside it (issue #1474). Two icon squares
+ * in one bordered group, the pressed one filled the way `Segmented`'s are: two glyphs of a window
+ * with its panel at the bottom or the side say which is which at a glance on a row that is already
+ * full of words, and the tooltip and the name say it in words.
+ */
+function TrayToggle({ layout }: { layout: DraftTrayLayout }): JSX.Element {
+  const tip = useTooltip();
+  const keep = useDraftTrayLayout((s) => s.keep);
+  return (
+    <div
+      role="group"
+      aria-label="Pool layout"
+      className="flex overflow-hidden rounded-md border border-border"
+    >
+      {TRAY_LAYOUTS.map(({ id, label, Icon }) => {
+        const pressed = layout === id;
+        return (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={pressed}
+            aria-label={label}
+            // `describes: false`: identical to the `aria-label` above.
+            {...tip(label, { describes: false })}
+            onClick={() => keep(id)}
+            className={cn(
+              "inline-flex size-9 items-center justify-center",
+              "transition-colors duration-150 motion-reduce:transition-none",
+              pressed ? "bg-accent text-accent-fg" : "text-dim hover:text-text",
+              FOCUS,
             )}
-          </div>
-        </div>
-
-        {waiting ? (
-          <div
-            role="status"
-            className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border px-6 py-16 text-center"
           >
-            <Hourglass className="size-6 text-accent" aria-hidden="true" />
-            <p className="m-0 text-sm">Waiting for the table…</p>
-            <p className="m-0 font-mono text-xs tabular-nums text-dim">
-              {picked} of {view.seats.length} have picked
-            </p>
-          </div>
-        ) : (
-          <PackWall
-            // A new pack is a new wall: the choice made in the last one does not carry over.
-            key={`${view.packNumber}.${view.pickNumber}`}
-            pack={sorted}
-            need={need}
-            width={scaled(PACK_TILE_WIDTH, zoom)}
-            busy={busy}
-            onPick={onPick}
-          />
-        )}
-        <InlineError message={error} />
-      </section>
-
-      {/* The pool is where a card from the pack is dropped to pick it. */}
-      <div
-        ref={poolRef}
-        className={cn("-m-1.5 rounded-xl p-1.5", armed && DROP_RING, over && DROP_OVER)}
-      >
-        <PoolColumns pool={view.pool} />
-      </div>
+            <Icon className="size-4" aria-hidden="true" />
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -249,7 +340,7 @@ function PackWall({
   /** A tile's least width, px — the draft's zoom applied to {@link PACK_TILE_WIDTH}. */
   width: number;
   busy: boolean;
-  onPick: (cards: DraftCard[]) => void;
+  onPick: (cards: DraftCard[], to: Destination) => void;
 }): JSX.Element {
   /** The chosen cards' `instanceId`s, oldest first — not their places, so a new sort keeps the
    *  choice. */
@@ -289,10 +380,10 @@ function PackWall({
     };
   }, [pack, need]);
 
-  const confirm = (ids: readonly string[]) => {
+  const confirm = (ids: readonly string[], to: Destination = "deck") => {
     if (busy || ids.length !== need) return;
     const picked = cardsOf(ids);
-    if (picked.length === need) onPick(picked);
+    if (picked.length === need) onPick(picked, to);
   };
 
   const press = (index: number, clicks: number) => {
@@ -349,9 +440,9 @@ function PackWall({
     }
     if (event.key === "Enter" && (need === 1 ? chosen.length === 1 : full)) {
       // Enter picks the chosen card(s) — never the button's own click, which would choose the
-      // focused one instead when the two differ.
+      // focused one instead when the two differ. Shift+Enter picks them into the sideboard.
       event.preventDefault();
-      confirm(chosen);
+      confirm(chosen, event.shiftKey ? "sideboard" : "deck");
     }
   };
 
@@ -400,6 +491,17 @@ function PackWall({
         <PrimaryButton ready={full} busy={busy} onPress={() => confirm(chosen)}>
           {label}
         </PrimaryButton>
+        <button
+          type="button"
+          aria-disabled={!full || busy}
+          aria-label={`${label} into the sideboard`}
+          onClick={() => {
+            if (full && !busy) confirm(chosen, "sideboard");
+          }}
+          className={QUIET_BUTTON}
+        >
+          To sideboard
+        </button>
         {need > 1 && (
           <span role="status" className="font-mono text-xs tabular-nums text-dim">
             {cards.length} of {need} chosen
@@ -407,8 +509,8 @@ function PackWall({
         )}
         <p className="m-0 text-xs text-dim">
           {need === 1
-            ? "Double-click or drag a card onto your pool to pick it · Click to choose · ← → ↑ ↓ move · Enter picks"
-            : `Click ${need} cards to choose them, then double-click or drag the last onto your pool · ← → ↑ ↓ move · Enter picks once ${need} are chosen`}
+            ? "Double-click a card to pick it into your deck, or drag it onto your deck or sideboard · Click to choose · ← → ↑ ↓ move · Enter picks into the deck, Shift+Enter into the sideboard"
+            : `Click ${need} cards to choose them, then double-click the last or drag it onto your deck or sideboard · ← → ↑ ↓ move · Enter picks once ${need} are chosen, Shift+Enter into the sideboard`}
         </p>
       </div>
     </div>
