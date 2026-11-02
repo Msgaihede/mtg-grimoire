@@ -37,10 +37,24 @@ describe("ReducedBreakdown", () => {
     expect(screen.getByText("$4,331.79")).toBeInTheDocument();
   });
 
+  /** Issue #1477: Open Packs' bulk price, after the percentage it is not reduced by. */
+  it("states the bulk price as a line of its own, added after the percentage", () => {
+    const bulk = reducedValue(
+      6247.11,
+      { cards: 466, value: 58.84 },
+      { sellPercent: 70, minimumValue: 0.5, bulkPrice: 0.01 },
+    )!;
+    render(<ReducedBreakdown value={bulk} currency="usd" />);
+    expect(screen.getByText("Bulk at $0.01 · 466 cards")).toBeInTheDocument();
+    expect(screen.getByText("+$4.66")).toBeInTheDocument();
+    expect(screen.getByText("$4,336.45")).toBeInTheDocument();
+  });
+
   it("leaves out a line whose setting is not set, and says one card alone", () => {
     const one = reducedValue(10, { cards: 1, value: 0.25 }, { sellPercent: 100, minimumValue: 0.5 })!;
     render(<ReducedBreakdown value={one} currency="eur" />);
     expect(screen.getByText(/· 1 card$/)).toBeInTheDocument();
     expect(screen.queryByText(/^Sell at/)).toBeNull();
+    expect(screen.queryByText(/^Bulk at/)).toBeNull();
   });
 });

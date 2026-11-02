@@ -35,7 +35,7 @@ export function ReducedBreakdown({
   value: ReducedValue;
   currency: Currency;
 }): ReactElement {
-  const { below, sale } = value;
+  const { below, sale, bulk } = value;
   return (
     <>
       <Line label="Full value" amount={formatPrice(value.full, currency)} />
@@ -49,6 +49,12 @@ export function ReducedBreakdown({
         <Line
           label={`Sell at ${sale.percent}%`}
           amount={`−${formatPrice(sale.lost, currency)}`}
+        />
+      )}
+      {bulk !== null && (
+        <Line
+          label={`Bulk at ${formatPrice(bulk.price, currency)} · ${count(bulk.cards)} ${bulk.cards === 1 ? "card" : "cards"}`}
+          amount={`+${formatPrice(bulk.value, currency)}`}
         />
       )}
       <div className="mt-1 flex justify-between gap-4 border-t border-border pt-1.5 font-medium">

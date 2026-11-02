@@ -6,9 +6,10 @@ import {
   belowMinimumOf,
   minimumOf,
   reducedValue,
+  type ReducedSettings,
   type ReducedValue,
 } from "@/lib/collectionValue";
-import type { BoosterCard, BoosterSet, CollectionValue } from "@/lib/ipc";
+import type { BoosterCard, BoosterSet } from "@/lib/ipc";
 import { rarityRank } from "@/lib/rarity";
 import {
   openBooster,
@@ -192,14 +193,14 @@ export function openedPrices(opened: Opened, priceOf: PriceOf): (number | null)[
 }
 
 /**
- * `full` at the page's own sell percentage and minimum (`reducedPick.ts`), from the prices of the
- * copies that make it up: the collection's sum (`reducedValue`), with the minimum compared here per
- * copy rather than in SQL. `null` where the figures reduce nothing.
+ * `full` at the page's own sell percentage, minimum and bulk price (`reducedPick.ts`), from the
+ * prices of the copies that make it up: the collection's sum (`reducedValue`), with the minimum
+ * compared here per copy rather than in SQL. `null` where the figures reduce nothing.
  */
 export function reducedOpening(
   full: number,
   prices: Iterable<number | null>,
-  settings: CollectionValue,
+  settings: ReducedSettings,
 ): ReducedValue | null {
   const minimum = minimumOf(settings);
   return reducedValue(

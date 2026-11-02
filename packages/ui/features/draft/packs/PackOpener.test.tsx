@@ -442,11 +442,19 @@ describe("PackOpener", () => {
     const priceOf = (id: string, foil: boolean) =>
       id === "land" ? null : finishPrice(PRICES.get(id), foil);
 
-    /** `(full − below the minimum) × percent`, worked here rather than by the page's own helper. */
-    function reducedOf(prices: (number | null)[], percent: number, minimum: number): number {
+    /** `(full − below the minimum) × percent + cards below × bulk`, worked here rather than by the
+     *  page's own helper. */
+    function reducedOf(
+      prices: (number | null)[],
+      percent: number,
+      minimum: number,
+      bulk = 0,
+    ): number {
       const full = prices.reduce<number>((s, p) => s + (p ?? 0), 0);
-      const below = prices.reduce<number>((s, p) => s + (p !== null && p < minimum ? p : 0), 0);
-      return Math.round((full - below) * percent) / 100;
+      const under = prices.filter((p): p is number => p !== null && p < minimum);
+      const below = under.reduce((s, p) => s + p, 0);
+      const sold = Math.round((full - below) * percent) / 100;
+      return Math.round((sold + under.length * bulk) * 100) / 100;
     }
 
     it("draws none until a figure is set", async () => {
@@ -485,7 +493,44 @@ describe("PackOpener", () => {
       expect(parseReduced(window.localStorage.getItem(REDUCED_KEY))).toEqual({
         sellPercent: 50,
         minimumValue: 0.5,
+        bulkPrice: 0,
       });
+    });
+
+    /** Issue #1477: each card under the minimum is worth the bulk price instead of nothing. */
+    it("counts the cards under the minimum at the bulk price, once a minimum is set", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await screen.findByText(/^Expected value/);
+      // A bulk price prices the cards under the minimum: with none, there is nothing to price.
+      expect(screen.getByLabelText("Bulk")).toBeDisabled();
+      await user.type(screen.getByLabelText("Sell at"), "50");
+      await user.type(screen.getByLabelText("Minimum"), "0.50{Enter}");
+      expect(screen.getByLabelText("Bulk")).toBeEnabled();
+      await user.type(screen.getByLabelText("Bulk"), "0.05{Enter}");
+      await user.click(screen.getByRole("button", { name: "Open" }));
+
+      const expected = openOne(SET, { kind: "booster", id: "collector", name: "" }, SEED);
+      const prices = expected.cards.map((c) => priceOf(c.cardId, c.foil));
+      const money = formatPrice(reducedOf(prices, 50, 0.5, 0.05), "usd");
+      expect(money).not.toBe(formatPrice(reducedOf(prices, 50, 0.5), "usd"));
+      expect(screen.getAllByRole("button", { name: `Reduced price ${money}` })).toHaveLength(2);
+
+      expect(parseReduced(window.localStorage.getItem(REDUCED_KEY))).toEqual({
+        sellPercent: 50,
+        minimumValue: 0.5,
+        bulkPrice: 0.05,
+      });
+    });
+
+    it("refuses a bulk price it cannot read and keeps nothing", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await user.type(await screen.findByLabelText("Minimum"), "1{Enter}");
+      await user.type(screen.getByLabelText("Bulk"), "cheap");
+      await user.tab();
+      expect(screen.getByText("Bulk has to be a price of zero or more.")).toBeInTheDocument();
+      expect(usePackReducedStore.getState().settings.bulkPrice).toBe(0);
     });
 
     it("opens on the figures this device remembers", async () => {

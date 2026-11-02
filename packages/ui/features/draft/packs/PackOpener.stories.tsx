@@ -164,6 +164,21 @@ export const Reduced: Story = {
   },
 };
 
+/** Issue #1477: a bulk price under the minimum — each card under $0.25 counted at $0.01 instead of
+ *  nothing, a line of its own in the reduced price's breakdown. */
+export const ReducedWithBulk: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Sets to open" });
+    await userEvent.click(within(wall).getAllByRole("button")[0]);
+    await userEvent.type(await canvas.findByLabelText("Sell at"), "70");
+    await userEvent.type(canvas.getByLabelText("Minimum"), "0.25{Enter}");
+    await userEvent.type(canvas.getByLabelText("Bulk"), "0.01{Enter}");
+    await userEvent.click(await canvas.findByRole("button", { name: "Open" }));
+    await expect(await canvas.findAllByRole("button", { name: /^Reduced price / })).toHaveLength(2);
+  },
+};
+
 /** Issue #1463: TCGplayer and Cardmarket picked in the combobox — searched for by typing — and
  *  priced together in the app's dollars, Cardmarket's euros converted at the ECB's rate. */
 export const TwoCurrencies: Story = {

@@ -3,7 +3,9 @@ import {
   DEFAULT_COLLECTION_VALUE,
   addBelow,
   belowMinimumOf,
+  bulkOf,
   minimumOf,
+  parseBulkPrice,
   parseMinimumValue,
   parseSellPercent,
   reducedPoint,
@@ -20,6 +22,7 @@ describe("the reduced price", () => {
       full: 6247.11,
       below: { minimum: 0.5, cards: 466, value: 58.84 },
       sale: { percent: 70, lost: 1856.48 },
+      bulk: null,
       reduced: 4331.79,
     });
   });
@@ -45,6 +48,41 @@ describe("the reduced price", () => {
    *  would ignore the minimum for a moment and then jump. */
   it("waits for the read that answers the minimum rather than guessing", () => {
     expect(reducedValue(100, undefined, BOTH)).toBeNull();
+  });
+
+  /** Issue #1477: a card under the minimum is worth the bulk price, not nothing — added after the
+   *  percentage, which is a cut of the market price and never of a bulk rate. */
+  it("counts each card under the minimum back at the bulk price", () => {
+    expect(
+      reducedValue(6247.11, { cards: 466, value: 58.84 }, { ...BOTH, bulkPrice: 0.01 }),
+    ).toEqual({
+      full: 6247.11,
+      below: { minimum: 0.5, cards: 466, value: 58.84 },
+      sale: { percent: 70, lost: 1856.48 },
+      bulk: { price: 0.01, cards: 466, value: 4.66 },
+      reduced: 4336.45,
+    });
+    // At 100%, the issue's own example: every card under $1 is $0.01.
+    expect(
+      reducedValue(
+        10,
+        { cards: 4, value: 2 },
+        { sellPercent: 100, minimumValue: 1, bulkPrice: 0.01 },
+      ),
+    ).toMatchObject({ sale: null, bulk: { cards: 4, value: 0.04 }, reduced: 8.04 });
+  });
+
+  it("counts no bulk price without a minimum, or at zero", () => {
+    const sell = reducedValue(100, undefined, { sellPercent: 50, minimumValue: 0, bulkPrice: 0.1 });
+    expect(sell).toMatchObject({ below: null, bulk: null, reduced: 50 });
+    expect(reducedValue(100, { cards: 3, value: 1.2 }, { ...BOTH, bulkPrice: 0 })?.bulk).toBeNull();
+    // A bulk price alone reduces nothing.
+    expect(
+      reducedValue(100, undefined, { ...DEFAULT_COLLECTION_VALUE, bulkPrice: 0.1 }),
+    ).toBeNull();
+    expect(bulkOf({ ...DEFAULT_COLLECTION_VALUE, bulkPrice: 0.1 })).toBeUndefined();
+    expect(bulkOf({ ...BOTH, bulkPrice: 0.1 })).toBe(0.1);
+    expect(bulkOf(BOTH)).toBeUndefined();
   });
 
   it("reaches zero and stops there", () => {
@@ -96,6 +134,12 @@ describe("the boxes and the per-copy minimum", () => {
     expect(parseMinimumValue("0.50")).toBe(0.5);
     expect(parseMinimumValue("")).toBe(0);
     expect(parseMinimumValue("-1")).toBeNull();
+  });
+
+  it("reads a bulk box the minimum's way", () => {
+    expect(parseBulkPrice("0.01")).toBe(0.01);
+    expect(parseBulkPrice("")).toBe(0);
+    expect(parseBulkPrice("cheap")).toBeNull();
   });
 
   /** The collection's SQL rule, here over a list: strictly below, each copy at its own price, and
