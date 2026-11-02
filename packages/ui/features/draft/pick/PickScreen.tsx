@@ -4,17 +4,17 @@ import { CardArt } from "@/components/CardArt";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { formatZoom, scaled, ZOOM_STEPS } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
-import { dndDraggable, useDndDropTarget } from "@/lib/dndTarget";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { dndDraggable } from "@/lib/dndTarget";
 import type { DraftCard, DraftView } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { InlineError, LABEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
-import { carriedPick, pickDragData, readPickDrag, type PickDrag } from "./pickDrag";
+import { carriedPick, pickDragData, type PickDrag } from "./pickDrag";
 import { sortPack, type PackSort } from "./pool";
-import { PoolColumns } from "./PoolColumns";
+import { PoolZones } from "./PoolZones";
+import type { Destination } from "./split";
 import { RoundStrip, SeatsStrip } from "./TableStrip";
 import { WinstonTable } from "./WinstonTable";
 
@@ -64,6 +64,11 @@ export function picksNeeded(view: DraftView): number {
  *
  * **The pack is laid out by rarity, mythic first** (issue #1432), a rarity's cards in the order they
  * were dealt; the Sort menu offers the dealt order instead, kept for the window's life.
+ *
+ * **A pick goes to the deck or the sideboard** (issue #1471, Arena's two lists): the pool is drawn
+ * as both (`PoolZones`), a card dropped on either is picked into it, the Pick button and Enter pick
+ * into the deck, and *To sideboard* and Shift+Enter into the sideboard. A press on a picked card
+ * sends it to the other list.
  */
 export function PickScreen({
   view,
@@ -73,18 +78,24 @@ export function PickScreen({
   onAutoPick,
   onWinston,
   winstonSent = false,
+  sideboard = [],
+  onMove,
 }: {
   view: DraftView;
   busy: boolean;
   error: string | null;
-  /** The cards picked — one, or `picksPerStep` of them. */
-  onPick: (cards: DraftCard[]) => void;
+  /** The cards picked — one, or `picksPerStep` of them — and the list they go to. */
+  onPick: (cards: DraftCard[], to: Destination) => void;
   /** The bots' choice for the reader — absent where the host's app makes the picks (a guest). */
   onAutoPick?: () => void;
   /** A Winston turn: take the pile, or decline it. */
   onWinston?: (pile: number, take: boolean) => void;
   /** This turn's decision is sent and its answer not in yet (a guest's, until the host's push). */
   winstonSent?: boolean;
+  /** The pool's cards on the sideboard, by `instanceId` — every other one is the deck's. */
+  sideboard?: readonly string[];
+  /** A picked card sent to the other list. */
+  onMove?: (card: DraftCard, to: Destination) => void;
 }): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.draft);
   /** The slider moved to stop `to`: walk there through `zoomCards`, the zoom's one door, so the
@@ -109,17 +120,13 @@ export function PickScreen({
   /** The pack's cards a drag carries, or fewer when one has left the pack since it was lifted. */
   const carried = (drag: PickDrag): DraftCard[] =>
     drag.ids.flatMap((id) => view.pack.find((c) => c.instanceId === id) ?? []);
-  const poolRef = useRef<HTMLDivElement>(null);
-  const { armed, over } = useDndDropTarget({
-    ref: poolRef,
-    read: readPickDrag,
-    canDrop: (drag) =>
+  // A pick cannot be taken back, so it is the pointer's decision — `PoolZones`' targets take a
+  // drop only where the pointer is let go, never where the carried card's corner overlaps them.
+  const drop = {
+    canDrop: (drag: PickDrag) =>
       !busy && !waiting && drag.ids.length === need && carried(drag).length === need,
-    onDrop: (drag) => onPick(carried(drag)),
-    // A pick cannot be taken back, so it is the pointer's decision — never the carried card's
-    // corner overlapping the pool while the pointer is still over the pack.
-    pointerOnly: true,
-  });
+    onDrop: (drag: PickDrag, to: Destination) => onPick(carried(drag), to),
+  };
 
   if (view.stack !== null) {
     return (
@@ -133,7 +140,7 @@ export function PickScreen({
           onDecide={(pile, take) => onWinston?.(pile, take)}
           onAutoPick={onAutoPick}
         />
-        <PoolColumns pool={view.pool} />
+        <PoolZones pool={view.pool} sideboard={sideboard} onMove={onMove} />
       </div>
     );
   }
@@ -228,13 +235,8 @@ export function PickScreen({
         <InlineError message={error} />
       </section>
 
-      {/* The pool is where a card from the pack is dropped to pick it. */}
-      <div
-        ref={poolRef}
-        className={cn("-m-1.5 rounded-xl p-1.5", armed && DROP_RING, over && DROP_OVER)}
-      >
-        <PoolColumns pool={view.pool} />
-      </div>
+      {/* The pool — Deck and Sideboard — is where a card from the pack is dropped to pick it. */}
+      <PoolZones pool={view.pool} sideboard={sideboard} onMove={onMove} drop={drop} />
     </div>
   );
 }
@@ -261,7 +263,7 @@ function PackWall({
   /** A tile's least width, px — the draft's zoom applied to {@link PACK_TILE_WIDTH}. */
   width: number;
   busy: boolean;
-  onPick: (cards: DraftCard[]) => void;
+  onPick: (cards: DraftCard[], to: Destination) => void;
 }): JSX.Element {
   /** The chosen cards' `instanceId`s, oldest first — not their places, so a new sort keeps the
    *  choice. */
@@ -301,10 +303,10 @@ function PackWall({
     };
   }, [pack, need]);
 
-  const confirm = (ids: readonly string[]) => {
+  const confirm = (ids: readonly string[], to: Destination = "deck") => {
     if (busy || ids.length !== need) return;
     const picked = cardsOf(ids);
-    if (picked.length === need) onPick(picked);
+    if (picked.length === need) onPick(picked, to);
   };
 
   const press = (index: number) => {
@@ -352,9 +354,9 @@ function PackWall({
     }
     if (event.key === "Enter" && (need === 1 ? chosen.length === 1 : full)) {
       // Enter picks the chosen card(s) — never the button's own click, which would choose the
-      // focused one instead when the two differ.
+      // focused one instead when the two differ. Shift+Enter picks them into the sideboard.
       event.preventDefault();
-      confirm(chosen);
+      confirm(chosen, event.shiftKey ? "sideboard" : "deck");
     }
   };
 
@@ -403,6 +405,17 @@ function PackWall({
         <PrimaryButton ready={full} busy={busy} onPress={() => confirm(chosen)}>
           {label}
         </PrimaryButton>
+        <button
+          type="button"
+          aria-disabled={!full || busy}
+          aria-label={`${label} into the sideboard`}
+          onClick={() => {
+            if (full && !busy) confirm(chosen, "sideboard");
+          }}
+          className={QUIET_BUTTON}
+        >
+          To sideboard
+        </button>
         {need > 1 && (
           <span role="status" className="font-mono text-xs tabular-nums text-dim">
             {cards.length} of {need} chosen
@@ -410,8 +423,8 @@ function PackWall({
         )}
         <p className="m-0 text-xs text-dim">
           {need === 1
-            ? "Drag a card onto your pool to pick it · Click to choose · ← → ↑ ↓ move · Enter picks"
-            : `Click ${need} cards to choose them, or drag the last onto your pool · ← → ↑ ↓ move · Enter picks once ${need} are chosen`}
+            ? "Drag a card onto your deck or sideboard to pick it · Click to choose · ← → ↑ ↓ move · Enter picks into the deck, Shift+Enter into the sideboard"
+            : `Click ${need} cards to choose them, or drag the last onto your deck or sideboard · ← → ↑ ↓ move · Enter picks once ${need} are chosen, Shift+Enter into the sideboard`}
         </p>
       </div>
     </div>

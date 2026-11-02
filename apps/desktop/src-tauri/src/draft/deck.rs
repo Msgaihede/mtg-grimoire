@@ -6,24 +6,26 @@
 use std::sync::Arc;
 
 use grimoire_core::deck::DeckRow;
-use grimoire_core::draft_deck::{self, BasicLand};
+use grimoire_core::draft_deck::{self, BasicLand, DraftDeckCard};
 
 use crate::sync::{lock_db_read, with_write, AppState};
 
-/// The pool as a virtual Limited deck named `name`, on the unsaved list. A repeated id is that
-/// many copies. With `commander` — a Commander draft's pool — the deck is Casual and has an empty
+/// The pool as a virtual Limited deck named `name`, on the unsaved list: `card_ids` (the
+/// sideboard) in Pool and each of `deck` in the pile the page filed it into (issue #1471). A
+/// repeated id is that many copies. With `commander` — a Commander draft's pool — the deck is Casual and has an empty
 /// Commander pile beside Deck and Pool.
 #[tauri::command]
 pub async fn draft_deck_create(
     state: tauri::State<'_, Arc<AppState>>,
     name: String,
     card_ids: Vec<String>,
+    deck: Vec<DraftDeckCard>,
     commander: bool,
 ) -> Result<DeckRow, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |conn| {
-            draft_deck::create(conn, &name, &card_ids, commander)
+            draft_deck::create(conn, &name, &card_ids, &deck, commander)
         })
     })
     .await

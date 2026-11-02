@@ -52,7 +52,10 @@ async function startFromHub(canvasElement: HTMLElement, mode: RegExp): Promise<v
   await userEvent.click(canvas.getByRole("button", { name: /Start draft/ }));
 }
 
-/** A quick draft dealt from one set and started: the first pack on the table, and one pick made. */
+/**
+ * A quick draft dealt from one set and started: the first pack on the table, one pick made into
+ * the deck and one into the sideboard (issue #1471).
+ */
 export const Drafting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -70,6 +73,20 @@ export const Drafting: Story = {
       const next = await canvas.findByRole("list", { name: "Pack" });
       await expect(within(next).getAllByRole("button")).toHaveLength(before - 1);
     });
+    // The second pick goes to the sideboard: the pool is drawn as Deck and Sideboard.
+    const second = within(await canvas.findByRole("list", { name: "Pack" })).getAllByRole(
+      "button",
+    )[0];
+    await userEvent.click(second);
+    await userEvent.click(
+      canvas.getByRole("button", {
+        name: `Pick ${second.getAttribute("aria-label")} into the sideboard`,
+      }),
+    );
+    const sideboard = canvas.getByRole("region", { name: "Sideboard" });
+    await waitFor(() =>
+      expect(within(sideboard).getAllByRole("button", { name: /to the deck$/ })).toHaveLength(1),
+    );
   },
 };
 
@@ -84,7 +101,9 @@ export const CommanderDraft: Story = {
     const [a, b] = within(pack).getAllByRole("button");
     await userEvent.click(a);
     await userEvent.click(b);
-    await userEvent.click(canvas.getByRole("button", { name: /^Pick .+ and / }));
+    await userEvent.click(
+      canvas.getByRole("button", { name: /^Pick .+ and .+(?<! into the sideboard)$/ }),
+    );
     await waitFor(async () => {
       const next = await canvas.findByRole("list", { name: "Pack" });
       await expect(within(next).getAllByRole("button")).toHaveLength(before - 2);

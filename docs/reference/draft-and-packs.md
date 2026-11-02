@@ -160,9 +160,26 @@ saved after each change (`app_meta` `draft_session`) and can be resumed; a pod c
 ## The draft deck
 
 A finished pool becomes a **virtual** Limited deck (`draft_deck::create`): nothing is allocated and
-nothing reaches the collection, which is the owner's rule. It has a **Deck** pile (main, the
-default, drawn while empty) and the deck's own Sideboard renamed **Pool** (one `side` pile per list
-is all `idx_deck_categories_kind` allows), holding the whole pool.
+nothing reaches the collection, which is the owner's rule. Its sideboard is the deck's own
+Sideboard renamed **Pool** (one `side` pile per list is all `idx_deck_categories_kind` allows).
+
+**Deck or sideboard is chosen while picking** (issue #1471, MTG Arena's two lists): the pick
+screen draws the pool as **Deck** and **Sideboard** (`pick/PoolZones.tsx`), each a curve. A card
+dropped on either is picked into it; the Pick button and Enter pick into the deck, _To sideboard_
+and Shift+Enter into the sideboard; a press on a picked card sends it to the other list, through
+the Build step too. The split is the page's (`pick/split.ts`) — the engine never hears of it — and
+is kept per device in `localStorage` (one draft at a time, so one row), started over by a draft
+that opens with an empty pool and forgotten when the draft is put away. A pick's list is applied
+only once the pick is taken, so a refused pick leaves nothing behind.
+
+At **Build**, the deck's cards are filed by **the add path's own rule** — `autoCategoryFor`, over one
+`oracle_tags_for_printings` read (a failed read files by type line) — and handed to
+`draft_deck_create` as `deck: [{ cardId, pile }]`; the sideboard's go in as `cardIds`, into Pool.
+The piles are found or made `'auto'` (gone with their last card), Pool is put after them, and the
+deck's adds are filed by the rule too (`default_category_id = AUTO_CATEGORY`), so a basic from the
+draft bar joins the other lands. A deck card filed into a zone's name is refused
+(`NOT_A_DECK_PILE`). With no card in the deck, the deck has an empty **Deck** pile instead (main,
+the default, drawn while empty) — the pile the reader drags their first cards out of Pool into.
 
 Until the reader saves it, its id is on `app_meta` `draft_decks` (never synced), and the editor is in
 **draft mode**: no card search dock (neither the corpus search nor the Collection tab), no Quick Add,

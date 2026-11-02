@@ -8,7 +8,8 @@ import { FlowBar, QUIET_BUTTON } from "../setup/parts";
 import { currentDraft } from "./current";
 import { PickScreen } from "./PickScreen";
 import { acceptsView } from "./pool";
-import { PoolColumns } from "./PoolColumns";
+import { PoolZones } from "./PoolZones";
+import { keepSideboard, recallSideboard, resetSideboard, sendTo, type Destination } from "./split";
 
 export const MODE_TITLE: Record<DraftMode, string> = {
   quick: "Quick Draft",
@@ -49,6 +50,12 @@ export function winstonTurn(view: DraftView): string | null {
  *
  * Going back to the hub keeps the draft (`./current.ts`; a solo draft is saved by the host too);
  * *Abandon* puts a solo draft away, *Leave pod* leaves the lobby.
+ *
+ * **Which picks are on the sideboard is this component's** (issue #1471, `./split.ts`): a pick's
+ * list is applied once the pick is taken — the host's answer, or a guest's send — so a refused
+ * pick leaves nothing behind; a press on a picked card moves it, through the Build step too. It is
+ * kept per device as it changes, started over by a draft that opens with an empty pool, and
+ * forgotten when the draft is put away.
  */
 export function DraftSession({
   draft,
@@ -65,6 +72,13 @@ export function DraftSession({
   notice?: string | null;
 }): JSX.Element {
   const [view, setView] = useState<DraftView | null>(initial);
+  const [sideboard, setSideboard] = useState<string[]>(() =>
+    initial !== null && initial.pool.length === 0 ? [] : recallSideboard(),
+  );
+  useEffect(() => keepSideboard(sideboard), [sideboard]);
+  const send = (ids: readonly string[], to: Destination) =>
+    setSideboard((cur) => sendTo(cur, ids, to));
+  const move = (card: DraftCard, to: Destination) => send([card.instanceId], to);
   // Ctrl+wheel anywhere over the draft steps its cards (issue #1433) — the pack, a Winston pile and
   // the pool, which all read `cardZoom.draft`. The scroll container rather than one wall, so a
   // gesture over the gaps between them is caught too and is never WebView2's page zoom.
@@ -130,12 +144,13 @@ export function DraftSession({
   /** The Winston turn a guest's decision went out on — the buttons stay down until it moves. */
   const [winstonSentOn, setWinstonSentOn] = useState<string | null>(null);
 
-  const pick = (cards: DraftCard[]) =>
+  const pick = (cards: DraftCard[], to: Destination) =>
     void run(async () => {
       const ids = cards.map((c) => c.instanceId);
       if (role === "guest" || draft === null) {
         const at = view;
         await ipc.lobbyPick(ids);
+        send(ids, to);
         // Drawn as waiting until the host's push — unless that push has already landed.
         setView((cur) =>
           cur !== null &&
@@ -148,7 +163,9 @@ export function DraftSession({
         );
         return;
       }
-      setView(await ipc.draftPick(draft, ids));
+      const next = await ipc.draftPick(draft, ids);
+      send(ids, to);
+      setView(next);
     });
 
   const decide = (pile: number, take: boolean) =>
@@ -175,6 +192,7 @@ export function DraftSession({
       if (role === "solo" && draft !== null) await ipc.draftEnd(draft);
       else await ipc.lobbyLeave();
       currentDraft.keep(null);
+      resetSideboard();
       onBack();
     });
 
@@ -227,9 +245,13 @@ export function DraftSession({
               view={view}
               draft={draft}
               role={role}
-              onBuilt={() => currentDraft.keep(null)}
+              sideboard={sideboard}
+              onBuilt={() => {
+                currentDraft.keep(null);
+                resetSideboard();
+              }}
             />
-            <PoolColumns pool={view.pool} />
+            <PoolZones pool={view.pool} sideboard={sideboard} onMove={move} />
           </div>
         ) : (
           <PickScreen
@@ -240,6 +262,8 @@ export function DraftSession({
             onAutoPick={autoPick}
             onWinston={decide}
             winstonSent={winstonSentOn !== null && winstonSentOn === winstonTurn(view)}
+            sideboard={sideboard}
+            onMove={move}
           />
         )}
       </div>

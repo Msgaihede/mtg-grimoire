@@ -4,9 +4,17 @@
 //! **A deck like any other, made by the deck writes that already exist**: [`create_deck`] makes
 //! it virtual (no cardboard, no group, nothing in the collection — the owner's rule) in format
 //! `limited`, and [`commit_import`] files the pool, so the history drawer opens on one `add` row
-//! as it does after any import. Two piles: **Deck**, an empty `main` pile that is the deck's
-//! default, and **Pool**, the deck's own Sideboard renamed — a list holds one `side` pile
-//! (`idx_deck_categories_kind`), and in Limited the pool *is* the sideboard.
+//! as it does after any import. **Pool** is the deck's own Sideboard renamed — a list holds one
+//! `side` pile (`idx_deck_categories_kind`), and in Limited the sideboard is the pool the deck was
+//! not built from — and holds the cards the reader sent to their sideboard while picking.
+//!
+//! **The cards sent to the deck while picking** (issue #1471) arrive with the pile the page filed
+//! each into ([`DraftDeckCard::pile`] — `autoCategoryFor`, the add path's own rule, which is
+//! TypeScript's), and land in those piles, found or made `'auto'` as any auto-filed add's are; the
+//! deck's adds are then filed by the same rule (`default_category_id` is
+//! [`crate::deck::AUTO_CATEGORY`]), so a basic from the draft bar joins the other lands. A deck with
+//! no such card has an empty **Deck** pile instead (`main`, the deck's default, drawn while empty)
+//! — the pile a reader drags their first cards out of Pool into.
 //!
 //! **A Commander draft's deck** (`create`'s `commander`) is made in format `casual` — no 40-card
 //! Limited floor; the draft bar checks its 60 cards and its one commander itself — and has a
@@ -23,10 +31,12 @@
 use std::collections::BTreeMap;
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::app_meta::{get_app_meta, set_app_meta};
-use crate::deck::{create_deck, delete_deck, DeckInput, DeckRow, K_LAST_DECK_FORMAT};
+use crate::deck::{
+    create_deck, delete_deck, DeckInput, DeckRow, AUTO_CATEGORY, K_LAST_DECK_FORMAT,
+};
 use crate::import::{commit_import, ImportItem};
 
 /// The list a draft deck's cards are in — the deck's `live` one.
@@ -50,6 +60,20 @@ pub const COMMANDER_PILE: &str = "Commander";
 pub const NO_CARDS: &str =
     "None of the drafted cards are in this app's card data, so no deck was made.";
 
+/// What a deck card filed into one of the deck's zones says — the page files a deck card into a
+/// `main` pile, and a zone's name would put it in that zone instead.
+pub const NOT_A_DECK_PILE: &str =
+    "A card for the deck was filed into the sideboard or another zone, so no deck was made.";
+
+/// One card the reader sent to the deck while picking, and the pile the page filed it into.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftDeckCard {
+    pub card_id: String,
+    /// A `main` pile's name — `autoCategoryFor`'s answer for the card. Never a zone's.
+    pub pile: String,
+}
+
 /// What [`discard`] says of a deck that is not an unsaved draft deck.
 pub const NOT_A_DRAFT_DECK: &str = "That deck is not an unsaved draft deck, so it was not deleted.";
 
@@ -72,10 +96,12 @@ const BASICS: [(&str, &str); 5] = [
     ("G", "Forest"),
 ];
 
-/// Make the draft deck `name` holding `card_ids` (a repeated id is that many copies) in Pool,
-/// and put it on [`K_DRAFT_DECKS`]. An id this corpus lacks, and a token printing, is skipped;
-/// a pool with nothing left is [`NO_CARDS`]. With `commander` — a Commander draft's pool — the
-/// deck is [`CASUAL`] rather than [`LIMITED`] and has an empty [`COMMANDER_PILE`] too.
+/// Make the draft deck `name` holding `card_ids` (a repeated id is that many copies) in Pool and
+/// each of `deck` in its own pile, and put it on [`K_DRAFT_DECKS`]. An id this corpus lacks, and a
+/// token printing, is skipped; a pool with nothing left is [`NO_CARDS`]. A `deck` card filed into
+/// a zone's name ([`crate::schema::PREDEFINED_CATEGORIES`], [`POOL_PILE`], [`COMMANDER_PILE`]) is
+/// [`NOT_A_DECK_PILE`], refused before anything is made. With `commander` — a Commander draft's
+/// pool — the deck is [`CASUAL`] rather than [`LIMITED`] and has an empty [`COMMANDER_PILE`] too.
 ///
 /// [`create_deck`] remembers the format a deck was made in for the New deck dialog; a draft deck
 /// is not the reader choosing Limited, so the remembered format is put back as it was.
@@ -83,14 +109,23 @@ pub fn create(
     conn: &Connection,
     name: &str,
     card_ids: &[String],
+    deck: &[DraftDeckCard],
     commander: bool,
 ) -> Result<DeckRow, String> {
-    let mut counted: BTreeMap<&str, i64> = BTreeMap::new();
+    if deck.iter().any(|c| is_a_zone(&c.pile)) {
+        return Err(NOT_A_DECK_PILE.to_owned());
+    }
+    let mut counted: BTreeMap<(&str, &str), i64> = BTreeMap::new();
     for id in card_ids {
-        *counted.entry(id.as_str()).or_default() += 1;
+        *counted.entry((POOL_PILE, id.as_str())).or_default() += 1;
+    }
+    for card in deck {
+        *counted
+            .entry((card.pile.trim(), card.card_id.as_str()))
+            .or_default() += 1;
     }
     let mut items = Vec::with_capacity(counted.len());
-    for (id, quantity) in counted {
+    for ((pile, id), quantity) in counted {
         let known: bool = conn
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM cards WHERE id = ?1)",
@@ -104,7 +139,7 @@ pub fn create(
         items.push(ImportItem {
             card_id: id.to_owned(),
             quantity,
-            category_name: POOL_PILE.to_owned(),
+            category_name: pile.to_owned(),
             inactive: false,
             finish: None,
             label_name: None,
@@ -137,8 +172,16 @@ pub fn create(
     // A preference lost is not worth the deck — `create_deck`'s own rule for this row.
     let _ = restored;
 
-    let filled = piles(conn, deck.id, commander)
+    let filed = items.iter().any(|item| item.category_name != POOL_PILE);
+    let filled = piles(conn, deck.id, commander, filed)
         .and_then(|()| commit_import(conn, deck.id, LIVE, "merge", &items).map(|_| ()))
+        .and_then(|()| {
+            if filed {
+                pool_last(conn, deck.id)
+            } else {
+                Ok(())
+            }
+        })
         .and_then(|()| {
             let mut list = listed(conn);
             list.push(deck.id);
@@ -151,12 +194,24 @@ pub fn create(
     crate::deck::read_deck(conn, deck.id)?.ok_or_else(|| crate::deck::GONE.to_owned())
 }
 
-/// The Sideboard renamed Pool, and an empty Deck pile in front as the deck's default — straight
-/// to the columns, in one transaction: `rename_category` refuses a predefined zone's name, and a
-/// fresh deck has no history these two need to be undone from. With `commander`, the deck's
-/// Commander zone (seeded with every deck) is made sure of: named [`COMMANDER_PILE`], active,
-/// and the reader's (`origin = 'user'`, drawn while empty) — or made, should it be missing.
-fn piles(conn: &Connection, deck_id: i64, commander: bool) -> Result<(), String> {
+/// Whether `name` is a zone's — a pile a deck card must never be filed into by name, since the
+/// find-or-create the import runs matches a name whatever its kind.
+fn is_a_zone(name: &str) -> bool {
+    let name = name.trim();
+    name == POOL_PILE
+        || name == COMMANDER_PILE
+        || crate::schema::PREDEFINED_CATEGORIES
+            .iter()
+            .any(|(_, zone, _)| *zone == name)
+}
+
+/// The Sideboard renamed Pool, and — with no card `filed` into the deck — an empty Deck pile in
+/// front as the deck's default; with one, adds are filed by the rule ([`AUTO_CATEGORY`]) instead.
+/// Straight to the columns, in one transaction: `rename_category` refuses a predefined zone's
+/// name, and a fresh deck has no history these need to be undone from. With `commander`, the
+/// deck's Commander zone (seeded with every deck) is made sure of: named [`COMMANDER_PILE`],
+/// active, and the reader's (`origin = 'user'`, drawn while empty) — or made, should it be missing.
+fn piles(conn: &Connection, deck_id: i64, commander: bool, filed: bool) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if commander {
         let found = tx
@@ -187,6 +242,14 @@ fn piles(conn: &Connection, deck_id: i64, commander: bool) -> Result<(), String>
         params![deck_id, POOL_PILE, LIVE],
     )
     .map_err(|e| e.to_string())?;
+    if filed {
+        tx.execute(
+            "UPDATE decks SET default_category_id = ?2 WHERE id = ?1",
+            params![deck_id, AUTO_CATEGORY],
+        )
+        .map_err(|e| e.to_string())?;
+        return tx.commit().map_err(|e| e.to_string());
+    }
     tx.execute(
         "UPDATE deck_categories SET sort_order = sort_order + 1
           WHERE deck_id = ?1 AND variant = ?2",
@@ -210,6 +273,19 @@ fn piles(conn: &Connection, deck_id: i64, commander: bool) -> Result<(), String>
     )
     .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Pool after every pile the import made, so the deck's piles read before its sideboard.
+fn pool_last(conn: &Connection, deck_id: i64) -> Result<(), String> {
+    conn.execute(
+        "UPDATE deck_categories
+            SET sort_order = (SELECT max(sort_order) + 1 FROM deck_categories
+                               WHERE deck_id = ?1 AND variant = ?2)
+          WHERE deck_id = ?1 AND variant = ?2 AND kind = 'side'",
+        params![deck_id, LIVE],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// The ids on [`K_DRAFT_DECKS`], as stored. A missing or unreadable row is an empty list.
@@ -339,7 +415,7 @@ mod tests {
     #[test]
     fn create_makes_a_virtual_limited_deck_with_the_pool_in_its_side_pile() {
         let conn = conn();
-        let deck = create(&conn, "HOB draft", &pool(), false).unwrap();
+        let deck = create(&conn, "HOB draft", &pool(), &[], false).unwrap();
         assert_eq!(deck.name, "HOB draft");
         assert_eq!(deck.format_key, LIMITED);
         assert!(deck.virtual_only);
@@ -394,7 +470,7 @@ mod tests {
     #[test]
     fn a_commander_drafts_deck_is_casual_with_an_empty_commander_pile() {
         let conn = conn();
-        let deck = create(&conn, "CMR draft", &pool(), true).unwrap();
+        let deck = create(&conn, "CMR draft", &pool(), &[], true).unwrap();
         assert_eq!(deck.format_key, CASUAL);
         assert_eq!(CASUAL, "casual");
         assert!(deck.virtual_only);
@@ -433,14 +509,110 @@ mod tests {
         assert_eq!(ids(&conn), vec![deck.id]);
 
         // Without it, the deck is Limited.
-        let limited = create(&conn, "HOB draft", &pool(), false).unwrap();
+        let limited = create(&conn, "HOB draft", &pool(), &[], false).unwrap();
         assert_eq!(limited.format_key, LIMITED);
+    }
+
+    fn to_deck(card_id: &str, pile: &str) -> DraftDeckCard {
+        DraftDeckCard {
+            card_id: card_id.to_owned(),
+            pile: pile.to_owned(),
+        }
+    }
+
+    #[test]
+    fn cards_sent_to_the_deck_land_in_their_piles_and_the_sideboard_in_pool() {
+        let conn = conn();
+        let deck = create(
+            &conn,
+            "HOB draft",
+            &["bolt".to_string()],
+            &[
+                to_deck("angel", "Creature"),
+                to_deck("bolt", "Removal"),
+                to_deck("bolt", "Removal"),
+                to_deck("ghost", "Creature"),
+            ],
+            false,
+        )
+        .unwrap();
+
+        let rows: Vec<(String, String, String, String, i64)> = conn
+            .prepare(
+                "SELECT dc.card_id, cat.name, cat.kind, cat.origin, dc.quantity FROM deck_cards dc
+                   JOIN deck_categories cat ON cat.id = dc.category_id
+                  WHERE dc.deck_id = ?1 AND dc.variant = 'live' ORDER BY cat.sort_order",
+            )
+            .unwrap()
+            .query_map([deck.id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "angel".into(),
+                    "Creature".into(),
+                    "main".into(),
+                    "auto".into(),
+                    1
+                ),
+                (
+                    "bolt".into(),
+                    "Removal".into(),
+                    "main".into(),
+                    "auto".into(),
+                    2
+                ),
+                (
+                    "bolt".into(),
+                    "Pool".into(),
+                    "side".into(),
+                    "user".into(),
+                    1
+                ),
+            ],
+            "each deck card in its pile, the sideboard's in Pool after them, the unknown skipped"
+        );
+
+        let default: i64 = conn
+            .query_row(
+                "SELECT default_category_id FROM decks WHERE id = ?1",
+                [deck.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(default, AUTO_CATEGORY, "adds are filed by the rule");
+        let deck_piles: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_categories WHERE deck_id = ?1 AND name = ?2",
+                params![deck.id, DECK_PILE],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(deck_piles, 0, "no empty Deck pile beside the filed ones");
+    }
+
+    #[test]
+    fn a_deck_card_filed_into_a_zone_makes_no_deck() {
+        let conn = conn();
+        for zone in ["Sideboard", "Pool", " Commander ", "Maybeboard"] {
+            let err = create(&conn, "x", &pool(), &[to_deck("angel", zone)], false).unwrap_err();
+            assert_eq!(err, NOT_A_DECK_PILE, "{zone}");
+        }
+        let decks: i64 = conn
+            .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(decks, 0);
     }
 
     #[test]
     fn a_pool_the_corpus_does_not_know_makes_no_deck() {
         let conn = conn();
-        let err = create(&conn, "x", &["ghost".to_string()], false).unwrap_err();
+        let err = create(&conn, "x", &["ghost".to_string()], &[], false).unwrap_err();
         assert_eq!(err, NO_CARDS);
         let decks: i64 = conn
             .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
@@ -452,7 +624,7 @@ mod tests {
     fn the_remembered_format_survives_a_draft_deck() {
         let conn = conn();
         set_app_meta(&conn, K_LAST_DECK_FORMAT, "modern").unwrap();
-        create(&conn, "x", &pool(), false).unwrap();
+        create(&conn, "x", &pool(), &[], false).unwrap();
         assert_eq!(
             get_app_meta(&conn, K_LAST_DECK_FORMAT).as_deref(),
             Some("modern")
@@ -462,9 +634,9 @@ mod tests {
     #[test]
     fn keep_and_discard_take_a_deck_off_the_list() {
         let conn = conn();
-        let a = create(&conn, "a", &pool(), false).unwrap().id;
-        let b = create(&conn, "b", &pool(), false).unwrap().id;
-        let c = create(&conn, "c", &pool(), false).unwrap().id;
+        let a = create(&conn, "a", &pool(), &[], false).unwrap().id;
+        let b = create(&conn, "b", &pool(), &[], false).unwrap().id;
+        let c = create(&conn, "c", &pool(), &[], false).unwrap().id;
         assert_eq!(ids(&conn), vec![a, b, c]);
 
         keep(&conn, a).unwrap();

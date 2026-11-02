@@ -11,6 +11,7 @@ import {
   createDraftDeck,
   DRAFT_REPLACED,
   LOBBIES_OFF,
+  NOT_A_DECK_PILE,
   NOT_IN_PACK,
   NOT_YOUR_PILE,
   WINSTON_NO_PICK,
@@ -219,6 +220,41 @@ describe("the draft deck", () => {
       ["Pool", "side"],
       ["Commander", "commander"],
     ]);
+  });
+
+  it("files the cards sent to the deck into their piles, and the sideboard's into Pool (#1471)", () => {
+    const { db, h } = world();
+    const [a, b] = [db.cards[0].id, db.cards[1].id];
+    const row = h.draft_deck_create({
+      name: "Quick Draft",
+      cardIds: [b],
+      deck: [
+        { cardId: a, pile: "Removal" },
+        { cardId: a, pile: "Removal" },
+        { cardId: "no-such-printing", pile: "Creature" },
+      ],
+    });
+    const detail = h.deck_get({ id: row.id, variant: "live" });
+    const named = (id: number) => detail?.categories.find((c) => c.id === id)?.name;
+    expect(detail?.cards.map((c) => [c.cardId, named(c.categoryId), c.quantity])).toEqual([
+      [a, "Removal", 2],
+      [b, "Pool", 1],
+    ]);
+    expect(detail?.categories.some((c) => c.name === "Deck")).toBe(false);
+    expect(db.decks.find((d) => d.id === row.id)?.defaultCategoryId).toBe(0);
+  });
+
+  it("refuses a deck card filed into a zone, and makes no deck", () => {
+    const { db, h } = world();
+    const before = db.decks.length;
+    expect(() =>
+      h.draft_deck_create({
+        name: "x",
+        cardIds: [],
+        deck: [{ cardId: db.cards[0].id, pile: "Sideboard" }],
+      }),
+    ).toThrow(NOT_A_DECK_PILE);
+    expect(db.decks.length).toBe(before);
   });
 
   it("leaves the list on a keep, and is deleted on a discard", () => {
