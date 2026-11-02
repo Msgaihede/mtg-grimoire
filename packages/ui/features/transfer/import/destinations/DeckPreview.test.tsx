@@ -153,6 +153,7 @@ const DECK: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -647,9 +648,7 @@ describe("where a live replace puts the copies", () => {
   it("says nothing when the live list is already empty", async () => {
     preview("live");
 
-    await userEvent.click(
-      await screen.findByLabelText("Replace — Actual is empty"),
-    );
+    await userEvent.click(await screen.findByLabelText("Replace — Actual is empty"));
     expect(screen.queryByText(PROMISE)).toBeNull();
   });
 });

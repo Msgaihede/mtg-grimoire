@@ -40,6 +40,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     curveCreatures: false,
     todosOpen: false,
     syncUid: null,
+    draft: false,
     ...over,
   };
 }
@@ -59,9 +60,7 @@ describe("filterDecks — the name box", () => {
   it("ignores case", () => {
     const decks = [deck({ name: "Atraxa Superfriends" }), deck({ name: "Burn" })];
 
-    expect(names(filterDecks(decks, filter({ query: "ATRAXA" })))).toEqual([
-      "Atraxa Superfriends",
-    ]);
+    expect(names(filterDecks(decks, filter({ query: "ATRAXA" })))).toEqual(["Atraxa Superfriends"]);
     expect(names(filterDecks(decks, filter({ query: "burn" })))).toEqual(["Burn"]);
   });
 
@@ -202,6 +201,10 @@ describe("deckFormats", () => {
       deck({ name: "B", formatKey: "commander", formatName: "Commander" }),
     ];
 
-    expect(deckFormats(decks).map((f) => f.key).sort()).toEqual(["commander", "paper-edh"]);
+    expect(
+      deckFormats(decks)
+        .map((f) => f.key)
+        .sort(),
+    ).toEqual(["commander", "paper-edh"]);
   });
 });

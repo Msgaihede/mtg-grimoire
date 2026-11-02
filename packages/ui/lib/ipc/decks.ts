@@ -1938,6 +1938,21 @@ export interface DeckRow {
    * other device can find.
    */
   syncUid: string | null;
+  /**
+   * Whether this deck is an **unsaved draft deck** — one Draft & Packs' *Build deck* made and the
+   * reader has not pressed *Save deck* on yet. `decks.draft INTEGER NOT NULL DEFAULT 0`, user
+   * schema v69, and `false` on every deck that predates it (a draft deck made before v69 had
+   * already reached the reader's other devices, so it became an ordinary deck rather than being
+   * marked).
+   *
+   * **The flag on the row is the only truth about it**, so the editor reads it here rather than
+   * keeping a list of its own beside it. A draft deck is apart from the reader's decks until it is
+   * saved: {@link ipc.deckList} never answers one (nor does any deck picker, count, mirror, share
+   * or sync), {@link ipc.draftDeckList} answers exactly those, and {@link ipc.deckGet} answers
+   * either with this saying which. It is never synced and never copied by a duplicate; Save
+   * (`draft_deck_keep`) clears it and announces the whole deck to the group as if newly made.
+   */
+  draft: boolean;
 }
 
 /**

@@ -239,11 +239,16 @@ fn scope_predicate(scope: &str) -> &'static str {
 
 /// The watched decks, as a CTE body. Used by all three statements so none of them can be taken
 /// over a different set of decks than the others.
+///
+/// **Never an unsaved draft deck** ([`crate::deck::DeckRow::draft`]), whatever the scope: `all`
+/// is the reader's decks and a draft is not one of them until it is saved, and `chosen` names ids
+/// a reader picked off the Decks page, where no draft is drawn. `decks_watched` counts by the same
+/// terms.
 fn watched_cte(scope: &str) -> String {
     format!(
         "SELECT d.id AS id, d.name AS name, d.virtual_only AS virtual_only
            FROM decks d
-          WHERE ({scope}) AND (?2 OR d.virtual_only = 0)",
+          WHERE ({scope}) AND (?2 OR d.virtual_only = 0) AND d.draft = 0",
         scope = scope_predicate(scope)
     )
 }
@@ -368,7 +373,8 @@ pub fn feed(conn: &Connection, ask: &Ask) -> Result<NewPrintings, String> {
     let decks_watched: i64 = conn
         .query_row(
             &format!(
-                "SELECT count(*) FROM decks d WHERE ({scope}) AND (?2 OR d.virtual_only = 0)",
+                "SELECT count(*) FROM decks d
+                  WHERE ({scope}) AND (?2 OR d.virtual_only = 0) AND d.draft = 0",
                 scope = scope_predicate(&ask.scope)
             ),
             params![ids_json, ask.include_virtual],

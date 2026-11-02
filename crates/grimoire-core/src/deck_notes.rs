@@ -858,6 +858,10 @@ pub fn reorder_notes(conn: &Connection, deck_id: i64, ids: &[i64]) -> Result<(),
 /// together and in the order that deck's band draws them. `n.id` breaks the last tie, because a
 /// list that reordered itself between two opens for no visible reason is the failure a stable sort
 /// exists to prevent.
+///
+/// **Every deck but an unsaved draft deck** ([`crate::deck::DeckRow::draft`]), which is not one of
+/// the reader's decks until it is saved — a note there would name a deck the modal's link cannot
+/// open from anywhere but the Draft & Packs page.
 pub fn notes_for_card(conn: &Connection, oracle_id: &str) -> Result<Vec<CardNoteRow>, String> {
     let oracle_id = oracle_id.trim();
     if oracle_id.is_empty() {
@@ -873,6 +877,7 @@ pub fn notes_for_card(conn: &Connection, oracle_id: &str) -> Result<Vec<CardNote
                JOIN deck_notes n ON n.id = nc.note_id
                JOIN decks d ON d.id = n.deck_id
               WHERE nc.oracle_id = ?1
+                AND d.draft = 0
               ORDER BY d.name, n.deck_id, n.sort_order, n.id",
         )
         .map_err(|e| e.to_string())?;

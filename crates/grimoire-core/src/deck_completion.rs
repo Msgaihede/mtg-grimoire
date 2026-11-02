@@ -141,10 +141,14 @@ impl Compare {
     /// lists read cannot come to name different decks. `virtual_only = 0` also drops the
     /// kindless `1/1` pair, which `deckKind.ts` reads as virtual; `theory_enabled = 1` keeps it,
     /// because a plan is a plan whatever else the deck says.
+    ///
+    /// **`d.draft = 0` under both**: an unsaved draft deck ([`crate::deck::DeckRow::draft`]) is
+    /// not one of the reader's decks until it is saved. Today it is virtual and keeps no plan, so
+    /// each arm's own term already drops it — the clause says so rather than leaning on that.
     fn decks(self) -> &'static str {
         match self {
-            Compare::Collection => "d.virtual_only = 0",
-            Compare::Theory(_) => "d.theory_enabled = 1",
+            Compare::Collection => "d.virtual_only = 0 AND d.draft = 0",
+            Compare::Theory(_) => "d.theory_enabled = 1 AND d.draft = 0",
         }
     }
 

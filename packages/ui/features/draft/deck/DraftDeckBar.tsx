@@ -10,7 +10,7 @@ import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { PLAIN_PRESS } from "@/features/decks/headerControls";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
-import { returnToDraftPage } from "../navigation";
+import { openSavedDeck, returnToDraftPage } from "../navigation";
 import { COMMANDER_DECK_SIZE } from "../deckSize";
 import { useDiscardDraftDeck, useKeepDraftDeck } from "../useDraftDecks";
 
@@ -64,8 +64,8 @@ export interface DraftDeckBarProps {
  *
  * One line saying why the searches are gone, then the three things a draft deck needs that an
  * ordinary deck gets elsewhere: **Basics** (a strip of five — a drafted pool holds no basic lands,
- * and with no search there is no other way to add one), **Save deck** (the deck leaves the
- * unsaved list and is a deck like any other), **Export** (the editor's own dialog) and **Discard**
+ * and with no search there is no other way to add one), **Save deck** (the deck is a deck like
+ * any other from then on, and the reader is taken to it in the Decks view), **Export** (the editor's own dialog) and **Discard**
  * (the deck and its pool are deleted, behind a question).
  *
  * Memoised: every prop is held still by the editor (`setCodes` is memoised on its joined text),
@@ -93,7 +93,13 @@ export const DraftDeckBar = memo(function DraftDeckBar({
 
   const save = () => {
     keep.mutate(deckId, {
-      onSuccess: () => notify.success(`Saved “${name}” to your decks`),
+      // The deck is one of the reader's decks now, so its editor is the Decks view's: the reader
+      // is taken there, on this deck, rather than left in Draft & Packs on a deck it no longer
+      // holds.
+      onSuccess: () => {
+        notify.success(`Saved “${name}” to your decks`);
+        openSavedDeck(deckId);
+      },
       onError: (failure) => notify.error("Couldn't save the deck", { body: ipcError(failure) }),
     });
   };

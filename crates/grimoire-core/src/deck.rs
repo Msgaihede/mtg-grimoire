@@ -124,6 +124,11 @@ pub const SAME_LIST: &str = "That category is already in the list the card is go
 /// What an adjustment says when the deck it names is not there.
 pub const GONE: &str = "That deck is not there any more.";
 
+/// What [`update_deck`] says to a patch that would switch an unsaved draft deck
+/// ([`DeckRow::draft`]) to theory-and-actual or to regular: it stays virtual — no cardboard, no
+/// group — until **Save deck** makes it a deck like any other.
+pub const DRAFT_STAYS_VIRTUAL: &str = "A draft deck stays virtual until it is saved.";
+
 /// A virtual deck tracks no cardboard, so no collection or wishlist write may name one.
 ///
 /// **[`crate::collection_alloc::THEORY_HOLDS_NOTHING`]'s sibling, one boundary out**, and the two
@@ -1143,6 +1148,22 @@ pub struct DeckRow {
     /// own id would name a deck no other device can find — so *Update* would stop working the
     /// moment the reader pressed it anywhere else.
     pub sync_uid: Option<String>,
+    /// Whether this is an **unsaved draft deck** — `decks.draft`, user schema v69, `DEFAULT 0`:
+    /// the deck Draft & Packs' **Build deck** makes from a drafted pool, until the reader presses
+    /// **Save deck** ([`crate::draft_deck`]).
+    ///
+    /// **A draft deck is the reader's and nobody else's until it is saved** (the owner's rule):
+    /// [`list_decks`] and every reader that sums or searches across decks leave it out, the
+    /// integrations projection and a share never see it, and the capture triggers record no sync
+    /// op for it or for any row under it — so a draft that is discarded never left the device, and
+    /// one that is saved is announced to the group whole, as if it had just been made. Only
+    /// [`read_deck`] — the editor opening the one deck it was handed — answers it, with this
+    /// `true`, which is what the editor draws its draft bar from.
+    ///
+    /// **Device-local and never copied**: not a synced field, not one [`duplicate_deck`] carries
+    /// (a copy of a draft is an ordinary deck), and not on the deck's history. Read last, for the
+    /// positional rule written on [`deck_row`]'s reads.
+    pub draft: bool,
 }
 
 /// One deck's tags as a reader would have typed them carefully — [`update_deck`]'s whole say
@@ -1450,7 +1471,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
             d.token_rail_index, d.curve_creatures, d.managed_wishlist_tokens, d.todos_open,
-            d.tags, d.sync_uid
+            d.tags, d.sync_uid, d.draft
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -1617,6 +1638,10 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // 34, at the end of the list, same rule — and a `TEXT` like `tags` at 33 beside it, so a
         // crossed pair would hand a JSON array to a share key and back with nothing going red.
         sync_uid: r.get(34)?,
+        // 35, at the end of the list, same rule — user schema v69's draft flag, a `bool` over an
+        // `INTEGER` like `archived` at 8: a crossed read would hide an archived deck from the
+        // gallery as a draft, or answer a draft as merely archived, both still a `0` or a `1`.
+        draft: r.get(35)?,
     })
 }
 
@@ -2272,7 +2297,31 @@ pub(crate) fn deck_group_holds_copies(conn: &Connection, deck_id: i64) -> Result
 ///
 /// `cover_kind` is absent from the column list on purpose and takes its DDL default,
 /// [`COVER_CARD_ART`]; [`DeckInput`] says why the other word cannot be reached from here.
+///
+/// An ordinary deck — [`create_deck_with`] with `draft` off, which is every caller but
+/// [`crate::draft_deck::create`].
 pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, String> {
+    create_deck_with(conn, input, false)
+}
+
+/// [`create_deck`], with `draft` deciding whether the deck is born an **unsaved draft deck**
+/// ([`DeckRow::draft`], user schema v69) — Draft & Packs' **Build deck** is the one caller that
+/// passes `true`.
+///
+/// **The flag is written by the INSERT itself, never by an UPDATE after it.** The capture
+/// triggers decide from `NEW` whether a row is a draft's, so a deck inserted ordinary and then
+/// flagged would already have announced itself — and every row seeded below it (the predefined
+/// piles, the history row) would have been recorded before the flag arrived. Written at birth,
+/// the deck and everything made under it in this transaction are a draft's from the first byte.
+///
+/// **A draft deck does not remember its format** in [`K_LAST_DECK_FORMAT`]: the New deck dialog
+/// opens on the format the reader last *chose*, and a drafted pool being built in Limited is not
+/// the reader choosing Limited.
+pub fn create_deck_with(
+    conn: &Connection,
+    input: &DeckInput,
+    draft: bool,
+) -> Result<DeckRow, String> {
     let name = valid_name(&input.name)?;
     let format_key = valid_format(conn, &input.format_key)?;
     let game_key = valid_game(&input.game_key)?;
@@ -2284,9 +2333,9 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
             // a deck is born with no notes for the reason it is born with no cards, and
             // `deck_notes` is where they go.
             "INSERT INTO decks (name, format_key, game_key, description, cover_card_id,
-                                folder_id, theory_enabled, virtual_only,
+                                folder_id, theory_enabled, virtual_only, draft,
                                 created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, unixepoch(), unixepoch())
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, unixepoch(), unixepoch())
              RETURNING id",
             params![
                 name,
@@ -2305,6 +2354,7 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
                 // and a create that silently rewrote one of the two fields it was handed would
                 // be answering a question the caller did not ask. See [`DeckInput::virtual_only`].
                 virtual_only,
+                draft,
             ],
             |r| r.get(0),
         )
@@ -2356,7 +2406,10 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
     // transaction, so a create that rolls back remembers nothing; and the error deliberately
     // dropped, unlike the `?` two lines above — losing a preference is not worth losing a deck
     // over. See this function's doc.
-    let _ = crate::app_meta::set_app_meta(&tx, K_LAST_DECK_FORMAT, format_key);
+    // A draft deck is not the reader choosing a format — see [`create_deck_with`].
+    if !draft {
+        let _ = crate::app_meta::set_app_meta(&tx, K_LAST_DECK_FORMAT, format_key);
+    }
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
@@ -2649,6 +2702,22 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
     // leave that pair standing for as long as it took to run, and `sync_engine::capture`'s
     // triggers fire per statement: the impossible kind would go out on the wire.
     let (theory_enabled, virtual_only) = deck_kind(patch);
+    // **A draft deck's kind is fixed until it is saved** ([`DRAFT_STAYS_VIRTUAL`]): it was made
+    // virtual so that it holds no cardboard and has no group, and either switch would undo that —
+    // a theory deck or a regular one gets a `collection_folders` row, which is a deck the
+    // collection would show while the deck itself is hidden. Refused only for a patch that would
+    // *move* a flag; one that restates the deck's own kind changes nothing and is no error.
+    let is_draft: bool = tx
+        .query_row("SELECT draft FROM decks WHERE id = ?1", params![id], |r| {
+            r.get(0)
+        })
+        .map_err(|e| e.to_string())?;
+    if is_draft
+        && (theory_enabled.is_some_and(|t| t != before.theory_enabled)
+            || virtual_only.is_some_and(|v| v != before.virtual_only))
+    {
+        return Err(DRAFT_STAYS_VIRTUAL.to_owned());
+    }
     let changed = tx
         .execute(
             "UPDATE decks SET
@@ -3718,7 +3787,32 @@ pub fn set_view_state(conn: &Connection, id: i64, state: &DeckViewState) -> Resu
 /// `deleting_a_deck_takes_its_history_with_it` pins that this is a property of the schema and
 /// not an omission.
 ///
+/// # A draft deck is deleted without a word to the group
+///
+/// An unsaved draft deck ([`DeckRow::draft`]) never left this device, so its deletion must not
+/// leave it either: the whole delete runs inside [`crate::sync_engine::capture::suppressed`].
+/// The decks trigger could read the flag off `OLD` by itself, **but the children cannot** —
+/// `ON DELETE CASCADE` removes `deck_cards`, `deck_categories` and the rest *after* the parent
+/// row is gone, so their AFTER DELETE triggers find no deck to ask and would record a delete of
+/// every row a peer never had. A draft is virtual and has no group, so nothing is refiled under
+/// the switch and nothing the reader owns goes unrecorded.
 pub fn delete_deck(conn: &Connection, id: i64) -> Result<(), String> {
+    let draft: bool = conn
+        .query_row("SELECT draft FROM decks WHERE id = ?1", params![id], |r| {
+            r.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(false);
+    if draft {
+        crate::sync_engine::capture::suppressed(conn, || delete_deck_rows(conn, id))
+    } else {
+        delete_deck_rows(conn, id)
+    }
+}
+
+/// [`delete_deck`]'s body, which a draft deck runs with capture switched off.
+fn delete_deck_rows(conn: &Connection, id: i64) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if let Some(group) = deck_group(&tx, id)? {
         // **The destination is looked up rather than assumed.** Schema v25 creates exactly one
@@ -3910,6 +4004,10 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // `Meme` deck is a `Meme` deck — where a to-do is a job, and a job copied is a job
             // owed twice. The stored text travels as it is, never through `read_tags` and back,
             // so a list a newer peer wrote in a shape this build cannot read is still the copy's.
+            //
+            // **User schema v69's `draft` is absent on purpose**, so the copy takes the column's
+            // `DEFAULT 0`: a copy is a deck the reader asked for, listed and synced like any
+            // other — even a copy of an unsaved draft deck.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
@@ -4101,8 +4199,26 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
 }
 
 /// The gallery, archived decks last and most recently touched first.
+///
+/// **No unsaved draft deck** ([`DeckRow::draft`]): it is the Draft & Packs page's until the
+/// reader saves it, and this list is every other deck surface's — the gallery, the pickers, the
+/// home widgets, the mirror, the read graph's `decks`. The filter is here rather than in
+/// [`DECK_SELECT`] because [`read_deck`] shares that query and must answer a draft: the editor
+/// opens one by id.
 pub fn list_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
-    let sql = format!("{DECK_SELECT} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC");
+    let sql = format!(
+        "{DECK_SELECT} WHERE d.draft = 0 ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], deck_row).map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// Every unsaved draft deck ([`DeckRow::draft`]), oldest first — [`list_decks`]' other half, and
+/// the Draft & Packs page's own list (`draft_deck_list`, through [`crate::draft_deck::list`]).
+pub fn list_draft_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
+    let sql = format!("{DECK_SELECT} WHERE d.draft = 1 ORDER BY d.id ASC");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], deck_row).map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -4161,6 +4277,7 @@ pub struct PipCost {
 const PIP_COSTS_SQL: &str = "
 SELECT dc.deck_id, c.mana_cost, sum(dc.quantity)
   FROM deck_cards dc
+  JOIN decks d ON d.id = dc.deck_id AND d.draft = 0
   JOIN deck_categories cat ON cat.id = dc.category_id
   JOIN cards c ON c.id = dc.card_id
  WHERE dc.variant = 'live'
@@ -4183,6 +4300,10 @@ SELECT dc.deck_id, c.mana_cost, sum(dc.quantity)
 /// so the fold below is a single pass, and by cost within a deck so two runs over one database
 /// cannot answer in two different orders. What order the *segments* are drawn in is
 /// `MANA_KEYS`', on the other side of the wire.
+///
+/// **An unsaved draft deck has no entry** (the `JOIN decks … d.draft = 0`): the gallery this
+/// feeds is [`list_decks`]', which leaves drafts out, and a bar for a tile that is not drawn is
+/// a row nobody reads.
 pub fn pip_costs(conn: &Connection) -> Result<Vec<DeckPipCosts>, String> {
     let mut stmt = conn.prepare(PIP_COSTS_SQL).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -6937,6 +7058,12 @@ pub(crate) fn plays_card(conn: &Connection, deck_id: i64, card_id: &str) -> Resu
 /// toward by accident. So the case is answered here, in Rust, where it can be said.
 ///
 /// `ORDER BY dc.deck_id`, so two runs answer in one order — [`played_keys`]' reason.
+///
+/// **An unsaved draft deck plays nothing here** ([`DeckRow::draft`]): it is not one of the
+/// reader's decks until it is saved, so it is neither a deck a row of copies could be filed into
+/// nor one the card's "in decks" count names. Filtered in this statement rather than in
+/// [`PLAYED_FROM`], which [`played_keys`] and [`plays_card`] also read for one deck by id — a
+/// draft deck's editor asks those of itself.
 pub fn decks_playing(conn: &Connection, keys: &[String]) -> Result<Vec<i64>, String> {
     let mut wanted: Vec<&str> = Vec::with_capacity(keys.len());
     let mut seen: HashSet<&str> = HashSet::new();
@@ -6952,6 +7079,7 @@ pub fn decks_playing(conn: &Connection, keys: &[String]) -> Result<Vec<i64>, Str
     let sql = format!(
         "SELECT dc.deck_id FROM {from}
           WHERE dc.variant = ? AND {key} IN ({holes})
+            AND dc.deck_id NOT IN (SELECT id FROM decks WHERE draft = 1)
           GROUP BY dc.deck_id
          HAVING count(DISTINCT {key}) = ?
           ORDER BY dc.deck_id",
@@ -6984,10 +7112,11 @@ pub fn decks_playing(conn: &Connection, keys: &[String]) -> Result<Vec<i64>, Str
 /// One deck's live list, valued — the home page's deck tile, and the figure `deck_list` has
 /// never carried.
 ///
-/// **Every deck gets one of these**, a deck holding no cards and an archived deck included, so
-/// a caller can index the answer by `deck_id` with no missing-key branch and decide for itself
-/// what to draw. That is [`deck_values_for`]'s join shape rather than a promise made in prose:
-/// the read starts at `decks` and everything below it is a `LEFT JOIN`.
+/// **Every listed deck gets one of these** — a deck holding no cards and an archived deck
+/// included, an unsaved draft deck not — so a caller can index the answer by `deck_id` with no
+/// missing-key branch and decide for itself what to draw. That is [`deck_values_for`]'s join
+/// shape rather than a promise made in prose: the read starts at `decks` and everything below it
+/// is a `LEFT JOIN`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckValue {
@@ -7039,6 +7168,10 @@ pub struct DeckValue {
 /// holding no cards, groups to a single row whose `dc` columns are NULL: `sum()` over nothing
 /// is NULL — which is exactly [`DeckValue::value`]'s "nothing priced" — and the `coalesce` on
 /// the unpriced count turns the same NULL into `0`.
+///
+/// **Every deck but an unsaved draft deck** ([`DeckRow::draft`]) — the `WHERE` on `decks`
+/// itself, the one table here that is not LEFT JOINed: the tiles this feeds draw
+/// [`list_decks`]' decks, which leave drafts out.
 pub fn deck_values_for(
     conn: &Connection,
     marketplace: crate::sorting::Marketplace,
@@ -7059,6 +7192,7 @@ pub fn deck_values_for(
                  AND dc.deck_id = d.id
                  AND dc.variant = 'live'
            LEFT JOIN cards c ON c.id = dc.card_id
+          WHERE d.draft = 0
           GROUP BY d.id
           ORDER BY d.id"
     );
@@ -11050,6 +11184,9 @@ mod tests {
             // A real uid rather than `None`, the rule above: `null` is what a deck that was never
             // captured carries and would read correct on a field that never left Rust.
             sync_uid: Some("deck-uid-burn".to_owned()),
+            // `true` rather than the column's `DEFAULT 0`, the rule above: `false` is what every
+            // listed deck carries and would read correct on a field that never left Rust.
+            draft: true,
         })
         .unwrap();
         assert_eq!(
@@ -11123,6 +11260,9 @@ mod tests {
                 // keys the share on it, and a snake-cased key would be `undefined` — so the
                 // control would draw nothing for every deck.
                 "syncUid": "deck-uid-burn",
+                // User schema v69, and `draft` as it is: the editor draws its draft bar, and the
+                // Draft & Packs page its editor, from this key on the row `deck_get` answers.
+                "draft": true,
                 // User schema v56, and `curveCreatures` rather than `curve_creatures`: the Mana
                 // curve reads this key to know whether to split its bars, and a snake-cased one
                 // would be `undefined` — falsy, so a split the reader saved would never draw.

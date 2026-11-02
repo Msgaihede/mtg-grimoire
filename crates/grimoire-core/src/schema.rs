@@ -737,7 +737,19 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// (`archive`), which carries every user table but sync's own. A rowid table with no index: the
 /// list reads every row, and there are a handful. **The rung creates it empty**: nothing defined a
 /// widget before it.
-pub const USER_SCHEMA_VERSION: i64 = 68;
+///
+/// **69 (2026-11-02, [#1467](https://github.com/Msgaihede/mtg-grimoire/issues/1467)) is
+/// `decks.draft`** — 1 on an unsaved draft deck, the one Draft & Packs' *Build deck* makes, until
+/// the reader presses *Save deck*. The flag is what keeps a draft out of every deck list, search,
+/// picker, share and integration, and off sync: the capture triggers of `decks` and of every
+/// table under it emit nothing for a draft's rows, and the save sends the whole subtree as if it
+/// were new. Not itself a synced field — a draft never reaches a peer to be told it is one. **The
+/// rung also deletes `app_meta` `draft_decks`**, the retired list of unsaved draft decks the flag
+/// replaces, **and backfills nothing from it**: the decks that list named were captured when they
+/// were made and their peers hold them, so marking them drafts now would hide them here alone and
+/// announce them whole a second time on a save, doubling every counter delta their rows carry.
+/// Every existing deck reads `draft = 0`.
+pub const USER_SCHEMA_VERSION: i64 = 69;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -4414,7 +4426,7 @@ CREATE TABLE {schema}.decks (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                REFERENCES deck_folders(id) ON DELETE SET NULL, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0, stats_open INTEGER NOT NULL DEFAULT 1, notes_open INTEGER NOT NULL DEFAULT 0, managed_wishlist_mode TEXT NOT NULL DEFAULT 'off', token_rail_index INTEGER NOT NULL DEFAULT -1, token_mode TEXT NOT NULL DEFAULT 'managed' CHECK (token_mode IN ('managed','collection','hidden')), curve_creatures INTEGER NOT NULL DEFAULT 0, managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0, todos_open INTEGER NOT NULL DEFAULT 0, tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)));
+                REFERENCES deck_folders(id) ON DELETE SET NULL, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1, theory_mark_unplanned INTEGER NOT NULL DEFAULT 1, virtual_only INTEGER NOT NULL DEFAULT 0, stats_open INTEGER NOT NULL DEFAULT 1, notes_open INTEGER NOT NULL DEFAULT 0, managed_wishlist_mode TEXT NOT NULL DEFAULT 'off', token_rail_index INTEGER NOT NULL DEFAULT -1, token_mode TEXT NOT NULL DEFAULT 'managed' CHECK (token_mode IN ('managed','collection','hidden')), curve_creatures INTEGER NOT NULL DEFAULT 0, managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0, todos_open INTEGER NOT NULL DEFAULT 0, tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)), draft INTEGER NOT NULL DEFAULT 0);
 
 CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -8665,6 +8677,40 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v69 (2026-11-02, issue #1467): `decks.draft` — 1 on an unsaved draft deck, the one Draft &
+    // Packs' *Build deck* makes, until the reader presses *Save deck*. The flag is what keeps a
+    // draft out of every deck list, search, picker and share, and off sync: the capture triggers
+    // of `decks` and of every table under it emit nothing for a draft's rows, and the save
+    // announces the whole subtree as if it were new (`capture::announce_deck`).
+    //
+    // **The flag on the row is the only truth**, so the rung also deletes `app_meta`
+    // `draft_decks`, the list of unsaved draft decks the flag replaces. **And it backfills
+    // nothing from it**: every deck that list named was already synced — captured like any other
+    // deck when it was made — so its peers hold it, and marking it a draft now would hide on this
+    // device a deck the others show, and announce it whole a second time on a save, which would
+    // double every counter delta its rows carry. A deck on the old list simply becomes an
+    // ordinary deck. Never backfill `draft = 1`.
+    //
+    // v56's rung otherwise, for v56's reasons: one `ADD COLUMN` spliced onto the `decks` tail
+    // [`USER_SCHEMA_SQL`] wears, `NOT NULL DEFAULT 0` because every deck that exists is a saved
+    // one. **Not on the `decks` capture spec** — whether a deck is a draft is this device's
+    // business, and a draft never reaches a peer to be told — not on any history row or undo
+    // list, and not carried by `duplicate_deck`. **No trigger comes off**, v62's note: an `ADD
+    // COLUMN` edits no row, and `capture::install` rebuilds the capture triggers to read the new
+    // column right after this function. No index: the readers filter decks they already scan. It
+    // owes [`fixtures::UNDO_V69`] for [`fixtures::UNDO_V13`]'s loud reason — `ADD COLUMN` is not
+    // idempotent.
+    if v < 69 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE decks ADD COLUMN draft INTEGER NOT NULL DEFAULT 0;
+             DELETE FROM app_meta WHERE key = 'draft_decks';",
+        )?;
+        // Literal `69`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 69;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -10532,7 +10578,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -10564,7 +10610,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -10591,7 +10637,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -10618,7 +10664,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -10642,7 +10688,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -10663,7 +10709,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -10684,7 +10730,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -10705,7 +10751,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -10736,7 +10782,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -10757,7 +10803,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
         ))
         .unwrap();
         conn
@@ -10772,7 +10818,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
         ))
         .unwrap();
         conn
@@ -10784,7 +10830,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
         ))
         .unwrap();
         conn
@@ -10793,7 +10839,7 @@ pub(crate) mod tests {
     /// A user file at 49 — the shape every machine carries the day before a price snapshot
     /// recorded how many copies it was of, and the only population the v50 rung is *for*.
     ///
-    /// Head rewound past **all nineteen** rungs above it, newest first — [`UNDO_V68`],
+    /// Head rewound past **all twenty** rungs above it, newest first — [`UNDO_V69`], [`UNDO_V68`],
     /// [`UNDO_V67`], [`UNDO_V66`], [`UNDO_V65`], [`UNDO_V64`],
     /// [`UNDO_V63`], [`UNDO_V62`], [`UNDO_V61`], [`UNDO_V60`], [`UNDO_V59`], [`UNDO_V58`], [`UNDO_V57`], [`UNDO_V56`],
     /// [`UNDO_V55`], [`UNDO_V54`], [`UNDO_V53`], [`UNDO_V52`], [`UNDO_V51`] and then
@@ -10802,7 +10848,7 @@ pub(crate) mod tests {
     /// eight" until v58 did, "all nine" until v59 did, "all ten" until v60 did, "all eleven"
     /// until v61 did, "all twelve" until v62 did, "all thirteen" until v63 did, "all fourteen"
     /// until v64 did, "all fifteen" until v65 did, "all sixteen" until v66 did, "all
-    /// seventeen" until v67 did and "all eighteen" until v68 did, which is the prediction every fixture doc on this ladder makes
+    /// seventeen" until v67 did, "all eighteen" until v68 did and "all nineteen" until v69 did, which is the prediction every fixture doc on this ladder makes
     /// coming true once more.
     /// Without [`UNDO_V51`] the file would keep `decks.token_rail_index` and the v51 rung would die
     /// at `duplicate column name` on the climb this fixture exists for; without [`UNDO_V52`],
@@ -10819,12 +10865,12 @@ pub(crate) mod tests {
     /// rules`; without [`UNDO_V65`], v65's at `table scan_batches already exists`; without
     /// [`UNDO_V66`], v66's at `table wish_snapshots already exists`; without [`UNDO_V67`], v67's
     /// at `duplicate column name: tags`; without [`UNDO_V68`], v68's at `table custom_widgets
-    /// already exists`.
+    /// already exists`; without [`UNDO_V69`], v69's at `duplicate column name: draft`.
     fn user_file_at_49() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
         ))
         .unwrap();
         conn
@@ -10841,7 +10887,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
         ))
         .unwrap();
         conn
@@ -10860,7 +10906,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} PRAGMA main.user_version = 52;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} PRAGMA main.user_version = 52;"
         ))
         .unwrap();
         conn
@@ -10910,7 +10956,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -11067,7 +11113,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -11124,7 +11170,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -11502,7 +11548,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 68);
+        assert_eq!(USER_SCHEMA_VERSION, 69);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -12482,7 +12528,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -12569,7 +12615,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -12880,7 +12926,7 @@ pub(crate) mod tests {
         // edited only the four this comment then named and left v43's red. **Do not trust this
         // list.** Bump what you can find, run `cargo test --lib schema::tests`, and every one
         // you missed names itself in a `left: <head>, right: <old>` panic.
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -12902,7 +12948,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -13343,7 +13389,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v41 — `migrate_user` climbs the whole ladder. One of the five the v36
         // block's ⚠️ warns about; this one is why that warning exists.
-        assert_eq!(v, 68);
+        assert_eq!(v, 69);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -13579,7 +13625,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v43 — `migrate_user` climbs the whole ladder. The fifth of the five the
         // v36 block's ⚠️ warns about, and the one v46 missed.
-        assert_eq!(v, 68);
+        assert_eq!(v, 69);
 
         assert_eq!(
             has_column(&conn, "decks", "notes"),
@@ -14040,7 +14086,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(has_column(&conn, "decks", "token_stack"), 0, "v52 took it");
         let (mode, stats): (String, i64) = conn
             .query_row(
@@ -14118,7 +14164,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 to v58 sit above this
         // rung.
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(has_column(&conn, "price_snapshots", "copies"), 1);
         assert_eq!(price_is_required(&conn), 0, "an unpriced holding is a row");
         let (rows, null_copies, price_sum): (i64, i64, f64) = conn
@@ -14270,7 +14316,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(has_column(&conn, "decks", "token_rail_index"), 1);
         let (index, stats): (i64, i64) = conn
             .query_row(
@@ -14567,7 +14613,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(has_column(&conn, "deck_categories", "variant"), 1);
 
         // The live side, untouched: every pile it had, under the same id and uid and stamps.
@@ -14874,7 +14920,7 @@ pub(crate) mod tests {
         // `sync_gone_decks` and `sync_gone_wishlist_folders` triggers to name — [`UNDO_V55`]'s
         // own reason.
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} PRAGMA main.user_version = 53;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} PRAGMA main.user_version = 53;"
         ))
         .unwrap();
         migrate_user(&conn).unwrap();
@@ -14910,7 +14956,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} PRAGMA main.user_version = 54;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} PRAGMA main.user_version = 54;"
         ))
         .unwrap();
         assert_eq!(has_column(&conn, "wishlist_folders", "managed_tokens"), 0);
@@ -14934,7 +14980,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         let own: i64 = conn
             .query_row(
                 "SELECT managed_tokens FROM wishlist_folders WHERE name = 'Deck 7'",
@@ -14977,7 +15023,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} PRAGMA main.user_version = 55;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} PRAGMA main.user_version = 55;"
         ))
         .unwrap();
         assert_eq!(
@@ -14997,7 +15043,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(has_column(&conn, "decks", "curve_creatures"), 1);
         let (split, stats): (i64, i64) = conn
             .query_row(
@@ -15026,7 +15072,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
         ))
         .unwrap();
         assert_eq!(
@@ -15055,7 +15101,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         let rows: Vec<(String, String, i64, i64)> = {
             let mut stmt = conn
                 .prepare(
@@ -15115,7 +15161,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
         ))
         .unwrap();
         // The rewind took the real `sync_upd_decks` off — [`UNDO_V58`] drops it, and [`UNDO_V57`]
@@ -15180,7 +15226,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} PRAGMA main.user_version = 57;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} PRAGMA main.user_version = 57;"
         ))
         .unwrap();
         for column in ["todos", "todos_open"] {
@@ -15203,7 +15249,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         let row: (i64, i64, i64) = conn
             .query_row(
                 "SELECT todos_open, notes_open, managed_wishlist_tokens FROM decks WHERE id = 1",
@@ -15240,7 +15286,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
         ))
         .unwrap();
         assert_eq!(
@@ -15262,7 +15308,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         type Row = (i64, String, String, i64, i64, i64, Option<String>);
         let rows: Vec<Row> = {
             let mut stmt = conn
@@ -15366,11 +15412,13 @@ pub(crate) mod tests {
         create_user_schema(&head, "main").unwrap();
         let head_decks = sql(&head, "decks").unwrap();
         // Head's tail from `todos_open` on, which since v62 is that column **and `tags` behind
-        // it** — the chain below rewinds v62 first, so `tags` is gone before [`UNDO_V59`] drops
-        // and re-adds `todos_open`, and what is swapped out for v58's two columns is the whole
-        // of what the rungs above 58 put there. It was `todos_open` alone until v62 landed.
+        // it**, and since v69 `draft` behind both — the chain below rewinds v69 and v62 first, so
+        // both are gone before [`UNDO_V59`] drops and re-adds `todos_open`, and what is swapped
+        // out for v58's two columns is the whole of what the rungs above 58 put there. It was
+        // `todos_open` alone until v62 landed, and ended at `tags` until v69 did.
         let tail = ", todos_open INTEGER NOT NULL DEFAULT 0, \
-                    tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)))";
+                    tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)), \
+                    draft INTEGER NOT NULL DEFAULT 0)";
         assert!(
             head_decks.ends_with(tail),
             "head's decks ends: {head_decks}"
@@ -15379,7 +15427,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
         ))
         .unwrap();
         let v58 = head_decks.replace(
@@ -15450,7 +15498,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} PRAGMA main.user_version = 59;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} PRAGMA main.user_version = 59;"
         ))
         .unwrap();
         for name in made {
@@ -15470,7 +15518,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         for name in made {
             let built = sql(&conn, name);
             assert!(built.is_some(), "the rung builds {name}");
@@ -15522,7 +15570,10 @@ pub(crate) mod tests {
         let head = Connection::open_in_memory().unwrap();
         create_user_schema(&head, "main").unwrap();
         let head_decks = sql(&head);
-        let column = ", tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)))";
+        // The column and, since v69, `draft` behind it — the chain below rewinds v69 first, so
+        // v61's text is head's less both. It ended at `tags` until v69 landed.
+        let column = ", tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)), \
+                      draft INTEGER NOT NULL DEFAULT 0)";
         assert!(
             head_decks.ends_with(column),
             "head's decks ends: {head_decks}"
@@ -15531,7 +15582,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} PRAGMA main.user_version = 61;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} PRAGMA main.user_version = 61;"
         ))
         .unwrap();
         assert_eq!(
@@ -15557,7 +15608,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(sql(&conn), head_decks, "decks climbed back to head's text");
         let rows: Vec<(String, Option<String>, i64)> = {
             let mut stmt = conn
@@ -15633,7 +15684,7 @@ pub(crate) mod tests {
         // `DROP TRIGGER`s are for: without them this dies at `error in trigger sync_ins_decks
         // after drop column`.
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} PRAGMA main.user_version = 61;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} PRAGMA main.user_version = 61;"
         ))
         .unwrap();
         conn.execute_batch(
@@ -15808,7 +15859,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} PRAGMA main.user_version = 60;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} PRAGMA main.user_version = 60;"
         ))
         .unwrap();
         assert_eq!(sql(&conn), None, "a v60 file has no sync_heard");
@@ -15826,7 +15877,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert!(sql(&conn).is_some(), "the rung builds sync_heard");
         assert_eq!(sql(&conn), sql(&head), "sync_heard at head's text");
         let count = |table: &str| -> i64 {
@@ -15894,7 +15945,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} PRAGMA main.user_version = 62;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} PRAGMA main.user_version = 62;"
         ))
         .unwrap();
         for name in BUILT {
@@ -15913,7 +15964,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         for name in BUILT {
             assert!(sql(&conn, name).is_some(), "the rung builds {name}");
             assert_eq!(sql(&conn, name), sql(&head, name), "{name} at head's text");
@@ -16042,7 +16093,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} PRAGMA main.user_version = 63;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} PRAGMA main.user_version = 63;"
         ))
         .unwrap();
         for table in TABLES {
@@ -16071,7 +16122,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         for table in TABLES {
             assert_eq!(
                 sql(&conn, table),
@@ -16159,7 +16210,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} PRAGMA main.user_version = 63;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} PRAGMA main.user_version = 63;"
         ))
         .unwrap();
         conn.execute("DELETE FROM sync_ops", []).unwrap();
@@ -16214,7 +16265,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} PRAGMA main.user_version = 64;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} PRAGMA main.user_version = 64;"
         ))
         .unwrap();
         for name in BUILT {
@@ -16231,7 +16282,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         for name in BUILT {
             assert!(sql(&conn, name).is_some(), "the rung builds {name}");
             assert_eq!(sql(&conn, name), sql(&head, name), "{name} at head's text");
@@ -24452,7 +24503,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert_eq!(
             overrides(&conn),
             before,
@@ -24562,7 +24613,7 @@ pub(crate) mod tests {
         )
         .unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} PRAGMA main.user_version = 58;"
         ))
         .unwrap();
         conn.execute_batch(
@@ -25046,6 +25097,105 @@ pub mod fixtures {
     /// `DROP COLUMN` would refuse a column an index named.
     pub const UNDO_V30: &str = "ALTER TABLE sync_devices DROP COLUMN baselined_at;";
 
+    /// **The v69 rung gives every deck that exists `draft = 0`, retires the old list, and lands on
+    /// head's text** — over a real v68 file, head rewound by [`UNDO_V69`] alone, on a connection
+    /// that ran `capture::install` first, so the rewind has to get past the capture triggers that
+    /// read `decks.draft` — which is the whole of its ⚠️ — and shows it left v68's `decks` text
+    /// byte for byte. The decks and the `app_meta` row are seeded after the rewind: a deck
+    /// inserted at head would take its `draft` from the frozen schema and pass whatever the rung
+    /// did.
+    ///
+    /// The old `draft_decks` list names deck 2 and the rung must **not** believe it: drafts made
+    /// before v69 were synced already, so deck 2 becomes an ordinary deck like deck 1. Another
+    /// `app_meta` key stands beside it as the control that the `DELETE` is the one row's. Then a
+    /// launch's `capture::install` over the climbed file, and the rewind once more — what every
+    /// chain in this file does to a head file.
+    #[test]
+    fn v69_gives_every_existing_deck_draft_0_and_retires_the_draft_list() {
+        let sql = |conn: &Connection| -> String {
+            conn.query_row(
+                "SELECT sql FROM main.sqlite_master WHERE name = 'decks'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let head = Connection::open_in_memory().unwrap();
+        create_user_schema(&head, "main").unwrap();
+        let head_decks = sql(&head);
+        let column = ", draft INTEGER NOT NULL DEFAULT 0)";
+        assert!(
+            head_decks.ends_with(column),
+            "head's decks ends: {head_decks}"
+        );
+
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        crate::sync_engine::capture::install(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V69} PRAGMA main.user_version = 68;"))
+            .unwrap();
+        assert_eq!(
+            has_column(&conn, "decks", "draft"),
+            0,
+            "a v68 deck has no draft"
+        );
+        assert_eq!(
+            sql(&conn),
+            head_decks.replacen(column, ")", 1),
+            "v68's decks, byte for byte"
+        );
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0),
+                    (2, 'Draft deck', 'limited', 0, 0);
+             INSERT INTO app_meta (key, value)
+             VALUES ('draft_decks', '[{\"deckId\":2,\"createdAt\":0}]'),
+                    ('scanner_tray', '[]');",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 69);
+        assert_eq!(sql(&conn), head_decks, "decks climbed back to head's text");
+        let drafts: Vec<(i64, i64)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, draft FROM decks ORDER BY id")
+                .unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(
+            drafts,
+            vec![(1, 0), (2, 0)],
+            "no backfill: a deck on the old list was synced already and stays an ordinary deck"
+        );
+        let meta = |key: &str| -> i64 {
+            conn.query_row("SELECT count(*) FROM app_meta WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .unwrap()
+        };
+        assert_eq!(meta("draft_decks"), 0, "the old list is retired");
+        assert_eq!(meta("scanner_tray"), 1, "and nothing else in app_meta is");
+        // Twice is the same as once: the stamp keeps a second launch off a non-idempotent
+        // `ADD COLUMN`.
+        migrate_user(&conn).unwrap();
+
+        crate::sync_engine::capture::install(&conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V69} PRAGMA main.user_version = 68;"))
+            .unwrap();
+        assert_eq!(
+            has_column(&conn, "decks", "draft"),
+            0,
+            "the rewind takes the column off a launched file too"
+        );
+    }
+
     /// **The v68 rung builds `custom_widgets` empty, at head's exact text, and only once** — over
     /// a real v67 file, head rewound by [`UNDO_V68`] alone, which first has to show it took the
     /// table. Then the one CHECK — a spec that is not JSON is refused — and the owner's decision:
@@ -25066,15 +25216,17 @@ pub mod fixtures {
 
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V68} PRAGMA main.user_version = 67;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V69} {UNDO_V68} PRAGMA main.user_version = 67;"
+        ))
+        .unwrap();
         assert_eq!(sql(&conn), None, "a v67 file has no custom_widgets");
 
         migrate_user(&conn).unwrap();
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         assert!(sql(&conn).is_some(), "the rung builds custom_widgets");
         assert_eq!(sql(&conn), sql(&head), "custom_widgets at head's text");
         let count: i64 = conn
@@ -25126,7 +25278,7 @@ pub mod fixtures {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} PRAGMA main.user_version = 65;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} PRAGMA main.user_version = 65;"
         ))
         .unwrap();
         for name in BUILT {
@@ -25144,7 +25296,7 @@ pub mod fixtures {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 68);
+        assert_eq!(version, 69);
         for name in BUILT {
             assert!(sql(&conn, name).is_some(), "the rung builds {name}");
             assert_eq!(sql(&conn, name), sql(&head, name), "{name} at head's text");
@@ -25202,8 +25354,60 @@ pub mod fixtures {
     /// `idx_device_names_uid` with it.
     pub const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v68's custom widgets — the newest rewind on the user ladder, directly above
-    /// [`UNDO_V67`], and prepended to every chain that starts with it.
+    /// v69's draft flag — the newest rewind on the user ladder, directly above [`UNDO_V68`], and
+    /// prepended to every chain that starts with it.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V62`]'s exactly: `ALTER TABLE decks ADD
+    /// COLUMN` is not idempotent, so a fixture that kept `draft` dies at `duplicate column name:
+    /// draft` on the way back up.
+    ///
+    /// [`UNDO_V62`]'s ⚠️, **thirty times over**: on a fixture that ran `capture::install`, the
+    /// capture triggers of `decks` *and of every table under it* read `decks.draft` — a draft
+    /// deck's rows emit nothing, and a child row's trigger asks its deck — and SQLite refuses a
+    /// `DROP COLUMN` on a column any trigger names, with `error in trigger … after drop column`.
+    /// So the three triggers of each of the ten tables whose parent chain reaches `decks` come off
+    /// first: `decks`, `collection_folders`, `deck_audit`, `deck_cards`, `deck_categories`,
+    /// `deck_notes`, `deck_note_cards`, `deck_todo_lists`, `deck_token_printings` and
+    /// `deck_tokens`. Some of those name no `draft` (`deck_audit` is captured on insert alone, and
+    /// a delete trigger may not ask), and they go anyway, so each table's set comes off whole, as
+    /// [`UNDO_V62`]'s does; `IF EXISTS` makes a name that was never created harmless. Every rewind
+    /// below this one that needed a table's triggers gone finds them gone already. Last in the
+    /// table, so the drop leaves v68's stored `CREATE TABLE` text byte for byte.
+    pub const UNDO_V69: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
+         DROP TRIGGER IF EXISTS sync_upd_decks;
+         DROP TRIGGER IF EXISTS sync_del_decks;
+         DROP TRIGGER IF EXISTS sync_ins_collection_folders;
+         DROP TRIGGER IF EXISTS sync_upd_collection_folders;
+         DROP TRIGGER IF EXISTS sync_del_collection_folders;
+         DROP TRIGGER IF EXISTS sync_ins_deck_audit;
+         DROP TRIGGER IF EXISTS sync_upd_deck_audit;
+         DROP TRIGGER IF EXISTS sync_del_deck_audit;
+         DROP TRIGGER IF EXISTS sync_ins_deck_cards;
+         DROP TRIGGER IF EXISTS sync_upd_deck_cards;
+         DROP TRIGGER IF EXISTS sync_del_deck_cards;
+         DROP TRIGGER IF EXISTS sync_ins_deck_categories;
+         DROP TRIGGER IF EXISTS sync_upd_deck_categories;
+         DROP TRIGGER IF EXISTS sync_del_deck_categories;
+         DROP TRIGGER IF EXISTS sync_ins_deck_notes;
+         DROP TRIGGER IF EXISTS sync_upd_deck_notes;
+         DROP TRIGGER IF EXISTS sync_del_deck_notes;
+         DROP TRIGGER IF EXISTS sync_ins_deck_note_cards;
+         DROP TRIGGER IF EXISTS sync_upd_deck_note_cards;
+         DROP TRIGGER IF EXISTS sync_del_deck_note_cards;
+         DROP TRIGGER IF EXISTS sync_ins_deck_todo_lists;
+         DROP TRIGGER IF EXISTS sync_upd_deck_todo_lists;
+         DROP TRIGGER IF EXISTS sync_del_deck_todo_lists;
+         DROP TRIGGER IF EXISTS sync_ins_deck_token_printings;
+         DROP TRIGGER IF EXISTS sync_upd_deck_token_printings;
+         DROP TRIGGER IF EXISTS sync_del_deck_token_printings;
+         DROP TRIGGER IF EXISTS sync_ins_deck_tokens;
+         DROP TRIGGER IF EXISTS sync_upd_deck_tokens;
+         DROP TRIGGER IF EXISTS sync_del_deck_tokens;
+         ALTER TABLE decks DROP COLUMN draft;";
+
+    /// v68's custom widgets — the rewind directly under [`UNDO_V69`] and directly above
+    /// [`UNDO_V67`], and prepended to every chain that starts with it. It read "the newest rewind
+    /// on the user ladder" until v69 landed above it.
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V66`]'s exactly: the rung is a bare
     /// `CREATE TABLE`, so a fixture that kept `custom_widgets` dies at `table custom_widgets
@@ -26015,7 +26219,7 @@ pub mod fixtures {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
+            "{UNDO_V69} {UNDO_V68} {UNDO_V67} {UNDO_V66} {UNDO_V65} {UNDO_V64} {UNDO_V63} {UNDO_V62} {UNDO_V61} {UNDO_V60} {UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
         ))
         .unwrap();
         conn

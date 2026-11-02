@@ -78,6 +78,7 @@ const SharedPage = lazy(() =>
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const openDeckId = useAppStore((s) => s.openDeckId);
+  const draftDeckId = useAppStore((s) => s.draftDeckId);
   const goldfish = useAppStore((s) => s.goldfish);
   // **The app opens on Home and swaps to the reader's stored view ~93 ms later, and that is
   // deliberate — the obvious fix was built, measured and backed out.** `useStartViewHydration`
@@ -102,9 +103,20 @@ function ActiveView({ update }: { update: Update }) {
   if (activeView === "trade") return <TradePage />;
   if (activeView === "playtesting") return <PlaytestingPage />;
   // No chord, like Shared but for its own reason: it arrived with every digit spoken for, and a
-  // digit for it would have pushed Settings off `Ctrl+9` (`AppShell`'s `CHORD_NAV`). A draft's
-  // deck is built in the Decks view's editor, in its draft mode (`features/draft/navigation.ts`).
-  if (activeView === "draft") return <DraftPage />;
+  // digit for it would have pushed Settings off `Ctrl+9` (`AppShell`'s `CHORD_NAV`).
+  //
+  // **A draft's deck is built in this view's own editor**, not the Decks view's: an unsaved draft
+  // deck is apart from the reader's decks until Save (`DeckRow.draft`), so it opens here in the
+  // editor's draft mode (`host="draft"`, a `Draft & Packs ›` crumb) while the store's
+  // `draftDeckId` names it — `features/draft/navigation.ts`. The editor is in the first chunk
+  // already (the Decks view's), so this arm fetches nothing the page's does not.
+  if (activeView === "draft") {
+    return draftDeckId !== null ? (
+      <DeckEditor key={`draft:${draftDeckId}`} deckId={draftDeckId} host="draft" />
+    ) : (
+      <DraftPage />
+    );
+  }
   if (activeView === "settings") return <SettingsPage update={update} />;
   // The gallery is the Decks view in its first state and the editor is the same view with a
   // deck open — one destination, two states, which is why the id lives in the store and not in
@@ -145,7 +157,8 @@ function ActiveView({ update }: { update: Update }) {
 /**
  * The view, under the two boundaries that keep a failing one inside its own box.
  *
- * **Keyed by where the reader stands** — the view, the open deck and the goldfish board — so a
+ * **Keyed by where the reader stands** — the view, the open deck (the Draft view's draft deck
+ * too) and the goldfish board — so a
  * press in the rail is a fresh view rather than the failure following the reader there, which is
  * what `ViewBoundary`'s retry is for a reader who stays. The key is the boundary's, not the
  * view's: `ActiveView` keeps its own keys for the editor and the board.
@@ -153,7 +166,7 @@ function ActiveView({ update }: { update: Update }) {
 function ViewArea({ update }: { update: Update }) {
   const place = useAppStore(
     (s) =>
-      `${s.activeView}:${s.openDeckId ?? ""}:${s.goldfish ? `${s.goldfish.deckId}:${s.goldfish.variant}` : ""}`,
+      `${s.activeView}:${s.openDeckId ?? ""}:${s.activeView === "draft" ? (s.draftDeckId ?? "") : ""}:${s.goldfish ? `${s.goldfish.deckId}:${s.goldfish.variant}` : ""}`,
   );
   return (
     <ViewBoundary key={place}>

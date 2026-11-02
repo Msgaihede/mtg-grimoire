@@ -7,6 +7,7 @@ import { resetNotifications } from "@/lib/notifications";
 import { resetViewMemory } from "@/lib/viewMemory";
 import { resetPackMarketplaces } from "@/features/draft/packs/marketplacePick";
 import { resetPackReduced } from "@/features/draft/packs/reducedPick";
+import { resetSideboard } from "@/features/draft/pick/split";
 import { resetDraftTrayLayout } from "@/features/draft/pick/trayLayout";
 
 /**
@@ -99,6 +100,8 @@ afterEach(resetViewMemory);
 afterEach(resetPackMarketplaces);
 // Its sell percentage and minimum too, kept the same way and for the same reason.
 afterEach(resetPackReduced);
+// A draft's deck-or-sideboard split (issue #1471), kept the same way and for the same reason.
+afterEach(resetSideboard);
 // The draft pick screen's pool layout (issue #1474), kept the same way: a test that put the pool in
 // the side tray would otherwise open the next test's draft with it there.
 afterEach(resetDraftTrayLayout);

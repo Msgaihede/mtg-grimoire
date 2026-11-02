@@ -382,6 +382,7 @@ const BURN: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -528,7 +529,8 @@ const lastQuery = () =>
  */
 const sweepCallsAt = (marketplace: string) =>
   collectionList.mock.calls.filter(
-    ([q]) => (q as CollectionQuery).limit === 500 && (q as CollectionQuery).marketplace === marketplace,
+    ([q]) =>
+      (q as CollectionQuery).limit === 500 && (q as CollectionQuery).marketplace === marketplace,
   ).length;
 
 /**
@@ -558,8 +560,7 @@ const sortSelect = () => onPage(screen.getAllByRole("button", { name: "Sort resu
  * reachable under jsdom, which measures every box as zero and therefore always reads as roomy),
  * and a reader who has shut it.
  */
-const searchColumn = () =>
-  screen.queryByRole("region", { name: "Add cards to your collection" });
+const searchColumn = () => screen.queryByRole("region", { name: "Add cards to your collection" });
 
 /**
  * The one match that is **not** inside the sidebar — the page's own half of the screen.
@@ -604,7 +605,9 @@ function offPanel<T extends Element>(matches: readonly T[] | ArrayLike<T>): T[] 
  * listbox is a plain conditional render, so it commits with the click and querying it here is a
  * fail-fast rather than a wait.
  */
-async function openPageSort(user: { click: (element: Element) => Promise<unknown> }): Promise<void> {
+async function openPageSort(user: {
+  click: (element: Element) => Promise<unknown>;
+}): Promise<void> {
   await user.click(sortSelect());
   screen.getByRole("listbox");
 }
@@ -633,7 +636,6 @@ async function openTray(user: {
 }): Promise<void> {
   await user.click(onPage(screen.getAllByRole("button", { name: /^Show filters/ })));
 }
-
 
 /**
  * The page, under the providers `App` mounts above it.
@@ -1040,7 +1042,12 @@ beforeEach(() => {
   shareOpen.mockReset().mockResolvedValue(undefined);
   syncSupporterStatus
     .mockReset()
-    .mockResolvedValue({ entitled: true, status: "active", since: 1_750_000_000, groupBound: true });
+    .mockResolvedValue({
+      entitled: true,
+      status: "active",
+      since: 1_750_000_000,
+      groupBound: true,
+    });
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
@@ -1168,7 +1175,9 @@ describe("CollectionPage", () => {
     // so it rides on the figure it is about — `Figure`'s own `title` prop, bound through
     // `useTooltip()` since the tooltip sweep rather than a native attribute.
     await userEvent.hover(figure);
-    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    const panel = await screen.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
     expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
     expect(figure).toHaveAttribute("aria-describedby", panel.id);
     await userEvent.unhover(figure);
@@ -1195,7 +1204,9 @@ describe("CollectionPage", () => {
     expect(figure).toHaveTextContent("€8,100.00");
     expect(screen.queryAllByText(/\$/)).toEqual([]);
     await userEvent.hover(figure);
-    const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
+    const panel = await screen.findByRole("tooltip", undefined, {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
     expect(panel).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
     await userEvent.unhover(figure);
   });
@@ -2031,7 +2042,9 @@ describe("CollectionPage", () => {
     // search inside it. The `querySelectorAll` still counts one across the whole page, which is
     // what catches a ring drawn in both places at once — scoped to the tiles, since a shelf
     // heading's controls carry focus-ring classes of their own.
-    expect(cardSources(container).filter((tile) => tile.classList.contains("ring-accent"))).toHaveLength(1);
+    expect(
+      cardSources(container).filter((tile) => tile.classList.contains("ring-accent")),
+    ).toHaveLength(1);
     expect(tileQuoting("$9.00").classList.contains("ring-accent")).toBe(true);
     expect(tileQuoting("$1.00").classList.contains("ring-accent")).toBe(false);
   });
@@ -2116,7 +2129,8 @@ describe("CollectionPage", () => {
     };
     const stepper = (direction: "Increase" | "Decrease", label: string) =>
       screen.getByRole("button", { name: new RegExp(`^${direction} ${named(label)}$`) });
-    const box = (label: string) => screen.getByRole("spinbutton", { name: new RegExp(`^${named(label)}$`) });
+    const box = (label: string) =>
+      screen.getByRole("spinbutton", { name: new RegExp(`^${named(label)}$`) });
     /** The same lookup where the expected answer is *nothing* — a fenced tile, or one that has
      *  left the list. `query`, so a miss is `null` rather than a throw. */
     const noBox = (label: string) =>
@@ -2303,15 +2317,22 @@ describe("CollectionPage", () => {
       collectionList.mockResolvedValue(
         page([
           { ...BOLT, id: 7, finish: "foil", folderId: null, quantity: 2 },
-          { ...BOLT, id: 8, finish: "nonfoil", folderId: 3, folderName: "Trade binder", quantity: 1 },
+          {
+            ...BOLT,
+            id: 8,
+            finish: "nonfoil",
+            folderId: 3,
+            folderName: "Trade binder",
+            quantity: 1,
+          },
         ]),
       );
       wrap(<CollectionPage />);
       await screen.findAllByAltText("Lightning Bolt");
 
-      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(
-        1,
-      );
+      expect(
+        await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) }),
+      ).toHaveValue(1);
       expect(box("Lightning Bolt (Foil)")).toHaveValue(2);
     });
 
@@ -2358,9 +2379,9 @@ describe("CollectionPage", () => {
       await screen.findByAltText("Counterspell");
 
       // The sentinel: the census has answered, so a filed tile can draw one.
-      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(
-        1,
-      );
+      expect(
+        await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) }),
+      ).toHaveValue(1);
       expect(noBox("Counterspell")).toBeNull();
       // And the tile is still a tile — badged with what the deck holds, openable, draggable.
       expect(screen.getByText("4 in your collection")).toBeInTheDocument();
@@ -2377,8 +2398,22 @@ describe("CollectionPage", () => {
       opened(DECK_GROUP.id);
       collectionList.mockResolvedValue(
         page([
-          { ...BOLT, id: 7, finish: "nonfoil", folderId: 3, folderName: "Trade binder", quantity: 1 },
-          { ...BOLT, id: 8, finish: "nonfoil", folderId: 20, folderName: "Mono-Red Aggro", quantity: 2 },
+          {
+            ...BOLT,
+            id: 7,
+            finish: "nonfoil",
+            folderId: 3,
+            folderName: "Trade binder",
+            quantity: 1,
+          },
+          {
+            ...BOLT,
+            id: 8,
+            finish: "nonfoil",
+            folderId: 20,
+            folderName: "Mono-Red Aggro",
+            quantity: 2,
+          },
         ]),
       );
       wrap(<CollectionPage />);
@@ -2422,7 +2457,9 @@ describe("CollectionPage", () => {
       await waitFor(() => expect(standingIn()).toBe(21));
 
       await screen.findByAltText("Lightning Bolt");
-      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(1);
+      expect(
+        await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) }),
+      ).toHaveValue(1);
 
       await userEvent.click(stepper("Decrease", "Lightning Bolt"));
       expect(collectionSetQuantity).toHaveBeenCalledWith(7, 0);
@@ -2439,7 +2476,14 @@ describe("CollectionPage", () => {
       opened(DECK_GROUP.id, REMOVED.id);
       collectionList.mockResolvedValue(
         page([
-          { ...BOLT, id: 7, finish: "nonfoil", folderId: 21, folderName: "Recently removed", quantity: 1 },
+          {
+            ...BOLT,
+            id: 7,
+            finish: "nonfoil",
+            folderId: 21,
+            folderName: "Recently removed",
+            quantity: 1,
+          },
           {
             ...BOLT,
             id: 8,
@@ -2455,7 +2499,9 @@ describe("CollectionPage", () => {
       wrap(<CollectionPage />);
       await screen.findByAltText("Counterspell");
 
-      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(1);
+      expect(
+        await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) }),
+      ).toHaveValue(1);
       expect(noBox("Counterspell")).toBeNull();
       expect(steppers()).toHaveLength(1);
     });
@@ -2504,9 +2550,7 @@ describe("CollectionPage", () => {
         ).toBeNull(),
       );
       expect(
-        screen.getByText(
-          "In Mono-Red Aggro. Remove it from the deck to change the quantity.",
-        ),
+        screen.getByText("In Mono-Red Aggro. Remove it from the deck to change the quantity."),
       ).toBeInTheDocument();
 
       // And the unfiled row beside it still is maintained here, which is what keeps the absence
@@ -2607,9 +2651,9 @@ describe("CollectionPage", () => {
     // The collection's own preview: a condition/finish default pair the deck's importer has
     // no equivalent of, and an `add`/`set` mode radio rather than `merge`/`replace`.
     expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
-    expect(
-      within(dialog).getByRole("button", { name: "Default condition" }),
-    ).toHaveTextContent("Not set");
+    expect(within(dialog).getByRole("button", { name: "Default condition" })).toHaveTextContent(
+      "Not set",
+    );
 
     // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
     // same accessible name.
@@ -3232,7 +3276,14 @@ describe("the card menu", () => {
       collectionList.mockResolvedValue(
         page([
           { ...BOLT, id: 7, folderId: 21, folderName: "Recently removed", quantity: 1 },
-          { ...BOLT, id: 9, condition: "LP", folderId: 21, folderName: "Recently removed", quantity: 2 },
+          {
+            ...BOLT,
+            id: 9,
+            condition: "LP",
+            folderId: 21,
+            folderName: "Recently removed",
+            quantity: 2,
+          },
         ]),
       );
       wrap(<CollectionPage />);
@@ -3829,7 +3880,9 @@ describe("the collection's shelves", () => {
 
   it("files a copy out of Recently removed and back to the root from the breadcrumb", async () => {
     collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
-    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 21, folderName: "Recently removed" }]));
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, folderId: 21, folderName: "Recently removed" }]),
+    );
     const user = userEvent.setup();
     const { container } = wrap(<CollectionPage />);
     await openShelf(user, "Recently removed");
@@ -3949,7 +4002,9 @@ describe("the collection's shelves", () => {
   it("refuses to drag a copy out of a deck group", async () => {
     collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
     opened(DECK_GROUP.id);
-    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 20, folderName: "Mono-Red Aggro" }]));
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, folderId: 20, folderName: "Mono-Red Aggro" }]),
+    );
     const { container } = wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
     await findHeading("Trade binder");
@@ -4168,7 +4223,9 @@ describe("the collection's shelves", () => {
   it("files a copy out of Recently removed onto a binder's heading, and re-reads the list", async () => {
     collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
     opened(REMOVED.id);
-    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 21, folderName: "Recently removed" }]));
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, folderId: 21, folderName: "Recently removed" }]),
+    );
     const { client, container } = wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
     await findHeading("Trade binder");
@@ -4433,7 +4490,9 @@ describe("the wall at the root", () => {
     await findHeading("Foils");
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
 
-    await user.click(within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }));
+    await user.click(
+      within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }),
+    );
 
     await waitFor(() => expect(queryHeading("Foils")).toBeNull());
     expect(screen.queryByText("Lightning Bolt")).toBeNull();
@@ -4510,7 +4569,9 @@ describe("the wall at the root", () => {
       }),
     );
     for (const name of ["Not sorted", "Trade binder", "Mono-Red Aggro"]) {
-      expect(within(heading(name)).getByRole("button", { name: `Expand ${name}` })).toBeInTheDocument();
+      expect(
+        within(heading(name)).getByRole("button", { name: `Expand ${name}` }),
+      ).toBeInTheDocument();
     }
   });
 
@@ -4538,9 +4599,7 @@ describe("the wall at the root", () => {
     wrap(<CollectionPage />);
     const group = await findHeading("Mono-Red Aggro");
 
-    await waitFor(() =>
-      expect(group.querySelectorAll("[data-shelf-peek] img")).toHaveLength(2),
-    );
+    await waitFor(() => expect(group.querySelectorAll("[data-shelf-peek] img")).toHaveLength(2));
     expect(lastQuery().shelves).not.toContain(20);
     // Shut, so its own cards are not on the wall.
     expect(screen.queryByText("Counterspell")).toBeNull();
@@ -4809,9 +4868,9 @@ describe("Add folder", () => {
     expect(follows(heading("Sealed"), draft)).toBe(true);
     expect(follows(draft, heading("Mono-Red Aggro"))).toBe(true);
     const boxes = [...container.querySelectorAll(`[${EMPTY_SHELF_ATTR}]`)];
-    expect(boxes.some((box) => follows(draft, box) && follows(box, heading("Mono-Red Aggro")))).toBe(
-      true,
-    );
+    expect(
+      boxes.some((box) => follows(draft, box) && follows(box, heading("Mono-Red Aggro"))),
+    ).toBe(true);
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
   });
 
@@ -5247,7 +5306,10 @@ describe("renaming a folder on its heading", () => {
     for (const row of [/^Move to folder/, /^Move up/, /^Move down/, /^Lock folder/, /^Delete/]) {
       expect(screen.getByRole("menuitem", { name: row })).toBeInTheDocument();
     }
-    expect(screen.getByRole("menuitem", { name: /^Move up/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitem", { name: /^Move up/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
     await user.click(screen.getByRole("menuitem", { name: /^Move to folder/ }));
     const move = await screen.findByRole("group", { name: "Move Trade binder into a folder" });
@@ -5334,7 +5396,9 @@ describe("the caret after Add folder in a heading and after a move", () => {
     }));
   /** The list over those rows, paged and narrowed to the shelves the query names. */
   const listOf = (rows: readonly CollectionRow[]) => async (q: CollectionQuery) => {
-    const shown = rows.filter((row) => q.shelves === undefined || q.shelves.includes(row.folderId!));
+    const shown = rows.filter(
+      (row) => q.shelves === undefined || q.shelves.includes(row.folderId!),
+    );
     const from = q.offset ?? 0;
     return page(shown.slice(from, from + (q.limit ?? 100)), shown.length);
   };
@@ -6384,7 +6448,9 @@ describe("locking a folder", () => {
     wrap(<CollectionPage />);
     await findHeading("Foils");
 
-    expect(within(heading("Trade binder")).getByRole("img", { name: "Locked" })).toBeInTheDocument();
+    expect(
+      within(heading("Trade binder")).getByRole("img", { name: "Locked" }),
+    ).toBeInTheDocument();
     expect(within(heading("Foils")).getByRole("img", { name: "Locked" })).toBeInTheDocument();
   });
 
@@ -6545,9 +6611,7 @@ describe("locking a folder", () => {
     wrap(<CollectionPage />);
     await findHeading("Graded");
     await shelfMenu(user, "Trade binder");
-    expect(screen.getByRole("menuitem", { name: /^Delete/ })).not.toHaveAttribute(
-      "aria-disabled",
-    );
+    expect(screen.getByRole("menuitem", { name: /^Delete/ })).not.toHaveAttribute("aria-disabled");
   });
 
   /**
@@ -6630,7 +6694,9 @@ describe("locking a folder", () => {
       expect(await screen.findAllByText("Lightning Bolt")).toHaveLength(2);
       await findHeading("Trade binder");
 
-      expect(within(heading("Trade binder")).getByRole("img", { name: "Locked" })).toBeInTheDocument();
+      expect(
+        within(heading("Trade binder")).getByRole("img", { name: "Locked" }),
+      ).toBeInTheDocument();
       expect(within(heading("Not sorted")).queryByRole("img", { name: "Locked" })).toBeNull();
     });
 
@@ -6782,11 +6848,7 @@ describe("locking a folder", () => {
      * confirm a move inside their own drawer.
      */
     it("treats a locked drawer inside a locked drawer as one drawer", async () => {
-      collectionFolderList.mockResolvedValue([
-        LOCKED_BINDER,
-        { ...FOILS, locked: true },
-        SLEEVED,
-      ]);
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER, { ...FOILS, locked: true }, SLEEVED]);
       collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 9, folderName: "Foils" }]));
       const { container } = wrap(<CollectionPage />);
       await screen.findByText("Lightning Bolt");
@@ -7058,7 +7120,10 @@ describe("rearranging the collection's cabinet", () => {
     // 600px this file stubs, and two rows of tiles (~290px each) put `Sealed`'s heading — the one
     // this case picks up — past the window and the overscan, so it would never mount to be held.
     const tall = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
-    Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      value: 2000,
+    });
     try {
       wrap(<CollectionPage />);
       await wall();
@@ -7157,7 +7222,9 @@ describe("folding while filtering, a drawer deleted elsewhere, and the loaded ed
      *  the wall and draws it open — which is how the case knows the filter has taken. */
     async function filtered() {
       collectionFolderList.mockResolvedValue([BINDER, SEALED]);
-      collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 3, folderName: "Trade binder" }]));
+      collectionList.mockResolvedValue(
+        page([{ ...BOLT, folderId: 3, folderName: "Trade binder" }]),
+      );
       shelfFolds.mockResolvedValue({ collection: { [String(BINDER.id)]: true }, wishlist: {} });
       const user = userEvent.setup();
       wrap(<CollectionPage />);
@@ -7230,7 +7297,9 @@ describe("folding while filtering, a drawer deleted elsewhere, and the loaded ed
     wrap(<CollectionPage />);
     await findHeading("Trade binder");
 
-    await user.click(within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }));
+    await user.click(
+      within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }),
+    );
 
     await waitFor(() =>
       expect(setShelfFolds).toHaveBeenCalledWith("collection", { [String(BINDER.id)]: true }),
@@ -7338,7 +7407,14 @@ describe("folding while filtering, a drawer deleted elsewhere, and the loaded ed
     collectionList.mockResolvedValue(
       page([
         BOLT,
-        { ...BOLT, id: 8, cardId: "c-shock", name: "Shock", folderId: 3, folderName: "Trade binder" },
+        {
+          ...BOLT,
+          id: 8,
+          cardId: "c-shock",
+          name: "Shock",
+          folderId: 3,
+          folderName: "Trade binder",
+        },
       ]),
     );
     wrap(<CollectionPage />);
@@ -7358,7 +7434,16 @@ describe("folding while filtering, a drawer deleted elsewhere, and the loaded ed
   it("refuses a copy dropped on Recently removed's heading", async () => {
     collectionFolderList.mockResolvedValue([BINDER, REMOVED]);
     collectionList.mockResolvedValue(
-      page([{ ...BOLT, id: 8, cardId: "c-shock", name: "Shock", folderId: 3, folderName: "Trade binder" }]),
+      page([
+        {
+          ...BOLT,
+          id: 8,
+          cardId: "c-shock",
+          name: "Shock",
+          folderId: 3,
+          folderName: "Trade binder",
+        },
+      ]),
     );
     wrap(<CollectionPage />);
     await findHeading("Recently removed");
@@ -7607,7 +7692,11 @@ describe("walking up to a level nothing has cached", () => {
     collectionFolderList.mockResolvedValue([BINDER, FOILS]);
     collectionList.mockImplementation((q: CollectionQuery) =>
       // `Trade binder` says it holds more than one page, so a wall that asks for the next one can.
-      answerFor(q, page(LEVEL_ROWS.get(levelOf(q)) ?? [], levelOf(q) === 3 ? 250 : undefined), true),
+      answerFor(
+        q,
+        page(LEVEL_ROWS.get(levelOf(q)) ?? [], levelOf(q) === 3 ? 250 : undefined),
+        true,
+      ),
     );
     collectionSummary.mockImplementation((q: CollectionQuery) =>
       answerFor(q, summary({ totalCards: LEVEL_CARDS.get(levelOf(q)) ?? 0 })),
@@ -7788,8 +7877,7 @@ describe("the docked card search", () => {
       .closest(`[${DND_SOURCE_ATTR}]`) as HTMLElement;
 
   /** The `+` on the panel's tile, whose accessible name states where a press would file. */
-  const quickAdd = () =>
-    within(searchColumn()!).getByRole("button", { name: /^Add Black Lotus/ });
+  const quickAdd = () => within(searchColumn()!).getByRole("button", { name: /^Add Black Lotus/ });
 
   /** Press the `+`, then the popup's own Add. Two presses because they are two decisions: the
    *  popup is where a reader says the finish, the grade and the price if they want to. */
@@ -7978,7 +8066,9 @@ describe("sharing from the cabinet", () => {
     wrap(<CollectionPage />);
     await findHeading("Trade binder");
 
-    expect(await screen.findByRole("button", { name: "Share your collection" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Share your collection" }),
+    ).toBeInTheDocument();
   });
 
   /**
@@ -8337,19 +8427,22 @@ describe("a needs-review hand-off over a filed cabinet", () => {
   it.each([
     ["its chip", "Remove filter — Needs review"],
     ["Reset all", /^Reset all/],
-  ] as const)("keeps the root, and its folds, when the filter is cleared by %s", async (_how, name) => {
-    const user = userEvent.setup();
-    wrap(<CollectionPage />);
-    await screen.findByText("Mox Sapphire");
+  ] as const)(
+    "keeps the root, and its folds, when the filter is cleared by %s",
+    async (_how, name) => {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await screen.findByText("Mox Sapphire");
 
-    await user.click(onPage(screen.getAllByRole("button", { name })));
+      await user.click(onPage(screen.getAllByRole("button", { name })));
 
-    await waitFor(() => expect(lastQuery().needsReview).toBeUndefined());
-    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
-    // Filed in the reader's own drawer, which the root's wall shows with or without a filter.
-    expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByText("Mox Sapphire")).toBeNull());
-    expect(standingIn()).toBeNull();
-    expect(setShelfFolds).not.toHaveBeenCalled();
-  });
+      await waitFor(() => expect(lastQuery().needsReview).toBeUndefined());
+      expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+      // Filed in the reader's own drawer, which the root's wall shows with or without a filter.
+      expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByText("Mox Sapphire")).toBeNull());
+      expect(standingIn()).toBeNull();
+      expect(setShelfFolds).not.toHaveBeenCalled();
+    },
+  );
 });

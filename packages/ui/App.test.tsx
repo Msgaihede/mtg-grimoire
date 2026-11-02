@@ -312,6 +312,7 @@ const BURN: DeckRow = {
   curveCreatures: false,
   todosOpen: false,
   syncUid: null,
+  draft: false,
   defaultCategoryId: 0,
   bracket: 0,
   tags: [],
@@ -671,6 +672,24 @@ it("loads the occasional views on first open rather than with the app", () => {
     expect(appSource).toContain(`import("@/features/${view}")`);
     expect(appSource).not.toMatch(new RegExp(`^import [^;]*"@/features/${view}";`, "m"));
   }
+});
+
+/**
+ * **A draft deck's editor is the Draft view's** — it is apart from the reader's decks until Save,
+ * so `App` draws the same editor in Draft & Packs while the store's `draftDeckId` names one, with
+ * a way back of its own, and the Decks view knows nothing of it.
+ */
+it("draws the deck editor in the Draft view on the draft deck it names", async () => {
+  const draftDetail = detail([]);
+  deckGet.mockResolvedValue({ ...draftDetail, deck: { ...draftDetail.deck, draft: true } });
+  useAppStore.setState({ activeView: "draft", draftDeckId: 4 });
+  render(<App />);
+
+  expect(await screen.findByLabelText("Deck name")).toBeInTheDocument();
+  expect(deckGet).toHaveBeenCalledWith(4, "live", "tcgplayer");
+  expect(screen.getByRole("button", { name: "Back to Draft & Packs" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /back to decks/i })).not.toBeInTheDocument();
+  expect(useAppStore.getState().openDeckId).toBeNull();
 });
 
 it("swaps the main pane when a sidebar entry is picked", async () => {

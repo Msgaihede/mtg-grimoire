@@ -35,7 +35,7 @@ import type {
   DeckRow,
   DeckVariant,
   DraftCard,
-  DraftDeckRef,
+  DraftDeckCard,
   DraftSaved,
   DraftSetup,
   DraftView,
@@ -47,7 +47,12 @@ import type {
   WinstonView,
 } from "@grimoire/ui/lib/ipc";
 import type { FakeCard } from "./cards";
-import type { FakeDb } from "./db";
+import type { FakeDb, FakeDeck } from "./db";
+
+/** `draft_deck::NOT_A_DRAFT_DECK` — a discard of a deck whose row does not say `draft`. */
+export const NOT_A_DRAFT_DECK = "That deck is not an unsaved draft deck, so it was not deleted.";
+/** `deck::GONE` — a keep of a deck that is not there. */
+export const DECK_GONE = "That deck is not there any more.";
 
 /** The sentence every lobby write refuses with. */
 export const LOBBIES_OFF = "Lobbies need the desktop app.";
@@ -57,6 +62,11 @@ export const DRAFT_REPLACED = "That draft has been replaced by another one.";
 export const NOT_IN_PACK = "That card is not in your pack.";
 /** A pick once every pack is empty. */
 export const DRAFT_OVER = "The draft is over — build your deck from the pool.";
+/** `draft_deck::NOT_A_DECK_PILE` — a deck card filed into a zone's name. */
+export const NOT_A_DECK_PILE =
+  "A card for the deck was filed into the sideboard or another zone, so no deck was made.";
+/** The names a deck card may not be filed into: the deck's zones, and the draft deck's Pool. */
+const ZONES: readonly string[] = ["Pool", "Commander", "Sideboard", "Companion", "Maybeboard"];
 /** `draft_resume` with nothing left off. */
 export const NOTHING_SAVED = "There is no draft to resume.";
 /** A pick of the wrong number of cards — a Commander draft takes two. */
@@ -119,12 +129,9 @@ const WINSTON_PILES = 3;
 
 interface DraftWorld {
   draft: DraftState | null;
-  /**
-   * `app_meta` `draft_decks`: the decks a draft made and the reader has not saved, each by its id
-   * and the uid it was made with (issue #1467). This fake's deck uid is derived from the id, so it
-   * cannot tell a reused id from the deck that had it — `draft_deck.rs`' tests hold that half.
-   */
-  draftDecks: DraftDeckRef[];
+  // No list of draft decks: since user schema v69 a draft deck is its own row's `draft` flag
+  // (`FakeDeck.draft`), which the deck handlers read too — the crate retired `app_meta`
+  // `draft_decks` with the same rung.
 }
 
 const WORLDS = new WeakMap<FakeDb, DraftWorld>();
@@ -132,7 +139,7 @@ const WORLDS = new WeakMap<FakeDb, DraftWorld>();
 function worldOf(db: FakeDb): DraftWorld {
   let world = WORLDS.get(db);
   if (world === undefined) {
-    world = { draft: null, draftDecks: [] };
+    world = { draft: null };
     WORLDS.set(db, world);
   }
   return world;
@@ -552,8 +559,10 @@ function current(db: FakeDb, name: number): DraftState {
 
 /**
  * `draft_deck::create` over the world's own deck writes: a **virtual** `limited` deck named
- * after the draft, its predefined zones taken away for two piles — **Deck** (`main`, the deck's
- * default, empty) and **Pool** (`side`, every drafted card) — and the deck on the unsaved list.
+ * after the draft, its predefined zones taken away for **Pool** (`side`, the cards sent to the
+ * sideboard) and, with no card sent to the deck, **Deck** (`main`, the deck's default, empty) —
+ * made with its row's `draft` flag set. Each of `deck` (issue #1471) lands in the pile the page
+ * filed it into, found or made, and the deck's adds are then filed by the rule (`AUTO_CATEGORY`).
  * With `commander` (a Commander draft's) it is a `casual` deck with a third, empty **Commander**
  * pile.
  * A printing the corpus does not hold is skipped, as the crate skips it.
@@ -568,7 +577,9 @@ export function createDraftDeck(
   name: string,
   cardIds: readonly string[],
   commander = false,
+  deck: readonly DraftDeckCard[] = [],
 ): DeckRow {
+  if (deck.some((c) => ZONES.includes(c.pile.trim()))) throw new Error(NOT_A_DECK_PILE);
   const row = writes.deck_create({
     deck: {
       name: name.trim() === "" ? "Draft" : name,
@@ -602,13 +613,40 @@ export function createDraftDeck(
       sortOrder: 2,
     });
   }
-  const deck = db.decks.find((d) => d.id === row.id);
-  if (deck !== undefined) deck.defaultCategoryId = deckPile.id;
+  const known = (cardId: string) => db.cards.some((c) => c.id === cardId);
+  const filed = deck.some((c) => known(c.cardId));
+  const made = db.decks.find((d) => d.id === row.id);
+  // `create_deck_with(.., true)`: the crate writes the flag in the INSERT. Here it is set on the
+  // row straight after `deck_create`, before any card is added — nothing reads between.
+  if (made !== undefined) made.draft = true;
+  if (filed) {
+    // The cards sent to the deck are in piles of their own: no empty Deck pile, and adds filed
+    // by the rule.
+    db.deckCategories = db.deckCategories.filter((c) => c.id !== deckPile.id);
+    if (made !== undefined) made.defaultCategoryId = 0;
+  } else if (made !== undefined) made.defaultCategoryId = deckPile.id;
+  for (const card of deck) {
+    if (!known(card.cardId)) continue;
+    writes.deck_add_card({
+      deckId: row.id,
+      cardId: card.cardId,
+      categoryId: null,
+      categoryName: card.pile.trim(),
+      variant: "live",
+      quantity: 1,
+    });
+  }
+  if (filed) {
+    const last = db.deckCategories
+      .filter((c) => c.deckId === row.id)
+      .reduce((n, c) => Math.max(n, c.sortOrder), 0);
+    poolPile.sortOrder = last + 1;
+  }
 
   const counts = new Map<string, number>();
   for (const id of cardIds) counts.set(id, (counts.get(id) ?? 0) + 1);
   for (const [cardId, quantity] of counts) {
-    if (!db.cards.some((c) => c.id === cardId)) continue;
+    if (!known(cardId)) continue;
     writes.deck_add_card({
       deckId: row.id,
       cardId,
@@ -618,8 +656,7 @@ export function createDraftDeck(
       quantity,
     });
   }
-  if (row.syncUid !== null) worldOf(db).draftDecks.push({ id: row.id, syncUid: row.syncUid });
-  return row;
+  return { ...row, draft: true };
 }
 
 /** `draft_deck::basic_lands` — each of the five basics the corpus holds, in a printing of one of
@@ -644,8 +681,16 @@ function basicLands(db: FakeDb, setCodes: readonly string[]): BasicLand[] {
 
 /* ------------------------------------------------------------------ handlers */
 
-/** Every `packs_*`, `draft_*`, `draft_deck_*` and `lobby_*` command, over one world. */
-export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
+/**
+ * Every `packs_*`, `draft_*`, `draft_deck_*` and `lobby_*` command, over one world. `rowOf` is
+ * `db.ts`' own `DeckRow` builder, handed in for `draft_deck_list` for {@link DraftDeckWrites}'
+ * reason (this module imports no value from `db.ts`).
+ */
+export function draftHandlers(
+  db: FakeDb,
+  writes: DraftDeckWrites,
+  rowOf: (deck: FakeDeck) => DeckRow,
+) {
   return {
     packs_booster_sets: (): BoosterSetSummary[] => fakeBoosterSets(db),
     packs_booster_set: (args: { setCode: string; refresh: boolean }): BoosterSet =>
@@ -718,25 +763,38 @@ export function draftHandlers(db: FakeDb, writes: DraftDeckWrites) {
       return viewOf(state);
     },
 
-    draft_deck_create: (args: { name: string; cardIds: string[]; commander?: boolean }): DeckRow =>
-      createDraftDeck(db, writes, args.name, args.cardIds, args.commander === true),
-    /** Only the decks that still exist — a draft deck deleted from the gallery leaves the list. */
-    draft_deck_ids: (): DraftDeckRef[] => {
-      const world = worldOf(db);
-      world.draftDecks = world.draftDecks.filter((e) => db.decks.some((d) => d.id === e.id));
-      return world.draftDecks.map((e) => ({ ...e }));
-    },
+    draft_deck_create: (args: {
+      name: string;
+      cardIds: string[];
+      deck?: DraftDeckCard[];
+      commander?: boolean;
+    }): DeckRow =>
+      createDraftDeck(
+        db,
+        writes,
+        args.name,
+        args.cardIds,
+        args.commander === true,
+        args.deck ?? [],
+      ),
+    /** `draft_deck::list` — every deck whose row says `draft`, oldest first (`ORDER BY d.id`). */
+    draft_deck_list: (): DeckRow[] =>
+      db.decks
+        .filter((d) => d.draft === true)
+        .sort((a, b) => a.id - b.id)
+        .map(rowOf),
+    /** `draft_deck::keep` — the flag cleared; a deck already saved is no error, a gone one is. */
     draft_deck_keep: (args: { deckId: number }): void => {
-      const world = worldOf(db);
-      world.draftDecks = world.draftDecks.filter((e) => e.id !== args.deckId);
+      const deck = db.decks.find((d) => d.id === args.deckId);
+      if (deck === undefined) throw new Error(DECK_GONE);
+      deck.draft = false;
     },
+    /** `draft_deck::discard` — refused unless the deck's own row says `draft`, then deleted. */
     draft_deck_discard: (args: { deckId: number }): void => {
-      const world = worldOf(db);
-      if (!world.draftDecks.some((e) => e.id === args.deckId)) {
-        throw new Error("That deck is not a draft deck any more.");
+      if (!db.decks.some((d) => d.id === args.deckId && d.draft === true)) {
+        throw new Error(NOT_A_DRAFT_DECK);
       }
       writes.deck_delete({ id: args.deckId });
-      world.draftDecks = world.draftDecks.filter((e) => e.id !== args.deckId);
     },
     draft_basic_lands: (args: { setCodes: string[] }): BasicLand[] => basicLands(db, args.setCodes),
 

@@ -217,25 +217,71 @@ saved after each change (`app_meta` `draft_session`) and can be resumed; a pod c
 ## The draft deck
 
 A finished pool becomes a **virtual** Limited deck (`draft_deck::create`): nothing is allocated and
-nothing reaches the collection, which is the owner's rule. It has a **Deck** pile (main, the
-default, drawn while empty) and the deck's own Sideboard renamed **Pool** (one `side` pile per list
-is all `idx_deck_categories_kind` allows), holding the whole pool.
+nothing reaches the collection, which is the owner's rule. Its sideboard is the deck's own
+Sideboard renamed **Pool** (one `side` pile per list is all `idx_deck_categories_kind` allows).
 
-Until the reader saves it, it is on `app_meta` `draft_decks` (never synced), and the editor is in
-**draft mode**: no card search dock (neither the corpus search nor the Collection tab), no Quick Add,
-no import, no `Add to ▸ Collection/Wishlist`, and `DraftDeckBar` in their place — basics from a
-printing of the draft's sets, **Save deck** (off the list: a deck like any other), **Export** (the
-editor's own dialog) and **Discard** (deleted; refused for a deck not on the list, so a stale page
-cannot delete a saved one).
+**Deck or sideboard is chosen while picking** (issue #1471, MTG Arena's two lists): the pick
+screen draws the pool as **Deck** and **Sideboard** (`pick/PoolZones.tsx`) — two curves under the
+pack, or two trays beside it in the side layout, the deck's the taller. A card
+dropped on either is picked into it; the Pick button and Enter pick into the deck, _To sideboard_
+and Shift+Enter into the sideboard (a double-click picks into the deck); a press on a picked card —
+or on a tray row, which moves its last-picked copy — sends it to the other list, through the Build
+step too. The split is the page's (`pick/split.ts`) — the engine never hears of it — and
+is kept per device in `localStorage` (one draft at a time, so one row), started over by a draft
+that opens with an empty pool and forgotten when the draft is put away. A pick's list is applied
+only once the pick is taken, so a refused pick leaves nothing behind.
 
-**An entry is the deck's id and its `sync_uid` (`DraftDeckRef`), and a deck is a draft deck only
-while both match** (issue #1467). `decks.id` has no `AUTOINCREMENT`, so SQLite gives a deleted
-highest id to the next deck: a draft deck deleted from the gallery used to leave its bare id on the
-list, and the next deck the reader made opened in draft mode — with a **Discard** that deleted it.
-The uid is never reused, so `draft_deck::ids`, `discard` and the editor's `useIsDraftDeck` (once
-`deck_get` answers) all hold a deck to both. A legacy entry (a bare id) is dropped, the safe
-direction. The list's query key is under the decks root (`["decks", "draftDecks"]`), so every deck
-write's invalidation asks it again.
+At **Build**, the deck's cards are filed by **the add path's own rule** — `autoCategoryFor`, over one
+`oracle_tags_for_printings` read (a failed read files by type line) — and handed to
+`draft_deck_create` as `deck: [{ cardId, pile }]`; the sideboard's go in as `cardIds`, into Pool.
+The piles are found or made `'auto'` (gone with their last card), Pool is put after them, and the
+deck's adds are filed by the rule too (`default_category_id = AUTO_CATEGORY`), so a basic from the
+draft bar joins the other lands. A deck card filed into a zone's name is refused
+(`NOT_A_DECK_PILE`). With no card in the deck, the deck has an empty **Deck** pile instead (main,
+the default, drawn while empty) — the pile the reader drags their first cards out of Pool into.
+
+**Until the reader saves it, it is an unsaved draft deck, and nobody else's** (the owner's rule,
+2026-11-02). The flag is the row's own — `decks.draft` (user schema v69), written by the INSERT
+that makes the deck (`deck::create_deck_with(…, true)`) — and it is the only truth:
+
+- **Hidden from every deck surface.** `deck_list` (`deck::list_decks`) leaves it out, and so the
+  gallery, every picker, the home widgets, the mirror and the read graph's `decks` do too; so do the
+  readers that sum or search across decks — `deck_ids_playing` and a card's "in decks" count,
+  `deck_values`, `deck_pip_costs`, the labels' counts, a card's notes, the to-do widget, deck
+  completion, New printings' watched decks and the activity feed's deck rows. `deck_get` still
+  answers it by id, with `draft: true`, which is what the editor draws draft mode from.
+  `draft_deck_list` (`deck::list_draft_decks`, oldest first) is the page's own list.
+- **Never synced until it is saved.** The capture triggers record no op for a draft's row or any
+  row under it, `sync_engine::baseline` skips it, and the integrations projection and a share never
+  see it (a share of one answers `DECK_NOT_FOUND`). **Save deck** (`draft_deck::keep`) clears the
+  flag and announces the deck in one transaction (`capture::announce_deck`: a `put` for every row
+  of the subtree, parents first), so a peer receives it as a deck just made. **Discard**
+  (`draft_deck::discard`, refused with `NOT_A_DRAFT_DECK` for any deck whose row does not say
+  `draft = 1`) deletes it with capture switched off (`deck::delete_deck` runs a draft's delete under
+  `capture::suppressed`, because the cascade's child triggers fire after the parent row is gone and
+  cannot see the flag) — it never left the device.
+- **Virtual until saved.** `deck_update` refuses to move `virtualOnly` or `theoryEnabled` on a draft
+  (`DRAFT_STAYS_VIRTUAL`). The flag is never copied (`duplicate_deck` makes an ordinary deck), never
+  on the deck's history or undo, and classified `Absent` in `Projection v1`.
+
+**The editor for a draft deck opens inside the Draft & Packs page** (view `draft`), under a **Draft
+& Packs ›** breadcrumb rather than in the Decks view. It is in **draft mode**: no card search dock
+(neither the corpus search nor the Collection tab), no Quick Add, no import, no `Add to ▸
+Collection/Wishlist`, and `DraftDeckBar` in their place — basics from a printing of the draft's
+sets, **Save deck** (a deck like any other, and the reader is taken to the Decks view's editor on
+it), **Export** (the editor's own dialog) and **Discard** (deleted).
+
+**Why a column and not the `app_meta` list it replaced.** Until v69 a draft deck was an ordinary
+deck named on `app_meta` `draft_decks` (never synced) — in the gallery and on every peer from its
+first card, so nothing was hidden. And a list of ids could name the wrong deck (issue #1467):
+`decks.id` has no `AUTOINCREMENT`, so a draft deck deleted from the gallery gave its id to the next
+deck the reader made, which then opened in draft mode with a **Discard** that deleted it; the list
+had started carrying each deck's `sync_uid` beside its id (`DraftDeckRef`) to tell the two apart.
+A flag on the row cannot outlive its row or name another, so a deck that takes a deleted draft's id
+is born with `draft = 0`. The v69 rung deletes the old row and **flags nothing**: the decks it named
+had already reached every peer, so they stay the ordinary decks they were. The list's query key
+stays under the decks root (`["decks", "draftDecks"]`), so every deck write's invalidation asks it
+again.
 
 ## Pods and lobby codes
 

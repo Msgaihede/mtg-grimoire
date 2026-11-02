@@ -4887,3 +4887,38 @@ command: it rides `DeckRow` and `DeckPatch`.
   `deck_tags_round_trip_tidy_audit_and_undo` (`deck.rs`) and
   `v62_gives_every_deck_an_empty_tag_list_behind_a_json_check` (`schema.rs`) are the fences;
   [data-and-sync.md](data-and-sync.md)'s v62 paragraph has the rewind.
+
+## Draft decks: a deck kept apart until it is saved, in `decks.draft`
+
+User schema **v69** (2026-11-02, [issue #1467](https://github.com/Msgaihede/mtg-grimoire/issues/1467))
+is `decks.draft INTEGER NOT NULL DEFAULT 0`, appended last — **1 on an unsaved draft deck**, the
+one Draft & Packs' *Build deck* makes, until the reader presses *Save deck*. A draft is a real deck
+row with a real subtree (categories, cards, the audit, its deck folder) so the deck editor works on
+it unchanged, and the flag is the whole of what keeps it apart. **The flag on the row is the only
+truth**: the `app_meta` `draft_decks` list it replaced is gone, deleted by the rung.
+
+- **Who reads it.** `deck_list` (`list_decks`) leaves drafts out, and so does every other reader
+  of "the reader's decks" — what is playing, deck values, pip costs, notes for a card, the to-do
+  lists, completion, new printings, the activity feed and label counts — while `deck_get`
+  (`read_deck`) answers a draft with `DeckRow.draft: true`, which is how the editor opens it.
+  `draft_deck::list` is the one list of drafts. The integrations projection leaves them out, so a
+  draft cannot be shared either. A draft stays virtual (`update_deck` refuses to change
+  `virtual_only` or `theory_enabled` on one, `DRAFT_STAYS_VIRTUAL`).
+- **Off sync until saved.** The capture triggers of `decks` and of every table whose parent chain
+  reaches it emit nothing for a draft's rows — the uid mint still runs, so the rows have their
+  names ready. Discarding a draft deletes it under suppressed capture, because a child's delete
+  trigger fires after the cascade has already removed the deck it would ask. **Save deck** clears
+  the flag (an update that emits nothing) and `capture::announce_deck` sends the deck and its whole
+  subtree as full `put`s, parents first, as if newly created.
+- **Not itself synced, and copied nowhere.** Not on the `decks` capture spec — a draft never
+  reaches a peer to be told it is one — not on `deck_undo::DECK_FIELDS`, no history row, not
+  carried by `duplicate_deck`, and classified absent in `Projection v1`.
+- **No backfill, deliberately.** The decks the old `draft_decks` list named were made before v69,
+  captured like any other deck and already held by peers. Marking them drafts now would hide on
+  one device a deck its peers show and, on a save, announce the whole subtree a second time —
+  doubling every counter delta its rows carry. So the rung deletes the list and every existing
+  deck reads `draft = 0`: an old draft simply becomes an ordinary deck.
+- **The rung is one `ADD COLUMN` and one `DELETE`**, takes no capture trigger off because it writes
+  no deck row, and adds no index. `UNDO_V69` is the rewind that has to take thirty triggers off
+  first; [data-and-sync.md](data-and-sync.md)'s v69 paragraph has why.
+  `v69_gives_every_existing_deck_draft_0_and_retires_the_draft_list` (`schema.rs`) is the fence.

@@ -70,6 +70,7 @@ function deck(name: string, over: Partial<DeckRow> = {}): DeckRow {
     curveCreatures: false,
     todosOpen: false,
     syncUid: null,
+    draft: false,
     ...over,
   };
 }

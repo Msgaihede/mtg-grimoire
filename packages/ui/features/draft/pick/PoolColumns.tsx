@@ -3,12 +3,15 @@ import { CardArt } from "@/components/CardArt";
 import { scaled } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
 import type { DraftCard } from "@/lib/ipc";
+import { FOCUS } from "@/lib/focus";
 import { useAppStore } from "@/lib/store";
 import { MANA_FILL, MANA_KEYS, MANA_LABEL, manaSymbolClass } from "@/lib/mana";
+import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { LABEL } from "../setup/parts";
 import { CardPreview, useCardPreview } from "./CardPreview";
 import { colorTally, POOL_COLUMNS, poolColumns, type PoolColumn } from "./pool";
+import type { Destination } from "./split";
 
 const COLUMN_TITLE: Record<PoolColumn, string> = {
   "0": "0",
@@ -28,7 +31,7 @@ const COLUMN_TITLE: Record<PoolColumn, string> = {
 const POOL_COLUMN_WIDTH = 190;
 
 /**
- * The pool so far, as a curve: one column per mana value, each a stack of cards with only the
+ * Part of the pool, as a curve: one column per mana value, each a stack of cards with only the
  * top strip of all but the last showing, and the lands in a column of their own. A count over
  * every column and a tally of colours over the whole.
  *
@@ -44,21 +47,41 @@ const POOL_COLUMN_WIDTH = 190;
  * **The pool is never shorter than one card** (issue #1473): it is where a card from the pack is
  * dropped, so an empty pool draws its columns and a row one card tall — a column's width at 5:7 —
  * with the hint over it, and the first pick changes nothing about where the pool can be hit.
+ *
+ * **The pool is drawn as two of these, Deck and Sideboard** (`PoolZones`, issue #1471). With
+ * `moveTo`, each card is a button that sends it to the other one — Arena's click — and says so in
+ * its name.
  */
-export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Element {
+export function PoolColumns({
+  pool,
+  title = "Your pool",
+  empty = "The cards you pick land here, by mana value.",
+  moveTo,
+  onMove,
+}: {
+  pool: readonly DraftCard[];
+  /** The heading, and the section's name. */
+  title?: string;
+  /** What the section says while it holds no card. */
+  empty?: string;
+  /** Where a press on a card sends it — absent, a card is not a button. */
+  moveTo?: Destination;
+  onMove?: (card: DraftCard, to: Destination) => void;
+}): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.draft);
   const columns = useMemo(() => poolColumns(pool), [pool]);
   const tally = useMemo(() => colorTally(pool), [pool]);
   // A stacked card shows only its name strip; resting on it draws it whole (issue #1472).
   const preview = useCardPreview();
+  const movable = moveTo !== undefined && onMove !== undefined;
   return (
-    <section aria-label="Your pool" className="flex flex-col gap-3">
+    <section aria-label={title} className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        <h3 className="m-0 font-heading text-lg font-semibold leading-none">Your pool</h3>
+        <h3 className="m-0 font-heading text-lg font-semibold leading-none">{title}</h3>
         <span className="font-mono text-sm tabular-nums text-dim">
           {plural(pool.length, "card")}
         </span>
-        <ColorTally tally={tally} />
+        <ColorTally tally={tally} label={`Colours in ${title.toLowerCase()}`} />
       </div>
       <div
         className="grid grid-rows-[auto_auto] gap-x-3 gap-y-1.5"
@@ -94,7 +117,19 @@ export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Eleme
                     className="[&:not(:first-child)]:-mt-[122%]"
                     {...preview.tileProps(card)}
                   >
-                    <CardArt cardId={card.cardId} name={card.name} />
+                    {movable ? (
+                      <button
+                        type="button"
+                        aria-label={`Move ${card.name} to the ${moveTo}`}
+                        title={`Move to the ${moveTo}`}
+                        onClick={() => onMove(card, moveTo)}
+                        className={cn("group block w-full rounded-lg", PRESS, FOCUS)}
+                      >
+                        <CardArt cardId={card.cardId} name={card.name} />
+                      </button>
+                    ) : (
+                      <CardArt cardId={card.cardId} name={card.name} />
+                    )}
                   </li>
                 ))}
               </ul>
@@ -113,7 +148,7 @@ export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Eleme
               className="m-0 flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-dim"
               style={{ gridColumn: "1 / -1", gridRow: 2 }}
             >
-              The cards you pick land here, by mana value.
+              {empty}
             </p>
           </>
         )}
@@ -124,9 +159,15 @@ export function PoolColumns({ pool }: { pool: readonly DraftCard[] }): JSX.Eleme
 }
 
 /** One pip per colour with its count, the colours the pool holds none of dimmed. */
-export function ColorTally({ tally }: { tally: Record<string, number> }): JSX.Element {
+export function ColorTally({
+  tally,
+  label = "Colours in your pool",
+}: {
+  tally: Record<string, number>;
+  label?: string;
+}): JSX.Element {
   return (
-    <ul aria-label="Colours in your pool" className="m-0 flex list-none items-center gap-2.5 p-0">
+    <ul aria-label={label} className="m-0 flex list-none items-center gap-2.5 p-0">
       {MANA_KEYS.map((key) => (
         <li
           key={key}

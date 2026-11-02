@@ -699,6 +699,31 @@ interface AppState {
    */
   parkedDeckId: number | null;
   /**
+   * **The draft deck open in Draft & Packs' own editor**, or `null` when that view is drawing its
+   * page (the hub, a setup, a pick, the build) — `features/draft/navigation.ts`' `openDraftDeck`.
+   *
+   * A deck a draft made and the reader has not saved (`DeckRow.draft`) is apart from their decks
+   * until they press Save: no deck list answers it, so its editor is not the Decks view's.
+   * `App.tsx` draws `DeckEditor` with `host="draft"` in the Draft view while this names a deck,
+   * and the page otherwise. Save hands the deck to the Decks view (`openSavedDeck`); Discard and
+   * the editor's `Draft & Packs` crumb set this back to `null` (`returnToDraftPage`).
+   *
+   * **It outlives a view change, where `openDeckId` is parked instead, and the difference is
+   * deliberate.** `openDeckId` is cleared on the way out because three readers take a non-null
+   * id to mean *the Decks editor is on screen* (see {@link parkedDeckId}); none of them is about
+   * a draft deck — the sidebar's Decks entry must not drop a card into one, and the Decks view's
+   * scopes are not its — so nothing gains from a second park. This field is read only beside
+   * `activeView === "draft"` (`App.tsx`, `activeScopes`), so a reader who leaves Draft & Packs
+   * mid-build and comes back lands in the same deck's editor, as a parked deck does.
+   *
+   * **In memory only**, for `openDeckId`'s reason: a restart opens Draft & Packs on its page,
+   * where *Draft in progress* lists the deck.
+   */
+  draftDeckId: number | null;
+  /** Open (or, with `null`, close) the Draft view's editor on a draft deck. Writes no view: call
+   *  `setActiveView("draft")` beside it, which `openDraftDeck` does. */
+  setDraftDeckId: (id: number | null) => void;
+  /**
    * The deck an editor has just closed, waiting for the gallery to hand the caret back to its
    * tile — written by `setOpenDeckId(null)`, read and cleared once by `DecksPage`.
    *
@@ -1728,6 +1753,21 @@ export const useAppStore = create<AppState>((set) => ({
   // never one. There is deliberately no path by which this is non-null while Decks is on screen:
   // arriving spends it, which is what stops a stale id reopening a deck two trips later.
   parkedDeckId: null,
+  // No draft deck open until Draft & Packs' Build (or its *Continue building*) opens one; not
+  // touched by `setActiveView` — see {@link AppState.draftDeckId}.
+  draftDeckId: null,
+  setDraftDeckId: (draftDeckId) =>
+    set({
+      draftDeckId,
+      // Opening or closing the Draft view's editor is a navigation, `setOpenDeckId`'s reasons:
+      // a picked set is addressed by slots of the deck it was picked in, and the card pane's
+      // deck context names a row of a deck that is no longer on screen.
+      cardSelection: null,
+      paneDeckContext: null,
+      paneCopy: null,
+      paneReturns: EMPTY_RETURNS,
+      paneFromDeckSearch: false,
+    }),
   returnToDeckId: null,
   clearReturnToDeck: () => set({ returnToDeckId: null }),
   // Nothing pending until a shortcut somewhere else names a folder, and never again after the

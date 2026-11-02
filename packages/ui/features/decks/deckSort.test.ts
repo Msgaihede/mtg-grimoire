@@ -59,6 +59,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     curveCreatures: false,
     todosOpen: false,
     syncUid: null,
+    draft: false,
     ...over,
   };
 }
@@ -268,9 +269,9 @@ describe("sortDecks — bracket", () => {
   it("breaks a tie between two decks reading the same number on name", () => {
     const decks = [deck({ id: 1, name: "Zur" }), deck({ id: 2, name: "Atraxa" })];
 
-    expect(names(sortDecks(decks, { key: "bracket", desc: false }, ctx({}, { 1: 3, 2: 3 })))).toEqual(
-      ["Atraxa", "Zur"],
-    );
+    expect(
+      names(sortDecks(decks, { key: "bracket", desc: false }, ctx({}, { 1: 3, 2: 3 }))),
+    ).toEqual(["Atraxa", "Zur"]);
   });
 });
 
@@ -369,10 +370,7 @@ describe("sortDecks — the four properties", () => {
    * sorting it in place would mutate the cache every other reader of `["decks", "list"]` shares.
    */
   it("leaves the input array exactly as it found it", () => {
-    const decks = [
-      deck({ name: "Zur", cardCount: 100 }),
-      deck({ name: "Burn", cardCount: 60 }),
-    ];
+    const decks = [deck({ name: "Zur", cardCount: 100 }), deck({ name: "Burn", cardCount: 60 })];
     const before = names(decks);
 
     const sorted = sortDecks(decks, { key: "cards", desc: true }, NOTHING);
@@ -388,9 +386,33 @@ describe("sortDecks — the four properties", () => {
    */
   it("answers the same list upside down when the direction turns", () => {
     const decks = [
-      deck({ id: 1, name: "Atraxa", cardCount: 100, updatedAt: 300, bracket: 4, formatKey: "commander", formatName: "Commander" }),
-      deck({ id: 2, name: "Burn", cardCount: 60, updatedAt: 200, bracket: 2, formatKey: "modern", formatName: "Modern" }),
-      deck({ id: 3, name: "Cascade", cardCount: 80, updatedAt: 100, bracket: 3, formatKey: "pauper", formatName: "Pauper" }),
+      deck({
+        id: 1,
+        name: "Atraxa",
+        cardCount: 100,
+        updatedAt: 300,
+        bracket: 4,
+        formatKey: "commander",
+        formatName: "Commander",
+      }),
+      deck({
+        id: 2,
+        name: "Burn",
+        cardCount: 60,
+        updatedAt: 200,
+        bracket: 2,
+        formatKey: "modern",
+        formatName: "Modern",
+      }),
+      deck({
+        id: 3,
+        name: "Cascade",
+        cardCount: 80,
+        updatedAt: 100,
+        bracket: 3,
+        formatKey: "pauper",
+        formatName: "Pauper",
+      }),
     ];
     const context = ctx({ 1: countPips("{W}"), 2: countPips("{U}{B}"), 3: countPips("{C}") });
 

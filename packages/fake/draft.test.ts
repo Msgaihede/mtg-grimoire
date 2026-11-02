@@ -1,16 +1,19 @@
 /**
  * The fake's Draft & Packs commands — enough of each for a story to click through: a booster set
  * whose products hold sheets of the world's own cards, a draft that passes packs and ends in
- * deckbuilding, a draft deck that is a virtual Limited deck with a Deck and a Pool pile on the
- * unsaved list, and lobbies that refuse.
+ * deckbuilding, a draft deck that is a virtual Limited deck with a Deck and a Pool pile and its
+ * row's `draft` flag set, and lobbies that refuse.
  */
 import { describe, expect, it } from "vitest";
 import type { DraftSetup } from "@grimoire/ui/lib/ipc";
 import { allHandlers, makeDb, writeHandlers } from "./db";
+import { DRAFT_STAYS_VIRTUAL } from "./db";
 import {
   createDraftDeck,
   DRAFT_REPLACED,
+  NOT_A_DRAFT_DECK,
   LOBBIES_OFF,
+  NOT_A_DECK_PILE,
   NOT_IN_PACK,
   NOT_YOUR_PILE,
   WINSTON_NO_PICK,
@@ -188,14 +191,20 @@ describe("the draft", () => {
 });
 
 describe("the draft deck", () => {
-  it("is a virtual Limited deck with an empty Deck pile and a Pool, on the unsaved list", () => {
+  it("is a virtual Limited deck with an empty Deck pile and a Pool, its row saying draft", () => {
     const { db, h } = world();
     const ids = [db.cards[0].id, db.cards[0].id, db.cards[1].id];
     const row = h.draft_deck_create({ name: "Quick Draft", cardIds: ids });
-    expect(row).toMatchObject({ name: "Quick Draft", formatKey: "limited", virtualOnly: true });
-    expect(h.draft_deck_ids()).toEqual([{ id: row.id, syncUid: row.syncUid }]);
+    expect(row).toMatchObject({
+      name: "Quick Draft",
+      formatKey: "limited",
+      virtualOnly: true,
+      draft: true,
+    });
+    expect(h.draft_deck_list().map((d) => [d.id, d.draft])).toEqual([[row.id, true]]);
 
     const detail = h.deck_get({ id: row.id, variant: "live" });
+    expect(detail?.deck.draft).toBe(true);
     expect(detail?.categories.map((c) => [c.name, c.kind])).toEqual([
       ["Deck", "main"],
       ["Pool", "side"],
@@ -221,16 +230,93 @@ describe("the draft deck", () => {
     ]);
   });
 
+  it("is apart from the reader's decks until it is kept: no deck_list, no counts", () => {
+    const { db, h } = world();
+    const before = h.deck_list().length;
+    const row = h.draft_deck_create({ name: "Quick Draft", cardIds: [db.cards[0].id] });
+    expect(h.deck_list().some((d) => d.id === row.id)).toBe(false);
+    expect(h.deck_list()).toHaveLength(before);
+    expect(h.draft_deck_list().map((d) => d.id)).toEqual([row.id]);
+    expect(h.deck_values({}).some((v) => v.deckId === row.id)).toBe(false);
+    expect(h.deck_pip_costs().some((p) => p.deckId === row.id)).toBe(false);
+
+    h.draft_deck_keep({ deckId: row.id });
+    const saved = h.deck_list().find((d) => d.id === row.id);
+    expect(saved?.draft).toBe(false);
+    expect(h.draft_deck_list()).toEqual([]);
+    expect(h.deck_values({}).some((v) => v.deckId === row.id)).toBe(true);
+  });
+
+  it("files the cards sent to the deck into their piles, and the sideboard's into Pool (#1471)", () => {
+    const { db, h } = world();
+    const [a, b] = [db.cards[0].id, db.cards[1].id];
+    const row = h.draft_deck_create({
+      name: "Quick Draft",
+      cardIds: [b],
+      deck: [
+        { cardId: a, pile: "Removal" },
+        { cardId: a, pile: "Removal" },
+        { cardId: "no-such-printing", pile: "Creature" },
+      ],
+    });
+    const detail = h.deck_get({ id: row.id, variant: "live" });
+    const named = (id: number) => detail?.categories.find((c) => c.id === id)?.name;
+    expect(detail?.cards.map((c) => [c.cardId, named(c.categoryId), c.quantity])).toEqual([
+      [a, "Removal", 2],
+      [b, "Pool", 1],
+    ]);
+    expect(detail?.categories.some((c) => c.name === "Deck")).toBe(false);
+    expect(db.decks.find((d) => d.id === row.id)?.defaultCategoryId).toBe(0);
+  });
+
+  it("refuses a deck card filed into a zone, and makes no deck", () => {
+    const { db, h } = world();
+    const before = db.decks.length;
+    expect(() =>
+      h.draft_deck_create({
+        name: "x",
+        cardIds: [],
+        deck: [{ cardId: db.cards[0].id, pile: "Sideboard" }],
+      }),
+    ).toThrow(NOT_A_DECK_PILE);
+    expect(db.decks.length).toBe(before);
+  });
+
   it("leaves the list on a keep, and is deleted on a discard", () => {
     const { db, h } = world();
     const kept = h.draft_deck_create({ name: "Kept", cardIds: [db.cards[0].id] });
     const gone = createDraftDeck(db, writeHandlers(db), "Gone", [db.cards[1].id]);
     h.draft_deck_keep({ deckId: kept.id });
-    expect(h.draft_deck_ids()).toEqual([{ id: gone.id, syncUid: gone.syncUid }]);
+    expect(h.draft_deck_list().map((d) => d.id)).toEqual([gone.id]);
+    // A keep of a deck already saved is no error.
+    expect(() => h.draft_deck_keep({ deckId: kept.id })).not.toThrow();
     h.draft_deck_discard({ deckId: gone.id });
-    expect(h.draft_deck_ids()).toEqual([]);
+    expect(h.draft_deck_list()).toEqual([]);
     expect(db.decks.some((d) => d.id === gone.id)).toBe(false);
     expect(db.decks.some((d) => d.id === kept.id)).toBe(true);
+  });
+
+  it("refuses to discard a deck whose row does not say draft", () => {
+    const { db, h } = world();
+    const kept = h.draft_deck_create({ name: "Kept", cardIds: [db.cards[0].id] });
+    h.draft_deck_keep({ deckId: kept.id });
+    expect(() => h.draft_deck_discard({ deckId: kept.id })).toThrow(NOT_A_DRAFT_DECK);
+    expect(db.decks.some((d) => d.id === kept.id)).toBe(true);
+  });
+
+  it("stays virtual until it is saved", () => {
+    const { db, h } = world();
+    const row = h.draft_deck_create({ name: "Quick Draft", cardIds: [db.cards[0].id] });
+    expect(() => h.deck_update({ id: row.id, patch: { virtualOnly: false } })).toThrow(
+      DRAFT_STAYS_VIRTUAL,
+    );
+    expect(() => h.deck_update({ id: row.id, patch: { theoryEnabled: true } })).toThrow(
+      DRAFT_STAYS_VIRTUAL,
+    );
+    // Restating its own kind, or any other field, is no error.
+    expect(() =>
+      h.deck_update({ id: row.id, patch: { virtualOnly: true, name: "Renamed" } }),
+    ).not.toThrow();
   });
 
   it("answers the basics the corpus holds", () => {

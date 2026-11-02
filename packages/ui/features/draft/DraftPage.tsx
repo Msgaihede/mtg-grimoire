@@ -11,10 +11,9 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { useDecks } from "@/features/decks/useDecks";
 import { openDraftDeck } from "@/features/draft/navigation";
 import { PackOpener } from "@/features/draft/packs/PackOpener";
-import { isDraftDeckIn, useDraftDecks } from "@/features/draft/useDraftDecks";
+import { useDraftDecks } from "@/features/draft/useDraftDecks";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -243,10 +242,9 @@ function DraftHub({
     // Every pick moves it; the hub is drawn between drafts, so it is always asked again.
     staleTime: 0,
   });
-  const unsaved = useDraftDecks();
-  const { decks } = useDecks();
-  // By id and uid both (issue #1467): an ordinary deck that took a deleted draft deck's id is not one.
-  const draftDecks = decks.filter((d) => isDraftDeckIn(unsaved, d));
+  // Whole rows from `draft_deck_list`: no deck list answers a draft deck, so there is nothing to
+  // filter — the row's `draft` flag is what put each one here.
+  const draftDecks = useDraftDecks();
   const live = isLive(lobby) ? lobby : null;
   const savedDraft = saved.data ?? null;
   const anything = savedDraft !== null || draftDecks.length > 0 || live !== null;
