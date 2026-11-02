@@ -135,8 +135,18 @@ session's tally keeps every priced card's price, not a reduced sum, so changing 
 reprices the whole session. The minimum is in whatever currency the page prices in, and nothing
 converts it. The expected value, the simulation and the histogram stay at full value.
 
-**Every price control is in the right-hand column** (issue #1465): _Prices from_, _Sell at_ and
-_Minimum_ sit above the expected value and the figures, so the product row (product, _Open_,
+**A _Bulk_ price is this page's alone** (issue
+[#1477](https://github.com/Msgaihede/mtg-grimoire/issues/1477)): set beside the minimum, each card
+under the minimum is counted at it instead of taken out — every card under $1 worth $0.01, say.
+It is added **after** the percentage, `(full − below) × percent + cards below × bulk`: a bulk price
+is already what a buyer pays for such a card, so a percentage off it would reduce it twice. The
+breakdown states it as a line of its own (_Bulk at $0.01 · 6 cards +$0.06_). With no minimum the box
+is greyed, since there is nothing under it to price, and its figure is kept for when one is set. It
+is kept with the other two (`bulkPrice` in `grimoire.packs.reduced`); figures kept before it existed
+read as no bulk price. Settings › Collection value has none.
+
+**Every price control is in the right-hand column** (issue #1465): _Prices from_, _Sell at_,
+_Minimum_ and _Bulk_ sit above the expected value and the figures, so the product row (product, _Open_,
 _Back_) is the only band at the top and the column starts level with it. On a narrow page the
 column folds under the wall, controls first.
 

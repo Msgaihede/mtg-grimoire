@@ -12,11 +12,32 @@ import { parsePurchasePrice } from "@/lib/prices";
  *
  * **Rust answers the part only SQL can**: {@link BelowMinimum} is compared per copy. The percentage
  * never reaches a statement, so changing it asks nothing of the database.
+ *
+ * **A bulk price is Open Packs' alone** (issue #1477, {@link ReducedSettings}): each card under the
+ * minimum is counted at it rather than at nothing. The collection's setting has none.
  */
 
 /** No reduced price: every card counted, at full price. `collection_value::CollectionValue`'s own
  *  default, repeated for a read still in flight. */
 export const DEFAULT_COLLECTION_VALUE: CollectionValue = { sellPercent: 100, minimumValue: 0 };
+
+/**
+ * The settings {@link reducedValue} reduces by: the collection's two figures, and a bulk price that
+ * only Open Packs sets (`features/draft/packs/reducedPick.ts`, issue #1477). Absent or `0`, a card
+ * under the minimum is taken out, as it always was.
+ */
+export interface ReducedSettings extends CollectionValue {
+  /** What each card under the minimum is worth instead of its market price. A sale figure — what a
+   *  buyer pays a card for bulk — so the sell percentage never reduces it again. Only counted while
+   *  a minimum is set. */
+  bulkPrice?: number;
+}
+
+/** The bulk price as the sum counts it: `undefined` with none, or with no minimum to be under. */
+export function bulkOf(settings: ReducedSettings): number | undefined {
+  const bulk = settings.bulkPrice ?? 0;
+  return bulk > 0 && minimumOf(settings) !== undefined ? bulk : undefined;
+}
 
 /** Whether these settings change anything at all. Neither set, the app reads as it always did. */
 export function reducesValue(settings: CollectionValue): boolean {
@@ -43,6 +64,12 @@ export function parseMinimumValue(text: string): number | null {
   if (text.trim() === "") return DEFAULT_COLLECTION_VALUE.minimumValue;
   const value = parsePurchasePrice(text);
   return value === undefined ? null : value;
+}
+
+/** A bulk price as a box reads it — the minimum's rule: empty is none (`0`), an unreadable price is
+ *  `null`. */
+export function parseBulkPrice(text: string): number | null {
+  return parseMinimumValue(text);
 }
 
 /** What `values` leave under `minimum`: each priced copy strictly below it, at its own price. An
@@ -76,6 +103,9 @@ export interface ReducedValue {
   below: (BelowMinimum & { minimum: number }) | null;
   /** The percentage and the money it took; `null` at 100%. */
   sale: { percent: number; lost: number } | null;
+  /** The cards under the minimum counted back at the bulk price, and what they add; `null` with no
+   *  bulk price (or no minimum). Added after the percentage, which never reduces it. */
+  bulk: { price: number; cards: number; value: number } | null;
   /** What is left. */
   reduced: number;
 }
@@ -87,11 +117,15 @@ export interface ReducedValue {
  * **`below` missing under a minimum is `null` rather than a guess.** A minimum just set is a new
  * query, and `keepPreviousData` holds the old answer for a moment. A figure that ignored the
  * minimum for that moment would be a wrong number that then jumps.
+ *
+ * **A bulk price is added after the percentage** (issue #1477): `(full − below) × percent + cards
+ * below × bulk`. It is already what a buyer pays for such a card, so taking a percentage off it
+ * would reduce it twice.
  */
 export function reducedValue(
   full: number | null,
   below: BelowMinimum | undefined,
-  settings: CollectionValue,
+  settings: ReducedSettings,
 ): ReducedValue | null {
   if (full === null || !reducesValue(settings)) return null;
   const minimum = minimumOf(settings);
@@ -100,7 +134,13 @@ export function reducedValue(
   const under = minimum === undefined || below === undefined ? null : below;
   const taken = under === null ? 0 : cents(under.value);
   const counted = Math.max(0, cents(whole - taken));
-  const reduced = settings.sellPercent < 100 ? cents((counted * settings.sellPercent) / 100) : counted;
+  const sold = settings.sellPercent < 100 ? cents((counted * settings.sellPercent) / 100) : counted;
+  const bulkPrice = bulkOf(settings);
+  const bulk =
+    bulkPrice === undefined || under === null
+      ? null
+      : { price: bulkPrice, cards: under.cards, value: cents(under.cards * bulkPrice) };
+  const reduced = bulk === null ? sold : cents(sold + bulk.value);
   return {
     full: whole,
     below:
@@ -109,8 +149,9 @@ export function reducedValue(
         : { minimum, cards: under.cards, value: taken },
     sale:
       settings.sellPercent < 100
-        ? { percent: settings.sellPercent, lost: cents(counted - reduced) }
+        ? { percent: settings.sellPercent, lost: cents(counted - sold) }
         : null,
+    bulk,
     reduced,
   };
 }

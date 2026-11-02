@@ -4,56 +4,70 @@
  * them. A reader who sells their collection at 80% may value a pack they are about to buy at 60%,
  * so this page neither reads the collection's setting nor writes it.
  *
+ * **And a bulk price, which only this page has** (issue #1477): what each card under the minimum is
+ * worth instead of nothing — a store's bulk rate. It counts only while a minimum is set.
+ *
  * **Remembered across launches in `localStorage`, per device** — `marketplacePick.ts`' arrangement
  * and its reasons: a way of pricing one page is this machine's, never `app_meta`. A host that
  * refuses the store keeps it for the session, and an unreadable value is no reduction at all.
  *
- * **The minimum is a number in whatever currency the page prices in**, and nothing converts it — the
- * collection's rule. Its box wears the current currency's sign.
+ * **The minimum and the bulk price are numbers in whatever currency the page prices in**, and
+ * nothing converts them — the collection's rule. Their boxes wear the current currency's sign.
  *
  * A module of its own importing nothing that reaches a host, for `marketplacePick.ts`' reason:
  * `test-setup.ts` and the fake's `installWorld` reset it.
  */
 import { create } from "zustand";
-import { DEFAULT_COLLECTION_VALUE } from "@/lib/collectionValue";
-import type { CollectionValue } from "@/lib/ipc";
+import { DEFAULT_COLLECTION_VALUE, type ReducedSettings } from "@/lib/collectionValue";
 
 export const STORAGE_KEY = "grimoire.packs.reduced";
 
+/** The page's figures: the collection's two and a bulk price, always stated here (`0` is none). */
+export interface PackReduction extends ReducedSettings {
+  bulkPrice: number;
+}
+
+/** No reduction: every card counted, at full price, and no bulk price. */
+export const DEFAULT_PACK_REDUCTION: PackReduction = { ...DEFAULT_COLLECTION_VALUE, bulkPrice: 0 };
+
+/** A price figure the store may hold: a finite number of zero or more. */
+function isPrice(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 /** What the store held, or no reduction for nothing (or nothing readable). Each figure is checked
- *  on its own against the collection setting's bounds, so a bad one costs only itself. */
-export function parseStored(raw: string | null): CollectionValue {
-  if (raw === null) return DEFAULT_COLLECTION_VALUE;
+ *  on its own against the collection setting's bounds, so a bad one costs only itself — and a
+ *  device that kept its figures before the bulk price existed reads as none. */
+export function parseStored(raw: string | null): PackReduction {
+  if (raw === null) return DEFAULT_PACK_REDUCTION;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return DEFAULT_COLLECTION_VALUE;
-    const { sellPercent, minimumValue } = parsed as Record<string, unknown>;
+    if (typeof parsed !== "object" || parsed === null) return DEFAULT_PACK_REDUCTION;
+    const { sellPercent, minimumValue, bulkPrice } = parsed as Record<string, unknown>;
     return {
       sellPercent:
         typeof sellPercent === "number" && sellPercent > 0 && sellPercent <= 100
           ? sellPercent
-          : DEFAULT_COLLECTION_VALUE.sellPercent,
-      minimumValue:
-        typeof minimumValue === "number" && Number.isFinite(minimumValue) && minimumValue >= 0
-          ? minimumValue
-          : DEFAULT_COLLECTION_VALUE.minimumValue,
+          : DEFAULT_PACK_REDUCTION.sellPercent,
+      minimumValue: isPrice(minimumValue) ? minimumValue : DEFAULT_PACK_REDUCTION.minimumValue,
+      bulkPrice: isPrice(bulkPrice) ? bulkPrice : DEFAULT_PACK_REDUCTION.bulkPrice,
     };
   } catch {
-    return DEFAULT_COLLECTION_VALUE;
+    return DEFAULT_PACK_REDUCTION;
   }
 }
 
-function readStored(): CollectionValue {
+function readStored(): PackReduction {
   try {
     return parseStored(window.localStorage.getItem(STORAGE_KEY));
   } catch {
-    return DEFAULT_COLLECTION_VALUE;
+    return DEFAULT_PACK_REDUCTION;
   }
 }
 
 interface StoredReduction {
-  settings: CollectionValue;
-  keep: (settings: CollectionValue) => void;
+  settings: PackReduction;
+  keep: (settings: PackReduction) => void;
 }
 
 export const usePackReducedStore = create<StoredReduction>((set) => ({
@@ -75,5 +89,5 @@ export function resetPackReduced(): void {
   } catch {
     // Nothing kept.
   }
-  usePackReducedStore.setState({ settings: DEFAULT_COLLECTION_VALUE });
+  usePackReducedStore.setState({ settings: DEFAULT_PACK_REDUCTION });
 }

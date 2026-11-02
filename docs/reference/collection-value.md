@@ -50,10 +50,17 @@ names it; a band has no rail, so the line carries its name.
 printing's price, so a card that fell under the minimum last week counts before that and not after.
 It is not a record of what the reader had set at the time.
 
-**Open Packs has figures of its own**, not these: a sell percentage and a minimum on the page,
-kept per device in `localStorage` and never in `app_meta` ([draft-and-packs.md](draft-and-packs.md)).
+**Open Packs has figures of its own**, not these: a sell percentage, a minimum and a bulk price on
+the page, kept per device in `localStorage` and never in `app_meta` ([draft-and-packs.md](draft-and-packs.md)).
 It runs the same `reducedValue`, with the minimum compared in TypeScript (`belowMinimumOf`) over
 the cards it opened, and its tooltip names the page instead of Settings (`ReducedPrice`'s `setIn`).
+
+**The bulk price is Open Packs' alone** (issue
+[#1477](https://github.com/Msgaihede/mtg-grimoire/issues/1477)): `reducedValue` takes it as
+`ReducedSettings.bulkPrice`, and with a minimum set counts each card under it back at that price,
+after the percentage — `(full − below) × percent + cards below × bulk` — as a breakdown line of its
+own. The collection's setting (`CollectionValue`, Rust's `collection_value`) has no such field, so
+every collection surface still takes those cards out.
 
 ## `ReducedPrice`
 

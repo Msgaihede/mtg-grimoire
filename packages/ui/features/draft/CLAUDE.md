@@ -39,9 +39,11 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   (`convertPrices`) before the lowest is taken. With no rate, the other currency is left out and
   the page says so — never compare a euro with a dollar unconverted, and never convert a price
   anywhere but this page.
-- **Open Packs' reduced price is the page's own** (`packs/reducedPick.ts`): its sell percentage and
-  minimum are kept the marketplace pick's way, and never read from or written to Settings'
-  collection value. The sum is `lib/collectionValue.ts`' `reducedValue`; never write a second one.
+- **Open Packs' reduced price is the page's own** (`packs/reducedPick.ts`): its sell percentage,
+  minimum and bulk price are kept the marketplace pick's way, and never read from or written to
+  Settings' collection value. The sum is `lib/collectionValue.ts`' `reducedValue`; never write a
+  second one. The bulk price (issue #1477) is this page's alone — it counts each card under the
+  minimum at that price, after the percentage — and never goes into the IPC's `CollectionValue`.
 - **The set walls are MTGJSON's** (`useBoosterSets` over `packs_booster_sets`): Open Packs and a
   draft's pack order offer only the sets MTGJSON sells a booster pack of. Never build a wall from
   the corpus's `list_sets` — Scryfall splits a release into sets no booster is sold of.
