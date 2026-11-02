@@ -2,10 +2,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useState, type JSX } from "react";
 import { ReducedBreakdown } from "@/components/ReducedPrice";
 import { collectionTotalKey } from "@/features/home/keys";
-import { DEFAULT_COLLECTION_VALUE, reducedValue, reducesValue } from "@/lib/collectionValue";
+import {
+  DEFAULT_COLLECTION_VALUE,
+  parseMinimumValue,
+  parseSellPercent,
+  reducedValue,
+  reducesValue,
+} from "@/lib/collectionValue";
 import { FOCUS } from "@/lib/focus";
 import { ipc, type CollectionValue } from "@/lib/ipc";
-import { formatPrice, parsePurchasePrice } from "@/lib/prices";
+import { formatPrice } from "@/lib/prices";
 import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
@@ -25,21 +31,6 @@ const BOX = cn(
   TOUCH_FLOOR,
   FOCUS,
 );
-
-/** A percentage as a box reads it: `70`, `70%` or `70.5`. Empty is the default, nothing else is. */
-function parsePercent(text: string): number | null {
-  const trimmed = text.replace("%", "").trim();
-  if (trimmed === "") return DEFAULT_COLLECTION_VALUE.sellPercent;
-  const value = Number(trimmed.replace(",", "."));
-  return Number.isFinite(value) && value > 0 && value <= 100 ? value : null;
-}
-
-/** A price as a box reads it. Empty is no minimum. */
-function parseMinimum(text: string): number | null {
-  if (text.trim() === "") return DEFAULT_COLLECTION_VALUE.minimumValue;
-  const value = parsePurchasePrice(text);
-  return value === undefined ? null : value;
-}
 
 /** One setting: its name and what it does on the left, its box on the right. */
 function Row({
@@ -158,7 +149,7 @@ export function CollectionValuePanel(): JSX.Element {
         suffix="%"
         initial={settings.sellPercent === 100 ? "" : String(settings.sellPercent)}
         placeholder="100"
-        onCommit={(text) => commit("sellPercent", parsePercent(text), SELL_REFUSED)}
+        onCommit={(text) => commit("sellPercent", parseSellPercent(text), SELL_REFUSED)}
       />
       <Row
         id={`${ID}-minimum`}
@@ -167,7 +158,7 @@ export function CollectionValuePanel(): JSX.Element {
         prefix={formatPrice(0, currency).replace(/[\d.,\s]/g, "")}
         initial={settings.minimumValue === 0 ? "" : settings.minimumValue.toFixed(2)}
         placeholder="0.00"
-        onCommit={(text) => commit("minimumValue", parseMinimum(text), MINIMUM_REFUSED)}
+        onCommit={(text) => commit("minimumValue", parseMinimumValue(text), MINIMUM_REFUSED)}
       />
 
       <PanelAlert tone="problem">{refusal}</PanelAlert>

@@ -147,3 +147,19 @@ export const Opened: Story = {
     await expect(await canvas.findByRole("complementary", { name: "Figures" })).toBeVisible();
   },
 };
+
+/** A sell percentage and a minimum set on the page: the reduced price in brackets beside the
+ *  opening's total and the session's, both kept on this device for the next visit. */
+export const Reduced: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Sets to open" });
+    await userEvent.click(within(wall).getAllByRole("button")[0]);
+    await userEvent.type(await canvas.findByLabelText("Sell at"), "70");
+    await userEvent.type(canvas.getByLabelText("Minimum"), "0.25{Enter}");
+    await userEvent.click(await canvas.findByRole("button", { name: "Open" }));
+    await expect(
+      await canvas.findAllByRole("button", { name: /^Reduced price / }),
+    ).toHaveLength(2);
+  },
+};

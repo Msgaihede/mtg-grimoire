@@ -1,6 +1,7 @@
 import { useId, useMemo, useState, type JSX } from "react";
 import { PackageOpen, RotateCcw } from "lucide-react";
 import { Dropdown, MultiDropdown } from "@/components/Dropdown/Dropdown";
+import { ReducedPrice } from "@/components/ReducedPrice";
 import { FILTER_LABEL } from "@/components/FilterChips";
 import { BUTTON } from "@/features/settings/controls";
 import { plural } from "@/lib/counts";
@@ -13,8 +14,10 @@ import { useBoosterPrices } from "../booster/prices";
 import { randomSeed } from "../booster/rng";
 import {
   figuresOf,
+  openedPrices,
   openedValue,
   openOne,
+  reducedOpening,
   theoreticalValue,
   type CardSort,
   type Opened,
@@ -23,12 +26,15 @@ import { usePackMarketplaces, type MarketplaceChoice } from "./marketplaces";
 import { OpenedWall } from "./OpenedWall";
 import { PackFigures, type Tally } from "./PackFigures";
 import { openables, openableValue, type Openable } from "./products";
+import { PACKS_SET_IN, ReducedInputs } from "./ReducedInputs";
+import { usePackReducedStore } from "./reducedPick";
 
 /**
  * **The session's tally, for the window's life** (`lib/viewMemory.ts`): a reader who opens ten
  * packs of one set and goes on to another wants the running total to carry on, and a restart to
  * start it again. Prices are a currency's; a switch of marketplace starts it over rather than
- * adding dollars to euros.
+ * adding dollars to euros. It keeps each priced card's price, not a reduced sum, so the reduced
+ * price beside it is always the page's figures as they stand.
  */
 const tallyMemory = viewMemory<Tally>("draft.packs.tally");
 
@@ -95,6 +101,8 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
   const [sort, setSort] = useState<CardSort>("price");
   const [tally, setTally] = useState<Tally | undefined>(() => tallyMemory.recall());
   const priceAt = usePackMarketplaces();
+  const reduction = usePackReducedStore((s) => s.settings);
+  const keepReduction = usePackReducedStore((s) => s.keep);
   const { priceOf, ready, currency } = useBoosterPrices(set, priceAt.marketplaces);
   const facts = useMemo(() => new Map(set.cards.map((c) => [c.cardId, c])), [set]);
 
@@ -107,17 +115,21 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
   const shownTally: Tally =
     tally !== undefined && tally.currency === currency
       ? tally
-      : { opened: 0, value: 0, ev: 0, currency };
+      : { opened: 0, value: 0, ev: 0, currency, prices: [], unpriced: 0 };
 
   const open = () => {
     if (choice === undefined) return;
     const next = openOne(set, choice, randomSeed());
     setOpened(next);
+    const prices = openedPrices(next, priceOf);
+    const priced = prices.filter((p): p is number => p !== null);
     const kept: Tally = {
       currency,
       opened: shownTally.opened + 1,
       value: shownTally.value + openedValue(next, priceOf),
       ev: shownTally.ev + theoreticalValue(set, choice, priceOf),
+      prices: [...shownTally.prices, ...priced],
+      unpriced: shownTally.unpriced + (prices.length - priced.length),
     };
     tallyMemory.keep(kept);
     setTally(kept);
@@ -129,6 +141,10 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
 
   const value = opened === null ? 0 : openedValue(opened, priceOf);
   const words = nouns(shown ?? choice);
+  const prices = opened === null || !ready ? [] : openedPrices(opened, priceOf);
+  const reduced = opened === null || !ready ? null : reducedOpening(value, prices, reduction);
+  const reducedTally =
+    shownTally.opened === 0 ? null : reducedOpening(shownTally.value, shownTally.prices, reduction);
 
   return (
     <div className="flex flex-col gap-5">
@@ -183,6 +199,9 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
           </p>
         )}
       </div>
+      {/* The page's own reduced price, apart from Settings' (`reducedPick.ts`). Under the row
+          rather than in it: the row is already the product, its prices and the press. */}
+      <ReducedInputs settings={reduction} currency={currency} onChange={keepReduction} />
 
       {opened !== null && (
         <div className="@container/packs">
@@ -194,6 +213,18 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
                   <span className="font-mono tabular-nums text-accent">
                     {ready ? formatPrice(value, currency) : "…"}
                   </span>
+                  {reduced !== null && (
+                    <>
+                      {" "}
+                      <ReducedPrice
+                        value={reduced}
+                        currency={currency}
+                        unpriced={prices.filter((p) => p === null).length}
+                        setIn={PACKS_SET_IN}
+                        className="font-mono font-normal text-dim"
+                      />
+                    </>
+                  )}
                 </h3>
                 <p className="m-0 font-mono text-sm tabular-nums text-dim">
                   {opened.openable.name} · {plural(opened.cards.length, "card")}
@@ -224,6 +255,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
                 unit={words.unit}
                 currency={currency}
                 tally={shownTally}
+                reducedTally={reducedTally}
               />
             </div>
           </div>

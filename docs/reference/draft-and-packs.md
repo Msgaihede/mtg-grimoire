@@ -99,6 +99,16 @@ picking a marketplace in the other currency starts the pick over from it; the la
 cannot be put down; Card trader (unpriced) and a feed the host cannot reach are greyed. Picking a
 feed that has never landed a row fetches it, as Settings does.
 
+**The reduced price is the page's own too** (`packs/reducedPick.ts`, `packs/ReducedInputs.tsx`): a
+_Sell at_ percentage and a _Minimum_ card value under the product row, apart from Settings ›
+Collection value — neither read from it nor written to it — and kept per device in `localStorage`
+(`grimoire.packs.reduced`). Set, the reduced price is drawn in brackets beside the opening's _Total
+value_ and the session's, by the collection's sum ([collection-value.md](collection-value.md)):
+each priced card strictly under the minimum is taken out, then the percentage of what is left. The
+session's tally keeps every priced card's price, not a reduced sum, so changing a figure mid-session
+reprices the whole session. The minimum is in whatever currency the page prices in, and nothing
+converts it. The expected value, the simulation and the histogram stay at full value.
+
 ## The draft: phase.rs's draft-core
 
 `crates/grimoire-play/src/draft/` runs one draft over `draft-core`, from phase.rs's repository at

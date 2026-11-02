@@ -61,15 +61,21 @@ export function ReducedBreakdown({
   );
 }
 
+/** Where the collection's reduced price is set — the tooltip's last line unless a surface with
+ *  settings of its own names them. */
+const SET_IN_SETTINGS = "Set in Settings › Collection value.";
+
 /** The tooltip: the breakdown, what it left out, and where it is set. */
 function Hint({
   value,
   currency,
   unpriced,
+  setIn,
 }: {
   value: ReducedValue;
   currency: Currency;
   unpriced: number;
+  setIn: string;
 }): ReactElement {
   return (
     <div className="w-64 py-1 leading-[1.45]">
@@ -80,7 +86,7 @@ function Hint({
             {count(unpriced)} unpriced {unpriced === 1 ? "card isn't" : "cards aren't"} counted.
           </span>
         )}
-        <span className="block">Set in Settings › Collection value.</span>
+        <span className="block">{setIn}</span>
       </p>
     </div>
   );
@@ -101,6 +107,7 @@ export function ReducedPrice({
   currency,
   unpriced = 0,
   plain = false,
+  setIn = SET_IN_SETTINGS,
   className,
 }: {
   value: ReducedValue;
@@ -108,11 +115,13 @@ export function ReducedPrice({
   /** Copies the value could not price, said under the breakdown. */
   unpriced?: number;
   plain?: boolean;
+  /** Where these settings are set, the tooltip's last line. Open Packs has its own. */
+  setIn?: string;
   className?: string;
 }): ReactElement {
   const tip = useTooltip();
   const money = formatPrice(value.reduced, currency);
-  const hint = tip(<Hint value={value} currency={currency} unpriced={unpriced} />);
+  const hint = tip(<Hint value={value} currency={currency} unpriced={unpriced} setIn={setIn} />);
   return (
     <span className={cn("whitespace-nowrap tabular-nums", className)}>
       (

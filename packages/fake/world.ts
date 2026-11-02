@@ -59,6 +59,7 @@ import { resetWindow } from "./window";
 import { resetBulkUndo } from "@grimoire/ui/lib/bulkUndo";
 import { resetViewMemory } from "@grimoire/ui/lib/viewMemory";
 import { resetPackMarketplaces } from "@grimoire/ui/features/draft/packs/marketplacePick";
+import { resetPackReduced } from "@grimoire/ui/features/draft/packs/reducedPick";
 import { MEMBERSHIP_ELSEWHERE } from "@grimoire/ui/lib/core/hostMembership";
 import { STORAGE_GROUP_WARNING } from "@grimoire/ui/lib/core/hostStorage";
 import lightMembership from "../../apps/light/src-tauri/src/membership.rs?raw";
@@ -296,6 +297,8 @@ export function installWorld(
   // The Packs page's marketplace pick (issue #1446) is the fourth — kept in `localStorage`, so a
   // story's pick would otherwise outlive a reload too. Same gate, same reason.
   if (options.resetStore !== false) resetPackMarketplaces();
+  // Its sell percentage and minimum, kept the same way. Same gate, same reason.
+  if (options.resetStore !== false) resetPackReduced();
 
   const removeCorpus = installCorpus(db.cards);
   const client = worldQueryClient(scope);
