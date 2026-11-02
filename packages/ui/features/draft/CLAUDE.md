@@ -11,17 +11,17 @@ Desktop only — the light app draws no such page, and every command it calls is
 Design: [the spec](../../../../docs/superpowers/specs/2026-10-29-draft-and-packs-design.md).
 Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-packs.md).
 
-| Folder / file                                | Holds                                                                                                                                                                                      |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `booster/`                                   | Pure booster logic: `open.ts` (collation, `draftProduct`), `value.ts` (expected value, variance, simulation, percentile), `rng.ts` (seeded `mulberry32`), `prices.ts` (`useBoosterPrices`) |
-| `sets.ts`, `SetGrid.tsx`                     | MTGJSON's booster sets (`useBoosterSets`), one set's `BoosterSet` (`useBoosterSet`), the set wall                                                                                          |
-| `packs/`                                     | Open Packs: the product picker, the marketplace pick (`marketplaces.ts`), the reduced price (`reducedPick.ts`), the opened wall, the figures and the histogram                           |
-| `DraftPage.tsx`                              | The hub (_Draft in progress_, _Start new_) and the page-local state machine                                                                                                                |
-| `setup/`                                     | Quick, Sealed, Cube, Commander and Winston setup; `deal.ts` deals boosters to seats and holds each table's seat bounds                                                                     |
-| `pick/`                                      | The pick screen (one card a pick, or two in a Commander draft; the pack by rarity unless sorted as dealt), the Winston table, the pool by mana value, the table strip                      |
-| `build/`                                     | The hand-over from a finished draft to a draft deck                                                                                                                                        |
-| `lobby/`                                     | Pod drafts: create (a supporter's), join by code, the host's room (format and seats) and the guest's                                                                                       |
-| `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode: `DraftDeckBar`, the unsaved list, opening a draft deck                                                                                                       |
+| Folder / file                                | Holds                                                                                                                                                                                                                    |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `booster/`                                   | Pure booster logic: `open.ts` (collation, `draftProduct`), `value.ts` (expected value, variance, simulation, percentile), `rng.ts` (seeded `mulberry32`), `prices.ts` (`useBoosterPrices`)                               |
+| `sets.ts`, `SetGrid.tsx`                     | MTGJSON's booster sets (`useBoosterSets`), one set's `BoosterSet` (`useBoosterSet`), the set wall                                                                                                                        |
+| `packs/`                                     | Open Packs: the product picker, the marketplace pick (`marketplaces.ts`), the reduced price (`reducedPick.ts`), the opened wall, the figures and the histogram                                                           |
+| `DraftPage.tsx`                              | The hub (_Draft in progress_, _Start new_) and the page-local state machine                                                                                                                                              |
+| `setup/`                                     | Quick, Sealed, Cube, Commander and Winston setup; `deal.ts` deals boosters to seats and holds each table's seat bounds                                                                                                   |
+| `pick/`                                      | The pick screen (one card a pick, or two in a Commander draft; the pack by rarity unless sorted as dealt), the Winston table, the pool by mana value below the pack or as a side tray (`trayLayout.ts`), the table strip |
+| `build/`                                     | The hand-over from a finished draft to a draft deck                                                                                                                                                                      |
+| `lobby/`                                     | Pod drafts: create (a supporter's), join by code, the host's room (format and seats) and the guest's                                                                                                                     |
+| `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode: `DraftDeckBar`, the unsaved list, opening a draft deck                                                                                                                                     |
 
 ## Binding rules
 
@@ -59,5 +59,10 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 - **Hosting a pod is a supporter's; joining is anybody's.** The page reads the membership the way
   `useMaySendScans` does (`useMayHostPod`); the host refuses a device that is not entitled, and the
   relay mints tokens only for an entitled membership.
+- **The pool is below the pack unless the reader moves it** (`pick/trayLayout.ts`, issue #1474): the
+  curve (`PoolColumns`) is the default, the side tray (`PoolTray`) the other of MTG Arena's two
+  views, switched by the pack heading's Pool toggle and kept per device in `localStorage` —
+  never `app_meta`. Either is the pick's drop target. A Winston table and the Build step always
+  draw the curve.
 - **Every pushed view is filtered** (`pick/pool.ts`' `acceptsView`): a `draft:view` for another seat
   or an older step is dropped.
