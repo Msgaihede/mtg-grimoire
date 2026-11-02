@@ -166,6 +166,15 @@ export interface BasicLand {
   cardId: string;
 }
 
+/**
+ * One card the reader sent to the deck while picking (issue #1471), and the pile the page filed it
+ * into — `autoCategoryFor`'s answer, never a zone's name (`draft_deck_create` refuses one).
+ */
+export interface DraftDeckCard {
+  cardId: string;
+  pile: string;
+}
+
 /** Hosting a lobby, or a guest in one. */
 export type LobbyRole = "host" | "guest";
 
@@ -239,11 +248,12 @@ export const draftCommands = {
   draftResume: (draft: number) => invoke<DraftView>("draft_resume", { draft }),
 
   /**
-   * The pool as a virtual deck, in the draft's unsaved list: Limited, or with `commander` a Casual
+   * The pool as a virtual deck, in the draft's unsaved list: `cardIds` (the sideboard) in its
+   * Pool and each of `deck` in its own pile (issue #1471). Limited, or with `commander` a Casual
    * deck with a Commander pile (a Commander draft's 60 cards and its commander).
    */
-  draftDeckCreate: (name: string, cardIds: string[], commander: boolean) =>
-    invoke<DeckRow>("draft_deck_create", { name, cardIds, commander }),
+  draftDeckCreate: (name: string, cardIds: string[], deck: DraftDeckCard[], commander: boolean) =>
+    invoke<DeckRow>("draft_deck_create", { name, cardIds, deck, commander }),
   /** The draft decks not saved yet, each as its id and the uid it was made with. */
   draftDeckIds: () => invoke<DraftDeckRef[]>("draft_deck_ids"),
   /** Save: the deck leaves the unsaved list, and is a deck like any other. */

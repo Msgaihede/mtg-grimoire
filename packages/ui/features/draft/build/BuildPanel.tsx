@@ -4,20 +4,41 @@ import { useQueryClient } from "@tanstack/react-query";
 import { openDraftDeck } from "@/features/draft/navigation";
 import { rememberDraftDeck } from "@/features/draft/useDraftDecks";
 import { plural } from "@/lib/counts";
-import { ipc, ipcError, type DraftView } from "@/lib/ipc";
+import { ipc, ipcError, type DraftCard, type DraftView } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
 import { colorTally, isLand } from "../pick/pool";
 import { ColorTally } from "../pick/PoolColumns";
+import { splitPool, toDraftDeck } from "../pick/split";
 import { FIELD, LABEL, PANEL, PrimaryButton } from "../setup/parts";
+
+/**
+ * What each of the deck's printings does, by printing id — one read for the whole deck, the way
+ * the importer asks (`oracle_tags_for_printings`). **A read that fails is not a deck that fails**
+ * (`useDeckCore`'s `oracleTagsFor`, for its reason): every card is then filed by its type line.
+ */
+async function deckTags(
+  cards: readonly DraftCard[],
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const ids = [...new Set(cards.map((c) => c.cardId))];
+  if (ids.length === 0) return new Map();
+  try {
+    const answers = await ipc.oracleTagsForPrintings(ids);
+    return new Map(answers.map((a) => [a.cardId, a.slugs]));
+  } catch {
+    return new Map();
+  }
+}
 
 /** Whose draft this is, which decides how it is put away once the deck is built. */
 export type DraftRole = "solo" | "host" | "guest";
 
 /**
  * The Build step: what the pool holds, a name for the deck, and the press that turns the pool
- * into a deck in the deck editor's draft mode (spec §5) — a **virtual** Limited deck whose Pool
- * holds every card drafted, never the collection's. A Commander draft's (`view.commanders > 0`,
+ * into a deck in the deck editor's draft mode (spec §5) — a **virtual** Limited deck, never the
+ * collection's. **The cards picked into the deck are filed by what they do** (issue #1471) —
+ * `autoCategoryFor`, the add path's own rule, over one read of their Oracle tags — and the
+ * sideboard's go into its Pool. A Commander draft's (`view.commanders > 0`,
  * spec §4a) is a Casual deck with a Commander pile beside Deck and Pool, built with
  * `draft_deck_create`'s `commander` flag.
  *
@@ -31,9 +52,12 @@ export function BuildPanel({
   view,
   draft,
   role,
+  sideboard = [],
   onBuilt,
 }: {
   view: DraftView;
+  /** The pool's cards on the sideboard, by `instanceId` (`../pick/split.ts`). */
+  sideboard?: readonly string[];
   /** The page's name for the draft — `null` for a guest, whose draft runs on the host. */
   draft: number | null;
   role: DraftRole;
@@ -48,17 +72,15 @@ export function BuildPanel({
   const lands = view.pool.filter(isLand).length;
   const creatures = view.pool.filter((c) => !isLand(c) && /\bCreature\b/.test(c.typeLine)).length;
   const others = view.pool.length - lands - creatures;
+  const split = useMemo(() => splitPool(view.pool, sideboard), [view.pool, sideboard]);
   const ready = name.trim() !== "" && view.pool.length > 0;
   const commander = view.commanders > 0;
 
   const build = async () => {
     setBusy(true);
     try {
-      const row = await ipc.draftDeckCreate(
-        name.trim(),
-        view.pool.map((c) => c.cardId),
-        commander,
-      );
+      const { cardIds, deck } = toDraftDeck(split, await deckTags(split.deck));
+      const row = await ipc.draftDeckCreate(name.trim(), cardIds, deck, commander);
       try {
         if (role === "solo" && draft !== null) await ipc.draftEnd(draft);
         else await ipc.lobbyLeave();
@@ -84,8 +106,10 @@ export function BuildPanel({
           Build your deck
         </h3>
         <p className="m-0 max-w-[60ch] text-sm text-dim">
-          The draft is done. Your {plural(view.pool.length, "card")} go into a deck of their own,
-          all in its Pool — move the ones you play into the Deck and add basics in the editor.{" "}
+          The draft is done. Your {plural(view.pool.length, "card")} go into a deck of their own:
+          the {split.deck.length} in your deck filed by what they do, the {split.sideboard.length}{" "}
+          in your sideboard in its Pool — click a card below to move it, and add basics in the
+          editor.{" "}
           {commander
             ? `A Commander deck needs ${view.minDeckSize} cards and ${view.commanders === 1 ? "a commander" : `${view.commanders} commanders`} in its Commander pile.`
             : `A deck needs ${view.minDeckSize} cards.`}{" "}

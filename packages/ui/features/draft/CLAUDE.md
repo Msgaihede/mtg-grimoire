@@ -18,7 +18,7 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 | `packs/`                                     | Open Packs: the set page's set picker (`SetSwitcher.tsx`), the product picker, the marketplace pick (`marketplaces.ts`), the reduced price (`reducedPick.ts`), the opened wall, the figures and the histogram            |
 | `DraftPage.tsx`                              | The hub (_Draft in progress_, _Start new_) and the page-local state machine                                                                                                                                              |
 | `setup/`                                     | Quick, Sealed, Cube, Commander and Winston setup; `deal.ts` deals boosters to seats and holds each table's seat bounds                                                                                                   |
-| `pick/`                                      | The pick screen (one card a pick, or two in a Commander draft; the pack by rarity unless sorted as dealt), the Winston table, the pool by mana value below the pack or as a side tray (`trayLayout.ts`), the table strip |
+| `pick/`                                      | The pick screen (one or two cards a pick; the pack by rarity or as dealt), the Winston table, the pool as Deck and Sideboard (`PoolZones`, `split.ts`) under the pack or in side trays (`trayLayout.ts`)                 |
 | `build/`                                     | The hand-over from a finished draft to a draft deck                                                                                                                                                                      |
 | `lobby/`                                     | Pod drafts: create (a supporter's), join by code, the host's room (format and seats) and the guest's                                                                                                                     |
 | `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode: `DraftDeckBar`, the unsaved list, opening a draft deck                                                                                                                                     |
@@ -62,6 +62,12 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   `DraftDeckRef`s and every reader matches both (`isDraftDeckIn`, `useIsDraftDeck(deckId, row)`,
   `draft_deck::ids` / `discard`). Never test membership by id alone, and keep `DRAFT_DECKS_KEY`
   under the `["decks"]` root so a deck's delete refreshes it.
+- **Deck or sideboard is the page's** (`pick/split.ts`, issue #1471): which picks are on the
+  sideboard is held by `instanceId`, kept per device in `localStorage`, and never sent to the
+  engine; a pick's list is applied only once the pick is taken. At Build, the deck's cards are
+  filed by `autoCategoryFor` — the add path's own rule, never a second copy of it — and the
+  sideboard's go into Pool. `split.ts` makes no IPC call: `test-setup.ts` loads it before any
+  suite mocks `@/lib/ipc`.
 - **A lobby is a draft's, a game's or a trade's** (`LobbyState.kind`, issue #1419): this page
   draws a `draft` lobby only; a `game` lobby is the Playtesting page's and a `trade` lobby the
   Trade page's (`features/trade/lobby/`), which host and join it with the same hooks

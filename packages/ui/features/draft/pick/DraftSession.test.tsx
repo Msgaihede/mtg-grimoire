@@ -17,6 +17,7 @@ const ipcMock = vi.hoisted(() => ({
   draftView: vi.fn(),
   draftEnd: vi.fn(),
   draftDeckCreate: vi.fn(),
+  oracleTagsForPrintings: vi.fn(),
   lobbyPick: vi.fn(),
   lobbyWinston: vi.fn(),
   lobbyLeave: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("@/features/draft/navigation", () => ({ openDraftDeck }));
 
 import type { DraftRole } from "../build/BuildPanel";
 import { DraftSession } from "./DraftSession";
+import { keepSideboard, recallSideboard } from "./split";
 
 function card(name: string, over: Partial<DraftCard> = {}): DraftCard {
   return {
@@ -114,6 +116,7 @@ let push: (v: DraftView) => void = () => {};
 beforeEach(() => {
   for (const fn of Object.values(ipcMock)) fn.mockReset();
   ipcMock.draftView.mockResolvedValue(null);
+  ipcMock.oracleTagsForPrintings.mockResolvedValue([]);
   ipcMock.lobbyRejoin.mockResolvedValue(null);
   ipcMock.onDraftView.mockImplementation((cb: (v: DraftView) => void) => {
     push = cb;
@@ -134,19 +137,23 @@ function setup(initial: DraftView, role: DraftRole = "solo", draft: number | nul
 
 const pack = () => screen.getByRole("list", { name: "Pack" });
 
-/** The box a card from the pack is let go over to pick it — the pool's drop target. */
-const poolTarget = () => screen.getByRole("region", { name: "Your pool" }).parentElement!;
+/** The box a card from the pack is let go over to pick it into `zone` — that zone's drop target. */
+const zoneTarget = (zone: "Deck" | "Sideboard") =>
+  screen.getByRole("region", { name: zone }).parentElement!;
 
 /**
- * A card carried from the pack onto the pool, as a real pointer gesture. Both ends are boxed
- * clear of each other: jsdom lays nothing out, and dnd-kit hit-tests by coordinate.
+ * A card carried from the pack onto the deck (or the sideboard), as a real pointer gesture. The
+ * ends are boxed clear of each other: jsdom lays nothing out, and dnd-kit hit-tests by coordinate.
  */
-async function dragToPool(name: string): Promise<void> {
+async function dragToPool(name: string, zone: "Deck" | "Sideboard" = "Deck"): Promise<void> {
   const tile = within(pack()).getByRole("button", { name });
   boxed(tile, 0, 100);
-  boxed(poolTarget(), 300, 200);
-  await act(() => pointerDrag(tile, poolTarget()));
+  boxed(zoneTarget("Deck"), 300, 200);
+  boxed(zoneTarget("Sideboard"), 600, 200);
+  await act(() => pointerDrag(tile, zoneTarget(zone)));
 }
+
+const zone = (name: "Deck" | "Sideboard") => screen.getByRole("region", { name });
 
 describe("DraftSession", () => {
   it("draws the round, the pick and the pass", () => {
@@ -171,7 +178,7 @@ describe("DraftSession", () => {
 
   it("draws an empty pool a card tall, its columns under the hint (issue #1473)", () => {
     setup(view());
-    const pool = screen.getByRole("region", { name: "Your pool" });
+    const pool = screen.getByRole("region", { name: "Deck" });
     // Every column is drawn before the first pick, so the first card moves nothing.
     expect(within(pool).getByRole("list", { name: "Mana value 0: 0 cards" })).toBeInTheDocument();
     expect(within(pool).getByRole("list", { name: "Lands: 0 cards" })).toBeInTheDocument();
@@ -336,9 +343,14 @@ describe("DraftSession", () => {
     expect(screen.getByRole("textbox", { name: "Deck name" })).toHaveValue("Test Set Draft");
     await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
     await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(9));
+    // Every card was picked into the deck: each filed by the add path's rule, none in the Pool.
     expect(ipcMock.draftDeckCreate).toHaveBeenCalledWith(
       "Test Set Draft",
-      ["id-Shock", "id-Mountain"],
+      [],
+      [
+        { cardId: "id-Shock", pile: "Instant" },
+        { cardId: "id-Mountain", pile: "Land" },
+      ],
       false,
     );
     expect(ipcMock.draftEnd).toHaveBeenCalledWith(42);
@@ -370,7 +382,12 @@ describe("DraftSession", () => {
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
     await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(4));
-    expect(ipcMock.draftDeckCreate).toHaveBeenCalledWith("Test Set Draft", ["id-Shock"], true);
+    expect(ipcMock.draftDeckCreate).toHaveBeenCalledWith(
+      "Test Set Draft",
+      [],
+      [{ cardId: "id-Shock", pile: "Instant" }],
+      true,
+    );
   });
 
   it("leaves the lobby, not the draft, once a guest has built", async () => {
@@ -385,6 +402,141 @@ describe("DraftSession", () => {
     await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(3));
     expect(ipcMock.lobbyLeave).toHaveBeenCalledOnce();
     expect(ipcMock.draftEnd).not.toHaveBeenCalled();
+  });
+
+  /** Issue #1471: a pick goes to the deck or the sideboard — Arena's two lists. */
+  describe("the deck and the sideboard", () => {
+    const shockPicked = (over: Partial<DraftView> = {}) =>
+      view({ pickNumber: 1, pack: [card("Opt")], pool: [card("Shock")], ...over });
+
+    it("picks a card dropped on the sideboard into the sideboard", async () => {
+      ipcMock.draftPick.mockResolvedValue(shockPicked());
+      setup(view());
+      await dragToPool("Shock", "Sideboard");
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
+      expect(
+        await within(zone("Sideboard")).findByRole("button", { name: "Move Shock to the deck" }),
+      ).toBeInTheDocument();
+      expect(within(zone("Deck")).queryByRole("button")).not.toBeInTheDocument();
+      expect(recallSideboard()).toEqual(["Shock#0.0.0"]);
+    });
+
+    it("picks into the deck by default, and into the sideboard with To sideboard", async () => {
+      ipcMock.draftPick.mockResolvedValueOnce(shockPicked());
+      setup(view());
+      await userEvent.click(within(pack()).getByRole("button", { name: "Shock" }));
+      await userEvent.click(screen.getByRole("button", { name: "Pick Shock into the sideboard" }));
+      expect(ipcMock.draftPick).toHaveBeenLastCalledWith(42, ["Shock#0.0.0"]);
+      expect(
+        await within(zone("Sideboard")).findByRole("button", { name: "Move Shock to the deck" }),
+      ).toBeInTheDocument();
+
+      ipcMock.draftPick.mockResolvedValueOnce(
+        view({ pickNumber: 2, pack: [], waiting: true, pool: [card("Shock"), card("Opt")] }),
+      );
+      within(pack()).getByRole("button", { name: "Opt" }).focus();
+      await userEvent.keyboard("{ArrowRight}{Enter}");
+      expect(ipcMock.draftPick).toHaveBeenLastCalledWith(42, ["Opt#0.0.0"]);
+      expect(
+        await within(zone("Deck")).findByRole("button", { name: "Move Opt to the sideboard" }),
+      ).toBeInTheDocument();
+    });
+
+    it("picks into the sideboard with Shift+Enter", async () => {
+      ipcMock.draftPick.mockResolvedValue(shockPicked());
+      setup(view());
+      within(pack()).getByRole("button", { name: "Shock" }).focus();
+      await userEvent.keyboard("{ArrowRight}{Shift>}{Enter}{/Shift}");
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
+      expect(recallSideboard()).toEqual(["Shock#0.0.0"]);
+    });
+
+    it("keeps nothing on the sideboard for a refused pick", async () => {
+      ipcMock.draftPick.mockRejectedValue("That card is not in your pack.");
+      setup(view());
+      await dragToPool("Shock", "Sideboard");
+      expect(await screen.findByRole("alert")).toHaveTextContent("That card is not in your pack.");
+      expect(recallSideboard()).toEqual([]);
+    });
+
+    it("moves a picked card between the deck and the sideboard with a click", async () => {
+      setup(view({ pool: [card("Shock")] }));
+      await userEvent.click(
+        within(zone("Deck")).getByRole("button", { name: "Move Shock to the sideboard" }),
+      );
+      expect(recallSideboard()).toEqual(["Shock#0.0.0"]);
+      await userEvent.click(
+        within(zone("Sideboard")).getByRole("button", { name: "Move Shock to the deck" }),
+      );
+      expect(recallSideboard()).toEqual([]);
+      expect(
+        within(zone("Deck")).getByRole("button", { name: "Move Shock to the sideboard" }),
+      ).toBeInTheDocument();
+    });
+
+    it("comes back to the split it was left in, and starts over with a new draft", () => {
+      keepSideboard(["Shock#0.0.0"]);
+      setup(view({ pool: [card("Shock"), card("Opt")] }));
+      expect(
+        within(zone("Sideboard")).getByRole("button", { name: "Move Shock to the deck" }),
+      ).toBeInTheDocument();
+    });
+
+    it("forgets the last draft's split when a draft opens with an empty pool", () => {
+      keepSideboard(["Shock#0.0.0"]);
+      setup(view());
+      expect(recallSideboard()).toEqual([]);
+    });
+
+    it("builds the deck's cards into piles by what they do, and the sideboard's into Pool", async () => {
+      keepSideboard(["Opt#0.0.0"]);
+      ipcMock.oracleTagsForPrintings.mockResolvedValue([
+        { cardId: "id-Shock", slugs: ["removal", "burn"] },
+      ]);
+      ipcMock.draftDeckCreate.mockResolvedValue({ id: 9, name: "Test Set Draft" });
+      ipcMock.draftEnd.mockResolvedValue(undefined);
+      setup(
+        view({
+          status: "deckbuilding",
+          pack: [],
+          pool: [card("Shock"), card("Opt"), card("Ogre", { typeLine: "Creature — Ogre", cmc: 3 })],
+        }),
+      );
+      expect(
+        screen.getByText(/the 2 in your deck filed by what they do, the 1/),
+      ).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
+      await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(9));
+      expect(ipcMock.oracleTagsForPrintings).toHaveBeenCalledExactlyOnceWith([
+        "id-Shock",
+        "id-Ogre",
+      ]);
+      expect(ipcMock.draftDeckCreate).toHaveBeenCalledWith(
+        "Test Set Draft",
+        ["id-Opt"],
+        [
+          { cardId: "id-Shock", pile: "Removal" },
+          { cardId: "id-Ogre", pile: "Creature" },
+        ],
+        false,
+      );
+      expect(recallSideboard()).toEqual([]);
+    });
+
+    it("files by type line when the tags cannot be read", async () => {
+      ipcMock.oracleTagsForPrintings.mockRejectedValue("database is busy");
+      ipcMock.draftDeckCreate.mockResolvedValue({ id: 9, name: "Test Set Draft" });
+      ipcMock.draftEnd.mockResolvedValue(undefined);
+      setup(view({ status: "deckbuilding", pack: [], pool: [card("Shock")] }));
+      await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
+      await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(9));
+      expect(ipcMock.draftDeckCreate).toHaveBeenCalledWith(
+        "Test Set Draft",
+        [],
+        [{ cardId: "id-Shock", pile: "Instant" }],
+        false,
+      );
+    });
   });
 
   describe("a pick of two", () => {
@@ -615,7 +767,7 @@ describe("DraftSession", () => {
       setup(drafted());
       expect(layoutButton("Pool below the pack")).toHaveAttribute("aria-pressed", "true");
       expect(layoutButton("Pool beside the pack")).toHaveAttribute("aria-pressed", "false");
-      const pool = screen.getByRole("region", { name: "Your pool" });
+      const pool = screen.getByRole("region", { name: "Deck" });
       // The curve: every mana value's column is drawn, empty or not, one card art a pick.
       expect(within(pool).getByRole("list", { name: "Mana value 3: 0 cards" })).toBeInTheDocument();
       expect(within(pool).getAllByRole("img")).toHaveLength(5);
@@ -628,12 +780,12 @@ describe("DraftSession", () => {
       expect(layoutButton("Pool beside the pack")).toHaveAttribute("aria-pressed", "true");
       expect(window.localStorage.getItem(TRAY_LAYOUT_KEY)).toBe("side");
 
-      const pool = screen.getByRole("region", { name: "Your pool" });
+      const pool = screen.getByRole("region", { name: "Deck" });
       expect(within(pool).queryAllByRole("img")).toHaveLength(0);
       // Only the columns holding cards, a name once with its count, by name within a column.
       const lists = within(pool)
         .getAllByRole("list")
-        .filter((l) => l.getAttribute("aria-label") !== "Colours in your pool");
+        .filter((l) => l.getAttribute("aria-label") !== "Colours in deck");
       expect(lists.map((l) => l.getAttribute("aria-label"))).toEqual([
         "Mana value 1: 4 cards",
         "Lands: 1 card",
@@ -673,14 +825,39 @@ describe("DraftSession", () => {
       await dragToPool("Shock");
       expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
       expect(await screen.findByRole("list", { name: "Mana value 1: 1 card" })).toBeInTheDocument();
-      expect(screen.getByRole("region", { name: "Your pool" }).closest("aside")).not.toBeNull();
+      expect(screen.getByRole("region", { name: "Deck" }).closest("aside")).not.toBeNull();
+    });
+
+    it("picks into the sideboard tray, and moves a row's copy with a click (#1471)", async () => {
+      useDraftTrayLayout.getState().keep("side");
+      ipcMock.draftPick.mockResolvedValue(
+        view({
+          pickNumber: 1,
+          pack: [card("Opt")],
+          pool: [card("Bolt"), card("Shock")],
+        }),
+      );
+      setup(view({ pool: [card("Bolt")] }));
+      await dragToPool("Shock", "Sideboard");
+      expect(ipcMock.draftPick).toHaveBeenCalledExactlyOnceWith(42, ["Shock#0.0.0"]);
+      const row = await within(zone("Sideboard")).findByRole("button", {
+        name: "Move Shock to the deck",
+      });
+      expect(zone("Sideboard").closest("aside")).not.toBeNull();
+      await userEvent.click(row);
+      expect(recallSideboard()).toEqual([]);
+      expect(
+        within(zone("Deck")).getByRole("button", { name: "Move Shock to the sideboard" }),
+      ).toBeInTheDocument();
     });
 
     it("keeps a Winston table's pool underneath, with no toggle", () => {
       useDraftTrayLayout.getState().keep("side");
       setup(winston({ pool: [card("Shock")] }));
       expect(screen.queryByRole("group", { name: "Pool layout" })).not.toBeInTheDocument();
-      expect(screen.getByRole("list", { name: "Mana value 3: 0 cards" })).toBeInTheDocument();
+      expect(
+        within(zone("Deck")).getByRole("list", { name: "Mana value 3: 0 cards" }),
+      ).toBeInTheDocument();
     });
   });
 });

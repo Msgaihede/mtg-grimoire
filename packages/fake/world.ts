@@ -60,6 +60,7 @@ import { resetBulkUndo } from "@grimoire/ui/lib/bulkUndo";
 import { resetViewMemory } from "@grimoire/ui/lib/viewMemory";
 import { resetPackMarketplaces } from "@grimoire/ui/features/draft/packs/marketplacePick";
 import { resetPackReduced } from "@grimoire/ui/features/draft/packs/reducedPick";
+import { resetSideboard } from "@grimoire/ui/features/draft/pick/split";
 import { resetDraftTrayLayout } from "@grimoire/ui/features/draft/pick/trayLayout";
 import { MEMBERSHIP_ELSEWHERE } from "@grimoire/ui/lib/core/hostMembership";
 import { STORAGE_GROUP_WARNING } from "@grimoire/ui/lib/core/hostStorage";
@@ -300,6 +301,8 @@ export function installWorld(
   if (options.resetStore !== false) resetPackMarketplaces();
   // Its sell percentage and minimum, kept the same way. Same gate, same reason.
   if (options.resetStore !== false) resetPackReduced();
+  // A draft's deck-or-sideboard split (issue #1471), kept the same way. Same gate, same reason.
+  if (options.resetStore !== false) resetSideboard();
   // The draft pick screen's pool layout (issue #1474), kept the same way. Same gate, same reason.
   if (options.resetStore !== false) resetDraftTrayLayout();
 
