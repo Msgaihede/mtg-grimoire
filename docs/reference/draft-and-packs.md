@@ -94,9 +94,9 @@ and is drawn with an em dash. A card MTGJSON knows and this corpus does not (`in
 no image and no price, and is never dealt into a draft.
 
 **The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a multi-select
-beside the product picker, _Prices from_, that starts at the app's marketplace (Settings) and is the
-reader's pick after that — kept per device in `localStorage` (`grimoire.packs.marketplaces`), never
-in `app_meta`, and never written back to the app's setting. `useBoosterPrices` reads
+at the head of the right-hand column, _Prices from_, that starts at the app's marketplace
+(Settings) and is the reader's pick after that — kept per device in `localStorage`
+(`grimoire.packs.marketplaces`), never in `app_meta`, and never written back to the app's setting. `useBoosterPrices` reads
 `printing_prices` once per picked marketplace (each its own cache entry) and takes each finish's
 lowest quote (`lowestPrices`) before the foil-else-nonfoil fallback, so one marketplace's non-foil
 never stands in for another's foil. **One currency at a time**: the app holds no exchange rate, so
@@ -105,7 +105,7 @@ cannot be put down; Card trader (unpriced) and a feed the host cannot reach are 
 feed that has never landed a row fetches it, as Settings does.
 
 **The reduced price is the page's own too** (`packs/reducedPick.ts`, `packs/ReducedInputs.tsx`): a
-_Sell at_ percentage and a _Minimum_ card value under the product row, apart from Settings ›
+_Sell at_ percentage and a _Minimum_ card value under _Prices from_, apart from Settings ›
 Collection value — neither read from it nor written to it — and kept per device in `localStorage`
 (`grimoire.packs.reduced`). Set, the reduced price is drawn in brackets beside the opening's _Total
 value_ and the session's, by the collection's sum ([collection-value.md](collection-value.md)):
@@ -113,6 +113,11 @@ each priced card strictly under the minimum is taken out, then the percentage of
 session's tally keeps every priced card's price, not a reduced sum, so changing a figure mid-session
 reprices the whole session. The minimum is in whatever currency the page prices in, and nothing
 converts it. The expected value, the simulation and the histogram stay at full value.
+
+**Every price control is in the right-hand column** (issue #1465): _Prices from_, _Sell at_ and
+_Minimum_ sit above the expected value and the figures, so the product row (product, _Open_,
+_Back_) is the only band at the top and the column starts level with it. On a narrow page the
+column folds under the wall, controls first.
 
 ## The draft: phase.rs's draft-core
 
