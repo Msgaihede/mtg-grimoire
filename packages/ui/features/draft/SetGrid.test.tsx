@@ -84,4 +84,14 @@ describe("SetGrid", () => {
     await user.type(box, "zzz");
     expect(screen.getByText("No set matches “hobbzzz”.")).toBeInTheDocument();
   });
+
+  it("sizes a set's symbol by its box, since keyrune's `.ss` inherits its font size", () => {
+    // Issue #1497: keyrune's unlayered `.ss { font-size: inherit }` beats any Tailwind size class
+    // on the `<i>` itself, so a size written there never reaches the symbol.
+    render(<SetGrid sets={SETS} onPick={() => {}} />);
+    const glyph = screen.getByRole("button", { name: /Foundations/ }).querySelector("i.ss");
+    expect(glyph).not.toBeNull();
+    expect(glyph?.className).not.toMatch(/\btext-\[|\btext-(xs|sm|base|lg|\d?xl)\b/);
+    expect(glyph?.parentElement?.className).toMatch(/\btext-\[5rem\]/);
+  });
 });
