@@ -1,5 +1,7 @@
 import { useId, useState, type JSX, type ReactNode } from "react";
+import { RotateCcw } from "lucide-react";
 import { ReducedPrice } from "@/components/ReducedPrice";
+import { BUTTON } from "@/features/settings/controls";
 import type { ReducedValue } from "@/lib/collectionValue";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice, parsePurchasePrice, unreadablePriceNote } from "@/lib/prices";
@@ -48,7 +50,7 @@ export interface Tally {
  * The product's figures beside what was opened (spec §7; botbox.dev's *Expected Value & Pack
  * Statistics*): expected value in theory and over ten thousand simulated packs, the spread, the
  * median, the pack's percentile, the chance to beat what the reader paid, the distribution with the
- * pack marked on it, and the session's tally.
+ * pack marked on it, and the session's tally, which _Reset_ starts over (issue #1503).
  *
  * **Every figure is at the page's reduced price where one is set** (issue #1502): `figures` were
  * simulated at it, `value` is the opened pack's reduced price, and the tally's totals are reduced
@@ -67,6 +69,7 @@ export function PackFigures({
   reducedTally = null,
   tallyExpected = tally.ev,
   reduction = null,
+  onResetTally,
 }: {
   figures: Figures | null;
   /** What was opened is worth this. */
@@ -84,6 +87,8 @@ export function PackFigures({
   tallyExpected?: number;
   /** What the figures are reduced by, in a sentence (`reductionLine`); `null` for nothing. */
   reduction?: string | null;
+  /** Starts the session's tally over; greyed while it has nothing in it. */
+  onResetTally: () => void;
 }): JSX.Element {
   const paidId = useId();
   const [paidText, setPaidText] = useState("");
@@ -175,7 +180,26 @@ export function PackFigures({
       </section>
 
       <section className="flex flex-col gap-2 border-t border-border pt-4">
-        <h3 className={LABEL}>This session</h3>
+        <div className="flex items-center justify-between gap-4">
+          <h3 className={LABEL}>This session</h3>
+          {/* Issue #1503: the tally runs for the window's life, across sets; this starts it over
+              without a restart. The opened pack and the page's prices stay as they are. */}
+          <button
+            type="button"
+            onClick={onResetTally}
+            disabled={tally.opened === 0}
+            aria-label="Reset this session"
+            title="Start the session's tally over"
+            className={cn(
+              BUTTON,
+              "h-6 gap-1 border-transparent px-1.5 py-0 text-xs text-dim",
+              "hover:border-border hover:text-text disabled:hover:border-transparent disabled:hover:text-dim",
+            )}
+          >
+            <RotateCcw className="size-3.5" aria-hidden="true" />
+            Reset
+          </button>
+        </div>
         <dl className="m-0 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-sm">
           <Row term="Opened">{tally.opened.toLocaleString("en-US")}</Row>
           <Row term="Total value">

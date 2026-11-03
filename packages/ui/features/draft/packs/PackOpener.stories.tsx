@@ -148,6 +148,25 @@ export const Opened: Story = {
   },
 };
 
+/** Issue #1503: two packs opened, then the session's tally started over with _Reset_ — the pack
+ *  just opened stays on the wall, and the button greys until the next press. */
+export const SessionReset: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Sets to open" });
+    await userEvent.click(within(wall).getAllByRole("button")[0]);
+    await userEvent.click(await canvas.findByRole("button", { name: "Open" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Open another" }));
+    const figures = await canvas.findByRole("complementary", { name: "Figures" });
+    await expect(within(figures).getByText("Opened").nextSibling).toHaveTextContent("2");
+    const reset = within(figures).getByRole("button", { name: "Reset this session" });
+    await userEvent.click(reset);
+    await expect(within(figures).getByText("Opened").nextSibling).toHaveTextContent("0");
+    await expect(reset).toBeDisabled();
+    await expect(canvas.getByRole("list", { name: "Opened cards" })).toBeVisible();
+  },
+};
+
 /** A sell percentage and a minimum set on the page: the reduced price in brackets beside the
  *  opening's total and the session's, both kept on this device for the next visit. */
 export const Reduced: Story = {
@@ -158,9 +177,7 @@ export const Reduced: Story = {
     await userEvent.type(await canvas.findByLabelText("Sell at"), "70");
     await userEvent.type(canvas.getByLabelText("Minimum"), "0.25{Enter}");
     await userEvent.click(await canvas.findByRole("button", { name: "Open" }));
-    await expect(
-      await canvas.findAllByRole("button", { name: /^Reduced price / }),
-    ).toHaveLength(2);
+    await expect(await canvas.findAllByRole("button", { name: /^Reduced price / })).toHaveLength(2);
   },
 };
 

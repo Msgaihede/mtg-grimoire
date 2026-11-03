@@ -55,7 +55,9 @@
 //!   so a reduced line is what the reader would have been told on that day and not today's rule
 //!   drawn backwards over today's cheap cards. It is per copy, strictly below, an unpriced holding
 //!   never below, and the live point's is [`crate::collection::BelowMinimum`]'s `value` for the same
-//!   minimum, to the cent. Only the collection's graph asks: a wish is not held, and the sell
+//!   minimum, to the cent. **`belowCards` is the same rows' copies**, the live point's
+//!   [`crate::collection::BelowMinimum`]'s `cards` exactly, which a bulk price multiplies (issue
+//!   #1477). Only the collection's graph asks: a wish is not held, and the sell
 //!   percentage this is subtracted for has nothing to say about what a card would cost. What the
 //!   reduced line comes to is TypeScript's sum.
 //! * **A card is in exactly one bucket, so the buckets always sum to the total.** The type split
@@ -136,6 +138,10 @@ pub struct ValuePoint {
     /// from the wire, when it asked none.**
     #[serde(skip_serializing_if = "Option::is_none")]
     pub below: Option<f64>,
+    /// Σ copies over the same rows as [`ValuePoint::below`] — what a bulk price multiplies (issue
+    /// #1477). **Asked and absent exactly as `below` is.**
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub below_cards: Option<i64>,
 }
 
 /// The whole graph.
@@ -336,7 +342,8 @@ fn periods_sql(source: Source, key: &str, name: &str, market: Marketplace) -> St
                          THEN x.prev_copies
                               * (coalesce(x.price, 0.0) - coalesce(x.prev_price, 0.0))
                          ELSE 0.0 END),
-                sum(CASE WHEN x.price < ?5 THEN x.copies * x.price ELSE 0.0 END)
+                sum(CASE WHEN x.price < ?5 THEN x.copies * x.price ELSE 0.0 END),
+                sum(CASE WHEN x.price < ?5 THEN x.copies ELSE 0 END)
            FROM (SELECT q.*, {key} AS bucket, {name} AS name
                    FROM paired q
                    LEFT JOIN cards c ON c.id = q.card_id) x
@@ -360,6 +367,8 @@ struct Period {
     moved: f64,
     /// Σ copies × price over the rows below the minimum — 0 when none was asked.
     below: f64,
+    /// Σ copies over those rows — 0 when none was asked.
+    below_cards: i64,
 }
 
 /// The collection's value over time at `market`, cut by `split` (`total`, `type`, `color` or
@@ -454,6 +463,7 @@ fn read(
             let value: Option<f64> = r.get(4).map_err(|e| e.to_string())?;
             let moved: Option<f64> = r.get(5).map_err(|e| e.to_string())?;
             let below: Option<f64> = r.get(6).map_err(|e| e.to_string())?;
+            let below_cards: Option<i64> = r.get(7).map_err(|e| e.to_string())?;
             if periods.last().map(|p| p.at != at).unwrap_or(true) {
                 periods.push(Period {
                     at,
@@ -461,12 +471,14 @@ fn read(
                     values: Vec::new(),
                     moved: 0.0,
                     below: 0.0,
+                    below_cards: 0,
                 });
             }
             let period = periods.last_mut().expect("pushed above");
             period.values.push((bucket.clone(), value.unwrap_or(0.0)));
             period.moved += moved.unwrap_or(0.0);
             period.below += below.unwrap_or(0.0);
+            period.below_cards += below_cards.unwrap_or(0);
             let known = names.entry(bucket).or_insert(None);
             if known.is_none() {
                 *known = label;
@@ -508,6 +520,7 @@ fn read(
             moved: (i > 0).then_some(p.moved),
             live: false,
             below: minimum.map(|_| p.below),
+            below_cards: minimum.map(|_| p.below_cards),
         })
         .collect();
     let first = points.is_empty();
@@ -518,6 +531,7 @@ fn read(
         moved: (!first).then(|| live.as_ref().map(|p| p.moved).unwrap_or(0.0)),
         live: true,
         below: minimum.map(|_| live.as_ref().map(|p| p.below).unwrap_or(0.0)),
+        below_cards: minimum.map(|_| live.as_ref().map(|p| p.below_cards).unwrap_or(0)),
     });
 
     Ok(ValueHistory {
@@ -1237,6 +1251,7 @@ mod tests {
                 moved: None,
                 live: true,
                 below: None,
+                below_cards: None,
             }],
             today: 1_800_000_000,
         })
@@ -1254,8 +1269,8 @@ mod tests {
         );
     }
 
-    /// A point that was asked about a minimum carries `below`, under that name — and only then,
-    /// which the test above is the other half of.
+    /// A point that was asked about a minimum carries `below` and `belowCards`, under those names
+    /// — and only then, which the test above is the other half of.
     #[test]
     fn a_point_asked_about_a_minimum_serialises_its_below() {
         let v = serde_json::to_value(ValuePoint {
@@ -1265,15 +1280,21 @@ mod tests {
             moved: None,
             live: true,
             below: Some(1.5),
+            below_cards: Some(3),
         })
         .unwrap();
         assert_eq!(v["below"], serde_json::json!(1.5));
+        assert_eq!(v["belowCards"], serde_json::json!(3));
     }
 
     // ---- what a minimum card value takes off ----
 
     fn below_of(h: &ValueHistory) -> Vec<Option<f64>> {
         h.points.iter().map(|p| p.below).collect()
+    }
+
+    fn below_cards_of(h: &ValueHistory) -> Vec<Option<i64>> {
+        h.points.iter().map(|p| p.below_cards).collect()
     }
 
     /// **Today's `below` is the collection header's `below_minimum.value`**, to the cent, at every
@@ -1316,11 +1337,18 @@ mod tests {
                 let header = summary.below_minimum.expect("a minimum was asked");
                 for split in ["total", "type", "color", "set"] {
                     let h = history(&conn, split, market, Some(minimum)).unwrap();
-                    let below = h.points.last().unwrap().below.expect("a minimum was asked");
+                    let live = h.points.last().unwrap();
+                    let below = live.below.expect("a minimum was asked");
                     assert!(
                         cents(below, header.value),
                         "{market:?} {split} at {minimum}: {below} against {}",
                         header.value
+                    );
+                    // The copies a bulk price multiplies (issue #1477), the header's exactly.
+                    assert_eq!(
+                        live.below_cards,
+                        Some(header.cards),
+                        "{market:?} {split} at {minimum}"
                     );
                 }
             }
@@ -1360,6 +1388,9 @@ mod tests {
         for (at, want) in got.iter().zip([0.0, 1.2 + 0.6, 0.0, 0.3]) {
             assert!(cents(at.unwrap(), want), "{got:?}");
         }
+        // The same rows' copies: `fell`'s three and the `bolt`'s two two days back, `fell`'s three
+        // today.
+        assert_eq!(below_cards_of(&h), [Some(0), Some(3 + 2), Some(0), Some(3)]);
         assert_eq!(
             totals(&h),
             totals(&tcg(&conn, "total")),
@@ -1380,6 +1411,7 @@ mod tests {
         for split in ["type", "color", "set"] {
             let h = history(&conn, split, Marketplace::Tcgplayer, Some(9.5)).unwrap();
             assert_eq!(below_of(&h), [Some(9.0 + 8.0), Some(6.0)], "{split}");
+            assert_eq!(below_cards_of(&h), [Some(1 + 2), Some(2)], "{split}");
         }
     }
 
@@ -1396,8 +1428,10 @@ mod tests {
         for minimum in [None, Some(0.0), Some(-1.0)] {
             let h = history(&conn, "total", Marketplace::Tcgplayer, minimum).unwrap();
             assert_eq!(below_of(&h), [None, None], "{minimum:?}");
+            assert_eq!(below_cards_of(&h), [None, None], "{minimum:?}");
             let json = serde_json::to_value(&h).unwrap();
             assert!(json["points"][0].get("below").is_none(), "{json}");
+            assert!(json["points"][0].get("belowCards").is_none(), "{json}");
         }
         assert_eq!(below_of(&wishes(&conn, "total")), [None, None]);
     }

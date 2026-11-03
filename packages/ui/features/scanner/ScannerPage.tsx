@@ -1,16 +1,20 @@
-import { useEffect, useRef, useState, type JSX } from "react";
-import { Bug, History } from "lucide-react";
+import { useEffect, useId, useRef, useState, type JSX } from "react";
+import { Bug, History, Minimize2, RotateCcw, Send } from "lucide-react";
 import { FILTER_CONTROL } from "@/components/FilterChips";
 import { PageBar } from "@/components/PageBar";
+import { BELOW_CAPTION } from "@/components/TitleBar";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
 import { plural } from "@/lib/counts";
+import { useEdition } from "@/lib/edition";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { ScanBatch } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { notify } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { leftOutSentence, putBackTitle } from "./history/historyWords";
 import { putBack } from "./history/putBack";
@@ -18,10 +22,20 @@ import { ScanHistoryDialog } from "./history/ScanHistoryDialog";
 import { Overlay } from "./Overlay";
 import { AddCardDialog } from "./reader/AddCardDialog";
 import { AddedToast } from "./reader/AddedToast";
+import {
+  EXIT_PACK_OPENER,
+  PACK_OPENER,
+  PackDrawerTab,
+  PackIndicator,
+  PackOpenerButton,
+  PackPress,
+  packFades,
+  usePackIdle,
+} from "./reader/PackOpener";
 import { ShotReadyPill, StoppedVeil } from "./reader/PictureNotes";
 import { matchStrip } from "./reader/readerText";
 import { ScanDock } from "./reader/ScanDock";
-import { ScanHud } from "./reader/ScanHud";
+import { RESET_EVIDENCE, ScanHud } from "./reader/ScanHud";
 import { TierConfetti } from "./reader/TierConfetti";
 import { setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
 import { withoutCommitted } from "./reader/trayCommit";
@@ -31,6 +45,7 @@ import { useLandedTier } from "./reader/useLandedTier";
 import { ScannerPanels } from "./ScannerPanels";
 import { useScanSounds } from "./sounds/useScanSounds";
 import { SubmitScanDialog } from "./submit/SubmitScanDialog";
+import { SEND_SCAN } from "./submit/submitText";
 import { useMaySendScans } from "./submit/useMaySendScans";
 import { useScanSubmit } from "./submit/useScanSubmit";
 import type { ScannerTrayRow } from "./types";
@@ -48,6 +63,15 @@ import { useTrayLanding } from "./useTrayLanding";
 import { useScannedDeck } from "./useScannedDeck";
 import { useWindowParked } from "./useWindowParked";
 import { SCANNER_OPEN_ELSEWHERE, SCANNER_OPENS_HERE_LATER } from "./verdictText";
+
+/**
+ * The pack opener's drawer: 30rem — the tray's own 24rem floor and room for its header on one
+ * line — and never so wide that the window's left 3rem of picture goes. The stage's right edge
+ * follows it while it is open, so the drawer sits beside the picture rather than over it: friends
+ * watching the shared window keep the whole frame. Written out twice for Tailwind's scanner.
+ */
+const DRAWER_WIDTH = "w-[30rem] max-w-[calc(100vw-3rem)]";
+const BESIDE_DRAWER = "right-[min(30rem,calc(100vw-3rem))]";
 
 // What used to stand here — the flash's hold, the filters' refusal, `isUserFolder` and
 // `withoutCommitted` — moved out with the logic that used it, so the light app's phone page files
@@ -107,8 +131,48 @@ function ElsewhereSentence() {
 function LiveScanner({ destination }: { destination: TrayDestination | undefined }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const { prefs, update, inForce, filterError, loaded, unavailable } = useScannerPrefs();
-  // The developer panels are the Scanner view's own; a destination's host draws none of them.
-  const developer = destination === undefined && prefs.developer;
+  /**
+   * **The pack opener** (issue #1504): the camera column as the whole window below the caption —
+   * the picture uncropped, the dock a one-row bar floating over its foot, the tray a drawer pulled
+   * out from the right — for a reader sharing the window with friends while they open packs.
+   *
+   * **The same elements, laid out again — never a second tree.** The `<video>` is the one
+   * `useCamera` handed its stream to; a second one mounted for the mode would be a black box, and
+   * reopening the camera for it a flicker and perhaps a second permission prompt. So entering and
+   * leaving change classes alone, and the scanner, its run, the tray and every hook above go on
+   * exactly as they were — a scan running when the button is pressed is still running on the
+   * stage. Session-only, as Start is: a new visit opens in the column.
+   *
+   * The Scanner view's alone: over a trade the page is already a dialog.
+   */
+  const [packOpener, setPackOpener] = useState(false);
+  const pack = destination === undefined && packOpener;
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const { idle, wake } = usePackIdle(pack);
+  const edition = useEdition();
+  const drawerId = useId();
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const packOpenerRef = useRef<HTMLElement | null>(null);
+  const leavePack = () => {
+    setPackOpener(false);
+    packOpenerRef.current?.focus();
+  };
+  // The caret onto the stage as it opens, so the keyboard is where the reader now is — the header
+  // press that opened it is under the stage.
+  useEffect(() => {
+    if (pack) stageRef.current?.focus();
+  }, [pack]);
+  // **Escape puts the drawer away first, then leaves the stage** — one layer a press. Anything
+  // open over either (a dock panel, a dialog) is a capture-phase layer and takes the press before.
+  useDismissOnEscape({
+    layer: "outer",
+    onDismiss: () => setDrawerOpen(false),
+    enabled: pack && drawerOpen,
+  });
+  useDismissOnEscape({ layer: "navigation", onDismiss: leavePack, enabled: pack });
+  // The developer panels are the Scanner view's own; a destination's host draws none of them, and
+  // neither does the pack opener — a window shared with friends is no place for the debug column.
+  const developer = destination === undefined && prefs.developer && !pack;
   // **Stopped until the reader presses Start** (issue #1317): opening the view turns the
   // camera on, not recognition. Session-only: a Start or Stop survives minimize/restore, and a new
   // visit starts stopped again.
@@ -507,8 +571,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     // drawn at the app root, and the page's five dialogs — *Clear all…*, *Create deck…*, *Send
     // scan…*, *Add card…* and *History* — are this fragment's other children, siblings of the box
     // and not inside it.
+    //
+    // **The pack opener drops the container**, and that is what lets its stage and drawer be
+    // `fixed` to the window from in here: they are this section's own column and tray, and moving
+    // them anywhere else would remount the video (the mode's doc says why it must not).
     <>
-      <section className="@container/scan flex h-full flex-col gap-3">
+      <section className={cn("flex h-full flex-col gap-3", !pack && "@container/scan")}>
         {/* Not shown: the page bar's title below draws the view's name, and this heading names
             it for assistive tech, as the other views' do — so that title is a `div`. It is here
             over a trade too, where no header is drawn. */}
@@ -524,6 +592,12 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             titleAs="div"
             actions={
               <>
+                <PackOpenerButton
+                  onOpen={(opener) => {
+                    packOpenerRef.current = opener;
+                    setPackOpener(true);
+                  }}
+                />
                 <HistoryButton
                   onOpen={(opener) => {
                     historyOpener.current = opener;
@@ -538,26 +612,67 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
         <div className="flex min-h-0 flex-1 gap-5">
           {/* The camera's column: the picture, with everything the scanner says drawn on it, and
-              the dock of controls under it. */}
-          <div className="flex min-w-[23rem] flex-[0_1_clamp(23rem,100cqw_-_25.25rem,clamp(31rem,100cqw_-_37.25rem,40rem))] flex-col gap-3 @min-[140rem]/scan:basis-[52.5rem]">
+              the dock of controls under it. **In the pack opener it is the stage**: the window
+              below the caption at `LAYER.stage`, as the game board is — over the rail and the
+              page, under every popup and dialog — its right edge beside the drawer while that is
+              out. Every pointer move and key over it wakes the bar (`usePackIdle`), and idle the
+              pointer goes too, so a shared window shows the cards and not an arrow. */}
+          <div
+            ref={stageRef}
+            role={pack ? "region" : undefined}
+            aria-label={pack ? PACK_OPENER : undefined}
+            tabIndex={pack ? -1 : undefined}
+            onPointerMove={pack ? wake : undefined}
+            onPointerDown={pack ? wake : undefined}
+            onKeyDown={pack ? wake : undefined}
+            className={
+              pack
+                ? cn(
+                    "fixed bottom-0 left-0 flex flex-col bg-black outline-none",
+                    edition.caption ? BELOW_CAPTION : "top-0",
+                    drawerOpen ? BESIDE_DRAWER : "right-0",
+                    LAYER.stage,
+                    idle && "cursor-none",
+                  )
+                : "flex min-w-[23rem] flex-[0_1_clamp(23rem,100cqw_-_25.25rem,clamp(31rem,100cqw_-_37.25rem,40rem))] flex-col gap-3 @min-[140rem]/scan:basis-[52.5rem]"
+            }
+          >
             {/* The column is the height, and the video box takes what the notes and the dock
                 under it leave. **Cropped rather than letterboxed** (`object-cover`, and
                 `Overlay`'s canvas with it): a column this shape is nearer square than 16:9, and a
-                letterboxed feed there is a strip with black above and below. */}
-            <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
-              <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
+                letterboxed feed there is a strip with black above and below. **The pack opener
+                letterboxes instead** (`object-contain`): the window is the picture there, and the
+                whole frame the camera sends is what friends are watching — a crop would cut the
+                card at the frame's edge off their screen. */}
+            <div
+              className={cn(
+                "relative min-h-0 flex-1 overflow-hidden bg-black",
+                !pack && "rounded-lg",
+              )}
+            >
+              <video
+                ref={videoRef}
+                muted
+                playsInline
+                className={cn("h-full w-full", pack ? "object-contain" : "object-cover")}
+              />
               <Overlay
                 videoRef={videoRef}
                 verdict={reading ? loop.verdict : null}
                 orientation={developer}
+                fit={pack ? "contain" : "cover"}
               />
               {/* **Stopped, the picture dims behind the press that begins it** — continuous only,
                   and only over a picture: a refused camera or a host with no session puts its own
                   sentence where the picture would be, and a veil laid over that would be two
-                  centred sentences on top of each other. */}
-              {!pointAndShoot && !scanning && camera.kind !== "error" && unavailable === null && (
-                <StoppedVeil />
-              )}
+                  centred sentences on top of each other. **Not in the pack opener**: a dimmed
+                  picture is not what friends came to watch, and the recording light in its corner
+                  already says it is stopped. */}
+              {!pack &&
+                !pointAndShoot &&
+                !scanning &&
+                camera.kind !== "error" &&
+                unavailable === null && <StoppedVeil />}
               {/* Before the popup, so the pieces leave from behind the card; thrown only for a
                   landing the popup is showing, at a price tier. A `null` burst throws nothing and
                   stops nothing, so a jackpot still in the air when the popup goes finishes. */}
@@ -568,7 +683,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                     : null
                 }
               />
-              <AddedToast card={shown} onDone={clearLanded} price={landedPrice} tier={landedTier} />
+              <AddedToast
+                card={shown}
+                onDone={clearLanded}
+                price={landedPrice}
+                tier={landedTier}
+                raised={pack}
+              />
               {camera.kind === "error" && (
                 <p
                   role="alert"
@@ -603,20 +724,26 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                   // No bar over the camera's own refusal: nothing is being matched there.
                   live={reading && camera.kind === "live"}
                   variant="labelled"
-                  onReset={pictureLive ? onReset : undefined}
+                  // In the pack opener both presses are the bar's, with every other control.
+                  onReset={pictureLive && !pack ? onReset : undefined}
                   // Offered only where `sendable` says: a run to send (a running scanner's, or
                   // the last shot's), the Scanner view itself, and a supporter's device. Without
                   // a live camera, or stopped, the picture is already saying why not; of the
                   // membership nothing is said at all.
-                  onSend={sendable ? submit.open : undefined}
+                  onSend={sendable && !pack ? submit.open : undefined}
                   note={hudNote}
                   // Point and shoot between two shots: what the next one is taken with — in the
                   // HUD's own flow, under *Reset evidence*, which it would otherwise run under in
                   // a column narrower than 584px.
                   notice={
-                    pointAndShoot && !shot.shooting && camera.kind !== "error" ? (
+                    !pack && pointAndShoot && !shot.shooting && camera.kind !== "error" ? (
                       <ShotReadyPill />
                     ) : null
+                  }
+                  // The pack opener's recording light, in the corner where the chip starts — it
+                  // stands for the stopped veil and the shot-ready pill, which it does not draw.
+                  lead={
+                    pack ? <PackIndicator reading={reading} pointAndShoot={pointAndShoot} /> : null
                   }
                 />
               )}
@@ -663,6 +790,45 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               onCamera={(cameraId) => {
                 if (cameraId !== prefs.cameraId) update({ cameraId });
               }}
+              // **The pack opener's bar**: the same dock in one row over the picture's foot, with
+              // the HUD's two presses and the way out at its end, gone while idle and back with
+              // the pointer (`packFades`). Above the HUD's layer, so its panels open over it.
+              variant={pack ? "bar" : "dock"}
+              className={
+                pack
+                  ? cn(
+                      "absolute inset-x-0 bottom-4 mx-auto w-fit max-w-[calc(100%-2rem)]",
+                      LAYER.raised,
+                      packFades(idle),
+                    )
+                  : undefined
+              }
+              extra={
+                pack ? (
+                  <>
+                    {pictureLive && (
+                      <PackPress
+                        words={RESET_EVIDENCE}
+                        glyph={<RotateCcw className="size-4" aria-hidden="true" />}
+                        onClick={onReset}
+                      />
+                    )}
+                    {sendable && (
+                      <PackPress
+                        words={SEND_SCAN}
+                        glyph={<Send className="size-4" aria-hidden="true" />}
+                        opensDialog
+                        onClick={(e) => submit.open(e.currentTarget)}
+                      />
+                    )}
+                    <PackPress
+                      words={EXIT_PACK_OPENER}
+                      glyph={<Minimize2 className="size-4" aria-hidden="true" />}
+                      onClick={leavePack}
+                    />
+                  </>
+                ) : undefined
+              }
             />
           </div>
 
@@ -672,15 +838,42 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               by itself, so opening a panel never moves the video, and the tray is capped rather
               than shrunk: a `min-h-0` item in a scroller hands its height to the panels beside it.
               **From 88rem it is a row instead**, the panels scrolling in a column of their own
-              beside the tray — its floor then the tray's 24rem, the gap and the panels' 21.25rem. */}
+              beside the tray — its floor then the tray's 24rem, the gap and the panels' 21.25rem.
+              **In the pack opener it is the drawer**: the window's right edge below the caption,
+              slid off it until the pull tab brings it out, and inert while it is away so the
+              keyboard never walks into a tray nobody can see. */}
           <div
+            onPointerMove={pack ? wake : undefined}
             className={
-              developer
-                ? "relative flex min-w-[24rem] flex-1 flex-col gap-4 overflow-auto @min-[88rem]/scan:min-w-[46.25rem] @min-[88rem]/scan:flex-row @min-[88rem]/scan:overflow-visible"
-                : "flex min-w-[24rem] flex-1 flex-col"
+              pack
+                ? cn(
+                    "fixed right-0 bottom-0 flex flex-col bg-bg p-3 shadow-xl",
+                    "transition-transform duration-300 motion-reduce:transition-none",
+                    DRAWER_WIDTH,
+                    edition.caption ? BELOW_CAPTION : "top-0",
+                    LAYER.stage,
+                    !drawerOpen && "translate-x-full",
+                  )
+                : developer
+                  ? "relative flex min-w-[24rem] flex-1 flex-col gap-4 overflow-auto @min-[88rem]/scan:min-w-[46.25rem] @min-[88rem]/scan:flex-row @min-[88rem]/scan:overflow-visible"
+                  : "flex min-w-[24rem] flex-1 flex-col"
             }
           >
+            {/* First in the DOM so it is the first stop into the drawer, and outside the inert
+                tray so it can always be reached. It fades with the bar, save while the drawer is
+                out — then it is the drawer's edge. */}
+            {pack && (
+              <PackDrawerTab
+                open={drawerOpen}
+                onToggle={() => setDrawerOpen((open) => !open)}
+                copies={totalCopies(tray.rows)}
+                controls={drawerId}
+                className={packFades(idle && !drawerOpen)}
+              />
+            )}
             <div
+              id={pack ? drawerId : undefined}
+              inert={pack && !drawerOpen}
               className={
                 developer
                   ? "flex max-h-[70vh] shrink-0 flex-col @min-[88rem]/scan:max-h-none @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:min-w-0 @min-[88rem]/scan:flex-1"

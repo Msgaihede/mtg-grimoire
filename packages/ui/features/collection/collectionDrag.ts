@@ -2,6 +2,7 @@ import { type RefObject } from "react";
 import { useDndDropTarget } from "@/lib/dndTarget";
 import { composedDraggable, dragData, type DragPayload } from "@/features/decks/dnd";
 import { readSearchCardDrag, type SearchCardDrag } from "@/features/search/searchCardDrag";
+import { readRecordGroup } from "@/lib/recordGroup";
 
 /**
  * The gesture that files a collection entry into one of the binder's own folders — the payload,
@@ -192,8 +193,18 @@ export function readCollectionTileDrag(data: Record<string, unknown>): Collectio
  * does not apply. Adding it here reaches every target that reads {@link readCollectionDrop} — the
  * shelf headings, the sticky bar, an empty folder's box and `CollectionBreadcrumb`'s segments —
  * with no component edit at all, which is what the discriminated union was for.
+ *
+ * **`"group"` is a picked set** (issue #1501): every tile the reader Ctrl- or Shift-picked on a
+ * wall, the one they grabbed first. It is the union of the others rather than a fourth shape,
+ * because each member is exactly what it would have been dragged alone, and a policy asks each
+ * member its own question — `useCollectionDrops` takes the group when any member could move.
  */
 export type CollectionDrop =
+  CollectionSingleDrop | { kind: "group"; members: readonly CollectionSingleDrop[] };
+
+/** One thing in the air — a row, a tile or a not-yet-owned card. What a {@link CollectionDrop}'s
+ *  `"group"` arm is a list of. */
+export type CollectionSingleDrop =
   | { kind: "entry"; entry: CollectionDrag }
   | { kind: "tile"; tile: CollectionTileDrag }
   | { kind: "new"; card: SearchCardDrag };
@@ -211,6 +222,18 @@ export type CollectionDrop =
  * smaller claim than creating one they do not.
  */
 export function readCollectionDrop(data: Record<string, unknown>): CollectionDrop | null {
+  const primary = readSingleDrop(data);
+  if (primary === null) return null;
+  // **A picked set, read member by member through the same reader** (issue #1501). Before this
+  // the group travelled only as card payloads, which no folder reads, so a set of tiles dropped
+  // on a shelf filed the tile the drag started on and left the rest where they were. A group
+  // whose primary is unreadable is nothing, `readDragGroup`'s rule: the marks live on the
+  // primary's keys, and an array with the right key name is not a drag this app wrote.
+  const rest = readRecordGroup(data, readSingleDrop);
+  return rest.length === 0 ? primary : { kind: "group", members: [primary, ...rest] };
+}
+
+function readSingleDrop(data: Record<string, unknown>): CollectionSingleDrop | null {
   const entry = readCollectionDrag(data);
   if (entry !== null) return { kind: "entry", entry };
   const tile = readCollectionTileDrag(data);

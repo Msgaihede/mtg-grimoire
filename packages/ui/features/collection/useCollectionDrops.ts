@@ -32,7 +32,8 @@ import { MENU_CONDITION } from "@/lib/conditions";
 import { ipc, ipcError, type CollectionFolder, type CollectionRow } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { refreshCardSearches } from "@/lib/searchMarks";
-import type { CollectionDrop } from "./collectionDrag";
+import { plural } from "@/lib/counts";
+import type { CollectionDrop, CollectionSingleDrop } from "./collectionDrag";
 import { ROOT_LABEL } from "./CollectionFolderPanel";
 import { addedReceipt, movedReceipt, report } from "./collectionReceipts";
 
@@ -68,6 +69,9 @@ export interface LockedMove {
   drop: CollectionDrop;
   to: number | null;
   card: string;
+  /** How many cards {@link card} names — more than one for a picked set (issue #1501), whose
+   *  `card` is then a count (`3 cards`) and is not quoted like a name. */
+  count: number;
   /** The set-aside drawer the copy is leaving, or `null` when it is not leaving one. */
   out: string | null;
   /** The set-aside drawer it would land in, or `null` when it is not landing in one. */
@@ -87,6 +91,7 @@ export function useCollectionDrops({
   folderNameOf,
   setFolder,
   moveCopy,
+  moveMany,
   reorder,
   setPicking,
 }: {
@@ -115,6 +120,16 @@ export function useCollectionDrops({
     variables: { entryId: number; folderId: number | null },
     options: { onSuccess: () => void; onError: (error: unknown) => void },
   ) => void;
+  /**
+   * `useSetCollectionFolderMany`'s `mutateAsync` — **a picked set's** filing (issue #1501), every
+   * copy in one write, the way the copy picker and the card menu's `Move N cards to` already file
+   * several. It makes its own undo offer; the receipt is {@link commitFile}'s.
+   */
+  moveMany: (variables: {
+    entryIds: readonly number[];
+    folderId: number | null;
+    destination: string;
+  }) => Promise<{ changes: readonly unknown[] }>;
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;
   /** Ask the copy picker — the page's own `picking` state, which the row menu sets too. */
@@ -341,8 +356,8 @@ export function useCollectionDrops({
    * one answer on the wall; the rule is kept as written because a **picked set** can still span
    * folders, and that reaches the picker the same way.
    */
-  const canFile = useCallback(
-    (drop: CollectionDrop, to: number | null) => {
+  const canFileOne = useCallback(
+    (drop: CollectionSingleDrop, to: number | null) => {
       // **A card nobody owns has no `from`, so two of {@link canMoveCopy}'s three clauses have
       // nothing to say about it.** It is leaving no folder, so it cannot be leaving a deck's
       // group; and it is in no folder, so "already there" — the clause that stops a folder
@@ -357,6 +372,18 @@ export function useCollectionDrops({
         : drop.tile.copies.some((copy) => canMoveCopy(copy.folderId, to));
     },
     [canMoveCopy, readersOwnLevel],
+  );
+  /**
+   * {@link canFileOne}, and **a picked set is taken when any member is** (issue #1501) — the tile
+   * rule above one level up, for its reason: a set of five with one already in this drawer still
+   * has four to file, and a folder that refused the five for the one would strand the four.
+   */
+  const canFile = useCallback(
+    (drop: CollectionDrop, to: number | null) =>
+      drop.kind === "group"
+        ? drop.members.some((member) => canFileOne(member, to))
+        : canFileOne(drop, to),
+    [canFileOne],
   );
   /**
    * The write, or the question about **which copy** that has to come before it — everything a drop
@@ -382,9 +409,88 @@ export function useCollectionDrops({
    * plain drag between shelves of the open wall is the rule's exemption: the copy is drawn where
    * the reader let it go. The copy picker reports for itself.
    */
+  const commitGroup = useCallback(
+    (members: readonly CollectionSingleDrop[], to: number | null, destination: string) => {
+      // **The adds** — a picked set off the search column. One write per card, because there is
+      // no bulk add to make, and **one toast** for the lot with any refusals folded in (the
+      // owner's rule: one action, one toast).
+      const added = members.flatMap((member) => (member.kind === "new" ? [member.card] : []));
+      if (added.length > 0) {
+        const writes = added.map((card) =>
+          addDroppedAsync({ cardId: card.cardId, finish: card.finish, folderId: to }),
+        );
+        void Promise.allSettled(writes).then((outcomes) => {
+          const refused = outcomes.flatMap((o) => (o.status === "rejected" ? [o.reason] : []));
+          const landed = outcomes.length - refused.length;
+          const only = added.length === 1 ? added[0].name : null;
+          if (refused.length === 0) {
+            notify.success(addedReceipt(only ?? "", destination, landed));
+          } else if (landed === 0) {
+            notify.error(`Couldn't add ${plural(added.length, "card")} to “${destination}”`, {
+              body: ipcError(refused[0]),
+            });
+          } else {
+            notify.warning(addedReceipt("", destination, landed), {
+              body: `${plural(refused.length, "card")} couldn't be added — ${ipcError(refused[0])}`,
+            });
+          }
+        });
+      }
+
+      // **The refiles** — every row and tile in the set, as the rows behind them.
+      const refiles = members.flatMap((member) =>
+        member.kind === "entry"
+          ? [
+              {
+                name: member.entry.name,
+                copies: [{ entryId: member.entry.entryId, folderId: member.entry.folderId }],
+              },
+            ]
+          : member.kind === "tile"
+            ? [{ name: member.tile.name, copies: member.tile.copies }]
+            : [],
+      );
+      if (refiles.length === 0) return;
+      // **A tile standing for several rows is still the one case the app cannot decide**
+      // ({@link commitFile}'s rule, unchanged by there being more than one tile in the air), so a
+      // set holding one goes to the copy picker — over every row in the set, each ticked unless
+      // the destination refuses it, which is the menu's `Move N cards to` exactly.
+      if (refiles.some((refile) => refile.copies.length > 1)) {
+        setPicking({
+          cardName: plural(refiles.length, "card"),
+          entryIds: refiles.flatMap((refile) => refile.copies.map((copy) => copy.entryId)),
+          folderId: to,
+        });
+        return;
+      }
+      // Otherwise every row the destination takes, in **one** write — a refusal rolls the whole
+      // press back rather than filing half the set — and one receipt counted off its answer.
+      const movable = refiles.filter((refile) => canMoveCopy(refile.copies[0].folderId, to));
+      if (movable.length === 0) return;
+      const entryIds = movable.map((refile) => refile.copies[0].entryId);
+      report(moveMany({ entryIds, folderId: to, destination }), {
+        done: (outcome) =>
+          movedReceipt(
+            outcome.changes.length || entryIds.length,
+            movable.length === 1 ? movable[0].name : null,
+            destination,
+          ),
+        failed: `Couldn't move ${plural(entryIds.length, "card")} to “${destination}”`,
+      });
+    },
+    [addDroppedAsync, canMoveCopy, moveMany, setPicking],
+  );
+
   const commitFile = useCallback(
     (drop: CollectionDrop, to: number | null, answered = false) => {
       const destination = folderNameOf(to) ?? ROOT_LABEL;
+      // **A picked set** (issue #1501) — always a receipt, whether or not a lock was asked about:
+      // it is a bulk write with an undo offer of its own, and the owner's rule names a bulk action
+      // among the moves that toast. See {@link commitGroup}.
+      if (drop.kind === "group") {
+        commitGroup(drop.members, to, destination);
+        return;
+      }
       // **The one branch that is an add rather than a refile**, and it never asks the reader
       // anything: there is exactly one row to write, so the picker below has nothing to pick
       // between. See {@link addDropped} for what the write says and why it says so little.
@@ -423,7 +529,7 @@ export function useCollectionDrops({
       }
       setPicking({ cardName: name, entryIds: copies.map((copy) => copy.entryId), folderId: to });
     },
-    [addDroppedAsync, setFolder, moveCopy, setPicking, folderNameOf],
+    [addDroppedAsync, setFolder, moveCopy, setPicking, folderNameOf, commitGroup],
   );
 
   /**
@@ -464,23 +570,32 @@ export function useCollectionDrops({
    * **A drag only.** `Add to → <folder>` and `Move to folder…` reach {@link setFolder} through
    * their own handlers and are deliberately not routed through here.
    */
+  const sourcesOf = useCallback(
+    (drop: CollectionSingleDrop, to: number | null): (number | null)[] =>
+      // **A card nobody owns comes from the root, and that is a statement rather than a
+      // placeholder.** The lock question is *has this drop crossed the edge of a drawer the
+      // reader set aside*, and it has two halves: leaving one, and landing in one. A new copy
+      // cannot be leaving — `lockRootOf(null)` is `null`, so the "out of" half is silent — and
+      // it can perfectly well be landing in one, which is the half the sentence *“X” is locked.
+      // Filing “Y” there sets that copy aside.* already says. Writing `[]` here would have made
+      // the sidebar the one door into a locked drawer that never asks.
+      drop.kind === "new"
+        ? [null]
+        : drop.kind === "entry"
+          ? [drop.entry.folderId]
+          : drop.tile.copies
+              .filter((copy) => canMoveCopy(copy.folderId, to))
+              .map((copy) => copy.folderId),
+    [canMoveCopy],
+  );
   const fileCard = useCallback(
     (drop: CollectionDrop, to: number | null) => {
+      // A picked set's sources are its members' — only the members that would move, for the
+      // reason the paragraph above gives for a tile's copies.
       const sources =
-        // **A card nobody owns comes from the root, and that is a statement rather than a
-        // placeholder.** The lock question is *has this drop crossed the edge of a drawer the
-        // reader set aside*, and it has two halves: leaving one, and landing in one. A new copy
-        // cannot be leaving — `lockRootOf(null)` is `null`, so the "out of" half is silent — and
-        // it can perfectly well be landing in one, which is the half the sentence *“X” is locked.
-        // Filing “Y” there sets that copy aside.* already says. Writing `[]` here would have made
-        // the sidebar the one door into a locked drawer that never asks.
-        drop.kind === "new"
-          ? [null]
-          : drop.kind === "entry"
-            ? [drop.entry.folderId]
-            : drop.tile.copies
-                .filter((copy) => canMoveCopy(copy.folderId, to))
-                .map((copy) => copy.folderId);
+        drop.kind === "group"
+          ? drop.members.flatMap((member) => (canFileOne(member, to) ? sourcesOf(member, to) : []))
+          : sourcesOf(drop, to);
       const crossed = sources.filter((from) => crossesLock(from, to));
       if (crossed.length === 0) {
         commitFile(drop, to);
@@ -498,16 +613,19 @@ export function useCollectionDrops({
         // The card, whichever of the three shapes is in the air — all of them carry a name, and
         // the sentence is about the printing rather than about the rows behind it.
         card:
-          drop.kind === "entry"
-            ? drop.entry.name
-            : drop.kind === "tile"
-              ? drop.tile.name
-              : drop.card.name,
+          drop.kind === "group"
+            ? plural(drop.members.length, "card")
+            : drop.kind === "entry"
+              ? drop.entry.name
+              : drop.kind === "tile"
+                ? drop.tile.name
+                : drop.card.name,
+        count: drop.kind === "group" ? drop.members.length : 1,
         out: leaving === null ? null : (folderNameOf(leaving) ?? "a folder you have set aside"),
         into: arriving === null ? null : (folderNameOf(arriving) ?? "a folder you have set aside"),
       });
     },
-    [canMoveCopy, crossesLock, lockRootOf, folderNameOf, commitFile],
+    [canFileOne, sourcesOf, crossesLock, lockRootOf, folderNameOf, commitFile],
   );
 
   /**

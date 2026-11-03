@@ -1363,6 +1363,35 @@ undone delete therefore reads with its owned counts at zero until the reader fil
 Teaching the journal about collection rows would be a change to what a step *is* — the argument in
 full is under "The history a cut writes, and the undo it deliberately does not" above.
 
+### Every removal gives its copies back (issue #1494, 2026-11-03)
+
+> **A card that leaves the live list sends the copies it was holding to `Recently removed`,
+> whichever press took it out.**
+
+The owner's rule, written down after
+[issue #1494](https://github.com/Msgaihede/mtg-grimoire/issues/1494): a reader changed a line to
+another printing in foil, pulled the new foil in, and found the deck's folder holding two copies
+of a card the list names once. Two holes let that happen, and both are closed by one helper,
+`deck::release_displaced_copies(tx, deck_id, variant, card_id, finish, displaced)`:
+
+- **The sweep keeps what the plan names.** `release_unclaimed_copies` claims each key at the larger
+  of the two lists (issue #1112), and that is right for the box as a whole — switching the plan on
+  empties the Actual list, and a sweep that ignored the plan would evict the box on the next swap.
+  But the plan nearly always names the printing a swap just took off the Actual list, so the old
+  copy stayed. `swap_printing`, `split_printing` and `set_card_finish` now release the **displaced**
+  copies first — at most what the write moved off the old `(card_id, finish)`, and never a copy the
+  live list still claims at that grain afterwards (another pile, or a finish change on a printing
+  sold only in foil, where the unsaid and the `foil` row play the same copy). Then the sweep runs as
+  before, with the plan's claims, over everything else. A cut (`deck_to_collection`) never asked the
+  plan, so the two kinds of removal now agree.
+- **Not every removal was a cut.** `set_card_quantity` took a live row down or out and moved no
+  copy; the editor sends a live cut through `deck_to_collection` when it has the row's id, but the
+  card modal's stepper did not hand one. The stepper write releases the displaced copies itself
+  now, and the modal hands `held` like the editor does. An undo or a redo that takes cards off the
+  live list (`deck_undo::apply_reversal`) reads the live claims before it applies and releases
+  what fell (`deck::live_claims`, `deck::release_dropped_claims`), inside the reversal's savepoint.
+  The step still names `deck_cards` alone — the paragraph above holds: undo puts no copy _back_.
+
 **All four of these do file a step where `deck_to_collection` does not**, and the difference is what
 the `deck_cards` half is worth on its own. A cleared or deleted pile — or a list an import has
 replaced — is many rows in an order and a filing nothing else records, so the step is the only way

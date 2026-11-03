@@ -657,6 +657,7 @@ that does not exist trains a reader to disbelieve the table.
 | `useScannerStatus.ts` | `scanner_status` once a session, and what a surface draws from it |
 | `useTray.ts`, `useTrayLanding.ts`, `useTrayCommit.ts`, `useTrayNewFolder.ts`, `reader/` | The tray (§10) |
 | `usePointAndShoot.ts` | A press's read (§10, *The tray*) |
+| `reader/PackOpener.tsx` | The pack opener's own pieces — the recording light, the bar's presses, the drawer's pull tab, the idle clock (*The pack opener*, §10) |
 | `Overlay.tsx`, `scanCorners.ts` | The canvas over the video — four gold corners round the card the frame votes for |
 | `ScannerPanels.tsx`, `panels/` | The Developer column (§10) |
 | `verdictText.ts`, `reader/readerText.ts` | The pure sentence functions the panels, the HUD, the tests and the stories share |
@@ -888,6 +889,11 @@ that row is the same oracle card, both ids known, or the same printing when both
 from the decision. A newest row of another card gets an ordinary add. The strip and the card over the
 camera say *Printing updated*, never *Added*.
 
+**Zero copies is the row's removal** (issue #1500). `tray.ts`' `setQuantity` reads a quantity below
+one as `removeRow`, so `−` at one copy — or a `0` typed in the desktop stepper's box — takes the card
+out of the tray exactly as its `×` does, on both trays. A row never holds `0`; a box emptied mid-type
+(`NaN`) still reads as one copy.
+
 **The commit is one `scanner_tray_commit(items, folderId, remaining)`**: the collection import in
 `add` mode **and** the tray that is left, in one transaction (`collection::commit_import_with`), so an
 app closed before a debounced tray write cannot leave committed rows in the stored tray. One condition
@@ -1052,6 +1058,52 @@ gone puts back nothing and says so (`NOTHING_TO_PUT_BACK`).
 
 **The batch is not touched**: it stays the record of what was put away then, and the next Add or
 Archive of those rows writes a batch of its own.
+
+### The pack opener (issue #1504, 2026-11-03)
+
+**The Scanner view's camera as the whole window**, for a reader sharing that window with friends
+while they open packs: *Pack opener* in the page's header, beside *History*. Session-only, like
+Start — a new visit opens in the column — and the Scanner view's alone: over a trade the page is
+already a dialog, so no press is drawn.
+
+- **The stage** is the camera column laid out again: `fixed` below the caption (`BELOW_CAPTION`) at
+  `LAYER.stage`, as the game board is — over the rail and `main`, under every popup and dialog, so
+  the bar's panels and every dialog the page opens still open over it. The picture is
+  **letterboxed, not cropped** (`object-contain`, and `Overlay`'s `fit="contain"`, whose stroke
+  divides by the *smaller* ratio): the whole frame the camera sends is what the watchers see.
+- **The same elements, never a second tree.** The `<video>` is the one `useCamera` gave its stream
+  to; a second `<video>` would be black, and reopening the camera for it a flicker and perhaps a
+  second permission prompt. So entering and leaving change classes and nothing else, and a scan
+  running when the press is made is still running on the stage (the suite holds `getUserMedia` to
+  one call across the way in). **The section drops `@container/scan` while the stage is up** —
+  a container is the containing block for `fixed` descendants, which would hold the stage to the
+  page's box.
+- **The bar** is `ScanDock` with `variant="bar"`: the same controls in one row, centred over the
+  picture's foot, the triggers' captions given to their accessible names alone; then the HUD's
+  *Reset evidence* and *Send scan…* (same conditions as the corner's, which the HUD does not draw
+  on the stage) and *Exit pack opener* as 44px glyph presses (`PackPress`). No `@container` on
+  the bar — it is `w-fit`, and an inline-size container measures its own width as if empty.
+- **The tray is a drawer** at the window's right edge, 30rem (never wider than the window less
+  3rem), slid off it until its pull tab (`PackDrawerTab`, a disclosure with the tray's copy count)
+  brings it out, and `inert` while away. The stage's right edge follows it while it is out, so it
+  stands beside the picture rather than over it.
+- **The recording light** (`PackIndicator`) in the picture's top-left corner, first in the HUD's
+  corner row (`ScanHud`'s `lead`): green and pulsing *Scanning* while recognition runs, red
+  *Stopped* (continuous) or *Ready to scan* (point & shoot) while it does not. It stands for the
+  stopped veil and the shot-ready pill, which the stage does not draw. Never fades.
+- **Idle, the controls leave the picture** (`usePackIdle`, `PACK_IDLE_MS` = 3s): the bar and the
+  closed drawer's tab fade out, and the pointer is hidden, until the next pointer move or key over
+  the stage. **Opacity only**, and back whatever the clock says while in use — hovered, holding
+  keyboard focus (`:focus-visible`, so a clicked button does not pin it up), or with a panel open
+  (`aria-expanded`) — `packFades`. The Added popup stands clear of the bar (`AddedToast`'s
+  `raised`) whether or not the bar is showing.
+- **Escape** puts the drawer away first (`outer`), then leaves the stage (`navigation`) and hands
+  the caret back to *Pack opener*; anything open over either is a capture-phase layer and takes
+  the press before. Entering puts the caret on the stage.
+- **No developer column on the stage**: a window shared with friends is no place for it. The
+  stored switch is untouched, so the column is back on leaving.
+- **Not native full screen.** The stage fills the window; a reader who wants the screen
+  maximises it. The caption stays, as over the game board, so the window can always be closed.
 
 ### The Developer switch
 

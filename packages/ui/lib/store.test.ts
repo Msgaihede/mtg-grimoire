@@ -1548,3 +1548,60 @@ describe("paneCopy", () => {
     expect(useAppStore.getState().paneCopy).toBeNull();
   });
 });
+
+/** Issue #1507: a press on the rail entry of the view already open walks it back to its root. */
+describe("a press on the view already open", () => {
+  it("asks that view for its root, and only a re-press does", () => {
+    useAppStore.getState().selectView("collection");
+    expect(useAppStore.getState().activeView).toBe("collection");
+    expect(useAppStore.getState().rootRequest).toBeNull();
+
+    useAppStore.getState().selectView("collection");
+
+    expect(useAppStore.getState().rootRequest).toBe("collection");
+  });
+
+  it("is spent by the next view change, so it cannot fire on a later visit", () => {
+    useAppStore.getState().selectView("wishlist");
+    useAppStore.getState().selectView("wishlist");
+
+    useAppStore.getState().setActiveView("settings");
+
+    expect(useAppStore.getState().rootRequest).toBeNull();
+  });
+
+  it("closes the deck editor, as re-pressing Decks always has", () => {
+    useAppStore.getState().selectView("decks");
+    useAppStore.getState().setOpenDeckId(4);
+
+    useAppStore.getState().selectView("decks");
+
+    expect(useAppStore.getState().openDeckId).toBeNull();
+    expect(useAppStore.getState().rootRequest).toBe("decks");
+  });
+
+  it("closes the draft deck's editor on Draft & Packs, and only there", () => {
+    useAppStore.getState().selectView("draft");
+    useAppStore.getState().setDraftDeckId(9);
+
+    useAppStore.getState().selectView("draft");
+    expect(useAppStore.getState().draftDeckId).toBeNull();
+
+    // Arriving from somewhere else is a return, which lands in the editor left open.
+    useAppStore.getState().setDraftDeckId(9);
+    useAppStore.getState().selectView("home");
+    useAppStore.getState().selectView("draft");
+    expect(useAppStore.getState().draftDeckId).toBe(9);
+  });
+
+  it("is a view change all the same, so the hand-offs and the card pane are cleared", () => {
+    useAppStore.getState().selectView("search");
+    useAppStore.getState().setSelectedCardId("p1");
+    const pulse = useAppStore.getState().viewPulse;
+
+    useAppStore.getState().selectView("search");
+
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+    expect(useAppStore.getState().viewPulse).toBe(pulse + 1);
+  });
+});

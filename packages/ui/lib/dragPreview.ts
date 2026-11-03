@@ -30,6 +30,7 @@
  */
 import type { DragDropManager } from "@dnd-kit/dom";
 import { readDragGroup } from "@/features/decks/dnd";
+import { recordGroupSize } from "./recordGroup";
 
 /** The attribute the chip carries, so a test can find it and nothing else can be mistaken for
  *  it. Not a class: the chip is drawn with inline styles for the reason above, and a class the
@@ -79,7 +80,11 @@ export function installCardCountPreview(manager: DragDropManager): () => void {
 
   const off = [
     manager.monitor.addEventListener("dragstart", ({ operation }) => {
-      const count = operation.source ? readDragGroup(operation.source.data).length : 0;
+      // The larger of the two groups a drag can carry: the cards, and — off a `dragRecord` wall —
+      // the whole tiles (`lib/recordGroup.ts`, issue #1501), which is the one that still counts a
+      // set whose grabbed tile has no card half (an any-printing wish).
+      const data = operation.source?.data;
+      const count = data ? Math.max(readDragGroup(data).length, recordGroupSize(data)) : 0;
       // Below two keeps the drag exactly as it was: the preview is a picture of the card, which
       // is better than any chip could be, and `1 card` tells the reader what they can see.
       if (count < 2) return;

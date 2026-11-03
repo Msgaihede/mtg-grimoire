@@ -42,9 +42,9 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 - **Open Packs' reduced price is the page's own** (`packs/reducedPick.ts`): its sell percentage,
   minimum and bulk price are kept the marketplace pick's way, and never read from or written to
   Settings' collection value. The sum is `lib/collectionValue.ts`' `reducedValue` — and its
-  per-copy form `reducedCopy`, held equal to it by the suite; never write a third. The bulk price
-  (issue #1477) is this page's alone — it counts each card under the minimum at that price, after
-  the percentage — and never goes into the IPC's `CollectionValue`.
+  per-copy form `reducedCopy`, held equal to it by the suite; never write a third. Its bulk price
+  (issue #1477) is apart from the collection setting's bulk price like the other two: the same
+  `CollectionValue` shape, never the same stored figure.
 - **Set, the reduced price is every figure on Open Packs** (issue #1502): the totals, the
   expected value, the simulation, the histogram and the chance to beat a price are all figured at
   it (`reducedPrices`), the full value said only in the breakdown's tooltip. Never figure one of

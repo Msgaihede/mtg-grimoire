@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { dragData, readDragData } from "@/features/decks/dnd";
 import { searchCardDragData, type SearchCardDrag } from "@/features/search/searchCardDrag";
+import { withRecordGroup } from "@/lib/recordGroup";
 import { readWishDrag, readWishDrop, wishDragData } from "./wishDrag";
 
 const WISH = { wishId: 7, name: "Lightning Bolt", folderId: null } as const;
@@ -40,8 +41,10 @@ describe("wishDragData / readWishDrag", () => {
    * yes to the same payload.
    */
   it("lets a pinned wish be read as a card and as a wish at once", () => {
-    const both = { ...dragData({ kind: "card", cardId: "c1", name: "Bolt", typeLine: null }),
-                   ...wishDragData(WISH) };
+    const both = {
+      ...dragData({ kind: "card", cardId: "c1", name: "Bolt", typeLine: null }),
+      ...wishDragData(WISH),
+    };
     expect(readDragData(both)).not.toBeNull();
     expect(readWishDrag(both)).toEqual(WISH);
   });
@@ -63,8 +66,9 @@ describe("readWishDrop", () => {
   /** A card payload carrying neither mark is not this feature's drag at all — which is what keeps
    *  a deck tile from raising every folder's ring. */
   it("refuses a record carrying neither mark", () => {
-    expect(readWishDrop(dragData({ kind: "card", cardId: "c1", name: "Bolt", typeLine: null })))
-      .toBeNull();
+    expect(
+      readWishDrop(dragData({ kind: "card", cardId: "c1", name: "Bolt", typeLine: null })),
+    ).toBeNull();
     expect(readWishDrop({})).toBeNull();
   });
 
@@ -83,5 +87,28 @@ describe("readWishDrop", () => {
   it("takes the wish when a record somehow carries both", () => {
     const both = { ...searchCardDragData(CARD), ...wishDragData(WISH) };
     expect(readWishDrop(both)).toEqual({ kind: "wish", wish: WISH });
+  });
+});
+
+/** Issue #1501: a picked set of wishes reads as one group, the grabbed wish first. */
+describe("readWishDrop — a picked set", () => {
+  const OTHER = { wishId: 8, name: "Ancestral Recall", folderId: 3 } as const;
+
+  it("reads every picked wish, grabbed first", () => {
+    const record = withRecordGroup(wishDragData(WISH), [wishDragData(OTHER)]);
+    expect(readWishDrop(record)).toEqual({
+      kind: "group",
+      members: [
+        { kind: "wish", wish: WISH },
+        { kind: "wish", wish: OTHER },
+      ],
+    });
+  });
+
+  it("passes over a malformed member, and refuses a group with no readable grabbed wish", () => {
+    expect(
+      readWishDrop(withRecordGroup(wishDragData(WISH), [{ ...wishDragData(OTHER), wishId: 0 }])),
+    ).toEqual({ kind: "wish", wish: WISH });
+    expect(readWishDrop(withRecordGroup({}, [wishDragData(OTHER)]))).toBeNull();
   });
 });

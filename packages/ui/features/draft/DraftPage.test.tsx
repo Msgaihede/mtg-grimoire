@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +28,7 @@ const openDraftDeck = vi.hoisted(() => vi.fn());
 vi.mock("@/features/draft/navigation", () => ({ openDraftDeck }));
 
 import { DraftPage } from "./DraftPage";
+import { useAppStore } from "@/lib/store";
 import { currentDraft } from "./pick/current";
 
 const SAVED: DraftSaved = {
@@ -177,6 +178,19 @@ describe("DraftPage", () => {
     expect(screen.getByText("0 packs chosen — up to 6")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Back to Draft & Packs" }));
     expect(screen.getByRole("region", { name: "Start new" })).toBeInTheDocument();
+  });
+
+  /** Issue #1507: the rail's Draft & Packs entry, pressed while a flow is up, is the way home. */
+  it("goes back to the hub when the Draft & Packs entry is pressed again", async () => {
+    useAppStore.setState({ ...useAppStore.getInitialState(), activeView: "draft" });
+    setup();
+    await userEvent.click(screen.getByRole("button", { name: /^Sealed/ }));
+    expect(screen.getByRole("button", { name: /Open sealed pool/ })).toBeInTheDocument();
+
+    act(() => useAppStore.getState().selectView("draft"));
+
+    expect(await screen.findByRole("region", { name: "Start new" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open sealed pool/ })).not.toBeInTheDocument();
   });
 
   it("opens a Commander draft's and a Winston draft's setup from the hub", async () => {

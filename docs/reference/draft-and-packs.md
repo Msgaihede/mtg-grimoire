@@ -48,6 +48,12 @@ opens any of them.
   draft's pack order alike. `byYear` only cuts the order it is given into runs of one year, never
   re-sorts it, and the filter drops a year whose sets it hides. The year left the tiles' code line
   with it — the divider says it once.
+- **A tile is mostly its set's symbol** (issue #1497): the symbol is how a reader knows a set, so
+  it fills a 6rem box at 5rem over the name, and the code moved to the tile's top-right corner
+  (_Suggested_ keeps the top-left). Columns are at least 10rem. The size is the box's, not the
+  `<i>`'s: keyrune's `.ss` rule is unlayered and says `font-size: inherit`, so it beats every
+  Tailwind size class on the glyph — before this the symbol drew at the button's 16px whatever
+  `text-[2rem]` said.
 - **A set page switches set from its own bar** (`packs/SetSwitcher`, issue #1466): a searchable
   single-select `Dropdown` over the same `useBoosterSets` list, in the wall's order, matched the
   wall's way (`setMatches`, name or code). Not the search page's `SetCombobox`, which is a
@@ -105,6 +111,14 @@ the kind (`booster` or `sealed`) and a sealed product's MTGJSON category in word
 `bundle`) — "collector box" finds the collector booster box. The shell owns the query (the
 `Dropdown`'s `matches` prop), so the trigger keeps naming the picked product while a search hides it.
 
+**A product pick opens one** (issue #1496, `ProductStage`'s `pick`): nobody picks a product and
+does not want to open it, so the pick is the first press, and _Open another_ is beside the wall it
+drew. Picking the product already on the wall is no press (the reader closed the list on what they
+had); after _Back_, picking the shown product opens it. A pick made before the prices answer waits
+for them — the session's tally adds a pack's value at the press, and an open made before then would
+count $0 for ever — while _Open_ itself never waits, since a read that failed never answers. The
+stage still arrives on its first product unopened: arriving on a set is not a pick of a product.
+
 **The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a combobox at the
 head of the right-hand column, _Prices from_ (`packs/MarketplaceCombobox.tsx`, issue #1463) — the
 picked marketplaces as chips, a search typed beside them, and under it the marketplaces it matches
@@ -154,7 +168,7 @@ and the expected value, the simulation and the histogram had stayed at full valu
   its tooltip and a screen reader saying it is not counted (or counted at the bulk price). The tile
   keeps the market's price: it is the fact the figures were reduced from.
 
-**A _Bulk_ price is this page's alone** (issue
+**A _Bulk_ price is this page's own too** (issue
 [#1477](https://github.com/Msgaihede/mtg-grimoire/issues/1477)): set beside the minimum, each card
 under the minimum is counted at it instead of taken out — every card under $1 worth $0.01, say.
 It is added **after** the percentage, `(full − below) × percent + cards below × bulk`: a bulk price
@@ -162,7 +176,16 @@ is already what a buyer pays for such a card, so a percentage off it would reduc
 breakdown states it as a line of its own (_Bulk at $0.01 · 6 cards +$0.06_). With no minimum the box
 is greyed, since there is nothing under it to price, and its figure is kept for when one is set. It
 is kept with the other two (`bulkPrice` in `grimoire.packs.reduced`); figures kept before it existed
-read as no bulk price. Settings › Collection value has none.
+read as no bulk price. Settings › Collection value has a bulk price of its own for the collection,
+and the two never meet.
+
+**The session's tally can be started over** (issue
+[#1503](https://github.com/Msgaihede/mtg-grimoire/issues/1503)): _This session_ — packs opened, their
+total value and their total expected — runs for the window's life (`lib/viewMemory.ts`), across
+sets, and a change of currency starts it over. A _Reset_ beside its heading starts it over at once,
+without a restart: the pack on the wall, the product and the page's prices stay as they are, and the
+next _Open another_ counts from one. It asks nothing first — the tally is a running sum for the
+reader's eyes, nothing is written — and it is greyed while the tally is empty.
 
 **Every price control is in the right-hand column** (issue #1465): _Prices from_, _Sell at_,
 _Minimum_ and _Bulk_ sit above the expected value and the figures, so the product row (product, _Open_,

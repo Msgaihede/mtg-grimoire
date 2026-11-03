@@ -4,8 +4,9 @@
  * them. A reader who sells their collection at 80% may value a pack they are about to buy at 60%,
  * so this page neither reads the collection's setting nor writes it.
  *
- * **And a bulk price, which only this page has** (issue #1477): what each card under the minimum is
- * worth instead of nothing — a store's bulk rate. It counts only while a minimum is set.
+ * **And a bulk price** (issue #1477): what each card under the minimum is worth instead of nothing —
+ * a store's bulk rate. It counts only while a minimum is set. The collection's setting has a bulk
+ * price too, and this one is apart from it like the other two.
  *
  * **Remembered across launches in `localStorage`, per device** — `marketplacePick.ts`' arrangement
  * and its reasons: a way of pricing one page is this machine's, never `app_meta`. A host that
@@ -18,17 +19,16 @@
  * `test-setup.ts` and the fake's `installWorld` reset it.
  */
 import { create } from "zustand";
-import { DEFAULT_COLLECTION_VALUE, type ReducedSettings } from "@/lib/collectionValue";
+import { DEFAULT_COLLECTION_VALUE } from "@/lib/collectionValue";
+import type { CollectionValue } from "@/lib/ipc";
 
 export const STORAGE_KEY = "grimoire.packs.reduced";
 
-/** The page's figures: the collection's two and a bulk price, always stated here (`0` is none). */
-export interface PackReduction extends ReducedSettings {
-  bulkPrice: number;
-}
+/** The page's figures: the collection setting's shape, kept apart from it. */
+export type PackReduction = CollectionValue;
 
 /** No reduction: every card counted, at full price, and no bulk price. */
-export const DEFAULT_PACK_REDUCTION: PackReduction = { ...DEFAULT_COLLECTION_VALUE, bulkPrice: 0 };
+export const DEFAULT_PACK_REDUCTION: PackReduction = DEFAULT_COLLECTION_VALUE;
 
 /** A price figure the store may hold: a finite number of zero or more. */
 function isPrice(value: unknown): value is number {

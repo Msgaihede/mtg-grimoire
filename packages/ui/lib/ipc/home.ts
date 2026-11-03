@@ -246,6 +246,11 @@ export interface ValuePoint {
    */
   below?: number;
   /**
+   * The copies over the same rows as {@link ValuePoint.below} — what a bulk price multiplies (issue #1477).
+   * Absent exactly when `below` is.
+   */
+  belowCards?: number;
+  /**
    * True on the last point only: **today**, computed live from `collection_entries` at today's
    * price the way `collection_summary` computes the collection's value — so the graph's last point
    * is exactly the figure the Collection value widget prints beside it.

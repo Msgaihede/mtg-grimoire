@@ -8,10 +8,9 @@ import {
   reducedCopy,
   reducedValue,
   reducesValue,
-  type ReducedSettings,
   type ReducedValue,
 } from "@/lib/collectionValue";
-import type { BoosterCard, BoosterSet } from "@/lib/ipc";
+import type { BoosterCard, BoosterSet, CollectionValue } from "@/lib/ipc";
 import { rarityRank } from "@/lib/rarity";
 import {
   openBooster,
@@ -146,7 +145,7 @@ export function addExpected(
  *  (`reducedCopy`) — the full price where they reduce nothing. */
 export function expectedAt(
   copies: Iterable<readonly [number, number]>,
-  settings: ReducedSettings,
+  settings: CollectionValue,
 ): number {
   let sum = 0;
   for (const [p, n] of copies) sum += (reducedCopy(p, settings) ?? 0) * n;
@@ -159,7 +158,7 @@ export function expectedAt(
  * figured at (issue #1502), so every figure on the page is the money the reader would see. The
  * same function back where the settings reduce nothing.
  */
-export function reducedPrices(priceOf: PriceOf, settings: ReducedSettings): PriceOf {
+export function reducedPrices(priceOf: PriceOf, settings: CollectionValue): PriceOf {
   if (!reducesValue(settings)) return priceOf;
   return (cardId, foil) => reducedCopy(priceOf(cardId, foil), settings);
 }
@@ -265,7 +264,7 @@ export function openedPrices(opened: Opened, priceOf: PriceOf): (number | null)[
 export function reducedOpening(
   full: number,
   prices: Iterable<number | null>,
-  settings: ReducedSettings,
+  settings: CollectionValue,
 ): ReducedValue | null {
   const minimum = minimumOf(settings);
   return reducedValue(

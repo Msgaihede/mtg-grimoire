@@ -163,6 +163,20 @@ is proposed.** `Ctrl+0` is not a tenth step of the run: it reads as zero, it sit
 the row, and a panel drawing `Ctrl` `1` **to** `Ctrl` `0` would promise a sequence no reader can
 count. A tenth entry needs a different answer — not one more line in `switchView.chords`.
 
+**A chord for the view already open walks it back to its root, as the rail's row does** (issue
+#1507). Both go through the store's `selectView` rather than `setActiveView`. On a press that
+moves nobody, `selectView` writes a one-shot `rootRequest`, and the page with somewhere nested to
+stand answers it through `useViewRootRequest` (`lib/viewRoot.ts`):
+
+- Decks leaves its folder (and the flat wall) for the top level. Re-pressing from an editor has
+  always closed the editor (`openDeckId`).
+- Collection and Wishlist leave their drawer for the root.
+- Draft & Packs closes a draft deck's editor (`draftDeckId`) and goes back from any flow (Open
+  Packs, a setup, the lobby, a draft) to the hub. That is the flow's own back, so nothing is
+  ended.
+
+Pages with nothing nested read nothing, and the next view change spends the request.
+
 ### The tenth destination arrived the same day, and the answer is that it has no chord
 
 **`shared` — somebody else's collection, opened from a link — makes `NAV` ten**, and the paragraph

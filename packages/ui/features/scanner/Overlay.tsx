@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, type JSX, type RefObject } from "react";
+import { cn } from "@/lib/utils";
 import { cornerMarks } from "./scanCorners";
 import type { ScannerVerdict } from "./types";
 
@@ -32,20 +33,29 @@ export function Overlay({
   videoRef,
   verdict,
   orientation = false,
+  fit = "cover",
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
   verdict: ScannerVerdict | null;
   /** Mark the corner the scanner reads as top-left — the Developer switch's debugging aid. */
   orientation?: boolean;
+  /**
+   * **The `<video>`'s own `object-fit`, which this must match** (see the canvas's comment):
+   * `cover`, the camera column's crop, or `contain`, the pack opener's whole frame letterboxed in
+   * the window (issue #1504).
+   */
+  fit?: "cover" | "contain";
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const verdictRef = useRef(verdict);
   const orientationRef = useRef(orientation);
+  const fitRef = useRef(fit);
   // A layout effect, not an assignment during render: the ref has to be current before the next
   // animation frame reads it, and `useEffect` alone is not guaranteed to run before that.
   useLayoutEffect(() => {
     verdictRef.current = verdict;
     orientationRef.current = orientation;
+    fitRef.current = fit;
   });
 
   useEffect(() => {
@@ -89,7 +99,8 @@ export function Overlay({
       // ratios, the picture's overflow cropped — so a width fixed in canvas pixels came out 1.5px
       // on a phone on its side and nearly 4px upright, where the crop is deepest. Dividing by that
       // scale draws `MARK_WIDTH` on screen at every shape (2px, the owner's call, 2026-10-26).
-      const scale = Math.max(
+      // `contain` scales by the smaller ratio instead, the whole frame inside the box.
+      const scale = (fitRef.current === "contain" ? Math.min : Math.max)(
         canvas.clientWidth / canvas.width,
         canvas.clientHeight / canvas.height,
       );
@@ -140,7 +151,10 @@ export function Overlay({
     <canvas
       ref={canvasRef}
       aria-hidden="true"
-      className="absolute inset-0 h-full w-full object-cover"
+      className={cn(
+        "absolute inset-0 h-full w-full",
+        fit === "contain" ? "object-contain" : "object-cover",
+      )}
     />
   );
 }

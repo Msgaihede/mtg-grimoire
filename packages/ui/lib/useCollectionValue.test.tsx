@@ -31,11 +31,20 @@ describe("useCollectionValue", () => {
   });
 
   it("reads the defaults until the row answers, and asks no minimum with none set", async () => {
-    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 0.5 });
+    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 0.5, bulkPrice: 0 });
     const { result } = setup();
     expect(result.current.settings).toEqual(DEFAULT_COLLECTION_VALUE);
     expect(result.current.minimum).toBeUndefined();
     await waitFor(() => expect(result.current.minimum).toBe(0.5));
+  });
+
+  /** Issue #1477: an answer older than the bulk price reads with none, every field stated. */
+  it("states a bulk price of none for an answer that lacks one", async () => {
+    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 0.5 });
+    const { result } = setup();
+    await waitFor(() =>
+      expect(result.current.settings).toEqual({ sellPercent: 70, minimumValue: 0.5, bulkPrice: 0 }),
+    );
   });
 
   /**
@@ -52,16 +61,20 @@ describe("useCollectionValue", () => {
     const { result } = setup();
     await waitFor(() => expect(collectionValue).toHaveBeenCalled());
 
-    act(() => result.current.setSettings({ sellPercent: 70, minimumValue: 0 }));
+    act(() => result.current.setSettings({ sellPercent: 70, minimumValue: 0, bulkPrice: 0 }));
     await waitFor(() => expect(setCollectionValue).toHaveBeenCalledTimes(1));
 
-    act(() => result.current.setSettings({ sellPercent: 70, minimumValue: 0.5 }));
+    act(() => result.current.setSettings({ sellPercent: 70, minimumValue: 0.5, bulkPrice: 0 }));
     // Drawn at once, and not sent: the first is still out.
     await waitFor(() => expect(result.current.minimum).toBe(0.5));
     expect(setCollectionValue).toHaveBeenCalledTimes(1);
 
     act(() => finish());
     await waitFor(() => expect(setCollectionValue).toHaveBeenCalledTimes(2));
-    expect(setCollectionValue).toHaveBeenLastCalledWith({ sellPercent: 70, minimumValue: 0.5 });
+    expect(setCollectionValue).toHaveBeenLastCalledWith({
+      sellPercent: 70,
+      minimumValue: 0.5,
+      bulkPrice: 0,
+    });
   });
 });

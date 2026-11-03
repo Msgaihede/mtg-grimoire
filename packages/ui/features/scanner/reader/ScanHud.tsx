@@ -20,7 +20,7 @@ import { SEND_SCAN } from "../submit/submitText";
 import type { StripState } from "./readerText";
 
 /** Reset's words, which are its accessible name in both shapes. */
-const RESET_EVIDENCE = "Reset evidence";
+export const RESET_EVIDENCE = "Reset evidence";
 
 /**
  * Both presses' ground: the page's own colour, a little see-through, with a hairline — legible
@@ -77,6 +77,12 @@ export interface ScanHudProps {
    * a 23rem column, the 274px pill met the 143px *Reset evidence* below a 584px column.
    */
   notice?: ReactNode;
+  /**
+   * Drawn at the corner row's start, before the chip — the pack opener's recording light
+   * (`PackIndicator`, issue #1504) — or nothing. In the row's own flow, so the chip wraps beside
+   * it rather than standing on it.
+   */
+  lead?: ReactNode;
 }
 
 /**
@@ -107,6 +113,7 @@ export function ScanHud({
   onSend,
   note = null,
   notice = null,
+  lead = null,
 }: ScanHudProps) {
   const leaning = strip.tone === "progress";
   const hidden = leaning ? true : undefined;
@@ -200,6 +207,8 @@ export function ScanHud({
               </span>
             )}
           </p>
+          {/* Last in the DOM and so first on screen: the row runs right to left. */}
+          {lead}
         </div>
         {notice}
       </div>

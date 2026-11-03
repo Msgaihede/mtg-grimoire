@@ -12,6 +12,7 @@ describe("folderFace", () => {
     const reduced = reducedValue(1300, { cards: 96, value: 14.2 }, {
       sellPercent: 70,
       minimumValue: 0.5,
+      bulkPrice: 0,
     });
     expect(folderFace({ cards: 240, value: 1300 }, "usd", false, reduced)).toEqual({
       shown: "240 cards · $1,300.00 ($900.06)",

@@ -6,7 +6,7 @@ import { ReducedBreakdown, ReducedPrice } from "./ReducedPrice";
 const VALUE = reducedValue(
   6247.11,
   { cards: 466, value: 58.84 },
-  { sellPercent: 70, minimumValue: 0.5 },
+  { sellPercent: 70, minimumValue: 0.5, bulkPrice: 0 },
 )!;
 
 describe("ReducedPrice", () => {
@@ -58,7 +58,11 @@ describe("ReducedBreakdown", () => {
   });
 
   it("leaves out a line whose setting is not set, and says one card alone", () => {
-    const one = reducedValue(10, { cards: 1, value: 0.25 }, { sellPercent: 100, minimumValue: 0.5 })!;
+    const one = reducedValue(
+      10,
+      { cards: 1, value: 0.25 },
+      { sellPercent: 100, minimumValue: 0.5, bulkPrice: 0 },
+    )!;
     render(<ReducedBreakdown value={one} currency="eur" />);
     expect(screen.getByText(/· 1 card$/)).toBeInTheDocument();
     expect(screen.queryByText(/^Sell at/)).toBeNull();

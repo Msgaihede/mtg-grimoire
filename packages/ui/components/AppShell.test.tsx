@@ -816,6 +816,18 @@ it("switches the active view", async () => {
   expect(screen.getByRole("button", { name: "Search" })).not.toHaveAttribute("aria-current");
 });
 
+/** Issue #1507: the entry of the page already open is the way back to that page's root. */
+it("asks the open view for its root when its own entry is pressed again", async () => {
+  render(<AppShell update={noUpdate}>{null}</AppShell>);
+
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  expect(useAppStore.getState().rootRequest).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  expect(useAppStore.getState().activeView).toBe("decks");
+  expect(useAppStore.getState().rootRequest).toBe("decks");
+});
+
 /**
  * The rail as two widths (issue #177).
  *

@@ -24,7 +24,8 @@ import { folderDescendants, folderLevel, type FolderNode } from "@/lib/folderTre
 import { ipc, ipcError, type WishlistFolder } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import type { Shelf } from "@/lib/shelves";
-import type { WishDrop } from "./wishDrag";
+import { plural } from "@/lib/counts";
+import type { WishDrop, WishSingleDrop } from "./wishDrag";
 import type { CardDrops } from "./WishShelfHeading";
 import { ROOT_LABEL } from "./WishFolderPanel";
 import { fileTarget, NEW_FOLDER_SHELF } from "./wishShelfPlan";
@@ -51,6 +52,7 @@ export function useWishDrops({
   treeParent,
   managed,
   setFolder,
+  moveWish,
   reorder,
   settleWhole,
 }: {
@@ -65,6 +67,9 @@ export function useWishDrops({
   /** `useWishEntryWrites`' `setFolder`, as its `mutate` — the drags' write. The Edit panel's move
    *  is `moveWish`, an observer of its own, because it toasts and a drag does not. */
   setFolder: (variables: { id: number; folderId: number | null }) => void;
+  /** The same write on the page's **toasted** observer (`moveWish`'s `mutateAsync`) — a picked
+   *  set's refiles (issue #1501), which are one bulk action and so one receipt. */
+  moveWish: (variables: { id: number; folderId: number | null }) => Promise<unknown>;
   /** The folder reorder's `mutate` — what a heading or a segment drop writes. */
   reorder: (plan: Placement) => void;
   /** How every write on the page finishes — `useWishEntryWrites`' `settleWhole`. */
@@ -127,14 +132,23 @@ export function useWishDrops({
    * wish is not a drag source on either view — so a stray payload cannot light a ring for a write
    * that is always refused.
    */
-  const canFile = useCallback(
-    (drop: WishDrop, to: number | null) => {
+  const canFileOne = useCallback(
+    (drop: WishSingleDrop, to: number | null) => {
       if (to !== null && managed.has(to)) return false;
       if (drop.kind === "new") return true;
       if (drop.wish.folderId !== null && managed.has(drop.wish.folderId)) return false;
       return drop.wish.folderId !== to;
     },
     [managed],
+  );
+  /** {@link canFileOne}, and a picked set when **any** member could go (issue #1501) — the
+   *  collection's rule: one wish of five already in this drawer must not strand the other four. */
+  const canFile = useCallback(
+    (drop: WishDrop, to: number | null) =>
+      drop.kind === "group"
+        ? drop.members.some((member) => canFileOne(member, to))
+        : canFileOne(drop, to),
+    [canFileOne],
   );
   /**
    * And what the drop writes — a **re-file** for a wish that exists, an **add** for a printing
@@ -144,6 +158,47 @@ export function useWishDrops({
    * asks one question and gets one answer: a heading lights up and takes what it is given.
    * Which command that turns into is the page's business, and it is the page that holds both.
    */
+  /**
+   * **A picked set let go on a shelf** (issue #1501) — every member the destination takes, and
+   * **one receipt** for the lot with refusals folded in (the owner's rule: one action, one toast).
+   *
+   * A single wish dragged between shelves says nothing, being the list rearranging itself under
+   * the pointer; a set is a bulk action, which the rule names among the moves that toast. There is
+   * no bulk wish refile, so each goes through the toasted observer as its own write.
+   */
+  const fileGroup = useCallback(
+    (members: readonly WishSingleDrop[], to: number | null) => {
+      const into = to === null ? ROOT_LABEL : (census.find((f) => f.id === to)?.name ?? "a folder");
+      const takes = members.filter((member) => canFileOne(member, to));
+      if (takes.length === 0) return;
+      const writes = takes.map((member) =>
+        member.kind === "wish"
+          ? moveWish({ id: member.wish.wishId, folderId: to })
+          : addWishAsync({ card: member.card, folderId: to }),
+      );
+      const moved = takes.some((member) => member.kind === "wish");
+      const verb = moved ? "Moved" : "Added";
+      const failVerb = moved ? "move" : "add";
+      void Promise.allSettled(writes).then((outcomes) => {
+        const refused = outcomes.flatMap((o) => (o.status === "rejected" ? [o.reason] : []));
+        const landed = outcomes.length - refused.length;
+        if (refused.length === 0) {
+          notify.success(`${verb} ${plural(landed, "wish", "wishes")} to “${into}”`);
+        } else if (landed === 0) {
+          notify.error(
+            `Couldn't ${failVerb} ${plural(takes.length, "wish", "wishes")} to “${into}”`,
+            { body: ipcError(refused[0]) },
+          );
+        } else {
+          notify.warning(`${verb} ${plural(landed, "wish", "wishes")} to “${into}”`, {
+            body: `${plural(refused.length, "wish", "wishes")} couldn't be ${moved ? "moved" : "added"} — ${ipcError(refused[0])}`,
+          });
+        }
+      });
+    },
+    [canFileOne, moveWish, addWishAsync, census],
+  );
+
   //
   // **Only the add is said** (the owner's rule, 2026-10-12: every add to a list toasts, and a drag
   // inside the open list does not). A wish re-filed by a drag is the list rearranging itself under
@@ -152,6 +207,10 @@ export function useWishDrops({
   // too — the page's banner says it as well, but a drop's banner sits far from where it was let go.
   const fileWish = useCallback(
     (drop: WishDrop, to: number | null) => {
+      if (drop.kind === "group") {
+        fileGroup(drop.members, to);
+        return;
+      }
       if (drop.kind === "wish") {
         setFolder({ id: drop.wish.wishId, folderId: to });
         return;
@@ -164,7 +223,7 @@ export function useWishDrops({
           notify.error(`Couldn't add “${name}” to “${into}”`, { body: ipcError(error) }),
       );
     },
-    [setFolder, addWishAsync, census],
+    [setFolder, addWishAsync, census, fileGroup],
   );
 
   /**

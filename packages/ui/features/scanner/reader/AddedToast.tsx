@@ -128,6 +128,11 @@ export interface AddedToastProps {
    * mark beside the name is what kind of landing it was.
    */
   compact?: boolean;
+  /**
+   * The card stands clear of the pack opener's floating bar (issue #1504), which is laid over the
+   * foot of the same picture, rather than at the picture's foot under it.
+   */
+  raised?: boolean;
 }
 
 /**
@@ -140,7 +145,14 @@ export interface AddedToastProps {
  * landing, and the page answers it by passing `null`, which is what lets the card leave through
  * its exit animation.
  */
-export function AddedToast({ card, onDone, price, tier = null, compact = false }: AddedToastProps) {
+export function AddedToast({
+  card,
+  onDone,
+  price,
+  tier = null,
+  compact = false,
+  raised = false,
+}: AddedToastProps) {
   // Latched rather than a dependency, so a caller passing a fresh arrow each render does not
   // restart the hold on every render — only a new landing does.
   const done = useRef(onDone);
@@ -174,7 +186,7 @@ export function AddedToast({ card, onDone, price, tier = null, compact = false }
       <div
         className={cn(
           "absolute inset-x-0 grid grid-cols-[minmax(0,1fr)] items-end justify-items-center",
-          compact ? "bottom-3 px-3" : "bottom-5 px-4",
+          compact ? "bottom-3 px-3" : raised ? "bottom-24 px-4" : "bottom-5 px-4",
         )}
       >
         <AnimatePresence>

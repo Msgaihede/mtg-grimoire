@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useState, type JSX } from "react";
 import { PackageOpen, RotateCcw } from "lucide-react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { ReducedPrice } from "@/components/ReducedPrice";
@@ -41,7 +41,8 @@ import { usePackReducedStore } from "./reducedPick";
  * packs of one set and goes on to another wants the running total to carry on, and a restart to
  * start it again. Prices are a currency's; a switch of marketplace starts it over rather than
  * adding dollars to euros. It keeps each priced card's price and the expected copies at each
- * price, not reduced sums, so its totals are always at the page's figures as they stand.
+ * price, not reduced sums, so its totals are always at the page's figures as they stand. _Reset_
+ * (issue #1503) starts it over at once, the pack on the wall left where it is.
  */
 const tallyMemory = viewMemory<Tally>("draft.packs.tally");
 
@@ -81,6 +82,11 @@ export function conversionNote(picked: readonly Marketplace[], plan: PricingPlan
     return `${names} left out: the exchange rate could not be fetched, and prices in two currencies can't be compared without it.`;
   }
   return null;
+}
+
+/** A session with nothing opened yet, in `currency`. */
+function emptyTally(currency: Currency): Tally {
+  return { opened: 0, value: 0, ev: 0, currency, prices: [], expected: [], unpriced: 0 };
 }
 
 /** "pack" for a booster, "box" for a sealed product — the words the figures speak in. */
@@ -128,27 +134,70 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
     [ready, set, shown, worth],
   );
   const shownTally: Tally =
-    tally !== undefined && tally.currency === currency
-      ? tally
-      : { opened: 0, value: 0, ev: 0, currency, prices: [], expected: [], unpriced: 0 };
+    tally !== undefined && tally.currency === currency ? tally : emptyTally(currency);
 
-  const open = () => {
-    if (choice === undefined) return;
-    const next = openOne(set, choice, randomSeed());
-    setOpened(next);
+  // The tally is kept from here rather than in each press, so the open a pick waited on (below)
+  // is plain state set during a render.
+  useEffect(() => {
+    if (tally !== undefined) tallyMemory.keep(tally);
+  }, [tally]);
+
+  /** Open `openable` once: the wall's new pack, and the session's tally one press longer. */
+  const openNow = (openable: Openable) => {
+    const next = openOne(set, openable, randomSeed());
     const prices = openedPrices(next, priceOf);
     const priced = prices.filter((p): p is number => p !== null);
-    const kept: Tally = {
+    setOpened(next);
+    setTally({
       currency,
       opened: shownTally.opened + 1,
       value: shownTally.value + openedValue(next, priceOf),
-      ev: shownTally.ev + theoreticalValue(set, choice, priceOf),
+      ev: shownTally.ev + theoreticalValue(set, openable, priceOf),
       prices: [...shownTally.prices, ...priced],
-      expected: addExpected(shownTally.expected, expectedOpening(set, choice, priceOf)),
+      expected: addExpected(shownTally.expected, expectedOpening(set, openable, priceOf)),
       unpriced: shownTally.unpriced + (prices.length - priced.length),
-    };
-    tallyMemory.keep(kept);
-    setTally(kept);
+    });
+  };
+
+  // **A pick opens one** (issue #1496): nobody picks a product and does not want to open it, so
+  // picking one is the first press. Before the prices answer, the open waits for them — the
+  // tally adds a pack's value at the press, and a pack opened before then would count $0 for
+  // ever. Taken during render, React's *adjusting state when a prop changes*, for
+  // `react-hooks/set-state-in-effect`'s reason. Open itself never waits: a read that failed
+  // never answers, and the press stays the reader's.
+  const [pending, setPending] = useState<Openable | null>(null);
+  if (pending !== null && ready) {
+    setPending(null);
+    openNow(pending);
+  }
+
+  const open = () => {
+    if (choice === undefined) return;
+    setPending(null);
+    openNow(choice);
+  };
+
+  /**
+   * The product row's pick. A pick of the product already on the wall is no press: the reader
+   * closed the list on what they had, and Open another is beside it.
+   */
+  const pick = (value: string) => {
+    const product = byValue.get(value);
+    const again = value === chosen && opened !== null;
+    setChosen(value);
+    if (product === undefined || again) return;
+    if (ready) {
+      setPending(null);
+      openNow(product);
+    } else {
+      setPending(product);
+    }
+  };
+
+  const resetTally = () => {
+    const empty = emptyTally(currency);
+    tallyMemory.keep(empty);
+    setTally(empty);
   };
 
   if (options.length === 0) {
@@ -195,7 +244,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
               id={pickId}
               labelledBy={`${pickId}-label`}
               value={chosen}
-              onChange={setChosen}
+              onChange={pick}
               options={options.map((o) => ({
                 value: openableValue(o),
                 label: o.name,
@@ -307,6 +356,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
               reducedTally={reducedTally}
               tallyExpected={tallyExpected}
               reduction={line}
+              onResetTally={resetTally}
             />
           ) : (
             figures !== null && (

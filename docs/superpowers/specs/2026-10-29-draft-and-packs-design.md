@@ -398,6 +398,6 @@ Draft, Sealed, Cube Draft, Pod Draft, Open Packs. A flow has a stepper: Choose �
 - **Pod**: Create lobby (supporters) shows the code to share and the people who joined; Join lobby
   takes a code and a name. The host picks the packs and starts; empty seats are bots.
 - **Open Packs**: a set, a product (boosters first, then sealed products that hold boosters),
-  Open; the cards by price with the total, and beside them the product's figures — expected
+  Open — a pick of a product is itself the first open (issue #1496); the cards by price with the total, and beside them the product's figures — expected
   value (theoretical and simulated), standard deviation, the chance to beat a price the reader
   types ("What you paid"), the pack's percentile, and the simulated distribution.
