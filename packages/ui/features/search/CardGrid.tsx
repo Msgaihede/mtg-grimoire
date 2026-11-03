@@ -26,6 +26,7 @@ import {
   withDragGroup,
   type DragPayload,
 } from "@/features/decks/dnd";
+import { withRecordGroup } from "@/lib/recordGroup";
 import {
   SHELF_ID_ATTR,
   headingPlace,
@@ -118,6 +119,19 @@ export interface GridCard {
  * about the *printing*. Six of the seven walls pass no `key` at all and are untouched.
  */
 const tileKey = <T extends GridCard>(card: T): string => card.key ?? card.id;
+
+/**
+ * What else a drag from one tile is carrying (issues #214 and #1501): the other picked tiles as
+ * **card payloads**, for `dnd.ts`'s group and every deck-shaped target, and — on a `dragRecord`
+ * wall — as the **whole records** the wall composes, for the folders that read a mark other than
+ * the card's (`lib/recordGroup.ts`). Both empty for an ordinary drag.
+ */
+interface DragRest {
+  payloads: DragPayload[];
+  records: Record<string, unknown>[];
+}
+
+const NO_REST: DragRest = { payloads: [], records: [] };
 
 /**
  * Whether a tile turns over — the caller's {@link CardGrid} `flips`, for a tile that has a
@@ -1669,8 +1683,8 @@ export function CardGrid<T extends GridCard>({
   );
 
   /**
-   * What else a drag from one tile is carrying — the picked set less the tile itself, as payloads
-   * (issue #214).
+   * What else a drag from one tile is carrying — the picked set less the tile itself, as card
+   * payloads and as whole records ({@link DragRest}, issues #214 and #1501).
    *
    * **Held still across renders**, because it lands in every tile's drag-registration dependency
    * list: a fresh function per render would tear four hundred registrations down each time the
@@ -1692,24 +1706,31 @@ export function CardGrid<T extends GridCard>({
   const dragRest = useMemo(
     () =>
       draggableWall
-        ? (card: T) => {
+        ? (card: T): DragRest => {
             const { picked: held, rows: drawn, ...seams } = dragRef.current;
-            if (!held.dragsAll(tileKey(card))) return [];
+            if (!held.dragsAll(tileKey(card))) return NO_REST;
             const wanted = new Set(held.keys);
-            return drawn.flatMap((row) => {
+            const payloads: DragPayload[] = [];
+            const records: Record<string, unknown>[] = [];
+            for (const row of drawn) {
               // The *tile*, on both sides: a wall whose foil and nonfoil of one printing are two
               // tiles must be able to drag one of them without the other coming along, and `id`
               // cannot tell them apart. See {@link tileKey}.
-              if (tileKey(row) === tileKey(card) || !wanted.has(tileKey(row))) return [];
+              if (tileKey(row) === tileKey(card) || !wanted.has(tileKey(row))) continue;
               // Whichever seam this wall uses. On a `dragRecord` wall the payload is read back
               // out of the composed record through the same fence a drop target reads it
               // through, so a tile carrying only a non-card mark — an any-printing wish —
-              // contributes nothing rather than an invented payload.
-              const payload =
-                seams.dragPayload?.(row) ??
-                (seams.dragRecord ? readDragData(seams.dragRecord(row) ?? {}) : null);
-              return payload ? [payload] : [];
-            });
+              // contributes no card rather than an invented payload.
+              const record = seams.dragRecord?.(row) ?? null;
+              // **And the whole record travels too** (issue #1501): the card half is all a deck
+              // reads, but a collection or wishlist folder reads the *other* marks a tile composed
+              // — its copies, its wish, its not-yet-owned card — and a group that carried only the
+              // cards left every folder acting on the primary tile alone.
+              if (record !== null) records.push(record);
+              const payload = seams.dragPayload?.(row) ?? (record ? readDragData(record) : null);
+              if (payload) payloads.push(payload);
+            }
+            return { payloads, records };
           }
         : undefined,
     [draggableWall],
@@ -2687,7 +2708,7 @@ function Tile<T extends GridCard>({
    * drag. Hold it still, like the two slots above it: its identity is in the registration's
    * dependency list.
    */
-  dragRest?: (card: T) => DragPayload[];
+  dragRest?: (card: T) => DragRest;
 }) {
   const mark = badge?.(card);
   const corner = topLeft?.(card);
@@ -2816,8 +2837,15 @@ function Tile<T extends GridCard>({
             // it can never name different cards. A record with no readable card payload — an
             // any-printing wish — gets no group, which is right: there is no card in it to
             // carry others alongside.
+            //
+            // **The other picked tiles' whole records ride beside it** (issue #1501,
+            // `lib/recordGroup.ts`), for the folders that read a mark other than the card's — and
+            // regardless of whether the primary has a card half, because a wish folder takes an
+            // any-printing wish as surely as a pinned one.
+            const rest = dragRest?.(card) ?? NO_REST;
             const primary = readDragData(now);
-            return primary === null ? now : withDragGroup(now, primary, dragRest?.(card) ?? []);
+            const carded = primary === null ? now : withDragGroup(now, primary, rest.payloads);
+            return withRecordGroup(carded, rest.records);
           },
         });
         return () => {
@@ -2831,7 +2859,7 @@ function Tile<T extends GridCard>({
       const stop = cardDraggable({
         element,
         payload: () => dragPayload(card) ?? carried,
-        rest: dragRest ? () => dragRest(card) : undefined,
+        rest: dragRest ? () => dragRest(card).payloads : undefined,
       });
       return () => {
         stop();

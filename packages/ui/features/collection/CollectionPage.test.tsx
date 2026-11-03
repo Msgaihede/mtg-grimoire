@@ -275,6 +275,18 @@ const BOLT: CollectionRow = {
   updatedAt: 1_800_000_000,
 };
 
+/** A second printing for a picked set (issue #1501) — another card, so it is another tile. */
+const COUNTERSPELL: CollectionRow = {
+  ...BOLT,
+  id: 9,
+  cardId: "c2",
+  name: "Counterspell",
+  oracleId: "o2",
+  manaCost: "{U}{U}",
+  finish: "nonfoil",
+  quantity: 1,
+};
+
 /**
  * The one printing the sidebar's card search answers with — a `CardSummary`, which is a different
  * object from the {@link BOLT} above it: that one is a `collection_entries` row the reader owns,
@@ -4140,6 +4152,103 @@ describe("the collection's shelves", () => {
     // A drag between shelves of the open wall is the owner's rule's exemption: the copy is drawn
     // where it was let go, so nothing is toasted.
     expect(useNotifications.getState().notices).toHaveLength(0);
+  });
+
+  /**
+   * **Issue #1501: a picked set dragged onto a folder files every tile in it**, where it filed the
+   * grabbed one and left the rest — the set travelled to the folder as one tile's copies, because
+   * the group rode only as card payloads, which a folder does not read. One write for the set,
+   * and one receipt for it: a bulk move is the owner's rule's, not the single-drag exemption's.
+   */
+  it("files every tile of a picked set when one of them is dragged onto a heading", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([BOLT, COUNTERSPELL]));
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    const bolt = await screen.findByRole("button", { name: "Lightning Bolt" });
+    const counter = screen.getByRole("button", { name: "Counterspell" });
+    await findHeading("Trade binder");
+    const binder = standHeading("Trade binder");
+
+    await user.keyboard("{Control>}");
+    await user.click(bolt);
+    await user.click(counter);
+    await user.keyboard("{/Control}");
+
+    const held = await holdCopy(cardSources(container)[0], { pressOn: bolt });
+    await held.over(binder);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolderMany).toHaveBeenCalledTimes(1));
+    expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 9], 3);
+    expect(collectionSetFolder).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Moved 2 cards to “Trade binder”",
+      tone: "success",
+    });
+  });
+
+  /** Dragged from a tile **outside** the set, the set is put down and only that tile moves — a
+   *  stray drag never carries cards the reader had forgotten were picked (issue #214's rule). */
+  it("files only the grabbed tile when it is not one of the picked set", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(
+      page([BOLT, COUNTERSPELL, { ...COUNTERSPELL, id: 10, cardId: "c3", name: "Brainstorm" }]),
+    );
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    const bolt = await screen.findByRole("button", { name: "Lightning Bolt" });
+    await findHeading("Trade binder");
+    const binder = standHeading("Trade binder");
+
+    await user.keyboard("{Control>}");
+    await user.click(bolt);
+    await user.click(screen.getByRole("button", { name: "Counterspell" }));
+    await user.keyboard("{/Control}");
+
+    const brainstorm = screen.getByRole("button", { name: "Brainstorm" });
+    const source = cardSources(container).find((tile) => tile.contains(brainstorm));
+    if (!source) throw new Error("Brainstorm's tile is not a drag source");
+    const held = await holdCopy(source, { pressOn: brainstorm });
+    await held.over(binder);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(10, 3));
+    expect(collectionSetFolderMany).not.toHaveBeenCalled();
+  });
+
+  /** A set holding a tile that stands for several rows still asks which — over **every** row of
+   *  the set, the menu's `Move N cards to` exactly — rather than guessing for that one tile. */
+  it("asks which copies over the whole set when a picked tile stands for several rows", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(
+      page([BOLT, { ...BOLT, id: 8, condition: "LP" }, COUNTERSPELL]),
+    );
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    const bolt = await screen.findByRole("button", { name: "Lightning Bolt" });
+    await findHeading("Trade binder");
+    const binder = standHeading("Trade binder");
+
+    await user.keyboard("{Control>}");
+    await user.click(bolt);
+    await user.click(screen.getByRole("button", { name: "Counterspell" }));
+    await user.keyboard("{/Control}");
+
+    const held = await holdCopy(cardSources(container)[0], { pressOn: bolt });
+    await held.over(binder);
+    await held.drop();
+
+    const dialog = await screen.findByRole("dialog");
+    expect(collectionSetFolderMany).not.toHaveBeenCalled();
+    expect(within(dialog).getAllByRole("checkbox")).toHaveLength(3);
+    await user.click(within(dialog).getByRole("button", { name: /^Move .* to Trade binder$/ }));
+    await waitFor(() => expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 8, 9], 3));
   });
 
   it("asks which copies when the art stands for more than one row", async () => {

@@ -4323,6 +4323,41 @@ describe("the folders", () => {
   });
 
   /**
+   * **Issue #1501: a picked set dragged onto a folder files every wish in it**, where it filed the
+   * grabbed one alone. Grabbed by the **any-printing** wish on purpose: that tile has no card half
+   * at all, so before the fix its drag carried no group of any kind. One receipt for the set — a
+   * bulk move toasts, where a single wish dragged between shelves does not.
+   */
+  it("files every wish of a picked set dropped on a folder's heading", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wishlistList.mockResolvedValue(page([BOLT, ANY]));
+    const user = userEvent.setup();
+    const { container } = wrap(<WishlistPage />);
+    const bolt = (await screen.findByAltText("Lightning Bolt")).closest("button");
+    const recall = screen.getByAltText("Ancestral Recall").closest("button");
+    if (!bolt || !recall) throw new Error("the wall drew no tile buttons");
+    await findHeading(ORDERED.id);
+
+    await user.keyboard("{Control>}");
+    await user.click(bolt);
+    await user.click(recall);
+    await user.keyboard("{/Control}");
+
+    const source = cardSources(container).find((tile) => tile.contains(recall));
+    if (!source) throw new Error("Ancestral Recall's tile is not a drag source");
+    await wishOnto(source, heading(ORDERED.id));
+
+    await waitFor(() => expect(wishlistSetFolder).toHaveBeenCalledTimes(2));
+    expect(wishlistSetFolder).toHaveBeenCalledWith(ANY.id, ORDERED.id);
+    expect(wishlistSetFolder).toHaveBeenCalledWith(BOLT.id, ORDERED.id);
+    await waitFor(() => expect(useNotifications.getState().notices).toHaveLength(1));
+    expect(useNotifications.getState().notices[0]).toMatchObject({
+      title: "Moved 2 wishes to “Ordered”",
+      tone: "success",
+    });
+  });
+
+  /**
    * And the way back **out** from inside a folder: a heading only ever takes a wish deeper, so
    * without the breadcrumb the gesture would be one-way.
    */

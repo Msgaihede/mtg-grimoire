@@ -936,6 +936,7 @@ export function CollectionPage() {
   // Held still for the drops below, `removeMany`'s reason.
   const { mutate: setFolderMutate } = setFolder;
   const { mutate: moveCopyMutate } = moveCopy;
+  const { mutateAsync: setFolderManyAsync } = setFolderMany;
 
   const onSetQuantity = useCallback(
     (row: CollectionRow, quantity: number) => setQuantityMutate({ row, quantity }),
@@ -2003,6 +2004,7 @@ export function CollectionPage() {
     folderNameOf,
     setFolder: setFolderMutate,
     moveCopy: moveCopyMutate,
+    moveMany: setFolderManyAsync,
     reorder: reorderMutate,
     setPicking,
   });
@@ -3591,9 +3593,12 @@ export function CollectionPage() {
                   },
                 );
               } else if (entryIds.length === 1) {
+                // The ticked row's own name where the list still has it: a picked set asks under
+                // a count (`3 cards`, issue #1501), and one card moved is named, not counted.
+                const name = rows.find((row) => row.id === entryIds[0])?.name || cardName;
                 report(moveCopy.mutateAsync({ entryId: entryIds[0], folderId: picking.folderId }), {
-                  done: () => movedReceipt(1, cardName, destination),
-                  failed: `Couldn't move “${cardName}” to “${destination}”`,
+                  done: () => movedReceipt(1, name, destination),
+                  failed: `Couldn't move “${name}” to “${destination}”`,
                 });
               }
               setPicking(null);

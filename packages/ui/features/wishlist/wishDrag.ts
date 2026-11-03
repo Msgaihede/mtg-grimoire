@@ -2,6 +2,7 @@ import { type RefObject } from "react";
 import { useDndDropTarget } from "@/lib/dndTarget";
 import { composedDraggable, dragData, type DragPayload } from "@/features/decks/dnd";
 import { readSearchCardDrag, type SearchCardDrag } from "@/features/search/searchCardDrag";
+import { readRecordGroup } from "@/lib/recordGroup";
 
 /**
  * The gesture that files a wish into one of the wishlist's own folders — the payload, the tile
@@ -112,9 +113,15 @@ export function readWishDrag(data: Record<string, unknown>): WishDrag | null {
  * pair these cards fold into one. Two rings on one card, each answering about a different drag, is
  * a drawing decision bought to avoid a type.
  */
-export type WishDrop =
-  | { kind: "wish"; wish: WishDrag }
-  | { kind: "new"; card: SearchCardDrag };
+export type WishDrop = WishSingleDrop | { kind: "group"; members: readonly WishSingleDrop[] };
+
+/**
+ * One thing in the air — a wish, or a card nobody wishes for yet. What a {@link WishDrop}'s
+ * `"group"` arm is a list of: **a picked set** (issue #1501), every tile the reader Ctrl- or
+ * Shift-picked, the grabbed one first — each exactly what it would have been dragged alone.
+ */
+export type WishSingleDrop =
+  { kind: "wish"; wish: WishDrag } | { kind: "new"; card: SearchCardDrag };
 
 /**
  * Either shape, or `null` for anything that is neither — the one reader every wishlist drop target
@@ -126,6 +133,16 @@ export type WishDrop =
  * to act on: it moves a row that already exists, where the other one creates one.
  */
 export function readWishDrop(data: Record<string, unknown>): WishDrop | null {
+  const primary = readSingleWishDrop(data);
+  if (primary === null) return null;
+  // A picked set, member by member through the same reader — `collectionDrag.ts`'s
+  // `readCollectionDrop` and its reason (issue #1501): the group used to travel as card payloads
+  // alone, which no wish folder reads, so a folder filed the grabbed tile and nothing else.
+  const rest = readRecordGroup(data, readSingleWishDrop);
+  return rest.length === 0 ? primary : { kind: "group", members: [primary, ...rest] };
+}
+
+function readSingleWishDrop(data: Record<string, unknown>): WishSingleDrop | null {
   const wish = readWishDrag(data);
   if (wish !== null) return { kind: "wish", wish };
   const card = readSearchCardDrag(data);
