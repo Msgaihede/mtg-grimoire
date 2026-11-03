@@ -2668,7 +2668,15 @@ pub fn apply_reversal(
         Some(ops) => {
             tx.execute_batch("SAVEPOINT reversal")
                 .map_err(|e| e.to_string())?;
-            match apply(&tx, deck_id, &ops) {
+            // A reversal that takes cards off the live list sends their copies to `Recently
+            // removed`, as every other removal does (issue #1494). The step itself still names
+            // `deck_cards` alone — the copies' move is the deck module's, inside this savepoint,
+            // so a reversal that fails moves no card either.
+            let applied = crate::deck::live_claims(&tx, deck_id).and_then(|before| {
+                apply(&tx, deck_id, &ops)?;
+                crate::deck::release_dropped_claims(&tx, deck_id, &before)
+            });
+            match applied {
                 Ok(()) => {
                     tx.execute_batch("RELEASE reversal")
                         .map_err(|e| e.to_string())?;

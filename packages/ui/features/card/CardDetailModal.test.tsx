@@ -25,6 +25,7 @@ const deckList = vi.fn();
 const deckFolderList = vi.fn();
 const deckGet = vi.fn();
 const deckSetCardQuantity = vi.fn();
+const deckToCollection = vi.fn();
 const deckCardSetLabel = vi.fn();
 const deckLabelAll = vi.fn();
 const deckLabelCreate = vi.fn();
@@ -82,6 +83,7 @@ vi.mock("@/lib/ipc", async (original) => ({
     deckGet: (id: number, variant: string, marketplace: MarketplaceId) =>
       deckGet(id, variant, marketplace),
     deckSetCardQuantity: (...args: unknown[]) => deckSetCardQuantity(...args),
+    deckToCollection: (...args: unknown[]) => deckToCollection(...args),
     deckCardSetLabel: (...args: unknown[]) => deckCardSetLabel(...args),
     // **The list `deck_get` cannot answer.** `deckLabelList` only ever sees a label some card is
     // wearing, so the picker's own list is this one — see the modal's `labelOptions`.
@@ -217,6 +219,9 @@ beforeEach(() => {
   deckFolderList.mockReset().mockResolvedValue([]);
   deckGet.mockReset().mockResolvedValue(null);
   deckSetCardQuantity.mockReset().mockResolvedValue({ quantity: 5, removed: false });
+  deckToCollection
+    .mockReset()
+    .mockResolvedValue({ entryId: null, fromDeck: null, deckCardId: null, quantity: 0 });
   deckCardSetLabel.mockReset().mockResolvedValue(undefined);
   deckLabelAll.mockReset().mockResolvedValue([]);
   deckLabelCreate.mockReset().mockResolvedValue({
@@ -1272,15 +1277,12 @@ it("splits the main area into controls and list at the widest rung only", async 
   expect(list, "no column-2 child").toBeDefined();
   expect(controls).toContainElement(screen.getByRole("button", { name: /^category/i }));
   expect(list).toContainElement(screen.getByRole("heading", { name: "Printings" }));
-  expect(
-    list,
-    "the door to the wall belongs above the list it opens more of",
-  ).toContainElement(screen.getByRole("button", { name: /^View all printings/ }));
+  expect(list, "the door to the wall belongs above the list it opens more of").toContainElement(
+    screen.getByRole("button", { name: /^View all printings/ }),
+  );
 
   // The controls column scrolls itself.
-  expect([...(controls as HTMLElement).classList]).toContain(
-    "@min-[1200px]/card:overflow-y-auto",
-  );
+  expect([...(controls as HTMLElement).classList]).toContain("@min-[1200px]/card:overflow-y-auto");
 
   // **The list column does not — the list inside it does**, which is what keeps the heading, the
   // sort control and the count line on screen while the rows move. A scroller out here takes
@@ -1420,7 +1422,9 @@ it("keeps its place in the list when another printing of the same card is opened
   // The Beta printing of the same oracle card — a card id no stop carries.
   cardDetail.mockImplementation((id: string) =>
     Promise.resolve(
-      id === "c1b" ? { ...detail, id: "c1b", setCode: "leb", setName: "Limited Edition Beta" } : detail,
+      id === "c1b"
+        ? { ...detail, id: "c1b", setCode: "leb", setName: "Limited Edition Beta" }
+        : detail,
     ),
   );
   useAppStore.setState({
@@ -1707,7 +1711,9 @@ it("swaps the deck's printing when one is picked out of the printings list", asy
 
   // deckId, from, to, categoryId, variant, finish — the row's whole address, with the finish
   // carried across rather than cleared: the reader is choosing a printing, not an object.
-  await waitFor(() => expect(deckSwapPrinting).toHaveBeenCalledWith(1, "c1", "c2", 2, "live", null));
+  await waitFor(() =>
+    expect(deckSwapPrinting).toHaveBeenCalledWith(1, "c1", "c2", 2, "live", null),
+  );
   // And the modal follows the row, which is the half a swap that only wrote would leave broken:
   // the re-anchor lives on the mutation (`useDeck`'s `reanchorPane`), so this is the same write
   // the printings wall gets for free.
@@ -1891,7 +1897,10 @@ it("steps onto the next card when the deck row behind the open one is removed", 
   const down = await renderOnDeckWalk();
 
   await userEvent.click(down);
-  await waitFor(() => expect(deckSetCardQuantity).toHaveBeenCalled());
+  // **A cut, not the absolute write** (issue #1494): the stepper hands the row it cuts from, as
+  // the editor's does, so the copies the deck held go to `Recently removed` with it.
+  await waitFor(() => expect(deckToCollection).toHaveBeenCalledWith(10, 1));
+  expect(deckSetCardQuantity).not.toHaveBeenCalled();
 
   // **The full six-field address, not just the id.** A move that carried only `selectedCardId`
   // would leave the modal drawing the next card with the *removed* row's stepper and pickers
@@ -1921,9 +1930,7 @@ it("keeps the chevrons and the arrow keys alive across a removal", async () => {
   // `blur` and no `focusout` — so the very press that removes the card also takes the arrows
   // away, with both chevrons still drawn and enabled. Measured here as
   // `document.activeElement === BODY` before `Dialog`'s `caretPulse` settle was wired.
-  await waitFor(() =>
-    expect(document.activeElement?.closest('[role="dialog"]')).not.toBeNull(),
-  );
+  await waitFor(() => expect(document.activeElement?.closest('[role="dialog"]')).not.toBeNull());
 
   await userEvent.keyboard("{ArrowLeft}");
   expect(useAppStore.getState().selectedCardId).toBe("c0");
@@ -1977,9 +1984,7 @@ it("does not walk back onto a card the reader has stepped away from", async () =
   // settle hands it back to the panel on an animation frame — the case above says why. An arrow
   // pressed before that frame lands on `<body>` and walks nothing: CI's `expected 'c2' to be
   // 'c0'`, reproduced every time with `requestAnimationFrame` delayed by 150ms.
-  await waitFor(() =>
-    expect(document.activeElement?.closest('[role="dialog"]')).not.toBeNull(),
-  );
+  await waitFor(() => expect(document.activeElement?.closest('[role="dialog"]')).not.toBeNull());
 
   await userEvent.keyboard("{ArrowLeft}");
   expect(useAppStore.getState().selectedCardId).toBe("c0");
@@ -2076,9 +2081,7 @@ it("moves the copy onto a printing picked once Edit is on, and follows it there"
   expect(await screen.findByRole("button", { name: "Done editing" })).toHaveFocus();
   expect(screen.getByText(/^Editing/)).toBeInTheDocument();
 
-  await userEvent.click(
-    await screen.findByRole("button", { name: "Change this copy to LEB 161" }),
-  );
+  await userEvent.click(await screen.findByRole("button", { name: "Change this copy to LEB 161" }));
   await waitFor(() => expect(collectionSetPrinting).toHaveBeenCalledWith(42, "c2"));
   await waitFor(() => expect(useAppStore.getState().paneCopy).toEqual({ entryId: 77 }));
   expect(useAppStore.getState().selectedCardId).toBe("c2");
@@ -2134,9 +2137,7 @@ it("refuses to move a foil copy onto a printing never made in foil", async () =>
   renderFromCollection("foil");
 
   await userEvent.click(await screen.findByRole("button", { name: "Edit this copy" }));
-  await userEvent.click(
-    await screen.findByRole("button", { name: "Change this copy to LEB 161" }),
-  );
+  await userEvent.click(await screen.findByRole("button", { name: "Change this copy to LEB 161" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent(/has no foil version/);
   expect(collectionSetPrinting).not.toHaveBeenCalled();

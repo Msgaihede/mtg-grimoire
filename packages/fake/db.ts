@@ -17531,6 +17531,45 @@ function releaseUnclaimedCopies(db: FakeDb, deckId: number, variant: DeckVariant
 }
 
 /**
+ * `deck::release_displaced_copies` — give back the copies of one printing and finish that a write
+ * just took off the **live** list (`displaced` of them), never more and never one the list still
+ * claims at that grain afterwards (issue #1494). The stepper's step down calls it, so a card that
+ * leaves the deck by `deck_set_card_quantity` sends its cardboard to `Recently removed` exactly as
+ * `deck_to_collection` does. Called **after** the `deckCards` write, so the claim it reads is the
+ * finished list's; a theory row and a deck with no group move nothing.
+ */
+function releaseDisplacedCopies(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  cardId: string,
+  finish: DeckFinish,
+  displaced: number,
+): void {
+  if (variant !== LIVE || displaced <= 0) return;
+  const group = deckGroup(db, deckId);
+  if (group === undefined) return;
+  const key = entryKey(db, cardId, finish);
+  const stillClaimed = db.deckCards
+    .filter(
+      (dc) =>
+        dc.deckId === deckId &&
+        dc.variant === LIVE &&
+        dc.cardId === cardId &&
+        entryKey(db, dc.cardId, dc.finish) === key,
+    )
+    .reduce((n, dc) => n + dc.quantity, 0);
+  const held = db.collectionEntries
+    .filter(
+      (e) =>
+        e.folderId === group.id && e.cardId === cardId && entryKey(db, e.cardId, e.finish) === key,
+    )
+    .reduce((n, e) => n + e.quantity, 0);
+  const take = Math.min(displaced, held - stillClaimed);
+  if (take > 0) releaseGroupCopies(db, deckId, cardId, finish, take);
+}
+
+/**
  * The bulk half of {@link releaseGroupCopies}: every `live` row of a pile that is about to be
  * deleted, released before anything goes.
  *
@@ -21978,6 +22017,8 @@ export function writeHandlers(db: FakeDb) {
         deck.updatedAt = stamp(db);
         // A slot already empty removed nothing, so it records nothing — and so files no step.
         if (row) {
+          // The copies the row held leave the deck with it (issue #1494).
+          releaseDisplacedCopies(db, args.deckId, variant, row.cardId, row.finish, row.quantity);
           record(
             db,
             args.deckId,
@@ -21996,6 +22037,8 @@ export function writeHandlers(db: FakeDb) {
       const was = row.quantity;
       row.quantity = args.quantity;
       deck.updatedAt = stamp(db);
+      // A step down gives back the copies it stepped off (issue #1494); a step up moves nothing.
+      releaseDisplacedCopies(db, args.deckId, variant, row.cardId, row.finish, was - args.quantity);
       record(
         db,
         args.deckId,
