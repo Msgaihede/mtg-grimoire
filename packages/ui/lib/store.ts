@@ -906,6 +906,29 @@ interface AppState {
    * Cleared by {@link setActiveView}; written after it by {@link revealCard}.
    */
   pendingReveal: PendingReveal | null;
+  /**
+   * **The view whose root a re-press asked for** (issue #1507), waiting for that page to read it —
+   * {@link pendingFolder}'s one-shot shape, aimed at "wherever this page nests, walk back out".
+   *
+   * Written by {@link selectView} alone, and only when the reader presses the rail entry (or the
+   * chord) of the view they are already standing on. Each page with nested places answers it with
+   * its own way home (`useViewRootRequest`): Decks and the Collection and Wishlist leave their
+   * drawer for the top level, Draft & Packs goes back to its hub. A page with nothing nested reads
+   * nothing and the request is spent by the next view change.
+   *
+   * **A request rather than a counter, so a page that mounts *because of* the press still hears
+   * it**: re-pressing Decks from inside an editor, or Draft & Packs from a draft deck's editor,
+   * swaps the editor for the page, and a page that only watched for a change after its mount would
+   * open on whatever it remembered. Cleared by {@link setActiveView}; written after it.
+   */
+  rootRequest: ViewId | null;
+  /** **A press on a view's rail entry or chord** — {@link setActiveView}, plus, when the reader is
+   *  already there, {@link rootRequest} (and the draft deck's editor closed, which is the Draft
+   *  view's nesting that lives in the store). Every other caller of `setActiveView` means "go
+   *  there" and keeps calling that. */
+  selectView: (view: ViewId) => void;
+  /** Spend it — the page that answered it, on the commit it read it. */
+  clearRootRequest: () => void;
   /** Go to the list `reveal.scope` names and reveal one card there — the view change and the
    *  hand-off in one action, {@link showSetInSearch}'s shape. */
   revealCard: (reveal: PendingReveal) => void;
@@ -1503,8 +1526,24 @@ export const useAppStore = create<AppState>((set) => ({
         pendingDeckFolder: null,
         pendingSearchText: null,
         pendingReveal: null,
+        // The re-press's hand-off (issue #1507), for the same reason: `selectView` writes it after
+        // calling this.
+        rootRequest: null,
       };
     }),
+  rootRequest: null,
+  selectView: (view) => {
+    const { activeView, setActiveView } = useAppStore.getState();
+    setActiveView(view);
+    if (view !== activeView) return;
+    set((s) => ({
+      rootRequest: view,
+      // The Draft view's one nesting the store holds: its editor on a draft deck. The deck stays a
+      // draft deck, listed under *Draft in progress* — `returnToDraftPage`'s effect.
+      draftDeckId: view === "draft" ? null : s.draftDeckId,
+    }));
+  },
+  clearRootRequest: () => set({ rootRequest: null }),
   // Nothing until a reader pastes a link, which is what keeps the rail row off the screen of
   // everybody who never does. Not cleared by `setActiveView` above: a binder a reader opened is
   // theirs to come back to for the rest of the session, and clearing it on the way out would make

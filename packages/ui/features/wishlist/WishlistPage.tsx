@@ -86,6 +86,7 @@ import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { toasted, writeFailure } from "@/lib/writes";
+import { useViewRootRequest } from "@/lib/viewRoot";
 import { ManagedFolderNote } from "./ManagedFolderNote";
 import { WishlistPageFigures } from "./WishlistSummary";
 import { managedEmptySentence, managedIds, userWishFolders } from "./managed";
@@ -324,6 +325,8 @@ export function WishlistPage() {
     requestedViewAll,
     setViewAll,
   } = wishlist;
+  // A press on the Wishlist entry while a drawer is open walks back to the root (issue #1507).
+  useViewRootRequest("wishlist", () => openFolder(null));
   const view = useAppStore((s) => s.wishlistView);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const folders = useWishlistFolders();

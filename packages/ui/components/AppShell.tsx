@@ -140,6 +140,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // window, so naming it in a dependency list below costs nothing.
   const edition = useEdition();
   const setActiveView = useAppStore((s) => s.setActiveView);
+  // A press on a destination — the rail's rows and their chords. **Not `setActiveView`**, because
+  // a press on the view already open walks it back to its root (issue #1507): out of a deck folder,
+  // a collection or wishlist drawer, or Draft & Packs' flows, to that page's top. `selectView` is
+  // where that lives; the two Settings buttons below are "go there" and keep `setActiveView`.
+  const selectView = useAppStore((s) => s.selectView);
   // Only its length is read, and only to decide whether the rail draws the Shared row — see
   // `entries` below.
   const openedShares = useAppStore((s) => s.openedShares);
@@ -301,11 +306,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
       // is left to whatever else wants it.
       if (!editionHas(edition, CHORD_NAV[i].id)) return;
       e.preventDefault();
-      setActiveView(CHORD_NAV[i].id);
+      selectView(CHORD_NAV[i].id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [edition, setActiveView, setKeyMapOpen]);
+  }, [edition, selectView, setKeyMapOpen]);
   // The one `marketplace:progress` subscription in the app, for `useSyncProgress`' reason.
   // It renders nothing: the event goes into the query cache, and every `useMarketplace()`
   // observer — including the one two lines below — reads it back from there.
@@ -584,7 +589,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
               Icon={Icon}
               active={id === activeView}
               narrow={narrow}
-              onSelect={() => setActiveView(id)}
+              onSelect={() => selectView(id)}
               dragging={drops.dragging}
               drop={id === "decks" || id === "wishlist" ? drops[id] : null}
             />

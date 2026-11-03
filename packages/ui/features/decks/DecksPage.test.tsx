@@ -428,6 +428,8 @@ beforeEach(() => {
     deckWallFlat: false,
     // The quick search's folder hand-off (issue #1098), which this page consumes.
     pendingDeckFolder: null,
+    // The rail's re-press (issue #1507), which this page consumes too.
+    rootRequest: null,
   });
 });
 
@@ -3859,6 +3861,23 @@ describe("the View all wall", () => {
     expect(await tileFor("Sunday draft")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Burn/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Folder actions" })).toBeInTheDocument();
+  });
+
+  /** Issue #1507: the rail's Decks entry, pressed while the gallery is in a folder. */
+  it("walks back to the top level when the Decks entry is pressed again", async () => {
+    withFolders();
+    useAppStore.setState({ activeView: "decks" });
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    expect(await tileFor("Sunday draft")).toBeInTheDocument();
+
+    act(() => useAppStore.getState().selectView("decks"));
+
+    expect(await tileFor("Burn")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Commander" })).not.toBeInTheDocument();
+    expect(useAppStore.getState().rootRequest).toBeNull();
   });
 
   /** Issue #1098: the header's quick search opens a deck folder — over the flat wall, too. */
