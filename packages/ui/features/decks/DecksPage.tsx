@@ -39,6 +39,7 @@ import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useDeskWidth } from "@/lib/useDeskWidth";
 import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { useViewRootRequest } from "@/lib/viewRoot";
 import { CreateDeckDialog } from "./CreateDeckDialog";
 import { deckFormats, filterDecks, NO_DECK_FILTER, type DeckFilter } from "./deckFilter";
 import { DeckTile } from "./DeckTile";
@@ -309,6 +310,9 @@ export function DecksPage() {
     },
     [setFlat],
   );
+  // A press on the Decks entry while the gallery is up walks out of the drawer to the top level
+  // (issue #1507) — and out of the flat wall, since `openFolder` is every route into the cabinet.
+  useViewRootRequest("decks", () => openFolder(null));
   /**
    * **The folder the header's quick search asked for** — `store.ts`' `pendingDeckFolder` (issue
    * #1098), answered as `SearchPage` answers `pendingSearchSet`: a seed on a mount (the

@@ -28,7 +28,9 @@ import {
 import { PRESS_SOFT } from "@/lib/motion";
 import { ago } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
+import { useAppStore } from "@/lib/store";
 import { viewMemory } from "@/lib/viewMemory";
+import { useViewRootRequest } from "@/lib/viewRoot";
 import type { DraftRole } from "./build/BuildPanel";
 import { WinstonPiles } from "./icons";
 import { LobbyScreen } from "./lobby/LobbyScreen";
@@ -74,7 +76,12 @@ function firstFlow(): Flow {
  * the desktop alone).
  */
 export function DraftPage(): JSX.Element {
-  const [flow, setFlowState] = useState<Flow>(firstFlow);
+  // A re-press of the rail's Draft & Packs entry from the draft deck's editor mounts this page
+  // with the request already waiting: open on the hub then, rather than on the screen remembered
+  // and a commit later on the hub.
+  const [flow, setFlowState] = useState<Flow>(() =>
+    useAppStore.getState().rootRequest === "draft" ? { kind: "hub" } : firstFlow(),
+  );
   const queryClient = useQueryClient();
   // A game's lobby is the Playtesting page's (issue #1419): no *Draft in progress* row for it,
   // and no notice on a guest's pool when it closes.
@@ -88,6 +95,11 @@ export function DraftPage(): JSX.Element {
     void queryClient.invalidateQueries({ queryKey: DRAFT_SAVED_KEY });
     setFlow({ kind: "hub" });
   }, [queryClient, setFlow]);
+  // A press on the rail's Draft & Packs entry while a flow is up — Open Packs, a setup, the lobby,
+  // a draft — is the page's own back to the hub (issue #1507). Nothing is ended: a draft under way
+  // stays under *Draft in progress*, and a lobby stays joined, exactly as the flow's back leaves
+  // them.
+  useViewRootRequest("draft", toHub);
   const toDraft = useCallback(
     (draft: number | null, view: DraftView | null, role: DraftRole) => {
       currentDraft.keep({ draft, role, view });
