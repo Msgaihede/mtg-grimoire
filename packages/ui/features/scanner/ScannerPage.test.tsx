@@ -150,6 +150,13 @@ vi.mock("./useWindowParked", async () => {
 });
 import { ipc } from "@/lib/ipc";
 import { SHOT_READY_CLICK, STOPPED_NOTE, STOPPED_TITLE } from "./reader/readerText";
+import {
+  EXIT_PACK_OPENER,
+  PACK_OPENER,
+  PACK_READY,
+  PACK_SCANNING,
+  PACK_STOPPED,
+} from "./reader/PackOpener";
 import { importItems } from "./reader/tray";
 import { ScannerPage } from "./ScannerPage";
 import { runClock } from "./submit/run";
@@ -3020,5 +3027,188 @@ describe("ScannerPage with a destination", () => {
     // The rows it warned about have gone, and the warning with them.
     await waitFor(() => expect(within(region).queryByRole("note")).toBeNull());
     expect(within(region).getByText("Cards you scan appear here.")).toBeInTheDocument();
+  });
+});
+
+/**
+ * **The pack opener** (issue #1504): the camera column laid out again as the whole window, the dock
+ * a bar over the picture's foot and the tray a drawer — the same elements, so the camera is never
+ * asked twice. The idle fade's clock is `usePackIdle`'s, and its own suite (`PackOpener.test.tsx`).
+ */
+describe("ScannerPage's pack opener", () => {
+  /** The stage, once the header's press has opened it. */
+  async function openPack() {
+    fireEvent.click(await screen.findByRole("button", { name: PACK_OPENER }));
+    return screen.getByRole("region", { name: PACK_OPENER });
+  }
+
+  /** The recording light in the picture's corner. */
+  function light(stage: HTMLElement): HTMLElement {
+    const found = within(stage)
+      .getAllByRole("status")
+      .find((el) => el.hasAttribute("data-pack-light"));
+    if (found === undefined) throw new Error("no recording light on the stage");
+    return found;
+  }
+
+  it("lays the same video out as the whole window, uncropped, with the camera asked once", async () => {
+    const restore = shimVideo();
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({ getTracks: () => [{ stop: () => {} }] } as unknown as MediaStream),
+    );
+    mediaDevices(getUserMedia);
+    try {
+      const { container } = mount();
+      await screen.findByRole("button", { name: "Start" });
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+      const video = container.querySelector("video");
+      expect(video).toHaveClass("object-cover");
+
+      const stage = await openPack();
+      // The very element the stream was handed — a second `<video>` would be a black box.
+      expect(within(stage).getByText((_, el) => el === video)).toBe(video);
+      expect(container.querySelectorAll("video")).toHaveLength(1);
+      expect(video).toHaveClass("object-contain");
+      expect(stage).toHaveClass("fixed");
+      expect(stage).toHaveFocus();
+      // The container is dropped, or `fixed` would be held to the page's box.
+      expect(container.querySelector("section")).not.toHaveClass("@container/scan");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("puts every control in the bar, the HUD's presses and the way out with them", async () => {
+    const restore = shimVideo();
+    opens();
+    try {
+      mount();
+      await screen.findByRole("button", { name: "Start" });
+      // The column's dock and the HUD's corner first, so the move is a move.
+      expect(await screen.findAllByRole("button", { name: "Reset evidence" })).toHaveLength(1);
+      const stage = await openPack();
+      for (const name of [
+        "Start",
+        "Filters: Any set",
+        "Finish: Detect",
+        "Camera: Default",
+        "Reset evidence",
+        EXIT_PACK_OPENER,
+      ]) {
+        expect(within(stage).getAllByRole("button", { name })).toHaveLength(1);
+      }
+      expect(within(stage).getByRole("group", { name: "How scanning runs" })).toBeInTheDocument();
+      // Neither the stopped veil nor the developer column: the light says stopped.
+      expect(screen.queryByText(STOPPED_TITLE)).toBeNull();
+      expect(screen.queryByRole("region", { name: "Match" })).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it("lights green while scanning and red while not, under both ways of scanning", async () => {
+    const restore = shimVideo();
+    opens();
+    paced();
+    const user = userEvent.setup();
+    try {
+      mount();
+      const stage = await openPack();
+      expect(light(stage)).toHaveTextContent(PACK_STOPPED);
+      expect(light(stage)).toHaveAttribute("data-pack-light", "off");
+
+      await user.click(within(stage).getByRole("button", { name: "Start" }));
+      expect(light(stage)).toHaveTextContent(PACK_SCANNING);
+      expect(light(stage)).toHaveAttribute("data-pack-light", "on");
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+
+      await user.click(within(stage).getByRole("button", { name: "Stop" }));
+      expect(light(stage)).toHaveTextContent(PACK_STOPPED);
+
+      await user.click(within(stage).getByRole("button", { name: "Point & shoot" }));
+      expect(light(stage)).toHaveTextContent(PACK_READY);
+      expect(within(stage).getByRole("button", { name: "Scan card" })).toBeInTheDocument();
+      // Not the column's pill: the light is what says it on the stage.
+      expect(screen.queryByText(SHOT_READY_CLICK)).toBeNull();
+      await user.click(within(stage).getByRole("button", { name: "Scan card" }));
+      expect(light(stage)).toHaveTextContent(PACK_SCANNING);
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps a scan running across the way in and the way out", async () => {
+    const restore = shimVideo();
+    opens();
+    paced();
+    const user = userEvent.setup();
+    try {
+      mount();
+      await start();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      const stage = await openPack();
+      expect(light(stage)).toHaveTextContent(PACK_SCANNING);
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent),
+      );
+      await user.click(within(stage).getByRole("button", { name: EXIT_PACK_OPENER }));
+      expect(screen.queryByRole("region", { name: PACK_OPENER })).toBeNull();
+      expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: PACK_OPENER })).toHaveFocus();
+    } finally {
+      restore();
+    }
+  });
+
+  it("pulls the tray out as a drawer, and Escape puts it away before leaving the stage", async () => {
+    refused();
+    vi.mocked(ipc.scannerTray).mockResolvedValue([...TRAY_ROWS]);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByText(TRAY_ROWS[0].name);
+    await openPack();
+    const tab = screen.getByRole("button", { name: "Scanned cards" });
+    const drawer = document.getElementById(tab.getAttribute("aria-controls") ?? "");
+    expect(drawer).not.toBeNull();
+    expect(drawer).toContainElement(tray());
+    // Away: out of the keyboard's reach, and the tab says how many copies wait in it.
+    expect(tab).toHaveAttribute("aria-expanded", "false");
+    expect(drawer).toHaveAttribute("inert");
+    expect(tab).toHaveTextContent(String(TRAY_ROWS.reduce((n, row) => n + row.quantity, 0)));
+
+    await user.click(tab);
+    expect(tab).toHaveAttribute("aria-expanded", "true");
+    expect(drawer).not.toHaveAttribute("inert");
+
+    await user.keyboard("{Escape}");
+    expect(tab).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("region", { name: PACK_OPENER })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("region", { name: PACK_OPENER })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Scanned cards" })).toBeNull();
+    expect(screen.getByRole("button", { name: PACK_OPENER })).toHaveFocus();
+  });
+
+  it("is the Scanner view's alone — not offered over a trade", async () => {
+    refused();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ScannerPage
+          destination={{
+            title: "Scanned for their side",
+            name: "their side",
+            commit: vi.fn(async () => {}),
+            onCommitted: vi.fn(),
+          }}
+        />
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("region", { name: "Scanned for their side" });
+    expect(screen.queryByRole("button", { name: PACK_OPENER })).toBeNull();
   });
 });
