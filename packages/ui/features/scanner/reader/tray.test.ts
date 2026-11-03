@@ -361,11 +361,24 @@ describe("tray", () => {
     expect(next.find((r) => r.key === "b")?.finish).toBe("nonfoil");
   });
 
-  it("clamps quantity to at least one", () => {
+  it("sets a quantity, and reads a non-number as one copy", () => {
     const rows = addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows;
-    expect(setQuantity(rows, "a", 0)[0].quantity).toBe(1);
     expect(setQuantity(rows, "a", Number.NaN)[0].quantity).toBe(1);
     expect(setQuantity(rows, "a", 4)[0].quantity).toBe(4);
+    expect(setQuantity(rows, "a", 2.7)[0].quantity).toBe(2);
+  });
+
+  it("removes the row at zero, as its × does (issue #1500)", () => {
+    const rows = addDecision(
+      addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows,
+      ambiguous,
+      { finish: "nonfoil" },
+      2,
+      "b",
+    ).rows;
+    expect(setQuantity(rows, "a", 0)).toEqual(removeRow(rows, "a"));
+    expect(setQuantity(rows, "a", 0).map((r) => r.key)).toEqual(["b"]);
+    expect(setQuantity(rows, "b", -1).map((r) => r.key)).toEqual(["a"]);
   });
 
   it("builds import items and refuses while a row is unresolved", () => {

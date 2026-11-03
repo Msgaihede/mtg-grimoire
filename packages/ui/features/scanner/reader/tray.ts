@@ -292,19 +292,21 @@ function update(
 }
 
 /**
- * A row's quantity, **never below one**.
+ * A row's quantity — and **zero is the row's removal**, the same write as its `×` (issue #1500).
  *
- * Zero is not a quantity a tray row can mean: a card the reader does not want is *removed*, and a
- * row reading `0` would commit an import line the backend has nothing to do with. A non-number is
- * read as the floor for the same reason — a stepper box emptied mid-type must not reach here as
- * `NaN` and survive as one.
+ * A tray row never *holds* `0`: it would commit an import line the backend has nothing to do
+ * with. But a reader stepping a card down past one, or typing `0` in its box, is saying they do
+ * not want it, the way `0` in a collection box deletes the entry — so the floor is not a wall the
+ * stepper stops at, it is {@link removeRow}. A non-number is read as one copy rather than none: a
+ * stepper box emptied mid-type must not reach here as `NaN` and take the card with it.
  */
 export function setQuantity(
   rows: readonly ScannerTrayRow[],
   key: string,
   quantity: number,
 ): ScannerTrayRow[] {
-  const next = Number.isFinite(quantity) ? Math.max(1, Math.floor(quantity)) : 1;
+  const next = Number.isFinite(quantity) ? Math.floor(quantity) : 1;
+  if (next < 1) return removeRow(rows, key);
   return update(rows, key, (row) => ({ ...row, quantity: next }));
 }
 

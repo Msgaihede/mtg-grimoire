@@ -1079,7 +1079,6 @@ function TrayRow({
               </span>
               <QuantityStepper
                 size="sm"
-                min={1}
                 value={row.quantity}
                 onChange={onQuantity}
                 label={`Quantity of ${label}`}
@@ -1342,7 +1341,6 @@ function TrayTile({
           </span>
           <QuantityStepper
             size="compact"
-            min={1}
             value={row.quantity}
             onChange={onQuantity}
             label={`Quantity of ${label}`}

@@ -158,7 +158,8 @@ function revealTrayTop(section: HTMLElement) {
  * - **the finish is a press** that says what it is and opens its answers as a sheet — the finishes
  *   the printing exists in, and `Unknown` — gold
  *   while the answer is `Unknown`, the colour this tray asks its questions in;
- * - **the stepper is 44px a side**, and stops at one — the row's own `×` is the removal;
+ * - **the stepper is 44px a side**, and `−` at one copy is the row's removal, the same write as
+ *   its `×` (issue #1500);
  * - **a row waiting on a pick is its candidates**, as whole cards three to a line (what tells two
  *   printings apart is the frame, not the art), each named `<name> — <SET> <number>`, with
  *   *More printings…* under them for a card that is none of the three.
@@ -424,9 +425,7 @@ export function Tray({
                 key={finish}
                 label={TRAY_FINISH_LABEL[finish]}
                 note={
-                  finish === UNKNOWN_FINISH
-                    ? "Stays in the tray when you add the rest."
-                    : undefined
+                  finish === UNKNOWN_FINISH ? "Stays in the tray when you add the rest." : undefined
                 }
                 current={finish === asked.finish}
                 onPick={() => {
@@ -584,7 +583,10 @@ function TrayRow({
                 )}
               >
                 <CardArt cardId={choice.cardId} name={choice.name} variant="grid" loading="lazy" />
-                <span aria-hidden="true" className="truncate text-center font-mono text-[0.6875rem] text-dim">
+                <span
+                  aria-hidden="true"
+                  className="truncate text-center font-mono text-[0.6875rem] text-dim"
+                >
                   {printingOf(choice)}
                 </span>
               </button>
@@ -643,12 +645,10 @@ function TrayRow({
             <button
               type="button"
               aria-label={`One fewer ${label}`}
-              // `aria-disabled`, never `disabled`: the caret stays on it at one copy.
-              aria-disabled={row.quantity <= 1 || undefined}
-              onClick={() => {
-                if (row.quantity > 1) onQuantity(row.quantity - 1);
-              }}
-              className={cn(SQUARE, "aria-disabled:text-dim aria-disabled:opacity-45")}
+              // At one copy this is the row's removal — `setQuantity` reads zero as `removeRow`
+              // (issue #1500) — so it is never out of reach.
+              onClick={() => onQuantity(row.quantity - 1)}
+              className={SQUARE}
             >
               <Minus aria-hidden className="size-4" />
             </button>

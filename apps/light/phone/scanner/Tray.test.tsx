@@ -174,14 +174,14 @@ describe("the phone's review tray", () => {
     expect(held.latest[1].quantity).toBe(3);
   });
 
-  it("stops the stepper at one copy, without leaving the tab order", async () => {
-    const held = mount([TOMB]);
+  it("removes the row when − steps it below one copy, as its × does (issue #1500)", async () => {
+    const held = mount([SAGA, TOMB, LOTUS]);
     const fewer = screen.getByRole("button", { name: "One fewer Ancient Tomb — TMP 315" });
-    expect(fewer).toHaveAttribute("aria-disabled", "true");
+    expect(fewer).not.toHaveAttribute("aria-disabled");
     expect(fewer).not.toBeDisabled();
     await userEvent.click(fewer);
-    expect(held.latest).toEqual([TOMB]);
-    expect(within(row("Ancient Tomb")).getByRole("status")).toHaveTextContent("1");
+    expect(held.latest).toEqual([SAGA, LOTUS]);
+    await waitFor(() => expect(screen.queryByText("Ancient Tomb")).toBeNull());
   });
 
   it("removes the row its × names", async () => {
@@ -197,7 +197,9 @@ describe("the phone's review tray", () => {
       screen.getByRole("button", { name: "Finish of Ancient Tomb — TMP 315: Foil" }),
     );
     const sheet = await screen.findByRole("dialog", { name: "Ancient Tomb" });
-    const choices = within(within(sheet).getByRole("list", { name: "Finishes" })).getAllByRole("button");
+    const choices = within(within(sheet).getByRole("list", { name: "Finishes" })).getAllByRole(
+      "button",
+    );
     expect(choices.map((c) => c.textContent)).toEqual([
       "Nonfoil",
       "Foil",
@@ -205,7 +207,10 @@ describe("the phone's review tray", () => {
       "UnknownStays in the tray when you add the rest.",
     ]);
     // The one it is in is marked and is not a press.
-    expect(within(sheet).getByRole("button", { name: "Foil" })).toHaveAttribute("aria-current", "true");
+    expect(within(sheet).getByRole("button", { name: "Foil" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
 
     await userEvent.click(within(sheet).getByRole("button", { name: "Etched" }));
     expect(held.latest[1]).toEqual({ ...TOMB, finish: "etched" });
@@ -248,7 +253,9 @@ describe("the phone's review tray", () => {
       screen.getByRole("button", { name: "Finish of Ancient Tomb — TMP 315: Etched" }),
     ).toHaveFocus();
 
-    const printing = screen.getByRole("button", { name: "More printings of Urza's Saga — MH2 259" });
+    const printing = screen.getByRole("button", {
+      name: "More printings of Urza's Saga — MH2 259",
+    });
     await userEvent.click(printing);
     await screen.findByRole("dialog", { name: "Urza's Saga" });
     await userEvent.keyboard("{Escape}");
@@ -311,7 +318,9 @@ describe("the phone's review tray", () => {
 
   it("asks for an unknown finish in gold, and only that one", () => {
     mount([NEEDS_A_FINISH_ROW, SAGA]);
-    const unknown = screen.getByRole("button", { name: "Finish of Lightning Bolt — STA 105: Unknown" });
+    const unknown = screen.getByRole("button", {
+      name: "Finish of Lightning Bolt — STA 105: Unknown",
+    });
     const known = screen.getByRole("button", { name: "Finish of Urza's Saga — MH2 259: Nonfoil" });
     expect(unknown.classList.contains("border-accent")).toBe(true);
     expect(known.classList.contains("border-accent")).toBe(false);
@@ -320,7 +329,9 @@ describe("the phone's review tray", () => {
   it("draws a row waiting on a pick as its candidates, and no finish or stepper", async () => {
     const held = mount([BOLT, SAGA]);
     const waiting = row("Pick a printing");
-    const candidates = within(within(waiting).getByRole("group", { name: "Printings of Lightning Bolt" }))
+    const candidates = within(
+      within(waiting).getByRole("group", { name: "Printings of Lightning Bolt" }),
+    )
       .getAllByRole("button")
       .map((b) => b.getAttribute("aria-label"));
     expect(candidates).toEqual([
@@ -331,7 +342,9 @@ describe("the phone's review tray", () => {
     expect(within(waiting).queryByRole("button", { name: /^Finish of/ })).toBeNull();
     expect(within(waiting).queryByRole("button", { name: /^One more/ })).toBeNull();
     // The way out stays, named for the card alone: a waiting row has no printing yet.
-    expect(within(waiting).getByRole("button", { name: "Remove Lightning Bolt" })).toBeInTheDocument();
+    expect(
+      within(waiting).getByRole("button", { name: "Remove Lightning Bolt" }),
+    ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt — STA 105" }));
     expect(held.latest[0]).toMatchObject({
@@ -393,7 +406,9 @@ describe("the phone's review tray", () => {
     // A row the scanner could not read the finish of: Lightning Bolt, STA 105.
     const held = mount([NEEDS_A_FINISH_ROW]);
     const pick = async (code: RegExp) => {
-      await userEvent.click(screen.getByRole("button", { name: /^More printings of Lightning Bolt/ }));
+      await userEvent.click(
+        screen.getByRole("button", { name: /^More printings of Lightning Bolt/ }),
+      );
       const sheet = await screen.findByRole("dialog", { name: "Lightning Bolt" });
       const list = await within(sheet).findByRole("list", { name: "Printings" }, SETTLE);
       const printing = within(list)
@@ -495,54 +510,52 @@ describe("the phone's review tray", () => {
   });
 });
 
-  /**
-   * **A card that lands brings the tray's heading back, only once the reader has scrolled past
-   * it** (issue #1320) — never down to it, which would scroll away the camera above the tray.
-   */
-  describe("a card landing", () => {
-    function scrolled(sectionTop: number) {
-      const scrollIntoView = vi.fn();
-      const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-      Element.prototype.scrollIntoView = scrollIntoView;
-      const held = mount([SAGA, TOMB], { scroller: true });
-      const at = (top: number) => ({ top }) as DOMRect;
-      vi.spyOn(screen.getByTestId("scroller"), "getBoundingClientRect").mockReturnValue(at(100));
-      vi.spyOn(
+/**
+ * **A card that lands brings the tray's heading back, only once the reader has scrolled past
+ * it** (issue #1320) — never down to it, which would scroll away the camera above the tray.
+ */
+describe("a card landing", () => {
+  function scrolled(sectionTop: number) {
+    const scrollIntoView = vi.fn();
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const held = mount([SAGA, TOMB], { scroller: true });
+    const at = (top: number) => ({ top }) as DOMRect;
+    vi.spyOn(screen.getByTestId("scroller"), "getBoundingClientRect").mockReturnValue(at(100));
+    vi.spyOn(
+      screen.getByRole("region", { name: "Scanned cards" }),
+      "getBoundingClientRect",
+    ).mockReturnValue(at(sectionTop));
+    const restore = () => {
+      if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    };
+    return { held, scrollIntoView, restore };
+  }
+
+  it("scrolls up to the tray's heading when the reader is down in the rows", () => {
+    const { held, scrollIntoView, restore } = scrolled(-400);
+    try {
+      // An edit is no landing.
+      act(() => held.set([{ ...SAGA, quantity: 2 }, TOMB]));
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      act(() => held.set([{ ...BOLT, addedAt: SAGA.addedAt + 1 }, { ...SAGA, quantity: 2 }, TOMB]));
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(
         screen.getByRole("region", { name: "Scanned cards" }),
-        "getBoundingClientRect",
-      ).mockReturnValue(at(sectionTop));
-      const restore = () => {
-        if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original);
-        else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
-      };
-      return { held, scrollIntoView, restore };
+      );
+    } finally {
+      restore();
     }
-
-    it("scrolls up to the tray's heading when the reader is down in the rows", () => {
-      const { held, scrollIntoView, restore } = scrolled(-400);
-      try {
-        // An edit is no landing.
-        act(() => held.set([{ ...SAGA, quantity: 2 }, TOMB]));
-        expect(scrollIntoView).not.toHaveBeenCalled();
-        act(() =>
-          held.set([{ ...BOLT, addedAt: SAGA.addedAt + 1 }, { ...SAGA, quantity: 2 }, TOMB]),
-        );
-        expect(scrollIntoView).toHaveBeenCalledTimes(1);
-        expect(scrollIntoView.mock.contexts[0]).toBe(
-          screen.getByRole("region", { name: "Scanned cards" }),
-        );
-      } finally {
-        restore();
-      }
-    });
-
-    it("leaves the page alone when the heading is in view or below it", () => {
-      const { held, scrollIntoView, restore } = scrolled(300);
-      try {
-        act(() => held.set([{ ...BOLT, addedAt: SAGA.addedAt + 1 }, SAGA, TOMB]));
-        expect(scrollIntoView).not.toHaveBeenCalled();
-      } finally {
-        restore();
-      }
-    });
   });
+
+  it("leaves the page alone when the heading is in view or below it", () => {
+    const { held, scrollIntoView, restore } = scrolled(300);
+    try {
+      act(() => held.set([{ ...BOLT, addedAt: SAGA.addedAt + 1 }, SAGA, TOMB]));
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+});
