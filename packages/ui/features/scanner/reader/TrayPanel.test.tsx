@@ -550,6 +550,18 @@ describe("TrayPanel", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("removes a row when its stepper goes below one copy, as its × does (issue #1500)", async () => {
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    wrap(<TrayPanel {...props({ onRows })} />);
+    const fewer = screen.getByRole("button", {
+      name: "Decrease Quantity of Honored Hierarch — ORI 17",
+    });
+    expect(fewer).toBeEnabled();
+    await user.click(fewer);
+    expect(edit(onRows, [newer, older]).map((r) => r.key)).toEqual(["newer"]);
+  });
+
   it("removes a row", async () => {
     const user = userEvent.setup();
     const onRows = vi.fn();

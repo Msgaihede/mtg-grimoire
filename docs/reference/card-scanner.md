@@ -888,6 +888,11 @@ that row is the same oracle card, both ids known, or the same printing when both
 from the decision. A newest row of another card gets an ordinary add. The strip and the card over the
 camera say *Printing updated*, never *Added*.
 
+**Zero copies is the row's removal** (issue #1500). `tray.ts`' `setQuantity` reads a quantity below
+one as `removeRow`, so `−` at one copy — or a `0` typed in the desktop stepper's box — takes the card
+out of the tray exactly as its `×` does, on both trays. A row never holds `0`; a box emptied mid-type
+(`NaN`) still reads as one copy.
+
 **The commit is one `scanner_tray_commit(items, folderId, remaining)`**: the collection import in
 `add` mode **and** the tray that is left, in one transaction (`collection::commit_import_with`), so an
 app closed before a debounced tray write cannot leave committed rows in the stored tray. One condition
