@@ -235,7 +235,12 @@ mod tests {
     #[test]
     fn a_row_from_before_the_bulk_price_reads_as_no_bulk_price() {
         let c = conn();
-        set_app_meta(&c, K_COLLECTION_VALUE, r#"{"sellPercent":70,"minimumValue":0.5}"#).unwrap();
+        set_app_meta(
+            &c,
+            K_COLLECTION_VALUE,
+            r#"{"sellPercent":70,"minimumValue":0.5}"#,
+        )
+        .unwrap();
         assert_eq!(
             stored(&c),
             CollectionValue {
