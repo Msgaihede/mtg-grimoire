@@ -4,6 +4,7 @@ import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { ReducedPrice } from "@/components/ReducedPrice";
 import { FILTER_LABEL } from "@/components/FilterChips";
 import { BUTTON } from "@/features/settings/controls";
+import { bulkOf, minimumOf } from "@/lib/collectionValue";
 import { plural } from "@/lib/counts";
 import type { BoosterSet } from "@/lib/ipc";
 import type { Currency, Marketplace } from "@/lib/marketplace";
@@ -13,11 +14,15 @@ import { viewMemory } from "@/lib/viewMemory";
 import { useBoosterPrices } from "../booster/prices";
 import { randomSeed } from "../booster/rng";
 import {
+  addExpected,
+  expectedAt,
+  expectedOpening,
   figuresOf,
   openedPrices,
   openedValue,
   openOne,
   reducedOpening,
+  reducedPrices,
   theoreticalValue,
   type CardSort,
   type Opened,
@@ -28,15 +33,15 @@ import { usePackMarketplaces } from "./marketplaces";
 import { OpenedWall } from "./OpenedWall";
 import { PackFigures, type Tally } from "./PackFigures";
 import { openableMatches, openables, openableValue, type Openable } from "./products";
-import { PACKS_SET_IN, ReducedInputs } from "./ReducedInputs";
+import { PACKS_SET_IN, ReducedInputs, reductionLine } from "./ReducedInputs";
 import { usePackReducedStore } from "./reducedPick";
 
 /**
  * **The session's tally, for the window's life** (`lib/viewMemory.ts`): a reader who opens ten
  * packs of one set and goes on to another wants the running total to carry on, and a restart to
  * start it again. Prices are a currency's; a switch of marketplace starts it over rather than
- * adding dollars to euros. It keeps each priced card's price, not a reduced sum, so the reduced
- * price beside it is always the page's figures as they stand.
+ * adding dollars to euros. It keeps each priced card's price and the expected copies at each
+ * price, not reduced sums, so its totals are always at the page's figures as they stand.
  */
 const tallyMemory = viewMemory<Tally>("draft.packs.tally");
 
@@ -111,17 +116,21 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
   const ready = pricesReady && !priceAt.plan.waiting;
   const note = conversionNote(priceAt.marketplaces, priceAt.plan);
   const facts = useMemo(() => new Map(set.cards.map((c) => [c.cardId, c])), [set]);
+  // Every figure beside the wall is at the page's reduced price (issue #1502): the expected value,
+  // the simulation, the histogram and the chance to beat what was paid are what the reader would
+  // get, not what the market lists. The wall's own tiles stay at the market's price.
+  const worth = useMemo(() => reducedPrices(priceOf, reduction), [priceOf, reduction]);
 
   const choice = options.find((o) => openableValue(o) === chosen) ?? options[0];
   const shown = opened?.openable ?? choice;
   const figures = useMemo(
-    () => (ready && shown !== undefined ? figuresOf(set, shown, priceOf) : null),
-    [ready, set, shown, priceOf],
+    () => (ready && shown !== undefined ? figuresOf(set, shown, worth) : null),
+    [ready, set, shown, worth],
   );
   const shownTally: Tally =
     tally !== undefined && tally.currency === currency
       ? tally
-      : { opened: 0, value: 0, ev: 0, currency, prices: [], unpriced: 0 };
+      : { opened: 0, value: 0, ev: 0, currency, prices: [], expected: [], unpriced: 0 };
 
   const open = () => {
     if (choice === undefined) return;
@@ -135,6 +144,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
       value: shownTally.value + openedValue(next, priceOf),
       ev: shownTally.ev + theoreticalValue(set, choice, priceOf),
       prices: [...shownTally.prices, ...priced],
+      expected: addExpected(shownTally.expected, expectedOpening(set, choice, priceOf)),
       unpriced: shownTally.unpriced + (prices.length - priced.length),
     };
     tallyMemory.keep(kept);
@@ -145,12 +155,25 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
     return <p className="m-0 text-sm text-dim">{set.name} has no boosters to open.</p>;
   }
 
-  const value = opened === null ? 0 : openedValue(opened, priceOf);
+  const full = opened === null ? 0 : openedValue(opened, priceOf);
   const words = nouns(shown ?? choice);
   const prices = opened === null || !ready ? [] : openedPrices(opened, priceOf);
-  const reduced = opened === null || !ready ? null : reducedOpening(value, prices, reduction);
+  const reduced = opened === null || !ready ? null : reducedOpening(full, prices, reduction);
+  // What was opened is worth its reduced price where one is set: the figure the pack is placed by
+  // among the simulated ones, which are reduced too.
+  const value = reduced?.reduced ?? full;
   const reducedTally =
     shownTally.opened === 0 ? null : reducedOpening(shownTally.value, shownTally.prices, reduction);
+  const tallyExpected =
+    reducedTally === null ? shownTally.ev : expectedAt(shownTally.expected, reduction);
+  const line = reductionLine(reduction, currency);
+  const minimum = minimumOf(reduction);
+  const bulk = bulkOf(reduction);
+  const underMinimum =
+    minimum === undefined
+      ? undefined
+      : `Under the ${formatPrice(minimum, currency)} minimum: ` +
+        (bulk === undefined ? "not counted" : `counted at ${formatPrice(bulk, currency)}`);
 
   return (
     // Two columns from the top (issue #1465): the product row and what was opened on the left, and
@@ -205,20 +228,21 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
               <header className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
                 <h3 className="m-0 text-base font-semibold">
                   Total value{" "}
-                  <span className="font-mono tabular-nums text-accent">
-                    {ready ? formatPrice(value, currency) : "…"}
-                  </span>
-                  {reduced !== null && (
-                    <>
-                      {" "}
-                      <ReducedPrice
-                        value={reduced}
-                        currency={currency}
-                        unpriced={prices.filter((p) => p === null).length}
-                        setIn={PACKS_SET_IN}
-                        className="font-mono font-normal text-dim"
-                      />
-                    </>
+                  {/* The reduced price is the figure where one is set (issue #1502) — the full
+                      value only in its breakdown, on hover. */}
+                  {reduced !== null ? (
+                    <ReducedPrice
+                      value={reduced}
+                      currency={currency}
+                      unpriced={prices.filter((p) => p === null).length}
+                      setIn={PACKS_SET_IN}
+                      bracketed={false}
+                      className="font-mono text-accent"
+                    />
+                  ) : (
+                    <span className="font-mono tabular-nums text-accent">
+                      {ready ? formatPrice(full, currency) : "…"}
+                    </span>
                   )}
                 </h3>
                 <p className="m-0 font-mono text-sm tabular-nums text-dim">
@@ -240,6 +264,8 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
                 currency={currency}
                 sort={sort}
                 onSort={setSort}
+                minimum={minimum}
+                underMinimum={underMinimum}
               />
             </section>
           )}
@@ -279,17 +305,22 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
               currency={currency}
               tally={shownTally}
               reducedTally={reducedTally}
+              tallyExpected={tallyExpected}
+              reduction={line}
             />
           ) : (
             figures !== null && (
               // One line, the label a bare text node of it: the line reads "Expected value $3.73"
               // whole, as it did in the product row.
-              <p className="m-0 flex items-baseline justify-between gap-4 text-sm text-dim">
-                Expected value{" "}
-                <span className="font-mono tabular-nums text-text">
-                  {formatPrice(figures.ev, currency)}
-                </span>
-              </p>
+              <div className="flex flex-col gap-1">
+                <p className="m-0 flex items-baseline justify-between gap-4 text-sm text-dim">
+                  Expected value{" "}
+                  <span className="font-mono tabular-nums text-text">
+                    {formatPrice(figures.ev, currency)}
+                  </span>
+                </p>
+                {line !== null && <p className="m-0 text-xs text-dim">{line}</p>}
+              </div>
             )
           )}
         </div>

@@ -8,6 +8,7 @@ import {
   parseBulkPrice,
   parseMinimumValue,
   parseSellPercent,
+  reducedCopy,
   reducedPoint,
   reducedValue,
   reducesValue,
@@ -149,5 +150,34 @@ describe("the boxes and the per-copy minimum", () => {
     expect(below.cards).toBe(3);
     expect(below.value).toBeCloseTo(0.69, 10);
     expect(belowMinimumOf([], 0.5)).toEqual({ cards: 0, value: 0 });
+  });
+});
+
+/** Issue #1502: Open Packs' expected value and simulation count card by card. */
+describe("reducedCopy", () => {
+  const PRICES = [0.1, 0.1, 0.49, 0.5, null, 2.35, 9, 16.14];
+
+  it("counts a copy under the minimum at the bulk price or nothing, the rest at the percentage", () => {
+    expect(reducedCopy(0.1, BOTH)).toBe(0);
+    expect(reducedCopy(0.5, BOTH)).toBeCloseTo(0.35, 10);
+    expect(reducedCopy(0.1, { ...BOTH, bulkPrice: 0.01 })).toBe(0.01);
+    expect(reducedCopy(null, BOTH)).toBeNull();
+    expect(reducedCopy(0.1, DEFAULT_COLLECTION_VALUE)).toBe(0.1);
+    // No minimum, no bulk price: a bulk price prices only what is under a minimum.
+    expect(reducedCopy(0.1, { sellPercent: 50, minimumValue: 0, bulkPrice: 0.01 })).toBe(0.05);
+  });
+
+  it("adds up to reducedValue's figure over the same copies", () => {
+    const full = PRICES.reduce<number>((s, p) => s + (p ?? 0), 0);
+    for (const settings of [
+      BOTH,
+      { ...BOTH, bulkPrice: 0.02 },
+      { sellPercent: 100, minimumValue: 0.41 },
+      { sellPercent: 85, minimumValue: 0 },
+    ]) {
+      const sum = PRICES.reduce<number>((s, p) => s + (reducedCopy(p, settings) ?? 0), 0);
+      const reduced = reducedValue(full, belowMinimumOf(PRICES, settings.minimumValue), settings);
+      expect(sum).toBeCloseTo(reduced?.reduced ?? Number.NaN, 2);
+    }
   });
 });

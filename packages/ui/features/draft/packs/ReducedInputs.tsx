@@ -1,6 +1,12 @@
 import { useId, useState, type JSX } from "react";
 import { FILTER_LABEL } from "@/components/FilterChips";
-import { parseBulkPrice, parseMinimumValue, parseSellPercent } from "@/lib/collectionValue";
+import {
+  bulkOf,
+  minimumOf,
+  parseBulkPrice,
+  parseMinimumValue,
+  parseSellPercent,
+} from "@/lib/collectionValue";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
@@ -8,6 +14,23 @@ import type { PackReduction } from "./reducedPick";
 
 /** The reduced price's tooltip line on this page: its figures are these boxes, not Settings'. */
 export const PACKS_SET_IN = "Set by Sell at, Minimum and Bulk on this page.";
+
+/**
+ * What the page's figures are reduced by, in a sentence for under _Expected value_ — every figure
+ * there is at these prices (issue #1502), and nothing else on the column says so. `null` where
+ * they reduce nothing.
+ */
+export function reductionLine(settings: PackReduction, currency: Currency): string | null {
+  const minimum = minimumOf(settings);
+  const percent = settings.sellPercent < 100 ? `${settings.sellPercent}%` : null;
+  if (minimum === undefined && percent === null) return null;
+  if (minimum === undefined) return `Every card counted at ${percent} of its price.`;
+  const bulk = bulkOf(settings);
+  const under =
+    `Cards under ${formatPrice(minimum, currency)} ` +
+    (bulk === undefined ? "are not counted" : `count ${formatPrice(bulk, currency)} each`);
+  return percent === null ? `${under}.` : `${under}; the rest at ${percent}.`;
+}
 
 const SELL_REFUSED = "Sell at has to be above 0 and at most 100%.";
 const MINIMUM_REFUSED = "Minimum has to be a price of zero or more.";

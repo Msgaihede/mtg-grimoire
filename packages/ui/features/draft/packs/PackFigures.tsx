@@ -37,6 +37,9 @@ export interface Tally {
   /** Every priced card opened, at its own price: the reduced price is drawn from these at the
    *  page's figures as they stand, so a minimum changed mid-session reprices the whole session. */
   prices: number[];
+  /** Expected copies by price over every press, `[price, copies]` (`expectedOpening`): the
+   *  expected total at the page's figures as they stand, for the same reason (issue #1502). */
+  expected: [number, number][];
   /** Cards opened that had no price, said in the reduced price's tooltip. */
   unpriced: number;
 }
@@ -45,8 +48,11 @@ export interface Tally {
  * The product's figures beside what was opened (spec §7; botbox.dev's *Expected Value & Pack
  * Statistics*): expected value in theory and over ten thousand simulated packs, the spread, the
  * median, the pack's percentile, the chance to beat what the reader paid, the distribution with the
- * pack marked on it, and the session's tally — its total value with the page's reduced price beside
- * it, when one is set.
+ * pack marked on it, and the session's tally.
+ *
+ * **Every figure is at the page's reduced price where one is set** (issue #1502): `figures` were
+ * simulated at it, `value` is the opened pack's reduced price, and the tally's totals are reduced
+ * the same way, its value's breakdown on hover. The full value is said only in that breakdown.
  *
  * `figures` is `null` until the prices have answered — every figure here is a sum of prices, and a
  * sum over em dashes would be a confident zero.
@@ -59,6 +65,8 @@ export function PackFigures({
   currency,
   tally,
   reducedTally = null,
+  tallyExpected = tally.ev,
+  reduction = null,
 }: {
   figures: Figures | null;
   /** What was opened is worth this. */
@@ -72,6 +80,10 @@ export function PackFigures({
   /** The session's total at the page's sell percentage and minimum; `null` when they reduce
    *  nothing. */
   reducedTally?: ReducedValue | null;
+  /** The session's expected total at those figures — `tally.ev` where they reduce nothing. */
+  tallyExpected?: number;
+  /** What the figures are reduced by, in a sentence (`reductionLine`); `null` for nothing. */
+  reduction?: string | null;
 }): JSX.Element {
   const paidId = useId();
   const [paidText, setPaidText] = useState("");
@@ -104,6 +116,7 @@ export function PackFigures({
           <Row term="Standard deviation">{money(figures.sd)}</Row>
           <Row term="Median">{money(figures.median)}</Row>
         </dl>
+        {reduction !== null && <p className="m-0 text-xs text-dim">{reduction}</p>}
         <p className="m-0 text-sm">
           Your {noun} is in the <span className="font-semibold">{ordinal(percentile)}</span>{" "}
           percentile.
@@ -166,21 +179,19 @@ export function PackFigures({
         <dl className="m-0 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1.5 text-sm">
           <Row term="Opened">{tally.opened.toLocaleString("en-US")}</Row>
           <Row term="Total value">
-            {formatPrice(tally.value, tally.currency)}
-            {reducedTally !== null && (
-              <>
-                {" "}
-                <ReducedPrice
-                  value={reducedTally}
-                  currency={tally.currency}
-                  unpriced={tally.unpriced}
-                  setIn={PACKS_SET_IN}
-                  className="text-dim"
-                />
-              </>
+            {reducedTally !== null ? (
+              <ReducedPrice
+                value={reducedTally}
+                currency={tally.currency}
+                unpriced={tally.unpriced}
+                setIn={PACKS_SET_IN}
+                bracketed={false}
+              />
+            ) : (
+              formatPrice(tally.value, tally.currency)
             )}
           </Row>
-          <Row term="Total expected">{formatPrice(tally.ev, tally.currency)}</Row>
+          <Row term="Total expected">{formatPrice(tallyExpected, tally.currency)}</Row>
         </dl>
       </section>
     </aside>

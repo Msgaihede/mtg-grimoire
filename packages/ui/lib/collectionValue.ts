@@ -156,6 +156,24 @@ export function reducedValue(
   };
 }
 
+/**
+ * {@link reducedValue}'s sum for one copy: what a card at `price` counts toward a reduced price —
+ * the bulk price (or nothing) under the minimum, else the price at the sell percentage. `null`
+ * stays `null`: an unpriced copy is under nothing and counts nothing.
+ *
+ * **The same sum, not a second one.** `(full − below) × percent + cards below × bulk` is a sum over
+ * copies of exactly this, so adding it up over a pack's cards reaches `reducedValue`'s figure (to
+ * the cent its lines are rounded to — the suite holds the two together). It exists for what cannot
+ * be stated as one total: Open Packs' expected value and its ten thousand simulated packs, which
+ * are drawn card by card (issue #1502).
+ */
+export function reducedCopy(price: number | null, settings: ReducedSettings): number | null {
+  if (price === null || !reducesValue(settings)) return price;
+  const minimum = minimumOf(settings);
+  if (minimum !== undefined && price < minimum) return bulkOf(settings) ?? 0;
+  return settings.sellPercent < 100 ? (price * settings.sellPercent) / 100 : price;
+}
+
 /** Two {@link BelowMinimum}s added — a folder's and what is under it. `undefined` is a read that was
  *  asked no minimum, and it stays that way only while both are. */
 export function addBelow(

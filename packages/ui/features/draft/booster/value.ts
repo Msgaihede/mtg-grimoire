@@ -167,6 +167,70 @@ export function variance(product: BoosterProduct, priceOf: PriceOf, colorsOf?: C
   return vs.reduce((s, v) => s + v.p * (v.variance + (v.mean - ev) ** 2), 0);
 }
 
+/**
+ * Expected copies by price: price → how many cards at that price one booster holds on average,
+ * `times` boosters added into `into`. Unpriced cards are left out — they count nothing in any sum.
+ *
+ * {@link expectedValue}'s mean, card by card: the same variants, slots, fixed sheets and colour
+ * balance, so `Σ price × copies` is the expected value. It is what a running total can keep after
+ * the set's sheets are gone (Open Packs' session tally, issue #1502): any per-copy reduction of
+ * the prices, applied to the keys, is the expected value at that reduction — `f` is applied per
+ * card, and the expected value is linear in it.
+ */
+export function expectedPrices(
+  product: BoosterProduct,
+  priceOf: PriceOf,
+  colorsOf?: ColorsOf,
+  into: Map<number, number> = new Map(),
+  times = 1,
+): Map<number, number> {
+  const total = product.variants.reduce((s, v) => s + Math.max(0, v.weight), 0);
+  if (total <= 0) return into;
+  const prepared = colorsOf === undefined ? null : prepareProduct(product, colorsOf);
+  const sheets = new Map(product.sheets.map((s) => [s.name, s]));
+  const add = (cardId: string, foil: boolean, copies: number) => {
+    if (copies <= 0) return;
+    const p = priceOf(cardId, foil);
+    if (p !== null) into.set(p, (into.get(p) ?? 0) + copies);
+  };
+  for (const v of product.variants) {
+    const pv = (Math.max(0, v.weight) / total) * times;
+    if (pv === 0) continue;
+    for (const slot of v.slots) {
+      const sheet = sheets.get(slot.sheet);
+      if (sheet === undefined) continue;
+      if (sheet.fixed) {
+        for (const c of sheet.cards) add(c.cardId, sheet.foil, pv * c.weight);
+        continue;
+      }
+      let rest = slot.count;
+      const balanced = prepared?.sheets.get(slot.sheet);
+      if (balanced?.byColor && slot.count >= BALANCE_MIN) {
+        for (const among of balanced.byColor) {
+          if (rest === 0) break;
+          if (among.length === 0) continue;
+          let weight = 0;
+          for (const i of among) weight += Math.max(0, balanced.sheet.cards[i].weight);
+          if (weight > 0) {
+            for (const i of among) {
+              const c = balanced.sheet.cards[i];
+              if (c.weight > 0) add(c.cardId, sheet.foil, (pv * c.weight) / weight);
+            }
+          }
+          rest--;
+        }
+      }
+      let weight = 0;
+      for (const c of sheet.cards) weight += Math.max(0, c.weight);
+      if (weight <= 0 || rest <= 0) continue;
+      for (const c of sheet.cards) {
+        if (c.weight > 0) add(c.cardId, sheet.foil, (pv * rest * c.weight) / weight);
+      }
+    }
+  }
+  return into;
+}
+
 /** What these cards are worth together — unpriced cards count 0. */
 export function packValue(cards: readonly OpenedCard[], priceOf: PriceOf): number {
   let sum = 0;

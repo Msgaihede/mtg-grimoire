@@ -4,6 +4,7 @@ import { colorsOf, PRODUCT, priceOf, SET } from "./fixture";
 import { mulberry32 } from "./rng";
 import {
   chanceToBeat,
+  expectedPrices,
   expectedValue,
   finishPrice,
   histogram,
@@ -141,6 +142,49 @@ describe("a colour-balanced slot", () => {
     const values = simulate(product, price, 20000, mulberry32(11), colours);
     const mean = values.reduce((s, v) => s + v, 0) / values.length;
     expect(Math.abs(mean - ev) / ev).toBeLessThan(0.03);
+  });
+
+  it("is counted card by card the same way by expectedPrices", () => {
+    const copies = expectedPrices(product, price, colours);
+    // Seven cards a pack, and the red card in every one — plus its share of the two drawn from
+    // the whole sheet after the colours, which the theory draws with replacement.
+    expect([...copies.values()].reduce((s, n) => s + n, 0)).toBeCloseTo(7, 10);
+    expect(copies.get(10)).toBeCloseTo(1 + 2 / ids.length, 10);
+    expect(byCopies(copies)).toBeCloseTo(expectedValue(product, price, colours), 10);
+  });
+});
+
+/** `Σ price × copies`. */
+function byCopies(copies: Map<number, number>, f: (p: number) => number = (p) => p): number {
+  let sum = 0;
+  for (const [p, n] of copies) sum += f(p) * n;
+  return sum;
+}
+
+describe("expectedPrices", () => {
+  it("adds up to the expected value, and to any per-card price of it", () => {
+    for (const colours of [undefined, colorsOf]) {
+      const copies = expectedPrices(PRODUCT, priceOf, colours);
+      expect(byCopies(copies)).toBeCloseTo(expectedValue(PRODUCT, priceOf, colours), 10);
+      // Cards under $1 at nothing, the rest at half: the expected value at those prices.
+      const reduce = (p: number) => (p < 1 ? 0 : p / 2);
+      const reducedPrice = (id: string, foil: boolean) => {
+        const p = priceOf(id, foil);
+        return p === null ? null : reduce(p);
+      };
+      expect(byCopies(copies, reduce)).toBeCloseTo(
+        expectedValue(PRODUCT, reducedPrice, colours),
+        10,
+      );
+    }
+  });
+
+  it("leaves unpriced cards out, and adds `times` boosters into what it is given", () => {
+    expect(expectedPrices(PRODUCT, () => null).size).toBe(0);
+    const twice = expectedPrices(PRODUCT, priceOf, undefined, expectedPrices(PRODUCT, priceOf));
+    const doubled = expectedPrices(PRODUCT, priceOf, undefined, new Map(), 2);
+    expect(byCopies(twice)).toBeCloseTo(2 * EV, 10);
+    expect(byCopies(doubled)).toBeCloseTo(2 * EV, 10);
   });
 });
 
