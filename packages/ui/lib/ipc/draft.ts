@@ -71,6 +71,8 @@ export interface DraftCard {
   colors: string[];
   cmc: number;
   typeLine: string;
+  /** The printed cost, `{1}{W/B}{W/B}` — the front face's for a card of two, `""` for a land. */
+  manaCost: string;
 }
 
 /** One seat as everyone at the table may see it. */

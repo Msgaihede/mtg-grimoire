@@ -185,6 +185,8 @@ function draftCard(db: FakeDb, cardId: string, seat: number, round: number, n: n
     colors: (c?.colors ?? "").split("").filter((l) => l.trim() !== ""),
     cmc: Math.round(c?.cmc ?? 0),
     typeLine: c?.typeLine ?? "",
+    // The row's cost as printed — a split card's both halves, as the host's `printed_costs` sends.
+    manaCost: c?.manaCost ?? "",
   };
 }
 

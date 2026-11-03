@@ -8,11 +8,12 @@
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-use crate::cards::CardFacts;
+use crate::cards::{CardFacts, FaceFacts};
 use crate::{on_engine_stack, Difficulty};
 
 use super::{
-    Draft, DraftCardFacts, DraftMode, DraftSeatSetup, DraftSetup, DraftStatus, DraftView, PodFormat,
+    printed_costs, Draft, DraftCard, DraftCardFacts, DraftMode, DraftSeatSetup, DraftSetup,
+    DraftStatus, DraftView, PodFormat,
 };
 
 fn engine<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
@@ -568,6 +569,69 @@ fn the_wire_is_camel_case() {
         .unwrap();
         assert_eq!(setup.mode, DraftMode::Pod);
     });
+}
+
+/// Issue #1498: every card in a view carries its printed cost — the pick screen's side tray draws
+/// it before the name — and a resumed draft still knows it.
+#[test]
+fn a_card_carries_its_printed_cost() {
+    engine(|| {
+        let facts = cards();
+        let cost_of = |id: &str| {
+            let fact = facts
+                .iter()
+                .find(|f| f.card.card_id == id)
+                .expect("dealt from the facts");
+            fact.card.mana_cost.clone().unwrap_or_default()
+        };
+        let mut draft = start(quick(Difficulty::VeryEasy));
+        draft.pick(0, first(&draft.view(0))).unwrap();
+        let view = draft.view(0);
+        assert!(!view.pack.is_empty() && !view.pool.is_empty());
+        for card in view.pack.iter().chain(&view.pool) {
+            assert_eq!(card.mana_cost, cost_of(&card.card_id), "{}", card.name);
+        }
+        assert!(view.pack.iter().any(|card| !card.mana_cost.is_empty()));
+
+        let snapshot = draft.snapshot();
+        let restored: Vec<CardFacts> = cards().into_iter().map(|c| c.card).collect();
+        let resumed = Draft::restore(&snapshot, restored).expect("the draft resumes");
+        assert_eq!(resumed.view(0), view);
+
+        // A host on an older app sends no cost: the card reads as costing nothing printed.
+        let mut json = serde_json::to_value(&view.pack[0]).unwrap();
+        json.as_object_mut().unwrap().remove("manaCost");
+        let card: DraftCard = serde_json::from_value(json).unwrap();
+        assert_eq!(card.mana_cost, "");
+    });
+}
+
+/// A transforming card's row leaves the card's own cost empty: its front face's is the one printed.
+#[test]
+fn a_card_of_two_faces_costs_what_its_front_does() {
+    let face = |name: &str, cost: Option<&str>| FaceFacts {
+        name: name.into(),
+        mana_cost: cost.map(Into::into),
+        ..FaceFacts::default()
+    };
+    let dfc = CardFacts {
+        card_id: "dfc".into(),
+        faces: vec![face("Delver", Some("{U}")), face("Aberration", None)],
+        ..CardFacts::default()
+    };
+    let split = CardFacts {
+        card_id: "split".into(),
+        mana_cost: Some("{1}{R} // {1}{U}".into()),
+        ..CardFacts::default()
+    };
+    let land = CardFacts {
+        card_id: "land".into(),
+        ..CardFacts::default()
+    };
+    let costs = printed_costs(&[dfc, split, land]);
+    assert_eq!(costs["dfc"], "{U}");
+    assert_eq!(costs["split"], "{1}{R} // {1}{U}");
+    assert_eq!(costs["land"], "");
 }
 
 /// The host keeps a draft across calls and hands it to the engine's thread.

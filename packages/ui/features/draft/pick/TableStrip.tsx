@@ -5,7 +5,7 @@ import { setGlyphClass } from "@/lib/keyrune";
 import { cn } from "@/lib/utils";
 
 /**
- * The round strip: one stop per booster, `P1 FRA ··· P2 HOB ··· P3 HOB`, the round on screen in
+ * The round strip: one stop per booster, `Pack 1 FRA ··· Pack 2 HOB ··· Pack 3 HOB`, the round on screen in
  * accent and the rounds behind it ticked off; then the pick within the round against the
  * booster's size, and which way the pack goes.
  */
@@ -33,7 +33,7 @@ export function RoundStrip({ view }: { view: DraftView }): JSX.Element {
                     : "border-border text-dim",
               )}
             >
-              <span>P{i + 1}</span>
+              <span>Pack {i + 1}</span>
               {code !== "" && (
                 <>
                   <i className={cn(setGlyphClass(code), "text-sm")} aria-hidden="true" />

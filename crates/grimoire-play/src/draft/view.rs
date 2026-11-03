@@ -110,6 +110,11 @@ pub struct DraftCard {
     pub colors: Vec<String>,
     pub cmc: u8,
     pub type_line: String,
+    /// The printed cost as Scryfall writes it, `{1}{W/B}{W/B}` — the front face's for a card of
+    /// two faces, `""` for a land (issue #1498: the side tray draws it before the name). A host
+    /// on an older app sends none, so it reads as `""`.
+    #[serde(default)]
+    pub mana_cost: String,
 }
 
 /// One seat as everyone at the table may see it: never its pack or its pool, only a count.

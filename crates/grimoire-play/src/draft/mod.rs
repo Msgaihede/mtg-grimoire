@@ -125,6 +125,9 @@ pub struct Draft {
     /// The draft's own cards, parsed — only for bots that evaluate (`bots::reads_faces`), and
     /// `None` when parsing failed: the bots then fall back to colour, rarity and curve.
     db: Option<CardDatabase>,
+    /// Each printing's cost, by its id (`printed_cost`) — phase's card instance carries none, and
+    /// the view sends it on every card.
+    costs: HashMap<String, String>,
 }
 
 impl Draft {
@@ -262,7 +265,13 @@ impl Draft {
         setup.packs = Vec::new();
         let cards: Vec<CardFacts> = facts.into_values().map(|f| f.card).collect();
         let db = card_database(setup.difficulty, &cards);
-        let mut draft = Draft { setup, session, db };
+        let costs = printed_costs(&cards);
+        let mut draft = Draft {
+            setup,
+            session,
+            db,
+            costs,
+        };
         draft.bots_act()?;
         Ok(draft)
     }
@@ -604,7 +613,13 @@ impl Draft {
             return Err("That saved draft is damaged and cannot be resumed.".into());
         }
         let db = card_database(setup.difficulty, &facts);
-        let mut draft = Draft { setup, session, db };
+        let costs = printed_costs(&facts);
+        let mut draft = Draft {
+            setup,
+            session,
+            db,
+            costs,
+        };
         draft.bots_act()?;
         Ok(draft)
     }
@@ -787,9 +802,11 @@ impl Draft {
     }
 
     fn card(&self, card: &DraftCardInstance) -> DraftCard {
+        let id = card_id(&card.instance_id);
         DraftCard {
             instance_id: card.instance_id.clone(),
-            card_id: card_id(&card.instance_id).to_string(),
+            mana_cost: self.costs.get(id).cloned().unwrap_or_default(),
+            card_id: id.to_string(),
             name: card.name.clone(),
             set_code: card.set_code.clone(),
             collector_number: card.collector_number.clone(),
@@ -949,6 +966,23 @@ fn source(setup: &DraftSetup, kind: DraftKind) -> DraftSource {
 
 /// The bots' card database, for the presets that read faces; `None` otherwise or when the cards
 /// cannot be parsed (the bots then pick without it).
+/// Each printing's cost as it is printed, by its id: the card's own, else its front face's (a
+/// transforming card's row leaves the card's empty), else `""` (a land).
+fn printed_costs(facts: &[CardFacts]) -> HashMap<String, String> {
+    facts
+        .iter()
+        .map(|card| {
+            let cost = card
+                .mana_cost
+                .clone()
+                .filter(|cost| !cost.is_empty())
+                .or_else(|| card.faces.first().and_then(|face| face.mana_cost.clone()))
+                .unwrap_or_default();
+            (card.card_id.clone(), cost)
+        })
+        .collect()
+}
+
 fn card_database(difficulty: crate::Difficulty, facts: &[CardFacts]) -> Option<CardDatabase> {
     if !bots::reads_faces(difficulty) {
         return None;

@@ -32,6 +32,62 @@ export function poolColumns(pool: readonly DraftCard[]): Record<PoolColumn, Draf
   return out;
 }
 
+/**
+ * The sideboard's columns beside the deck (issue #1499): the curve folded into four, so the
+ * sideboard's columns can be as wide as the deck's beside it — `0–2`, `3–4`, `5+`, then the lands.
+ */
+export const SIDEBOARD_COLUMNS = ["0-2", "3-4", "5+", "lands"] as const;
+export type SideboardColumn = (typeof SIDEBOARD_COLUMNS)[number];
+
+function sideboardColumnOf(card: DraftCard): SideboardColumn {
+  if (isLand(card)) return "lands";
+  return card.cmc <= 2 ? "0-2" : card.cmc <= 4 ? "3-4" : "5+";
+}
+
+/** One column of a shelf, headed in symbols: its cards, in pick order. */
+export interface ShelfColumn {
+  key: string;
+  /**
+   * The heading as mana symbols for `ManaText` — `{1}`, `{6}+`, `{0}–{2}` — or `null` for the
+   * lands, whose heading is the land symbol.
+   */
+  symbols: string | null;
+  /** What the heading says to a screen reader: `Mana value 1`, `Mana value 0 to 2`, `Lands`. */
+  spoken: string;
+  cards: DraftCard[];
+}
+
+/** `6+` as `{6}+`, `0-2` as `{0}–{2}`: each number its generic mana symbol. */
+function symbolsOf(column: string): string {
+  return column.replace("-", "–").replace(/\d+/g, (n) => `{${n}}`);
+}
+
+function spokenOf(column: string): string {
+  if (column === "lands") return "Lands";
+  if (column.endsWith("+")) return `Mana value ${column.slice(0, -1)} or more`;
+  return `Mana value ${column.replace("-", " to ")}`;
+}
+
+/**
+ * A shelf's columns: `curve`, the deck's eight (mana value 0 … 6+, then the lands), or `grouped`,
+ * the sideboard's four. Empty columns are kept, so the curve is drawn as a curve.
+ */
+export function shelfColumns(
+  pool: readonly DraftCard[],
+  shape: "curve" | "grouped",
+): ShelfColumn[] {
+  const keys: readonly string[] = shape === "curve" ? POOL_COLUMNS : SIDEBOARD_COLUMNS;
+  const of = shape === "curve" ? columnOf : sideboardColumnOf;
+  const byKey = new Map(keys.map((key) => [key, [] as DraftCard[]]));
+  for (const card of pool) byKey.get(of(card))?.push(card);
+  return keys.map((key) => ({
+    key,
+    symbols: key === "lands" ? null : symbolsOf(key),
+    spoken: spokenOf(key),
+    cards: byKey.get(key) ?? [],
+  }));
+}
+
 /** One line of the side tray: a card name and how many copies of it the pool holds. */
 export interface PoolRow {
   name: string;
@@ -39,6 +95,8 @@ export interface PoolRow {
   cardId: string;
   count: number;
   colors: readonly string[];
+  /** The printed cost, drawn before the name (issue #1498) — `""` for a land. */
+  manaCost: string;
 }
 
 /**
@@ -47,9 +105,14 @@ export interface PoolRow {
  * decklist — sorted by name within a column, since a list is read by name and the curve already
  * keeps pick order. Columns holding nothing are left out: a list has no curve to draw.
  */
-export function poolRows(
-  pool: readonly DraftCard[],
-): { column: PoolColumn; count: number; rows: PoolRow[] }[] {
+export function poolRows(pool: readonly DraftCard[]): {
+  column: PoolColumn;
+  /** The column's heading as mana symbols, or `null` for the lands — `ShelfColumn`'s. */
+  symbols: string | null;
+  spoken: string;
+  count: number;
+  rows: PoolRow[];
+}[] {
   const columns = poolColumns(pool);
   return POOL_COLUMNS.flatMap((column) => {
     const cards = columns[column];
@@ -63,11 +126,20 @@ export function poolRows(
           cardId: card.cardId,
           count: 1,
           colors: card.colors,
+          manaCost: card.manaCost,
         });
       } else row.count += 1;
     }
     const rows = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-    return [{ column, count: cards.length, rows }];
+    return [
+      {
+        column,
+        symbols: column === "lands" ? null : symbolsOf(column),
+        spoken: spokenOf(column),
+        count: cards.length,
+        rows,
+      },
+    ];
   });
 }
 
