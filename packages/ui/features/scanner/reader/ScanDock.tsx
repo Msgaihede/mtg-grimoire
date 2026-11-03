@@ -72,6 +72,17 @@ export interface ScanDockProps {
    */
   cameraId: string | null;
   onCamera: (deviceId: string) => void;
+  /**
+   * How the dock is drawn. `dock` (the default) is the camera column's two rows under the picture.
+   * **`bar` is the pack opener's** (issue #1504): one row floating over the foot of a full-window
+   * picture, the triggers' captions given to their names alone (`Filters: Any set` is still what
+   * each is called) so the bar stays as short as it can be, and every trigger the primary's 44px.
+   */
+  variant?: "dock" | "bar";
+  /** The bar's other presses, drawn after a rule at its end — `bar` only. */
+  extra?: ReactNode;
+  /** On the root — where the page places it. */
+  className?: string;
 }
 
 /**
@@ -123,16 +134,37 @@ export function ScanDock({
   cameras,
   cameraId,
   onCamera,
+  variant = "dock",
+  extra,
+  className,
 }: ScanDockProps) {
+  const bar = variant === "bar";
   // `Default` for a live camera the list has not caught up with yet, and for no camera at all —
   // the trigger still has to read as something, and what opens with nothing chosen is the default.
   const cameraName = cameras.find((c) => c.deviceId === cameraId)?.label ?? "Default";
 
   return (
-    <div className="@container/dock shrink-0 rounded-lg border border-border bg-surface px-3.5 py-3">
+    <div
+      className={cn(
+        // **No `@container` on the bar.** It is as wide as what it holds (`w-fit`, the page's), and
+        // an inline-size container's own width is measured as if it held nothing — the bar would
+        // fold to zero. Its rows never fold by width; they wrap, centred, where the window is
+        // narrower than one row.
+        bar
+          ? "rounded-xl border border-border bg-surface/90 p-2 shadow-lg"
+          : "@container/dock shrink-0 rounded-lg border border-border bg-surface px-3.5 py-3",
+        className,
+      )}
+    >
       {/* One wrapping box with a full-width break between its two rows, so *Filters* can move from
-          the first to the second by `order` alone — the break is the row gap. */}
-      <div className="flex flex-wrap items-center gap-x-2.5 @max-[31rem]/dock:gap-x-2">
+          the first to the second by `order` alone — the break is the row gap. The bar has no
+          break: it is one row. */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center",
+          bar ? "justify-center gap-2" : "gap-x-2.5 @max-[31rem]/dock:gap-x-2",
+        )}
+      >
         {pointAndShoot ? (
           <PrimaryPress
             label={shooting ? CANCEL_SCAN : SCAN_CARD}
@@ -172,13 +204,14 @@ export function ScanDock({
           // The row's far end, so the panel opens back across the dock rather than off it.
           align="end"
           tall
-          className="ml-auto @max-[34.125rem]/dock:order-last"
+          bare={bar}
+          className={bar ? undefined : "ml-auto @max-[34.125rem]/dock:order-last"}
           panelClassName="w-72"
         >
           <FiltersBody filters={filters} onFilters={onFilters} filterError={filterError} />
         </DockPopover>
 
-        <span aria-hidden="true" className="h-2.5 basis-full" />
+        {!bar && <span aria-hidden="true" className="h-2.5 basis-full" />}
 
         <DockPopover
           caption="Finish"
@@ -186,6 +219,8 @@ export function ScanDock({
           icon={<SwatchBook className="size-3.5 shrink-0" aria-hidden="true" />}
           active={false}
           refusal={null}
+          tall={bar}
+          bare={bar}
           panelLabel="Finish"
           // `p-1.5` over the shell's `p-3`: the rows carry their own inset for their hover wash, as
           // `FolderPicker`'s list does in the tray's footer.
@@ -209,6 +244,8 @@ export function ScanDock({
           icon={<Video className="size-3.5 shrink-0" aria-hidden="true" />}
           active={false}
           refusal={cameras.length === 0 ? "No camera found" : null}
+          tall={bar}
+          bare={bar}
           panelLabel="Camera"
           panelClassName="w-75 p-1.5"
         >
@@ -224,6 +261,13 @@ export function ScanDock({
             />
           )}
         </DockPopover>
+
+        {bar && extra !== undefined && (
+          <>
+            <span aria-hidden="true" className="mx-0.5 h-7 w-px bg-border" />
+            {extra}
+          </>
+        )}
       </div>
     </div>
   );
@@ -350,6 +394,7 @@ function DockPopover({
   panelClassName,
   align = "start",
   tall = false,
+  bare = false,
   className,
   children,
 }: {
@@ -367,6 +412,8 @@ function DockPopover({
   align?: "start" | "end";
   /** The first row's 44px, beside the primary, rather than the filter row's 36. */
   tall?: boolean;
+  /** The caption is not drawn — the pack opener's bar (`variant="bar"`). The name keeps it. */
+  bare?: boolean;
   /** On the root — where it sits in its row. */
   className?: string;
   /** Or a function of `close`, handed straight to `AnchoredPopup` — for a panel whose press is
@@ -392,7 +439,7 @@ function DockPopover({
       triggerContent={
         <>
           {icon}
-          <span className="shrink-0 text-dim @max-[31rem]/dock:hidden">{caption}</span>
+          {!bare && <span className="shrink-0 text-dim @max-[31rem]/dock:hidden">{caption}</span>}
           <span className="min-w-0 truncate">{value}</span>
           <ChevronDown className="size-3.5 shrink-0" aria-hidden="true" />
         </>

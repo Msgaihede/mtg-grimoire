@@ -66,6 +66,13 @@ dialog, `destination`) neither is drawn, as today.
   read at Add), then **Add N to collection** as a filled gold button. No refusal line under it
   (the tooltip stays).
 
+**Pack opener** (issue #1504, *amended 2026-11-03*): a header press that lays the camera column
+out as the whole window below the caption — the picture uncropped, the dock as one floating bar
+over its foot (with Reset evidence, Send scan… and the way out), the tray in a drawer pulled out
+from the right edge, a green/red recording light in the corner, and the bar fading while idle.
+The column and tray layout above is unchanged outside it; see `docs/reference/card-scanner.md`,
+*The pack opener*.
+
 ## Phone (light app, under 1024 px)
 
 **Upright**, top to bottom, the page fitting the screen without scrolling:

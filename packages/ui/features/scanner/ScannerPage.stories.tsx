@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ipc } from "@/lib/ipc";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "./fixtures";
+import { PACK_OPENER, PACK_STOPPED } from "./reader/PackOpener";
 import { SHOT_READY_CLICK } from "./reader/readerText";
 import { ScannerPage } from "./ScannerPage";
 import type { ScannerPrefs, ScannerTrayRow } from "./types";
@@ -160,6 +161,30 @@ export const WithTray: Story = {
  * The scanner uses the same settings dialog as the gallery, before any deck write — from the
  * tray's ⋯ *Tray actions* menu.
  */
+/**
+ * **The pack opener** (issue #1504): the header's press lays the camera out as the whole window —
+ * the picture uncropped, the recording light in its corner, every control in one bar floating over
+ * its foot — and the tray waits in a drawer at the right edge, its pull tab counting the copies.
+ * The play opens the stage and pulls the drawer out. The camera is refused here as in every story
+ * in this file, so the picture is the refusal's sentence; the live pass is what shows a frame.
+ */
+export const PackOpener: Story = {
+  render: () => <Written tray={TRAY_ROWS} />,
+  parameters: { docs: { story: { inline: false, height: "640px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("Urza's Saga");
+    await userEvent.click(canvas.getByRole("button", { name: PACK_OPENER }));
+    const stage = await canvas.findByRole("region", { name: PACK_OPENER });
+    await expect(within(stage).getByRole("button", { name: "Start" })).toBeInTheDocument();
+    await expect(within(stage).getByText(PACK_STOPPED)).toBeInTheDocument();
+    const tab = canvas.getByRole("button", { name: "Scanned cards" });
+    await expect(tab).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(tab);
+    await expect(tab).toHaveAttribute("aria-expanded", "true");
+    await expect(canvas.getByRole("region", { name: "Scanned cards" })).toBeInTheDocument();
+  },
+};
 export const CreateDeckFromTray: Story = {
   render: () => <Written tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} />,
   parameters: { docs: { story: { inline: false, height: "800px" } } },
