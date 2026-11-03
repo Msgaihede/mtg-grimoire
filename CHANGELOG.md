@@ -30,6 +30,39 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.67.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.66.0...v0.67.0) (2026-11-03)
+
+
+### Features
+
+* **collection:** a bulk price for cards under the collection's minimum ([90909e4](https://github.com/Msgaihede/mtg-grimoire/commit/90909e40256a366eded11cdcef3db5151af7ec2d))
+* **collection:** a bulk price for cards under the collection's minimum ([a733e6b](https://github.com/Msgaihede/mtg-grimoire/commit/a733e6b09385a4d92fc211e67654a767685b9b90))
+* **draft:** set symbols fill the set wall's tiles ([ce1add9](https://github.com/Msgaihede/mtg-grimoire/commit/ce1add9d69a9e3ef7d2a86065db6769e5af68814))
+* **draft:** set symbols fill the set wall's tiles ([0743ed1](https://github.com/Msgaihede/mtg-grimoire/commit/0743ed151166317aa3a7df3fec59d41498d3483d)), closes [#1497](https://github.com/Msgaihede/mtg-grimoire/issues/1497)
+* **draft:** side-by-side pool, costs in the tray, and deck stats ([#1516](https://github.com/Msgaihede/mtg-grimoire/issues/1516)) ([938f71c](https://github.com/Msgaihede/mtg-grimoire/commit/938f71c7f832839815d26830b22093db8a624d07)), closes [#1499](https://github.com/Msgaihede/mtg-grimoire/issues/1499) [#1498](https://github.com/Msgaihede/mtg-grimoire/issues/1498)
+* **nav:** re-pressing the open view's rail entry returns to its root ([600bff7](https://github.com/Msgaihede/mtg-grimoire/commit/600bff7d2b3eed4f6766e0a53976b7f485b64de5))
+* **nav:** re-pressing the open view's rail entry returns to its root ([55a3336](https://github.com/Msgaihede/mtg-grimoire/commit/55a33367c3b4bfd3676cde654307ae2d42f1cd0c)), closes [#1507](https://github.com/Msgaihede/mtg-grimoire/issues/1507)
+* **packs:** a bulk price for cards under the minimum in Open Packs ([e255647](https://github.com/Msgaihede/mtg-grimoire/commit/e255647f8b86fb11a4a859170416d8508dc84cb6))
+* **packs:** a bulk price for cards under the minimum in Open Packs ([168e42a](https://github.com/Msgaihede/mtg-grimoire/commit/168e42abd983bc97814a9a3404a66dd0516b4882)), closes [#1477](https://github.com/Msgaihede/mtg-grimoire/issues/1477)
+* **packs:** picking a product opens one at once ([6ba7f87](https://github.com/Msgaihede/mtg-grimoire/commit/6ba7f87d11a3d5c884bd9867fc14d2778cf772f8))
+* **packs:** picking a product opens one at once ([44e0807](https://github.com/Msgaihede/mtg-grimoire/commit/44e0807f17c3c23072495700464f6a9e46d32061)), closes [#1496](https://github.com/Msgaihede/mtg-grimoire/issues/1496)
+* **packs:** reset the session's tally in Open Packs ([256478b](https://github.com/Msgaihede/mtg-grimoire/commit/256478b41bc69e81dd46620e6e96f8a078c3a62a))
+* **packs:** reset the session's tally in Open Packs ([dbbe46f](https://github.com/Msgaihede/mtg-grimoire/commit/dbbe46f5688c6007b67af6683395f0b7d0158fb6)), closes [#1503](https://github.com/Msgaihede/mtg-grimoire/issues/1503)
+* **packs:** the reduced price is every figure on Open Packs ([8ee5097](https://github.com/Msgaihede/mtg-grimoire/commit/8ee5097e98d640ffc660379e379d8cf9a559a103))
+* **packs:** the reduced price is every figure on Open Packs ([963cc5a](https://github.com/Msgaihede/mtg-grimoire/commit/963cc5ad34dfe55cbb68164373bac81c55787cb0)), closes [#1502](https://github.com/Msgaihede/mtg-grimoire/issues/1502)
+* **scanner:** Pack opener mode — full-window camera, floating bar, tray drawer ([71c2394](https://github.com/Msgaihede/mtg-grimoire/commit/71c2394e5825c97535a31ae67ea749743bd9d93a))
+* **scanner:** Pack opener mode — full-window camera, floating bar, tray drawer ([56416f2](https://github.com/Msgaihede/mtg-grimoire/commit/56416f21b09074f05d802ddfc76b1a077229b58e)), closes [#1504](https://github.com/Msgaihede/mtg-grimoire/issues/1504)
+
+
+### Bug Fixes
+
+* **collection:** drag every picked card onto a folder, not just the grabbed one ([55ddaf5](https://github.com/Msgaihede/mtg-grimoire/commit/55ddaf52998ed80bcfd9af953cb744b7c2887435))
+* **collection:** drag every picked card onto a folder, not just the grabbed one ([fe806c7](https://github.com/Msgaihede/mtg-grimoire/commit/fe806c7cd76377c28fe60b25f1ae40c817411687)), closes [#1501](https://github.com/Msgaihede/mtg-grimoire/issues/1501)
+* **decks:** every removal from a deck files its copies into Recently removed ([05c522f](https://github.com/Msgaihede/mtg-grimoire/commit/05c522f047892a81d670988401849b337f4d8ebe))
+* **decks:** every removal from a deck files its copies into Recently removed ([a67c1a5](https://github.com/Msgaihede/mtg-grimoire/commit/a67c1a52d65b43118e8798c34c265a2fd8163492)), closes [#1494](https://github.com/Msgaihede/mtg-grimoire/issues/1494)
+* **scanner:** a quantity of zero removes the tray row ([2d10cd8](https://github.com/Msgaihede/mtg-grimoire/commit/2d10cd8e926a3aa099d7ee8179909eaafcdd09fe))
+* **scanner:** a quantity of zero removes the tray row ([df895dd](https://github.com/Msgaihede/mtg-grimoire/commit/df895ddbb0247c39688c484f6ad53fc24c3ad801)), closes [#1500](https://github.com/Msgaihede/mtg-grimoire/issues/1500)
+
 ## [0.66.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.65.0...v0.66.0) (2026-11-02)
 
 
