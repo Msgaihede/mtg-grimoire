@@ -36,7 +36,8 @@ import { usePackReducedStore } from "./reducedPick";
  * packs of one set and goes on to another wants the running total to carry on, and a restart to
  * start it again. Prices are a currency's; a switch of marketplace starts it over rather than
  * adding dollars to euros. It keeps each priced card's price, not a reduced sum, so the reduced
- * price beside it is always the page's figures as they stand.
+ * price beside it is always the page's figures as they stand. _Reset_ (issue #1503) starts it over
+ * at once, the pack on the wall left where it is.
  */
 const tallyMemory = viewMemory<Tally>("draft.packs.tally");
 
@@ -76,6 +77,11 @@ export function conversionNote(picked: readonly Marketplace[], plan: PricingPlan
     return `${names} left out: the exchange rate could not be fetched, and prices in two currencies can't be compared without it.`;
   }
   return null;
+}
+
+/** A session with nothing opened yet, in `currency`. */
+function emptyTally(currency: Currency): Tally {
+  return { opened: 0, value: 0, ev: 0, currency, prices: [], unpriced: 0 };
 }
 
 /** "pack" for a booster, "box" for a sealed product — the words the figures speak in. */
@@ -119,9 +125,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
     [ready, set, shown, priceOf],
   );
   const shownTally: Tally =
-    tally !== undefined && tally.currency === currency
-      ? tally
-      : { opened: 0, value: 0, ev: 0, currency, prices: [], unpriced: 0 };
+    tally !== undefined && tally.currency === currency ? tally : emptyTally(currency);
 
   const open = () => {
     if (choice === undefined) return;
@@ -139,6 +143,12 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
     };
     tallyMemory.keep(kept);
     setTally(kept);
+  };
+
+  const resetTally = () => {
+    const empty = emptyTally(currency);
+    tallyMemory.keep(empty);
+    setTally(empty);
   };
 
   if (options.length === 0) {
@@ -279,6 +289,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
               currency={currency}
               tally={shownTally}
               reducedTally={reducedTally}
+              onResetTally={resetTally}
             />
           ) : (
             figures !== null && (
