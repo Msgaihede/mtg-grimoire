@@ -207,8 +207,35 @@ In that layout the pack and the tray scroll apart, so the tray — the drop targ
 reach under a zoomed-in pack. The choice is kept per device in `localStorage`
 (`grimoire.draft.trayLayout`), the Packs page's arrangement: it is a way of looking at this screen.
 A Winston table and the Build step keep the curve: neither has a pack heading to carry the toggle.
-`DraftCard` carries no mana cost, so a row shows none; adding one would be an IPC change for a
-glyph the column heading already says in words.
+
+**The pick screen as drawn on the 2026-11-03 canvas** (issues #1498 and #1499, and the owner's
+iterations on them):
+
+- **Under the pack, Deck and Sideboard sit side by side** on one panel (`PoolZones`), so either is a
+  drop away without a scroll. The sideboard's curve is folded into four columns — `0–2`, `3–4`,
+  `5+`, lands (`pool.ts`' `shelfColumns`, `grouped`) — of the deck's column width: each zone is as
+  wide as its columns want and the two shrink in step, so a deck column and a sideboard column stay
+  one size. The panel is the side tray's, setting the pool apart from the pack it is picked from.
+- **Every pool column is headed in symbols** (`pick/ColumnSymbols.tsx`): a mana value as its generic
+  mana symbol (`{3}`, `{6}+`, `{0}–{2}`), the lands as the land symbol, named in words for a screen
+  reader. Words and symbols mixed read as two systems.
+- **A tray row reads `2× {R} Lightning Bolt`**: the printed cost leads the name and flows with it,
+  no column of its own. `DraftCard.manaCost` carries it — the front face's for a card of two faces,
+  a split card's both halves (`draft/mod.rs`' `printed_costs`; phase's card instance has none, so
+  the draft keeps a map built from the same facts it starts and restores from). A host on an older
+  app sends none, so it is `#[serde(default)]`. The tray is **one scroller** (the panel, which is
+  also the rows' preview frame), never a scroll per tray, and 20rem wide.
+- **Beside the tray, Pick and To sideboard hold the foot of the pack's scroller** (`PackWall`'s
+  `pinned`), so a pick is never a scroll away.
+- **The rounds and the table share a row** while both fit, rounds left and table right; the table
+  drops below as a unit before it wraps. A round's chip says `Pack 2`, not `P2`.
+- **The deck's stats** (`pick/PickStats.tsx`) are drawn at the right-hand edge on a page at least
+  `STATS_MIN_WIDTH` wide (a 1920 window and up): the mana curve with its creature split (the `0`
+  column only when the deck holds a 0-cost spell), the cards by type, and the nonland cards by color
+  as the land pie draws lands — each built from the deck editor's own pieces. **Only the deck's
+  picks are counted, never the sideboard's.** The width is measured (`useElementWidth`), never a
+  container query: the screen's card previews and Sort menu are `fixed`. A toggle beside the Pool
+  switch hides them, kept per device (`grimoire.draft.stats`).
 
 **A card rested on is drawn large** (issue #1472, `pick/CardPreview.tsx`): the pack, a face-up
 Winston pile and the pool's curve open the card's `display` image beside the pointer once it has rested

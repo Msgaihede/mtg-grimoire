@@ -45,13 +45,13 @@ export const CREATURE_SPLIT_LABEL = "Creatures vs noncreatures in mana curve";
 /** The two parts' colours. Custom properties, never `bg-…` classes, for `BarChart`'s `fill`
  *  reason — and the same tokens Card distribution's `Creatures vs noncreatures` band paints
  *  with, so the two halves of one fact are one colour on both cards. */
-const CREATURE_FILL = "var(--color-creature)";
+export const CREATURE_FILL = "var(--color-creature)";
 const CREATURE_FG = "var(--color-creature-fg)";
-const NONCREATURE_FILL = "var(--color-noncreature)";
+export const NONCREATURE_FILL = "var(--color-noncreature)";
 const NONCREATURE_FG = "var(--color-text)";
 
 /** A bar's two parts, foot first — `ChartBar.parts`' order. */
-function splitParts(total: number, creatures: number, key: string): ChartPart[] {
+export function splitParts(total: number, creatures: number, key: string): ChartPart[] {
   return [
     { key: `${key}-c`, count: creatures, noun: "creature", fill: CREATURE_FILL, fg: CREATURE_FG },
     {
@@ -140,9 +140,7 @@ export function ManaCurveChart({
             aria-label={CREATURE_SPLIT_LABEL}
             onClick={() => onSplitChange(!split)}
             {...tip(
-              split
-                ? "Show one bar per mana value"
-                : "Split bars into creatures and noncreatures",
+              split ? "Show one bar per mana value" : "Split bars into creatures and noncreatures",
             )}
             className={cn(
               // Mana pips' `Hide` box, so the two toggles on the band are one control.
@@ -161,12 +159,12 @@ export function ManaCurveChart({
               siblings rather than one element's contents, so the figure and the word stay two
               runs to read instead of concatenating into `3.24average`. */}
           <p className="flex items-baseline gap-1.5">
-          <span className="font-mono text-lg tabular-nums text-accent">
-            {/* An em dash rather than a zero for a deck of nothing but lands: an average of no
+            <span className="font-mono text-lg tabular-nums text-accent">
+              {/* An em dash rather than a zero for a deck of nothing but lands: an average of no
                 numbers is not 0. `toFixed(2)` is `DeckLedger`'s spelling of the same figure, so
                 the head of the page and the band at the foot of it print one number one way. */}
-            {stats.averageManaValue === null ? "—" : stats.averageManaValue.toFixed(2)}
-          </span>
+              {stats.averageManaValue === null ? "—" : stats.averageManaValue.toFixed(2)}
+            </span>
             <span className="text-xs text-dim">average</span>
           </p>
         </div>
@@ -195,7 +193,7 @@ export function ManaCurveChart({
 }
 
 /** One swatch, its word and its count. */
-function LegendEntry({
+export function LegendEntry({
   fill,
   label,
   count,

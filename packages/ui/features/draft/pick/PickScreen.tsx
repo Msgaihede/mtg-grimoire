@@ -8,26 +8,29 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
-import { Hourglass, PanelBottom, PanelRight, WandSparkles } from "lucide-react";
+import { ChartColumn, Hourglass, PanelBottom, PanelRight, WandSparkles } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
+import { PREVIEW_FRAME_ATTR } from "@/features/card/PrintingPreview";
 import { scaled } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
 import { dndDraggable } from "@/lib/dndTarget";
 import type { DraftCard, DraftView } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
+import { useElementWidth } from "@/lib/useElementWidth";
 import { cn } from "@/lib/utils";
 import { viewMemory } from "@/lib/viewMemory";
 import { InlineError, LABEL, PANEL, PrimaryButton, QUIET_BUTTON } from "../setup/parts";
 import { CardPreview, useCardPreview } from "./CardPreview";
 import { carriedPick, pickDragData, type PickDrag } from "./pickDrag";
+import { PickStats } from "./PickStats";
 import { sortPack, type PackSort } from "./pool";
 import { PoolZones } from "./PoolZones";
-import type { Destination } from "./split";
+import { splitPool, type Destination } from "./split";
 import { RoundStrip, SeatsStrip } from "./TableStrip";
-import { useDraftTrayLayout, type DraftTrayLayout } from "./trayLayout";
+import { useDraftStatsShown, useDraftTrayLayout, type DraftTrayLayout } from "./trayLayout";
 import { WinstonTable } from "./WinstonTable";
 
 /**
@@ -38,6 +41,14 @@ import { WinstonTable } from "./WinstonTable";
  * does. The gesture is the only control — the pick screen's Card size slider went with issue #1470.
  */
 export const PACK_TILE_WIDTH = 190;
+
+/**
+ * The page width, px, from which the deck's stats are drawn beside the pick — a 1920 window's
+ * page (about 1670px once the rail and the page's padding are taken off), with some room to spare.
+ * Measured on the pick screen's own box (`useElementWidth`), never a container query: this screen's
+ * card previews and its Sort menu are `fixed`, and a container would become their containing block.
+ */
+export const STATS_MIN_WIDTH = 1600;
 
 const SORTS: { value: PackSort; label: string }[] = [
   { value: "rarity", label: "Rarity" },
@@ -85,6 +96,10 @@ export function picksNeeded(view: DraftView): number {
  * as both, in either layout (`PoolZones`); a card dropped on either is picked into it, a
  * double-click, the Pick button and Enter pick into the deck, and *To sideboard* and Shift+Enter
  * into the sideboard. A press on a picked card sends it to the other list.
+ *
+ * **On a page wide enough** (`STATS_MIN_WIDTH`) the deck's stats are drawn at the right-hand edge
+ * (`PickStats`) — beside the tray, or beside the pack and the pool under it — unless the reader
+ * hid them with the toggle beside the Pool switch (`useDraftStatsShown`).
  */
 export function PickScreen({
   view,
@@ -126,6 +141,12 @@ export function PickScreen({
   const need = picksNeeded(view);
   // Held across renders: the wall registers its drag sources again whenever its pack changes.
   const sorted = useMemo(() => sortPack(view.pack, sort), [view.pack, sort]);
+  // `0` is unmeasured (and jsdom's for ever), read as too narrow: the stats arrive with the first
+  // measurement rather than squeezing a narrow window for a frame.
+  const [measure, width] = useElementWidth<HTMLDivElement>();
+  const roomy = width >= STATS_MIN_WIDTH;
+  const statsShown = useDraftStatsShown((s) => s.shown);
+  const deck = useMemo(() => splitPool(view.pool, sideboard).deck, [view.pool, sideboard]);
 
   /** The pack's cards a drag carries, or fewer when one has left the pack since it was lifted. */
   const carried = (drag: PickDrag): DraftCard[] =>
@@ -155,15 +176,19 @@ export function PickScreen({
     );
   }
 
+  // The rounds at the left and the table at the right, one row while both fit. A flex line breaks
+  // on each group's whole width, so the table drops below the rounds as a unit before it wraps.
   const strips = (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
       <RoundStrip view={view} />
       <SeatsStrip view={view} />
     </div>
   );
 
+  const stats = roomy && statsShown ? <PickStats cards={deck} /> : null;
+
   const packSection = (
-    <section aria-labelledby={`${headingId}-pack`} className="flex flex-col gap-3">
+    <section aria-labelledby={`${headingId}-pack`} className="flex flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         <h3
           id={`${headingId}-pack`}
@@ -181,6 +206,7 @@ export function PickScreen({
         )}
         <div className="ml-auto flex flex-wrap items-center gap-3">
           <TrayToggle layout={layout} />
+          {roomy && <StatsToggle />}
           <span id={`${headingId}-sort-label`} className={LABEL}>
             Sort
           </span>
@@ -228,6 +254,7 @@ export function PickScreen({
           width={scaled(PACK_TILE_WIDTH, zoom)}
           busy={busy}
           onPick={onPick}
+          pinned={layout === "side"}
         />
       )}
       <InlineError message={error} />
@@ -236,14 +263,22 @@ export function PickScreen({
 
   if (layout === "side") {
     return (
-      <div className="flex min-h-0 flex-1 gap-5">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 overflow-y-auto pb-8 pr-1">
+      <div ref={measure} className="flex min-h-0 flex-1 gap-5">
+        {/* No foot padding: the pick's buttons are pinned to this scroller's foot (`PackWall`). */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-6 overflow-y-auto pr-1">
           {strips}
           {packSection}
         </div>
         {/* The trays — Deck and Sideboard — are where a card from the pack is dropped to pick it.
-            Keyed by the layout, so a switch registers the drop targets on the new elements. */}
-        <aside className={cn(PANEL, "mb-3 flex min-h-0 w-72 shrink-0 flex-col p-3")}>
+            Keyed by the layout, so a switch registers the drop targets on the new elements. The
+            panel is their one scroller, and so the frame their rows' previews are placed in. */}
+        <aside
+          {...{ [PREVIEW_FRAME_ATTR]: true }}
+          className={cn(
+            PANEL,
+            "scrollbar-slim relative mb-3 flex min-h-0 w-80 shrink-0 flex-col overflow-y-auto p-3",
+          )}
+        >
           <PoolZones
             key="side"
             layout="side"
@@ -253,18 +288,60 @@ export function PickScreen({
             drop={drop}
           />
         </aside>
+        {stats && (
+          <div className="scrollbar-slim mb-3 w-[22.5rem] shrink-0 overflow-y-auto pr-1">
+            {stats}
+          </div>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      {strips}
-      {packSection}
+    <div ref={measure} className="flex items-start gap-5">
+      <div className="flex min-w-0 flex-1 flex-col gap-6">
+        {strips}
+        {packSection}
 
-      {/* The pool — Deck and Sideboard — is where a card from the pack is dropped to pick it. */}
-      <PoolZones key="bottom" pool={view.pool} sideboard={sideboard} onMove={onMove} drop={drop} />
+        {/* The pool — Deck and Sideboard — is where a card from the pack is dropped to pick it. */}
+        <PoolZones
+          key="bottom"
+          pool={view.pool}
+          sideboard={sideboard}
+          onMove={onMove}
+          drop={drop}
+        />
+      </div>
+      {/* Held in view while the page scrolls down to the pool. */}
+      {stats && <div className="sticky top-0 w-[22.5rem] shrink-0">{stats}</div>}
     </div>
+  );
+}
+
+/**
+ * Whether the deck's stats are drawn — beside the Pool switch, drawn only where they fit. One
+ * square in the switch's own shape, filled while the stats are shown; kept per device.
+ */
+function StatsToggle(): JSX.Element {
+  const tip = useTooltip();
+  const shown = useDraftStatsShown((s) => s.shown);
+  const keep = useDraftStatsShown((s) => s.keep);
+  return (
+    <button
+      type="button"
+      aria-pressed={shown}
+      aria-label="Deck stats"
+      {...tip(shown ? "Hide deck stats" : "Show deck stats")}
+      onClick={() => keep(!shown)}
+      className={cn(
+        "inline-flex size-9 items-center justify-center rounded-md border border-border",
+        "transition-colors duration-150 motion-reduce:transition-none",
+        shown ? "bg-accent text-accent-fg" : "text-dim hover:text-text",
+        FOCUS,
+      )}
+    >
+      <ChartColumn className="size-4" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -328,6 +405,10 @@ function TrayToggle({ layout }: { layout: DraftTrayLayout }): JSX.Element {
  *
  * Every tile is a drag source carrying the pick it would make (`carriedPick`); the pool,
  * `PickScreen`'s, is where it is let go.
+ *
+ * **`pinned`, beside the tray, the buttons hold the foot of the pack's scroller**: the wall takes the
+ * room left and the buttons stick to the bottom edge however far down a zoomed-in pack is scrolled,
+ * so Pick is never a scroll away. Under the pack they follow the wall, as the page scrolls.
  */
 function PackWall({
   pack,
@@ -335,6 +416,7 @@ function PackWall({
   width,
   busy,
   onPick,
+  pinned = false,
 }: {
   pack: readonly DraftCard[];
   need: number;
@@ -342,6 +424,7 @@ function PackWall({
   width: number;
   busy: boolean;
   onPick: (cards: DraftCard[], to: Destination) => void;
+  pinned?: boolean;
 }): JSX.Element {
   /** The chosen cards' `instanceId`s, oldest first — not their places, so a new sort keeps the
    *  choice. */
@@ -459,7 +542,7 @@ function PackWall({
         : `Pick ${need}`;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className={cn("flex flex-col gap-3", pinned && "flex-1")}>
       <ul
         ref={wall}
         aria-label="Pack"
@@ -494,7 +577,12 @@ function PackWall({
         })}
       </ul>
       <CardPreview shown={preview.shown} />
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-x-4 gap-y-2",
+          pinned && "sticky bottom-0 mt-auto border-t border-border bg-bg py-3",
+        )}
+      >
         <PrimaryButton ready={full} busy={busy} onPress={() => confirm(chosen)}>
           {label}
         </PrimaryButton>

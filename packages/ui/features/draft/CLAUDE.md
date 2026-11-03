@@ -18,7 +18,7 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 | `packs/`                                     | Open Packs: the set page's set picker (`SetSwitcher.tsx`), the product picker, the marketplace pick (`marketplaces.ts`), the reduced price (`reducedPick.ts`), the opened wall, the figures and the histogram                                                 |
 | `DraftPage.tsx`                              | The hub (_Draft in progress_, _Start new_) and the page-local state machine                                                                                                                                                                                   |
 | `setup/`                                     | Quick, Sealed, Cube, Commander and Winston setup; `deal.ts` deals boosters to seats and holds each table's seat bounds                                                                                                                                        |
-| `pick/`                                      | The pick screen (one or two cards a pick; the pack by rarity or as dealt), the Winston table, the pool as Deck and Sideboard (`PoolZones`, `split.ts`) under the pack or in side trays (`trayLayout.ts`), the large card preview on hover (`CardPreview.tsx`) |
+| `pick/`                                      | The pick screen (one or two cards a pick; the pack by rarity or as dealt), the Winston table, the pool as Deck and Sideboard (`PoolZones`, `split.ts`) under the pack or in side trays (`trayLayout.ts`), the large card preview on hover (`CardPreview.tsx`), the deck's stats on a wide page (`PickStats.tsx`) |
 | `build/`                                     | The hand-over from a finished draft to a draft deck                                                                                                                                                                                                           |
 | `lobby/`                                     | Pod drafts: create (a supporter's), join by code, the host's room (format and seats) and the guest's                                                                                                                                                          |
 | `deck/`, `useDraftDecks.ts`, `navigation.ts` | The deck editor's draft mode (`DraftDeckBar`), the unsaved draft decks (`draft_deck_list`), and the way in and out: `openDraftDeck`, `returnToDraftPage`, `openSavedDeck`                                                                                     |
@@ -91,6 +91,14 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   curve (`PoolColumns`) is the default, the side tray (`PoolTray`) the other of MTG Arena's two
   views, switched by the pack heading's Pool toggle and kept per device in `localStorage` —
   never `app_meta`. Either is the pick's drop target. A Winston table and the Build step always
-  draw the curve.
+  draw the curve. Under the pack, Deck and Sideboard sit **side by side** on one panel, the
+  sideboard in four columns of the deck's width (issue #1499); every pool column is headed in
+  symbols (`ColumnSymbols`), and a tray row leads with the card's cost (`DraftCard.manaCost`,
+  issue #1498). The trays' panel is their one scroller — never a scroll per tray.
+- **The deck's stats count the deck, never the sideboard** (`pick/PickStats.tsx`, over
+  `pickStatsCounts.ts` and the deck editor's own stats pieces). They are drawn on a page at least
+  `STATS_MIN_WIDTH` wide, measured with `useElementWidth` — never a container query, which would
+  hold this screen's `fixed` previews — and hidden by the toggle beside the Pool switch, kept per
+  device like the layout. Record: [draft-and-packs.md](../../../../docs/reference/draft-and-packs.md).
 - **Every pushed view is filtered** (`pick/pool.ts`' `acceptsView`): a `draft:view` for another seat
   or an older step is dropped.

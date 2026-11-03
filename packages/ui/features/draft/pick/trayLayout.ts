@@ -50,12 +50,46 @@ export const useDraftTrayLayout = create<StoredLayout>((set) => ({
   },
 }));
 
-/** Forget the choice — a fresh device's state. For tests and stories. */
+/**
+ * **Whether the deck's stats are drawn beside the pick** on a page wide enough for them
+ * (`PickScreen`'s `STATS_MIN_WIDTH`): on until the reader hides them with the toggle beside the
+ * Pool switch, and kept the same way and for the same reasons as the layout — per device.
+ */
+export const STATS_STORAGE_KEY = "grimoire.draft.stats";
+
+function readStatsShown(): boolean {
+  try {
+    return window.localStorage.getItem(STATS_STORAGE_KEY) !== "hidden";
+  } catch {
+    return true;
+  }
+}
+
+interface StoredStats {
+  shown: boolean;
+  keep: (shown: boolean) => void;
+}
+
+export const useDraftStatsShown = create<StoredStats>((set) => ({
+  shown: readStatsShown(),
+  keep: (shown) => {
+    try {
+      window.localStorage.setItem(STATS_STORAGE_KEY, shown ? "shown" : "hidden");
+    } catch {
+      // Kept for the session.
+    }
+    set({ shown });
+  },
+}));
+
+/** Forget both choices — a fresh device's state. For tests and stories. */
 export function resetDraftTrayLayout(): void {
   try {
     window.localStorage.removeItem(STORAGE_KEY);
+    window.localStorage.removeItem(STATS_STORAGE_KEY);
   } catch {
     // Nothing kept.
   }
   useDraftTrayLayout.setState({ layout: DEFAULT_TRAY_LAYOUT });
+  useDraftStatsShown.setState({ shown: true });
 }

@@ -115,9 +115,7 @@ function CreaturePanel({
               </li>
             ))}
           </ul>
-          {hidden > 0 ? (
-            <p className={NOTE}>{`And ${plural(hidden, "more type")}.`}</p>
-          ) : null}
+          {hidden > 0 ? <p className={NOTE}>{`And ${plural(hidden, "more type")}.`}</p> : null}
           <p className={NOTE}>
             {rows.length > 0
               ? "A creature with two types counts under both."
@@ -203,7 +201,7 @@ function fills(types: readonly ManaKey[]): string[] {
 }
 
 /** A legend swatch: the fill, or the slice's stripes as a CSS gradient at the same angle. */
-function swatch(types: readonly ManaKey[]): string {
+export function swatch(types: readonly ManaKey[]): string {
   const colours = fills(types);
   if (colours.length === 1) return colours[0];
   const stops = colours.map((colour, i) => `${colour} ${i * 3}px ${(i + 1) * 3}px`);
@@ -219,7 +217,13 @@ function swatch(types: readonly ManaKey[]): string {
  * one pie drawn twice across a layout switch) sharing an id would fill one from the other's
  * definition.
  */
-function Pie({ slices, total }: { slices: readonly LandSlice[]; total: number }): JSX.Element {
+export function Pie({
+  slices,
+  total,
+}: {
+  slices: readonly LandSlice[];
+  total: number;
+}): JSX.Element {
   // `useId` answers with characters (`:`, `«`) that are legal in an id and not in a bare
   // `url(#…)` reference, so they are stripped rather than escaped.
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");

@@ -61,6 +61,7 @@ const VIEW: DraftView = {
       colors: ["W"],
       cmc: 4,
       typeLine: "Legendary Creature — Avatar Wizard",
+      manaCost: "{2}{W}{W}",
     },
   ],
   waiting: false,

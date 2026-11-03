@@ -8,25 +8,15 @@ import { useAppStore } from "@/lib/store";
 import { MANA_FILL, MANA_KEYS, MANA_LABEL, manaSymbolClass } from "@/lib/mana";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { LABEL } from "../setup/parts";
 import { CardPreview, useCardPreview } from "./CardPreview";
-import { colorTally, POOL_COLUMNS, poolColumns, type PoolColumn } from "./pool";
+import { ColumnSymbols } from "./ColumnSymbols";
+import { colorTally, shelfColumns } from "./pool";
 import type { Destination } from "./split";
-
-const COLUMN_TITLE: Record<PoolColumn, string> = {
-  "0": "0",
-  "1": "1",
-  "2": "2",
-  "3": "3",
-  "4": "4",
-  "5": "5",
-  "6+": "6+",
-  lands: "Lands",
-};
 
 /**
  * A column's widest at 100%, px — the pack's tile width, so a card picked from the pack lands at the
- * size it was taken at.
+ * size it was taken at. The deck's and the sideboard's columns share it, so beside each other they
+ * are one size (issue #1499).
  */
 const POOL_COLUMN_WIDTH = 190;
 
@@ -48,9 +38,12 @@ const POOL_COLUMN_WIDTH = 190;
  * dropped, so an empty pool draws its columns and a row one card tall — a column's width at 5:7 —
  * with the hint over it, and the first pick changes nothing about where the pool can be hit.
  *
- * **The pool is drawn as two of these, Deck and Sideboard** (`PoolZones`, issue #1471). With
- * `moveTo`, each card is a button that sends it to the other one — Arena's click — and says so in
- * its name.
+ * **The pool is drawn as two of these, Deck and Sideboard** (`PoolZones`, issue #1471), side by
+ * side (issue #1499): the deck as the curve, the sideboard in `grouped` shape — four columns,
+ * `0–2`, `3–4`, `5+` and the lands — of the deck's column width. With `moveTo`, each card is a
+ * button that sends it to the other one — Arena's click — and says so in its name.
+ *
+ * **Each column is headed in symbols** (`ColumnSymbols`), its count beside it.
  */
 export function PoolColumns({
   pool,
@@ -58,6 +51,7 @@ export function PoolColumns({
   empty = "The cards you pick land here, by mana value.",
   moveTo,
   onMove,
+  shape = "curve",
 }: {
   pool: readonly DraftCard[];
   /** The heading, and the section's name. */
@@ -67,9 +61,11 @@ export function PoolColumns({
   /** Where a press on a card sends it — absent, a card is not a button. */
   moveTo?: Destination;
   onMove?: (card: DraftCard, to: Destination) => void;
+  /** The deck's curve of eight columns, or the sideboard's four (`shelfColumns`). */
+  shape?: "curve" | "grouped";
 }): JSX.Element {
   const zoom = useAppStore((s) => s.cardZoom.draft);
-  const columns = useMemo(() => poolColumns(pool), [pool]);
+  const columns = useMemo(() => shelfColumns(pool, shape), [pool, shape]);
   const tally = useMemo(() => colorTally(pool), [pool]);
   // A stacked card shows only its name strip; resting on it draws it whole (issue #1472).
   const preview = useCardPreview();
@@ -86,25 +82,31 @@ export function PoolColumns({
       <div
         className="grid grid-rows-[auto_auto] gap-x-3 gap-y-1.5"
         style={{
-          gridTemplateColumns: `repeat(${POOL_COLUMNS.length}, minmax(0, ${scaled(POOL_COLUMN_WIDTH, zoom)}px))`,
+          gridTemplateColumns: `repeat(${columns.length}, minmax(0, ${scaled(POOL_COLUMN_WIDTH, zoom)}px))`,
         }}
       >
-        {POOL_COLUMNS.map((column, index) => {
-          const cards = columns[column];
+        {columns.map((column, index) => {
+          const cards = column.cards;
           // Every part is placed by hand: the empty pool's hint lies over the cards' row, and
           // only items with a definite cell may share one.
           const at = index + 1;
           return (
-            <Fragment key={column}>
+            <Fragment key={column.key}>
               <h4
-                className={cn(LABEL, "flex min-w-0 items-baseline justify-between")}
+                className="m-0 flex min-h-6 min-w-0 items-center justify-between gap-1.5 border-b border-border pb-1"
                 style={{ gridColumn: at, gridRow: 1 }}
               >
-                <span>{COLUMN_TITLE[column]}</span>
-                <span className="font-mono tabular-nums">{cards.length}</span>
+                <ColumnSymbols
+                  symbols={column.symbols}
+                  spoken={column.spoken}
+                  className="text-[1.1875rem]"
+                />
+                <span className="font-mono text-[0.8125rem] tabular-nums text-dim">
+                  {cards.length}
+                </span>
               </h4>
               <ul
-                aria-label={`${column === "lands" ? "Lands" : `Mana value ${column}`}: ${plural(cards.length, "card")}`}
+                aria-label={`${column.spoken}: ${plural(cards.length, "card")}`}
                 className="m-0 flex min-w-0 list-none flex-col p-0"
                 style={{ gridColumn: at, gridRow: 2 }}
               >

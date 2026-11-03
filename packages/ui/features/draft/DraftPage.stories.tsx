@@ -11,8 +11,16 @@ const meta = {
   title: "Draft/Draft & Packs",
   component: DraftPage,
   decorators: [
-    (Story) => (
-      <div className="h-[860px] w-[1280px] overflow-auto bg-bg p-6">
+    // A 1440 window's page by default; `wide` is a 1920 window's (the rail taken off), where the
+    // pick screen draws the deck's stats (`PickScreen`'s `STATS_MIN_WIDTH`).
+    (Story, { parameters }) => (
+      <div
+        className={
+          parameters.wide === true
+            ? "h-[1040px] w-[1712px] overflow-auto bg-bg p-6"
+            : "h-[860px] w-[1280px] overflow-auto bg-bg p-6"
+        }
+      >
         <Story />
       </div>
     ),
@@ -107,8 +115,47 @@ export const DraftingSideTray: Story = {
     await userEvent.click(await canvas.findByRole("button", { name: "Pool beside the pack" }));
     const pool = await canvas.findByRole("region", { name: "Deck" });
     await waitFor(() => expect(within(pool).getByText("1 card")).toBeVisible());
-    await expect(within(pool).queryAllByRole("img")).toHaveLength(0);
+    // No card art in the tray: its rows are names, and its headings are symbols, not cards.
+    const picked = card.getAttribute("aria-label") ?? "";
+    await expect(within(pool).queryAllByRole("img", { name: picked })).toHaveLength(0);
     await expect(within(pool).getByText("1×")).toBeVisible();
+  },
+};
+
+/**
+ * A 1920 window: the deck's stats beside the pick, counting the deck and never the sideboard, and
+ * the toggle beside the Pool switch that hides them.
+ *
+ * **The play makes the picks and claims nothing about the stats**: they are drawn from a measured
+ * width (`useElementWidth`), and `stories.test.tsx` runs plays in jsdom, whose observer never
+ * reports — so whether they draw is a browser's claim, read here in Storybook. The panel itself is
+ * `PickStats.test.tsx`'s.
+ */
+export const DraftingWithStats: Story = {
+  parameters: { wide: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await startFromHub(canvasElement, /^Quick Draft/);
+    const pack = await canvas.findByRole("list", { name: "Pack" }, { timeout: 5000 });
+    const first = within(pack).getAllByRole("button")[0];
+    await userEvent.click(first);
+    await userEvent.click(
+      canvas.getByRole("button", { name: `Pick ${first.getAttribute("aria-label")}` }),
+    );
+    const second = within(
+      await canvas.findByRole("list", { name: "Pack" }, { timeout: 5000 }),
+    ).getAllByRole("button")[0];
+    await userEvent.click(second);
+    await userEvent.click(
+      canvas.getByRole("button", {
+        name: `Pick ${second.getAttribute("aria-label")} into the sideboard`,
+      }),
+    );
+    // One card in the deck, one on the sideboard: the stats beside it count the one.
+    const sideboard = canvas.getByRole("region", { name: "Sideboard" });
+    await waitFor(() =>
+      expect(within(sideboard).getAllByRole("button", { name: /to the deck$/ })).toHaveLength(1),
+    );
   },
 };
 

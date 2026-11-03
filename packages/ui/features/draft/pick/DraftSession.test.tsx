@@ -47,6 +47,7 @@ function card(name: string, over: Partial<DraftCard> = {}): DraftCard {
     colors: ["R"],
     cmc: 1,
     typeLine: "Instant",
+    manaCost: "{R}",
     ...over,
   };
 }
@@ -163,7 +164,7 @@ describe("DraftSession", () => {
     expect(screen.getByText("4/14")).toBeInTheDocument();
     expect(screen.getByText("Passing left")).toBeInTheDocument();
     const rounds = within(screen.getByRole("list", { name: "Rounds" })).getAllByRole("listitem");
-    expect(rounds.map((r) => r.textContent)).toEqual(["P1TST", "P2TST", "P3TST"]);
+    expect(rounds.map((r) => r.textContent)).toEqual(["Pack 1TST", "Pack 2TST", "Pack 3TST"]);
     expect(rounds[1]).toHaveAttribute("aria-current", "step");
   });
 
@@ -403,8 +404,11 @@ describe("DraftSession", () => {
         commanders: 1,
       }),
     );
+    // One short line, the Commander pile named in it.
     expect(
-      screen.getByText(/A Commander deck needs 60 cards and a commander in its Commander pile\./),
+      screen.getByText(
+        "Name your deck — you’ll add basic lands, and put your commander in its Commander pile, in the editor.",
+      ),
     ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
     await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(4));
@@ -529,8 +533,11 @@ describe("DraftSession", () => {
         }),
       );
       expect(
-        screen.getByText(/the 2 in your deck filed by what they do, the 1/),
+        screen.getByText("Name your deck — you’ll add basic lands in the editor."),
       ).toBeInTheDocument();
+      // The split is the shelf's, under the panel: two in the deck, one on the sideboard.
+      expect(within(zone("Deck")).getByText("2 cards")).toBeInTheDocument();
+      expect(within(zone("Sideboard")).getByText("1 card")).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Build deck" }));
       await waitFor(() => expect(openDraftDeck).toHaveBeenCalledWith(9));
       expect(ipcMock.oracleTagsForPrintings).toHaveBeenCalledExactlyOnceWith([
@@ -794,9 +801,37 @@ describe("DraftSession", () => {
       expect(layoutButton("Pool below the pack")).toHaveAttribute("aria-pressed", "true");
       expect(layoutButton("Pool beside the pack")).toHaveAttribute("aria-pressed", "false");
       const pool = screen.getByRole("region", { name: "Deck" });
-      // The curve: every mana value's column is drawn, empty or not, one card art a pick.
+      // The curve: every mana value's column is drawn, empty or not, one card art a pick. A
+      // column's heading is a picture too (its symbols), so the art is counted by the cards' names.
       expect(within(pool).getByRole("list", { name: "Mana value 3: 0 cards" })).toBeInTheDocument();
-      expect(within(pool).getAllByRole("img")).toHaveLength(5);
+      expect(
+        within(pool).getAllByRole("img", { name: /^(Shock|Opt|Mountain|Fireball)$/ }),
+      ).toHaveLength(5);
+    });
+
+    it("draws the sideboard beside the deck, its curve folded into four (issue #1499)", () => {
+      keepSideboard(["Opt#0.0.0"]);
+      setup(drafted());
+      const columns = within(zone("Sideboard"))
+        .getAllByRole("list")
+        .map((l) => l.getAttribute("aria-label") ?? "")
+        .filter((name) => /^(Mana value|Lands)/.test(name));
+      expect(columns).toEqual([
+        "Mana value 0 to 2: 1 card",
+        "Mana value 3 to 4: 0 cards",
+        "Mana value 5 or more: 0 cards",
+        "Lands: 0 cards",
+      ]);
+      // One row on one panel: either is a drop away without a scroll.
+      const panel = (name: "Deck" | "Sideboard") => zone(name).parentElement!.parentElement;
+      expect(panel("Deck")).toBe(panel("Sideboard"));
+      // The columns are headed in symbols, named in words.
+      expect(
+        within(zone("Deck")).getByRole("img", { name: "Mana value 6 or more" }),
+      ).toBeInTheDocument();
+      expect(
+        within(zone("Sideboard")).getByRole("img", { name: "Mana value 0 to 2" }),
+      ).toBeInTheDocument();
     });
 
     it("lists the pool by name in a side tray on request, and keeps the choice", async () => {
@@ -807,7 +842,9 @@ describe("DraftSession", () => {
       expect(window.localStorage.getItem(TRAY_LAYOUT_KEY)).toBe("side");
 
       const pool = screen.getByRole("region", { name: "Deck" });
-      expect(within(pool).queryAllByRole("img")).toHaveLength(0);
+      expect(
+        within(pool).queryAllByRole("img", { name: /^(Shock|Opt|Mountain|Fireball)$/ }),
+      ).toHaveLength(0);
       // Only the columns holding cards, a name once with its count, by name within a column.
       const lists = within(pool)
         .getAllByRole("list")
@@ -820,7 +857,8 @@ describe("DraftSession", () => {
         within(lists[0]!)
           .getAllByRole("listitem")
           .map((li) => li.textContent),
-      ).toEqual(["1×Fireball", "1×Opt", "2×Shock"]);
+        // Each row's cost leads its name (issue #1498): the symbols' spoken tokens, then the name.
+      ).toEqual(["1×R Fireball", "1×R Opt", "2×R Shock"]);
       expect(within(pool).getByText("5 cards")).toBeInTheDocument();
       // The pack is still there to pick from.
       expect(within(pack()).getAllByRole("button")).toHaveLength(2);

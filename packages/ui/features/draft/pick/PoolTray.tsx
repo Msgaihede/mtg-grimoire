@@ -1,6 +1,6 @@
 import { useEffect, useMemo, type CSSProperties, type JSX } from "react";
+import { ManaText } from "@/components/ManaText";
 import {
-  PREVIEW_FRAME_ATTR,
   PrintingPreview,
   usePrintingDwell,
   type DwellRowProps,
@@ -10,14 +10,10 @@ import type { DraftCard } from "@/lib/ipc";
 import { MANA_FILL, MANA_KEYS, type ManaKey } from "@/lib/mana";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { LABEL } from "../setup/parts";
-import { colorTally, columnOf, poolRows, type PoolColumn, type PoolRow } from "./pool";
+import { ColumnSymbols } from "./ColumnSymbols";
+import { colorTally, columnOf, poolRows, type PoolRow } from "./pool";
 import { ColorTally } from "./PoolColumns";
 import type { Destination } from "./split";
-
-function columnTitle(column: PoolColumn): string {
-  return column === "lands" ? "Lands" : `Mana value ${column}`;
-}
 
 /**
  * The colour edge down a row's left side: the card's colour, a hard-stopped band of each of a
@@ -43,10 +39,15 @@ function edgeOf(colors: readonly string[]): CSSProperties {
  * the window.
  *
  * **A row's art is a dwell away**: `usePrintingDwell`, the card modal's printings list's own hover
- * preview, draws the card beside its row after a quarter second's rest. The list is its frame
- * (`PREVIEW_FRAME_ATTR`), so the picture is placed in it and clipped by it. Rows are not
- * focusable — there is nothing to do with one — so the preview is the pointer's; the names are
- * plain text a screen reader reads as a list.
+ * preview, draws the card beside its row after a quarter second's rest. Its frame
+ * (`PREVIEW_FRAME_ATTR`) is the panel round the trays, which is also their one scroller (`PickScreen`),
+ * so the picture is placed in it and clipped by it. Rows are not focusable — there is nothing to do
+ * with one — so the preview is the pointer's; the names are plain text a screen reader reads as a
+ * list.
+ *
+ * **A row reads `2× {R} Lightning Bolt`** (issue #1498): the printed cost leads the name, as part of
+ * it, so a reader scanning for their two-drops reads the cost first. A column is headed in symbols
+ * (`ColumnSymbols`), as the shelf's are.
  *
  * The tray is the pick's drop target in this layout, as the curve is in the other: `PoolZones`
  * wraps it.
@@ -79,7 +80,7 @@ export function PoolTray({
   const { cancel } = dwell;
   useEffect(() => cancel(), [pool, cancel]);
   return (
-    <section aria-label={title} className="flex min-h-0 flex-1 flex-col gap-3">
+    <section aria-label={title} className="flex flex-col gap-3">
       <div className="flex flex-col gap-2">
         <div className="flex items-baseline gap-3">
           <h3 className="m-0 font-heading text-lg font-semibold leading-none">{title}</h3>
@@ -94,18 +95,20 @@ export function PoolTray({
           {empty}
         </p>
       ) : (
-        <div
-          {...{ [PREVIEW_FRAME_ATTR]: true }}
-          className="scrollbar-slim relative flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1"
-        >
+        // Not positioned: the preview is placed in the frame the caller marks, the trays' panel.
+        <div className="flex flex-col gap-3">
           {groups.map((group) => (
             <div key={group.column} className="flex flex-col gap-1">
-              <h4 className={cn(LABEL, "flex items-baseline justify-between")}>
-                <span>{columnTitle(group.column)}</span>
-                <span className="font-mono tabular-nums">{group.count}</span>
+              <h4 className="m-0 flex min-h-5 items-center justify-between gap-1.5">
+                <ColumnSymbols
+                  symbols={group.symbols}
+                  spoken={group.spoken}
+                  className="text-base"
+                />
+                <span className="font-mono text-xs tabular-nums text-dim">{group.count}</span>
               </h4>
               <ul
-                aria-label={`${columnTitle(group.column)}: ${plural(group.count, "card")}`}
+                aria-label={`${group.spoken}: ${plural(group.count, "card")}`}
                 className="m-0 flex list-none flex-col gap-1 p-0"
               >
                 {group.rows.map((row) => {
@@ -150,7 +153,12 @@ function TrayRow({
     <>
       <span aria-hidden="true" className="h-full w-1.5 shrink-0" style={edgeOf(row.colors)} />
       {/* Counts beside a card keep their `×` (the app's rule; `CountTag` is the one over art). */}
-      <span className="w-6 shrink-0 font-mono text-xs tabular-nums text-dim">{row.count}×</span>
+      <span className="shrink-0 font-mono text-xs tabular-nums text-dim">{row.count}×</span>
+      {/* The cost leads the name and flows with it — no column of its own, so a short cost leaves
+          no gap before the name. A land prints none. */}
+      {row.manaCost !== "" && (
+        <ManaText source={row.manaCost} className="-mr-0.5 shrink-0 text-[0.8125rem]" />
+      )}
       {/* No tooltip for a name the tray cuts short: the dwell's picture is the whole card. */}
       <span className="min-w-0 flex-1 truncate">{row.name}</span>
     </>

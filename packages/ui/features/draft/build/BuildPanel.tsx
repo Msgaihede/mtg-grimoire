@@ -2,7 +2,6 @@ import { useId, useMemo, useState, type JSX } from "react";
 import { Hammer } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { openDraftDeck } from "@/features/draft/navigation";
-import { plural } from "@/lib/counts";
 import { ipc, ipcError, type DraftCard, type DraftView } from "@/lib/ipc";
 import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
@@ -105,15 +104,13 @@ export function BuildPanel({
         <h3 id={`${fieldId}-title`} className="m-0 font-heading text-xl font-semibold">
           Build your deck
         </h3>
+        {/* One line, said the way a person would (the owner's ask): the counts are under the
+            panel, a card is moved the way it is on the pick screen, and the hub already says
+            nothing here touches the collection. */}
         <p className="m-0 max-w-[60ch] text-sm text-dim">
-          The draft is done. Your {plural(view.pool.length, "card")} go into a deck of their own:
-          the {split.deck.length} in your deck filed by what they do, the {split.sideboard.length}{" "}
-          in your sideboard in its Pool — click a card below to move it, and add basics in the
-          editor.{" "}
           {commander
-            ? `A Commander deck needs ${view.minDeckSize} cards and ${view.commanders === 1 ? "a commander" : `${view.commanders} commanders`} in its Commander pile.`
-            : `A deck needs ${view.minDeckSize} cards.`}{" "}
-          Nothing is added to your collection.
+            ? "Name your deck — you’ll add basic lands, and put your commander in its Commander pile, in the editor."
+            : "Name your deck — you’ll add basic lands in the editor."}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
