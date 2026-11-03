@@ -38,8 +38,8 @@ export function byYear(sets: readonly BoosterSetSummary[]): SetYear[] {
 
 /**
  * A wall of set tiles to pick one from — the Packs page's first step and the draft's pack order
- * (spec §7): a filter box, then every set as a dark tile with its keyrune symbol centred above its
- * name, in the order given (`useBoosterSets` gives newest first), under a divider per release year
+ * (spec §7): a filter box, then every set as a dark tile whose keyrune symbol fills most of it,
+ * centred above its name (issue #1497), in the order given (`useBoosterSets` gives newest first), under a divider per release year
  * (issue #1456) — the year in the accent heading face between two rules, as the home page's
  * activity days are headed.
  *
@@ -147,7 +147,7 @@ function YearRun({
       </div>
       <ul
         aria-labelledby={labelId}
-        className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-2 p-0"
+        className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] gap-2 p-0"
       >
         {run.sets.map((set) => (
           <li key={set.code} className="flex">
@@ -164,8 +164,11 @@ function YearRun({
   );
 }
 
-/** One set: its symbol, its name, its code in dim mono — and *Suggested* when it is one of the
- *  sets the draft is made for. The year is the divider's, not the tile's (issue #1456). */
+/** One set: its symbol, filling most of the tile (issue #1497 — the symbol is how a reader knows a
+ *  set), its name under it, its code in dim mono in the top-right corner — and *Suggested* in the
+ *  top-left when it is one of the sets the draft is made for. The year is the divider's, not the
+ *  tile's (issue #1456). The symbol sits in a box of its own height, so symbols of every shape
+ *  line up across a row, and the name keeps room for two lines, so a row's tiles are one height. */
 function SetTile({
   set,
   picked,
@@ -183,7 +186,7 @@ function SetTile({
       aria-pressed={picked}
       onClick={onPick}
       className={cn(
-        "relative flex w-full flex-col items-center gap-2 rounded-lg border px-2 pb-3 pt-4 text-center",
+        "relative flex w-full flex-col items-center gap-2 rounded-lg border px-2 pb-3 pt-6 text-center",
         "transition-colors motion-reduce:transition-none",
         PRESS,
         FOCUS,
@@ -197,12 +200,19 @@ function SetTile({
           Suggested
         </span>
       )}
-      <i
+      {/* The size is the box's, not the glyph's: keyrune's unlayered `.ss` rule says
+          `font-size: inherit`, which beats any Tailwind size class on the `<i>` itself. */}
+      <span
         aria-hidden="true"
-        className={cn(setGlyphClass(set.code), "text-[2rem] leading-none", picked && "text-accent")}
-      />
-      <span className="line-clamp-2 text-sm leading-tight">{set.name}</span>
-      <span className="font-mono text-[0.6875rem] uppercase tracking-wider text-dim">
+        className={cn(
+          "flex h-24 w-full items-center justify-center text-[5rem] leading-none",
+          picked && "text-accent",
+        )}
+      >
+        <i className={setGlyphClass(set.code)} />
+      </span>
+      <span className="line-clamp-2 min-h-[2lh] text-sm leading-tight">{set.name}</span>
+      <span className="absolute right-2 top-1.5 font-mono text-[0.6875rem] uppercase leading-4 tracking-wider text-dim">
         {set.code}
       </span>
     </button>
