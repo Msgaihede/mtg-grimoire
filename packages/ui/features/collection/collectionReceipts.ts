@@ -34,9 +34,10 @@ export function movedReceipt(entries: number, name: string | null, destination: 
   return `Moved ${cardsOf(entries, name)} to “${destination}”`;
 }
 
-/** `Added “Sol Ring” to “Trade binder”` — a card off the search column, dropped on a shelf. */
-export function addedReceipt(name: string, destination: string): string {
-  return `Added ${cardsOf(1, name)} to “${destination}”`;
+/** `Added “Sol Ring” to “Trade binder”` — a card off the search column, dropped on a shelf — or
+ *  `Added 4 cards to “Trade binder”` for a picked set of them (issue #1501). */
+export function addedReceipt(name: string, destination: string, entries = 1): string {
+  return `Added ${cardsOf(entries, name)} to “${destination}”`;
 }
 
 /**

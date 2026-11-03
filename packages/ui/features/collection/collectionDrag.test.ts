@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { dragData, readDragData } from "@/features/decks/dnd";
 import { searchCardDragData, type SearchCardDrag } from "@/features/search/searchCardDrag";
+import { withRecordGroup } from "@/lib/recordGroup";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import {
   collectionDragData,
@@ -276,5 +277,62 @@ describe("readCollectionDrop", () => {
     const both = { ...dragData(SEARCH_CARD), ...searchCardDragData(NEW_CARD) };
     expect(readDragData(both)).toEqual(SEARCH_CARD);
     expect(readCollectionDrop(both)).toEqual({ kind: "new", card: NEW_CARD });
+  });
+});
+
+/**
+ * Issue #1501: a picked set off a wall carries every other tile's whole record beside the
+ * grabbed one (`lib/recordGroup.ts`), and a folder reads each through this same reader.
+ */
+describe("readCollectionDrop — a picked set", () => {
+  const OTHER: CollectionTileDrag = {
+    cardId: "c9",
+    name: "Counterspell",
+    copies: [{ entryId: 9, folderId: null }],
+  };
+
+  it("reads the grabbed tile and every other picked tile as one group, grabbed first", () => {
+    const record = withRecordGroup(collectionTileDragData(TILE), [collectionTileDragData(OTHER)]);
+    expect(readCollectionDrop(record)).toEqual({
+      kind: "group",
+      members: [
+        { kind: "tile", tile: TILE },
+        { kind: "tile", tile: OTHER },
+      ],
+    });
+  });
+
+  it("reads a picked set of search tiles as cards nobody owns yet", () => {
+    const other = { ...NEW_CARD, cardId: "c3", name: "Mox Pearl" };
+    const record = withRecordGroup(searchCardDragData(NEW_CARD), [searchCardDragData(other)]);
+    expect(readCollectionDrop(record)).toEqual({
+      kind: "group",
+      members: [
+        { kind: "new", card: NEW_CARD },
+        { kind: "new", card: other },
+      ],
+    });
+  });
+
+  /** One unreadable member of five is passed over rather than refusing the four — and a group
+   *  left with no other member is the single drop it always was. */
+  it("passes over a malformed member, and is a single drop when none is left", () => {
+    const record = withRecordGroup(collectionTileDragData(TILE), [
+      { ...collectionTileDragData(OTHER), copies: [] },
+      dragData(CARD),
+    ]);
+    expect(readCollectionDrop(record)).toEqual({ kind: "tile", tile: TILE });
+  });
+
+  /** The marks live on the primary's keys: an array under the right key name is not a drag
+   *  this app wrote. */
+  it("refuses a group whose grabbed tile is unreadable", () => {
+    const record = withRecordGroup(dragData(CARD), [collectionTileDragData(OTHER)]);
+    expect(readCollectionDrop(record)).toBeNull();
+  });
+
+  it("leaves an ordinary drag's record untouched", () => {
+    const record = collectionTileDragData(TILE);
+    expect(withRecordGroup(record, [])).toBe(record);
   });
 });

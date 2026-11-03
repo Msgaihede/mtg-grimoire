@@ -1029,6 +1029,7 @@ export function WishlistPage() {
     treeParent,
     managed,
     setFolder: setFolderMutate,
+    moveWish: moveWishAsync,
     reorder: reorderMutate,
     settleWhole,
   });

@@ -216,6 +216,8 @@ export function LockedMoveConfirm({
   onCancel: () => void;
 }) {
   const { card, out, into } = move;
+  // A name is quoted; a picked set's count (`3 cards`, issue #1501) is not a name.
+  const named = move.count > 1 ? card : `“${card}”`;
   const confirm = useConfirmFocus(
     out !== null && into !== null
       ? `Move ${card} from ${out} into ${into}`
@@ -231,9 +233,9 @@ export function LockedMoveConfirm({
     >
       <p className="text-xs leading-relaxed text-destructive">
         {out !== null && into !== null
-          ? `“${out}” and “${into}” are both locked. Move “${card}” anyway?`
+          ? `“${out}” and “${into}” are both locked. Move ${named} anyway?`
           : out !== null
-            ? `“${out}” is locked. Moving “${card}” out makes it available to your decks again.`
+            ? `“${out}” is locked. Moving ${named} out makes it available to your decks again.`
             : `“${into}” is locked. Cards filed there aren't used by your decks.`}
       </p>
 

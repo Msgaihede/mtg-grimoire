@@ -105,6 +105,7 @@ For global repo workflow, style, and testing conventions, refer to:
   - Focus outlines are gated on `data-kbd` (`keyboardModality.ts`).
   - `tabIndex={-1}` landing pad containers carry no focus ring.
   - Multi-selection: `Ctrl/Cmd` toggles, `Shift` selects range (`packages/ui/lib/multiSelect.ts`). `Ctrl+A` picks every card a wall's filters match, unloaded pages included, and `Escape` puts a picked set down — a wall with a `selectionScope` registers itself (`features/search/selectAllSurface.ts`); a docked search column takes the chord only from inside it. See [keyboard-shortcuts.md](../../docs/reference/keyboard-shortcuts.md#selectall).
+  - A drag from a picked tile carries the **whole** set to every target. Deck-shaped targets read the cards (`dnd.ts`'s `dragGroup`, via `readCards`); a folder reads every picked tile's whole `dragRecord` (`lib/recordGroup.ts`, issue #1501) through its own reader, which answers a `"group"` arm (`readCollectionDrop`, `readWishDrop`). A new drop target that reads a feature mark must handle that arm, or it acts on the grabbed tile alone.
 
 ---
 
