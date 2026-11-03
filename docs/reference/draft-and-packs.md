@@ -111,6 +111,14 @@ the kind (`booster` or `sealed`) and a sealed product's MTGJSON category in word
 `bundle`) — "collector box" finds the collector booster box. The shell owns the query (the
 `Dropdown`'s `matches` prop), so the trigger keeps naming the picked product while a search hides it.
 
+**A product pick opens one** (issue #1496, `ProductStage`'s `pick`): nobody picks a product and
+does not want to open it, so the pick is the first press, and _Open another_ is beside the wall it
+drew. Picking the product already on the wall is no press (the reader closed the list on what they
+had); after _Back_, picking the shown product opens it. A pick made before the prices answer waits
+for them — the session's tally adds a pack's value at the press, and an open made before then would
+count $0 for ever — while _Open_ itself never waits, since a read that failed never answers. The
+stage still arrives on its first product unopened: arriving on a set is not a pick of a product.
+
 **The marketplaces are the page's own** (issue #1446, `packs/marketplaces.ts`): a combobox at the
 head of the right-hand column, _Prices from_ (`packs/MarketplaceCombobox.tsx`, issue #1463) — the
 picked marketplaces as chips, a search typed beside them, and under it the marketplaces it matches

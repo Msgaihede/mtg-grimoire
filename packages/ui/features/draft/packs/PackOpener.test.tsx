@@ -107,27 +107,31 @@ function expectedLine(
   return `Expected value ${formatPrice(figuresOf(SET, first, priced).ev, currency)}`;
 }
 
+/** The host's `printing_prices` answer at `marketplace`. */
+function answerPrices(ids: string[], marketplace: string): PrintingPrices[] {
+  return ids.flatMap((cardId) => {
+    const finishPrices = PRICES.get(cardId);
+    if (!finishPrices) return [];
+    // Card Kingdom quotes every card at half, and only the rare and the mythic: the rest is
+    // TCGplayer's alone, which is what makes the lowest a per-card answer.
+    if (marketplace === "cardkingdom") {
+      return cardId === "rare" || cardId === "mythic"
+        ? [{ cardId, finishPrices: halved(finishPrices) }]
+        : [];
+    }
+    // Cardmarket quotes the rare alone, at half the dollar figure — in euros.
+    if (marketplace === "cardmarket") {
+      return cardId === "rare" ? [{ cardId, finishPrices: halved(finishPrices) }] : [];
+    }
+    return [{ cardId, finishPrices }];
+  });
+}
+
 function setup() {
   packsBoosterSets.mockResolvedValue([SUMMARY]);
   packsBoosterSet.mockResolvedValue(SET);
-  printingPrices.mockImplementation(
-    async (ids: string[], marketplace: string): Promise<PrintingPrices[]> =>
-      ids.flatMap((cardId) => {
-        const finishPrices = PRICES.get(cardId);
-        if (!finishPrices) return [];
-        // Card Kingdom quotes every card at half, and only the rare and the mythic: the rest is
-        // TCGplayer's alone, which is what makes the lowest a per-card answer.
-        if (marketplace === "cardkingdom") {
-          return cardId === "rare" || cardId === "mythic"
-            ? [{ cardId, finishPrices: halved(finishPrices) }]
-            : [];
-        }
-        // Cardmarket quotes the rare alone, at half the dollar figure — in euros.
-        if (marketplace === "cardmarket") {
-          return cardId === "rare" ? [{ cardId, finishPrices: halved(finishPrices) }] : [];
-        }
-        return [{ cardId, finishPrices }];
-      }),
+  printingPrices.mockImplementation(async (ids: string[], marketplace: string) =>
+    answerPrices(ids, marketplace),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onBack = vi.fn();
@@ -259,12 +263,83 @@ describe("PackOpener", () => {
     const { user } = setup();
     await user.click(await screen.findByRole("button", { name: /Test Set/ }));
     await screen.findByText(/^Expected value/);
+    // Issue #1496: the pick is the first press — no Open after it.
     await pickOption(user, "Product", /Test Play Booster Box/);
-    await user.click(screen.getByRole("button", { name: "Open" }));
     const wall = screen.getByRole("list", { name: "Opened cards" });
     // Five boosters of seven, and the bundle's promo.
     expect(within(wall).getAllByRole("listitem")).toHaveLength(36);
     expect(screen.getByText(/3 items in it could not be opened/)).toBeInTheDocument();
+  });
+
+  /** Issue #1496: nobody picks a product and does not want to open it. */
+  describe("a product pick opens one", () => {
+    const openedCount = () =>
+      within(screen.getByRole("complementary", { name: "Figures" })).getByText("Opened")
+        .nextSibling;
+
+    it("opens the picked product at once, and a pick of the same one is no press", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await screen.findByText(/^Expected value/);
+      expect(screen.queryByRole("list", { name: "Opened cards" })).toBeNull();
+
+      await pickOption(user, "Product", /Test Collector Booster/);
+      const wall = screen.getByRole("list", { name: "Opened cards" });
+      expect(within(wall).getAllByRole("listitem")).toHaveLength(7);
+      expect(screen.getByRole("button", { name: "Open another" })).toBeInTheDocument();
+      expect(openedCount()).toHaveTextContent("1");
+
+      // The list closed on what was already open: the wall and the tally stay as they were.
+      await pickOption(user, "Product", /Test Collector Booster/);
+      expect(openedCount()).toHaveTextContent("1");
+
+      // Another product is another open, onto the same session's tally.
+      await pickOption(user, "Product", /Test Play Booster Box/);
+      expect(screen.getByText(/3 items in it could not be opened/)).toBeInTheDocument();
+      expect(openedCount()).toHaveTextContent("2");
+    });
+
+    it("opens on a pick of the shown product once Back has put the pack down", async () => {
+      const { user } = setup();
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await screen.findByText(/^Expected value/);
+      // The stage opens on its first product; picking it is still the reader's first press.
+      await pickOption(user, "Product", /Test Collector Booster/);
+      await user.click(screen.getByRole("button", { name: "Back" }));
+      expect(screen.queryByRole("list", { name: "Opened cards" })).toBeNull();
+      await pickOption(user, "Product", /Test Collector Booster/);
+      expect(screen.getByRole("list", { name: "Opened cards" })).toBeInTheDocument();
+      expect(openedCount()).toHaveTextContent("2");
+    });
+
+    it("waits for the prices before it opens, so the tally never counts a pack as $0", async () => {
+      const { user } = setup();
+      // Every price read hangs until the test lets it answer.
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      printingPrices.mockImplementation(async (ids: string[], marketplace: string) => {
+        await gate;
+        return answerPrices(ids, marketplace);
+      });
+      await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+      await screen.findByRole("button", { name: "Product" });
+      expect(screen.queryByText(/^Expected value/)).toBeNull();
+
+      await pickOption(user, "Product", /Test Collector Booster/);
+      expect(screen.queryByRole("list", { name: "Opened cards" })).toBeNull();
+
+      await act(async () => release());
+      const wall = await screen.findByRole("list", { name: "Opened cards" });
+      const expected = openOne(SET, { kind: "booster", id: "collector", name: "" }, SEED);
+      const total = packValue(expected.cards, (id, foil) =>
+        id === "land" ? null : finishPrice(PRICES.get(id), foil),
+      );
+      expect(within(wall).getAllByRole("listitem")).toHaveLength(7);
+      expect(openedCount()).toHaveTextContent("1");
+      const figures = screen.getByRole("complementary", { name: "Figures" });
+      // The session's value is the pack's own, priced — not the $0 of an open before the prices.
+      expect(within(figures).getAllByText(formatPrice(total, "usd")).length).toBeGreaterThan(0);
+    });
   });
 
   /** Issue #1464: the product picker is a combobox — type to narrow, pick from what is left. */
