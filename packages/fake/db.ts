@@ -2441,7 +2441,7 @@ export interface FakeDb {
    * {@link readHandlers.scan_sounds} and {@link writeHandlers.set_scan_sounds}.
    */
   scanSounds: ScanSounds | null;
-  /** `app_meta.collection_value` — the reader's sell percentage and minimum card value; `null` for
+  /** `app_meta.collection_value` — the reader's sell percentage, minimum card value and bulk price; `null` for
    *  the row not being there, which is no reduced price. */
   collectionValue: CollectionValue | null;
   /**
@@ -10229,6 +10229,8 @@ function valueHistoryFrom(
     day: number;
     total: number;
     below: number;
+    /** The copies `below` is over — what a bulk price multiplies. */
+    belowCards: number;
     byBucket: Map<string, number>;
     present: Map<string, number>;
     holding: Map<string, { copies: number; price: number }> | null;
@@ -10274,6 +10276,7 @@ function valueHistoryFrom(
         day: period.day,
         total: 0,
         below: 0,
+        belowCards: 0,
         byBucket: new Map(),
         present: new Map(),
         holding: new Map(),
@@ -10282,7 +10285,10 @@ function valueHistoryFrom(
         const copies = s.copies;
         // Held but unpriced: worth nothing to the total, and present all the same.
         if (s.price !== null) add(t, cardOf(s), copies * s.price);
-        if (isBelow(s.price, minimum)) t.below += copies * (s.price ?? 0);
+        if (isBelow(s.price, minimum)) {
+          t.below += copies * (s.price ?? 0);
+          t.belowCards += copies;
+        }
         const price = s.price ?? 0;
         t.present.set(printing, price);
         t.holding?.set(printing, { copies, price });
@@ -10293,13 +10299,17 @@ function valueHistoryFrom(
     day: today,
     total: 0,
     below: 0,
+    belowCards: 0,
     byBucket: new Map(),
     present: new Map(),
     holding: null,
   };
   for (const e of current) {
     add(live, cardOf(e), e.copies * (e.price ?? 0));
-    if (isBelow(e.price, minimum)) live.below += e.copies * (e.price ?? 0);
+    if (isBelow(e.price, minimum)) {
+      live.below += e.copies * (e.price ?? 0);
+      live.belowCards += e.copies;
+    }
     live.present.set(e.key, e.price ?? 0);
   }
   tallies.push(live);
@@ -10345,7 +10355,7 @@ function valueHistoryFrom(
       values: lines.map((line) => line.sums.reduce((n, key) => n + (t.byBucket.get(key) ?? 0), 0)),
       moved,
       live: t === live,
-      ...(asksMinimum(minimum) ? { below: t.below } : {}),
+      ...(asksMinimum(minimum) ? { below: t.below, belowCards: t.belowCards } : {}),
     };
   });
   return { buckets: lines.map((line) => line.bucket), points, today };
@@ -14002,9 +14012,11 @@ export function readHandlers(db: FakeDb) {
      *  through a sync. */
     scan_sounds: (): ScanSounds => throughJson(db.scanSounds ?? DEFAULT_SCAN_SOUNDS),
 
-    /** `collection_value::stored`: the row, or the defaults, which are no reduced price. */
+    /** `collection_value::stored`: the row, or the defaults, which are no reduced price. A row
+     *  missing a field keeps the rest — the crate's `#[serde(default)]`, so a world seeded before
+     *  the bulk price (issue #1477) reads with none. */
     collection_value: (): CollectionValue =>
-      throughJson(db.collectionValue ?? DEFAULT_COLLECTION_VALUE),
+      throughJson({ ...DEFAULT_COLLECTION_VALUE, ...db.collectionValue }),
 
     start_view: (): string =>
       db.startView !== null && db.startView.trim() !== "" ? db.startView : DEFAULT_START_VIEW,
@@ -24775,21 +24787,23 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `collection_value::store` — remember the two figures, whole. One refusal, the crate's
+     * `collection_value::store` — remember the three figures, whole. One refusal, the crate's
      * `OUT_OF_BOUNDS`, and `busy` like every ordinary write.
      */
     set_collection_value: (args: { settings: CollectionValue }): void => {
       refuseIfBusy(db);
-      const { sellPercent, minimumValue } = args.settings;
+      const { sellPercent, minimumValue, bulkPrice } = args.settings;
       const inRange =
         Number.isFinite(sellPercent) &&
         Number.isFinite(minimumValue) &&
+        Number.isFinite(bulkPrice) &&
         sellPercent > 0 &&
         sellPercent <= 100 &&
-        minimumValue >= 0;
+        minimumValue >= 0 &&
+        bulkPrice >= 0;
       if (!inRange) {
         throw refuse(
-          "Sell percentage has to be above 0 and at most 100, and the minimum card value can't be below zero.",
+          "Sell percentage has to be above 0 and at most 100, and the minimum card value and bulk price can't be below zero.",
         );
       }
       db.collectionValue = throughJson(args.settings);

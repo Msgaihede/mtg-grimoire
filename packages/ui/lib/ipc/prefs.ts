@@ -60,12 +60,16 @@ export interface ScanSounds {
  *
  * `sellPercent` is the share of market price they expect, above 0 and at most 100; `minimumValue`
  * is the price below which a card is not worth selling, in the marketplace's own currency and
- * never converted — `ScanSounds`' rule. The defaults, 100 and 0, are "no reduced price". The crate
- * refuses anything outside those bounds and reads a stored row outside them as the defaults.
+ * never converted — `ScanSounds`' rule; `bulkPrice` is what each copy under the minimum is worth
+ * instead of nothing (issue #1477), zero or more, in the same currency, and counted only while a
+ * minimum is set. The defaults, 100, 0 and 0, are "no reduced price". The crate refuses anything
+ * outside those bounds and reads a stored row outside them as the defaults; a row from before the
+ * bulk price reads with none.
  */
 export interface CollectionValue {
   sellPercent: number;
   minimumValue: number;
+  bulkPrice: number;
 }
 
 /** The prefs commands — spread into `ipc` by `../ipc.ts`, which is the only reader of this object. */

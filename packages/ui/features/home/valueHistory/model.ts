@@ -204,8 +204,8 @@ function fold(
  * Range, fold and label. Pure.
  *
  * `settings` are the reader's reduced-price figures, the Collection value graph's alone. **The
- * percentage is applied here, to every point**, and each point's `below` is its own period's: a
- * reader's settings of today, read against the prices of each day.
+ * percentage is applied here, to every point**, and each point's `below` and `belowCards` are its
+ * own period's: a reader's settings of today, read against the prices of each day.
  */
 export function viewOf(
   h: ValueHistory,
@@ -235,7 +235,7 @@ export function viewOf(
     reduced:
       settings === undefined || !reducesValue(settings)
         ? null
-        : points.map((p) => reducedPoint(finite(p.total), p.below, settings)),
+        : points.map((p) => reducedPoint(finite(p.total), p.below, p.belowCards, settings)),
     historyShort: cutoff !== null && oldest !== null && oldest > cutoff,
     today: h.today,
   };

@@ -43,6 +43,7 @@ const SUMMARY = {
 
 const sell = () => screen.getByRole("textbox", { name: /Sell percentage/ });
 const minimum = () => screen.getByRole("textbox", { name: /Minimum card value/ });
+const bulk = () => screen.getByRole("textbox", { name: /Bulk price/ });
 
 describe("CollectionValuePanel", () => {
   beforeEach(() => {
@@ -57,11 +58,12 @@ describe("CollectionValuePanel", () => {
     expect(await screen.findByText(/only full values are shown/)).toBeInTheDocument();
     expect(sell()).toHaveValue("");
     expect(minimum()).toHaveValue("");
+    expect(bulk()).toHaveValue("");
     expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
   });
 
   it("breaks the collection down under stored settings", async () => {
-    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 0.5 });
+    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 0.5, bulkPrice: 0 });
     collectionSummary.mockResolvedValue({
       ...SUMMARY,
       belowMinimum: { cards: 466, value: 58.84 },
@@ -70,6 +72,7 @@ describe("CollectionValuePanel", () => {
     expect(await screen.findByText("Under $0.50 · 466 cards")).toBeInTheDocument();
     expect(screen.getByText("Sell at 70%")).toBeInTheDocument();
     expect(screen.getByText("−$1,856.48")).toBeInTheDocument();
+    expect(screen.queryByText(/^Bulk at/)).toBeNull();
     await waitFor(() => expect(sell()).toHaveValue("70"));
     expect(minimum()).toHaveValue("0.50");
     expect(collectionSummary).toHaveBeenLastCalledWith(expect.objectContaining({ minimumValue: 0.5 }));
@@ -82,8 +85,62 @@ describe("CollectionValuePanel", () => {
     await user.type(sell(), "70");
     await user.tab();
     await waitFor(() =>
-      expect(setCollectionValue).toHaveBeenCalledWith({ sellPercent: 70, minimumValue: 0 }),
+      expect(setCollectionValue).toHaveBeenCalledWith({
+        sellPercent: 70,
+        minimumValue: 0,
+        bulkPrice: 0,
+      }),
     );
+  });
+
+  /** Issue #1477: a bulk price prices the cards under the minimum, so it waits for one. */
+  it("greys the bulk price until a minimum is set, then stores it", async () => {
+    const user = userEvent.setup();
+    render(wrap(<CollectionValuePanel />));
+    await screen.findByText(/only full values are shown/);
+    expect(bulk()).toBeDisabled();
+    await user.type(minimum(), "1{Enter}");
+    await waitFor(() => expect(bulk()).toBeEnabled());
+    await user.type(bulk(), "0.01{Enter}");
+    await waitFor(() =>
+      expect(setCollectionValue).toHaveBeenLastCalledWith({
+        sellPercent: 100,
+        minimumValue: 1,
+        bulkPrice: 0.01,
+      }),
+    );
+  });
+
+  it("states the bulk price in the breakdown, after the percentage", async () => {
+    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 0.5, bulkPrice: 0.01 });
+    collectionSummary.mockResolvedValue({
+      ...SUMMARY,
+      belowMinimum: { cards: 466, value: 58.84 },
+    });
+    render(wrap(<CollectionValuePanel />));
+    expect(await screen.findByText("Bulk at $0.01 · 466 cards")).toBeInTheDocument();
+    expect(screen.getByText("+$4.66")).toBeInTheDocument();
+    expect(screen.getAllByText("$4,336.45").length).toBeGreaterThan(0);
+    await waitFor(() => expect(bulk()).toHaveValue("0.01"));
+  });
+
+  /** A row from before the bulk price reads with none — the crate's `#[serde(default)]`. */
+  it("reads settings without a bulk price as none", async () => {
+    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 0.5 });
+    render(wrap(<CollectionValuePanel />));
+    await waitFor(() => expect(minimum()).toHaveValue("0.50"));
+    expect(bulk()).toHaveValue("");
+    expect(bulk()).toBeEnabled();
+  });
+
+  it("refuses a bulk price it cannot read and stores nothing", async () => {
+    const user = userEvent.setup();
+    collectionValue.mockResolvedValue({ sellPercent: 100, minimumValue: 1, bulkPrice: 0 });
+    render(wrap(<CollectionValuePanel />));
+    await waitFor(() => expect(bulk()).toBeEnabled());
+    await user.type(bulk(), "cheap{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Bulk price has to be a price");
+    expect(setCollectionValue).not.toHaveBeenCalled();
   });
 
   it("refuses a percentage out of bounds in words and stores nothing", async () => {
@@ -95,9 +152,9 @@ describe("CollectionValuePanel", () => {
     expect(setCollectionValue).not.toHaveBeenCalled();
   });
 
-  it("puts both figures back on Reset", async () => {
+  it("puts every figure back on Reset", async () => {
     const user = userEvent.setup();
-    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 0 });
+    collectionValue.mockResolvedValue({ sellPercent: 70, minimumValue: 1, bulkPrice: 0.01 });
     render(wrap(<CollectionValuePanel />));
     await user.click(await screen.findByRole("button", { name: "Reset" }));
     await waitFor(() =>

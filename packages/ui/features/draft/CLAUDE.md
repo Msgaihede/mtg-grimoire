@@ -42,8 +42,8 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
 - **Open Packs' reduced price is the page's own** (`packs/reducedPick.ts`): its sell percentage,
   minimum and bulk price are kept the marketplace pick's way, and never read from or written to
   Settings' collection value. The sum is `lib/collectionValue.ts`' `reducedValue`; never write a
-  second one. The bulk price (issue #1477) is this page's alone — it counts each card under the
-  minimum at that price, after the percentage — and never goes into the IPC's `CollectionValue`.
+  second one. Its bulk price (issue #1477) is apart from the collection setting's bulk price like
+  the other two: the same `CollectionValue` shape, never the same stored figure.
 - **The set walls are MTGJSON's** (`useBoosterSets` over `packs_booster_sets`): Open Packs and a
   draft's pack order offer only the sets MTGJSON sells a booster pack of. Never build a wall from
   the corpus's `list_sets` — Scryfall splits a release into sets no booster is sold of.

@@ -373,28 +373,40 @@ function view(totals: number[], moved: (number | null)[], gapDays = 1): HistoryV
 
 describe("the reduced price on the graph", () => {
   const points = [
-    { day: ago(1), total: 100, values: [], moved: null, live: false, below: 10 },
-    { day: TODAY, total: 120, values: [], moved: 0, live: true, below: 20 },
+    { day: ago(1), total: 100, values: [], moved: null, live: false, below: 10, belowCards: 40 },
+    { day: TODAY, total: 120, values: [], moved: 0, live: true, below: 20, belowCards: 80 },
   ];
   const history = { buckets: [], points, today: TODAY };
 
   it("reduces each point by that point's own below, at today's percentage", () => {
-    const v = viewOf(history, "total", "30d", { sellPercent: 50, minimumValue: 0.5 });
+    const v = viewOf(history, "total", "30d", { sellPercent: 50, minimumValue: 0.5, bulkPrice: 0 });
     expect(v.reduced).toEqual([45, 50]);
   });
 
+  /** Issue #1477: each point's own copies under the minimum, at today's bulk price. */
+  it("adds each point's copies under the minimum at the bulk price", () => {
+    const v = viewOf(history, "total", "30d", {
+      sellPercent: 50,
+      minimumValue: 0.5,
+      bulkPrice: 0.1,
+    });
+    expect(v.reduced).toEqual([49, 58]);
+  });
+
   it("applies a percentage with no minimum to the whole total", () => {
-    const v = viewOf(history, "total", "30d", { sellPercent: 50, minimumValue: 0 });
+    const v = viewOf(history, "total", "30d", { sellPercent: 50, minimumValue: 0, bulkPrice: 0 });
     expect(v.reduced).toEqual([50, 60]);
   });
 
   it("draws nothing with no settings, and nothing for the wishlist's graph", () => {
-    expect(viewOf(history, "total", "30d", { sellPercent: 100, minimumValue: 0 }).reduced).toBeNull();
+    expect(
+      viewOf(history, "total", "30d", { sellPercent: 100, minimumValue: 0, bulkPrice: 0 }).reduced,
+    ).toBeNull();
     expect(viewOf(history, "total", "30d").reduced).toBeNull();
   });
 
   it("says the hovered day's reduced price on the readout", () => {
-    const v = viewOf(history, "total", "30d", { sellPercent: 50, minimumValue: 0.5 });
+    const v = viewOf(history, "total", "30d", { sellPercent: 50, minimumValue: 0.5, bulkPrice: 0 });
     const readout = readoutAt(v, 0, "total", "usd");
     expect(readout.reduced).toBe("$45.00");
     expect(readout.facts.map((f) => f.label).slice(0, 2)).toEqual(["Value", "Reduced price"]);

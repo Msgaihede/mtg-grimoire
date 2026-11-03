@@ -2,14 +2,8 @@
  * The Packs page's conclusions, pure: what one press opened, what the product is worth, and the
  * order the opened cards are laid out in. The components only draw these.
  */
-import {
-  belowMinimumOf,
-  minimumOf,
-  reducedValue,
-  type ReducedSettings,
-  type ReducedValue,
-} from "@/lib/collectionValue";
-import type { BoosterCard, BoosterSet } from "@/lib/ipc";
+import { belowMinimumOf, minimumOf, reducedValue, type ReducedValue } from "@/lib/collectionValue";
+import type { BoosterCard, BoosterSet, CollectionValue } from "@/lib/ipc";
 import { rarityRank } from "@/lib/rarity";
 import {
   openBooster,
@@ -200,7 +194,7 @@ export function openedPrices(opened: Opened, priceOf: PriceOf): (number | null)[
 export function reducedOpening(
   full: number,
   prices: Iterable<number | null>,
-  settings: ReducedSettings,
+  settings: CollectionValue,
 ): ReducedValue | null {
   const minimum = minimumOf(settings);
   return reducedValue(
