@@ -13,7 +13,7 @@ import {
   reducesValue,
 } from "./collectionValue";
 
-const BOTH = { sellPercent: 70, minimumValue: 0.5 };
+const BOTH = { sellPercent: 70, minimumValue: 0.5, bulkPrice: 0 };
 
 describe("the reduced price", () => {
   /** The design's own figures, line by line: the lines on screen add up to the total on screen. */
@@ -28,12 +28,13 @@ describe("the reduced price", () => {
   });
 
   it("states a line only for the setting that made it", () => {
-    const sell = reducedValue(100, undefined, { sellPercent: 68, minimumValue: 0 });
+    const sell = reducedValue(100, undefined, { sellPercent: 68, minimumValue: 0, bulkPrice: 0 });
     expect(sell).toMatchObject({ below: null, reduced: 68, sale: { percent: 68, lost: 32 } });
 
     const minimum = reducedValue(100, { cards: 3, value: 1.2 }, {
       sellPercent: 100,
       minimumValue: 0.5,
+      bulkPrice: 0,
     });
     expect(minimum).toMatchObject({ sale: null, reduced: 98.8 });
     expect(minimum?.below).toEqual({ minimum: 0.5, cards: 3, value: 1.2 });
@@ -99,8 +100,8 @@ describe("what a read asks", () => {
 
   it("calls either setting a reduction, and the defaults none", () => {
     expect(reducesValue(DEFAULT_COLLECTION_VALUE)).toBe(false);
-    expect(reducesValue({ sellPercent: 99, minimumValue: 0 })).toBe(true);
-    expect(reducesValue({ sellPercent: 100, minimumValue: 0.01 })).toBe(true);
+    expect(reducesValue({ sellPercent: 99, minimumValue: 0, bulkPrice: 0 })).toBe(true);
+    expect(reducesValue({ sellPercent: 100, minimumValue: 0.01, bulkPrice: 0 })).toBe(true);
   });
 });
 
@@ -114,9 +115,19 @@ describe("addBelow", () => {
 
 describe("reducedPoint", () => {
   it("ignores a below no minimum asked for, and never goes under zero", () => {
-    expect(reducedPoint(100, 40, { sellPercent: 50, minimumValue: 0 })).toBe(50);
-    expect(reducedPoint(100, 40, BOTH)).toBe(42);
-    expect(reducedPoint(10, 40, BOTH)).toBe(0);
+    expect(reducedPoint(100, 40, 5, { sellPercent: 50, minimumValue: 0, bulkPrice: 0 })).toBe(50);
+    expect(reducedPoint(100, 40, 5, BOTH)).toBe(42);
+    expect(reducedPoint(10, 40, 5, BOTH)).toBe(0);
+  });
+
+  /** Issue #1477: the period's copies under the minimum at the bulk price, after the percentage —
+   *  {@link reducedValue}'s order. */
+  it("adds the period's copies under the minimum at the bulk price", () => {
+    expect(reducedPoint(100, 40, 5, { ...BOTH, bulkPrice: 0.1 })).toBeCloseTo(42.5, 10);
+    // No minimum, no bulk: there is nothing under it to price.
+    expect(reducedPoint(100, 40, 5, { sellPercent: 50, minimumValue: 0, bulkPrice: 0.1 })).toBe(50);
+    // A read too old to carry the copies counts none rather than guessing.
+    expect(reducedPoint(100, 40, undefined, { ...BOTH, bulkPrice: 0.1 })).toBe(42);
   });
 });
 

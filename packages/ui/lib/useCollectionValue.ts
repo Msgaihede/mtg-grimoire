@@ -11,15 +11,23 @@ import { notify } from "@/lib/notifications";
  */
 export const COLLECTION_VALUE_KEY = ["collectionValue"] as const;
 
+/** Every field stated: a figure the answer lacks is its default — the crate's `#[serde(default)]`
+ *  on this side, for a cached answer older than the bulk price (issue #1477). Memoised by React
+ *  Query on the answer, so a reader sees one object per answer. */
+function complete(settings: CollectionValue): CollectionValue {
+  return { ...DEFAULT_COLLECTION_VALUE, ...settings };
+}
+
 const QUERY = {
   queryKey: COLLECTION_VALUE_KEY,
   queryFn: () => ipc.collectionValue(),
   staleTime: Infinity,
+  select: complete,
 };
 
 /**
- * The reader's sell percentage and minimum card value — read by every surface that draws a
- * reduced price, and read and written by Settings.
+ * The reader's sell percentage, minimum card value and bulk price — read by every surface that
+ * draws a reduced price, and read and written by Settings.
  *
  * **A read in flight or failed is the defaults**, which is no reduced price: the far end's own
  * answer for a row it cannot read, and a value with no brackets is true.

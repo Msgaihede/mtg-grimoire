@@ -11,32 +11,26 @@ import { parsePurchasePrice } from "@/lib/prices";
  * card's market price: a $0.60 card at 70% is still a card worth selling.
  *
  * **Rust answers the part only SQL can**: {@link BelowMinimum} is compared per copy. The percentage
- * never reaches a statement, so changing it asks nothing of the database.
+ * and the bulk price never reach a statement, so changing either asks nothing of the database.
  *
- * **A bulk price is Open Packs' alone** (issue #1477, {@link ReducedSettings}): each card under the
- * minimum is counted at it rather than at nothing. The collection's setting has none.
+ * **A bulk price counts each card under the minimum back at that price** (issue #1477) rather than
+ * at nothing, after the percentage. Settings › Collection value has one for the collection, and
+ * Open Packs one of its own (`features/draft/packs/reducedPick.ts`); the two never meet.
  */
 
 /** No reduced price: every card counted, at full price. `collection_value::CollectionValue`'s own
  *  default, repeated for a read still in flight. */
-export const DEFAULT_COLLECTION_VALUE: CollectionValue = { sellPercent: 100, minimumValue: 0 };
-
-/**
- * The settings {@link reducedValue} reduces by: the collection's two figures, and a bulk price that
- * only Open Packs sets (`features/draft/packs/reducedPick.ts`, issue #1477). Absent or `0`, a card
- * under the minimum is taken out, as it always was.
- */
-export interface ReducedSettings extends CollectionValue {
-  /** What each card under the minimum is worth instead of its market price. A sale figure — what a
-   *  buyer pays a card for bulk — so the sell percentage never reduces it again. Only counted while
-   *  a minimum is set. */
-  bulkPrice?: number;
-}
+export const DEFAULT_COLLECTION_VALUE: CollectionValue = {
+  sellPercent: 100,
+  minimumValue: 0,
+  bulkPrice: 0,
+};
 
 /** The bulk price as the sum counts it: `undefined` with none, or with no minimum to be under. */
-export function bulkOf(settings: ReducedSettings): number | undefined {
-  const bulk = settings.bulkPrice ?? 0;
-  return bulk > 0 && minimumOf(settings) !== undefined ? bulk : undefined;
+export function bulkOf(settings: CollectionValue): number | undefined {
+  return settings.bulkPrice > 0 && minimumOf(settings) !== undefined
+    ? settings.bulkPrice
+    : undefined;
 }
 
 /** Whether these settings change anything at all. Neither set, the app reads as it always did. */
@@ -125,7 +119,7 @@ export interface ReducedValue {
 export function reducedValue(
   full: number | null,
   below: BelowMinimum | undefined,
-  settings: ReducedSettings,
+  settings: CollectionValue,
 ): ReducedValue | null {
   if (full === null || !reducesValue(settings)) return null;
   const minimum = minimumOf(settings);
@@ -167,14 +161,16 @@ export function addBelow(
   return { cards: a.cards + b.cards, value: a.value + b.value };
 }
 
-/** A point on the value graph, reduced: {@link reducedValue}'s sum over a period's own figures,
- *  with no breakdown to write. */
+/** A point on the value graph, reduced: {@link reducedValue}'s sum over a period's own figures —
+ *  its money under the minimum and its copies there — with no breakdown to write. */
 export function reducedPoint(
   total: number,
   below: number | undefined,
+  belowCards: number | undefined,
   settings: CollectionValue,
 ): number {
-  return (Math.max(0, total - (minimumOf(settings) === undefined ? 0 : (below ?? 0))) *
-    settings.sellPercent) /
-    100;
+  const asked = minimumOf(settings) !== undefined;
+  const sold = (Math.max(0, total - (asked ? (below ?? 0) : 0)) * settings.sellPercent) / 100;
+  const bulk = bulkOf(settings);
+  return bulk === undefined ? sold : sold + (belowCards ?? 0) * bulk;
 }

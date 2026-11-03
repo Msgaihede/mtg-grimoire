@@ -1,18 +1,20 @@
 //! **What the reader's collection would fetch** — the share of a card's price they expect to get
-//! for it, and the price under which a card is not worth selling at all. One `app_meta` row,
-//! written whole.
+//! for it, the price under which a card is not worth selling at all, and what such a card fetches
+//! as bulk instead. One `app_meta` row, written whole.
 //!
-//! The reduced price is the page's conclusion (`(full − below) × sellPercent / 100`): Rust supplies
-//! the facts it is drawn from and never does the sum. **The sell percentage never reaches SQL**;
-//! only the minimum does, because a minimum is compared per card and only the statement that
-//! prices the cards can do that ([`crate::collection::BelowMinimum`]). All this module owns is the
-//! setting and the rule that keeps it one a page can act on — **a percentage of nothing is no
-//! price, and neither is a minimum below zero** — refused where the reader can still fix it rather
-//! than stored to be argued with later.
+//! The reduced price is the page's conclusion (`(full − below) × sellPercent / 100 + cards below ×
+//! bulkPrice`): Rust supplies the facts it is drawn from and never does the sum. **The sell
+//! percentage and the bulk price never reach SQL**; only the minimum does, because a minimum is
+//! compared per card and only the statement that prices the cards can do that
+//! ([`crate::collection::BelowMinimum`], whose `cards` the bulk price multiplies). All this module
+//! owns is the setting and the rule that keeps it one a page can act on — **a percentage of
+//! nothing is no price, and neither is a minimum or a bulk price below zero** — refused where the
+//! reader can still fix it rather than stored to be argued with later.
 //!
-//! **The minimum is in the marketplace's own currency**, whichever the reader quotes in — dollars
-//! at TCGplayer, euros at Cardmarket. Nothing here converts: it means "a card worth less than this
-//! at the prices I see", and it is compared against exactly those prices.
+//! **The minimum and the bulk price are in the marketplace's own currency**, whichever the reader
+//! quotes in — dollars at TCGplayer, euros at Cardmarket. Nothing here converts: the minimum means
+//! "a card worth less than this at the prices I see", and it is compared against exactly those
+//! prices.
 //!
 //! **Reading can never fail**, [`crate::startview`]'s rule: no row, a row that is not JSON, a row
 //! of the wrong shape and a row whose figures are out of bounds all read as the defaults, which
@@ -28,10 +30,10 @@ pub const K_COLLECTION_VALUE: &str = "collection_value";
 
 /// What [`store`] says when a figure is out of bounds, or is not a figure at all.
 pub const OUT_OF_BOUNDS: &str =
-    "Sell percentage has to be above 0 and at most 100, and the minimum card value can't be below zero.";
+    "Sell percentage has to be above 0 and at most 100, and the minimum card value and bulk price can't be below zero.";
 
 /// What a reader expects to get for the collection: this share of the price, for the cards priced
-/// at this much or more.
+/// at this much or more, and a bulk price for each of the rest.
 ///
 /// `#[serde(default)]` on the struct, so a row written by an older or newer build with a field
 /// more or less reads with the rest intact.
@@ -44,6 +46,10 @@ pub struct CollectionValue {
     /// The price a copy has to reach to be counted at all — `0` out of the box, every priced copy.
     /// A copy priced exactly here counts.
     pub minimum_value: f64,
+    /// What each copy priced under the minimum is worth instead of nothing — `0` out of the box,
+    /// which takes those copies out (issue #1477). A sale figure, so the sell percentage never
+    /// reduces it, and it counts only while a minimum is set. Nothing ties it below the minimum.
+    pub bulk_price: f64,
 }
 
 impl Default for CollectionValue {
@@ -51,19 +57,22 @@ impl Default for CollectionValue {
         CollectionValue {
             sell_percent: 100.0,
             minimum_value: 0.0,
+            bulk_price: 0.0,
         }
     }
 }
 
 impl CollectionValue {
-    /// Whether both figures are finite and inside their bounds. `sell_percent` is above zero
+    /// Whether every figure is finite and inside its bounds. `sell_percent` is above zero
     /// rather than at least one, so a reader's `0.5` is a setting and only `0` is refused.
     fn valid(&self) -> bool {
         self.sell_percent.is_finite()
             && self.minimum_value.is_finite()
+            && self.bulk_price.is_finite()
             && self.sell_percent > 0.0
             && self.sell_percent <= 100.0
             && self.minimum_value >= 0.0
+            && self.bulk_price >= 0.0
     }
 }
 
@@ -102,6 +111,7 @@ mod tests {
         let s = stored(&conn());
         assert_eq!(s.sell_percent, 100.0);
         assert_eq!(s.minimum_value, 0.0);
+        assert_eq!(s.bulk_price, 0.0);
     }
 
     #[test]
@@ -110,6 +120,7 @@ mod tests {
         let s = CollectionValue {
             sell_percent: 70.0,
             minimum_value: 0.25,
+            bulk_price: 0.01,
         };
         store(&c, &s).unwrap();
         assert_eq!(stored(&c), s);
@@ -124,10 +135,12 @@ mod tests {
             CollectionValue {
                 sell_percent: 100.0,
                 minimum_value: 0.0,
+                bulk_price: 0.0,
             },
             CollectionValue {
                 sell_percent: 0.5,
                 minimum_value: 1000.0,
+                bulk_price: 1000.0,
             },
         ] {
             store(&c, &s).unwrap();
@@ -171,6 +184,18 @@ mod tests {
                 minimum_value: f64::INFINITY,
                 ..CollectionValue::default()
             },
+            CollectionValue {
+                bulk_price: -0.01,
+                ..CollectionValue::default()
+            },
+            CollectionValue {
+                bulk_price: f64::NAN,
+                ..CollectionValue::default()
+            },
+            CollectionValue {
+                bulk_price: f64::INFINITY,
+                ..CollectionValue::default()
+            },
         ] {
             assert_eq!(store(&c, &bad), Err(OUT_OF_BOUNDS.to_owned()), "{bad:?}");
         }
@@ -189,6 +214,7 @@ mod tests {
             r#"{"sellPercent":0}"#,
             r#"{"sellPercent":150}"#,
             r#"{"minimumValue":-1}"#,
+            r#"{"bulkPrice":-1}"#,
         ] {
             set_app_meta(&c, K_COLLECTION_VALUE, junk).unwrap();
             assert_eq!(stored(&c), CollectionValue::default(), "{junk}");
@@ -205,12 +231,32 @@ mod tests {
         assert_eq!(s.minimum_value, 0.0);
     }
 
+    /// A row written before the bulk price existed (issue #1477) reads with none.
+    #[test]
+    fn a_row_from_before_the_bulk_price_reads_as_no_bulk_price() {
+        let c = conn();
+        set_app_meta(
+            &c,
+            K_COLLECTION_VALUE,
+            r#"{"sellPercent":70,"minimumValue":0.5}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            stored(&c),
+            CollectionValue {
+                sell_percent: 70.0,
+                minimum_value: 0.5,
+                bulk_price: 0.0,
+            }
+        );
+    }
+
     /// The names `packages/ui/lib/ipc.ts` reads, and the row's own.
     #[test]
     fn the_setting_serialises_under_the_names_the_page_reads() {
         assert_eq!(
             serde_json::to_value(CollectionValue::default()).unwrap(),
-            serde_json::json!({ "sellPercent": 100.0, "minimumValue": 0.0 })
+            serde_json::json!({ "sellPercent": 100.0, "minimumValue": 0.0, "bulkPrice": 0.0 })
         );
     }
 }

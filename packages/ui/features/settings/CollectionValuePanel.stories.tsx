@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { CollectionValuePanel } from "./CollectionValuePanel";
 
 const meta = {
@@ -17,12 +17,13 @@ const meta = {
     docs: {
       description: {
         component:
-          "What the reader expects to get for their cards: a sell percentage and a minimum card " +
-          "value, which together make the one reduced price drawn in brackets beside the " +
-          "collection's value, its folders and the home widgets.\n\n" +
+          "What the reader expects to get for their cards: a sell percentage, a minimum card " +
+          "value and a bulk price, which together make the one reduced price drawn in brackets " +
+          "beside the collection's value, its folders and the home widgets.\n\n" +
           "**The minimum goes first**, on each card's market price, and the percentage is taken " +
-          "of what is left. A box is stored when it is left or Enter is pressed. An empty box is " +
-          "that setting's default.",
+          "of what is left; each card under the minimum is then counted at the bulk price, which " +
+          "waits greyed until a minimum is set. A box is stored when it is left or Enter is " +
+          "pressed. An empty box is that setting's default.",
       },
     },
   },
@@ -57,5 +58,20 @@ export const OutOfBounds: Story = {
     await canvas.findByText(/only full values are shown/);
     await userEvent.type(canvas.getByRole("textbox", { name: /Sell percentage/ }), "120{Enter}");
     await expect(await canvas.findByRole("alert")).toHaveTextContent(/at most 100/);
+  },
+};
+
+/** Issue #1477: a minimum, then a bulk price — each card under $1.00 counted at $0.01, a line of
+ *  its own in the breakdown. */
+export const SetABulkPrice: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText(/only full values are shown/);
+    const bulk = canvas.getByRole("textbox", { name: /Bulk price/ });
+    await expect(bulk).toBeDisabled();
+    await userEvent.type(canvas.getByRole("textbox", { name: /Minimum card value/ }), "1{Enter}");
+    await waitFor(() => expect(bulk).toBeEnabled());
+    await userEvent.type(bulk, "0.01{Enter}");
+    await expect(await canvas.findByText(/^Bulk at \$0\.01 · /)).toBeInTheDocument();
   },
 };
