@@ -219,6 +219,42 @@ describe("PackOpener", () => {
     expect(screen.getByText("100%")).toBeInTheDocument();
   });
 
+  /** Issue #1503: the session's tally starts over without a restart; the opened pack stays. */
+  it("resets the session's tally, leaving the opened pack on the wall", async () => {
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+    await screen.findByText(/^Expected value/);
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await user.click(screen.getByRole("button", { name: "Open another" }));
+
+    const expected = openOne(SET, { kind: "booster", id: "collector", name: "" }, SEED);
+    const one = packValue(expected.cards, (id, foil) =>
+      id === "land" ? null : finishPrice(PRICES.get(id), foil),
+    );
+    const figures = screen.getByRole("complementary", { name: "Figures" });
+    const opened = () => within(figures).getByText("Opened").nextSibling;
+    const total = () => within(figures).getByText("Total value").nextSibling;
+    expect(opened()).toHaveTextContent("2");
+    expect(total()).toHaveTextContent(formatPrice(one * 2, "usd"));
+
+    const reset = within(figures).getByRole("button", { name: "Reset this session" });
+    await user.click(reset);
+    expect(opened()).toHaveTextContent("0");
+    expect(total()).toHaveTextContent(formatPrice(0, "usd"));
+    expect(within(figures).getByText("Total expected").nextSibling).toHaveTextContent(
+      formatPrice(0, "usd"),
+    );
+    // Nothing left to reset; the pack just opened is still drawn.
+    expect(reset).toBeDisabled();
+    expect(screen.getByRole("list", { name: "Opened cards" })).toBeInTheDocument();
+
+    // The next press counts from nothing.
+    await user.click(screen.getByRole("button", { name: "Open another" }));
+    expect(opened()).toHaveTextContent("1");
+    expect(total()).toHaveTextContent(formatPrice(one, "usd"));
+    expect(reset).toBeEnabled();
+  });
+
   it("opens a sealed product: every booster in it", async () => {
     const { user } = setup();
     await user.click(await screen.findByRole("button", { name: /Test Set/ }));

@@ -152,6 +152,14 @@ is kept with the other two (`bulkPrice` in `grimoire.packs.reduced`); figures ke
 read as no bulk price. Settings › Collection value has a bulk price of its own for the collection,
 and the two never meet.
 
+**The session's tally can be started over** (issue
+[#1503](https://github.com/Msgaihede/mtg-grimoire/issues/1503)): _This session_ — packs opened, their
+total value and their total expected — runs for the window's life (`lib/viewMemory.ts`), across
+sets, and a change of currency starts it over. A _Reset_ beside its heading starts it over at once,
+without a restart: the pack on the wall, the product and the page's prices stay as they are, and the
+next _Open another_ counts from one. It asks nothing first — the tally is a running sum for the
+reader's eyes, nothing is written — and it is greyed while the tally is empty.
+
 **Every price control is in the right-hand column** (issue #1465): _Prices from_, _Sell at_,
 _Minimum_ and _Bulk_ sit above the expected value and the figures, so the product row (product, _Open_,
 _Back_) is the only band at the top and the column starts level with it. On a narrow page the
