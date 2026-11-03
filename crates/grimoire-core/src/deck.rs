@@ -2051,6 +2051,140 @@ pub(crate) fn release_unclaimed_copies(
     sweep_group(tx, deck_id, &[LIVE, THEORY])
 }
 
+/// Give back the copies of one printing and finish that the **live** list stopped claiming
+/// because a write just took `displaced` copies of it off the list — a stepper step down, a swap,
+/// a split or a finish change.
+///
+/// **Why the sweep is not enough** ([issue #1494](https://github.com/Msgaihede/mtg-grimoire/issues/1494)).
+/// [`release_unclaimed_copies`] keeps every copy the plan still names, issue #1112's rule, and
+/// that rule is right for the deck as a whole: switching the plan on empties the Actual list and
+/// leaves the box where it was, so a sweep that ignored the plan would evict the box on the next
+/// swap. But a swap on a deck that keeps a plan then leaves the **old printing's copy in the
+/// group** whenever the plan still lists that printing — and it nearly always does, because the
+/// plan is the list the Actual one was built from. The reader swapped a Face Yourself to a foil
+/// printing, pulled the new copy in, and found two copies filed under a deck that lists one: the
+/// old copy was held back by the plan, claimed by no row they could see. A cut
+/// ([`crate::collection_alloc::deck_to_collection`]) never asked the plan — it gives back what it
+/// took off the live list — so the two kinds of removal disagreed about where the cardboard goes.
+///
+/// So the copies that leave are **the ones this write displaced and nothing more**: at most
+/// `displaced`, and never one the live list still claims at this `(card_id, finish)` grain after
+/// the write — another pile listing the same printing keeps its copies, and a finish change on a
+/// printing sold only in foil (an unsaid row and a `foil` row play the same copy,
+/// [`entry_finish`]) displaces nothing. Every other copy in the group is still the sweep's to
+/// judge, with the plan's claims, so issue #1112's eviction cannot come back through here.
+///
+/// The `live` fence is here for [`release_unclaimed_copies`]' reason: a plan holds no cards.
+/// Called inside the caller's transaction, **after** the `deck_cards` write, so the claim it reads
+/// is the finished list's.
+pub(crate) fn release_displaced_copies(
+    tx: &Connection,
+    deck_id: i64,
+    variant: &str,
+    card_id: &str,
+    finish: Option<&str>,
+    displaced: i64,
+) -> Result<(), String> {
+    if variant != LIVE || displaced <= 0 {
+        return Ok(());
+    }
+    let Some(group) = deck_group(tx, deck_id)? else {
+        return Ok(());
+    };
+    let finishes = printing_finishes(tx, card_id)?;
+    let played = entry_finish(finish, finishes.as_deref());
+    // What the finished live list still claims of this grain — every row of the printing whose
+    // played finish is this one, switched-off piles included (the sweep's rule: custody follows
+    // what the list names).
+    let rows: Vec<(Option<String>, i64)> = tx
+        .prepare(
+            "SELECT finish, quantity FROM deck_cards
+              WHERE deck_id = ?1 AND variant = ?2 AND card_id = ?3",
+        )
+        .and_then(|mut s| {
+            s.query_map(params![deck_id, LIVE, card_id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect()
+        })
+        .map_err(|e| e.to_string())?;
+    let still_claimed: i64 = rows
+        .into_iter()
+        .filter(|(stored, _)| entry_finish(stored.as_deref(), finishes.as_deref()) == played)
+        .map(|(_, quantity)| quantity)
+        .sum();
+    let [said, legacy] = entry_spellings(&played, finishes.as_deref());
+    let held: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries
+              WHERE folder_id = ?1 AND card_id = ?2 AND finish IN (?3, ?4)",
+            params![group, card_id, said, legacy],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let take = displaced.min(held - still_claimed);
+    if take <= 0 {
+        return Ok(());
+    }
+    release_group_copies(tx, deck_id, card_id, finish, take)?;
+    Ok(())
+}
+
+/// What the **live** list claims, per `(card_id, played finish)` — [`entry_finish`]'s grain, the
+/// one custody is kept at. Read before a write whose effect on the list is not known up front
+/// (an undo or a redo, which restores whatever cells its step names), so
+/// [`release_dropped_claims`] can tell afterwards what the write took off the list.
+pub(crate) fn live_claims(
+    tx: &Connection,
+    deck_id: i64,
+) -> Result<HashMap<(String, String), i64>, String> {
+    let rows: Vec<(String, Option<String>, Option<String>, i64)> = tx
+        .prepare(
+            "SELECT dc.card_id, dc.finish, c.finishes, dc.quantity
+               FROM deck_cards dc
+               LEFT JOIN cards c ON c.id = dc.card_id
+              WHERE dc.deck_id = ?1 AND dc.variant = ?2",
+        )
+        .and_then(|mut s| {
+            s.query_map(params![deck_id, LIVE], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect()
+        })
+        .map_err(|e| e.to_string())?;
+    let mut claims: HashMap<(String, String), i64> = HashMap::new();
+    for (card_id, finish, finishes, quantity) in rows {
+        let key = (
+            card_id,
+            entry_finish(finish.as_deref(), finishes.as_deref()),
+        );
+        *claims.entry(key).or_insert(0) += quantity;
+    }
+    Ok(claims)
+}
+
+/// Give back the copies of every grain whose live claim fell below `before` — a read of
+/// [`live_claims`] taken ahead of the write. [`release_displaced_copies`] once per grain the write
+/// shrank, so an undo that takes a card off the list sends its copies to `Recently removed` the
+/// way the cut it mirrors would (issue #1494), and a grain it grew or left alone moves nothing.
+pub(crate) fn release_dropped_claims(
+    tx: &Connection,
+    deck_id: i64,
+    before: &HashMap<(String, String), i64>,
+) -> Result<(), String> {
+    let after = live_claims(tx, deck_id)?;
+    for ((card_id, finish), was) in before {
+        let now = after
+            .get(&(card_id.clone(), finish.clone()))
+            .copied()
+            .unwrap_or(0);
+        if now < *was {
+            release_displaced_copies(tx, deck_id, LIVE, card_id, Some(finish), was - now)?;
+        }
+    }
+    Ok(())
+}
+
 /// [`release_unclaimed_copies`]' sweep, with the lists whose rows claim named by the caller.
 ///
 /// **Two callers and two answers.** A swap, a split or a finish change keeps what either list
@@ -4677,6 +4811,16 @@ fn counterpart_pile(
 /// A negative number is refused through the one [`valid_quantity`], and the refusal matters
 /// more here rather than less: in a module where zero legitimately deletes, treating `-1` as
 /// close enough to zero would let arithmetic that went wrong upstream destroy a row.
+///
+/// **A step down on the live list gives the copies back** ([issue
+/// #1494](https://github.com/Msgaihede/mtg-grimoire/issues/1494)). The editor routes a live cut
+/// through [`crate::collection_alloc::deck_to_collection`] when it knows the row's id, but any
+/// caller that does not — the card modal's stepper was one — reached this write, which took the
+/// card off the list and left its copies filed under a deck that no longer named them. The rule
+/// is that a card leaving the deck sends its cardboard to `Recently removed` whichever press took
+/// it out, so the release is here too: [`release_displaced_copies`], never more than the step
+/// took and never a copy another row still claims. A theory row and a virtual deck move nothing.
+/// The undo step still restores `deck_cards` alone — [`swap_printing`]'s bargain.
 pub fn set_card_quantity(
     conn: &Connection,
     deck_id: i64,
@@ -4729,6 +4873,9 @@ pub fn set_card_quantity(
                 params![deck_id, card_id, category_id, variant, finish],
             )
             .map_err(|e| e.to_string())?;
+            // The copies the row was holding leave the deck with it (issue #1494) — see this
+            // function's doc on why the stepper's own write gives them back.
+            release_displaced_copies(&tx, deck_id, variant, card_id, finish.as_deref(), *was)?;
             // `reason` is null and stays null from here: the reconciler is the only writer
             // that could ever have one to give, and it does not delete — it flags. The key is
             // in the shape so a later caller that *does* remove a card for a stated reason has
@@ -4771,6 +4918,15 @@ pub fn set_card_quantity(
         params![deck_id, card_id, category_id, variant, finish, quantity],
     )
     .map_err(|e| e.to_string())?;
+    // A step down gives back the copies it stepped off, a step up moves nothing.
+    release_displaced_copies(
+        &tx,
+        deck_id,
+        variant,
+        card_id,
+        finish.as_deref(),
+        was - quantity,
+    )?;
     let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
@@ -5404,6 +5560,18 @@ pub fn swap_printing(
     // printing's copies would sit in this deck's group claimed by nothing — and
     // `deck_pull::CANDIDATE_SQL` excludes every deck group, so no press could reach them. The
     // sweep is a no-op on `theory` and on a deck holding exactly what it lists.
+    //
+    // The old printing's copies go first, and whether or not the plan still names it — the row
+    // stopped claiming them, which is a cut of the old printing as far as the box is concerned
+    // (issue #1494; see [`release_displaced_copies`]).
+    release_displaced_copies(
+        &tx,
+        deck_id,
+        variant,
+        from_card_id,
+        finish.as_deref(),
+        quantity,
+    )?;
     release_unclaimed_copies(&tx, deck_id, variant)?;
 
     // `delta` 0 and the **new** printing's id: the deck holds the same number of the same card
@@ -5565,6 +5733,16 @@ pub fn split_printing(
         .map_err(|e| e.to_string())?;
     // A fresh row holds exactly the copies split onto it; anything more was already there.
     let folded = landed > copies;
+    // The copies split away stop being claimed by the old printing's row — issue #1494, the
+    // swap's rule (see [`release_displaced_copies`]).
+    release_displaced_copies(
+        &tx,
+        deck_id,
+        variant,
+        from_card_id,
+        finish.as_deref(),
+        copies,
+    )?;
     release_unclaimed_copies(&tx, deck_id, variant)?;
 
     // `swap`'s kind, because `AUDIT_KINDS` is CHECK-constrained and this is the same act on
@@ -5728,6 +5906,10 @@ pub fn set_card_finish(
     // finish's copies would sit in this deck's group claimed by nothing — and
     // `deck_pull::CANDIDATE_SQL` excludes every deck group, so no press could reach them. The
     // sweep is a no-op on `theory` and on a deck holding exactly what it lists.
+    //
+    // The old finish's copies go first, whether or not the plan still names them — issue
+    // #1494, the swap's rule (see [`release_displaced_copies`]).
+    release_displaced_copies(&tx, deck_id, variant, card_id, from.as_deref(), moved)?;
     release_unclaimed_copies(&tx, deck_id, variant)?;
 
     // `delta` 0 and the `swap` kind: the deck holds the same number of the same card, in a
@@ -14424,10 +14606,13 @@ mod tests {
 
         swap_printing(&conn, deck, "serra-lea", "serra-8ed", main, LIVE, None).unwrap();
 
+        // The Bolts are the plan's alone and stay in the box. The Angel the swap took off the
+        // Actual list leaves it, plan or no plan — issue #1494: a card leaving the deck sends
+        // its cardboard to `Recently removed` whichever press took it out.
         assert_eq!(
             custody(&conn, deck, &["bolt-lea", "serra-lea"]),
-            vec![(4, 0), (1, 0)],
-            "the plan still names every copy in the box, so none of them leaves it"
+            vec![(4, 0), (0, 1)],
+            "only the swapped printing's copy leaves; the rest of the box stays with the plan"
         );
     }
 
@@ -14458,6 +14643,189 @@ mod tests {
         );
     }
 
+    /// [Issue #1494](https://github.com/Msgaihede/mtg-grimoire/issues/1494), as the reader met
+    /// it: a deck whose plan and Actual list both name a printing, the Actual line changed to
+    /// another printing and then to foil. The sweep kept the old copy for the plan, so once the
+    /// new foil was pulled in the deck's folder held two copies of a card its list names once.
+    #[test]
+    fn a_swap_then_foil_on_the_actual_list_files_the_old_copy_even_when_the_plan_names_it() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "commander")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let plan = plan_pile(&conn, deck, main);
+        add(&conn, deck, "bolt-lea", main, 1);
+        add_card(&conn, deck, "bolt-lea", Some(plan), None, THEORY, None, 1).unwrap();
+        file_into_group(&conn, deck, "bolt-lea", 1);
+
+        swap_printing(&conn, deck, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
+        set_card_finish(&conn, deck, "bolt-m10", main, LIVE, None, Some("foil")).unwrap();
+
+        assert_eq!(
+            custody(&conn, deck, &["bolt-lea"]),
+            vec![(0, 1)],
+            "the old printing left the Actual list, so its copy left the deck's folder"
+        );
+
+        // The reader's next two presses: the new foil into the collection, and the pull.
+        let root = crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-m10".to_owned(),
+                finish: "foil".to_owned(),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        crate::deck_pull::from_collection(
+            &conn,
+            deck,
+            &[crate::deck_pull::Pick {
+                entry_id: root,
+                quantity: 1,
+            }],
+        )
+        .unwrap();
+        let group = group_of(&conn, deck);
+        assert_eq!(folder_copies_of(&conn, group, "bolt-m10", "foil"), 1);
+        assert_eq!(
+            count(
+                &conn,
+                &format!("collection_entries WHERE folder_id = {group}")
+            ),
+            1,
+            "the folder holds exactly the one card the list names"
+        );
+    }
+
+    /// The finish change alone, on a deck whose plan names the regular copy.
+    #[test]
+    fn a_finish_change_files_the_old_finish_even_when_the_plan_names_it() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let plan = plan_pile(&conn, deck, main);
+        add(&conn, deck, "bolt-m10", main, 2);
+        add_card(&conn, deck, "bolt-m10", Some(plan), None, THEORY, None, 2).unwrap();
+        file_into_group(&conn, deck, "bolt-m10", 2);
+
+        set_card_finish(&conn, deck, "bolt-m10", main, LIVE, None, Some("foil")).unwrap();
+
+        let removed = removed_group(&conn);
+        assert_eq!(
+            folder_copies_of(&conn, group_of(&conn, deck), "bolt-m10", "nonfoil"),
+            0
+        );
+        assert_eq!(folder_copies_of(&conn, removed, "bolt-m10", "nonfoil"), 2);
+    }
+
+    /// A split gives back only the copies it moved off the old printing — the row left behind
+    /// keeps its own.
+    #[test]
+    fn a_split_files_the_copies_it_moved_and_keeps_the_rest() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let plan = plan_pile(&conn, deck, main);
+        add(&conn, deck, "bolt-lea", main, 3);
+        add_card(&conn, deck, "bolt-lea", Some(plan), None, THEORY, None, 3).unwrap();
+        file_into_group(&conn, deck, "bolt-lea", 3);
+
+        split_printing(&conn, deck, "bolt-lea", "bolt-m10", main, LIVE, None, 1).unwrap();
+
+        assert_eq!(custody(&conn, deck, &["bolt-lea"]), vec![(2, 1)]);
+    }
+
+    /// **The targeted release never takes a copy another row still claims.** The same printing
+    /// sits in two piles and the group holds one copy: swapping one pile's line away leaves that
+    /// copy for the other pile, which still names it.
+    #[test]
+    fn a_swap_leaves_the_copies_another_pile_still_claims() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let side = kind_of(&conn, deck, "side");
+        add(&conn, deck, "bolt-lea", main, 1);
+        add(&conn, deck, "bolt-lea", side, 1);
+        file_into_group(&conn, deck, "bolt-lea", 1);
+
+        swap_printing(&conn, deck, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
+
+        assert_eq!(custody(&conn, deck, &["bolt-lea"]), vec![(1, 0)]);
+    }
+
+    /// **The stepper's own write gives the copies back** (issue #1494). The editor sends a live
+    /// cut through `deck_to_collection`, but a caller without the row's id reached
+    /// `set_card_quantity`, which took the card off the list and left its copies in the folder.
+    #[test]
+    fn stepping_a_live_row_down_files_the_copies_it_stepped_off() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 3);
+        file_into_group(&conn, deck, "bolt-lea", 3);
+
+        set_card_quantity(&conn, deck, "bolt-lea", main, LIVE, None, 2).unwrap();
+        assert_eq!(custody(&conn, deck, &["bolt-lea"]), vec![(2, 1)]);
+
+        set_card_quantity(&conn, deck, "bolt-lea", main, LIVE, None, 0).unwrap();
+        assert_eq!(custody(&conn, deck, &["bolt-lea"]), vec![(0, 3)]);
+    }
+
+    /// A step up moves nothing, a theory row moves nothing, and a removal never takes the copies
+    /// another pile still claims.
+    #[test]
+    fn stepping_down_leaves_what_the_list_still_claims() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let side = kind_of(&conn, deck, "side");
+        let plan = plan_pile(&conn, deck, main);
+        add(&conn, deck, "bolt-lea", main, 1);
+        add(&conn, deck, "bolt-lea", side, 1);
+        add_card(&conn, deck, "bolt-lea", Some(plan), None, THEORY, None, 2).unwrap();
+        file_into_group(&conn, deck, "bolt-lea", 1);
+
+        set_card_quantity(&conn, deck, "bolt-lea", main, LIVE, None, 4).unwrap();
+        set_card_quantity(&conn, deck, "bolt-lea", main, LIVE, None, 1).unwrap();
+        set_card_quantity(&conn, deck, "bolt-lea", plan, THEORY, None, 0).unwrap();
+        assert_eq!(custody(&conn, deck, &["bolt-lea"]), vec![(1, 0)]);
+
+        set_card_quantity(&conn, deck, "bolt-lea", main, LIVE, None, 0).unwrap();
+        assert_eq!(
+            custody(&conn, deck, &["bolt-lea"]),
+            vec![(1, 0)],
+            "the sideboard still names the one copy the folder holds"
+        );
+    }
+
+    /// **An undo that takes a card off the list gives its copies back too** (issue #1494): the
+    /// add is undone, and the copy the reader filed behind it since goes to `Recently removed`
+    /// rather than staying under a deck that no longer names it.
+    #[test]
+    fn undoing_an_add_files_the_copies_the_row_held() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 1);
+        file_into_group(&conn, deck, "bolt-lea", 1);
+
+        let step = crate::deck_undo::next_undo(&conn, deck)
+            .unwrap()
+            .expect("the add filed a step");
+        crate::deck_undo::apply_reversal(&conn, deck, step, true).unwrap();
+
+        assert_eq!(custody(&conn, deck, &["bolt-lea"]), vec![(0, 1)]);
+    }
+
     /// **The plan claims with its switch off as well**: switching it off hides a tab and keeps
     /// every row, and a display switch must not turn the next swap into an eviction — the
     /// switched-off pile's rule, one level up.
@@ -14471,9 +14839,10 @@ mod tests {
 
         swap_printing(&conn, deck, "serra-lea", "serra-8ed", main, LIVE, None).unwrap();
 
+        // The swapped Angel's copy leaves (issue #1494); the plan's Bolts stay.
         assert_eq!(
             custody(&conn, deck, &["bolt-lea", "serra-lea"]),
-            vec![(4, 0), (1, 0)]
+            vec![(4, 0), (0, 1)]
         );
     }
 

@@ -1420,6 +1420,11 @@ function Body({
         categoryId: scope.deck.categoryId,
         finish: scope.deck.finish,
         quantity: next,
+        // The row it cuts from, as the editor's `setQuantityAt` hands it, so a step down on an
+        // Actual list is `deck_to_collection` — the copies go to `Recently removed` and the
+        // collection's reads are refreshed with them (issue #1494).
+        held:
+          deckCard === null ? undefined : { deckCardId: deckCard.id, quantity: deckCard.quantity },
       });
       return;
     }
