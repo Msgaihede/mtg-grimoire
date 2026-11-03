@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type JSX } from "react";
+import { useEffect, useId, useMemo, useState, type JSX } from "react";
 import { PackageOpen, RotateCcw } from "lucide-react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { ReducedPrice } from "@/components/ReducedPrice";
@@ -123,22 +123,61 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
       ? tally
       : { opened: 0, value: 0, ev: 0, currency, prices: [], unpriced: 0 };
 
-  const open = () => {
-    if (choice === undefined) return;
-    const next = openOne(set, choice, randomSeed());
-    setOpened(next);
+  // The tally is kept from here rather than in each press, so the open a pick waited on (below)
+  // is plain state set during a render.
+  useEffect(() => {
+    if (tally !== undefined) tallyMemory.keep(tally);
+  }, [tally]);
+
+  /** Open `openable` once: the wall's new pack, and the session's tally one press longer. */
+  const openNow = (openable: Openable) => {
+    const next = openOne(set, openable, randomSeed());
     const prices = openedPrices(next, priceOf);
     const priced = prices.filter((p): p is number => p !== null);
-    const kept: Tally = {
+    setOpened(next);
+    setTally({
       currency,
       opened: shownTally.opened + 1,
       value: shownTally.value + openedValue(next, priceOf),
-      ev: shownTally.ev + theoreticalValue(set, choice, priceOf),
+      ev: shownTally.ev + theoreticalValue(set, openable, priceOf),
       prices: [...shownTally.prices, ...priced],
       unpriced: shownTally.unpriced + (prices.length - priced.length),
-    };
-    tallyMemory.keep(kept);
-    setTally(kept);
+    });
+  };
+
+  // **A pick opens one** (issue #1496): nobody picks a product and does not want to open it, so
+  // picking one is the first press. Before the prices answer, the open waits for them — the
+  // tally adds a pack's value at the press, and a pack opened before then would count $0 for
+  // ever. Taken during render, React's *adjusting state when a prop changes*, for
+  // `react-hooks/set-state-in-effect`'s reason. Open itself never waits: a read that failed
+  // never answers, and the press stays the reader's.
+  const [pending, setPending] = useState<Openable | null>(null);
+  if (pending !== null && ready) {
+    setPending(null);
+    openNow(pending);
+  }
+
+  const open = () => {
+    if (choice === undefined) return;
+    setPending(null);
+    openNow(choice);
+  };
+
+  /**
+   * The product row's pick. A pick of the product already on the wall is no press: the reader
+   * closed the list on what they had, and Open another is beside it.
+   */
+  const pick = (value: string) => {
+    const product = byValue.get(value);
+    const again = value === chosen && opened !== null;
+    setChosen(value);
+    if (product === undefined || again) return;
+    if (ready) {
+      setPending(null);
+      openNow(product);
+    } else {
+      setPending(product);
+    }
   };
 
   if (options.length === 0) {
@@ -172,7 +211,7 @@ export function ProductStage({ set }: { set: BoosterSet }): JSX.Element {
               id={pickId}
               labelledBy={`${pickId}-label`}
               value={chosen}
-              onChange={setChosen}
+              onChange={pick}
               options={options.map((o) => ({
                 value: openableValue(o),
                 label: o.name,
