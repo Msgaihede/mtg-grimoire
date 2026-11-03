@@ -63,6 +63,12 @@ It is not a record of what the reader had set at the time.
 the page, kept per device in `localStorage` and never in `app_meta` ([draft-and-packs.md](draft-and-packs.md)).
 It runs the same `reducedValue`, with the minimum compared in TypeScript (`belowMinimumOf`) over
 the cards it opened, and its tooltip names the page instead of Settings (`ReducedPrice`'s `setIn`).
+**It is the one surface that draws the reduced price in place of the full value** (issue
+[#1502](https://github.com/Msgaihede/mtg-grimoire/issues/1502)): what a pack would fetch is the
+figure a reader opens packs to learn, so the full value is said only in the tooltip's breakdown.
+Its expected value and simulation are drawn card by card, so it also runs the per-copy form,
+`reducedCopy` — the same sum one copy at a time (`(full − below) × percent + cards below × bulk` is
+a sum over copies of it), which the suite holds equal to `reducedValue` to the cent.
 
 **The two bulk prices never meet** (issue
 [#1477](https://github.com/Msgaihede/mtg-grimoire/issues/1477)): the collection's is
@@ -72,6 +78,8 @@ field of the page's own `grimoire.packs.reduced`. Neither is read where the othe
 ## `ReducedPrice`
 
 `components/ReducedPrice.tsx` draws the brackets, the dotted underline and the tooltip's breakdown.
+**`bracketed={false}`** drops the brackets where the reduced price is the figure rather than an
+aside to the full one — Open Packs alone.
 It is a `<button>` that presses nothing, so the keyboard reaches the tooltip. **`plain` is for a
 figure already inside a press** (Summary's Value, a Folders row), where a button in a button is
 invalid HTML: there the tooltip is pointer-only, and the press's own name says the price.

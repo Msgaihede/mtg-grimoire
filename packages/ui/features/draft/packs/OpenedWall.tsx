@@ -30,6 +30,10 @@ const TILE_WIDTH = 152;
  * same tile with no picture and no press: there is no image to ask for and no card to open, but
  * its printing is still MTGJSON's fact to state. Every other tile's art is a button that opens the
  * card's modal, as a tile anywhere else in the app does.
+ *
+ * **A card under the page's minimum has its price in red** (issue #1502): it is not counted at that
+ * price in any figure beside the wall — taken out, or counted at the bulk price — and the tile is
+ * where the reader looks to see which cards those are. The price itself stays the market's.
  */
 export function OpenedWall({
   cards,
@@ -38,6 +42,8 @@ export function OpenedWall({
   currency,
   sort,
   onSort,
+  minimum,
+  underMinimum = "Under the minimum: not counted at this price",
 }: {
   cards: readonly OpenedCard[];
   facts: ReadonlyMap<string, BoosterCard>;
@@ -45,6 +51,10 @@ export function OpenedWall({
   currency: Currency;
   sort: CardSort;
   onSort: (sort: CardSort) => void;
+  /** The page's minimum card value; a priced card strictly under it is drawn red. */
+  minimum?: number;
+  /** What a red price means, on hover and to a screen reader. */
+  underMinimum?: string;
 }): JSX.Element {
   const sortId = useId();
   const open = useAppStore((s) => s.setSelectedCardId);
@@ -95,7 +105,16 @@ export function OpenedWall({
                     ? { setCode: fact.setCode, collectorNumber: fact.collectorNumber }
                     : { printing: "—", printingTitle: null }
                 }
-                money={formatPrice(price, currency)}
+                money={
+                  minimum !== undefined && price !== null && price < minimum ? (
+                    <span className="text-destructive" title={underMinimum}>
+                      {formatPrice(price, currency)}
+                      <span className="sr-only">, {underMinimum.toLowerCase()}</span>
+                    </span>
+                  ) : (
+                    formatPrice(price, currency)
+                  )
+                }
                 zoom={zoom}
                 onPress={inCorpus ? () => open(card.cardId) : undefined}
                 hoverZoom

@@ -142,12 +142,31 @@ feed that has never landed a row fetches it, as Settings does.
 **The reduced price is the page's own too** (`packs/reducedPick.ts`, `packs/ReducedInputs.tsx`): a
 _Sell at_ percentage and a _Minimum_ card value under _Prices from_, apart from Settings ›
 Collection value — neither read from it nor written to it — and kept per device in `localStorage`
-(`grimoire.packs.reduced`). Set, the reduced price is drawn in brackets beside the opening's _Total
-value_ and the session's, by the collection's sum ([collection-value.md](collection-value.md)):
+(`grimoire.packs.reduced`). Its sum is the collection's ([collection-value.md](collection-value.md)):
 each priced card strictly under the minimum is taken out, then the percentage of what is left. The
-session's tally keeps every priced card's price, not a reduced sum, so changing a figure mid-session
-reprices the whole session. The minimum is in whatever currency the page prices in, and nothing
-converts it. The expected value, the simulation and the histogram stay at full value.
+minimum is in whatever currency the page prices in, and nothing converts it.
+
+**Set, the reduced price is every figure on the page** (issue
+[#1502](https://github.com/Msgaihede/mtg-grimoire/issues/1502)): a reader who will not sell a card
+under $0.41 wants to know what a pack would fetch, and a figure that counted those cards was
+misleading. Until then the reduced price had been drawn in brackets beside a full _Total value_,
+and the expected value, the simulation and the histogram had stayed at full value. Now:
+
+- **The opening's and the session's _Total value_ are the reduced price**, unbracketed
+  (`ReducedPrice bracketed={false}`), the full value only in the tooltip's breakdown.
+- **The expected value, the standard deviation, the median, the ten thousand simulated packs, the
+  histogram, the percentile and the chance to beat _What you paid_** are figured with
+  `reducedPrices(priceOf, settings)` — each card at `reducedCopy`, `reducedValue`'s sum one copy at
+  a time — so a pack's reduced price is placed among simulated reduced prices. A line under
+  _Expected value_ says what the figures are reduced by (`reductionLine`).
+- **The session's _Total expected_** is repriced like its _Total value_: the tally keeps, beside
+  every priced card's price, each press's expected copies by price (`expectedOpening`, over
+  `booster/value.ts`' `expectedPrices`, `expectedValue`'s mean card by card), and the total is
+  `Σ reducedCopy(price) × copies` at the figures as they stand — so changing a figure mid-session
+  reprices the whole session, even after the set's sheets are gone.
+- **A card under the minimum has its price in red** on the opened wall (`OpenedWall`'s `minimum`),
+  its tooltip and a screen reader saying it is not counted (or counted at the bulk price). The tile
+  keeps the market's price: it is the fact the figures were reduced from.
 
 **A _Bulk_ price is this page's own too** (issue
 [#1477](https://github.com/Msgaihede/mtg-grimoire/issues/1477)): set beside the minimum, each card

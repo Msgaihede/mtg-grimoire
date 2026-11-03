@@ -2,7 +2,14 @@
  * The Packs page's conclusions, pure: what one press opened, what the product is worth, and the
  * order the opened cards are laid out in. The components only draw these.
  */
-import { belowMinimumOf, minimumOf, reducedValue, type ReducedValue } from "@/lib/collectionValue";
+import {
+  belowMinimumOf,
+  minimumOf,
+  reducedCopy,
+  reducedValue,
+  reducesValue,
+  type ReducedValue,
+} from "@/lib/collectionValue";
 import type { BoosterCard, BoosterSet, CollectionValue } from "@/lib/ipc";
 import { rarityRank } from "@/lib/rarity";
 import {
@@ -14,6 +21,7 @@ import {
 } from "../booster/open";
 import { mulberry32 } from "../booster/rng";
 import {
+  expectedPrices,
   expectedValue,
   median,
   packValue,
@@ -91,6 +99,68 @@ export function theoreticalValue(set: BoosterSet, openable: Openable, priceOf: P
     skip: () => {},
   });
   return ev;
+}
+
+/**
+ * Expected copies by price for `openable` — price → cards at it one press opens on average
+ * (`expectedPrices`, a sealed product's boosters and its own cards added). `Σ price × copies` is
+ * {@link theoreticalValue}; the session's tally keeps these so its expected total can be repriced
+ * at the page's reduction after the set's sheets are gone (issue #1502).
+ */
+export function expectedOpening(
+  set: BoosterSet,
+  openable: Openable,
+  priceOf: PriceOf,
+): Map<number, number> {
+  const colorsOf = colorLookup(set);
+  const into = new Map<number, number>();
+  if (openable.kind === "booster") {
+    const product = set.products.find((p) => p.key === openable.id);
+    return product === undefined ? into : expectedPrices(product, priceOf, colorsOf, into);
+  }
+  walkSealed(set, openable.id, {
+    booster: (product) => {
+      expectedPrices(product, priceOf, colorsOf, into);
+    },
+    card: (card) => {
+      const p = priceOf(card.cardId, card.foil);
+      if (p !== null) into.set(p, (into.get(p) ?? 0) + 1);
+    },
+    skip: () => {},
+  });
+  return into;
+}
+
+/** Two sets of expected copies added, as the tally keeps them: `[price, copies]` pairs. */
+export function addExpected(
+  kept: readonly (readonly [number, number])[],
+  more: ReadonlyMap<number, number>,
+): [number, number][] {
+  const sum = new Map<number, number>(kept.map(([p, n]) => [p, n]));
+  for (const [p, n] of more) sum.set(p, (sum.get(p) ?? 0) + n);
+  return [...sum];
+}
+
+/** The expected value of what `copies` describe, each copy at `settings`' reduced price
+ *  (`reducedCopy`) — the full price where they reduce nothing. */
+export function expectedAt(
+  copies: Iterable<readonly [number, number]>,
+  settings: CollectionValue,
+): number {
+  let sum = 0;
+  for (const [p, n] of copies) sum += (reducedCopy(p, settings) ?? 0) * n;
+  return sum;
+}
+
+/**
+ * `priceOf` at the page's sell percentage, minimum and bulk price, card by card (`reducedCopy`):
+ * what the expected value, the simulation, the histogram and the chance to beat a price are
+ * figured at (issue #1502), so every figure on the page is the money the reader would see. The
+ * same function back where the settings reduce nothing.
+ */
+export function reducedPrices(priceOf: PriceOf, settings: CollectionValue): PriceOf {
+  if (!reducesValue(settings)) return priceOf;
+  return (cardId, foil) => reducedCopy(priceOf(cardId, foil), settings);
 }
 
 /** A product's figures, theoretical and simulated. */

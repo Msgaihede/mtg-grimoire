@@ -576,7 +576,9 @@ describe("PackOpener", () => {
       expect(screen.queryByRole("button", { name: /^Reduced price/ })).toBeNull();
     });
 
-    it("draws it beside the opening's total and the session's, and keeps the figures", async () => {
+    /** Issue #1502: set, the reduced price is the figure — the opening's, the session's, and every
+     *  expected and simulated value — and the cards it leaves out are drawn red. */
+    it("makes it every figure on the page, and keeps the figures", async () => {
       const { user } = setup();
       await user.click(await screen.findByRole("button", { name: /Test Set/ }));
       await screen.findByText(/^Expected value/);
@@ -594,12 +596,40 @@ describe("PackOpener", () => {
       expect(
         within(heading).getByRole("button", { name: `Reduced price ${money}` }),
       ).toBeInTheDocument();
-      // Full value stays: the reader needs both.
-      expect(heading).toHaveTextContent(formatPrice(packValue(expected.cards, priceOf), "usd"));
+      // The full value is not drawn: only the tooltip's breakdown states it.
+      expect(heading).not.toHaveTextContent(formatPrice(packValue(expected.cards, priceOf), "usd"));
+      expect(heading).not.toHaveTextContent(`(${money})`);
       const figures = screen.getByRole("complementary", { name: "Figures" });
       expect(
         within(figures).getByRole("button", { name: `Reduced price ${money}` }),
       ).toBeInTheDocument();
+
+      // The expected value is figured at the same prices, card by card.
+      const reducedPriceOf = (id: string, foil: boolean) => {
+        const p = priceOf(id, foil);
+        return p === null ? null : p < 0.5 ? 0 : p / 2;
+      };
+      const reducedEv = figuresOf(
+        SET,
+        { kind: "booster", id: "collector", name: "" },
+        reducedPriceOf,
+      ).ev;
+      expect(within(figures).getByText("Theoretical").nextElementSibling).toHaveTextContent(
+        formatPrice(reducedEv, "usd"),
+      );
+      expect(within(figures).getByText("Total expected").nextElementSibling).toHaveTextContent(
+        formatPrice(reducedEv, "usd"),
+      );
+      expect(
+        within(figures).getByText("Cards under $0.50 are not counted; the rest at 50%."),
+      ).toBeInTheDocument();
+
+      // Each card under the minimum has its price in red, and says why.
+      const under = prices.filter((p) => p !== null && p < 0.5).length;
+      const wall = screen.getByRole("list", { name: "Opened cards" });
+      const marked = within(wall).getAllByText(/under the \$0\.50 minimum: not counted/);
+      expect(marked).toHaveLength(under);
+      for (const m of marked) expect(m.parentElement).toHaveClass("text-destructive");
 
       expect(parseReduced(window.localStorage.getItem(REDUCED_KEY))).toEqual({
         sellPercent: 50,

@@ -23,6 +23,13 @@ describe("ReducedPrice", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText("$4,331.79")).toBeInTheDocument();
   });
+
+  /** Issue #1502: where the reduced price is the figure, not an aside, it stands unbracketed. */
+  it("draws no brackets when it is the figure itself", () => {
+    render(<ReducedPrice value={VALUE} currency="usd" bracketed={false} />);
+    const button = screen.getByRole("button", { name: "Reduced price $4,331.79" });
+    expect(button.parentElement).toHaveTextContent(/^\$4,331\.79$/);
+  });
 });
 
 describe("ReducedBreakdown", () => {

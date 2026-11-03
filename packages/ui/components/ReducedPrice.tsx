@@ -107,6 +107,9 @@ function Hint({
  * a button in a button is invalid HTML; that control's own name then has to say the price.
  *
  * It sets no size or colour of its own but the dotted figure's, so it takes both from where it sits.
+ *
+ * **`bracketed={false}` is the reduced price standing alone**, the main figure rather than an aside
+ * to the full one: Open Packs, whose every figure is at the reader's reduced price (issue #1502).
  */
 export function ReducedPrice({
   value,
@@ -114,6 +117,7 @@ export function ReducedPrice({
   unpriced = 0,
   plain = false,
   setIn = SET_IN_SETTINGS,
+  bracketed = true,
   className,
 }: {
   value: ReducedValue;
@@ -123,6 +127,8 @@ export function ReducedPrice({
   plain?: boolean;
   /** Where these settings are set, the tooltip's last line. Open Packs has its own. */
   setIn?: string;
+  /** Brackets around the figure, the aside beside a full value. Off where it is the figure. */
+  bracketed?: boolean;
   className?: string;
 }): ReactElement {
   const tip = useTooltip();
@@ -130,7 +136,7 @@ export function ReducedPrice({
   const hint = tip(<Hint value={value} currency={currency} unpriced={unpriced} setIn={setIn} />);
   return (
     <span className={cn("whitespace-nowrap tabular-nums", className)}>
-      (
+      {bracketed && "("}
       {plain ? (
         <span className={FIGURE} {...hint}>
           {money}
@@ -145,7 +151,7 @@ export function ReducedPrice({
           {money}
         </button>
       )}
-      )
+      {bracketed && ")"}
     </span>
   );
 }
