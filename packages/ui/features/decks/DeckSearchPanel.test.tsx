@@ -15,7 +15,7 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
-import { readDragData } from "./dnd";
+import { readCards, readDragData } from "./dnd";
 
 const searchCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the filter bar and asks for the set list on the way up.
@@ -897,6 +897,40 @@ describe("DeckSearchPanel", () => {
         typeLine: BOLT.typeLine,
         finish: "etched",
       },
+    ]);
+  });
+
+  /**
+   * Issue #1517: a drag from a Ctrl- or Shift-picked tile carries **every** picked card, not just
+   * the one under the pointer. The panel's tiles used to register their own `cardDraggable`
+   * through `tileRef`, which the wall could not add the rest of the set to — so every category
+   * took the grabbed tile alone. Read back through `readCards`, the reader every category and the
+   * sidebar's Decks entry use, so this asks what a drop would actually act on.
+   */
+  it("carries every picked tile in a drag from one of them", async () => {
+    searchCards.mockResolvedValue(page([BOLT, RHYSTIC_STUDY, RAMPANT_GROWTH]));
+    const { container } = await openPanel();
+    await screen.findByRole("button", { name: "Rampant Growth" });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await user.keyboard("{Shift>}");
+    await user.click(screen.getByRole("button", { name: "Rampant Growth" }));
+    await user.keyboard("{/Shift}");
+
+    const tile = [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)].find((el) =>
+      el.contains(screen.getByRole("button", { name: "Rhystic Study" })),
+    )!;
+    const drags = recordDrags();
+    const held = await startPointerDrag(boxed(tile, 0));
+    await held.cancel();
+    drags.stop();
+
+    // The grabbed tile first, then the rest in the order the wall draws them.
+    expect(readCards(drags.records[0])?.map((card) => card.cardId)).toEqual([
+      RHYSTIC_STUDY.id,
+      BOLT.id,
+      RAMPANT_GROWTH.id,
     ]);
   });
 

@@ -6,6 +6,7 @@ import type {
 } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { rowHasBackFace } from "@/features/card/printings";
+import type { DragPayload } from "@/features/decks/dnd";
 import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar, type FilterLabels } from "@/features/search/FilterBar";
 import { failureOf, summaryOf, tileUnreleased } from "@/features/search/SearchPage";
@@ -105,16 +106,21 @@ export interface CardSearchBodyProps {
    */
   addFailure?: string | null;
   /**
-   * The tile's drag registration, at the lower of `CardGrid`'s two seams — the deck panel's,
-   * which registers its own `cardDraggable` on the element.
+   * What a tile carries when it is dragged, as one deck-drag payload — `CardGrid`'s `dragPayload`
+   * seam, which is the deck panel's (its tiles carry a `"search-card"` a category reads).
+   *
+   * **`CardGrid`'s seam and not a `tileRef` the caller registers itself** (issue #1517): the wall
+   * is what knows the picked set, so only a drag it registers can carry the rest of a Ctrl- or
+   * Shift-picked selection beside the tile that was grabbed. A `cardDraggable` the panel put on
+   * the element through `tileRef` carried the grabbed tile alone, whatever was picked.
    *
    * **Exactly one of this and {@link dragRecord}.** They do not compose and `CardGrid` enforces
    * it: `dragRecord` wins where both are passed, so a caller that sent both would silently lose
-   * this one.
+   * this one. Hold it still — every tile's drag registration depends on its identity.
    */
-  tileRef?: (card: CardSummary, element: HTMLElement | null) => void | (() => void);
+  dragPayload?: (card: CardSummary) => DragPayload | null;
   /** The tile's drag registration at `CardGrid`'s own seam — a flat record of one or more marks,
-   *  which is what the collection and the wishlist sidebars pass. See {@link tileRef}. */
+   *  which is what the collection and the wishlist sidebars pass. See {@link dragPayload}. */
   dragRecord?: (card: CardSummary) => Record<string, unknown> | null;
   /**
    * The finish a tile's card is drawn as — `CardGrid`'s `finish` slot, handed straight through.
@@ -184,7 +190,7 @@ export function CardSearchBody({
   selectionScope,
   baseTileWidth = TILE_BASE,
   addFailure = null,
-  tileRef,
+  dragPayload,
   dragRecord,
   finish,
   badge,
@@ -289,7 +295,7 @@ export function CardSearchBody({
           baseTileWidth={baseTileWidth}
           selectedId={selectedId}
           onSelect={(id) => onSelect(id)}
-          tileRef={tileRef}
+          dragPayload={dragPayload}
           dragRecord={dragRecord}
           // The crown in a tile's top-right chip: the same fact the search view's wall marks,
           // marked the same way here — see `tileGameChanger`.

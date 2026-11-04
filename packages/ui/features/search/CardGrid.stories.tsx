@@ -543,11 +543,12 @@ export const LongNames: Story = {
  *
  * The `grid` image is 488px wide, so a smaller base is a deeper downscale and never a blowup.
  *
- * That panel's tiles carry `"search-card"` through the lower-level `tileRef` seam rather than
- * through `dragPayload` — **one or the other, never both**. They do not compose: the tile runs
- * `tileRef` and then registers its own draggable on the *same* element, the library keeps one
- * draggable per element, and a development build logs "You have already registered a
- * `draggable` on the same element" for every tile on the wall.
+ * That panel's tiles carry `"search-card"` through `dragPayload`, so a drag from a picked tile
+ * carries the whole set (issue #1517). It is never paired with the lower-level `tileRef` seam —
+ * **one or the other, never both**. They do not compose: the tile runs `tileRef` and then
+ * registers its own draggable on the *same* element, the library keeps one draggable per element,
+ * and a development build logs "You have already registered a `draggable` on the same element"
+ * for every tile on the wall.
  */
 export const InTheDockedPanel: Story = {
   args: { rows: ALL, baseTileWidth: 150 },

@@ -25,7 +25,7 @@ import { AUTO_CATEGORY, autoCategoryIfKnown, UNNAMED_PILE_TIP } from "./autoCate
 import { CollectionSearchTab } from "./CollectionSearchTab";
 import { isTokenPrinting } from "./deckTokens";
 import { TOKENS_HEADING } from "./DeckTokensPanel";
-import { cardDraggable } from "./dnd";
+import type { DragPayload } from "./dnd";
 import type { Deck } from "./useDeck";
 import { useDeckSearchWidth } from "./useDeckSearchWidth";
 import { useWallOracleTags } from "./useWallOracleTags";
@@ -846,7 +846,7 @@ function OpenPanel({
   );
   /**
    * The same answer, read at the moment a drag starts. Through a ref rather than in
-   * {@link tileRef}'s dependency list, because a new `tileRef` re-registers every tile's drag —
+   * {@link tileDrag}'s dependency list, because a new `tileDrag` re-registers every tile's drag —
    * and pressing a filter chip is not a reason to tear down the wall's drag sources.
    */
   const wantedRef = useRef(wanted);
@@ -857,19 +857,19 @@ function OpenPanel({
   /**
    * Every drawn tile, as a card that can be dragged into a category.
    *
-   * The wall builds its own tiles, so this is the only way to hand a library an element: one
-   * `draggable()` per tile, torn down by the cleanup React 19 takes from a ref callback. The
-   * *drop* is the category column's business — this end only says what is being carried.
-   *
-   * **`tileRef` rather than `CardSearchBody`'s `dragRecord` seam**, which is the one place this
-   * panel and the two page sidebars differ about the same wall: a deck category reads a
-   * `DragPayload` through `dnd.ts`, and this registers `cardDraggable` on the element itself so
-   * the deck's own auto-scroll and drop feedback are the ones already built. The two seams do not
-   * compose and `CardGrid` enforces it.
+   * **Through `CardGrid`'s `dragPayload` seam rather than a `tileRef` of this panel's own** (issue
+   * #1517). The wall registers the `cardDraggable` itself, and it is the wall that holds the picked
+   * set — so a drag from a Ctrl- or Shift-picked tile carries the whole selection (`dnd.ts`'s
+   * `dragGroup`, read by every category through `readCards`), exactly as the collection tab beside
+   * this one does. The `tileRef` that stood here registered its own `cardDraggable` with no `rest`,
+   * so the wall could not add the others and only the grabbed tile ever arrived. The *drop* is
+   * still the category column's business — this end only says what is being carried — and the
+   * deck's own auto-scroll and drop feedback are the ones already built, since both seams end in
+   * the same `cardDraggable`.
    *
    * A stable identity, so the registration is not torn down and rebuilt on every render of a
-   * panel that re-renders on every keystroke. The tile's element is passed fresh each time,
-   * and the card with it, so nothing here goes stale.
+   * panel that re-renders on every keystroke. The card is handed in fresh at each `dragstart`, so
+   * nothing here goes stale.
    *
    * The Add button beside the art does the same thing for the keyboard and for anyone who
    * would rather press than drag (spec §7's click-to-add fallback, which is the *primary*
@@ -877,25 +877,19 @@ function OpenPanel({
    * it is a press: `cardDraggable` has the story, and the tile's *art* stays draggable
    * because the exclusion is marked rather than guessed from the tag.
    */
-  const tileRef = useCallback(
-    (card: CardSummary, element: HTMLElement | null) =>
-      element
-        ? cardDraggable({
-            element,
-            payload: () => ({
-              kind: "search-card",
-              cardId: card.id,
-              name: card.name,
-              // Carried even though every drop target inside this editor is a category that
-              // names itself: a tile can also be let go on the sidebar's Decks entry, which
-              // names none. One payload shape, whichever target takes it (`dnd.ts`).
-              typeLine: card.typeLine,
-              // Said only when the filter commits to one — see `filteredFinish`. Absent is the
-              // regular copy, which is what every other source of this payload sends.
-              ...(wantedRef.current && { finish: wantedRef.current }),
-            }),
-          })
-        : undefined,
+  const tileDrag = useCallback(
+    (card: CardSummary): DragPayload => ({
+      kind: "search-card",
+      cardId: card.id,
+      name: card.name,
+      // Carried even though every drop target inside this editor is a category that
+      // names itself: a tile can also be let go on the sidebar's Decks entry, which
+      // names none. One payload shape, whichever target takes it (`dnd.ts`).
+      typeLine: card.typeLine,
+      // Said only when the filter commits to one — see `filteredFinish`. Absent is the
+      // regular copy, which is what every other source of this payload sends.
+      ...(wantedRef.current && { finish: wantedRef.current }),
+    }),
     [],
   );
 
@@ -915,7 +909,7 @@ function OpenPanel({
       // deck's selection down, since a pick in a new scope replaces the whole set.
       selectionScope="deck-panel"
       addFailure={add.isError ? ipcError(add.error) : null}
-      tileRef={tileRef}
+      dragPayload={tileDrag}
       selectedId={selectedCardId}
       onSelect={selectCard}
       cardMenu={cardMenu}

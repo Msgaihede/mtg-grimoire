@@ -847,7 +847,10 @@ export function CardGrid<T extends GridCard>({
    *
    * A callback ref, so it may return a cleanup (React 19) and the caller's registration is
    * torn down with the tile. Nothing here uses the element: absent, this wall behaves exactly
-   * as it did, and the deck editor's search panel is the only caller.
+   * as it did. **No surface registers a drag through it any more** — the deck editor's search
+   * panel did, and its drags carried the grabbed tile alone whatever was picked, because a drag
+   * this wall did not register is one it cannot add the rest of the set to (issue #1517). A drag
+   * goes through {@link dragPayload} or {@link dragRecord}.
    */
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   /**
@@ -876,9 +879,9 @@ export function CardGrid<T extends GridCard>({
    * down and rebuild it on every scrolled row — and a source that unregisters mid-drag is a
    * drop that never arrives.
    *
-   * {@link tileRef} is the lower-level seam beside it, for the one caller that registers its
-   * own drag (the deck editor's docked panel, whose tiles carry a `"search-card"` because they
-   * are inside the editor). **One or the other, never both.** They do not compose: the tile
+   * The deck editor's docked panel passes this one, its tiles carrying a `"search-card"` because
+   * they are inside the editor — it registered its own drag through {@link tileRef} until issue
+   * #1517, and that drag could not carry the picked set. **This or {@link tileRef}, never both.** They do not compose: the tile
    * runs the `tileRef` first and then registers its own `cardDraggable` on the *same* element,
    * and the library keeps one draggable per element in a `WeakMap` — so the second
    * registration silently replaces the caller's, either teardown unregisters the element
