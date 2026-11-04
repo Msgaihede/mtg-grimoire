@@ -30,6 +30,14 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.67.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.67.0...v0.67.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **decks:** carry the whole picked set in a drag from the search panel ([71d2f9e](https://github.com/Msgaihede/mtg-grimoire/commit/71d2f9e1b85a6e9ffdf3e1fc8f6b0d3a5dfb4e87))
+* **decks:** carry the whole picked set in a drag from the search panel ([ca9a037](https://github.com/Msgaihede/mtg-grimoire/commit/ca9a03709eeb7c3892e48e47b3a85bd68f090630)), closes [#1517](https://github.com/Msgaihede/mtg-grimoire/issues/1517)
+
 ## [0.67.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.66.0...v0.67.0) (2026-11-03)
 
 
