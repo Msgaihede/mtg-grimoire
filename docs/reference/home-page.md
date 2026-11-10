@@ -41,8 +41,11 @@ is not `2`; an `id` or a `kind` that is blank after `trim`; a `w` outside `1..=M
 that is present and outside `1..=2`; and a serialized document over `MAX_BYTES`, 64 KiB. **Rust
 knows nothing about how many columns a window has** — `layout.ts`'s `normalise` is what brings a
 stored document inside the grid it is drawn on, and it does so on every draw **without writing the
-result back**, so narrowing the window never rewrites the reader's arrangement until they change
-something.
+result back**, so narrowing the window never rewrites the reader's arrangement until they **move or
+resize** something there. A move is judged on the grid on screen, so it saves that grid's geometry;
+every other change — a setting, a chip, a removal, an Add — is written onto the stored document, so
+only that widget changes and widening the window gives the rest of the page back (issue #1581). An
+Add finds its free cell on the grid as drawn and appends the new widget to the stored list.
 
 **Version 1 still reads.** A version-1 row carries `span` and no geometry; Rust answers `0` for
 the four cells, and `parseLayout` reads `w === 0` as *never placed* and lays each widget out at its

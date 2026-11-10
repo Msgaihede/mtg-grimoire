@@ -706,6 +706,17 @@ describe("addWidget", () => {
     ]);
   });
 
+  // Issue #1581: a stored layout wider than the grid on screen. The free cell is found on the grid
+  // as `normalise` draws it, and every other widget keeps its stored geometry.
+  it("finds the free cell on the grid as drawn and keeps the stored geometry of the rest", () => {
+    const wide = doc(at("a", "future-a", 10, 0, 2, 2), at("b", "future-b", 6, 0, 4, 2));
+    expect(cellsOf(addWidget(wide, "folders", 9).widgets)).toEqual([
+      ["a", 10, 0, 2, 2],
+      ["b", 6, 0, 4, 2],
+      ["folders", 0, 2, 4, 2],
+    ]);
+  });
+
   it("leaves the layout it was handed alone", () => {
     const before = pair();
     addWidget(before, "folders", 8);
