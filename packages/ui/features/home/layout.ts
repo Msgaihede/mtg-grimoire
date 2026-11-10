@@ -297,6 +297,13 @@ export function toStored(layout: HomeLayout): HomeLayout {
 /**
  * The same layout with one more widget of this kind, at its own footprint, at the first free cell.
  *
+ * **The cell is judged on the grid as drawn and the widget appended to the layout as stored.** The
+ * reader picks Add looking at {@link normalise}'s answer for `cols`, so that is where the first free
+ * cell has to be found — but every other widget keeps its stored geometry, so a reader who adds a
+ * widget in a narrowed window and widens it again gets the rest of their page back where it was
+ * (issue #1581). The new widget is last in the list, so on the grid it was added to `normalise`
+ * leaves it where it landed, and on any other grid it is the one that gives way.
+ *
  * The id is minted rather than taken from the kind, because a reader may pin two sets of decks in
  * two `decks` widgets — see {@link newWidgetId}. The config is `null`, which is what "this widget
  * has not been configured" is spelled as everywhere.
@@ -316,7 +323,7 @@ export function addWidget(
     kind,
     w,
     h,
-    ...firstFree(layout.widgets, w, h, cols),
+    ...firstFree(normalise(layout.widgets, cols), w, h, cols),
     config,
   };
   return { ...layout, widgets: [...layout.widgets.map((entry) => ({ ...entry })), added] };
