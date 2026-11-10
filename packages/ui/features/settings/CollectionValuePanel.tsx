@@ -4,7 +4,7 @@ import { ReducedBreakdown } from "@/components/ReducedPrice";
 import { collectionTotalKey } from "@/features/home/keys";
 import { DEFAULT_COLLECTION_VALUE, reducedValue, reducesValue } from "@/lib/collectionValue";
 import { FOCUS } from "@/lib/focus";
-import { ipc, type CollectionValue } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import { formatPrice } from "@/lib/prices";
 import { useCollectionValue } from "@/lib/useCollectionValue";
 import { useMarketplace } from "@/lib/useMarketplace";
