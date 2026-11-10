@@ -222,8 +222,9 @@ async function settle(): Promise<void> {
  * grabs it; only a test can be this fast. The frame below is what closes that gap.
  *
  * The gesture crosses dnd-kit's 5px distance constraint on the first move, which is why no test
- * here has to run a timer: the *other* default constraint is a 200ms delay, and either one alone
- * activates the drag.
+ * here has to run a timer — and holding still could not stand in for it: the manager's mouse
+ * constraint is that distance alone (`dndManager.ts`'s `pressCost`, issue #1566), so a still
+ * press never becomes a drag.
  *
  * **`move: false` presses and does not move**, for the one kind of test that is about the
  * *threshold* rather than about a drag that has already started — a source that declares a handle
