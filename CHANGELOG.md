@@ -30,6 +30,15 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.68.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.68.0...v0.68.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **ci:** install the emulator and its system image with retries ([d5c2f49](https://github.com/Msgaihede/mtg-grimoire/commit/d5c2f4941d3863453e793cfe716a9d1cb8b3f25c))
+* **ci:** make the Android emulator first-run measurement survive two emulator flakes ([959667b](https://github.com/Msgaihede/mtg-grimoire/commit/959667b9ffff459ee4303b19c8c6edbd1d182d13))
+* **ci:** stop the emulator's cellular link from holding the first-run measurement ([bf71a60](https://github.com/Msgaihede/mtg-grimoire/commit/bf71a60a7c0365cf3abf974f4a2d090bf43ff97e))
+
 ## [0.68.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.67.0...v0.68.0) (2026-11-10)
 
 
