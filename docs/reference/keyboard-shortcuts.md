@@ -510,6 +510,15 @@ it would hand back to has been replaced. Both halves are pinned and each fails o
 reverting to the unconditional `focus()` reddens the `F1` case alone, reverting to the bare
 `contains()` reddens the `<body>` case alone (`KeyMap.test.tsx`, both measured 2026-09-03).
 
+**Escape closes the panel before a dialog it was opened over** (2026-11-10,
+[issue #1542](https://github.com/Msgaihede/mtg-grimoire/issues/1542)). `F1` works with a dialog up
+and the panel is drawn over it, but its rung was `"outer"` — the bubble phase — while every
+`Dialog`'s is `"inner"`, in capture, so the first Escape closed the dialog underneath (and its
+unsaved state: a pasted list, a new deck's form) and left the panel standing. The panel's rung now
+passes `overOpenLayers`: opened while a capture rung is listening, it joins the capture stack on top
+of it, so one press closes the panel and the next the dialog. Opened over nothing it is the plain
+`"outer"` rung it always was (`KeyMap.test.tsx`, `useDismissOnEscape.test.tsx`).
+
 ## The panel needs no `LAYER` rung
 
 `TitleBar`'s root carries `LAYER.caption` (`z-60`), and **a z-index other than `auto` on a flex

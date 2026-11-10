@@ -288,6 +288,60 @@ describe("useDismissOnEscape", () => {
     expect(second).toHaveBeenCalledTimes(1);
     expect(first).not.toHaveBeenCalled();
   });
+
+  /**
+   * **An outer layer opened over an inner one is drawn over it** (issue #1542) — `F1` with a
+   * dialog up. With `overOpenLayers` it joins the capture stack on top, so one press closes it and
+   * the next the dialog; without, the dialog's rung took the first press out from under it.
+   */
+  it("gives the press to an outer layer that opened over an inner one, when it says so", () => {
+    const inner = vi.fn();
+    const outer = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: inner }));
+    const { rerender } = renderHook(
+      ({ enabled }) =>
+        useDismissOnEscape({ layer: "outer", onDismiss: outer, overOpenLayers: true, enabled }),
+      { initialProps: { enabled: true } },
+    );
+
+    expect(pressEscape()).toBe(true);
+    expect(outer).toHaveBeenCalledTimes(1);
+    expect(inner).not.toHaveBeenCalled();
+
+    rerender({ enabled: false });
+    expect(pressEscape()).toBe(true);
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(outer).toHaveBeenCalledTimes(1);
+  });
+
+  /** The flag reads the moment the layer opens: opened with nothing over the view, it is an
+   *  ordinary bubble rung, and a dialog opened after it still beats it. */
+  it("keeps such a layer on the bubble rung when it opened over nothing", () => {
+    const inner = vi.fn();
+    const outer = vi.fn();
+    renderHook(() =>
+      useDismissOnEscape({ layer: "outer", onDismiss: outer, overOpenLayers: true }),
+    );
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: inner }));
+
+    expect(pressEscape()).toBe(true);
+
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+  });
+
+  /** Opt-in: an ordinary outer layer opened over an inner one still waits its turn. */
+  it("leaves an outer layer without the flag under an inner one whatever the order", () => {
+    const inner = vi.fn();
+    const outer = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: inner }));
+    renderHook(() => useDismissOnEscape({ layer: "outer", onDismiss: outer }));
+
+    expect(pressEscape()).toBe(true);
+
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(outer).not.toHaveBeenCalled();
+  });
 });
 
 /**
