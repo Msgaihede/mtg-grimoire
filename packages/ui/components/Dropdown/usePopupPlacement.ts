@@ -46,7 +46,9 @@ import type { Placement } from "./types";
  * `placement` is `null` on the render that mounts the panel, because the panel's own size cannot be
  * known before it exists. The shell draws it at `opacity: 0` on that frame — which `popup` already
  * does — and this hook fills the numbers in a **layout** effect, before the browser paints. A
- * `useEffect` here would paint one frame of panel in the top-left corner of its frame.
+ * `useEffect` here would paint one frame of panel in the top-left corner of its frame. After that
+ * a `ResizeObserver` on the panel re-measures it whenever its box changes — a search narrowing or
+ * widening its list — so the side it flipped to and its `top` follow the panel it is now.
  *
  * ## Nothing here can go red
  *
@@ -136,21 +138,57 @@ export function usePopupPlacement({
       },
       align,
     });
-    setStore({
-      // Viewport coordinates, minus wherever the frame's own origin turned out to be.
-      placement: { ...next, left: next.left - origin.left, top: next.top - origin.top },
-      // A picker never opens narrower than the control that produced it.
-      minWidth: trigger.offsetWidth,
-    });
+    // Viewport coordinates, minus wherever the frame's own origin turned out to be.
+    const placement = { ...next, left: next.left - origin.left, top: next.top - origin.top };
+    // A picker never opens narrower than the control that produced it.
+    const minWidth = trigger.offsetWidth;
+    // Unchanged is no write: the observer below takes a reading on every change of the panel's
+    // box, and most of them (a row's hover tint, a query that keeps the row count) move nothing.
+    const prev = storeRef.current;
+    if (
+      prev.placement !== null &&
+      prev.minWidth === minWidth &&
+      prev.placement.left === placement.left &&
+      prev.placement.top === placement.top &&
+      prev.placement.flipX === placement.flipX &&
+      prev.placement.flipY === placement.flipY
+    ) {
+      return;
+    }
+    setStore({ placement, minWidth });
   }, [triggerRef, frameRef, panelRef, align, setStore]);
 
+  /**
+   * Measured on opening, and again **whenever the panel's own box changes size** (issue #1574).
+   *
+   * A searchable panel shrinks and grows under the reader's typing: placed once, a panel that
+   * flipped above its trigger at twelve rows kept the `top` of the tall panel when a query left
+   * two, and hung well clear of the trigger; one opened on a kept query of three rows and placed
+   * below grew to `max-h-64` when the box was cleared and ran past the window's bottom with no
+   * flip. `Submenu` observes its panel for the same reason, and its argument holds here: a
+   * floating popup measuring **itself**, which CSS cannot answer.
+   *
+   * **It cannot feed back.** A placement writes `left`/`top` and the transform origin, which move
+   * the panel and change no dimension of it; `minWidth` is the trigger's width, which the panel
+   * does not set — so the one reading it provokes (0 → the trigger's width on the first pass)
+   * settles on the next.
+   *
+   * The first reading stays synchronous, ahead of the observer: `ResizeObserver` delivers its
+   * initial notification after layout rather than during this effect, and leaning on it would
+   * paint a frame of panel in the frame's corner.
+   */
   useLayoutEffect(() => {
     if (!open) {
       setStore({ placement: null, minWidth: storeRef.current.minWidth });
       return;
     }
     measure();
-  }, [open, measure, setStore]);
+    const panel = panelRef.current;
+    if (!panel) return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [open, measure, setStore, panelRef]);
 
   useEffect(() => {
     if (!open) return;

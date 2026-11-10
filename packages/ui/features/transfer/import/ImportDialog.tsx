@@ -10,6 +10,7 @@ import { Dialog } from "@/components/Dialog";
 import type { ImportDestination } from "./destination";
 import { PRIMARY } from "./shared/CommitBar";
 import { CsvNotes } from "./shared/CsvNotes";
+import { SourceRefusal } from "./shared/SourceRefusal";
 import { useImport } from "./useImport";
 import { useImportSource } from "./useImportSource";
 
@@ -220,6 +221,10 @@ function ImportBody({
     ? `Couldn't read a card list from a file — ${ipcError(readFile.error)}`
     : null;
 
+  /** Nothing was read and the parser said why — `SourceRefusal`'s own condition, held here only
+   *  to name it as the box's description. */
+  const refused = parsed.lines.length === 0 && parsed.issues.length > 0;
+
   if (previewed !== null && destination !== undefined) {
     return (
       <>
@@ -305,7 +310,14 @@ function ImportBody({
             readOnly={resolve.isPending}
             rows={14}
             spellCheck={false}
-            aria-describedby={readAs === "windows-1252" ? `${id}-encoding` : undefined}
+            aria-describedby={
+              [
+                readAs === "windows-1252" ? `${id}-encoding` : null,
+                refused ? `${id}-refused` : null,
+              ]
+                .filter((part) => part !== null)
+                .join(" ") || undefined
+            }
             className={cn(
               "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
               "font-mono text-xs leading-relaxed",
@@ -322,8 +334,9 @@ function ImportBody({
             </p>
           )}
           <p className="mt-1 text-[0.6875rem] text-dim">
-            One card per line, quantity first (e.g. <span className="font-mono">4 Lightning Bolt</span>).
-            Supports Arena, Moxfield, and MTGO exports.
+            One card per line, quantity first (e.g.{" "}
+            <span className="font-mono">4 Lightning Bolt</span>). Supports Arena, Moxfield, and MTGO
+            exports.
           </p>
           {/* The counts as they are typed, so the box says what it has read before the
               reader commits to a preview. */}
@@ -333,6 +346,11 @@ function ImportBody({
               {parsed.issues.length > 0 && ` · ${plural(parsed.issues.length, "unreadable line")}`}
             </p>
           )}
+          {/* Why Preview is shut, in the parser's own sentence — a refused spreadsheet, a
+              Cockatrice `.cod`, a list of `0 Shock`s. The preview step quotes every issue, but
+              with no line read it cannot be reached, so here is the only place the reader can
+              learn why (issue #1552). Draws nothing once any line was read. */}
+          <SourceRefusal parsed={parsed} id={`${id}-refused`} className="mt-1 text-[0.6875rem]" />
           <AnimatePresence initial={false}>
             {fileFailure !== null && (
               <motion.p

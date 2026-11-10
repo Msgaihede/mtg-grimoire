@@ -112,6 +112,16 @@ pub const NOT_SHORT_OF_THAT: &str = "This deck is not short of that printing any
 /// [`crate::deck::release_live_copies`] exists to prevent from the other end.
 pub const MORE_THAN_MISSING: &str = "That is more copies than this deck is short of.";
 
+/// What [`from_collection`] says about a pick naming copies in a locked folder (issue #1541).
+///
+/// [`plan`] does not offer them, so only a stale dialog reaches this — the drawer was locked from
+/// another window while this one was open. Its own sentence rather than [`NOT_SHORT_OF_THAT`],
+/// which would be false (the deck is still short) and would send the reader looking at the deck
+/// when what changed is the folder. It says what to do, [`crate::collection_folders::FOLDER_IS_LOCKED`]'s
+/// manners.
+pub const ENTRY_IN_A_LOCKED_FOLDER: &str =
+    "Those copies are in a locked folder. Unlock it to pull them into a deck.";
+
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck, indexed rather than
 /// spelled, [`crate::collection_alloc`]'s discipline.
 const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
@@ -264,7 +274,28 @@ pub struct PullOutcome {
 ///
 /// This is a pre-pick and not a decision. Every candidate is returned and the reader ticks the
 /// ones they want; the order is what the dialog offers first.
-const CANDIDATE_SQL: &str = "SELECT e.id, e.quantity, e.folder_id, f.name, f.kind,
+///
+/// # A locked folder's copies are not on the desk either (issue #1541)
+///
+/// A folder the reader has set aside — by its own flag or an ancestor's — is left out by
+/// [`crate::collection_folders::LOCKED_FOLDER_IDS`], the **effective** lock, the same statement
+/// the deck editor's Collection tab, its All-cards availability and the Compare dialog's
+/// "Already owned" already push. Issue #365 asked for a locked drawer to be out of reach of every
+/// automated action, *moving cards into a deck folder* named first, and a one-press pull that
+/// pre-ticks the drawer's copies is exactly that action. The reader who does want them still
+/// can: a drag out of a locked folder asks first, and unlocking the folder puts its copies back
+/// in this list. **Not offered rather than offered unticked**, because every other reader that
+/// asks "what could this deck have" says the copies are not there, and a dialog that disagreed
+/// would be the one place the lock is a suggestion.
+///
+/// The write follows for free: [`from_collection`] re-plans through this statement, so a pick
+/// naming a locked row is not in its plan and [`why_not_offered`] names the lock.
+///
+/// Its own `IS NULL` arm, `deck_theory`'s `OWNED_SPARE_SQL` reason: the two conditions are ANDed,
+/// each has to let the root through on its own, and a `NOT IN` over a NULL is NULL.
+static CANDIDATE_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT e.id, e.quantity, e.folder_id, f.name, f.kind,
             e.condition, e.lang, e.altered, e.signed, e.proxy, e.misprint,
             e.grading, e.serial_number
        FROM collection_entries e
@@ -273,13 +304,17 @@ const CANDIDATE_SQL: &str = "SELECT e.id, e.quantity, e.folder_id, f.name, f.kin
         AND e.finish IN (?2, ?5)
         AND e.quantity > 0
         AND (e.folder_id IS NULL OR f.kind <> ?3)
+        AND (e.folder_id IS NULL OR e.folder_id NOT IN ({locked}))
       ORDER BY CASE
                  WHEN e.folder_id IS NULL THEN 0
                  WHEN f.kind = ?4 THEN 1
                  ELSE 2
                END,
                coalesce(f.sort_order, 0),
-               e.id";
+               e.id",
+        locked = crate::collection_folders::LOCKED_FOLDER_IDS
+    )
+});
 
 /// What this deck is short of that the reader already owns.
 ///
@@ -324,7 +359,7 @@ pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<PullRow>, String> {
     //
     // One prepared statement for the whole plan rather than one per row: a 100-card list short
     // of thirty printings is thirty index lookups on `idx_collection_card`, not thirty prepares.
-    let mut stmt = conn.prepare(CANDIDATE_SQL).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&CANDIDATE_SQL).map_err(|e| e.to_string())?;
     let mut rows: Vec<PullRow> = Vec::new();
     for s in crate::deck::live_shortfall(conn, deck_id)? {
         let candidates = candidates(
@@ -519,8 +554,8 @@ fn candidates(
 ///
 /// Every pick is validated against a plan built **here**, not against the one the dialog was
 /// drawn from: between the read and the press another window may have cut a card, filed a copy
-/// into a different deck, or folded the very row the reader ticked. Six ways a pick is refused,
-/// each in words naming the mistake:
+/// into a different deck, locked its folder, or folded the very row the reader ticked. Seven ways
+/// a pick is refused, each in words naming the mistake:
 ///
 /// * an empty batch — [`NOTHING_PICKED`];
 /// * a quantity of zero or less — [`crate::collection_alloc::ZERO_MOVE`];
@@ -528,11 +563,13 @@ fn candidates(
 /// * a row that has since been filed into a deck's group —
 ///   [`crate::collection_folders::ENTRY_IN_A_DECK`], the sentence that already tells a reader
 ///   what to do about exactly that;
+/// * a row that has since been set aside in a locked folder — [`ENTRY_IN_A_LOCKED_FOLDER`]
+///   (issue #1541; [`plan`] does not offer one, so only a stale dialog can name it);
 /// * a row this deck has no hole for — [`NOT_SHORT_OF_THAT`];
 /// * more copies than the row holds ([`crate::collection_alloc::NOT_THAT_MANY`]) or than the deck
 ///   is short of ([`MORE_THAN_MISSING`]).
 ///
-/// **A seventh refusal is not about a pick at all**, which is why it is not on that list:
+/// **An eighth refusal is not about a pick at all**, which is why it is not on that list:
 /// [`crate::deck::VIRTUAL_HOLDS_NOTHING`] (issue #401), asked of the deck before any pick is
 /// looked at. A virtual deck tracks a deck the reader owns no cardboard for, so there is no
 /// binder for a pull to move copies out of and no group to move them into — the refusal is about
@@ -682,31 +719,38 @@ pub fn from_collection(
     Ok(PullOutcome { copies, cards })
 }
 
-/// Why an entry the caller picked is not in the plan — one of three different sentences.
+/// Why an entry the caller picked is not in the plan — one of four different sentences.
 ///
 /// Asked only on the refusal path, so the happy path pays nothing for it. One statement answering
-/// a nested `Option`: the outer says whether the row is there at all, the inner what kind of
-/// folder it sits in (`None` at the root, which is a fine place for a copy to be).
+/// an `Option` of a pair: the `Option` says whether the row is there at all, the pair what kind of
+/// folder it sits in (`None` at the root, which is a fine place for a copy to be) and whether that
+/// folder is effectively locked ([`ENTRY_IN_A_LOCKED_FOLDER`], issue #1541). The deck arm is asked
+/// first: a deck's group is never locked, but a sentence about a deck is the truer one anyway.
 ///
 /// The `deck` arm reuses [`crate::collection_folders::ENTRY_IN_A_DECK`] rather than writing a
 /// fourth sentence, because it is the same fact and already says what to do about it — and it is
 /// right for **this** deck's group too, where the copies are not missing at all but already
 /// counted as owned.
 fn why_not_offered(tx: &Connection, entry_id: i64) -> Result<String, String> {
-    let kind: Option<Option<String>> = tx
+    let row: Option<(Option<String>, bool)> = tx
         .query_row(
-            "SELECT (SELECT f.kind FROM collection_folders f WHERE f.id = e.folder_id)
-               FROM collection_entries e WHERE e.id = ?1",
+            &format!(
+                "SELECT (SELECT f.kind FROM collection_folders f WHERE f.id = e.folder_id),
+                        e.folder_id IS NOT NULL AND e.folder_id IN ({locked})
+                   FROM collection_entries e WHERE e.id = ?1",
+                locked = crate::collection_folders::LOCKED_FOLDER_IDS
+            ),
             params![entry_id],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    Ok(match kind {
+    Ok(match row {
         None => crate::collection::GONE.to_owned(),
-        Some(Some(kind)) if kind == DECK_KIND => {
+        Some((Some(kind), _)) if kind == DECK_KIND => {
             crate::collection_folders::ENTRY_IN_A_DECK.to_owned()
         }
+        Some((_, true)) => ENTRY_IN_A_LOCKED_FOLDER.to_owned(),
         Some(_) => NOT_SHORT_OF_THAT.to_owned(),
     })
 }
@@ -1129,6 +1173,101 @@ mod tests {
             vec![root_older, root_newer, in_removed, in_early, in_late],
             "root (oldest first), then Recently removed, then the reader's folders by sort_order"
         );
+    }
+
+    /// **A locked folder's copies are not offered, and neither are a subfolder's** (issue #1541).
+    /// The issue's own repro: the deck is two Bolts short, the only two loose copies sit in a
+    /// drawer the reader set aside, and the dialog arrived with them ticked. The subfolder is the
+    /// arm that gets missed — it carries no flag of its own and is locked by its parent, which is
+    /// why the fence is `LOCKED_FOLDER_IDS` and not `f.locked`. Unlocking the drawer puts both
+    /// back, so the lock is the whole of the reason they were gone.
+    #[test]
+    fn a_locked_folders_copies_are_not_offered() {
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 2, None);
+        let drawer = user_folder(&conn, "Set aside", 0);
+        let shelf: i64 = conn
+            .query_row(
+                "INSERT INTO collection_folders
+                     (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+                 VALUES (?1, 'Shelf', 'user', NULL, 0, unixepoch(), unixepoch())
+                 RETURNING id",
+                params![drawer],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let in_drawer = seed_entry(&conn, "bolt", 1, Some(drawer));
+        let in_shelf = seed_entry(&conn, "bolt", 1, Some(shelf));
+        crate::collection_folders::set_folder_locked(&conn, drawer, true).unwrap();
+
+        assert!(
+            plan(&conn, deck).unwrap().is_empty(),
+            "short two, and the only copies are set aside — the drawer's and its shelf's"
+        );
+
+        crate::collection_folders::set_folder_locked(&conn, drawer, false).unwrap();
+        let rows = plan(&conn, deck).unwrap();
+        let offered: Vec<i64> = rows[0].candidates.iter().map(|c| c.entry_id).collect();
+        assert_eq!(
+            offered,
+            vec![in_drawer, in_shelf],
+            "unlocked, both are back"
+        );
+    }
+
+    /// **A locked copy beside a loose one: only the loose one is offered**, so the default
+    /// one-press pull reaches for nothing the reader set aside.
+    #[test]
+    fn a_locked_copy_does_not_crowd_out_a_loose_one() {
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 2, None);
+        let drawer = user_folder(&conn, "Set aside", 0);
+        seed_entry(&conn, "bolt", 2, Some(drawer));
+        let loose = seed_entry(&conn, "bolt", 1, None);
+        crate::collection_folders::set_folder_locked(&conn, drawer, true).unwrap();
+
+        let rows = plan(&conn, deck).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].short, 2,
+            "the shortfall is the deck's and the lock does not move it"
+        );
+        let offered: Vec<i64> = rows[0].candidates.iter().map(|c| c.entry_id).collect();
+        assert_eq!(offered, vec![loose]);
+    }
+
+    /// **A stale pick of a locked row is refused in the lock's own words and moves nothing** —
+    /// the dialog was drawn, then the drawer was locked from another window. Not
+    /// `NOT_SHORT_OF_THAT`: the deck is still short, and what changed is the folder.
+    #[test]
+    fn a_pick_out_of_a_locked_folder_is_refused_and_moves_nothing() {
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 2, None);
+        let drawer = user_folder(&conn, "Set aside", 0);
+        let in_drawer = seed_entry(&conn, "bolt", 2, Some(drawer));
+        let loose = seed_entry(&conn, "bolt", 1, None);
+        assert_eq!(plan(&conn, deck).unwrap()[0].candidates.len(), 2);
+        crate::collection_folders::set_folder_locked(&conn, drawer, true).unwrap();
+
+        let err = from_collection(
+            &conn,
+            deck,
+            &[
+                Pick {
+                    entry_id: loose,
+                    quantity: 1,
+                },
+                Pick {
+                    entry_id: in_drawer,
+                    quantity: 1,
+                },
+            ],
+        )
+        .unwrap_err();
+        assert_eq!(err, ENTRY_IN_A_LOCKED_FOLDER);
+        assert_eq!(group_copies(&conn, deck, "bolt"), 0, "all or nothing");
+        assert_eq!(entry_quantity(&conn, in_drawer), Some(2));
+        assert_eq!(entry_quantity(&conn, loose), Some(1));
     }
 
     #[test]

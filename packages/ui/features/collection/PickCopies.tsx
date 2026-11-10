@@ -43,6 +43,13 @@ const DEFAULT_LANG = "en";
  */
 export interface CopyChoice {
   entryId: number;
+  /** The card this row is a copy of — "Lightning Bolt". Drawn only when the rows span more than
+   *  one card ({@link spansCards}); one card's rows are named once, by the heading. */
+  cardName: string;
+  /** Its printing, already worded by the caller — "M10 #146". Drawn beside {@link cardName}, and
+   *  half of what tells two cards apart: two printings of one name are two cards to a reader
+   *  choosing between them. */
+  printing: string;
   /** Nonfoil / Foil / Etched — already labelled by the caller. */
   finish: string;
   /** Near mint, Lightly played, Not set … — already labelled by the caller. */
@@ -86,6 +93,41 @@ export interface CopyChoice {
  * as the graded one above it. Two rows of one printing differing only in whether a grade was
  * ever claimed is exactly the pair this panel exists to let a reader choose between.
  */
+/**
+ * **Do these rows span more than one card?** — a picked set moved from the menu or dragged
+ * together (issue #1575), where one card's rows are a single tile's.
+ *
+ * A card is a name **and** a printing: a Lightning Bolt from M10 and one from 2XM are two tiles
+ * on the wall and two things a reader might mean, so a row that said only the name would read as
+ * the same card twice.
+ */
+export function spansCards(copies: readonly CopyChoice[]): boolean {
+  const first = copies[0];
+  if (first === undefined) return false;
+  return copies.some((c) => c.cardName !== first.cardName || c.printing !== first.printing);
+}
+
+/**
+ * A copy's face, in the two spellings of one sentence — and, where the rows span several cards,
+ * the card it is a copy of (`card`), drawn as a line of its own above the facts.
+ *
+ * **The card is drawn only when it is the thing telling rows apart** (issue #1575). One card's
+ * rows sit under a heading that already names it, and repeating the name on every row would be a
+ * column of the same words pushing the folder off a narrow panel. Several cards' rows sit under
+ * a count, and without the name a foil Lightning Bolt and a foil Counterspell read identically.
+ * The accessible name always carries it in that case, first, because it is what a reader listens
+ * for before anything else.
+ */
+function rowFace(
+  copy: CopyChoice,
+  named: boolean,
+): { card: string | null; shown: string; spoken: string } {
+  const { shown, spoken } = copyFace(copy);
+  if (!named) return { card: null, shown, spoken };
+  const card = `${copy.cardName} · ${copy.printing}`;
+  return { card, shown, spoken: `${copy.cardName}, ${copy.printing}, ${spoken}` };
+}
+
 function copyFace(copy: CopyChoice): { shown: string; spoken: string } {
   const parts = [
     copy.finish,
@@ -140,7 +182,8 @@ export function PickCopies({
   onConfirm,
   onCancel,
 }: {
-  /** The printing, for the heading — "Move Lightning Bolt to Binder". */
+  /** What is moving, for the heading — a card's name ("Move Lightning Bolt to Binder"), or a
+   *  count ("Move 3 cards to Binder") when the rows span several cards. The host's word. */
   cardName: string;
   /** Where they are going, already worded by the caller: a folder's name, or "Collection". */
   destination: string;
@@ -187,10 +230,7 @@ export function PickCopies({
    * A list of ids is what a host writes and what a test reads, and neither should have to know
    * about insertion order to say what it expected.
    */
-  const chosen = useMemo(
-    () => copies.filter((c) => picked.has(c.entryId)),
-    [copies, picked],
-  );
+  const chosen = useMemo(() => copies.filter((c) => picked.has(c.entryId)), [copies, picked]);
 
   /**
    * The number on the button, which is **copies and not rows**.
@@ -202,6 +242,7 @@ export function PickCopies({
    */
   const moving = chosen.reduce((sum, c) => sum + c.quantity, 0);
   const allBlocked = copies.length > 0 && copies.every((c) => c.blocked !== null);
+  const named = spansCards(copies);
 
   const toggle = (entryId: number) =>
     setPicked((prev) => {
@@ -246,9 +287,10 @@ export function PickCopies({
            name carrying it. */
         <ul className="space-y-1.5">
           {copies.map((copy) => {
-            const { shown } = copyFace(copy);
+            const { card, shown } = rowFace(copy, named);
             return (
               <li key={copy.entryId} className="space-y-0.5 px-2 text-xs text-dim">
+                {card !== null && <p className="break-words font-medium">{card}</p>}
                 <p className="break-words">{shown}</p>
                 <p className="text-[0.7rem] leading-relaxed">{copy.blocked}</p>
               </li>
@@ -265,7 +307,7 @@ export function PickCopies({
           className="max-h-56 space-y-0.5 overflow-y-auto p-1.5"
         >
           {copies.map((copy) => {
-            const { shown, spoken } = copyFace(copy);
+            const { card, shown, spoken } = rowFace(copy, named);
             const blocked = copy.blocked !== null;
             return (
               <li key={copy.entryId}>
@@ -301,6 +343,7 @@ export function PickCopies({
                     className={cn("mt-0.5 size-4 shrink-0 accent-accent", FOCUS)}
                   />
                   <span className="min-w-0 flex-1 space-y-0.5">
+                    {card !== null && <span className="block break-words font-medium">{card}</span>}
                     <span className="block break-words">{shown}</span>
                     {blocked && (
                       /* For the eye only — the checkbox's own name already says it, and a

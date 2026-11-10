@@ -253,12 +253,22 @@ export function useCollectionFolders() {
    * numbers roll up into, and re-reading the list is precisely what recomputes that. The summary
    * map is keyed by folder id and is untouched by where the folder sits.
    *
+   * **And `["collection", "ruleConflicts"]`, the one entry-counted read a re-parent does move**
+   * (issue #1570). A folder's rules inherit on read — a subfolder is judged by its own and every
+   * ancestor's (`collection_folders::set_folder_rules`) — so a folder dragged into, or out of, a
+   * folder with rules changes which copies break one without a single entry moving. Without it the
+   * badge counts and the wall's red outlines stayed as they were until something else re-read them,
+   * and a badge could open an empty "breaks rules" wall. A same-level placement re-reads it for
+   * nothing; one conflicts read is cheap beside the folder summary this comment exists to spare.
+   *
    * On error as well as on success, `writes`' rule: a refusal is a busy database, a cycle, or an
    * id in `ids` another surface has already deleted — and the last must not leave a tree drawing a
    * node that is gone.
    */
-  const settleOrder = () =>
+  const settleOrder = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection", "folders"] });
+    void queryClient.invalidateQueries({ queryKey: ["collection", "ruleConflicts"] });
+  };
 
   /**
    * Place a whole level: `ids` is **every** child of `parentId`, in the order they are to sit in.

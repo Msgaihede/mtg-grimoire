@@ -7695,6 +7695,38 @@ describe("DeckEditor — the Collection submenu", () => {
   });
 
   /**
+   * **Nor is the last opening's refusal, on the same row of the same card** (issue #1543): a
+   * refused Record, Cancel, and the same question asked again sends the same `wishId` and card, so
+   * only the opening's own clock (`openedAt`) tells this question from the last one.
+   */
+  it("does not reopen the wish question on the last opening's refusal", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue(WISHES);
+    deckQuickAddToCollection.mockRejectedValue(new Error("that wishlist line is not there"));
+    await open();
+    await collectionMenu();
+
+    const row = "Quick add 4 and remove from wishlist";
+    await userEvent.click(screen.getByRole("menuitem", { name: row }));
+    let dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Couldn't record those copies",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Which wishlist item?" }),
+      ).not.toBeInTheDocument(),
+    );
+
+    await collectionMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: row }));
+    dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
    * The caret goes back to the card the reader right-clicked, which is `ContextMenu`'s half of
    * the contract met by this editor's: `run` focuses the opener *before* it calls a row, so
    * `document.activeElement` read at the press is exact — and it is read **before** the await,
@@ -8778,6 +8810,81 @@ describe("DeckEditor multi-select", () => {
   });
 
   /**
+   * **A hidden stack is off the desk, and a range does not run through it** (issue #1533). Three
+   * piles in a row, the middle one hidden in Stacks view: a Shift-click from the first to the last
+   * picks the two cards on screen, and Delete takes those two out and leaves the hidden pile's card
+   * where it is. It used to pick and remove all three.
+   */
+  describe("with a stack hidden", () => {
+    const ALPHA = 1;
+    const BETA = 6;
+    const GAMMA = 7;
+    const PILES: DeckCategory[] = [
+      category(ALPHA, "Alpha", "main", { sortOrder: 0, cardCount: 1 }),
+      category(BETA, "Beta", "main", { sortOrder: 1, cardCount: 1 }),
+      category(GAMMA, "Gamma", "main", { sortOrder: 2, cardCount: 1 }),
+      ...CATEGORIES.slice(1),
+    ];
+    const pile = (id: number) =>
+      document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${id}"]`)!;
+    const cardsIn = (id: number) => pile(id).querySelectorAll(`[${DECK_CARD_ATTR}]`).length;
+
+    async function openWithPiles() {
+      deckGet.mockResolvedValue(
+        detail(
+          {},
+          [
+            card({ name: "Sol Ring", categoryId: ALPHA, categoryName: "Alpha", quantity: 1 }),
+            card({ name: "Ponder", categoryId: BETA, categoryName: "Beta", quantity: 1 }),
+            card({ name: "Opt", categoryId: GAMMA, categoryName: "Gamma", quantity: 1 }),
+          ],
+          PILES,
+        ),
+      );
+      deckCategoryList.mockResolvedValue(PILES);
+      await open();
+    }
+
+    it("leaves a hidden stack's cards out of a Shift-click range and out of Delete", async () => {
+      hiddenStacks.mockResolvedValue([BETA]);
+      await openWithPiles();
+      await waitFor(() => expect(cardsIn(BETA)).toBe(0));
+      expect(cardsIn(ALPHA)).toBe(1);
+      expect(cardsIn(GAMMA)).toBe(1);
+
+      await userEvent.click(screen.getByRole("button", { name: /^Sol Ring/ }));
+      await pressWith("Opt", { shift: true });
+
+      expect(useAppStore.getState().cardSelection?.keys).toEqual([
+        deckCardSlot(ALPHA, "c-Sol Ring", null),
+        deckCardSlot(GAMMA, "c-Opt", null),
+      ]);
+
+      await userEvent.keyboard("{Delete}");
+
+      await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
+      expect(JSON.stringify(deckToCollection.mock.calls)).not.toContain("c-Ponder");
+    });
+
+    /** The variant: a pick made while the stack was drawn is put down when the stack is hidden. */
+    it("drops a pick from the set when its stack is hidden", async () => {
+      await openWithPiles();
+      await userEvent.click(screen.getByRole("button", { name: /^Sol Ring/ }));
+      await pressWith("Ponder", { ctrl: true });
+      expect(useAppStore.getState().cardSelection?.keys).toHaveLength(2);
+
+      fireEvent.contextMenu(pile(BETA));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Hide" }));
+
+      await waitFor(() =>
+        expect(useAppStore.getState().cardSelection?.keys).toEqual([
+          deckCardSlot(ALPHA, "c-Sol Ring", null),
+        ]),
+      );
+    });
+  });
+
+  /**
    * **The gesture the issue asked for**: one drag, every picked card moved.
    *
    * Driven over the library's own code path — a real `dragstart` on the card's `<li>`, a real
@@ -8802,6 +8909,41 @@ describe("DeckEditor multi-select", () => {
       null,
     );
     expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Bear", MAIN, SIDE, null, "live", null);
+  });
+
+  /**
+   * **Issue #1534: the quick zones' New category takes the whole set too.** It read the grabbed
+   * card alone, so the dialog named one card and only that card moved — the other two stayed put
+   * and stayed picked. Now every picked card is filed into the new pile, said in one toast with
+   * the count, and the set is put down.
+   */
+  it("files every picked card into a pile made on New category", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    const held = await startPointerDrag(row("Lightning Bolt"));
+    await held.over(
+      boxed(document.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="New category"]`)!, 100, 60),
+    );
+    await held.drop();
+
+    const dialog = await screen.findByRole("dialog", { name: "New category" });
+    expect(within(dialog).getByText("2 cards")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("New category name"), "Removal");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(2));
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, 9, null, "live", null);
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Bear", MAIN, 9, null, "live", null);
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Created “Removal” and filed 2 cards in it",
+        tone: "success",
+      }),
+    );
+    expect(useNotifications.getState().notices).toHaveLength(1);
+    expect(useAppStore.getState().cardSelection).toBeNull();
   });
 
   /**

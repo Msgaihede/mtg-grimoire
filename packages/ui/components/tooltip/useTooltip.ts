@@ -72,6 +72,30 @@ const NO_BINDING: TooltipBinding = Object.freeze({});
 export type TooltipBinder = (content: ReactNode, options?: TooltipOptions) => TooltipBinding;
 
 /**
+ * The native focus and blur events a bound element nearer the target has already answered.
+ *
+ * `onFocus`/`onBlur` bubble (see {@link useTooltip}), so a focus inside a bound element that is
+ * itself inside another — the Collection page's bracketed "Reduced price …" button inside the
+ * `Figure` that carries the prices' date — runs the inner binding's handler and then the outer
+ * one's, and the outer one, anchoring on the same `target`, overwrote the words the button exists
+ * to make reachable (issue #1574). React hands every handler on the path the **same**
+ * `nativeEvent`, and bubbling reaches the nearest binding first, so the first handler to see an
+ * event claims it here and every outer one stands down. The pointer path needs nothing:
+ * `pointerenter`/`pointerleave` do not bubble.
+ *
+ * A `WeakSet` rather than `stopPropagation()`, which would also starve every unrelated `onFocus`
+ * up the tree — a dropdown root's close-on-blur among them.
+ */
+const claimed = new WeakSet<Event>();
+
+/** True for the first bound element an event reaches; false for every binding outside it. */
+const claim = (e: { nativeEvent: Event }): boolean => {
+  if (claimed.has(e.nativeEvent)) return false;
+  claimed.add(e.nativeEvent);
+  return true;
+};
+
+/**
  * The one door a surface uses: `{...tip(words)}` on the element it already has.
  *
  * **The pointer anchor is `event.currentTarget`, so there is no ref to merge and no wrapper
@@ -95,6 +119,11 @@ export type TooltipBinder = (content: ReactNode, options?: TooltipOptions) => To
  * bounds in these three cases. **This costs the ordinary unwrapped case nothing**: there
  * `target === currentTarget` for a focus event exactly as it does for a pointer one, since the
  * bound element and the focused element are the same node.
+ *
+ * **Bubbling has a second consequence: a bound control inside another bound element.** Both
+ * handlers see the one focus, both anchor on its `target`, and the outer one ran last — so the
+ * control showed (and was described by) its container's words. Only the nearest binding answers
+ * a focus or a blur; see `claimed`.
  *
  * `content` of `null`, `undefined`, `false`, `""` or `0` binds nothing — the same shape as the
  * `title={… ?? undefined}` that nine sites in this app already used, and as `cond && "words"`.
@@ -121,9 +150,14 @@ export function useTooltip(): TooltipBinder {
       return {
         onPointerEnter: (e) => api.enter(e.currentTarget, content, options),
         onPointerLeave: (e) => api.leave(e.currentTarget),
-        // `target`, not `currentTarget` — see the doc comment above.
-        onFocus: (e) => api.focus(e.target as HTMLElement, content, options),
-        onBlur: (e) => api.leave(e.target as HTMLElement),
+        // `target`, not `currentTarget` — see the doc comment above. And only the nearest
+        // binding answers — see `claimed`.
+        onFocus: (e) => {
+          if (claim(e)) api.focus(e.target as HTMLElement, content, options);
+        },
+        onBlur: (e) => {
+          if (claim(e)) api.leave(e.target as HTMLElement);
+        },
       };
     },
     [api],

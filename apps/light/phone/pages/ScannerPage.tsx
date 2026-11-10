@@ -26,7 +26,7 @@ import { useScanSounds } from "@grimoire/ui/features/scanner/sounds/useScanSound
 import { SubmitScanDialog } from "@grimoire/ui/features/scanner/submit/SubmitScanDialog";
 import { useMaySendScans } from "@grimoire/ui/features/scanner/submit/useMaySendScans";
 import { useScanSubmit } from "@grimoire/ui/features/scanner/submit/useScanSubmit";
-import { useCamera, useCameraDevices } from "@grimoire/ui/features/scanner/useCamera";
+import { cameraPress, useCamera, useCameraDevices } from "@grimoire/ui/features/scanner/useCamera";
 import { usePageParked } from "@grimoire/ui/features/scanner/useParked";
 import { usePointAndShoot } from "@grimoire/ui/features/scanner/usePointAndShoot";
 import { useScanLoop } from "@grimoire/ui/features/scanner/useScanLoop";
@@ -202,7 +202,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   const landscape = useLandscape();
   // `undefined` until the prefs are in, which holds the camera shut; and again once the page has
   // been hidden past its grace — its tracks are stopped, and coming back asks afresh.
-  const camera = useCamera(videoRef, loaded && !parked.released ? prefs.cameraId : undefined);
+  // Bumped to reopen the stored camera when the default is open in its place (`cameraPress`).
+  const [cameraAttempt, setCameraAttempt] = useState(0);
+  const camera = useCamera(
+    videoRef,
+    loaded && !parked.released ? prefs.cameraId : undefined,
+    cameraAttempt,
+  );
+  const openCamera = camera.kind === "live" ? camera.deviceId : prefs.cameraId;
   // Keyed on the camera that opened: a browser names no camera until one has been granted.
   const cameras = useCameraDevices(camera.kind === "live" ? camera.deviceId : null);
   const tray = useTray();
@@ -210,10 +217,17 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   useScannerHold(parked.released);
 
-  const { onDecision, onPicked, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
-    tray,
-    prefs.finish,
-  );
+  // `armed` — the desktop page's word: scanning at all, continuous or point and shoot. Above the
+  // landing, which lays a card over the camera only while it is on (issue #1555).
+  const armed = prefs.pointAndShoot || scanning;
+  const {
+    onDecision,
+    onPicked,
+    lastAdded,
+    landed,
+    shown: shownLanding,
+    flashKey,
+  } = useTrayLanding(tray, prefs.finish, armed);
   // *Add card…* (issue #978) — the desktop page's: the scanner pauses while the search is open,
   // and closing it resumes whatever was running before.
   const [picking, setPicking] = useState(false);
@@ -273,9 +287,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     interrupted: parked.paused || sending || picking || overlaid,
   });
   const reading = pointAndShoot ? shot.shooting : scanning;
-  const armed = pointAndShoot || scanning;
-  // The landing the popup is showing, if any — the confetti is thrown for that one and no other.
-  const shownLanding = armed ? landed : null;
+  // `shownLanding`, from the landing above, is the card the popup is showing, if any — the
+  // confetti is thrown for that one and no other.
   // What the card over the camera costs — at the tray's marketplace, so it is its row's figure —
   // and the rung of the sound ladder it reaches, which colours the figure and sizes the confetti.
   const landedPrice = useLandedPrice(shownLanding, destination?.marketplace);
@@ -582,7 +595,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             <TierConfetti burst={burst} originBottom={landscape ? 36 : undefined} />
             <AddedToast
               card={shownLanding}
-              onDone={clearLanded}
               price={landedPrice}
               tier={landedTier}
               compact={landscape}
@@ -768,10 +780,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
         onCondition={(condition) => update({ condition })}
         cameras={cameras}
         // The camera that opened; while a switch is starting, the one asked for.
-        cameraId={camera.kind === "live" ? camera.deviceId : prefs.cameraId}
-        // A press on the camera already chosen changes nothing, and must not restart the stream.
+        cameraId={openCamera}
+        // A press on the ticked camera changes nothing; on the stored one while the fallback is
+        // open, reopens it (issue #1554). See `cameraPress`.
         onCamera={(cameraId) => {
-          if (cameraId !== prefs.cameraId) update({ cameraId });
+          const press = cameraPress(cameraId, openCamera, prefs.cameraId);
+          if (press === "store") update({ cameraId });
+          else if (press === "reopen") setCameraAttempt((n) => n + 1);
         }}
       />
 

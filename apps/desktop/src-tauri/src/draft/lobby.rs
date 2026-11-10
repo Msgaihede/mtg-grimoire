@@ -171,6 +171,13 @@ const NOT_OPEN_NOW: &str = "The lobby is not open for a new draft.";
 const NOT_A_POD: &str = "A lobby's draft is a pod draft.";
 const NOT_IN_LOBBY: &str = "A seat names someone who is not in the lobby.";
 const NOT_SEATED: &str = "That guest has no seat at the table.";
+/// `lobby_start` when someone came in after the press dealt the seats (issue #1586): the page
+/// deals again from the roster it now shows.
+const ROSTER_MOVED: &str =
+    "Someone joined while the packs were being opened. Press Start again to seat everyone.";
+/// Sent to a guest who is in the room once the pod is drafting but has no seat at its table — in
+/// before the lock took, or back after being away at the start — before they are let go.
+const NO_SEAT: &str = "The draft started without a seat for you.";
 const NOT_A_DRAFT_LOBBY: &str = "This lobby is for a game, not a draft.";
 const NO_POD: &str = "This lobby has no draft under way.";
 const NOT_A_GAME_LOBBY: &str = "This lobby is for a draft, not a game.";
@@ -693,6 +700,21 @@ pub fn rejoin(state: &LobbyState, draft: Option<u64>) -> Result<Option<u64>, &'s
     }
 }
 
+/// The guests online in `peers` that `seats` gives no seat to (issue #1586) — a pod's table is
+/// everyone online at the start, so one of these came in after the seats were dealt.
+pub fn unseated(seats: &[grimoire_play::DraftSeatSetup], peers: &[LobbyPeer]) -> Vec<String> {
+    peers
+        .iter()
+        .filter(|p| p.online)
+        .filter(|p| {
+            !seats
+                .iter()
+                .any(|s| !s.bot && s.peer.as_deref() == Some(p.peer.as_str()))
+        })
+        .map(|p| p.peer.clone())
+        .collect()
+}
+
 /// Whether `from` is the other reader of a trade's lobby: the first guest in, the one the room
 /// was locked behind.
 fn partner(state: &LobbyState, from: &str) -> bool {
@@ -1024,8 +1046,11 @@ impl Ctx {
                 self.with(|live| live.send(send_frame("*", &room_body(&room_of(&live.state)))));
             }
             Act::SeatsOnline(peers) => {
+                let strays = Arc::new(Mutex::new(Vec::new()));
+                let found = strays.clone();
                 let _ = self
                     .change_pod(move |d| {
+                        *crate::sync::lock_plain(&found) = unseated(d.seats(), &peers);
                         let seats: Vec<(u8, bool)> = d
                             .seats()
                             .iter()
@@ -1042,6 +1067,15 @@ impl Ctx {
                         Ok(())
                     })
                     .await;
+                // A guest the table has no seat for would wait on "dealing" for ever: told why,
+                // and let go.
+                let strays = std::mem::take(&mut *crate::sync::lock_plain(&strays));
+                self.with(|live| {
+                    for peer in &strays {
+                        live.send(send_frame(peer, &end_body(NO_SEAT)));
+                        live.send(kick_frame(peer));
+                    }
+                });
             }
             Act::Pick { from, ids } => {
                 let peer = from.clone();
@@ -1690,7 +1724,13 @@ pub async fn lobby_start(
     if unknown {
         return Err(NOT_IN_LOBBY.to_owned());
     }
+    // The page dealt the seats from the roster at its press, and then fetched the sets' files: a
+    // guest who came in meanwhile has no seat (issue #1586).
+    if !unseated(&setup.seats, &peers).is_empty() {
+        return Err(ROSTER_MOVED.to_owned());
+    }
     let label = setup.label.clone();
+    let seats = setup.seats.clone();
     let outcome = super::deal(state.inner(), &slot.0, setup, draft).await?;
     let ctx = Ctx {
         app,
@@ -1700,16 +1740,32 @@ pub async fn lobby_start(
         generation,
         role: LobbyRole::Host,
     };
+    // Checked again, under the lobby's lock, with the room locked in the same breath: a guest in
+    // during the deal is refused the same way, and none gets in after it.
     let started = ctx.with(|live| {
+        if live.state.phase != LobbyPhase::Open {
+            return Err(NOT_OPEN_NOW);
+        }
+        if !unseated(&seats, &live.state.peers).is_empty() {
+            return Err(ROSTER_MOVED);
+        }
         live.draft = Some(draft);
         live.state.phase = LobbyPhase::Drafting;
         live.state.label = label;
         live.send(lock_frame());
         live.send(send_frame("*", &room_body(&room_of(&live.state))));
+        Ok(())
     });
-    if started.is_none() {
-        super::end_pod(&slot.0, draft);
-        return Err(NO_LOBBY.to_owned());
+    match started {
+        Some(Ok(())) => {}
+        Some(Err(refusal)) => {
+            super::end_pod(&slot.0, draft);
+            return Err(refusal.to_owned());
+        }
+        None => {
+            super::end_pod(&slot.0, draft);
+            return Err(NO_LOBBY.to_owned());
+        }
     }
     // Seat 0's view is the answer, not an event: only the guests are sent theirs.
     ctx.pass_on(&Outcome {
@@ -1718,6 +1774,16 @@ pub async fn lobby_start(
     });
     ctx.emit_state();
     Ok(outcome.view)
+}
+
+/// The pod draft a live lobby this app hosts is drafting — the one a solo start or resume must
+/// not take the slot from (issue #1586).
+pub(crate) fn hosted_pod(lobby: &LobbySlot) -> Option<u64> {
+    let held = lock(&lobby.0);
+    let live = held.as_ref()?;
+    (live.state.role == LobbyRole::Host && live.state.phase != LobbyPhase::Closed)
+        .then_some(live.draft)
+        .flatten()
 }
 
 /// Take this app's seat at the pod's draft again ([`rejoin`]): a host is answered its draft's
@@ -2110,6 +2176,39 @@ mod tests {
             online,
             deck: None,
         }
+    }
+
+    fn seat(name: &str, bot: bool, peer: Option<&str>) -> grimoire_play::DraftSeatSetup {
+        grimoire_play::DraftSeatSetup {
+            name: name.into(),
+            bot,
+            peer: peer.map(Into::into),
+        }
+    }
+
+    /// Issue #1586: a guest in after the press dealt the seats has none, and is named.
+    #[test]
+    fn a_guest_online_with_no_seat_at_the_pod_is_unseated() {
+        let seats = vec![
+            seat("Ada", false, None),
+            seat("Bo", false, Some("p1")),
+            seat("Bot 1", true, None),
+            // A kicked guest's seat is a bot's now, peer and all.
+            seat("Cy", true, Some("p3")),
+        ];
+        let peers = vec![
+            peer("p1", "Bo", true),
+            peer("p2", "Dee", true),
+            // Away at the start: no seat, but nobody is waiting on them either.
+            peer("p4", "Eve", false),
+        ];
+        assert_eq!(unseated(&seats, &peers), vec!["p2".to_owned()]);
+        assert_eq!(
+            unseated(&seats, &[peer("p3", "Cy", true)]),
+            vec!["p3".to_owned()]
+        );
+        assert!(unseated(&seats, &peers[..1]).is_empty());
+        assert!(unseated(&seats, &[]).is_empty());
     }
 
     fn view() -> DraftView {

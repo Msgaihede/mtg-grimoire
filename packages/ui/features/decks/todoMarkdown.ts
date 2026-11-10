@@ -58,7 +58,10 @@
  * that one character and no other byte, and it refuses every line this reader does not draw as a
  * box — a heading, a line of text and an escaped `\- [ ]` among them.
  */
-import { HARD_BREAK, inlineText, parseInlines, type Inline } from "./noteMarkdown";
+// `EMPTY_PARAGRAPH` is the editor's empty-paragraph marker. Read the same way here as in a note, or
+// an emptied to-do or paragraph would draw as the six characters of an entity and keep a list
+// alive in storage.
+import { EMPTY_PARAGRAPH, HARD_BREAK, inlineText, parseInlines, type Inline } from "./noteMarkdown";
 
 /**
  * One to-do, and the sub-to-dos under it.
@@ -138,15 +141,6 @@ const LEAD = /^[ \t]*/;
 
 /** The column a tab advances to the next multiple of — CommonMark's own tab stop. */
 const TAB_STOP = 4;
-
-/**
- * What the editor writes for a paragraph with nothing in it, which its own reader reads back as
- * empty — the paragraph extension's marker, entity and character both. Read the same way here, or
- * an emptied to-do or paragraph would draw as the six characters of an entity and keep a list
- * alive in storage. The character is spelled as an escape because a literal no-break space is
- * invisible in source and one rewrite of this file already turned it into a plain space.
- */
-const EMPTY_PARAGRAPH = ["&nbsp;", "\u00a0"];
 
 /** How many columns a run of spaces and tabs occupies, with each tab stopping on a multiple of four. */
 function width(indent: string): number {

@@ -73,6 +73,44 @@ export function priceAtPosition(pos: number): number {
 }
 
 /**
+ * The nearest price the ladder can express strictly past `value` in `direction` — or `undefined`
+ * when the ladder has nothing further that way.
+ *
+ * **What an arrow key steps to, because a native step cannot.** A native arrow moves one of a
+ * thousand positions, and almost everywhere that is less than one shop price: the handler rounds
+ * it back to the same price, the controlled `value` snaps the thumb back to that price's
+ * position, and the key goes nowhere (issue #1573). Stepping by *distinct rounded price* rather
+ * than by position is what makes every press a visible notch — `$0.05` under a pound, quarters
+ * under ten, and so on up the ladder.
+ *
+ * A scan of the whole track rather than a walk from `value`'s own position, because a typed
+ * number can sit anywhere between two of the ladder's prices and the scan needs no case for that.
+ * A thousand comparisons per keypress, and {@link priceAtPosition} is monotonic, so the first hit
+ * is the nearest.
+ */
+export function stepPrice(value: number, direction: 1 | -1): number | undefined {
+  if (direction > 0) {
+    for (let pos = 0; pos <= PRICE_POSITIONS; pos += 1) {
+      const price = priceAtPosition(pos);
+      if (price > value) return price;
+    }
+  } else {
+    for (let pos = PRICE_POSITIONS; pos >= 0; pos -= 1) {
+      const price = priceAtPosition(pos);
+      if (price < value) return price;
+    }
+  }
+  return undefined;
+}
+
+/** Which way an arrow key moves a handle along the track, or `0` for a key that is not one. */
+function arrowDirection(key: string): 1 | -1 | 0 {
+  if (key === "ArrowRight" || key === "ArrowUp") return 1;
+  if (key === "ArrowLeft" || key === "ArrowDown") return -1;
+  return 0;
+}
+
+/**
  * Where a price sits on the track — the inverse of {@link priceAtPosition}, up to its rounding.
  *
  * **A number above the top anchor clamps to the far right**, where it shares a position with
@@ -173,6 +211,52 @@ export function PriceRange({
   const bounded = min !== undefined || max !== undefined;
   const spoken = (value: number | undefined, open: string) =>
     value === undefined ? open : formatPrice(value, currency);
+
+  // **Each end's own rule for what is open**, shared by a drag and a keypress so the two cannot
+  // disagree. A floor that rounds to nothing is no floor — positions 1–4 round to `0`, and a
+  // floor of `0` is the very narrow filter that drops every unpriced printing, which a reader
+  // nudging the handle a hair off the left edge did not ask for. (A ceiling's open end is a
+  // *position* — the far right, which a typed `2000` shares — so its handlers decide it.) Both
+  // then push the other end rather than cross it, which is what every dual slider
+  // in a shop does: refusing instead leaves the handle stuck under the pointer with no way to say
+  // why.
+  const setLow = (price: number | undefined) => {
+    const next = price === undefined || price === 0 ? undefined : price;
+    onChange(next, max !== undefined && next !== undefined && max < next ? next : max);
+  };
+  const setHigh = (next: number | undefined) =>
+    onChange(min !== undefined && next !== undefined && min > next ? next : min, next);
+  /**
+   * An arrow key, stepped by price rather than by position — see {@link stepPrice}.
+   *
+   * `preventDefault` so the native one-position step never runs alongside: it would fire its own
+   * `change` with a position that rounds back to where the handle already is. Home, End and the
+   * page keys are left native, because their steps are large enough to land on a new price.
+   * A chord is left alone too, so nothing this control does shadows a shortcut.
+   */
+  const stepWith =
+    (
+      value: number | undefined,
+      openAt: number,
+      openTowards: 1 | -1,
+      step: (price: number | undefined) => void,
+    ) =>
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      const direction = arrowDirection(e.key);
+      if (direction === 0 || e.altKey || e.ctrlKey || e.metaKey) return;
+      e.preventDefault();
+      const price = stepPrice(value ?? openAt, direction);
+      // Stepping *onto* the open end's own price, heading towards it, is opening that end: the
+      // floor stepped down to `0`, the ceiling stepped up to the top anchor. The same price
+      // reached the other way is a real bound — a typed `2000` stepped down is a ceiling of
+      // `1000`, not the removal of the ceiling.
+      const opens = direction === openTowards && (price === undefined || price === openAt);
+      if (!opens) {
+        if (price !== undefined) step(price);
+      } else if (value !== undefined) step(undefined);
+      // …and otherwise a key that does nothing: the end is already open, or the ladder has no
+      // further price, and the native range at the end of its travel is silent too.
+    };
 
   const box = cn(
     FILTER_FIELD,
@@ -276,14 +360,10 @@ export function PriceRange({
           // The number, spoken — a screen reader reading "480" off a thousand-position track
           // would be hearing the mechanism instead of the filter.
           aria-valuetext={spoken(min, "No minimum")}
-          onChange={(e) => {
-            const pos = Number(e.target.value);
-            const next = pos === 0 ? undefined : priceAtPosition(pos);
-            // Pushed rather than blocked: dragging the floor past the ceiling takes the ceiling
-            // with it, which is what every dual slider in a shop does. Refusing the drag instead
-            // leaves the handle stuck under the pointer with no way to say why.
-            onChange(next, max !== undefined && next !== undefined && max < next ? next : max);
-          }}
+          onChange={(e) => setLow(priceAtPosition(Number(e.target.value)))}
+          // An open floor steps up from nothing, so the first press lands on the ladder's first
+          // real price rather than on the `0` that would hide every unpriced printing.
+          onKeyDown={stepWith(min, PRICE_ANCHORS[0], -1, setLow)}
           className={handle}
         />
         <input
@@ -295,9 +375,11 @@ export function PriceRange({
           aria-valuetext={spoken(max, "No maximum")}
           onChange={(e) => {
             const pos = Number(e.target.value);
-            const next = pos === PRICE_POSITIONS ? undefined : priceAtPosition(pos);
-            onChange(min !== undefined && next !== undefined && min > next ? next : min, next);
+            setHigh(pos === PRICE_POSITIONS ? undefined : priceAtPosition(pos));
           }}
+          // An open ceiling steps down from the top anchor, so the first press moves the handle
+          // off the far right instead of landing on the price that is already drawn there.
+          onKeyDown={stepWith(max, PRICE_ANCHORS[PRICE_ANCHORS.length - 1], 1, setHigh)}
           className={handle}
         />
       </div>

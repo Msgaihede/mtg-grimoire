@@ -25,6 +25,8 @@ const IN_A_DECK = "Those copies are in a deck. Cut the card from the deck to get
 
 function copy(over: Partial<CopyChoice> & { entryId: number }): CopyChoice {
   return {
+    cardName: "Lightning Bolt",
+    printing: "M10 #146",
     finish: "Nonfoil",
     condition: "NM",
     lang: "en",
@@ -103,6 +105,53 @@ describe("PickCopies", () => {
     expect(
       screen.getByRole("checkbox", { name: "Nonfoil, NM, Trade binder, 1 copy" }),
     ).toBeInTheDocument();
+  });
+
+  /** Issue #1575: a picked set's rows are several cards, and two cards' rows in one grade and one
+   *  folder read the same unless the row says which card it is. */
+  it("names each row's card and printing when the rows span more than one card", () => {
+    draw({
+      cardName: "3 cards",
+      copies: [
+        copy({ entryId: 1 }),
+        copy({ entryId: 2, cardName: "Counterspell", printing: "LEA #54" }),
+        copy({ entryId: 3, printing: "2XM #141" }),
+      ],
+    });
+
+    expect(screen.getByRole("group")).toHaveAccessibleName("Move 3 cards to Trade binder");
+    const rows = screen.getAllByRole("checkbox");
+    expect(rows[0]).toHaveAccessibleName(
+      "Lightning Bolt, M10 #146, Nonfoil, NM, Collection, 1 copy",
+    );
+    expect(rows[1]).toHaveAccessibleName("Counterspell, LEA #54, Nonfoil, NM, Collection, 1 copy");
+    // Same name, another printing: still another card, so still named.
+    expect(rows[2]).toHaveAccessibleName(
+      "Lightning Bolt, 2XM #141, Nonfoil, NM, Collection, 1 copy",
+    );
+    expect(screen.getByText("Counterspell · LEA #54")).toBeInTheDocument();
+  });
+
+  it("draws no card name on the rows of a single card, which the heading already names", () => {
+    draw();
+
+    expect(screen.queryByText(/Lightning Bolt ·/)).toBeNull();
+    expect(screen.getAllByRole("checkbox")[0]).toHaveAccessibleName(
+      "Nonfoil, NM, Collection, 1 copy",
+    );
+  });
+
+  it("names each card on the rows of an all-blocked set too", () => {
+    draw({
+      cardName: "2 cards",
+      copies: [
+        copy({ entryId: 1, blocked: IN_A_DECK }),
+        copy({ entryId: 2, cardName: "Counterspell", printing: "LEA #54", blocked: IN_A_DECK }),
+      ],
+    });
+
+    expect(screen.getByText("Lightning Bolt · M10 #146")).toBeInTheDocument();
+    expect(screen.getByText("Counterspell · LEA #54")).toBeInTheDocument();
   });
 
   it("starts every copy it can move ticked, and hands back their ids in the order they are drawn", async () => {

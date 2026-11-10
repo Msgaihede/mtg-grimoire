@@ -660,6 +660,24 @@ describe("categories", () => {
     expect(dndManager.dragOperation.status.idle).toBe(true);
   });
 
+  /**
+   * **A move that moves nothing writes nothing** (issue #1546). `reorder_categories` touches the
+   * deck and records a history row and an undo step unconditionally, so an ArrowUp on the first
+   * row sent through would cost the reader an empty Ctrl+Z.
+   */
+  it("sends no reorder for an arrow key past either end of the list", async () => {
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    screen.getByRole("button", { name: "Move Commander, 1 of 5" }).focus();
+    await user.keyboard("{ArrowUp}");
+    screen.getByRole("button", { name: "Move Maybeboard, 5 of 5" }).focus();
+    await user.keyboard("{ArrowDown}");
+
+    expect(deckCategoryReorder).not.toHaveBeenCalled();
+  });
+
   it("puts the order back when the reorder is refused", async () => {
     deckCategoryReorder.mockRejectedValue("The database is busy.");
     mount();
@@ -724,6 +742,27 @@ describe("categories", () => {
   });
 
   /* -------------------------------------------------------------------- delete ------- */
+
+  /**
+   * **One question open at a time** (issue #1546), `LabelsDialog`'s rule. With a rename on one
+   * row and a delete question on another both standing, cancelling the delete — the shared
+   * `onDone` — discarded the half-typed rename with it.
+   */
+  it("shuts a rename on one row when a delete is asked on another, and the reverse", async () => {
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    await user.click(within(row("Ramp")).getByRole("button", { name: "Rename" }));
+    await screen.findByLabelText("Rename Ramp");
+    await user.click(within(row("Removal")).getByRole("button", { name: "Delete" }));
+    await screen.findByRole("group", { name: "Delete Removal" });
+    expect(screen.queryByLabelText("Rename Ramp")).not.toBeInTheDocument();
+
+    await user.click(within(row("Ramp")).getByRole("button", { name: "Rename" }));
+    await screen.findByLabelText("Rename Ramp");
+    expect(screen.queryByRole("group", { name: "Delete Removal" })).not.toBeInTheDocument();
+  });
 
   /**
    * The one destructive control on this dialog, and the thing its question exists to make

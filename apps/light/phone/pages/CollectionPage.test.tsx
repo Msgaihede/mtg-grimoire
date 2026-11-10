@@ -130,9 +130,7 @@ describe("Collection", () => {
     );
     // Stored as the desktop stores it (step 3.5b): only where it leaves the kind's default — a
     // deck's group starts shut, so an open one is the override.
-    await waitFor(async () =>
-      expect((await ipc.shelfFolds()).collection).toEqual({ "4": false }),
-    );
+    await waitFor(async () => expect((await ipc.shelfFolds()).collection).toEqual({ "4": false }));
   });
 
   it("shuts an open shelf on a press, and its cards go", async () => {
@@ -309,12 +307,52 @@ describe("Collection", () => {
     list.mockRestore();
   });
 
-  it("says so when the collection is empty", async () => {
+  it("says so when the collection is empty, and still offers the import", async () => {
     renderPhone(<PhoneFace />, { path: "/collection", fake: { seed: "empty" } });
     expect(
       await screen.findByText("Nothing in your collection yet.", undefined, SETTLE),
     ).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Your collection" })).toBeNull();
+    // A new install has no other way to fill this page (issue #1598).
+    const pair = screen.getByRole("group", { name: "Import and export" });
+    await userEvent.click(
+      within(pair).getByRole("button", { name: "Import cards into your collection" }),
+    );
+    expect(await screen.findByRole("dialog", undefined, SETTLE)).toBeInTheDocument();
+  });
+
+  it("offers the import inside an empty folder", async () => {
+    tallViewport();
+    renderPhone(<PhoneFace />, { path: "/collection" });
+    const wall = await cabinet();
+
+    await userEvent.click(within(wall).getByRole("button", { name: "Open Someday" }));
+
+    expect(
+      await screen.findByText("Nothing in this folder yet.", undefined, SETTLE),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("group", { name: "Import and export" })).getByRole("button", {
+        name: "Import cards into your collection",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("offers the import when a filter matches nothing", async () => {
+    renderPhone(<PhoneFace />, { path: "/collection" });
+    await cabinet();
+
+    await userEvent.type(
+      screen.getByRole("searchbox", { name: "Search your collection" }),
+      "zzzqqqxxx",
+    );
+
+    expect(await screen.findByText("No cards match.", undefined, SETTLE)).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("group", { name: "Import and export" })).getByRole("button", {
+        name: "Import cards into your collection",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("says so when the collection cannot be read", async () => {

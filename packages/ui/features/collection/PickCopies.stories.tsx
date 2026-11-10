@@ -11,6 +11,8 @@ const IN_A_DECK = "Those copies are in a deck. Cut the card from the deck to get
 
 function copy(over: Partial<CopyChoice> & { entryId: number }): CopyChoice {
   return {
+    cardName: "Lightning Bolt",
+    printing: "M10 #146",
     finish: "Nonfoil",
     condition: "NM",
     lang: "en",
@@ -60,7 +62,7 @@ const meta = {
           "card* is not a thing the app can do without choosing. The drag says **where**; only " +
           "the reader knows **which**.\n\n" +
           "**Every copy it can move starts ticked**, because the commonest answer by far is " +
-          "\"all of them\": a reader who dragged the card meant the card. What the ticks buy is " +
+          '"all of them": a reader who dragged the card meant the card. What the ticks buy is ' +
           "the ability to say *fewer*, which is the answer nothing else on this screen can " +
           "express.\n\n" +
           "**Presentational and nothing else.** It holds which rows are ticked and holds no " +
@@ -69,7 +71,7 @@ const meta = {
           "document-level key listener in here would be an unregistered rung closing a surface " +
           "it did not open.\n\n" +
           "**The button counts copies, not rows.** One entry can be `2 copies`, so a press " +
-          "reported as \"Move 1 copy\" would be counting the wrong thing at the moment it " +
+          'reported as "Move 1 copy" would be counting the wrong thing at the moment it ' +
           "happens — it is `sum(quantity)`, the same arithmetic the tile behind it does, so the " +
           "picker and the wall can never count one printing two ways.\n\n" +
           "**No `play` functions here on purpose**: story plays are not runnable while this " +
@@ -119,6 +121,24 @@ export const SeveralCopies: Story = {
       copy({ entryId: 3, condition: "LP", quantity: 2, folderName: "Bulk box" }),
       copy({ entryId: 4, condition: "NM", lang: "ja", folderName: "Trade binder" }),
       copy({ entryId: 5, finish: "Etched", condition: "MP", folderName: "Sealed" }),
+    ],
+  },
+};
+
+/**
+ * A picked set moved together — four cards over four rows, so the heading counts the cards and
+ * **every row says which card it is** (issue #1575). Without the name, the Counterspell and
+ * Brainstorm rows are one sentence written twice. A second printing of one name is a second
+ * card, so it is named by its set and number as well.
+ */
+export const SeveralCards: Story = {
+  args: {
+    cardName: "4 cards",
+    copies: [
+      copy({ entryId: 1, finish: "Foil", quantity: 2 }),
+      copy({ entryId: 2, cardName: "Counterspell", printing: "LEA #54" }),
+      copy({ entryId: 3, cardName: "Brainstorm", printing: "ICE #61" }),
+      copy({ entryId: 4, printing: "2XM #141", folderName: "Trade binder" }),
     ],
   },
 };

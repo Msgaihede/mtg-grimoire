@@ -100,6 +100,15 @@ const DIALECT_CORPUS = [
   "line one  \nline two",
   "- item one  \nitem two",
 
+  // Blank lines and empty items. Tiptap writes the second and later of a run of empty paragraphs
+  // as `&nbsp;`, and an empty item as a bare marker; the reader draws neither.
+  "one\n\n\n\n&nbsp;\n\ntwo",
+  "\n\n&nbsp;\n\nMana base",
+  "> a\n>\n>\n>\n> &nbsp;\n>\n> b",
+  "- Sol Ring\n- Arcane Signet\n- ",
+  "- a\n- \n- b",
+  "- ",
+
   // Link.
   "[Scryfall](https://scryfall.com)",
   "A [bare link](https://scryfall.com/card/lea/161) inline.",
@@ -236,6 +245,59 @@ describe("the note dialect", () => {
     expect(parseNoteBody("[R&amp;D](https://x.test/?a=1&b=2)")).toEqual([
       { kind: "paragraph", inlines: [{ kind: "link", text: "R&D", href: "https://x.test/?a=1&b=2" }] },
     ]);
+  });
+
+  /**
+   * ⚠️ **Tiptap writes the second and later of a run of empty paragraphs as `&nbsp;`, and an empty
+   * list item as a bare `- ` or `3. `** — the shapes a reader gets for pressing Enter a few times,
+   * or for saving with the caret on a fresh bullet. Measured 2026-11-10 against `NOTE_EXTENSIONS`.
+   * The reader has to draw each as nothing, or the card shows the markup and a note that opens
+   * with a blank line is titled `&nbsp;`.
+   */
+  it("writes blank lines and empty items as markup, and the reader draws nothing for them", () => {
+    const empty = { type: "paragraph" };
+    const item = (words?: string): object => ({
+      type: "listItem",
+      content: [words ? para(words) : empty],
+    });
+    const cases: { doc: object[]; written: string; read: string }[] = [
+      {
+        doc: [para("one"), empty, empty, para("two")],
+        written: "one\n\n\n\n&nbsp;\n\ntwo",
+        read: "one\ntwo",
+      },
+      {
+        doc: [empty, empty, para("Mana base")],
+        written: "\n\n&nbsp;\n\nMana base",
+        read: "Mana base",
+      },
+      {
+        doc: [{ type: "bulletList", content: [item("Sol Ring"), item("Arcane Signet"), item()] }],
+        written: "- Sol Ring\n- Arcane Signet\n- ",
+        read: "Sol Ring\nArcane Signet",
+      },
+      {
+        doc: [{ type: "orderedList", content: [item("Sol Ring"), item("Arcane Signet"), item()] }],
+        written: "1. Sol Ring\n2. Arcane Signet\n3. ",
+        read: "Sol Ring\nArcane Signet",
+      },
+      { doc: [{ type: "bulletList", content: [item()] }], written: "- ", read: "" },
+      { doc: [{ type: "orderedList", content: [item()] }], written: "1. ", read: "" },
+    ];
+    const wrong = cases.flatMap(({ doc, written, read }) => {
+      const editor = new Editor({
+        element: document.createElement("div"),
+        extensions: NOTE_EXTENSIONS,
+      });
+      editor.commands.setContent({ type: "doc", content: doc });
+      const body = editor.getMarkdown();
+      editor.destroy();
+      const drawn = noteToPlainText(body);
+      return body === written && drawn === read
+        ? []
+        : [`${JSON.stringify(body)} → ${JSON.stringify(drawn)}`];
+    });
+    expect(wrong).toEqual([]);
   });
 
   /**

@@ -8,6 +8,7 @@ import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import { MENU_CONDITION } from "@/lib/conditions";
+import { viewMemory } from "@/lib/viewMemory";
 import { WALL_CARD_VARIANT } from "@/lib/images";
 import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -1893,5 +1894,62 @@ describe("SearchPage — a set handed over by the card modal", () => {
     act(() => useAppStore.getState().showSetInSearch("lea"));
     await waitFor(() => expect(lastRequest()).toMatchObject({ sets: ["lea"], text: undefined }));
     expect(box).toHaveValue("");
+  });
+
+  /**
+   * Issue #1562: the tags picked in the sidebar on an earlier visit are put down too, as the
+   * text hand-off puts them down — a `dragon` chip left standing turned the set's wall into
+   * "the dragons in that set", or into nothing, with no word on screen to say why.
+   */
+  describe("with tags picked on an earlier visit", () => {
+    beforeEach(() => {
+      viewMemory("searchTags").keep({
+        selection: {
+          chips: [{ slug: "dragon", label: "Dragon", namespace: "art", mode: "include" }],
+          namespace: "both",
+          floor: "any",
+        },
+        text: "",
+      });
+    });
+
+    it("opens on the set without them, from the first request", async () => {
+      useAppStore.setState({ pendingSearchSet: "lea" });
+      wrap(<SearchPage />);
+
+      await waitFor(() => expect(useAppStore.getState().pendingSearchSet).toBeNull());
+      expect(searchCards).toHaveBeenCalled();
+      for (const [req] of searchCards.mock.calls) {
+        expect(req).toMatchObject({ sets: ["lea"] });
+        expect(req.artTags).toBeUndefined();
+        expect(req.oracleTags).toBeUndefined();
+      }
+    });
+
+    /** The quick search's hand-off had the same first request: put down in render, but
+     *  after the wall had been asked for `bolt` under the dragon chip. */
+    it("opens on handed-over text without them too", async () => {
+      useAppStore.setState({ pendingSearchText: "bolt" });
+      wrap(<SearchPage />);
+
+      await waitFor(() => expect(useAppStore.getState().pendingSearchText).toBeNull());
+      expect(searchCards).toHaveBeenCalled();
+      for (const [req] of searchCards.mock.calls) {
+        expect(req).toMatchObject({ text: "bolt" });
+        expect(req.artTags).toBeUndefined();
+      }
+    });
+
+    it("puts them down on a page already on screen", async () => {
+      wrap(<SearchPage />);
+      await waitFor(() =>
+        expect(lastRequest().artTags).toEqual({ include: ["dragon"], exclude: [] }),
+      );
+
+      act(() => useAppStore.getState().showSetInSearch("lea"));
+
+      await waitFor(() => expect(lastRequest()).toMatchObject({ sets: ["lea"] }));
+      expect(lastRequest().artTags).toBeUndefined();
+    });
   });
 });

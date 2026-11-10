@@ -1664,7 +1664,29 @@ export function predicateLabel(input: string, token: PredicateToken): string {
  * whole group, so `(t:goblin or t:elf)` goes in one press, parentheses and all.
  */
 export function removeToken(input: string, token: Pick<TagToken, "start" | "end">): string {
-  return `${input.slice(0, token.start)}${input.slice(token.end)}`.replace(/\s+/g, " ").trim();
+  return removeTokens(input, [token]);
+}
+
+/**
+ * The query with several terms taken out at once — a deduplicated chip's ✕, which removes every
+ * term that produced it.
+ *
+ * **Every span is spliced before the whitespace is collapsed, and it is collapsed once.** Folding
+ * {@link removeToken} over the terms right to left looked safe — a later splice leaves the earlier
+ * spans true — but each call also collapsed the spaces of the whole string, and a leading or
+ * doubled space *before* an earlier term shifted that term's span by the spaces it lost:
+ * `bolt  cmc>=3 mv>=3` came back `bolt c` (issue #1565). Spans are taken in any order and spliced
+ * latest first, which is what keeps them true while nothing else moves.
+ */
+export function removeTokens(
+  input: string,
+  tokens: readonly Pick<TagToken, "start" | "end">[],
+): string {
+  let out = input;
+  for (const { start, end } of [...tokens].sort((a, b) => b.start - a.start)) {
+    out = `${out.slice(0, start)}${out.slice(end)}`;
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -1715,12 +1737,37 @@ export function setTokenValue(
   token: Pick<TagToken, "start" | "end">,
   value: string,
 ): string {
+  const { start, end } = termSpan(input, token);
   const head =
-    /^-?[A-Za-z][A-Za-z0-9_-]*(?:>=|<=|!=|:|=|>|<)/.exec(
-      input.slice(token.start, token.end),
-    )?.[0] ?? "";
+    /^-?[A-Za-z][A-Za-z0-9_-]*(?:>=|<=|!=|:|=|>|<)/.exec(input.slice(start, end))?.[0] ?? "";
   const quoted = /\s/.test(value) ? `"${value}"` : value;
-  return `${input.slice(0, token.start)}${head}${quoted}${input.slice(token.end)}`;
+  return `${input.slice(0, start)}${head}${quoted}${input.slice(end)}`;
+}
+
+/**
+ * Where the term itself sits inside a token's span — the one chunk that reads as something.
+ *
+ * A token's span is not always its term's: the lone surviving child of a parenthesised group
+ * takes the group's span (see {@link simplify}), so `(otag:remov` and `-(otag:remov)` are spans
+ * that start at the `(` or the `-(`. {@link setTokenValue} recovers the keyword from the head of
+ * the span, and from there it found none and wrote the bare value over the whole group —
+ * `(otag:remov` became the free text `removal` (issue #1565). The span is lexed again and the
+ * chunk that classifies as a term is the one to edit; the others in it are the dropped keystrokes
+ * (`t:`) that let the term be the group's only child. A span that is already one chunk is itself.
+ */
+function termSpan(
+  input: string,
+  token: Pick<TagToken, "start" | "end">,
+): { start: number; end: number } {
+  const chunks = lex(input.slice(token.start, token.end)).filter(
+    (l): l is Extract<Lexeme, { kind: "chunk" }> => l.kind === "chunk",
+  );
+  const term =
+    chunks.find((c) => classify(c.text)?.kind === "tag") ??
+    chunks.find((c) => classify(c.text) !== null);
+  return term
+    ? { start: token.start + term.start, end: token.start + term.end }
+    : { start: token.start, end: token.end };
 }
 
 /**

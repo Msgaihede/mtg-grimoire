@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import type { CollectionFolder, CollectionRow, DeckCategory } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 
 const collectionList = vi.hoisted(() => vi.fn());
@@ -221,6 +222,22 @@ const UNPLAYED = row({
   setCode: "c21",
   collectorNumber: "263",
   typeLine: "Artifact",
+});
+
+/**
+ * **An owned token** — loose on the desk, and a card no deck's census can name (issue #1540):
+ * `deck::add_card` files a token as a token entry and never as a `deck_cards` row.
+ */
+const TREASURE = row({
+  id: 8,
+  cardId: "treasure",
+  oracleId: "o-treasure",
+  name: "Treasure",
+  setCode: "tc21",
+  collectorNumber: "14",
+  typeLine: "Token Artifact — Treasure",
+  layout: "token",
+  quantity: 2,
 });
 
 /**
@@ -580,7 +597,9 @@ describe("CollectionSearchTab", () => {
     tab();
 
     expect(
-      await screen.findByRole("button", { name: "Add Lightning Bolt (LEA 161, Nonfoil, Near mint) to Main deck" }),
+      await screen.findByRole("button", {
+        name: "Add Lightning Bolt (LEA 161, Nonfoil, Near mint) to Main deck",
+      }),
     ).toBeInTheDocument();
   });
 
@@ -682,6 +701,28 @@ describe("CollectionSearchTab", () => {
   });
 
   /**
+   * **Escape declines, and only declines** (issue #1542). The question is not inside a `Dialog`,
+   * so without a rung of its own the press fell to the deck editor's floor and closed the whole
+   * deck with the question still on screen. The floor is stood in by a `"navigation"` rung here.
+   */
+  it("declines on Escape without closing the deck behind it", async () => {
+    const closeDeck = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "navigation", onDismiss: closeDeck }));
+    collectionList.mockResolvedValue({ items: [SPOKEN_FOR], total: 1 });
+    tab();
+    await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
+    expect(await screen.findByRole("group", { name: /Move Lightning Bolt/ })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: /Move Lightning Bolt/ })).not.toBeInTheDocument(),
+    );
+    expect(closeDeck).not.toHaveBeenCalled();
+    expect(collectionToDeck).not.toHaveBeenCalled();
+  });
+
+  /**
    * **`MoveOutcome.fromDeck` carries the name after the fact as well as before it**, so the
    * confirmation and the result say the same thing. The deck it came out of is the one thing
    * about this press the reader cannot see for themselves — they are looking at this deck.
@@ -769,12 +810,7 @@ describe("CollectionSearchTab", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
 
     await waitFor(() =>
-      expect(collectionToDeck).toHaveBeenCalledWith(
-        OTHER_PRINTING.id,
-        DECK_ID,
-        { id: MAIN.id },
-        1,
-      ),
+      expect(collectionToDeck).toHaveBeenCalledWith(OTHER_PRINTING.id, DECK_ID, { id: MAIN.id }, 1),
     );
   });
 
@@ -843,6 +879,75 @@ describe("CollectionSearchTab", () => {
         name: "Lightning Bolt — couldn't check the deck",
       }),
     ).toHaveAttribute("aria-disabled", "true");
+  });
+
+  /**
+   * **A token is outside the fence, because Rust puts it there** (issue #1540). The wall greyed
+   * every owned token with *"is not in this deck — add it from the Card search tab first"*, and
+   * the advice could not be followed: a deck never "plays" a token — `deck::add_card` files it as
+   * a token entry, never a `deck_cards` row — so the census never names one. `collection_to_deck`
+   * asks `printing_is_token` before `NOT_IN_DECK` and files the row as a token entry.
+   *
+   * So the tile presses, names the token pile rather than the deck's (the card-search tab's
+   * `landsIn` rule), and the press that answers `quantity: 0` and no deck row — the token arm's
+   * outcome — still owes its receipt. The census here is the Bolt's, which names nothing the
+   * token is: the state every real deck is in.
+   */
+  it("files an owned token as a token entry, and says so", async () => {
+    collectionList.mockResolvedValue({ items: [TREASURE], total: 1 });
+    collectionToDeck.mockResolvedValue({
+      entryId: null,
+      fromDeck: null,
+      deckCardId: null,
+      quantity: 0,
+    });
+    tab();
+
+    const add = await screen.findByRole("button", {
+      name: "Add Treasure (TC21 14, Nonfoil, Near mint) to Tokens & Emblems",
+    });
+    expect(add).not.toHaveAttribute("aria-disabled");
+    expect(screen.queryByRole("button", { name: /is not in this deck/ })).toBeNull();
+
+    await userEvent.click(add);
+
+    await waitFor(() =>
+      expect(collectionToDeck).toHaveBeenCalledWith(TREASURE.id, DECK_ID, { id: MAIN.id }, 1),
+    );
+    await waitFor(() =>
+      expect(useNotifications.getState().notices.map((n) => [n.tone, n.title])).toEqual([
+        ["success", "Added “Treasure” to “Tokens & Emblems”"],
+      ]),
+    );
+  });
+
+  /**
+   * **A token press takes nothing from the deck holding the copy**, so it is never asked about
+   * and never named as a taking: the backend files a token entry and leaves the cardboard where it
+   * sits. The confirm exists for a copy that leaves another deck's list, and this one does not.
+   */
+  it("does not ask before filing a token whose copy another deck holds", async () => {
+    collectionList.mockResolvedValue({
+      items: [{ ...TREASURE, folderId: OTHER_GROUP.id, folderName: OTHER_GROUP.name }],
+      total: 1,
+    });
+    collectionToDeck.mockResolvedValue({
+      entryId: null,
+      fromDeck: null,
+      deckCardId: null,
+      quantity: 0,
+    });
+    tab();
+
+    const add = await screen.findByRole("button", {
+      name: "Add Treasure (TC21 14, Nonfoil, Near mint) to Tokens & Emblems",
+    });
+    await userEvent.click(add);
+
+    // The write itself is the assertion — the confirm path writes nothing until answered — and
+    // the question is a `role="group"` box, never a `dialog` (`useConfirmFocus`).
+    await waitFor(() => expect(collectionToDeck).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("group", { name: /^Move / })).not.toBeInTheDocument();
   });
 
   /**

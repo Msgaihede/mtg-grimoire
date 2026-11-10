@@ -1873,7 +1873,10 @@ export function DeckEditor({
         }
         const choice = chooseWish(wishes);
         if (choice.kind === "ask") {
-          openLayer({ kind: "quickUnwish", card, copies, wishes: choice.wishes }, handBack);
+          openLayer(
+            { kind: "quickUnwish", card, copies, wishes: choice.wishes, openedAt: Date.now() },
+            handBack,
+          );
           return;
         }
         quickAddOne(card, copies);
@@ -1997,49 +2000,65 @@ export function DeckEditor({
    * The quick zones' **New category**, in two halves an act apart.
    *
    * The drop opens the dialog and writes nothing: a modal cannot be opened mid-gesture, and a
-   * pile has to be called something. The submit makes the pile and then files the card into it
-   * with the write the drag meant all along — {@link dropWrite} asked a second time, against the
-   * id the create just answered with, so the add/move branch is the *same* rule a drop onto a
-   * drawn heading goes through rather than a second copy of it.
+   * pile has to be called something. The submit makes the pile and then files the cards into it
+   * with the writes the drag meant all along — {@link dropWrite} asked a second time per card,
+   * against the id the create just answered with, so the add/move branch is the *same* rule a
+   * drop onto a drawn heading goes through rather than a second copy of it.
+   *
+   * **Every card the drag carried** (issue #1534), the way the three zones beside it and every
+   * pile heading take a picked set: one write per card, as `applyDrops` sends them, said as one
+   * toast with the count (`reportPresses`, the owner's one-action-one-toast rule), and the set
+   * put down afterwards because its members have left the piles it points at. Not `applyDrops`
+   * itself, only because that files the outcome for the banner and this one is the toast's — the
+   * dialog went through a question the reader answered and then watched close.
    */
   const createCategory = meta.createCategory.mutate;
   const resetCreateCategory = meta.createCategory.reset;
   const openQuickCategory = useCallback(
-    (payload: DragPayload) => {
+    (payloads: DragPayload[]) => {
       // The dialog draws this observer's refusal, and a sentence left over from a previous press
       // would be on screen before the reader had typed anything — `resetCategoryDelete`'s reason.
       resetCreateCategory();
       // Nothing to hand the caret back to: the drop is a pointer gesture and no control opened
       // this.
-      openLayer({ kind: "quickCategory", payload }, null);
+      openLayer({ kind: "quickCategory", payloads }, null);
     },
     [openLayer, resetCreateCategory],
   );
-  const quickCategoryPayload = layer?.kind === "quickCategory" ? layer.payload : null;
+  const quickCategoryPayloads = layer?.kind === "quickCategory" ? layer.payloads : null;
   const createQuickCategory = useCallback(
     (name: string) => {
-      if (!quickCategoryPayload) return;
+      if (!quickCategoryPayloads) return;
       createCategory(name, {
         // **Closed only on success**, which is what leaves a refused name in the field to be
-        // corrected. The second write's own refusal is the toast below — `reportToasted` keeps
-        // the editor's banner from saying it again.
+        // corrected. The filing writes' own refusals are the toast below — `reportToasted` keeps
+        // the editor's banner from saying them again.
         onSuccess: (category) => {
-          const write = dropWrite(quickCategoryPayload, {
-            kind: "category",
-            categoryId: category.id,
+          const target = { kind: "category", categoryId: category.id } as const;
+          // Each write beside the name it files, so the receipt can name or count what landed.
+          // `dropWrite` cannot refuse a fresh pile today — no card is in it yet, so no move is a
+          // move to itself — and the pairing is what keeps the names honest the day it can.
+          const filed = quickCategoryPayloads.flatMap((payload) => {
+            const write = dropWrite(payload, target);
+            return write === null ? [] : [{ write, name: payload.name }];
           });
-          // The dialog closes on this, so the pile it made and the card filed into it are said
+          // The dialog closes on this, so the pile it made and the cards filed into it are said
           // once, as a toast — a drag onto a drawn heading says nothing, but this one went
           // through a question the reader answered and then watched disappear.
-          const card = quickCategoryPayload.name;
-          if (write) {
-            const press = applyDrop(write);
-            reportToasted([press]);
-            void press.then(
-              () => notify.success(`Created “${category.name}” and filed “${card}” in it`),
-              (error: unknown) =>
-                notifyRefusal(`Couldn't file “${card}” in “${category.name}”`, error),
+          if (filed.length > 0) {
+            const presses = filed.map(({ write }) => applyDrop(write));
+            reportToasted(presses);
+            reportPresses(
+              presses,
+              filed.map((f) => f.name),
+              {
+                done: (what) => `Created “${category.name}” and filed ${what} in it`,
+                failed: (what) => `Couldn't file ${what} in “${category.name}”`,
+              },
             );
+            // `applyDrops`' rule: the cards have moved, so a set still pointing at where they
+            // were would carry slots that no longer exist into its next drag.
+            if (filed.length > 1) setCardSelection(null);
           } else {
             notify.success(`Created “${category.name}”`);
           }
@@ -2047,7 +2066,7 @@ export function DeckEditor({
         },
       });
     },
-    [applyDrop, reportToasted, close, createCategory, quickCategoryPayload],
+    [applyDrop, reportToasted, close, createCategory, quickCategoryPayloads, setCardSelection],
   );
 
   /** The stepper's write, addressed by the card's own slot. */

@@ -235,8 +235,10 @@ export const draftCommands = {
   draftEnd: (draft: number) => invoke<void>("draft_end", { draft }),
   /** The solo draft left off, if any. */
   draftSaved: () => invoke<DraftSaved | null>("draft_saved"),
-  /** Take the saved draft back up under the name `draft`. */
+  /** Take the saved draft back up under the name `draft` — refused while this app's pod drafts. */
   draftResume: (draft: number) => invoke<DraftView>("draft_resume", { draft }),
+  /** Drop the saved draft without taking the table (a solo draft at it goes too; a pod never). */
+  draftDiscard: () => invoke<void>("draft_discard"),
 
   /**
    * The pool as a virtual deck, made a draft deck (its row says `draft`): `cardIds` (the

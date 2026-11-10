@@ -68,7 +68,7 @@ import { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type JS
 import { ChevronRight, Plus } from "lucide-react";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
-import type { DeckCard, DeckNote, DeckNoteCard } from "@/lib/ipc";
+import { ipcError, type DeckCard, type DeckNote, type DeckNoteCard } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { notify } from "@/lib/notifications";
 import { cn } from "@/lib/utils";
@@ -310,8 +310,21 @@ export const DeckNotesPanel = memo(function DeckNotesPanel({
       // **`title: ""` on every note this band writes**, which is the redesign's own sentence:
       // there is no title field anywhere in {@link NoteEditorDialog}, and `noteTitle()` answers
       // the body's first line — the thing it already did for a blank title.
-      onCreate={(body, oracleIds) => notes.create.mutate({ title: "", body, oracleIds })}
-      onSave={(id, patch) => notes.update.mutate({ id, patch })}
+      //
+      // **The answer goes back to the band**, which closes its dialog on the success and keeps it
+      // open on the refusal (issue #1549) — so a refused Save leaves the reader's text on screen.
+      onCreate={(body, oracleIds, answer) =>
+        notes.create.mutate(
+          { title: "", body, oracleIds },
+          { onSuccess: answer.onSuccess, onError: (error) => answer.onError(ipcError(error)) },
+        )
+      }
+      onSave={(id, patch, answer) =>
+        notes.update.mutate(
+          { id, patch },
+          { onSuccess: answer.onSuccess, onError: (error) => answer.onError(ipcError(error)) },
+        )
+      }
       // A receipt for a delete (destructive, and the confirmation has closed). The band says a
       // refusal itself (`failure`), so only the success is a toast.
       onDelete={(id) => {
@@ -327,6 +340,17 @@ export const DeckNotesPanel = memo(function DeckNotesPanel({
     />
   );
 });
+
+/**
+ * How a note write answers the band that sent it — the editor closes on the first and stays open,
+ * text and all, on the second (issue #1549). `onError` takes the refusal **in words**: this half
+ * of the file has no database behind it, so the host says what went wrong and the band only
+ * draws it.
+ */
+export interface NoteWriteAnswer {
+  onSuccess: () => void;
+  onError: (message: string) => void;
+}
 
 export interface NotesBandProps {
   open: boolean;
@@ -379,8 +403,8 @@ export interface NotesBandProps {
   /** A new note: the body the reader typed, and the cards it is born naming.
    *  **`title` is not a parameter** — every note this band writes is written with `title: ""`, and
    *  `noteTitle()` answers the first line. See {@link NoteEditorDialog}. */
-  onCreate: (body: string, oracleIds: string[]) => void;
-  onSave: (id: number, patch: { title: string; body: string }) => void;
+  onCreate: (body: string, oracleIds: string[], answer: NoteWriteAnswer) => void;
+  onSave: (id: number, patch: { title: string; body: string }, answer: NoteWriteAnswer) => void;
   onDelete: (id: number) => void;
   onAttach: (noteId: number, oracleId: string) => void;
   onDetach: (noteId: number, oracleId: string) => void;
@@ -603,6 +627,21 @@ export function NotesBand({
   }, []);
 
   /**
+   * The panel a Save was pressed on, while its write is out — `null` otherwise (issue #1549).
+   *
+   * **The dialog closes when the write answers, not when it is sent**, so the answer has to know
+   * whether the panel it was sent from is still the one up: the reader may have discarded it in
+   * the meantime, and a late success must not then close — and hand the caret back from — a
+   * dialog they opened since. A ref, because only the answer's callbacks read it, and
+   * {@link closePanel} clears it on every way out.
+   */
+  const savingRef = useRef<NotePanel>(null);
+
+  /** The last Save's refusal, with the panel it was refused on — drawn only while that panel is
+   *  still the one up, so a fresh open never inherits an old sentence. */
+  const [refusal, setRefusal] = useState<{ panel: NotePanel; message: string } | null>(null);
+
+  /**
    * Shut whichever is open, and give the caret back — **focus first, then close**, which is
    * `DeckEditor`'s `dismiss` character for character and for its reason: at this instant the
    * opener is still mounted, and one line further on it may not be.
@@ -637,6 +676,9 @@ export function NotesBand({
   const closePanel = useCallback(() => {
     const opener = openerRef.current;
     openerRef.current = null;
+    // Whatever Save was out belongs to the panel going away: its answer must not close, or draw a
+    // refusal on, whatever opens next. See {@link savingRef}.
+    savingRef.current = null;
     if (opener !== null && opener.isConnected) opener.focus();
     else newNoteRef.current?.focus();
     setPanel(null);
@@ -871,6 +913,7 @@ export function NotesBand({
               : { kind: "new" }
         }
         pending={pending}
+        error={refusal !== null && refusal.panel === panel ? refusal.message : null}
         // ⚠️ **The note's existing title goes back unchanged.** `deck_note_update` takes both
         // columns and has no patch shape a caller can half-fill usefully, and the labels dialog
         // one file over is where this app learned what happens otherwise: two controls each
@@ -878,12 +921,32 @@ export function NotesBand({
         // edits the body only, so the title travels with it untouched — and on a note written
         // through it that title is `""`, which is exactly what it should stay.
         onSave={(body) => {
-          if (panel?.kind === "edit" && live !== null) onSave(live.id, { title: live.title, body });
-          else onCreate(body, panel?.kind === "newFromCard" ? [panel.card.oracleId] : []);
-          // A Save is a way out like any other, so the caret goes back the same way. The opener
-          // survives every arm of this write — an edit leaves its card standing and a create adds
-          // one — so there is nothing here to clear, which is exactly what the delete is not.
-          closePanel();
+          const saved = panel;
+          savingRef.current = saved;
+          setRefusal(null);
+          const answer: NoteWriteAnswer = {
+            // ⚠️ **Closed from the success and never from the press** (issue #1549): closed
+            // here, a refused write — a busy database, the note or the deck removed in another
+            // window — took the only copy of the reader's text with it. `pending` greys Save for
+            // the round trip in between. A Save is a way out like any other once it lands, so the
+            // caret goes back the same way; the opener survives every arm of this write — an edit
+            // leaves its card standing and a create adds one — which is exactly what the delete
+            // is not.
+            onSuccess: () => {
+              if (savingRef.current === saved) closePanel();
+            },
+            // The dialog stays up with the text and says why; Save can be pressed again.
+            onError: (message) => {
+              if (savingRef.current !== saved) return;
+              savingRef.current = null;
+              setRefusal({ panel: saved, message });
+            },
+          };
+          if (panel?.kind === "edit" && live !== null) {
+            onSave(live.id, { title: live.title, body }, answer);
+          } else {
+            onCreate(body, panel?.kind === "newFromCard" ? [panel.card.oracleId] : [], answer);
+          }
         }}
         onClose={closePanel}
       />

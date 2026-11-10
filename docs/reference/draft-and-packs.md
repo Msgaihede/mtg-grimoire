@@ -387,6 +387,18 @@ every arrival, since its view only ever arrives pushed, so a view kept from befo
 or still waiting on a pack that has since come) is brought up to date. Creating, joining or leaving
 a lobby forgets a pod seat kept from an earlier one.
 
+**A guest's sent pick is a flag beside the view, never part of it** (issue #1585). `lobby_pick` and
+`lobby_winston` resolve once the frame is queued, not once the host has applied it: the relay drops
+a guest's frame while the host is off it (the host reconnects with a 1–16 s backoff), and the host
+may refuse a pick. The page once wrote `waiting: true` into its own copy of the view, which
+`progressOf` scores half a step past the pick, so the host's re-send of the seat as it stands (same
+pick, not waiting) scored lower and was turned away by `acceptsView` — and the fabricated view was
+what `currentDraft` kept, so no remount or Rejoin helped. Now `DraftSession` holds the view the
+decision went out on (`sentOn`, by identity) and draws it as waiting — the pack greyed, a Winston
+turn's buttons down — until any view of the seat is pushed. While `LobbyState.hostOnline` is false
+a guest's pick is greyed with a line saying so, and the host coming back is asked for the seat
+again (`lobby_rejoin`).
+
 **A lobby seats a draft or a game** (`LobbyKind`, issue #1419): the Playtesting page opens the same
 lobby for a game, and the host's room tells its guests which (`LobbyRoom.kind`; a guest's
 `LobbyState.kind` is `null` until it does). A game's lobby carries each guest's deck name beside
