@@ -734,7 +734,7 @@ function Panel({
           // arrow onto it. An outline here therefore states nothing — what it draws is the
           // whole modal ringed in gold the moment the reader presses any key at all, which is
           // what it did until 2026-09-03. The close button below keeps its own; that one is a
-          // control. `packages/ui/lib/focus.ts` carries the rule and all ten sites.
+          // control. `packages/ui/lib/focus.ts` carries the rule and every site.
         )}
       >
         <header

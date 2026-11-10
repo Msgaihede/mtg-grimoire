@@ -1,3 +1,6 @@
+import type { QueryClient } from "@tanstack/react-query";
+import { LOBBY_KEY } from "@/features/draft/lobby/useLobby";
+import { ipc } from "@/lib/ipc";
 import { viewMemory } from "@/lib/viewMemory";
 import { holdGuestGame, type GuestHeldGame } from "./play/guestGame";
 import type { HeldGame } from "./play/heldGame";
@@ -25,6 +28,37 @@ export function keptGame(): HeldGame | null {
 /** Keep `game` as the page's, or forget it (`null`). Never ends one: the caller does that. */
 export function keepGame(game: HeldGame | null): void {
   KEPT.keep(game);
+}
+
+/**
+ * **Whether `game` is a lobby host's game that reached the table** (issue #1592): dealt, or still
+ * being dealt — the lobby moves to its game with the deal, so putting this game away is closing
+ * the lobby, and a way out asks before it does. **A refused deal never reached it**
+ * (`lobby_game_start` refuses before the lobby leaves its open phase): its lobby is still open,
+ * its code still good, and nothing about it is the game's to close.
+ */
+export function atLobbyTable(game: HeldGame): boolean {
+  if (game.picks.lobby === undefined || !game.live()) return false;
+  const { view, error } = game.state();
+  return view !== null || error === null;
+}
+
+/** Whether `game` is a lobby host's deal the engine refused: no board, and the lobby still open. */
+export function refusedLobbyDeal(game: HeldGame): boolean {
+  if (game.picks.lobby === undefined) return false;
+  const { view, error } = game.state();
+  return view === null && error !== null;
+}
+
+/**
+ * Leave this app's lobby — the host's closes it for everyone — and forget it here, the guest's
+ * held game with it. Resolves once it is left; rejects with the engine's sentence.
+ */
+export function leaveGameLobby(client: QueryClient): Promise<void> {
+  forgetGuestGame();
+  return ipc.lobbyLeave().then(() => {
+    client.setQueryData(LOBBY_KEY, null);
+  });
 }
 
 /**

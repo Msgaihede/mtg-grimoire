@@ -727,8 +727,17 @@ playing / End game); a game the engine has ended (`over`), or one still being de
 once. The goldfish keeps its own rule, a game held for the board's life: `usePlaytestGame` with no
 held game deals one on mount and ends it on unmount. **The host holds one game**, so "Goldfish this
 deck" asks before dealing over a kept game that is underway ("End your Playtesting game?"; Keep it
-goes back to the deck with nothing dealt), and puts away a kept game that is over without asking. A
-restart opens the setup page; the host's old game is dropped by the next deal.
+goes back to the deck with nothing dealt), and puts away a kept game that is over without asking —
+unless it is a lobby host's game, which it always asks about ("Close your lobby game?") and whose
+lobby it closes, with a toast, as the board's own Back does (issue #1592). A restart opens the setup
+page; the host's old game is dropped by the next deal.
+
+**The setup is `inert` under the board, and the board takes the focus** (issue #1592). The setup
+stays mounted under it so the way back finds it as it was left, but the Start game just pressed
+must not keep the caret: Enter would press it again and deal a new game over the one on the board,
+and Tab would walk into the covered controls. So `PlaytestSetup` takes `covered` (its `section` is
+`inert`), and `PlaytestPage`'s frame is a `tabIndex={-1}` landing pad focused on mount (no outline,
+`lib/focus.ts`' rule).
 
 **The goldfish is drawn in the duel layout** (the owner's choice of 2026-10-17), exactly as a single
 AI opponent is: its band with its face-down hand count, its plate, its zone columns and its empty
@@ -1032,6 +1041,13 @@ waits. The host's game is an ordinary held game dealt by `lobbyGameStart`, which
 `waiting` as "Waiting for {name}…" and, on the host's, offers "Let the AI play {name}" for a guest
 who is offline or gone (`lobbyKick`). Back puts the game away and leaves the lobby: the host's
 closes it for everyone.
+
+**The host's board comes up once the deal answers** (issue #1592). Until then the lobby panel says
+"Dealing the game…" and Start waits. A refused deal — a seat with no deck yet, a printing the host's
+card data lacks — never reached the table (`lobby_game_start` refuses before the lobby leaves
+`open`), so it is said under Start in the lobby panel, the never-dealt game is put away, and the
+lobby stays open to fix and start again. `keptGame.ts`' `atLobbyTable` is the one test of whether
+putting a host's game away closes its lobby: dealt or being dealt, never refused.
 
 ## What is not there yet
 
