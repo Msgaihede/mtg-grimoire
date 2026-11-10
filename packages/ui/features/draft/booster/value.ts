@@ -276,13 +276,26 @@ export function simulate(
   return out.sort();
 }
 
-/** The least index whose value is `>= value` (`lower`) or `> value` (`upper`). */
+/** Money in whole cents — what two values are compared at. */
+function inCents(x: number): number {
+  return Math.round(x * 100);
+}
+
+/**
+ * The least index whose value is `>= value` (`lower`) or `> value` (`upper`), **compared in whole
+ * cents** (issue #1587). The simulated values are float sums card by card (`0.01` fourteen times is
+ * `0.13999999999999999`) and the opened pack's reduced value is rounded to cents (`0.14`): compared
+ * exactly, a pack tied with most of the table counts as above or below all of it. Rounding is
+ * monotone, so the sorted values stay sorted in cents and the search holds.
+ */
 function bound(sorted: Float64Array, value: number, upper: boolean): number {
+  const target = inCents(value);
   let lo = 0;
   let hi = sorted.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (upper ? sorted[mid] <= value : sorted[mid] < value) lo = mid + 1;
+    const at = inCents(sorted[mid]);
+    if (upper ? at <= target : at < target) lo = mid + 1;
     else hi = mid;
   }
   return lo;
@@ -292,7 +305,7 @@ function bound(sorted: Float64Array, value: number, upper: boolean): number {
  * Where `value` stands among the sorted values, 0–100: the share below it plus half the share equal
  * to it (the mid-rank). Mid-rank because pack values tie often — a pack of bulk is worth exactly
  * what many others are — and a pack tied with half the table is the 50th percentile, not the 0th
- * or the 100th. `0` for no values.
+ * or the 100th. Values are compared in whole cents ({@link bound}). `0` for no values.
  */
 export function percentileOf(sorted: Float64Array, value: number): number {
   if (sorted.length === 0) return 0;
@@ -311,7 +324,8 @@ export function median(sorted: Float64Array): number {
 
 /**
  * The chance, 0–1, that a pack is worth **more** than `price` — what botbox.dev calls the chance to
- * beat what you paid. A pack worth exactly the price has not beaten it.
+ * beat what you paid. A pack worth exactly the price, to the cent ({@link bound}), has not beaten
+ * it.
  */
 export function chanceToBeat(sorted: Float64Array, price: number): number {
   if (sorted.length === 0) return 0;
