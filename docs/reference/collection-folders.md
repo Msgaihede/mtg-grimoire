@@ -1197,10 +1197,19 @@ above its copies fall under. The two are deliberately **separate axes and not a 
   between two unrelated facts.
 * One is decided by a rule over rows, the other by the card's identity.
 
-So `PlayState` (`plays | notPlayed | unread | unreadable`) sits beside `sourceOf` on the hook's
+So `PlayState` (`plays | notPlayed | unread | unreadable`, and since #1540 `token`) sits beside `sourceOf` on the hook's
 return, and the Add button's existing refusal ladder asks the census first, the fence second and
 the copy third. **The tab is assign-only now**: it answers *which copies I own back this deck's
 list*, and adding a card the deck does not play is the Card search tab beside it.
+
+**Tokens and emblems are outside the fence (issue #1540), because Rust puts them there.**
+`collection_to_deck` asks `printing_is_token` before `NOT_IN_DECK` and files such a row as a token
+entry, moving no copy — and a deck never "plays" a token (`deck::add_card` reroutes one into
+`deck_token_printings`, never a `deck_cards` row), so the census can never name one. Fencing them
+greyed every owned token for ever, with advice that could not be followed. `PlayState` has a fifth
+word, `token`, answered by `isTokenPrinting` before the census: the tile presses, names
+**Tokens & Emblems** as where it lands (the card-search tab's rule), is never asked about or named
+as a taking, and the `quantity: 0` / no-deck-row outcome still raises its receipt.
 
 The third row is the one that needs a sentence: the side effect lands on a deck the reader is not
 looking at. Taking the copies decrements that deck's live list as well as emptying its group,
