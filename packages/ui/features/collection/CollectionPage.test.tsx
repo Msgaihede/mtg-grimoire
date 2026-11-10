@@ -1052,14 +1052,12 @@ beforeEach(() => {
   shareRefresh.mockReset().mockResolvedValue(undefined);
   shareRevoke.mockReset().mockResolvedValue(undefined);
   shareOpen.mockReset().mockResolvedValue(undefined);
-  syncSupporterStatus
-    .mockReset()
-    .mockResolvedValue({
-      entitled: true,
-      status: "active",
-      since: 1_750_000_000,
-      groupBound: true,
-    });
+  syncSupporterStatus.mockReset().mockResolvedValue({
+    entitled: true,
+    status: "active",
+    since: 1_750_000_000,
+    groupBound: true,
+  });
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
@@ -4249,6 +4247,86 @@ describe("the collection's shelves", () => {
     expect(within(dialog).getAllByRole("checkbox")).toHaveLength(3);
     await user.click(within(dialog).getByRole("button", { name: /^Move .* to Trade binder$/ }));
     await waitFor(() => expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 8, 9], 3));
+  });
+
+  /**
+   * **Issue #1575, the drag door**: the heading counted the cards, but the rows carried no name,
+   * so a Counterspell row and a Lightning Bolt row in the same grade read identically. Each row
+   * now says which card it is, and the same words are its checkbox's name.
+   */
+  it("names each row's card when a dragged set's copies span several cards", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(
+      page([BOLT, { ...BOLT, id: 8, condition: "LP" }, COUNTERSPELL]),
+    );
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    const bolt = await screen.findByRole("button", { name: "Lightning Bolt" });
+    await findHeading("Trade binder");
+    const binder = standHeading("Trade binder");
+
+    await user.keyboard("{Control>}");
+    await user.click(bolt);
+    await user.click(screen.getByRole("button", { name: "Counterspell" }));
+    await user.keyboard("{/Control}");
+
+    const held = await holdCopy(cardSources(container)[0], { pressOn: bolt });
+    await held.over(binder);
+    await held.drop();
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("group")).toHaveAccessibleName("Move 2 cards to Trade binder");
+    const names = within(dialog)
+      .getAllByRole("checkbox")
+      .map((box) => box.getAttribute("aria-label"));
+    expect(names).toEqual([
+      "Lightning Bolt, LEA #161, Foil, Near mint, Collection, 2 copies",
+      "Lightning Bolt, LEA #161, Foil, Lightly played, Collection, 2 copies",
+      "Counterspell, LEA #161, Nonfoil, Near mint, Collection, 1 copy",
+    ]);
+    expect(within(dialog).getByText("Counterspell · LEA #161")).toBeInTheDocument();
+  });
+
+  /**
+   * **Issue #1575, the menu door** — the reported case: three single-row cards picked and moved
+   * through `Move 3 cards to`. The heading named only the first card and the rows had no names;
+   * it is a question about three cards now, and the receipt counts them.
+   */
+  it("asks about every card of a picked set moved from the menu, not just the first", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(
+      page([BOLT, COUNTERSPELL, { ...COUNTERSPELL, id: 10, cardId: "c3", name: "Brainstorm" }]),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    const bolt = await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    await user.keyboard("{Control>}");
+    await user.click(bolt);
+    await user.click(screen.getByRole("button", { name: "Counterspell" }));
+    await user.click(screen.getByRole("button", { name: "Brainstorm" }));
+    await user.keyboard("{/Control}");
+    rightClick(bolt);
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: /^Move 3 cards to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Trade binder" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("group")).toHaveAccessibleName("Move 3 cards to Trade binder");
+    for (const name of ["Lightning Bolt", "Counterspell", "Brainstorm"]) {
+      expect(
+        within(dialog).getByRole("checkbox", { name: new RegExp(`^${name}, `) }),
+      ).toBeChecked();
+    }
+    await user.click(within(dialog).getByRole("button", { name: "Move 4 copies to Trade binder" }));
+    await waitFor(() => expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 9, 10], 3));
+    await waitFor(() =>
+      expect(useNotifications.getState().notices[0]).toMatchObject({
+        title: "Moved 3 cards to “Trade binder”",
+      }),
+    );
   });
 
   it("asks which copies when the art stands for more than one row", async () => {
