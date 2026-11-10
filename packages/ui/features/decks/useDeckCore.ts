@@ -32,6 +32,7 @@ import {
   type MoveOutcome,
 } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { useLatestPress } from "@/lib/useLatestPress";
 import { useStepSettle } from "@/lib/useStepSettle";
 // The condition every menu add in this app records a copy at, imported rather than respelled: the
 // card menu's collection add and this hook's quick add have to agree, and two spellings of a
@@ -809,6 +810,14 @@ export function useDeckCore(
     [id, variant],
   );
   const steps = useStepSettle(setQuantityKey);
+  /**
+   * Which press of a slot is the newest — only it writes its answer back or rolls back its
+   * refusal (issue #1535). Three quick presses on a 6 used to store 8: press 1's answer landed
+   * after press 2's guess and drew 7, so press 3 was computed from 7.
+   */
+  const presses = useLatestPress();
+  const slotName = ({ cardId, categoryId, finish }: Slot) =>
+    JSON.stringify([id, variant, cardId, categoryId, finish]);
   /** A cut in the current run filed copies into `Recently removed` — see {@link invalidateCollection}. */
   const cutMoved = useRef(false);
   const settleSteps = () => {
@@ -853,6 +862,9 @@ export function useDeckCore(
     },
     onMutate: async ({ cardId, categoryId, finish, quantity }) => {
       steps.hold();
+      // The ticket before the `await`, so presses are ordered as they were made.
+      const slot = slotName({ cardId, categoryId, finish });
+      const ticket = presses.press(slot);
       await queryClient.cancelQueries({ queryKey: detailKey });
       const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
       // **Before the patch below, and that order is the whole reason this is planned here rather
@@ -869,26 +881,40 @@ export function useDeckCore(
         { cardId, categoryId, finish },
         quantity === 0 ? null : (card) => ({ ...card, quantity }),
       );
-      return { saved, departure };
+      return { saved, departure, slot, ticket };
     },
     onError: (_error, _slot, context) => {
       // The rollback puts the row back in the cache and the editor republishes a walk with it on,
-      // so a refused removal needs nothing done about `departure`: nobody was moved.
-      if (context?.saved !== undefined) queryClient.setQueryData(detailKey, context.saved);
+      // so a refused removal needs nothing done about `departure`: nobody was moved. **Only the
+      // slot's newest press rolls back** (issue #1535): an older refusal's snapshot predates the
+      // newer guess, and the newer press's own answer, or the settle below, says what is stored.
+      if (context?.saved !== undefined && presses.isLatest(context.slot, context.ticket)) {
+        queryClient.setQueryData(detailKey, context.saved);
+      }
       steps.now(settleSteps);
+    },
+    onSettled: (_result, _error, _slot, context) => {
+      if (context) presses.release(context.slot, context.ticket);
     },
     onSuccess: (result, { cardId, categoryId, finish }, context) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
       // number it actually stored. **An answer that confirms the guess leaves the row as it is**
       // (issue #1402) — the same object, so `patchSlot` hands the deck back untouched rather than
       // re-rendering the editor to draw the number the press already drew.
-      patchSlot(
-        { cardId, categoryId, finish },
-        result.removed
-          ? null
-          : (card) =>
-              card.quantity === result.quantity ? card : { ...card, quantity: result.quantity },
-      );
+      //
+      // **An answer a newer press of the same slot has superseded writes nothing** (issue #1535):
+      // that press's guess is the number on screen, or its own answer is already in — rewriting
+      // the row with this older number put the box back a press, and the next press was computed
+      // from it.
+      if (presses.isLatest(context.slot, context.ticket)) {
+        patchSlot(
+          { cardId, categoryId, finish },
+          result.removed
+            ? null
+            : (card) =>
+                card.quantity === result.quantity ? card : { ...card, quantity: result.quantity },
+        );
+      }
       // **The one write here that leaves no address to re-anchor to.** Zero deletes the row, so
       // an open card that came out of it is left addressing nothing — see {@link DeckAnchor.removed},
       // which carries the argument for stepping the modal onto the next card rather than closing
