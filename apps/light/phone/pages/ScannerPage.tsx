@@ -210,10 +210,17 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
 
   useScannerHold(parked.released);
 
-  const { onDecision, onPicked, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
-    tray,
-    prefs.finish,
-  );
+  // `armed` — the desktop page's word: scanning at all, continuous or point and shoot. Above the
+  // landing, which lays a card over the camera only while it is on (issue #1555).
+  const armed = prefs.pointAndShoot || scanning;
+  const {
+    onDecision,
+    onPicked,
+    lastAdded,
+    landed,
+    shown: shownLanding,
+    flashKey,
+  } = useTrayLanding(tray, prefs.finish, armed);
   // *Add card…* (issue #978) — the desktop page's: the scanner pauses while the search is open,
   // and closing it resumes whatever was running before.
   const [picking, setPicking] = useState(false);
@@ -273,9 +280,8 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     interrupted: parked.paused || sending || picking || overlaid,
   });
   const reading = pointAndShoot ? shot.shooting : scanning;
-  const armed = pointAndShoot || scanning;
-  // The landing the popup is showing, if any — the confetti is thrown for that one and no other.
-  const shownLanding = armed ? landed : null;
+  // `shownLanding`, from the landing above, is the card the popup is showing, if any — the
+  // confetti is thrown for that one and no other.
   // What the card over the camera costs — at the tray's marketplace, so it is its row's figure —
   // and the rung of the sound ladder it reaches, which colours the figure and sizes the confetti.
   const landedPrice = useLandedPrice(shownLanding, destination?.marketplace);
@@ -582,7 +588,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
             <TierConfetti burst={burst} originBottom={landscape ? 36 : undefined} />
             <AddedToast
               card={shownLanding}
-              onDone={clearLanded}
               price={landedPrice}
               tier={landedTier}
               compact={landscape}

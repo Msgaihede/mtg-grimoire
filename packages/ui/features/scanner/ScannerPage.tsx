@@ -213,11 +213,21 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    */
   const writeRows = (rows: ScannerTrayRow[]) => tray.setRows(rows);
 
+  /**
+   * Whether the reader is scanning at all — continuous scanning running, or point and shoot on,
+   * whose shot ends on the card it read. Above the landing, which lays a card over the camera only
+   * while it is on (issue #1555).
+   */
+  const armed = prefs.pointAndShoot || scanning;
+
   // One card, into the tray — once per `decision_seq`, built on `tray.latest()`, in the finish
-  // the dock's Finish menu holds as the card lands (`useTrayLanding`).
-  const { onDecision, onPicked, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
+  // the dock's Finish menu holds as the card lands (`useTrayLanding`). `shown` is the card over
+  // the camera — the popup's, and so the confetti's: nothing lands over a picture whose reader is
+  // not scanning, and a Stop puts it away.
+  const { onDecision, onPicked, lastAdded, landed, shown, flashKey } = useTrayLanding(
     tray,
     prefs.finish,
+    armed,
   );
 
   /**
@@ -244,9 +254,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
    * **Point and shoot** (`usePointAndShoot`): with the pref on, the dock's *Scan card* runs the
    * pump until one card lands, and Start/Stop is not drawn. Over anything that pauses the pump the
    * shot is over, so a dialog closing never resumes one. `reading` is whichever of the two is
-   * running — what the overlay, the progress bar and the notes over the picture follow; `armed` is
-   * whether the reader is scanning at all, so a card that ended its own shot still lands over the
-   * camera.
+   * running — what the overlay, the progress bar and the notes over the picture follow; `armed`
+   * (above) is whether the reader is scanning at all, so a card that ended its own shot still
+   * lands over the camera.
    */
   const pointAndShoot = prefs.pointAndShoot;
   const shot = usePointAndShoot({
@@ -254,7 +264,6 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     interrupted: parked.paused || sending || picking,
   });
   const reading = pointAndShoot ? shot.shooting : scanning;
-  const armed = pointAndShoot || scanning;
 
   const loop = useScanLoop({
     videoRef,
@@ -280,11 +289,9 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
     },
   });
 
-  // The card over the camera — the popup's, and so the confetti's: nothing lands over a picture
-  // whose reader is not scanning.
-  const shown = armed ? landed : null;
-  // What it costs — at the tray's marketplace, so it is its row's figure — and the rung of the
-  // sound ladder that reaches, which colours the figure and throws the confetti.
+  // What the card over the camera costs — at the tray's marketplace, so it is its row's figure —
+  // and the rung of the sound ladder that reaches, which colours the figure and throws the
+  // confetti.
   const landedPrice = useLandedPrice(shown, destination?.marketplace);
   const landedTier = useLandedTier(shown, destination?.marketplace);
   // **A sound for each card that lands, and for each row the reader settles** — `needs-input`
@@ -683,13 +690,7 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
                     : null
                 }
               />
-              <AddedToast
-                card={shown}
-                onDone={clearLanded}
-                price={landedPrice}
-                tier={landedTier}
-                raised={pack}
-              />
+              <AddedToast card={shown} price={landedPrice} tier={landedTier} raised={pack} />
               {camera.kind === "error" && (
                 <p
                   role="alert"

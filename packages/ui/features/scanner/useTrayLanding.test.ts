@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRAY_ROWS, VERDICTS } from "./fixtures";
 import type { ScannerDecision, ScannerFinishPref, ScannerTrayRow } from "./types";
+import { LANDED_HOLD_MS } from "./reader/AddedToast";
 import { FLASH_MS, useTrayLanding } from "./useTrayLanding";
 
 /** A tray as the hook reads it: `latest()` is whatever the last write left, as `useTray`'s is. */
@@ -17,9 +18,9 @@ function trayOf(rows: ScannerTrayRow[] = []) {
 const RESOLVED = VERDICTS.decided.decision as ScannerDecision;
 const AMBIGUOUS = VERDICTS.ambiguous.decision as ScannerDecision;
 
-function mount(tray: ReturnType<typeof trayOf>, pref: ScannerFinishPref = "detect") {
-  return renderHook(({ finish }) => useTrayLanding(tray, finish), {
-    initialProps: { finish: pref },
+function mount(tray: ReturnType<typeof trayOf>, pref: ScannerFinishPref = "detect", armed = true) {
+  return renderHook(({ finish, armed }) => useTrayLanding(tray, finish, armed), {
+    initialProps: { finish: pref, armed },
   });
 }
 
@@ -31,6 +32,7 @@ describe("useTrayLanding", () => {
     const { result } = mount(trayOf());
     expect(result.current.lastAdded).toBeNull();
     expect(result.current.landed).toBeNull();
+    expect(result.current.shown).toBeNull();
     expect(result.current.flashKey).toBeNull();
   });
 
@@ -88,7 +90,7 @@ describe("useTrayLanding", () => {
     act(() => result.current.onDecision(RESOLVED));
     expect(tray.latest()[0].finish).toBe("foil");
 
-    rerender({ finish: "etched" });
+    rerender({ finish: "etched", armed: true });
     act(() =>
       result.current.onDecision({
         ...RESOLVED,
@@ -150,12 +152,68 @@ describe("useTrayLanding", () => {
     expect(result.current.lastAdded).not.toBeNull();
   });
 
-  it("puts the landed card away when the overlay says its hold is over", () => {
+  it("lays a card that lands while armed over the camera, and puts it away after its hold", () => {
     const { result } = mount(trayOf());
     act(() => result.current.onDecision(RESOLVED));
+    expect(result.current.shown).toBe(result.current.landed);
+    act(() => vi.advanceTimersByTime(LANDED_HOLD_MS - 1));
+    expect(result.current.shown).not.toBeNull();
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current.shown).toBeNull();
+    // The landing itself is not taken back: it is what the sounds key on.
     expect(result.current.landed).not.toBeNull();
-    act(() => result.current.clearLanded());
-    expect(result.current.landed).toBeNull();
+  });
+
+  it("gives a card landing inside the last one's hold a whole hold of its own", () => {
+    const { result } = mount(trayOf(), "nonfoil");
+    act(() => result.current.onDecision(RESOLVED));
+    act(() => vi.advanceTimersByTime(LANDED_HOLD_MS - 500));
+    act(() => result.current.onDecision(RESOLVED));
+    expect(result.current.shown).toMatchObject({ kind: "again", quantity: 2 });
+    act(() => vi.advanceTimersByTime(LANDED_HOLD_MS - 1));
+    expect(result.current.shown).not.toBeNull();
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current.shown).toBeNull();
+  });
+
+  /**
+   * Issue #1555: the hold was the overlay's clock, which stopped when a Stop hid the overlay — so
+   * the card stayed set and the next Start raised it again as news.
+   */
+  it("puts the card away at a Stop, and does not raise it again at the next Start", () => {
+    const { result, rerender } = mount(trayOf());
+    act(() => result.current.onDecision(RESOLVED));
+    expect(result.current.shown).not.toBeNull();
+    rerender({ finish: "detect", armed: false });
+    expect(result.current.shown).toBeNull();
+    act(() => vi.advanceTimersByTime(LANDED_HOLD_MS * 2));
+    rerender({ finish: "detect", armed: true });
+    expect(result.current.shown).toBeNull();
+  });
+
+  it("files a card added by hand while stopped without laying it over the camera, then or at Start", () => {
+    const tray = trayOf();
+    const { result, rerender } = mount(tray, "detect", false);
+    act(() =>
+      result.current.onPicked(
+        {
+          cardId: "bolt-2x2",
+          oracleId: "bolt",
+          name: "Lightning Bolt",
+          setCode: "2x2",
+          collectorNumber: "117",
+        },
+        "foil",
+      ),
+    );
+    expect(tray.latest()[0]).toMatchObject({ name: "Lightning Bolt", finish: "foil" });
+    // Landed — the strip names it, the row flashes, the sound plays — but nothing over the camera.
+    expect(result.current.landed).toMatchObject({ kind: "added", name: "Lightning Bolt" });
+    expect(result.current.lastAdded).toMatchObject({ name: "Lightning Bolt" });
+    expect(result.current.flashKey).toBe(tray.latest()[0].key);
+    expect(result.current.shown).toBeNull();
+    rerender({ finish: "detect", armed: true });
+    expect(result.current.shown).toBeNull();
   });
 
   it("leaves no timer behind when the view goes", () => {

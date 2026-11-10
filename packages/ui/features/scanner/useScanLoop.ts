@@ -10,6 +10,10 @@ export type { RunFrame };
 
 /** What the loop has to say: the last verdict, its cost, the running rate, the last failure. */
 export interface ScanLoop {
+  /**
+   * The last verdict taken — `null` from a start until that stream's first answer, since the
+   * start forgets the card the last one ended on (issue #1555).
+   */
   verdict: ScannerVerdict | null;
   roundTripMs: number | null;
   /** Frames per second over the last twenty round trips. `null` until the first answers. */
@@ -255,6 +259,15 @@ export function useScanLoop({
   const [roundTripMs, setRoundTripMs] = useState<number | null>(null);
   const [rate, setRate] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // **A pump that starts says nothing yet** (issue #1555): the start resets the session, so the
+  // verdict the last stream ended on — its corners, and the HUD's `Matched … Added` — is about a
+  // card this stream has not seen. Cleared in the render `live` turns on ("adjusting state when a
+  // prop changes"), so not one frame of the new stream draws it.
+  const [wasLive, setWasLive] = useState(live);
+  if (wasLive !== live) {
+    setWasLive(live);
+    if (live) setVerdict(null);
+  }
   // Latched in a layout effect for `QrScanner`'s reason: the ref has to be current before the
   // next tick of a loop that mounted once and must not restart, and `useEffect` alone is not
   // guaranteed to run before that.
