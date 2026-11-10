@@ -41,7 +41,7 @@ Importing maps raw text or CSV to database entries across two UI steps: text ent
 - **MTGO `.dek` XML (`parseDek`, issue #1175)**: The second file-level judgement — text opening on `<?xml` or `<Deck` is read by its `<Cards>` elements (`Name`, `Quantity`, `Sideboard`; a sideboard entry annotated `16777728` is the commander), never line by line. Other XML (Cockatrice `.cod`) is one issue, not one per line. Both pickers offer `.dek` (`DECKLIST_EXTENSIONS`, `DECKLIST_ACCEPT`).
 - **Category and section resolution**:
   - Precedence order: `forcedCategoryName > SECTION_CATEGORY[kind] > line.categoryName > autoCategoryFor(...)`.
-  - Command zone always outranks pile categorization.
+  - Command zone always outranks pile categorization — but only a card the reader confirmed or the plan stated (issue #1551): a `merge` into a deck whose list already holds a `commander`-kind card turns `automatic` into `ask` (`deferToHeldCommander`, default No commander), and a pick is kept to the plan's current candidates (`livePicks`), so a format change drops a commander the new format does not offer.
   - Right-clicking a pile heading imports directly into that category via `forcedCategoryName`.
 - **Destination planner (`destinations/deck.ts`)**: Pure TypeScript planner without React or IPC dependencies. Resolves Oracle tag slugs in a single batch query (`oracleTagsForPrintings`) during the `resolve` mutation to prevent preview flicker.
 - **Single-transaction commits**: Imports never run per-line mutations. `deck_import_commit` commits the entire list in one database transaction.

@@ -707,6 +707,25 @@ the root instead of folding into the one they filed. `WishRow.elsewhere` is what
 imported row draws an "also on your list" mark. Whole reasoning:
 [wishlist-folders.md](wishlist-folders.md).
 
+### The commander step checks what is already decided — issue #1551, 2026-11-10
+
+`commanderChoice` reads the pasted list alone, and two answers it gave were wrong once the step's
+own state was taken into account:
+
+- **A pick outlived the format that offered it.** On the new-deck step a format change rebuilds the
+  plan, but `picked` is plain state — so Sisay picked under Commander rode to the commit under
+  Oathbreaker, beneath a step that said nothing could be the commander and drew no way out.
+  `livePicks` now keeps the pick to the plan's current candidates, on both deck arms, and the step
+  draws that answer, so what is pressed is what Import sends. Filtered rather than cleared: turning
+  the format back offers the same pick again.
+- **A merge forced a second commander.** One legendary creature in a paste is `automatic`, which has
+  no "No commander" and outranks every filing, `forcedCategoryName` included — so pasting `Captain
+  Sisay` into a deck Kenrith already leads made two commanders. On a `merge` into a list that holds a
+  card in a `commander`-kind pile, `deferToHeldCommander` turns `automatic` into `ask` with the one
+  candidate offered and **No commander** pressed, under a line naming the commander already there. A
+  `replace` clears the command zone with the rest, so the radio moved to Replace gives the
+  `automatic` back. `fromFile` is untouched: a Commander heading in the file is the file saying so.
+
 ### A Virtual deck moves two sentences and takes one control away
 
 The third deck kind landed 2026-09-08 (user schema v40,
