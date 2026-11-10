@@ -29,8 +29,11 @@
 //! card anywhere, tap, counters, tokens, draws, life totals — on the reader's own cards and on
 //! every card the table shows (never an opponent's hand or library), and a play the rules refuse
 //! made unpaid instead: cast without paying, or put down when even that is not legal (`unpaid`).
-//! Taken in the reader's main phase only, where nothing is half-done. Off from the start against
-//! the AI, on against the goldfish; the reader turns it on or off whenever they like.
+//! Taken whenever the game waits on the reader to play or to declare (issue #1522): their main
+//! phase, a moment to respond (any step they stop at), their declare-attackers and
+//! declare-blockers steps (`edit`) — never in the middle of a question, nor before the opening
+//! hand is kept. Off from the start against the AI, on against the goldfish; the reader turns it
+//! on or off whenever they like.
 //!
 //! **The goldfish never loses, and neither does the reader**: in a goldfish game a command-zone
 //! emblem with "you can't lose the game" (CR 104.3b, no `affected` — every player) is granted at
@@ -2558,6 +2561,9 @@ impl Playtest {
             _ if stage == PlaytestStage::Prompt => {
                 Err("Answer the question first, or cancel it.".into())
             }
+            // A hand on the table, wherever else the reader decides: the main phase, a
+            // response, the declare steps (issue #1522).
+            edit if is_sandbox(&edit) => self.edit(edit, stage, out),
 
             PlaytestAction::Attack { attacks } => {
                 let WaitingFor::DeclareAttackers {
@@ -2642,12 +2648,33 @@ impl Playtest {
                 self.apply(self.you, GameAction::PassPriority, out)?;
                 self.advance(out)
             }
-            _ if stage == PlaytestStage::Respond => Err(MAIN_ONLY.into()),
-            sandbox => {
-                self.sandbox(sandbox, out)?;
-                self.advance(out)
-            }
+            _ => Err(MAIN_ONLY.into()),
         }
+    }
+
+    /// A sandbox action, at a decision of the reader's (`run` has checked it is one, and that the
+    /// sandbox is on). phase takes its debug actions whatever it waits for, and re-reads the
+    /// declare steps' attackers and blockers after one (`refresh_combat_declaration_waiting_for`)
+    /// — but not a question's answers, so a question is answered first. In the main phase the
+    /// game plays on as after any play (a trigger of the edit's resolves, and the reader is home
+    /// again); anywhere else the reader is kept at the decision they edited at (`held`) — a
+    /// response's window or a step they stopped at is not passed over because the table changed.
+    /// An edit can end a declaration, though: with no creature left that could attack (or block),
+    /// the empty declaration is the only one and phase makes it itself (CR 508.1a). That decision
+    /// is gone, so the game plays on from there as after any action.
+    fn edit(
+        &mut self,
+        action: PlaytestAction,
+        stage: PlaytestStage,
+        out: &mut Log,
+    ) -> Result<(), String> {
+        self.sandbox(action, out)?;
+        let held = match stage {
+            PlaytestStage::Main => false,
+            PlaytestStage::Respond => true,
+            _ => self.stage() == stage,
+        };
+        self.play_on(held, out)
     }
 
     /// The rules first: the one way to play it, or a question about which way. When the rules
@@ -2661,7 +2688,7 @@ impl Playtest {
         let obj = self.own(id)?;
         let name = obj.name.clone();
         let zone = obj.zone;
-        let by_hand = self.sandbox && self.stage() == PlaytestStage::Main;
+        let by_hand = self.sandbox;
         let ways = self.plays_of(id);
         if !matches!(zone, Zone::Hand | Zone::Command) {
             if !ways.is_empty() {
@@ -2675,17 +2702,12 @@ impl Playtest {
         if ways.is_empty() && by_hand {
             return self.unpaid(id, out);
         }
-        let sandbox = self.sandbox;
+        // With the sandbox on, a play the rules refuse was made unpaid above.
         self.take_one(ways, "CastChoice", name.clone(), out, || {
-            let why = format!(
+            format!(
                 "{name} can't be played right now: no land drop left, too little mana, or nothing \
-                 it could target."
-            );
-            if sandbox {
-                format!("{why} It can be put down by hand in your main phase.")
-            } else {
-                format!("{why} Turn the sandbox on to put it down by hand.")
-            }
+                 it could target. Turn the sandbox on to put it down by hand."
+            )
         })
     }
 
@@ -3199,6 +3221,15 @@ impl Playtest {
     /// priority is passed for them except where `stops_here` says otherwise. While the reader ends
     /// a turn (`ending`), their main phases are passed and they declare no attackers.
     fn advance(&mut self, out: &mut Log) -> Result<(), String> {
+        self.play_on(false, out)
+    }
+
+    /// `advance`, but `held`: the reader has just changed the table by hand (`edit`) at a
+    /// decision of theirs that is not their main phase, and stays at it — the first time the game
+    /// comes back to their priority or their declaration they are stopped there, whatever
+    /// `stops_here` would say now. A question the edit raised is still asked (or taken, when it
+    /// has one answer) on the way.
+    fn play_on(&mut self, held: bool, out: &mut Log) -> Result<(), String> {
         for _ in 0..STEP_LIMIT {
             self.tell_out(out);
             self.mark_dead();
@@ -3259,7 +3290,7 @@ impl Playtest {
                     // again: whether they stop here or pass, it can no longer be taken back.
                     self.pending = None;
                     self.end_free()?;
-                    if !ending && self.stops_here() {
+                    if held || (!ending && self.stops_here()) {
                         return Ok(());
                     }
                     self.apply(self.you, GameAction::PassPriority, out)?;
@@ -3267,7 +3298,7 @@ impl Playtest {
                 WaitingFor::DeclareAttackers {
                     valid_attacker_ids, ..
                 } => {
-                    if !(ending || valid_attacker_ids.is_empty()) {
+                    if held || !(ending || valid_attacker_ids.is_empty()) {
                         return Ok(());
                     }
                     self.apply(
@@ -3282,7 +3313,7 @@ impl Playtest {
                 WaitingFor::DeclareBlockers {
                     valid_blocker_ids, ..
                 } => {
-                    if !valid_blocker_ids.is_empty() {
+                    if held || !valid_blocker_ids.is_empty() {
                         return Ok(());
                     }
                     self.apply(

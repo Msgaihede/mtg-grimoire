@@ -74,8 +74,8 @@ export function OpponentArea({
   active: boolean;
   /** This player won the game. */
   won: boolean;
-  /** The sandbox's moves work now (on, the reader's main phase, nothing out): the battlefield's
-   *  card menus, and a life stepper that can be pressed. */
+  /** The sandbox's moves work now (on, the reader playing or declaring, nothing out): the
+   *  battlefield's card menus, and a life stepper that can be pressed. */
   sandbox: boolean;
   /** The sandbox is on: the plate has a life stepper at all (greyed while `sandbox` is not). */
   steppers: boolean;

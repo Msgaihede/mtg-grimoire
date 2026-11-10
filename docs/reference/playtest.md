@@ -10,15 +10,15 @@ reader's, turned around.
 Built 2026-10-13; four players added 2026-10-14 (issue #994); the goldfish and the sandbox setting
 folded in 2026-10-17. The owner's choices that shape it:
 
-| Question                 | Choice                                                                                                                                     |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| Who plays the opponent   | phase-ai, at a difficulty the reader picks; or the goldfish, which takes no actions (2026-10-17)                                           |
-| How strict the rules are | The rules decide, with a prompt for targets, modes and the rest                                                                            |
-| The sandbox              | A setting (2026-10-17): off by default against the AI, on against the goldfish. On, it edits every card the table shows, in the main phase |
-| Where a game starts      | The Playtesting page: your deck, who it plays (any of your own decks, or the goldfish), a difficulty; or the deck editor's goldfish button |
-| How many opponents       | The goldfish, one, or three for a four-player game (issue #994): one player against three AI seats                                         |
-| Playing with people      | A supporter's lobby, joined by code (issue #1419): guests bring their own decks and take opponents' seats; the host's app runs the game    |
-| Priority                 | Arena-style auto-pass: the reader decides only in their main phases, in combat, and when the engine asks                                   |
+| Question                 | Choice                                                                                                                                                                       |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Who plays the opponent   | phase-ai, at a difficulty the reader picks; or the goldfish, which takes no actions (2026-10-17)                                                                             |
+| How strict the rules are | The rules decide, with a prompt for targets, modes and the rest                                                                                                              |
+| The sandbox              | A setting (2026-10-17): off by default against the AI, on against the goldfish. On, it edits every card the table shows, whenever the reader plays or declares (issue #1522) |
+| Where a game starts      | The Playtesting page: your deck, who it plays (any of your own decks, or the goldfish), a difficulty; or the deck editor's goldfish button                                   |
+| How many opponents       | The goldfish, one, or three for a four-player game (issue #994): one player against three AI seats                                                                           |
+| Playing with people      | A supporter's lobby, joined by code (issue #1419): guests bring their own decks and take opponents' seats; the host's app runs the game                                      |
+| Priority                 | Arena-style auto-pass: the reader decides only in their main phases, in combat, and when the engine asks                                                                     |
 
 The engine, the nightly pin, the 16 MiB stack, the hybrid model of rules and sandbox, the goldfish
 as an opponent (its emblems, its library, `deadOn`), the table's shared pieces and the licences are
@@ -326,7 +326,7 @@ land drop left, too little mana, nothing to target), what happens is the sandbox
 - **Sandbox off: it is refused with a sentence** that ends "Turn the sandbox on to put it down by
   hand." Putting a card down unpaid against an opponent would be cheating it, so it is never done
   unasked.
-- **Sandbox on, in the reader's main phase: it is played unpaid** (`unpaid`): cast without paying
+- **Sandbox on, in the main phase or a response: it is played unpaid** (`unpaid`): cast without paying
   its mana cost (CR 118.9, under a `CastFromHandFree` emblem held only while the cast is made —
   [goldfish.md](goldfish.md)), so its cast and enter triggers happen (issue #1075), told as `cast`.
   Only when even that is not legal is it put where it would have gone — a permanent onto the
@@ -396,7 +396,22 @@ which the engine permits for the reader's seat (`debug_permitted`) and never for
 
 - **Off,** every one of them is refused: "That changes the game by hand. Turn the sandbox on in the
   game menu to do it." `run` checks it first (`is_sandbox`), so no action slips past.
-- **On,** they are taken in the reader's main phase only, where nothing is half done, on the
+- **On,** they are taken **wherever the game waits on the reader to play or to declare** (issue
+  #1522, 2026-11-10; until then the main phase only): their main phase, `respond` — the opponent's
+  spell, combat after blocks, or any step they stopped at, so a reader who wants to change the
+  table in the opponent's upkeep sets a stop there — and the `attack` and `block` steps (`edit`).
+  phase's `apply` takes a debug action whatever it waits for, and re-reads the declare steps'
+  attackers and blockers after one (`refresh_combat_declaration_waiting_for`), so a creature
+  tapped by hand mid-declaration is no longer offered. Tap the last one that could attack and phase
+  makes the empty declaration itself (CR 508.1a: it is then the only one), and the game plays on
+  to the second main phase as after declaring no attack. **The reader stays where they were**: in
+  the main phase the game plays on as after any play (an edit's trigger resolves, and the reader
+  is home again); anywhere else `play_on`'s `held` stops at the first priority or declaration it
+  comes back to, so neither a response's window nor a stop is passed over because the table
+  changed (`stopped_at` would otherwise let it go by). **Not in a question** (`prompt`, a cast
+  half made among them): phase does not re-read a question's answers after an edit, so it is
+  refused, "Answer the question first, or cancel it."; nor at the opening hand ("Keep or
+  mulligan the opening hand first."). They are taken on the
   reader's own cards anywhere and on **any card the table shows**: an opponent's battlefield,
   graveyard, exile and command zone (`editable`). **Never an opponent's hand or library**, which
   the reader may not see: "That card is in a zone you cannot see." Every emblem is out of reach
@@ -824,7 +839,9 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 **Interactions.**
 
 - **The sandbox decides most of what is offered.** The board works it out once (`edits`: the
-  sandbox on, the reader's main phase, nothing with the engine) and hands it to every piece.
+  sandbox on, a stage the engine takes its moves at — `play/sandbox.ts`' `sandboxEditsAt`: `main`,
+  `respond`, `attack`, `block` — and nothing with the engine) and hands it to every piece. In the
+  declare steps a click on a creature that may attack or block still picks it; T taps it.
   - **Off:** no hand edits are drawn. A card's menu keeps only the rules' rows (Play, Foretell, Cast,
     Activate ability, Tap for mana), and a castable card in the graveyard or exile dialog its Cast; a click taps only for mana; T, G, E and H do nothing; the only drag is a play onto the
     table; the library pile is disabled; a graveyard or exile opens read-only; and every life plate
@@ -837,8 +854,8 @@ facts are found as a run of `step.happened`, and the end takes the rest.
   zone, and "Activate ability" heads a battlefield card's menu. **A click on a permanent the rules
   let tap for mana (`canTapForMana`) taps it for mana**, sandbox or not, and "Tap for mana" is on
   its menu; with the sandbox on, the menu's plain Tap still only turns the card. A pile is split by
-  `canTapForMana` (`pileKey`), so a click never lands on a summoning-sick twin. In `respond`, the hand and the
-  abilities are playable as in the main phase; the sandbox is not.
+  `canTapForMana` (`pileKey`), so a click never lands on a summoning-sick twin. In `respond`, the hand, the
+  abilities and the sandbox are all as in the main phase.
 - **The opponent's cards** can be pointed at for the preview, and their graveyard and exile open
   read-only. They are never dragged, and their table takes no zone drops (`refuse`) — only the
   rules' aims below.

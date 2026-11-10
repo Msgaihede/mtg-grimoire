@@ -25,8 +25,8 @@ const BAND_REACH = 80;
 export interface HandFanProps {
   cards: GameCard[];
   /**
-   * The sandbox's moves work now (on, the reader's main phase, nothing out): a card's menu moves
-   * it anywhere and a drag puts it in any zone. Off, a card is played — double-clicked, dragged
+   * The sandbox's moves work now (on, the reader playing or declaring, nothing out): a card's menu
+   * moves it anywhere and a drag puts it in any zone. Off, a card is played — double-clicked, dragged
    * onto the table, or by its menu's one row — and goes nowhere else. Either way it can be moved
    * along the hand, which is the reader's own order.
    */

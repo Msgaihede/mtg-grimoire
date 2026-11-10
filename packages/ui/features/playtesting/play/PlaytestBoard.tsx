@@ -87,6 +87,7 @@ import { DamagePanel } from "./DamagePanel";
 import { PickPanel } from "./PickPanel";
 import { PromptPanel } from "./PromptPanel";
 import { RespondPrompt, respondingTo } from "./RespondPrompt";
+import { sandboxEditsAt } from "./sandbox";
 
 /**
  * The board — one table for every game on a deck: the reader's deck against **the goldfish**, an
@@ -139,9 +140,11 @@ import { RespondPrompt, respondingTo } from "./RespondPrompt";
  * menu's row — off against the AI, on against the goldfish, at the start). Its moves change the
  * game by hand, outside the rules: a click taps, a drag puts a card in any zone, the T / G / E / H
  * keys, the card menus' moves and counters and token copies, the library's draws and looks, a
- * token from the game menu, the life steppers on every plate. The engine takes them only in the
- * reader's main phase, so the board offers them only then and only while nothing is with the
- * engine (`edits`); off, none of them is drawn, and what is left is the rules'. With it on they
+ * token from the game menu, the life steppers on every plate. The engine takes them wherever the
+ * game waits on the reader to play or to declare — the main phase, a response or a step they
+ * stopped at, the declare steps (`sandbox.ts`, issue #1522) — never in the middle of a question,
+ * so the board offers them only then and only while nothing is with the engine (`edits`); off,
+ * none of them is drawn, and what is left is the rules'. With it on they
  * reach **every card the table shows**: an opponent's permanents get the sandbox's card menu and
  * their plates a stepper — but an opponent's cards are never dragged, and their hand and library
  * are counts the reader never touches.
@@ -380,11 +383,13 @@ export function PlaytestBoard({
   /** The sandbox is on — the setting, whatever the stage: the plates have steppers. */
   const sandboxOn = view?.sandbox ?? false;
   /**
-   * **The sandbox's moves work now**: it is on, it is the reader's main phase (the engine refuses
-   * them anywhere else), and nothing is with the engine. What every table piece is handed as its
-   * `sandbox`, so each offers the hand moves only when they would be taken.
+   * **The sandbox's moves work now**: it is on, the reader is playing or declaring (the main
+   * phase, a response, the declare steps — `sandboxEditsAt`; the engine refuses them in a
+   * question), and nothing is with the engine. What every table piece is handed as its
+   * `sandbox`, so each offers the hand moves only when they would be taken. In the declare steps
+   * a click on a creature that may attack or block still picks it; T taps it.
    */
-  const edits = view !== null && view.sandbox && view.stage === "main" && !locked;
+  const edits = view !== null && view.sandbox && sandboxEditsAt(view.stage) && !locked;
 
   const ids = useMemo(
     () => (view === null || view.stage === "mulligan" ? null : seen(view)),
@@ -1526,10 +1531,12 @@ function PlaytestHelp({
       ) : sandbox ? (
         <>
           <span className="text-dim">
-            The sandbox is on: in your main phase, drag any of your cards anywhere, click a
-            permanent to tap it (Shift-click taps the pile; a land is tapped for mana), right-click
-            any card on the table for counters, copies and moves, and set any life total. A card the
-            rules cannot play is put down unpaid.
+            The sandbox is on: whenever the game waits on you — your main phase, a response, your
+            attackers or blockers — drag any of your cards anywhere, click a permanent to tap it
+            (Shift-click taps the pile; a land is tapped for mana), right-click any card on the
+            table for counters, copies and moves, and set any life total. A card the rules cannot
+            play is put down unpaid. To change things in a step the game passes, stop there (the
+            Stops button); answer a question before changing the table.
           </span>
           <span className="text-dim">
             Point at one of your cards and press T, G, E or H to tap it, bury it, exile it or return

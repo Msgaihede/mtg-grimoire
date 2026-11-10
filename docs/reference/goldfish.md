@@ -172,8 +172,11 @@ radio row in the game menu): **off by default against the AI, on against the gol
 | The turn and each of its steps, every seat's; attacks and blocks   | Life totals, draws, mills and shuffles outside the draw step |
 | P/T with counters and statics; the mana open                       |                                                              |
 
-**A hand edit is taken in the reader's main phase only**, where nothing is half done, on the
-reader's own cards anywhere and on any card the table shows: an opponent's battlefield, graveyard,
+**A hand edit is taken wherever the game waits on the reader to play or to declare** (issue
+#1522, 2026-11-10): their main phase, a moment to respond — any step they stopped at — and their
+declare-attackers and declare-blockers steps; never in the middle of a question, nor before the
+opening hand is kept ([playtest.md](playtest.md#casting-cancelling-and-the-sandbox)). It is taken
+on the reader's own cards anywhere and on any card the table shows: an opponent's battlefield, graveyard,
 exile and command zone. **Never an opponent's hand or library**, which are counts the reader may
 not see ("That card is in a zone you cannot see."). With the sandbox off, every hand edit — move,
 tap, untap all, counters, token copy, create token, draw, mill, shuffle, set life — is refused:
@@ -186,7 +189,8 @@ the table. It looks for the legal `PlayLand` or `CastSpell` for that card:
 - **Exactly one:** it is played. phase lists a cast once per way to make it (a target, a mode), so
   one row means nothing is left to decide.
 - **Two or more:** the board asks which, as a prompt with Cancel ([playtest.md](playtest.md#prompts)).
-- **None:** with the sandbox on, in the main phase, the card is played unpaid (`unpaid`). It is
+- **None:** with the sandbox on, the card is played unpaid (`unpaid`), in a response as in the
+  main phase. It is
   **cast without paying its mana cost** first (CR 118.9, `cast_free`): an emblem of the reader's
   with phase's `CastFromHandFree` (Omniscience's static) is granted, the cast is made as any other
   — one way taken, several asked about — and the emblem is removed once nothing is pending and the
@@ -433,8 +437,8 @@ the reader's cards are dragged — an opponent's never:
   (`pointerOnly`). A card carried out of the hand overlaps the table's edge long before the pointer
   does, and a drop there was played by accident. **This is the one drop the rules make, so it is
   the only one with the sandbox off**;
-- anywhere else, it is a move, the sandbox's, offered only while its moves work (on, the reader's
-  main phase, nothing with the engine);
+- anywhere else, it is a move, the sandbox's, offered only while its moves work (on, the reader
+  playing or declaring, nothing with the engine);
 - a pile dragged off the table moves its top card.
 
 **Keys:** Space presses the stage button's primary action (To combat, End turn, the declarations;

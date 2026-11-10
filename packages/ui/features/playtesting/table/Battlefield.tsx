@@ -93,8 +93,8 @@ export interface TablePick {
 export interface BattlefieldProps {
   cards: GameCard[];
   /**
-   * The sandbox's moves work now (on, the reader's main phase, nothing out): a click taps, a pile
-   * is carried off to anywhere, and the menu has every hand move. Off, a card is only clicked when
+   * The sandbox's moves work now (on, the reader playing or declaring, nothing out): a click taps, a
+   * pile is carried off to anywhere, and the menu has every hand move. Off, a card is only clicked when
    * the rules ask for it (`pick`) or to tap it for mana, dragged only onto what the rules take
    * (`carry`, `aim`), and its menu is the rules' rows alone — and the table still takes a card
    * played onto it from the hand or the command zone. Either way a click on a card the rules let

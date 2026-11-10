@@ -4,12 +4,13 @@
 
 use crate::cards::{CardFacts, FaceFacts};
 use crate::on_engine_stack;
-use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, Place};
+use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, Place, Seat};
 
 use super::session::Playtest;
 use super::view::{
-    Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestHappened as H,
-    PlaytestPickPurpose, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep, PlaytestView,
+    Difficulty, PlaytestAction as A, PlaytestAttackPair, PlaytestHappened as H, PlaytestPhase,
+    PlaytestPickPurpose, PlaytestPlayer, PlaytestStage as Stage, PlaytestStep, PlaytestStop,
+    PlaytestStopStep, PlaytestView,
 };
 
 const YOU: PlaytestPlayer = PlaytestPlayer::You;
@@ -2530,4 +2531,144 @@ fn an_optional_cast_from_the_graveyard_casts_the_card_picked() {
     }));
     assert!(find(&step.view.you.graveyard, "Quick Study").is_none());
     assert!(find(&step.view.you.exile, "Quick Study").is_some());
+}
+
+/// Issue #1522: the sandbox is not the main phase's alone. At a step the reader stopped at — the
+/// goldfish's upkeep — a draw and a life total are taken, and the reader stays at that stop for
+/// each: an edit never passes the priority it was made at. Passing then moves on.
+#[test]
+fn the_sandbox_edits_at_a_stop_in_the_goldfishs_turn_and_the_reader_stays_there() {
+    let (stopped, drawn, set, passed) = engine(|| {
+        let mut game = kept();
+        game.act(A::SetStops {
+            stops: vec![PlaytestStop {
+                seat: Seat::Opponent,
+                step: PlaytestStopStep::Upkeep,
+            }],
+        })
+        .unwrap();
+        let mut step = game.act(A::Pass).unwrap();
+        while step.view.active == YOU {
+            step = game.act(A::Pass).unwrap();
+        }
+        let drawn = game.act(A::Draw { count: 1 }).unwrap();
+        let set = game
+            .act(A::SetLife {
+                seat: FISH,
+                life: 7,
+            })
+            .unwrap();
+        (step, drawn, set, game.act(A::Pass).unwrap())
+    });
+    assert_eq!(stopped.view.stage, Stage::Respond);
+    assert_eq!(stopped.view.phase, PlaytestPhase::Beginning);
+    for edited in [&drawn, &set] {
+        assert_eq!(edited.view.stage, Stage::Respond, "{:?}", edited.happened);
+        assert_eq!(edited.view.active, FISH);
+        assert_eq!(edited.view.phase, PlaytestPhase::Beginning);
+    }
+    assert_eq!(drawn.view.you.hand.len(), stopped.view.you.hand.len() + 1);
+    assert_eq!(set.view.opponents[0].life, 7);
+    assert!(
+        !(passed.view.stage == Stage::Respond && passed.view.phase == PlaytestPhase::Beginning),
+        "passing leaves the stop"
+    );
+}
+
+/// Issue #1522: in the declare-attackers step a creature is tapped, untapped and pumped by hand.
+/// phase re-reads who may attack after each edit, so the tapped bear is no longer offered, the
+/// untapped one is again, and its counter is in the damage it deals.
+#[test]
+fn the_sandbox_edits_in_the_declare_attackers_step_and_the_attackers_follow() {
+    let (tapped, untapped, pumped, hit) = engine(|| {
+        let mut game = kept();
+        for _ in 0..2 {
+            put_down(&mut game, "Grizzly Bears");
+        }
+        // The draws that found the bears are past the hand size: the cleanup asks what to discard.
+        let mut step = game.act(A::EndTurn).unwrap();
+        while step.view.stage == Stage::Prompt {
+            step = game.act(A::Auto).unwrap();
+        }
+        let bear = find(&game.view().you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .id;
+        assert_eq!(game.act(A::Pass).unwrap().view.stage, Stage::Attack);
+        let tap = |tapped| A::Tap {
+            ids: vec![bear],
+            tapped,
+        };
+        let tapped = game.act(tap(true)).unwrap();
+        let untapped = game.act(tap(false)).unwrap();
+        let pumped = game
+            .act(A::Counters {
+                id: bear,
+                kind: "+1/+1".into(),
+                delta: 1,
+            })
+            .unwrap();
+        let hit = game
+            .act(A::Attack {
+                attacks: vec![PlaytestAttackPair {
+                    attacker: bear,
+                    target: None,
+                    player: None,
+                }],
+            })
+            .unwrap();
+        (tapped, untapped, pumped, hit)
+    });
+    let attackers =
+        |step: &PlaytestStep| step.view.attack.as_ref().map_or(0, |a| a.attackers.len());
+    assert_eq!(tapped.view.stage, Stage::Attack, "{:?}", tapped.happened);
+    assert_eq!(attackers(&tapped), 1, "a tapped creature can't attack");
+    assert_eq!(untapped.view.stage, Stage::Attack);
+    assert_eq!(attackers(&untapped), 2);
+    assert_eq!(pumped.view.stage, Stage::Attack);
+    assert_eq!(hit.view.opponents[0].life, 37, "the counter's damage too");
+}
+
+/// Issue #1522: tapping the last creature that could attack ends the declaration — the empty one
+/// is then the only one, and phase makes it (CR 508.1a) — and the game plays on to the reader's
+/// second main phase, as after declaring no attack.
+#[test]
+fn tapping_the_last_attacker_by_hand_declares_no_attack() {
+    let after = engine(|| {
+        let mut game = kept();
+        put_down(&mut game, "Grizzly Bears");
+        game.act(A::EndTurn).unwrap();
+        let bear = find(&game.view().you.battlefield, "Grizzly Bears")
+            .unwrap()
+            .id;
+        assert_eq!(game.act(A::Pass).unwrap().view.stage, Stage::Attack);
+        game.act(A::Tap {
+            ids: vec![bear],
+            tapped: true,
+        })
+        .unwrap()
+    });
+    assert_eq!(after.view.stage, Stage::Main, "{:?}", after.happened);
+    assert_eq!(after.view.phase, PlaytestPhase::Main2);
+    assert_eq!(after.view.opponents[0].life, 40);
+}
+
+/// Issue #1522: a question is answered first. phase does not re-read a question's answers after
+/// a hand on the table, so an edit in the middle of one is refused and changes nothing.
+#[test]
+fn a_sandbox_edit_waits_for_the_question_to_be_answered() {
+    let (asked, refused, after) = engine(|| {
+        let mut game = kept();
+        let forest = in_hand(&mut game, "Forest");
+        game.act(A::Play { id: forest }).unwrap();
+        for _ in 0..2 {
+            put_down(&mut game, "Grizzly Bears");
+        }
+        let growth = in_hand(&mut game, "Giant Growth");
+        let asked = game.act(A::Play { id: growth }).unwrap();
+        let refused = game.act(A::Draw { count: 1 }).unwrap_err();
+        (asked, refused, game.view())
+    });
+    assert_eq!(asked.view.stage, Stage::Prompt);
+    assert!(refused.contains("Answer the question first"), "{refused}");
+    assert_eq!(after, asked.view);
 }
