@@ -4,7 +4,7 @@ import { Check, ChevronDown } from "lucide-react";
 import { FILTER_UNAVAILABLE } from "@/components/FilterChips";
 import { PopupPanel } from "@/components/PopupListbox";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { FOCUS } from "@/lib/focus";
+import { FOCUS, blurLeftTheWindow } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -123,6 +123,9 @@ const DEFAULT_PLACEHOLDER = "—";
 
 /** How long a run of closed-trigger keystrokes stays one type-ahead word. */
 const TYPE_AHEAD_MS = 600;
+
+/** What a press inside the panel is allowed to focus — see the frame's `onMouseDown`. */
+const TEXT_ENTRY = "input, textarea, select, [contenteditable]";
 
 /** Module scope so a scroll effect can depend on it without re-running every render. */
 const optionId = (id: string, index: number) => `${id}-option-${index}`;
@@ -608,8 +611,12 @@ function DropdownShell(props: ShellProps) {
       className={cn(fill && "w-full")}
       // Tab out of the panel and the panel should not still be there. `onBlur` is React's
       // `focusout`, so it catches the listbox losing focus to anything at all; a `relatedTarget`
-      // still inside the root (the trigger, on Escape) is not leaving.
+      // still inside the root (the trigger, on Escape) is not leaving, and nor is the window
+      // losing focus on Alt+Tab (`blurLeftTheWindow`). A press on the panel's own non-row
+      // content would drop focus to `<body>` and look like leaving too — the frame's
+      // `onMouseDown` below stops that at the source.
       onBlur={(e) => {
+        if (blurLeftTheWindow(e)) return;
         if (open && !rootRef.current?.contains(e.relatedTarget)) setOpen(false);
       }}
     >
@@ -691,7 +698,22 @@ function DropdownShell(props: ShellProps) {
           // The key belongs on AnimatePresence's own direct child — this frame div — and not
           // on PopupPanel, a grandchild it happens to work for today only because there is
           // ever at most one of these mounted.
-          <div key="panel" ref={frameRef} className={cn("fixed left-0 top-0 size-0", LAYER.popup)}>
+          <div
+            key="panel"
+            ref={frameRef}
+            className={cn("fixed left-0 top-0 size-0", LAYER.popup)}
+            // **A press inside the panel keeps the caret where it is.** On non-focusable content —
+            // a footer's sentence, the panel's padding, an empty-list line — Chromium would move
+            // focus to `<body>`, and the root's `onBlur` above would read that as leaving and
+            // close the panel under the press (issue #1571). The rows already do this for their
+            // own reason; a footer button still gets its click, as `SetCombobox`'s "Show N more"
+            // always has. A text field in a footer is the exception, since a press is how a caret
+            // gets into one.
+            onMouseDown={(e) => {
+              if (!(e.target instanceof Element) || !e.target.closest(TEXT_ENTRY))
+                e.preventDefault();
+            }}
+          >
             <PopupPanel
               ref={panelRef}
               style={{ left: placement?.left ?? 0, top: placement?.top ?? 0, minWidth }}
@@ -745,9 +767,7 @@ function DropdownShell(props: ShellProps) {
                 // The search box carries this instead when there is one — see the doc comment
                 // above this component.
                 aria-activedescendant={
-                  !searchable && drawn.length > 0 && index >= 0
-                    ? optionId(uid, index)
-                    : undefined
+                  !searchable && drawn.length > 0 && index >= 0 ? optionId(uid, index) : undefined
                 }
                 onKeyDown={searchable ? undefined : onListKeyDown}
                 className="max-h-64 overflow-auto"
