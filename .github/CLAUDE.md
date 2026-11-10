@@ -11,7 +11,7 @@ The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 
 - **`ci-ok` is the single protected check**:
   - Branch protection pins `ci-ok` as the required status check.
   - Acts as an aggregator requiring success or deliberate skip across all job dependencies:
-    `changes`, `frontend`, `rust`, `rust-windows`, `core`, `powershell`, `storybook`, `android`, and `web`.
+    `changes`, `frontend`, `rust`, `rust-windows`, `core`, `powershell`, `storybook`, `android`, `web`, and `neural`.
   - `enforce_admins` is `false`: a red PR cannot merge, but direct administrative pushes to `main` remain possible.
 - **CLAUDE.md line budget check**: The `changes` job runs `node scripts/check-claude-md.ts` before classification, failing CI immediately if any `CLAUDE.md` in the repository grows beyond 200 lines.
 - **Path routing (`changes` job)**:
@@ -21,7 +21,7 @@ The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 
   - `crates/grimoire-web/**` and `crates/grimoire-scan/**` (the web host's two modules) route to `frontend`, `rust`, and `web`; `crates/grimoire-play/**` and `crates/grimoire-graph/**` (desktop-only) to `frontend` and `rust`. All must sit above `crates/grimoire-core/*` and `crates/*`.
   - `crates/grimoire-core/**` routes to `frontend`, `rust`, `core`, and `web` (must stay above `crates/*`).
   - `crates/*` routes to `frontend`, `rust`, `core`, and `web` (covers `crates/card-scanner`).
-  - `crates/card-neural/models/*` (the model files, and the README whose table pins them) routes to the same four, above the prose arm; `crates/card-neural/train/*` (the training's Python, which no job here runs) to none, above `crates/*`.
+  - `crates/card-neural/models/*` (the model files, and the README whose table pins them) routes to the same four and `neural`, above the prose arm; `crates/card-neural/train/*` (the training's Python) to `neural` alone, above `crates/*`; `packages/ui/lib/core/web/assets.ts` (`neuralTable`, whose row pattern the delivery's suites read) to the page's three and `neural`, above `packages/ui/*`. The census cannot see a Python read, so these three arms are hand-kept.
   - `apps/light/src-tauri/**` (the phone's host) routes to `frontend`, `rust`, and `android`; `apps/light/vite.config.ts` to `frontend`, `rust`, `android`, and `web`; `apps/light/vite.sw.ts` to `frontend` and `web`. All three must sit above `apps/light/*`, which routes the rest of the light app to `frontend`, `storybook`, and `web`.
   - `apps/desktop/index.html` routes to `frontend` and `storybook` (above `apps/desktop/*`, which with `packages/ui/*` routes to `frontend`, `storybook`, and `web`); `packages/fake/*` to `frontend` and `storybook` (`packages/fake/aliases.ts` to `web` as well, above it).
   - Root `vite.base.ts`, `vite.watch.ts`, `vitest.config.ts`, `tsconfig*.json` and `infrastructure/*/tsconfig.json` route to `frontend`, `storybook`, and `web`.
@@ -66,6 +66,7 @@ The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 
     - Scans one real card through the scanner's own module (`pnpm web:scanner-smoke`: a file for a camera, the desktop face and then the phone face); the card's picture is the one request the script makes of Scryfall, kept by `actions/cache` between runs.
     - Runs the live-sync walk (`pnpm web:sync-smoke`: two Chrome profiles, `infrastructure/relay/` under `wrangler dev --local`), with wrangler installed from `infrastructure/wrangler/package-lock.json` (`npm ci --ignore-scripts --prefix infrastructure/wrangler`; npm's, because that folder is not in the pnpm workspace) — never `npx wrangler@…`, and no secret in the job. `infrastructure/relay/**` routes to `frontend`, `rust` and `web`.
   - **`powershell`**: Runs `lock.test.ps1` for worktree locks on `windows-latest`. Windows is required because holder PID, process name, and `StartTime` are inspected.
+  - **`neural`** (2026-11-10): the Neural delivery's own suites, `python3 -B -m unittest discover -s crates/card-neural/train/tests -p "test_deliver*.py"` — the command `neural-deliver.yml`'s `build` job runs before it builds, on that job's image (`ubuntu-24.04`, the runner's Python, no install), and `scripts/ci-route.test.ts` holds the two lines equal. Until it existed that job was their only run: the 2026-11 delivery merged with seven of them red. The fail-safe does not set it; the suites that need torch are run by hand.
 
 ## Toolchain & Action Security
 
@@ -142,7 +143,7 @@ The weekly `scanner-bundle.yml` (the hash bundle and OCR models) was removed on 
 
 ## `neural-train.yml` & `neural-deliver.yml` — the Neural scanner's training
 
-Retrains `crates/card-neural`'s two networks on a Modal GPU and delivers them as a pull request (2026-10-20; the plan is `docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`, the code and the owner's setup `crates/card-neural/train/`). Neither gates anything.
+Retrains `crates/card-neural`'s two networks on a Modal GPU and delivers them as a pull request (2026-10-20; the plan is `docs/superpowers/plans/2026-10-20-neural-training-pipeline.md`, the code and the owner's setup `crates/card-neural/train/`). Neither gates anything; the delivery's own tests gate a pull request through `ci.yml`'s `neural` job.
 
 - **`neural-train.yml`**: 03:41 UTC on the 1st (run `YYYY-MM`) and dispatch (`detector`, `cpu`, `memory_gib`, `budget_usd`, `smoke`; run `YYYY-MM-DD-HHMM`, `-smoke` after). One job: `modal deploy crates/card-neural/train/modal_app.py` from the triggering commit, then `launch.py` spawns the run on Modal and returns; the summary names the run and how it will be delivered. **`detector` on does not by itself retrain the detector**: the run trains one only when the Volume holds readers' scenes (`real-scenes/`, the owner's to put there — `crates/card-neural/train/README.md`, "The readers' scenes"), and otherwise keeps the current `detector.onnx` and says so in `DONE.json` and the pull request (issue #1526: the 2026-11 run's detector, trained on drawn scenes alone, lost the card on a reader's desk).
 - **The cost cap — $10 a run, the owner's limit**: a dispatch asking more is refused before anything is deployed, `budget.py` holds the run to its budget on Modal (each stage's container time charged as it runs, a stage stopped at its share), and the Modal workspace's own budget is the backstop.

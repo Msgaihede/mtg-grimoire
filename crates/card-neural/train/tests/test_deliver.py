@@ -19,7 +19,7 @@ import deliver  # noqa: E402
 import update_readme as ur  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_deliver_readme import EVIDENCE, bands_json, done_for, neural_table, symbols_json  # noqa: E402
+from test_deliver_readme import EVIDENCE, LAB, bands_json, done_for, neural_table, symbols_json  # noqa: E402
 
 
 def write_json(path: Path, value) -> None:
@@ -206,7 +206,8 @@ class VolumePaths(unittest.TestCase):
 
 
 class Body(unittest.TestCase):
-    before = json.loads((Path(deliver.REPO) / deliver.MODELS / ur.TRAINING_JSON).read_text(encoding="utf-8"))
+    # The record a run is set beside: the tests' own, not `training.json` in git (see `LAB`).
+    before = LAB
     info = {"budget_usd": 10.0, "resources": {"gpu": "L4", "cpu": 16.0, "memory_gib": 24.0}}
 
     def test_opens_with_what_changes_for_a_person_scanning_cards(self):
