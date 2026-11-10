@@ -31,6 +31,7 @@ import { ago } from "@/lib/relativeTime";
 import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { nowSeconds } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { writeFailure } from "@/lib/writes";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PANEL_BUTTON, TOUCH_CODE_ROOM, TOUCH_FIELD, TOUCH_FLOOR } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
@@ -825,8 +826,10 @@ function SupporterSection({
   /** The code the reader is pasting back from the relay's landing page. Cleared by a claim that
    *  worked, and deliberately not by one that was refused — a refused code may be retypable. */
   const [code, setCode] = useState("");
-  /** The last round trip's report, kept until the next press. `undefined` is "no press yet" and
-   *  `null` is the backend's own "there was nothing to do", which are different sentences. */
+  /** The last round trip's report, kept until the next press — and *only* until it: the press
+   *  clears it (`sync`'s `onMutate`), so a refused trip never draws the previous trip's figures
+   *  beside its own refusal (issue #1595). `undefined` is "no report to draw" and `null` is the
+   *  backend's own "there was nothing to do", which are different sentences. */
   const [outcome, setOutcome] = useState<RelayOutcome | null | undefined>(undefined);
 
   const read = useQuery({ queryKey: RELAY_KEY, queryFn: () => ipc.syncRelayStatus() });
@@ -875,6 +878,9 @@ function SupporterSection({
 
   const sync = useMutation({
     mutationFn: () => ipc.syncNow(),
+    // The previous trip's report is not this one's: forgotten the moment the press starts, so a
+    // trip that then fails leaves only its failure on screen.
+    onMutate: () => setOutcome(undefined),
     onSettled: (result) => {
       // **`onSettled`, not `onSuccess`.** A refused trip still moved `last_error` and may have
       // applied part of a pull before it stopped, so the figures have to be re-read either way.
@@ -1096,16 +1102,9 @@ function SupporterSection({
       </PanelAlert>
 
       {/* The refusal itself, in the app's destructive red — a press the reader made did not
-          happen. One line, because only one of the three is ever in flight here. */}
-      <PanelAlert tone="problem">
-        {connect.error
-          ? ipcError(connect.error)
-          : claim.error
-            ? ipcError(claim.error)
-            : sync.error
-              ? ipcError(sync.error)
-              : null}
-      </PanelAlert>
+          happen. **The newest press owns the line** (`writeFailure`): a fixed precedence let a
+          failed Connect Patreon go on masking every later claim and Sync now (issue #1595). */}
+      <PanelAlert tone="problem">{writeFailure([connect, claim, sync])}</PanelAlert>
     </div>
   );
 }
@@ -1382,6 +1381,13 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
     // (`poll.data`) can therefore run its body more than once for the same completed pairing.
     if (poll.data?.stage !== "complete" || completedRef.current) return;
     completedRef.current = true;
+    // **Spend the answer, not just the guard.** `completedRef` dies with this component, while
+    // the disabled poll's `{stage: "complete"}` would sit in the app-lifetime cache until it was
+    // collected — so a reader who left Settings › Sync and came back within `gcTime` remounted
+    // into that cached answer, and this effect toasted *Device paired* and ran `syncNow` a second
+    // time (issue #1595). Removing the entry here leaves nothing for a remount to replay;
+    // `startNewAttempt` still clears it as well, for an attempt that never completed.
+    client.removeQueries({ queryKey: PAIRING_POLL_KEY, exact: true });
     // `PAIRING_KEY` rather than `SYNC_KEY`: what this side of the panel promises is the
     // roster, and that is what a finished pairing changed. The membership and the relay
     // figures are `SupporterSection`'s own reads.
@@ -1402,19 +1408,25 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
   }, [poll.data, client]);
 
   /**
-   * Whichever press last refused — or, now, whichever *poll* did. One line, because only one
-   * thing is ever in flight here.
+   * The refusal the problem line draws: **the newest started write's** (`writeFailure`), never
+   * the first in a fixed list that happens to be holding one. A mutation keeps its error until
+   * *it* runs again, so a precedence order let an old refusal outrank a newer one — a refused
+   * code stayed red under a fresh QR after Cancel and *Pair a device*, and an unreachable relay
+   * from an earlier *Pair a device* hid a typed code's own refusal (issue #1595).
    *
-   * **`poll.error` sits right after `begin`/`accept`, ahead of `confirm` and the roster
-   * mutations.** `begin` and `accept` are how an attempt can fail to *start*; `poll` is that same
-   * attempt failing *while it is running* — an unreachable relay, or a rendezvous answer that
-   * will not parse. That is a more fundamental failure than a stale `confirm` refusal from
-   * earlier in the same attempt, so it is asked first. It is **not** swallowed, unlike the
-   * `syncNow` rejection in the effect above: that one hides a harmless failure *after* a success,
-   * and this is the only signal the reader gets that the thing they are waiting for is never
-   * coming. `Cancel` stays rendered on both those screens regardless of this line, which is what
-   * stops the sentence stranding anyone: reading it still leaves a press that gets back to
-   * `idle`.
+   * **`cancel` is in the list for its timing and nothing else.** Cancel is a press, and what it
+   * did is put the panel back at rest; a refusal from the attempt it ended is not news after it.
+   * Its own failure is not drawn — the flow settles to `idle` either way (its `onSettled`), and a
+   * dead offer stops working with the process.
+   *
+   * **`poll` is a query, so it is seated as a write that started when it last refused.** It is
+   * the running attempt failing — an unreachable relay, a rendezvous answer that will not parse —
+   * and the only signal the reader gets that what they are waiting for is never coming, so it is
+   * not swallowed like the completed pairing's `syncNow` above. A poll that answers well
+   * `submittedAt: 0` instead of its fetch time: it refetches every 1.5 s, and seated by its
+   * answers it would be the newest write within a tick and wipe a `confirm` refusal the reader
+   * had not read yet. `startNewAttempt` removes the entry, so an old attempt's poll refusal does
+   * not outlive it. `Cancel` stays rendered on both polling screens regardless of this line.
    *
    * ⚠️ **The ten-minute expiry is not one of these and used to be.** `pairing::poll` answered
    * `Err(EXPIRED)` and cleared the pending offer in the same breath, so the refusal was exactly
@@ -1425,15 +1437,21 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
    * above into {@link EXPIRED_NOTE}, because a stage survives a retry where the absence of an
    * answer does not.
    */
-  const error =
-    begin.error ??
-    accept.error ??
-    poll.error ??
-    confirm.error ??
-    rename.error ??
-    revoke.error ??
-    leave.error ??
-    null;
+  const refusal = writeFailure([
+    begin,
+    accept,
+    {
+      submittedAt: poll.isError ? poll.errorUpdatedAt : 0,
+      isError: poll.isError,
+      error: poll.error,
+      isSuccess: poll.isSuccess,
+    },
+    confirm,
+    { submittedAt: cancel.submittedAt, isError: false, error: null, isSuccess: cancel.isSuccess },
+    rename,
+    revoke,
+    leave,
+  ]);
 
   const paired = status !== null && status.groupId !== null;
 
@@ -1684,11 +1702,11 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
         </>
       )}
 
-      {/* **One problem line, and a live refusal outranks the obituary.** `error` is whatever
+      {/* **One problem line, and a live refusal outranks the obituary.** `refusal` is whatever
           just failed; `endedNote` is an attempt that quietly ran out of time. Both are the same
           kind of thing to a reader — *the thing you were doing is not happening* — so they share
           a box rather than stacking two red sentences, and the fresher one wins. */}
-      <PanelAlert tone="problem">{error ? ipcError(error) : endedNote}</PanelAlert>
+      <PanelAlert tone="problem">{refusal ?? endedNote}</PanelAlert>
 
       <SupporterSection live={live} openLink={openLink} />
 
