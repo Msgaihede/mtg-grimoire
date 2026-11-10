@@ -2211,6 +2211,40 @@ describe("DecksPage folders", () => {
   });
 
   /**
+   * **A pressed format chip reads only while the drawer draws it** (issue #1532). The chips are
+   * built from the drawer the reader is standing in, and a folder of one format draws none, so a
+   * format pressed at the top level and carried into it emptied the wall with nothing on screen
+   * to un-press. The fence is on the read: walking back finds the chip still pressed.
+   */
+  it("drops a pressed format the drawer draws no chip for, and finds it pressed again on return", async () => {
+    deckFolderList.mockResolvedValue([EDH, LEGENDS]);
+    deckList.mockResolvedValue([BURN, { ...KENRITH, folderId: null }, { ...DRAFT, folderId: 1 }]);
+    const user = userEvent.setup();
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+
+    await user.click(screen.getByRole("button", { name: "Modern format, 1 deck" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /^Kenrith Two-Drops/ })).not.toBeInTheDocument(),
+    );
+
+    // Commander holds one Limited deck: one format, so no chip row — and no stale filter either.
+    await user.click(screen.getByRole("button", { name: "Commander, 1 deck" }));
+    expect(await tileFor("Sunday draft")).toBeInTheDocument();
+    expect(screen.queryByText("No decks match this filter")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Format" })).not.toBeInTheDocument();
+
+    // Back at the top the chip is drawn again, and still pressed.
+    await user.click(screen.getByRole("button", { name: /^All decks/ }));
+    expect(await screen.findByRole("button", { name: "Modern format, 1 deck" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.queryByRole("button", { name: /^Kenrith Two-Drops/ })).not.toBeInTheDocument();
+  });
+
+  /**
    * Scryfall's image policy reaches the folder cards too: an `art` crop has no printed frame, so
    * every illustrator whose work is in the strip is named — and a cover the card database has no
    * artist for is not drawn at all, exactly as on a deck tile.

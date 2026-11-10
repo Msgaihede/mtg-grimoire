@@ -41,7 +41,13 @@ import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape
 import { cn } from "@/lib/utils";
 import { useViewRootRequest } from "@/lib/viewRoot";
 import { CreateDeckDialog } from "./CreateDeckDialog";
-import { deckFormats, filterDecks, NO_DECK_FILTER, type DeckFilter } from "./deckFilter";
+import {
+  deckFormats,
+  effectiveDeckFilter,
+  filterDecks,
+  NO_DECK_FILTER,
+  type DeckFilter,
+} from "./deckFilter";
 import { DeckTile } from "./DeckTile";
 import { TILE_MIN_WIDTH, useDeckWallMarks, wallStyle } from "./deckWall";
 import { type DeckMenuDeps } from "./deckMenu";
@@ -539,14 +545,6 @@ export function DecksPage() {
     () => ({ pips: pipsByDeck, brackets: floorByDeck }),
     [pipsByDeck, floorByDeck],
   );
-  const shown = useMemo(
-    () => sortDecks(filterDecks(here, filter), sort, sortContext),
-    [here, filter, sort, sortContext],
-  );
-  const shownArchived = useMemo(
-    () => sortDecks(filterDecks(archivedHere, filter), sort, sortContext),
-    [archivedHere, filter, sort, sortContext],
-  );
 
   /**
    * The format chips, one per format actually present among the decks **on the wall**.
@@ -571,6 +569,24 @@ export function DecksPage() {
   const formats = useMemo(() => deckFormats(here), [here]);
 
   /**
+   * The filter **as the walls read it** (issue #1532): the pressed formats this drawer still
+   * draws a chip for — {@link effectiveDeckFilter}. A drawer of one format draws no chip row, and
+   * a pressed key no chip represents (a folder of another format, the last Modern deck archived
+   * or re-formatted) would otherwise empty the wall with nothing on screen to un-press. Derived
+   * rather than pruned, so walking back to a level that draws the chip finds it pressed.
+   */
+  const active = useMemo(() => effectiveDeckFilter(filter, formats), [filter, formats]);
+
+  const shown = useMemo(
+    () => sortDecks(filterDecks(here, active), sort, sortContext),
+    [here, active, sort, sortContext],
+  );
+  const shownArchived = useMemo(
+    () => sortDecks(filterDecks(archivedHere, active), sort, sortContext),
+    [archivedHere, active, sort, sortContext],
+  );
+
+  /**
    * Whether anything is narrowing the wall — the one thing the empty sentence below is allowed
    * to claim.
    *
@@ -578,7 +594,7 @@ export function DecksPage() {
    * this must not swallow: a format chip pressed on a drawer where every deck is that format
    * narrows nothing and is still a filter that is on.
    */
-  const filtering = filter.query.trim() !== "" || filter.formats.length > 0;
+  const filtering = active.query.trim() !== "" || active.formats.length > 0;
 
   const setFilterQuery = useCallback(
     (query: string) => setFilter((f) => ({ ...f, query })),
