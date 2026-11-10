@@ -23,6 +23,7 @@ import { wholeWishlistQuery } from "@/features/wishlist/wholeWishlistQuery";
 import { makeFit } from "./fit";
 import {
   activityKey,
+  COLLECTION_ENTRY_HOME_PREFIXES,
   collectionBreakdownKey,
   collectionTotalKey,
   deckCompletionKey,
@@ -141,6 +142,30 @@ describe("shape", () => {
     // Each of the two arguments is part of the question, so each has to change the key.
     expect(valueHistoryKey("set", "cardmarket")).not.toEqual(key);
     expect(valueHistoryKey("type", "tcgplayer")).not.toEqual(key);
+  });
+
+  // The entry settle names these prefixes rather than the root (issue #1570), so each home read
+  // counted from collection entries has to start with one of them — a key that drifted off its
+  // prefix would be a widget a stepper press stops refreshing, with nothing else going red.
+  it("files every entry-counted home read under a prefix the entry settle invalidates", () => {
+    const starts = (key: QueryKey) =>
+      COLLECTION_ENTRY_HOME_PREFIXES.some((prefix) => prefix.every((part, i) => key[i] === part));
+    expect(starts(collectionBreakdownKey("set", MARKETPLACE))).toBe(true);
+    expect(starts(setCompletionKey)).toBe(true);
+    expect(starts(priceMoversKey("30d", "up", MARKETPLACE, 10))).toBe(true);
+    expect(
+      starts(
+        priceMoversKey("30d", "up", MARKETPLACE, 10, {
+          collectionFolders: [1],
+          wishlistFolders: [],
+          cards: [],
+        }),
+      ),
+    ).toBe(true);
+    expect(starts(valueHistoryKey("type", MARKETPLACE))).toBe(true);
+    expect(starts(valueHistoryKey("type", MARKETPLACE, 2))).toBe(true);
+    // And never the list, which is the one read that settle leaves alone on purpose.
+    expect(starts(["collection", "list"])).toBe(false);
   });
 
   // The wishlist's graph (issue #1378): the same shape under the root every wishlist write

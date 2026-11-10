@@ -339,17 +339,24 @@ describe("useCollectionFolders", () => {
    * own comment on `settleOrder` carries the gap in full: a reorder writes `parent_id` as well as
    * `sort_order`, so a level placed under a **locked** parent moves the effective lock — which
    * both `["cards", "search"]` (issue #349) and, since 2026-09-09, `["decks"]` (issue #435) read.
-   * Neither root has ever been settled here. The assertion is left naming one key because that is
-   * what the hook does today; whoever closes the re-parent arm changes both together.
+   * Neither root has ever been settled here. The assertion is left naming those keys because that
+   * is what the hook does today; whoever closes the re-parent arm changes both together.
+   *
+   * **The rule verdicts are the one entry-counted read it does take** (issue #1570): rules inherit
+   * on read, so a folder dragged into or out of a folder with rules changes which copies break
+   * one with no entry moving.
    */
-  it("re-reads the folder list after a reorder, and nothing else", async () => {
+  it("re-reads the folder list and the rule verdicts after a reorder, and nothing else", async () => {
     const { result } = renderHook(() => useCollectionFolders(), { wrapper });
     await waitFor(() => expect(result.current.folders).toHaveLength(2));
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await result.current.reorder.mutateAsync({ parentId: null, ids: [2, 1] });
 
-    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["collection", "folders"] }]]);
+    expect(invalidate.mock.calls).toEqual([
+      [{ queryKey: ["collection", "folders"] }],
+      [{ queryKey: ["collection", "ruleConflicts"] }],
+    ]);
   });
 
   /** A refused reorder re-reads too, `move`'s rule: the refusal is a busy database, a cycle, or an
