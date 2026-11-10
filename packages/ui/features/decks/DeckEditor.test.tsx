@@ -8810,6 +8810,81 @@ describe("DeckEditor multi-select", () => {
   });
 
   /**
+   * **A hidden stack is off the desk, and a range does not run through it** (issue #1533). Three
+   * piles in a row, the middle one hidden in Stacks view: a Shift-click from the first to the last
+   * picks the two cards on screen, and Delete takes those two out and leaves the hidden pile's card
+   * where it is. It used to pick and remove all three.
+   */
+  describe("with a stack hidden", () => {
+    const ALPHA = 1;
+    const BETA = 6;
+    const GAMMA = 7;
+    const PILES: DeckCategory[] = [
+      category(ALPHA, "Alpha", "main", { sortOrder: 0, cardCount: 1 }),
+      category(BETA, "Beta", "main", { sortOrder: 1, cardCount: 1 }),
+      category(GAMMA, "Gamma", "main", { sortOrder: 2, cardCount: 1 }),
+      ...CATEGORIES.slice(1),
+    ];
+    const pile = (id: number) =>
+      document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${id}"]`)!;
+    const cardsIn = (id: number) => pile(id).querySelectorAll(`[${DECK_CARD_ATTR}]`).length;
+
+    async function openWithPiles() {
+      deckGet.mockResolvedValue(
+        detail(
+          {},
+          [
+            card({ name: "Sol Ring", categoryId: ALPHA, categoryName: "Alpha", quantity: 1 }),
+            card({ name: "Ponder", categoryId: BETA, categoryName: "Beta", quantity: 1 }),
+            card({ name: "Opt", categoryId: GAMMA, categoryName: "Gamma", quantity: 1 }),
+          ],
+          PILES,
+        ),
+      );
+      deckCategoryList.mockResolvedValue(PILES);
+      await open();
+    }
+
+    it("leaves a hidden stack's cards out of a Shift-click range and out of Delete", async () => {
+      hiddenStacks.mockResolvedValue([BETA]);
+      await openWithPiles();
+      await waitFor(() => expect(cardsIn(BETA)).toBe(0));
+      expect(cardsIn(ALPHA)).toBe(1);
+      expect(cardsIn(GAMMA)).toBe(1);
+
+      await userEvent.click(screen.getByRole("button", { name: /^Sol Ring/ }));
+      await pressWith("Opt", { shift: true });
+
+      expect(useAppStore.getState().cardSelection?.keys).toEqual([
+        deckCardSlot(ALPHA, "c-Sol Ring", null),
+        deckCardSlot(GAMMA, "c-Opt", null),
+      ]);
+
+      await userEvent.keyboard("{Delete}");
+
+      await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
+      expect(JSON.stringify(deckToCollection.mock.calls)).not.toContain("c-Ponder");
+    });
+
+    /** The variant: a pick made while the stack was drawn is put down when the stack is hidden. */
+    it("drops a pick from the set when its stack is hidden", async () => {
+      await openWithPiles();
+      await userEvent.click(screen.getByRole("button", { name: /^Sol Ring/ }));
+      await pressWith("Ponder", { ctrl: true });
+      expect(useAppStore.getState().cardSelection?.keys).toHaveLength(2);
+
+      fireEvent.contextMenu(pile(BETA));
+      await userEvent.click(await screen.findByRole("menuitem", { name: "Hide" }));
+
+      await waitFor(() =>
+        expect(useAppStore.getState().cardSelection?.keys).toEqual([
+          deckCardSlot(ALPHA, "c-Sol Ring", null),
+        ]),
+      );
+    });
+  });
+
+  /**
    * **The gesture the issue asked for**: one drag, every picked card moved.
    *
    * Driven over the library's own code path — a real `dragstart` on the card's `<li>`, a real
