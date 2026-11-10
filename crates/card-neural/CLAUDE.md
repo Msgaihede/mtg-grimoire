@@ -91,5 +91,19 @@ file's boxes, so a box can be judged by eye before any network is trained for it
   `build-gallery` from `<kind>s.matrix`. A monthly run retrains all four networks, and
   a printing newer than the galleries has no row, so the evidence cannot rule it out until the
   next run (`models/README.md`). Their boxes and thresholds are measured in the lab, never here.
+- **The detector trains on readers' frames among its drawn scenes, or not at all** (issue #1526,
+  2026-11-10). `real_scenes.py` turns the scan inbox's mirror into scenes — each frame with the
+  card's corners, found by matching its Scryfall scan to the frame — and `qd_detect_train.py --real`
+  mixes them in and scores the scans it holds out; the drawn scenes also hold a card in a box, a
+  feed between bars and scenes with nothing to find. A monthly run keeps the current
+  `detector.onnx` unless the Volume holds that folder (`modal_app._detector_kept`): the 2026-11
+  run remade the detector on drawn scenes alone, scored as the lab's had there, and on a reader's
+  deck scanner lost the card. **The folder is readers' photographs: never in git, rebuilt after a
+  deletion request, and the 124 scans up to 2026-10-15 are never in it** — they are the test set
+  (`train/README.md`, "The readers' scenes").
+- **A detector is judged on readers' scans before it ships**: `pnpm scanner:replay` for the scores,
+  and each frame's quad against the registered corners for where it put them
+  (`docs/reference/card-scanner.md` §10, _The card finder on readers' frames_). Its own
+  drawn-scene figures said nothing was wrong.
 - `python -m unittest discover crates/card-neural/train/tests` — no GPU, no network; not part of
   `pnpm verify`.

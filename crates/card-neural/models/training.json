@@ -14,18 +14,21 @@
     }
   },
   "detector": {
-    "run": "2026-11",
-    "where": "modal",
-    "finished_at": "2026-11-01T04:58:57Z",
-    "git_sha": "817165ad6a6049e146ef567b90f79291d29a2383",
+    "run": "det-b",
+    "where": "scanner lab",
+    "finished_at": "2026-11-10T06:13:14Z",
+    "git_sha": null,
     "metrics": {
-      "found": 0.9930851063829788,
-      "corner_err": 0.027722418011322008,
-      "corner_err_p90": 0.045807896356170656,
-      "wrong_way": 0.006427423674343867,
-      "scenes_per_s": 816,
-      "steps": 30000,
-      "usd": 1.313
+      "found": 0.989956057752668,
+      "corner_err": 0.031476790082434,
+      "corner_err_p90": 0.0544552054708943,
+      "wrong_way": 0.00317057704502219,
+      "real_found": 1.0,
+      "real_corner_err": 0.0249,
+      "real_container": 0.0,
+      "real_empty_hit": 0.0,
+      "scenes_per_s": 399,
+      "steps": 30000
     }
   },
   "symbol": {

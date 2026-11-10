@@ -740,6 +740,73 @@ cross-validation on these same scans** (95.2 % card ✓ held out). The five unde
 embedder does not recognise: a foil, a card under binder glare, a Japanese printing, a dark card in a
 dim deck box, one plain miss.
 
+### The card finder on readers' frames
+
+**2026-11-10, issue #1526: the scanner's edges jumped, cards were counted twice, and some were never
+added.** All three were the card finder. The first monthly training run (2026-11, shipped 0.65.0 to
+0.67.0) had remade it on drawn scenes alone, as the lab had made the first (`det-a`), and its scores
+on drawn scenes matched — found 0.993, corner error 2.8 %. Nothing in the run was a reader's camera,
+and the delivery's pull request merged with *replay the readers' scans* unticked. On the scans a
+reader sent with the report — a card at the bottom of a deck scanner's white well — it found no card
+on 19.3 % of the frames and, on the rest, drew its quad round the card on one frame and round the
+box on the next: 4.6 % of frames running overlapped the one before by less than the 0.8 the
+agreement asks of a card lying still (§4), so the count kept starting over; a frame of the box reads
+as no card of the decided one, which is what *another copy laid on it* waits for; and a box handed
+to the recogniser is a crop of plastic, which it sometimes names. `det-a` did not jump there — it
+drew the box, steadily, and decided nothing. Both took a reader's empty mat, empty deck box and
+sheet of paper for a card: each is a rectangle of about a card's shape, and so is the upright
+picture a phone used as a webcam sends between black bars, which is nearly every scan sent so far.
+
+**Since 2026-11-10 `detector.onnx` is `det-b`**: the same network, trained on drawn scenes that hold
+those things — a card in a box, a barred feed, scenes with nothing to find — with readers' own
+frames among them, their corners found by matching the card's Scryfall scan to each frame
+(`crates/card-neural/train/README.md`, "The readers' scenes"). The 124 scans up to 2026-10-15 stay
+the test set and never train it; of the 75 newer ones, 57 trained it and 18 were held out (a
+nineteenth held-out scan was removed after the run, sent with the wrong finish). Each detector
+beside the same recogniser (run 2026-11's embedder, gallery and evidence, thresholds unchanged), the
+replay's Neural pass on every scan sent by 2026-11-10:
+
+| Detector | The 124 test scans: printing ✓ · card ✓ · wrong · undecided | The 69 newer scans of a card | Their 1 335 labelled frames: the quad is the card · what holds it · no quad | Corner error on the card, median · p90 |
+| --- | ---: | ---: | ---: | ---: |
+| `det-a` (to 0.64.0) | 109 · 8 · 1 · 6 | 46 · 2 · 4 · 17 | 65.2 % · 34.8 % · 0 % | 2.4 % · 4.5 % |
+| run 2026-11 (0.65.0 to 0.67.0) | 108 · 9 · 1 · 6 | 47 · 3 · 4 · 15 | 62.3 % · 31.3 % · 6.4 % | 2.6 % · 5.5 % |
+| **`det-b`** | **111 · 9 · 0 · 4** | **61 · 3 · 2 · 3** | **100 % · 0 % · 0 %** | **1.3 % · 2.0 %** |
+
+The corner error is the mean corner distance as a share of the card's height, over the frames where
+the quad is the card; on the held-out scans alone `det-b`'s is 1.7 % · 3.5 %. The one wrong card on
+the 124 under the 2026-11 recogniser (Germination Practicum) is undecided behind `det-b`.
+
+**A card lying still, and an empty lens.** A sent scan is at most two seconds and ends at the press,
+so it cannot show a card counted twice. Each newer scan's last ten frames, played forwards and
+backwards for six seconds — the reader's own frames, only their order made — are a card at rest (69
+runs) or nothing under the lens (6), and every decision is what a tray would have been given:
+
+| Detector | Card at rest: added once · never · twice · a wrong card | Empty lens: a card added | Empty frames with a quad |
+| --- | ---: | ---: | ---: |
+| `det-a` | 47 · 17 · 1 · 4 | 1 of 6 | 67 % |
+| run 2026-11 | 48 · 15 · 2 · 4 | 1 of 6 | 100 % |
+| **`det-b`** | **65 · 2 · 0 · 2** | **0 of 6** | **0 %** |
+
+Of the 16 held-out scans of a card: 15 · 1 · 0 · 0 (11 · 2 · 1 · 2 with run 2026-11's). An empty
+frame with a quad is more than a risk of a false add: `Read::present` stays true, so the stretch
+break (§4) never forgets the last card and the same card laid again adds nothing.
+
+**What it does not show.** Nearly every scan so far is one reader's camera and a handful of places to
+put a card (a deck scanner's well, a deck box, a dark mat, a sheet of paper), and the held-out scans are the same desks as the training's: the 124 are the only scans the
+detector's makers never fitted anything to, and they are that camera too. **What is left is the
+recogniser's**: the two wrong cards on the newer scans (Shelob's Ambush read as Tempt with
+Discovery, a foil Nyota Uhura as The Blue Spirit) have the quad on the card and a wrong look
+accepted at distances 64 and 56, and the three undecided are foils; `neural.json`'s thresholds were
+tuned for the first embedder and have not been tuned again for run 2026-11's.
+
+**How to measure a detector**: replay with its files (`replay --neural-models <dir>`), then
+`python crates/card-neural/train/real_scenes.py score <real scenes> <results.json>` for the quads
+against the registered corners. The at-rest runs and the empty-lens runs (which the replay skips by
+name, so they are fed through a stand-in label) are the scanner lab's
+(`E:\mtg-scanner\scratch\detector-real-2026-11\tools\rest.mjs`, `restscore.mjs`). **A monthly run
+makes a detector only among readers' frames, and is held to floors on the scans it holds out**
+(`modal_app.FLOORS`); without them on its Volume it keeps this one.
+
 ### The printing evidence
 
 **2026-10-21, issue #1324.** The whole-card embedder sees the card through the box
