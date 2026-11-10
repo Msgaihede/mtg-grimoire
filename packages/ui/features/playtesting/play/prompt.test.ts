@@ -75,6 +75,29 @@ describe("optionLabel", () => {
     expect(optionLabel(option({}), target).text).toBe("No more targets");
   });
 
+  it("names a spell's new target, and keeping its targets (issue #1520)", () => {
+    const retarget = { kind: "RetargetChoice" };
+    const answer = (over: Partial<PlaytestOption>) => option({ kind: "RetargetSpell", ...over });
+    const card = { id: 7, name: "Grizzly Bears", cardId: null, text: null, cause: null };
+    expect(promptTitle("RetargetChoice")).toBe("Choose a new target");
+    expect(optionLabel(answer({ cards: [card] }), retarget).text).toBe("Grizzly Bears");
+    expect(optionLabel(answer({ players: ["opponent3"] }), retarget, 3).text).toBe("Opponent 3");
+    expect(optionLabel(answer({}), retarget).text).toBe("Keep the targets");
+    // The board takes a click on a card a new target names.
+    const prompt = {
+      kind: "RetargetChoice",
+      source: "Beast Within",
+      sourceText: null,
+      cause: null,
+      options: [answer({ index: 0 }), answer({ index: 1, cards: [card] })],
+      cancellable: false,
+      pick: null,
+      keyword: null,
+      damage: null,
+    };
+    expect(pickableCards(prompt)).toEqual(new Map([[7, 1]]));
+  });
+
   it("says yes and no, X and modes", () => {
     const may = { kind: "OptionalEffectChoice" };
     expect(optionLabel(option({ kind: "DecideOptionalEffect", yes: true }), may).text).toBe("Yes");

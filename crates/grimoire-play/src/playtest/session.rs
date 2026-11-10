@@ -2174,10 +2174,11 @@ impl Playtest {
                     "selection" if value.get("mana_type").is_some() => {
                         label = value.get("mana_type").and_then(tag_of);
                     }
-                    // Cards, by id or list of ids.
+                    // Cards, by id or list of ids. A retarget's `new_targets` is one entry per
+                    // target of the spell, `null` for each left as it is (issue #1520).
                     "object_id" | "source_id" | "keep" | "target_id" | "equipment_id"
                     | "vehicle_id" | "cards" | "creature_ids" | "targets" | "target" | "kept"
-                    | "selection" => {
+                    | "new_targets" | "selection" => {
                         collect_refs(value, self.eyes(), &mut ids, &mut players);
                     }
                     "order" if !abilities.is_empty() => {
@@ -3554,6 +3555,13 @@ impl Playtest {
     #[cfg(test)]
     pub(super) fn emblems_for_test(&self) -> usize {
         self.state.objects.values().filter(|o| o.is_emblem).count()
+    }
+
+    /// Tests only: the engine's game itself, for a test that sets up what no deck can be told to
+    /// do — an opponent's spell on the stack, a question the engine parks on.
+    #[cfg(test)]
+    pub(super) fn state_for_test(&mut self) -> &mut GameState {
+        &mut self.state
     }
 
     /// Tests only: put a card of `seat`'s from its library onto the battlefield, as if it had
