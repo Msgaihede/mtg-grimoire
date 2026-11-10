@@ -37,7 +37,7 @@ Importing maps raw text or CSV to database entries across two UI steps: text ent
   - Non-dropping rule: Unparseable lines generate `ParseIssue` objects and are presented to the user; lines are never silently omitted.
 - **Heading lookahead (`namesASection`)**: The only lookahead in the parser. Distinguishes category headings from card names by requiring candidate lines to have no quantity, set hint, or brackets, followed by a counted line.
 - **Label parsing**: Caret groups (`^Label,#color^`) split colors at the last comma. Labels are deduplicated by `labelNameKey`, matched against existing user labels, and presented in the preview step.
-- **CSV format detection (`csv.ts`)**: File-level judgement made on the header row (requires ≥2 recognized headers including Name, plus matching column counts). Delimiter auto-detected (`,`, `;`, `\t`). Escaped formulas unescaped; physical line indices tracked for multiline cells.
+- **CSV format detection (`csv.ts`)**: File-level judgement made on the header row (requires ≥2 recognized headers including Name, plus matching column counts). Delimiter auto-detected (`,`, `;`, `\t`). Escaped formulas unescaped; physical line indices tracked for multiline cells. A `"` opens a quoted cell only at a cell's start (blanks allowed) and is literal mid-cell; one never closed is re-read as literal so the following rows survive, and its row (`CsvRecord.unterminated`) becomes a `ParseIssue`, never a card (issue #1553).
 - **MTGO `.dek` XML (`parseDek`, issue #1175)**: The second file-level judgement — text opening on `<?xml` or `<Deck` is read by its `<Cards>` elements (`Name`, `Quantity`, `Sideboard`; a sideboard entry annotated `16777728` is the commander), never line by line. Other XML (Cockatrice `.cod`) is one issue, not one per line. Both pickers offer `.dek` (`DECKLIST_EXTENSIONS`, `DECKLIST_ACCEPT`).
 - **Category and section resolution**:
   - Precedence order: `forcedCategoryName > SECTION_CATEGORY[kind] > line.categoryName > autoCategoryFor(...)`.
@@ -70,6 +70,7 @@ Exporting transforms card lists into canonical formats via `format.ts`: `(cards,
 - **Field selection (`fields.ts`)**:
   - Intersects format capabilities (`FORMAT_FIELDS`) with surface properties (`SURFACE_FIELDS`).
   - `quantity` and `name` are mandatory. Changing format re-initializes defaults.
+  - A line format writes the collector number **only behind a written set** (`(SET) 117`, `[SET] 117`): with `Set code` off or no set on the card the number is left off, since a bare trailing number reads back as part of the name (issue #1553). The CSV keeps its own column. Both writers (`format.ts`, `write.rs`) hold the rule.
   - CSV formula escaping: Cells starting with `=`, `+`, `-`, `@`, `\t`, or `\r` are prefixed with an apostrophe.
 - **Collection & wishlist sweeping (`export/scope.ts`)**: Automatically pages through virtualized lists in 500-row increments before launching export dialogs.
 - **Preview disclosure**: `ExportDialog` opens with the `<pre>` text preview collapsed by default (showing line count in the toggle) to prioritize Copy and Save actions.

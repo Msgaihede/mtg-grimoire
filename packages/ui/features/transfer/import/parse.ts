@@ -971,6 +971,18 @@ function parseCsvGrid(
       return column === undefined ? "" : (row[column] ?? "").trim();
     };
 
+    // A quote this row opened and the file never closed (issue #1553). `readCsv` read on past it
+    // so the rows below are still rows, but this one's cells are a guess — the quote may have
+    // been meant to hold a comma — so it is an issue naming the line, never a card.
+    if (records[r].unterminated === true) {
+      issues.push({
+        lineNumber,
+        raw,
+        reason: "a quote in this row is never closed — close it or remove it",
+      });
+      continue;
+    }
+
     const name = cell("name");
     if (name === "") {
       // A wholly blank row is a spreadsheet's trailing line, not a claim about a card.

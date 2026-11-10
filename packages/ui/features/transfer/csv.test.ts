@@ -140,6 +140,38 @@ describe("readCsv", () => {
     expect(readCsv("").records).toEqual([]);
   });
 
+  /** Issue #1553: a quote opens a quoted cell only where the cell starts. */
+  it("reads a quote inside an unquoted cell as a character, not the start of a quoted one", () => {
+    const { records } = readCsv(
+      'Quantity,Name,Notes\n1,Sol Ring,7" playmat promo\n4,Lightning Bolt,\n',
+    );
+    expect(records.map((r) => r.cells)).toEqual([
+      ["Quantity", "Name", "Notes"],
+      ["1", "Sol Ring", '7" playmat promo'],
+      ["4", "Lightning Bolt", ""],
+    ]);
+    expect(records.some((r) => r.unterminated)).toBe(false);
+  });
+
+  it("still opens a quoted cell after blanks, as a space after the comma has always allowed", () => {
+    expect(parseCsv('1, "Aragorn, the Uniter"\n')).toEqual([["1", " Aragorn, the Uniter"]]);
+  });
+
+  /** Issue #1553: an unclosed quote no longer swallows the rest of the file into one cell. */
+  it("reads on past a quote the file never closes, and flags the row that opened it", () => {
+    const { records } = readCsv('Quantity,Name\n1,"Sol Ring\n4,Lightning Bolt\n2,Shock\n');
+    expect(records.map((r) => [r.line, r.cells, r.unterminated ?? false])).toEqual([
+      [1, ["Quantity", "Name"], false],
+      [2, ["1", '"Sol Ring'], true],
+      [3, ["4", "Lightning Bolt"], false],
+      [4, ["2", "Shock"], false],
+    ]);
+  });
+
+  it("does not let a quote inside a header cell decide the separator", () => {
+    expect(readCsv('Name;Size 7" x 5, approx;Quantity\n').delimiter).toBe(";");
+  });
+
   /** `formula.ts`' writer puts one apostrophe in front of anything a spreadsheet would
    *  evaluate; this is the half that takes it back off, on every cell, header included. */
   it("takes the formula escape off every cell, and only that escape", () => {

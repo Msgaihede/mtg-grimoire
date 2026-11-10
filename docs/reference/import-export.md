@@ -479,6 +479,15 @@ field only when it carries a comma, a quote or a newline, and the reader is a ch
 scanner (a quoted field can hold a comma or a newline, so there is no line-oriented shortcut that is
 correct).
 
+**A quote opens a quoted cell only at the start of one** (blanks before it allowed, so
+`1, "Aragorn, the Uniter"` still reads), and is an ordinary character anywhere else — `7" playmat
+promo` is a note about a seven-inch playmat (issue #1553). Until then a mid-cell quote opened quoted
+mode, and with nothing to close it every row below went into that one note with no issue raised. A
+quote that *does* open a cell and is never closed is taken back as a literal character: the scanner
+reads on from it, so the rows after it are rows, and the row that carried it is flagged
+`unterminated` and reaches the preview as a `ParseIssue` ("a quote in this row is never closed")
+rather than as a card. `detectDelimiter` counts separators under the same rule.
+
 **Reading a CSV is the one *file-level* judgement `parse.ts` makes; every other rule in it is
 per-line.** A format detector would have to choose a reader before it had read anything and would
 be wrong about exactly the lists somebody had hand-edited — which is why every other shape is read
