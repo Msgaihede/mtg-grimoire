@@ -691,7 +691,12 @@ describe("a refused read", () => {
     expect(within(region).queryByText(/^Reading this deck/)).toBeNull();
   });
 
-  it("says a refused write in the same one line", async () => {
+  /**
+   * **A refused Save keeps the dialog up, with the text and the reason** (issue #1549). The band
+   * used to close the dialog at the press, so a refusal left one line in the band and the body
+   * nowhere at all. The band's own line still says it too — it is the band's record of the write.
+   */
+  it("keeps the dialog and its text on a refused write, and says why", async () => {
     deckNotes.mockResolvedValue([]);
     deckNoteCreate.mockRejectedValue("the deck is gone");
     renderBand();
@@ -700,7 +705,37 @@ describe("a refused read", () => {
     await userEvent.click(within(region).getByRole("button", { name: "New note" }));
     await writeAndSave("New note", "Mana base", "Save note");
 
-    expect(await within(region).findByRole("alert")).toHaveTextContent("the deck is gone");
+    const dialog = screen.getByRole("dialog", { name: "New note" });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("the deck is gone");
+    expect(within(dialog).getByLabelText("Body of New note")).toHaveValue("Mana base");
+    expect(
+      within(region)
+        .getAllByRole("alert")
+        .filter((line) => !dialog.contains(line)),
+    ).toHaveLength(1);
+
+    // And a retry that lands closes it, as a first Save would have.
+    deckNoteCreate.mockResolvedValue(note({ id: 9 }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save note" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(deckNoteCreate).toHaveBeenLastCalledWith(4, "", "Mana base", []);
+  });
+
+  /** The close waits for the answer: while the write is out, the dialog and its text stay. */
+  it("closes the dialog when the write answers, not when it is sent", async () => {
+    let answer: (value: DeckNote) => void = () => {};
+    deckNoteCreate.mockReturnValue(new Promise<DeckNote>((resolve) => (answer = resolve)));
+    renderBand();
+
+    const region = await band();
+    await userEvent.click(within(region).getByRole("button", { name: "New note" }));
+    await writeAndSave("New note", "Mana base", "Save note");
+
+    expect(screen.getByRole("dialog", { name: "New note" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save note" })).toBeDisabled();
+
+    answer(note({ id: 9 }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 });
 
