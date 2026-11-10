@@ -963,6 +963,20 @@ note fills the ordinary dim token lands at about 4.3:1, under the 4.5:1 floor fo
 is a contrast bug no test in this repo catches. `text-dim` stays correct everywhere on the page
 background.
 
+**Every note is reachable, and the pin has a press**
+([issue #1583](https://github.com/Msgaihede/mtg-grimoire/issues/1583), 2026-11-10). Two gaps of
+the same kind as `sticky_note_reorder`'s above — plumbing with nothing pressing it. The Board cut
+the list at the tiles its footprint holds and the Pad's rail (tier 2) and index (tier 3) at the
+names they hold, with no way past the cut: the footer said *7 notes* over six tiles, and *New
+note* on a full board made exactly the note nobody could reach. Each cut surface now **pages**
+(`notePage` in `StickyNotesWidget.tsx`) with a `‹ ›` pair once the notes outrun the room; the page
+drawn is the one holding the widget's *shown note* — one id for both layouts, never stored — so
+*New note* names the note it made and the Board turns to its page while the Pad flips to it. And
+`StickyNotePatch.pinned` and `sticky_note_update` always carried the pin while no UI sent it, so
+*Pinned note first* (on by default), the pin dot and the Pad's pinned seed were dead for every
+reader; `StickyNoteDialog` now has a **Pin note** toggle (`aria-pressed`) that travels in the same
+debounced partial patch as the name and the colour, `null` until pressed.
+
 ---
 
 ## 13. The tenth kind — New printings (2026-09-20)

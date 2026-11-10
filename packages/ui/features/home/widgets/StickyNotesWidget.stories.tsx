@@ -192,6 +192,24 @@ export const NewNote: Story = {
 };
 
 /**
+ * The default footprint holds six tiles and the fake seeds eight notes, so the board is two pages
+ * (issue #1583): the footer carries `‹ 1 / 2 ›`, and the notes past the last row are a press away
+ * rather than counted and drawn nowhere.
+ */
+export const BoardPages: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "Notes" }));
+    await expect(await card.findAllByRole("listitem")).toHaveLength(6);
+    await expect(card.getByText("1 / 2")).toBeInTheDocument();
+
+    await userEvent.click(card.getByRole("button", { name: "Next page" }));
+    await expect(card.getByText("2 / 2")).toBeInTheDocument();
+    await expect(card.getAllByRole("listitem")).toHaveLength(2);
+  },
+};
+
+/**
  * Two cells by two — the size `min: [3, 2]` exists to make unreachable, drawn here because the
  * cost of it is the argument for that floor: 96×67 tiles, two preview lines, and every name
  * truncated. The footer loses its words and keeps its press.
@@ -229,7 +247,7 @@ export const BoardPlain: Story = {
 };
 
 /** Pad at the default footprint — tier 2, where the other notes become a rail of names with the
- *  current one in the accent and the rest counted. */
+ *  current one in the accent, a page of names at a time. */
 export const Pad: Story = {
   args: { widget: notes(4, 3, { layout: "pad" }) },
   play: async ({ canvasElement }) => {
