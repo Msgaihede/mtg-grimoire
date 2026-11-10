@@ -57,6 +57,7 @@ import { feltBackground } from "../table/playmats";
 import type { Playmat, Pointed, ZoneLook } from "../table/types";
 import {
   NO_PICKS,
+  carryPicks,
   aimAttacker,
   aimablePlayers,
   pickAttacker,
@@ -333,9 +334,10 @@ export function PlaytestBoard({
   }, []);
   const zone = zoneSize(boardHeight);
 
-  // **The reader's combat picks belong to the view they were made on.** Every answer is a new
-  // view — the step moved on, or the engine refused and the old one came back — and either way
-  // a pick held across it would name a declaration that is no longer being asked for. Adjusted
+  // **The reader's combat picks belong to the declaration they were made on** (issue #1591).
+  // Every answer is a new view, but a Stop toggled, the Sandbox pill or a lobby push answers
+  // with the same declaration still asked for: `carryPicks` keeps what the new offer still
+  // allows, and starts afresh only when the stage, turn or active player moved on. Adjusted
   // while rendering, React's way to reset state that follows a prop without an effect.
   const [held, setHeld] = useState<{ view: PlaytestView | null; picks: Picks }>({
     view,
@@ -343,7 +345,7 @@ export function PlaytestBoard({
   });
   let picks = held.picks;
   if (held.view !== view) {
-    picks = NO_PICKS;
+    picks = carryPicks(held.picks, held.view, view);
     setHeld({ view, picks });
   }
   const setPicks = useCallback(
