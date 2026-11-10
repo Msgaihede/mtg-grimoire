@@ -838,6 +838,7 @@ facts are found as a run of `step.happened`, and the end takes the rest.
 | `attack`                  | Attack with N, or No attack                                                                                                        |                       |
 | `block`                   | Confirm blocks, or No blocks                                                                                                       |                       |
 | busy                      | A spinner and "Opponent is thinking…" ("Playing on…" against the goldfish; "Passing turn…" while `endTurn` runs)                   |                       |
+| busy at the opening hand  | Keep and Mulligan `aria-disabled`, and the instruction line a spinner and what is being done (issue #1593)                         |                       |
 | `over`                    | A centred banner ("You won", "You lost", "Draw"; "On turn N") with New game and the way back ("Back to setup", "Back to the deck") |                       |
 
 **Interactions.**
@@ -920,6 +921,10 @@ For a seat that is not the reader's, and for the sandbox:
 - `PlateFrame`: `aim`, the player as a drop target. `tableDrag.ts`' `useAimTarget` registers one.
 - `LifePlate`: `compact`, a one-row plate 38 px tall; `readOnly`, the number as plain text with the
   sandbox off.
+  A plate sends `setLife` 400 ms after the last press; the board has every plate send a change
+  still in that wait before any other action (`table/lifeCommits.ts`, issue #1593), so `+` then
+  Space reaches the engine in that order, and a plate whose change the engine refused shows the
+  game's life again once the engine is idle.
 - `layoutTable` and `pilesOf`: an `apart` key, so an attacking creature does not join a pile with
   its untouched twin.
 - The zone components: a `size`, whose `compact` puts each zone's count on its card.

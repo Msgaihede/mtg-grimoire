@@ -86,7 +86,8 @@ function setup(view: PlaytestView | null, options: Parameters<typeof board>[2] =
   const { rerender } = render(board(view, handlers, options));
   return {
     ...handlers,
-    rerender: (next: PlaytestView | null) => rerender(board(next, handlers, options)),
+    rerender: (next: PlaytestView | null, more: Parameters<typeof board>[2] = {}) =>
+      rerender(board(next, handlers, { ...options, ...more })),
   };
 }
 
@@ -175,6 +176,14 @@ describe("PlaytestBoard's opening hand", () => {
 
     fireEvent.mouseLeave(goyf);
     expect(preview()).not.toBeInTheDocument();
+  });
+
+  it("offers neither Keep nor Mulligan while the engine is working (issue #1593)", () => {
+    const { onAct } = setup(openingHand(), { busy: true });
+    expect(screen.getByRole("status")).toHaveTextContent("Working…");
+    fireEvent.click(screen.getByRole("button", { name: /^Mulligan to/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep 7" }));
+    expect(onAct).not.toHaveBeenCalled();
   });
 });
 
@@ -689,6 +698,52 @@ describe("PlaytestBoard's sandbox", () => {
     fireEvent.keyDown(window, { key: "t" });
     expect(onAct).toHaveBeenLastCalledWith({ type: "tap", ids: [elves.id], tapped: true });
     expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeEnabled();
+  });
+
+  describe("life steppers (issue #1593)", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    const life = () => screen.getByRole("spinbutton", { name: "Your life" });
+
+    it("send a change still in its wait before the board's next action", () => {
+      const view = sandboxed();
+      const { onAct } = setup(view);
+      fireEvent.click(screen.getByRole("button", { name: "Increase Your life" }));
+      fireEvent.keyDown(window, { key: " " });
+      expect(onAct.mock.calls).toEqual([
+        [{ type: "setLife", seat: "you", life: view.you.life + 1 }],
+        [{ type: "pass" }],
+      ]);
+      act(() => vi.advanceTimersByTime(400));
+      expect(onAct).toHaveBeenCalledTimes(2);
+    });
+
+    it("show the game's life again once a change is refused", () => {
+      const view = sandboxed();
+      const { onAct, rerender } = setup(view);
+      // The engine takes the action at once: the board is busy in the same task.
+      onAct.mockImplementationOnce(() => rerender(view, { busy: true }));
+      fireEvent.click(screen.getByRole("button", { name: "Increase Your life" }));
+      act(() => vi.advanceTimersByTime(400));
+      expect(onAct).toHaveBeenCalledWith({ type: "setLife", seat: "you", life: view.you.life + 1 });
+      expect(life()).toHaveValue(view.you.life + 1);
+
+      // Refused: the same view back, the engine idle.
+      rerender(view, { busy: false });
+      expect(life()).toHaveValue(view.you.life);
+    });
+
+    it("keep an answered change through the round trip", () => {
+      const view = sandboxed();
+      const { onAct, rerender } = setup(view);
+      onAct.mockImplementationOnce(() => rerender(view, { busy: true }));
+      fireEvent.click(screen.getByRole("button", { name: "Increase Your life" }));
+      act(() => vi.advanceTimersByTime(400));
+      const answered = { ...view, you: { ...view.you, life: view.you.life + 1 } };
+      rerender(answered, { busy: false });
+      expect(life()).toHaveValue(view.you.life + 1);
+    });
   });
 
   it("takes no hand edits in the middle of a question, though it is on", () => {
