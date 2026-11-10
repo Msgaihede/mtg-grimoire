@@ -391,6 +391,15 @@ export function PlaytestBoard({
    * a click on a creature that may attack or block still picks it; T taps it.
    */
   const edits = view !== null && view.sandbox && sandboxEditsAt(view.stage) && !locked;
+  /**
+   * **The sandbox's moves work, or will once the engine answers** — {@link edits} without
+   * `busy` (issue #1590). What a zone's dialog is gated on: each card moved out of it sets
+   * `busy` until the engine answers, and a dialog unmounted for that wait would come back with
+   * its own state lost (a Scry 3's count of cards sent out of the window, a search's text). So
+   * the dialog stays open across the wait with its buttons disabled (`disabled={busy}`).
+   */
+  const editsAfterBusy =
+    view !== null && view.sandbox && sandboxEditsAt(view.stage) && !replaying && !waiting;
 
   const ids = useMemo(
     () => (view === null || view.stage === "mulligan" ? null : seen(view)),
@@ -668,10 +677,11 @@ export function PlaytestBoard({
   const lookYou = (l: ZoneLook) => setLook({ look: l, side: "you" });
   const lookOpponent = (l: ZoneLook) => setLook({ look: l, side: "opponent" });
   const lookedAt = look === null || view === null ? undefined : seatOfPlayer(view, look.side);
-  /** A zone's dialog is open. A library is looked through only with the sandbox's moves working;
+  /** A zone's dialog is open. A library is looked through only with the sandbox's moves working
+   *  — or about to again: it stays open while a move it sent is with the engine (issue #1590);
    *  a graveyard or exile is public, and opens read-only without them. */
   const looking =
-    look !== null && lookedAt !== undefined && (look.look.zone !== "library" || edits);
+    look !== null && lookedAt !== undefined && (look.look.zone !== "library" || editsAfterBusy);
   const goldfish = view?.goldfish ?? false;
   /** The goldfish's life has reached 0 on this turn of the reader's; `null` while it is above. */
   const deadOn = goldfish ? (opponent?.deadOn ?? null) : null;
@@ -1310,7 +1320,8 @@ export function PlaytestBoard({
         <LibraryDialog
           look={look.look}
           view={lookedAt}
-          readOnly={!edits}
+          readOnly={!editsAfterBusy}
+          disabled={busy}
           opponent={look.side !== "you"}
           owner={playerPossessive(look.side, opponentCount)}
           onAct={offer}

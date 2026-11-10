@@ -698,6 +698,83 @@ describe("PlaytestBoard's sandbox", () => {
     expect(screen.getByRole("spinbutton", { name: "Your life" })).toBeDisabled();
   });
 
+  // Issue #1590: every move out of a library look sets `busy` until the engine answers. The
+  // dialog must outlive that wait, or it comes back with its own state lost.
+  describe("keeps a library look open while a move from it is with the engine", () => {
+    function rendered(view: PlaytestView) {
+      const handlers = { onAct: vi.fn(), onBack: vi.fn(), onNewGame: vi.fn(), onSkip: vi.fn() };
+      const { rerender } = render(board(view, handlers));
+      return {
+        onAct: handlers.onAct,
+        rerender: (next: PlaytestView, busy: boolean) => rerender(board(next, handlers, { busy })),
+      };
+    }
+    const openLibraryMenu = async () => {
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^Library, 48 cards/ }));
+      await screen.findByRole("menu");
+    };
+    const shown = (dialog: HTMLElement) =>
+      within(dialog)
+        .getAllByRole("group")
+        .map((g) => g.getAttribute("aria-label"));
+
+    it("a Scry 3 shows two cards after one goes to the bottom, not the fourth card down", async () => {
+      const view = sandboxed();
+      const { onAct, rerender } = rendered(view);
+      await openLibraryMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Scry…/ }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Scry 3" }));
+      const dialog = screen.getByRole("dialog", { name: "Scry 3" });
+      expect(shown(dialog)).toEqual(["Forest", "Island", "Llanowar Elves"]);
+
+      const [top, ...rest] = view.you.libraryCards;
+      fireEvent.click(
+        within(within(dialog).getByRole("group", { name: "Forest" })).getByRole("button", {
+          name: "Bottom",
+        }),
+      );
+      expect(onAct).toHaveBeenLastCalledWith({ type: "move", id: top.id, to: "libraryBottom" });
+
+      rerender(view, true);
+      const waiting = screen.getByRole("dialog", { name: "Scry 3" });
+      for (const b of within(waiting).getAllByRole("button", { name: /^(Top|Bottom)$/ }))
+        expect(b).toBeDisabled();
+      expect(within(waiting).getByRole("button", { name: "Done" })).toBeEnabled();
+
+      const moved = { ...top, id: 9_999 };
+      rerender({ ...view, you: { ...view.you, libraryCards: [...rest, moved] } }, false);
+      const after = screen.getByRole("dialog", { name: "Scry 3" });
+      expect(shown(after)).toEqual(["Island", "Llanowar Elves"]);
+      for (const b of within(after).getAllByRole("button", { name: /^(Top|Bottom)$/ }))
+        expect(b).toBeEnabled();
+    });
+
+    it("a search keeps its text across the move", async () => {
+      const view = sandboxed();
+      const { rerender } = rendered(view);
+      await openLibraryMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Search the library…" }));
+      const dialog = screen.getByRole("dialog", { name: "Search your library" });
+      const box = within(dialog).getByRole("textbox", { name: "Find a card by name" });
+      fireEvent.change(box, { target: { value: "tarmo" } });
+      const [goyf] = within(dialog).getAllByRole("group", { name: "Tarmogoyf" });
+      fireEvent.click(within(goyf).getByRole("button", { name: "Hand" }));
+
+      rerender(view, true);
+      expect(
+        within(screen.getByRole("dialog")).getByRole("button", { name: "Shuffle" }),
+      ).toBeDisabled();
+      const index = view.you.libraryCards.findIndex((c) => c.name === "Tarmogoyf");
+      const libraryCards = view.you.libraryCards.filter((_, i) => i !== index);
+      rerender({ ...view, you: { ...view.you, libraryCards, library: 47 } }, false);
+      expect(
+        within(screen.getByRole("dialog", { name: "Search your library" })).getByRole("textbox", {
+          name: "Find a card by name",
+        }),
+      ).toHaveValue("tarmo");
+    });
+  });
+
   it("is turned on and off by the chip in the top band", () => {
     const { onAct, rerender } = setup(turnFive().view);
     const chip = screen.getByRole("button", { name: "Sandbox" });
