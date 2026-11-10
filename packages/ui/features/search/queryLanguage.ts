@@ -302,7 +302,7 @@ export const QUERY_KEYWORDS: readonly KeywordSpec[] = [
     defaultOp: "gte",
     ops: COMPARISONS,
     example: "c>=rg",
-    blurb: "Card colors — letters, a guild or shard, m, or a count",
+    blurb: "Card colors — letters, a color name, a guild or shard, m, or a count",
     section: "Colors and mana",
   },
   {
@@ -712,12 +712,28 @@ const YEAR = /^\d{4}$/;
 
 /**
  * Every colour *name* Scryfall's `c:` and `id:` read, plus `m`/`multicolor`, as keys of
- * {@link keywordKey}. Rust's `color_letters` turns a name into its letters; this side only has to
- * know that the value is one, so `c:esper` is a term and `c:green` stays a word.
+ * {@link keywordKey}. Rust's `color_value` turns a name into its letters; this side only has to
+ * know that the value is one, so `c:esper`, `c:green` and `c:colorless` are all terms.
+ *
+ * **The same names as `filters.rs`' `COLOR_NAMES`, plus the four multicolour spellings its
+ * `color_value` matches first** — `ipc.test.ts` holds the two together, as it does `IS_VALUES`.
+ * They drifted once (issue #1564): Rust answered `c:red` while this set left it out, so the box
+ * sent it to full-text search and `-c:red` excluded nothing.
  */
-const COLOR_NAMES = new Set([
+export const COLOR_NAMES: ReadonlySet<string> = new Set([
   "m",
+  "multi",
   "multicolor",
+  "multicolour",
+  // The five colours and colourless.
+  "white",
+  "blue",
+  "black",
+  "red",
+  "green",
+  "c",
+  "colorless",
+  "colourless",
   // Guilds.
   "azorius",
   "dimir",
@@ -1060,7 +1076,10 @@ function predicateValue(field: PredicateField, raw: string, op: PredicateOp): st
       return numericValue(raw);
     case "colors":
     case "colorIdentity":
-      return COLOR_LETTERS.test(raw) || COUNT.test(raw) || COLOR_NAMES.has(key) ? raw : null;
+      // A name goes out as its key: Rust compares names whole, so `glint-eye` sent as typed
+      // would miss `glinteye` and be read letter by letter — as G alone.
+      if (COLOR_NAMES.has(key)) return key;
+      return COLOR_LETTERS.test(raw) || COUNT.test(raw) ? raw : null;
     case "manaCost":
       return MANA_COST.test(raw) ? raw : null;
     case "devotion":
