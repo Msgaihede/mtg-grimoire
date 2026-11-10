@@ -1450,7 +1450,9 @@ function Body({
     // A deck's copy is the deck's to count (issue #1537): the Collection page's sentence, said at
     // the press rather than after a write the backend would refuse.
     const held =
-      scope.quantity === "owned" && rows[0] ? deckCustodyRefusal(collectionFolders, rows[0]) : null;
+      scope.quantity === "owned" && ownedRows[0]
+        ? deckCustodyRefusal(collectionFolders, ownedRows[0])
+        : null;
     if (held !== null) {
       setRefusal(held);
       return;
