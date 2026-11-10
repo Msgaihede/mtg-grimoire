@@ -109,6 +109,54 @@ describe("the link a reader pastes", () => {
     expect(useAppStore.getState().openedShares).toEqual([]);
   });
 
+  /**
+   * ⚠️ **A cancelled open stays cancelled** (issue #1578). The fetch outlives the press of Cancel
+   * on *Opening…*, and when a slow link answered it used to be remembered and navigated to anyway —
+   * switching the reader off the binder they were looking at, and dropping its ticks with it.
+   */
+  it("does not open a link whose dialog was cancelled while it was still answering", async () => {
+    let answer!: (value: unknown) => void;
+    shareOpen.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const { onClose, onOpened } = mount();
+    await userEvent.type(field(), LINK);
+    await userEvent.click(openButton());
+    expect(await screen.findByRole("button", { name: "Opening…" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    answer(JSON.parse(golden));
+    // The answer is in, and nothing acted on it: the box reads as a fresh one again.
+    expect(await screen.findByRole("button", { name: "Open collection" })).toBeInTheDocument();
+    await Promise.resolve();
+    expect(onOpened).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().openedShares).toEqual([]);
+  });
+
+  /** The same for a refusal: a sentence about a press the reader took back is not theirs to read. */
+  it("does not show the refusal of an open that was cancelled", async () => {
+    let refuse!: (reason: unknown) => void;
+    shareOpen.mockReturnValue(
+      new Promise((_, reject) => {
+        refuse = reject;
+      }),
+    );
+    mount();
+    await userEvent.type(field(), LINK);
+    await userEvent.click(openButton());
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    refuse("That shared collection is no longer available.");
+    await waitFor(() => expect(shareOpen).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   /** An empty box has nothing to open, and the control says so without leaving the tab order. */
   it("greys the press until something has been typed", async () => {
     mount();
@@ -148,7 +196,10 @@ describe("the link a reader pastes", () => {
    */
   it("says exactly what the crate says, word for word", () => {
     const declared = /pub const NOT_A_LINK: &str = "([^"]*)";/.exec(publishRs);
-    expect(declared, "share::publish::NOT_A_LINK is no longer a plain string literal").not.toBeNull();
+    expect(
+      declared,
+      "share::publish::NOT_A_LINK is no longer a plain string literal",
+    ).not.toBeNull();
     expect(declared?.[1]).toBe(NOT_A_SHARE_LINK);
   });
 });

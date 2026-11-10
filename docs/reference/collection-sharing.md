@@ -1036,7 +1036,15 @@ picked copies onto one wish per printing and finish, offers the wishlist cabinet
 copies are already on the reader's list, since `wishlist_add` folds onto the grain and a second
 add would otherwise be silent. **The tick is gated on the same answer the figure line is**: against
 the empty index every card reads _wanted 0_, so a want list built during the sweep would offer to
-add cards the reader already wants with nothing on screen saying so.
+add cards the reader already wants with nothing on screen saying so. **A tick is filed under the
+row's grain and ordinal, never its position** (issue #1578): a re-check — the _Check for an update_
+press or the fifteen-minute timer — replaces the snapshot under the same link, and a tick that was
+an array index moved onto the next card down when the owner republished with a card in front of
+it. Keyed by printing, finish, folder, condition and language (and the ordinal among rows that
+share all five), it stays on its card, and one whose row went resolves to nothing. The picked
+folder is fenced the same way — read only while the new snapshot still draws it — and the paste
+dialog acts on a fetch only while the press that started it is still the live one, so a link
+cancelled on _Opening…_ is not opened when it answers.
 
 **The cross-reference is the reason to open a share in the app at all** — _you own 2 · you want 3_,
 from two sweeps over the reader's own lists. Three things about it:

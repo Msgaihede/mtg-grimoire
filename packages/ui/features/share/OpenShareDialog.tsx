@@ -12,7 +12,7 @@
  * the sentence saying so belongs beside the box they typed it into rather than on a page they
  * would first have to be navigated to.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog } from "@/components/Dialog";
 import { BUTTON } from "@/features/settings/controls";
@@ -93,6 +93,24 @@ export function OpenShareDialog({
   const [opening, setOpening] = useState(false);
   const openShare = useAppStore((s) => s.openShare);
   const client = useQueryClient();
+  /**
+   * Which press of *Open collection* is the live one, bumped by every close.
+   *
+   * ⚠️ **A fetch outlives the dialog it was started from** (issue #1578). A slow link still
+   * answers after the reader pressed Cancel or Escape on *Opening…*, and it used to open anyway:
+   * the view switched to a binder the reader had just said no to, and — `Binder` being keyed by
+   * its link — the ticks on the binder they were looking at went with it. So an answer is acted
+   * on only while its attempt is still the current one; a close, or a later press, retires it.
+   */
+  const attempt = useRef(0);
+
+  const close = () => {
+    attempt.current += 1;
+    // The retired fetch will not reset this, so the close does: reopened, the box must not still
+    // read *Opening…* over a press nobody is waiting for.
+    setOpening(false);
+    onClose();
+  };
 
   const submit = async () => {
     const link = shareLinkFrom(text);
@@ -100,19 +118,23 @@ export function OpenShareDialog({
       setRefusal(NOT_A_SHARE_LINK);
       return;
     }
+    const mine = (attempt.current += 1);
     setRefusal(null);
     setOpening(true);
     try {
       // `fetchQuery` rather than a bare call: the answer lands in the cache under the key the
       // view reads, so the binder is already there when the reader arrives at it.
       await client.fetchQuery(sharedSnapshotQuery(link));
+      // Cached all the same — a reader who pastes the link again is answered at once — but
+      // neither remembered nor navigated to.
+      if (attempt.current !== mine) return;
       openShare(link);
       onOpened(link);
-      onClose();
+      close();
     } catch (e) {
-      setRefusal(ipcError(e));
+      if (attempt.current === mine) setRefusal(ipcError(e));
     } finally {
-      setOpening(false);
+      if (attempt.current === mine) setOpening(false);
     }
   };
 
@@ -123,8 +145,8 @@ export function OpenShareDialog({
       subtitle="Paste a shared collection link."
       closeLabel="Close"
       size="w-[32rem]"
-      onDismiss={onClose}
-      onClose={onClose}
+      onDismiss={close}
+      onClose={close}
     >
       <form
         className="flex flex-col gap-4 p-5"
@@ -182,7 +204,7 @@ export function OpenShareDialog({
         </p>
 
         <div className="flex justify-end gap-2">
-          <button type="button" onClick={onClose} className={cn(BUTTON, "border-border")}>
+          <button type="button" onClick={close} className={cn(BUTTON, "border-border")}>
             Cancel
           </button>
           <button
