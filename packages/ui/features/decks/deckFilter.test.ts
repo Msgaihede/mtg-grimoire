@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { DeckRow } from "@/lib/ipc";
-import { NO_DECK_FILTER, deckFormats, filterDecks, type DeckFilter } from "./deckFilter";
+import {
+  NO_DECK_FILTER,
+  deckFormats,
+  effectiveDeckFilter,
+  filterDecks,
+  type DeckFilter,
+} from "./deckFilter";
 
 let nextId = 1;
 
@@ -206,5 +212,30 @@ describe("deckFormats", () => {
         .map((f) => f.key)
         .sort(),
     ).toEqual(["commander", "paper-edh"]);
+  });
+});
+
+describe("effectiveDeckFilter — only the chips that are drawn (issue #1532)", () => {
+  const MODERN = { key: "modern" };
+  const COMMANDER = { key: "commander" };
+  const STANDARD = { key: "standard" };
+  const pressed = (...formats: string[]): DeckFilter => ({ query: "bolt", formats });
+
+  it("hands the filter back untouched when every pressed format is drawn", () => {
+    const filter = pressed("modern");
+    expect(effectiveDeckFilter(filter, [COMMANDER, MODERN])).toBe(filter);
+    expect(effectiveDeckFilter(NO_DECK_FILTER, [])).toBe(NO_DECK_FILTER);
+  });
+
+  it("drops a pressed format no chip represents, and keeps the rest and the query", () => {
+    expect(effectiveDeckFilter(pressed("modern", "commander"), [COMMANDER, STANDARD])).toEqual(
+      pressed("commander"),
+    );
+  });
+
+  it("drops every pressed format where the row draws no chip at all", () => {
+    // One format is no chip row (`formats.length > 1`), so even its own key is not drawn.
+    expect(effectiveDeckFilter(pressed("modern"), [MODERN])).toEqual(pressed());
+    expect(effectiveDeckFilter(pressed("modern"), [])).toEqual(pressed());
   });
 });

@@ -556,23 +556,37 @@ export function DeckDesk({
    * substring test it always was) and its typed terms (`matching`, a set of printings Rust
    * answered, or `null` while no term narrows). See {@link useDeckCardQuery}.
    */
+  /**
+   * The label chips **as the filter reads them** (issue #1532) — the pressed ids this list's
+   * toolbar still draws a chip for, fenced exactly as the editor fences {@link gcFilter} and
+   * {@link missingFilter}. `labels` is what *this list* is wearing, so taking a label off its last
+   * card, removing that card, deleting the label or switching between Actual and Theory takes the
+   * chip away — and a stored id left standing would narrow the desk to nothing with nothing on
+   * screen to un-press. Gating the derivation rather than pruning `labelIds` keeps it a read: an
+   * undo that brings the label back finds its chip pressed where the reader left it.
+   */
+  const activeLabelIds = useMemo(
+    () => labelIds.filter((id) => labels.some((label) => label.id === id)),
+    [labelIds, labels],
+  );
+
   const shown = useMemo(() => {
     // Whether *any* chip in that row is pressed, which is the one thing the OR needs to know:
     // no chip is no chip filter, exactly as an empty `labelIds` was on its own.
-    const chips = labelIds.length > 0 || gcFilter || missingFilter;
+    const chips = activeLabelIds.length > 0 || gcFilter || missingFilter;
     if (!needle && !chips && matching === null) return cards;
     return cards.filter(
       (card) =>
         (!chips ||
           (gcFilter && card.gameChanger === true) ||
           (missingFilter && isShort(card)) ||
-          (card.labelId !== null && labelIds.includes(card.labelId))) &&
+          (card.labelId !== null && activeLabelIds.includes(card.labelId))) &&
         needleMatches(card, needle) &&
         // The typed terms, answered per printing — so a foil and a regular copy of one card,
         // or one card in two piles, always stand or fall together.
         (matching === null || matching.has(card.cardId)),
     );
-  }, [cards, needle, matching, labelIds, gcFilter, missingFilter]);
+  }, [cards, needle, matching, activeLabelIds, gcFilter, missingFilter]);
 
   const groups = useMemo(
     // No currency any more: the rows this groups arrived priced at the selected marketplace,

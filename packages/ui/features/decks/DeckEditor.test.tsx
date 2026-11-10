@@ -1973,6 +1973,48 @@ describe("DeckEditor", () => {
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
   });
 
+  /**
+   * **The label chips are fenced as the ledger's presses are** (issue #1532): a pressed id reads
+   * only while its chip is drawn. Taking the label off its last card (or removing that card,
+   * deleting the label, or switching to a list nobody labelled with it) takes the chip away, and
+   * a stored id left standing narrowed the desk to nothing with nothing on screen to un-press.
+   * The fence is on the read, so the label coming back finds its chip still pressed.
+   */
+  it("keeps the deck on screen when a pressed label's chip goes, and remembers the press", async () => {
+    const WINCON = { id: 7, name: "Wincon", color: "gold", cardCount: 4 };
+    const labelled = () =>
+      detail(
+        {},
+        [bolt({ labelId: 7, labelName: "Wincon", labelColor: "gold" }), card({ name: "Bear" })],
+        CATEGORIES,
+        [WINCON],
+      );
+    deckGet.mockResolvedValue(labelled());
+
+    await open();
+    await userEvent.click(await screen.findByRole("button", { name: "Wincon" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Bear/ })).toBeNull());
+
+    // The label leaves its last card. Every write re-reads the deck, which brings the rows in.
+    deckGet.mockResolvedValue(detail({}, [bolt(), card({ name: "Bear" })], CATEGORIES, []));
+    await writeToDeck("Burn unlabelled");
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: CHIP_ROW })).not.toBeInTheDocument(),
+    );
+    // The chip went, and the filter it was driving went with it.
+    expect(await screen.findByRole("button", { name: /^Bear/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+
+    // …and comes back pressed: nothing cleared the id, so this is the state the reader left.
+    deckGet.mockResolvedValue(labelled());
+    await writeToDeck("Burn labelled again");
+    expect(await screen.findByRole("button", { name: "Wincon" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await waitFor(() => expect(screen.queryByRole("button", { name: /^Bear/ })).toBeNull());
+  });
+
   /** Each chip wears its label's colour (issue #995), the same square the card modal's label
    *  dropdown draws — and only as decoration: the chip's name is still the label's alone. */
   it("draws each label chip with its colour swatch", async () => {

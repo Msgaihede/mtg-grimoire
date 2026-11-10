@@ -94,6 +94,30 @@ export function filterDecks(decks: readonly DeckRow[], filter: DeckFilter): Deck
 }
 
 /**
+ * The filter **as the wall reads it**: the pressed formats a drawn chip still represents (issue
+ * #1532).
+ *
+ * The chips are built from the drawer the reader is standing in and drawn only when there are
+ * two or more ({@link deckFormats}, and `DecksPage`'s `formats.length > 1`), but
+ * {@link DeckFilter.formats} is held across drawers. A key no drawn chip represents — a folder of
+ * one other format, the only Modern deck archived, deleted or re-formatted — is a filter nothing
+ * on screen can un-press, so it is not asked. The same rule the deck editor's Game Changers and
+ * Missing presses follow: gate the read, not the state, so walking back to a level that draws the
+ * chip finds it still pressed.
+ *
+ * Returns `filter` itself when nothing is dropped, so a memo keyed on the answer stays put.
+ */
+export function effectiveDeckFilter(
+  filter: DeckFilter,
+  formats: readonly { key: string }[],
+): DeckFilter {
+  if (filter.formats.length === 0) return filter;
+  const drawn = formats.length > 1 ? formats : [];
+  const kept = filter.formats.filter((key) => drawn.some((format) => format.key === key));
+  return kept.length === filter.formats.length ? filter : { ...filter, formats: kept };
+}
+
+/**
  * The chips the row offers: the formats these decks are actually in, with a count each.
  *
  * **Only the formats present**, which is faceting rather than a picker — a chip for Pauper in a
