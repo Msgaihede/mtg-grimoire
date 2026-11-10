@@ -2074,6 +2074,18 @@ pub(crate) fn release_unclaimed_copies(
 /// [`entry_finish`]) displaces nothing. Every other copy in the group is still the sweep's to
 /// judge, with the plan's claims, so issue #1112's eviction cannot come back through here.
 ///
+/// **The cut is a caller too** ([issue #1536](https://github.com/Msgaihede/mtg-grimoire/issues/1536)).
+/// [`crate::collection_alloc::deck_to_collection`] — the press the editor sends every live step
+/// down through — released up to the cut quantity through [`release_group_copies`], which clamps
+/// only at what the group holds. On a line the folder backs only in part (4 listed, 2 held) a
+/// step down filed an owned copy although the copy that was cut was one the reader never had,
+/// and cutting a Main row whose one copy the Sideboard still names took that copy out. It calls
+/// this now, after its `deck_cards` write, so the two kinds of removal agree whatever the
+/// folder holds.
+///
+/// The answer is [`release_group_copies`]' [`Released`] — what moved and where it landed, the
+/// two facts that cut reports — and nothing when the clamp left nothing to take.
+///
 /// The `live` fence is here for [`release_unclaimed_copies`]' reason: a plan holds no cards.
 /// Called inside the caller's transaction, **after** the `deck_cards` write, so the claim it reads
 /// is the finished list's.
@@ -2084,12 +2096,16 @@ pub(crate) fn release_displaced_copies(
     card_id: &str,
     finish: Option<&str>,
     displaced: i64,
-) -> Result<(), String> {
+) -> Result<Released, String> {
+    let nothing = Released {
+        moved: 0,
+        landed: None,
+    };
     if variant != LIVE || displaced <= 0 {
-        return Ok(());
+        return Ok(nothing);
     }
     let Some(group) = deck_group(tx, deck_id)? else {
-        return Ok(());
+        return Ok(nothing);
     };
     let finishes = printing_finishes(tx, card_id)?;
     let played = entry_finish(finish, finishes.as_deref());
@@ -2124,10 +2140,9 @@ pub(crate) fn release_displaced_copies(
         .map_err(|e| e.to_string())?;
     let take = displaced.min(held - still_claimed);
     if take <= 0 {
-        return Ok(());
+        return Ok(nothing);
     }
-    release_group_copies(tx, deck_id, card_id, finish, take)?;
-    Ok(())
+    release_group_copies(tx, deck_id, card_id, finish, take)
 }
 
 /// What the **live** list claims, per `(card_id, played finish)` — [`entry_finish`]'s grain, the
