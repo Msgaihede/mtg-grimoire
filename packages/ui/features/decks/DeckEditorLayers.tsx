@@ -225,8 +225,18 @@ export type Layer =
    * `wishes` is never empty — {@link chooseWish} writes outright for none and asks for one or
    * more, because the read answers every printing and finish of the card and a lone line is not
    * certainly the cardboard just recorded.
+   *
+   * `openedAt` is the press's clock (`Date.now()`), and it is what makes the panel's refusal
+   * this opening's own: a refusal whose write was submitted before it is about an earlier
+   * opening, even of the same row on the same card (see `unwishFailure`).
    */
-  | { kind: "quickUnwish"; card: DeckCard; copies: number; wishes: readonly DeckQuickAddWish[] }
+  | {
+      kind: "quickUnwish";
+      card: DeckCard;
+      copies: number;
+      wishes: readonly DeckQuickAddWish[];
+      openedAt: number;
+    }
   | { kind: "history" }
   | { kind: "theoryDiff" }
   | { kind: "settings" }
@@ -539,11 +549,17 @@ export function DeckEditorLayers({
    * `variables` are what tell the two apart — this dialog is the only presser that sends both a
    * `wishId` and *this* card — and reading them is a derivation rather than a `reset()`, which
    * would take the banner's memory of that earlier refusal away with it.
+   *
+   * **And the write's `submittedAt` against the opening's `openedAt`**, which is the case the
+   * variables cannot see: a refused Record, Cancel, and the same row opened again on the same
+   * card sends the same `wishId` and card, so without it the fresh question opened already
+   * showing the last attempt's refusal (issue #1543). Still a derivation, for the reason above.
    */
   const unwishVariables = deck.quickAddToCollection.variables;
   const unwishFailure =
     unwish !== null &&
     deck.quickAddToCollection.isError &&
+    deck.quickAddToCollection.submittedAt >= unwish.openedAt &&
     unwishVariables !== undefined &&
     unwishVariables.wishId !== null &&
     unwishVariables.card.cardId === unwish.card.cardId

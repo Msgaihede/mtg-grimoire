@@ -1,7 +1,7 @@
 import { useId, type JSX, type ReactNode } from "react";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { Dialog } from "@/components/Dialog";
-import { ipc, type CardDetail, type OracleTagStatus } from "@/lib/ipc";
+import { ipc, ipcError, type CardDetail, type OracleTagStatus } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cardDetailKey } from "./cardDetailKey";
@@ -86,16 +86,20 @@ export function OracleTagsDialog(): JSX.Element {
       onDismiss={close}
       onClose={close}
     >
-      <Body card={card.data ?? null} oracleId={oracleId} tags={tags} status={status} />
+      <Body card={card} oracleId={oracleId} tags={tags} status={status} />
     </Dialog>
   );
 }
 
-/** One query's two facts, so {@link Body} can be handed a result without importing TanStack's
- *  whole observer type — and so a story or a test can stage one by hand. */
+/** One query's four facts, so {@link Body} can be handed a result without importing TanStack's
+ *  whole observer type — and so a story or a test can stage one by hand. The error pair is
+ *  `NotesOverlay`'s: without it a rejected read fell through to the empty sentence, which is the
+ *  one state a failure must never be mistaken for (issue #1543). */
 interface Reading<T> {
   data: T | undefined;
   isPending: boolean;
+  isError: boolean;
+  error: unknown;
 }
 
 /**
@@ -108,7 +112,7 @@ function Body({
   tags,
   status,
 }: {
-  card: CardDetail | null;
+  card: Reading<CardDetail | null>;
   oracleId: string | null;
   tags: Reading<{ oracleId: string; slugs: string[] }[]>;
   status: Reading<OracleTagStatus>;
@@ -121,10 +125,23 @@ function Body({
   return (
     <>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {card === null ? (
+        {card.isError ? (
+          // **Before every other arm and in a colour of its own** — `NotesOverlay`'s rule: a
+          // failed card read used to draw "Loading card…" for as long as the panel stood open.
+          <ReadFailed>Couldn't read this card — {ipcError(card.error)}.</ReadFailed>
+        ) : card.isPending ? (
           <Note>Loading card…</Note>
+        ) : // `card_detail` answers `null` for an id `cards` has no row for, which is a real state
+        // rather than a failure: a collection or a deck can hold a printing the corpus has dropped.
+        (card.data ?? null) === null ? (
+          <Note>This printing is no longer in the card database.</Note>
         ) : oracleId === null ? (
           <Note>{ORACLE_TAGS_NO_ORACLE_CARD}</Note>
+        ) : tags.isError ? (
+          // Before the pending arm, and never the empty sentence below: "No oracle tags for this
+          // card" over a read that never answered (a database busy with a sync) is a false claim
+          // about the card. The status read keeps its own quiet fallback — see the last arm.
+          <ReadFailed>Couldn't read this card's oracle tags — {ipcError(tags.error)}.</ReadFailed>
         ) : tags.isPending || status.isPending ? (
           // Both reads, not just the tag one: the sentence an empty answer gets is *decided* by
           // the status row, so drawing before it lands would flash whichever of the two claims
@@ -178,4 +195,15 @@ function Body({
  */
 function Note({ children }: { children: ReactNode }) {
   return <p className="text-sm leading-relaxed text-dim">{children}</p>;
+}
+
+/** A read that failed, said as one: {@link Note}'s one-text-node shape in the destructive colour,
+ *  and `role="alert"` for `NotesOverlay`'s reason — the press that opened this panel was on
+ *  another dialog and the eye has left it. */
+function ReadFailed({ children }: { children: ReactNode }) {
+  return (
+    <p role="alert" className="text-sm leading-relaxed text-destructive">
+      {children}
+    </p>
+  );
 }

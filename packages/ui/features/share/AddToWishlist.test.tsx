@@ -296,6 +296,46 @@ describe("adding picked rows from somebody else's binder", () => {
     });
   });
 
+  /**
+   * Issue #1543: "Added 1 of 2. …" is a sentence about one press. Over a different selection it
+   * is a refusal for something the reader did not do; reopened over the same one, the button's
+   * own "the remaining N" carries what the ledger still knows.
+   */
+  it("drops the partial refusal over a new selection and on reopening", async () => {
+    const user = userEvent.setup();
+    wishlistAdd
+      .mockResolvedValueOnce({ id: 1, quantity: 1, removed: false })
+      .mockRejectedValueOnce("The card database is busy finishing a sync.");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const two = [card(), card({ id: "sol", n: "Sol Ring", s: "c21", cn: "263" })];
+    const dialog = (open: boolean, cards: readonly ShareCard[]) => (
+      <QueryClientProvider client={client}>
+        <AddToWishlist
+          open={open}
+          cards={cards}
+          index={EMPTY_INDEX}
+          onClose={vi.fn()}
+          onAdded={vi.fn()}
+        />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(dialog(true, two));
+    await screen.findByRole("option", { name: "Trade targets" });
+    await user.click(addButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Added 1 of 2 cards/);
+
+    rerender(dialog(false, two));
+    rerender(dialog(true, two));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add the remaining 1 card" })).toBeInTheDocument();
+
+    wishlistAdd.mockRejectedValueOnce("The card database is busy finishing a sync.");
+    await user.click(screen.getByRole("button", { name: "Add the remaining 1 card" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Added 1 of 2 cards/);
+    rerender(dialog(true, [card({ id: "ring", n: "Sol Ring", s: "c21", cn: "263" })]));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   /** Issue #1173: pressing Add again after a partial add adds only the rest — the first press's
    *  cards are not raised to 2. */
   it("adds only the cards that did not land when pressed again", async () => {

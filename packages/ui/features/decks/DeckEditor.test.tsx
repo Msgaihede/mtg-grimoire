@@ -7653,6 +7653,38 @@ describe("DeckEditor — the Collection submenu", () => {
   });
 
   /**
+   * **Nor is the last opening's refusal, on the same row of the same card** (issue #1543): a
+   * refused Record, Cancel, and the same question asked again sends the same `wishId` and card, so
+   * only the opening's own clock (`openedAt`) tells this question from the last one.
+   */
+  it("does not reopen the wish question on the last opening's refusal", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue(WISHES);
+    deckQuickAddToCollection.mockRejectedValue(new Error("that wishlist line is not there"));
+    await open();
+    await collectionMenu();
+
+    const row = "Quick add 4 and remove from wishlist";
+    await userEvent.click(screen.getByRole("menuitem", { name: row }));
+    let dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Couldn't record those copies",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Which wishlist item?" }),
+      ).not.toBeInTheDocument(),
+    );
+
+    await collectionMenu();
+    await userEvent.click(screen.getByRole("menuitem", { name: row }));
+    dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
    * The caret goes back to the card the reader right-clicked, which is `ContextMenu`'s half of
    * the contract met by this editor's: `run` focuses the opener *before* it calls a row, so
    * `document.activeElement` read at the press is exact — and it is read **before** the await,

@@ -977,6 +977,10 @@ function Body({
    * whole walk — so per-card state is reset during render here instead.
    */
   const [melded, setMelded] = useState<MeldRelation | null>(null);
+  /** What a write this file makes was refused with, or `null`. Superseded by the next press,
+   *  which is every banner's rule on these pages — and by the next card, below: a refusal is
+   *  about the card it was pressed on, and the walk does not remount this body. */
+  const [refusal, setRefusal] = useState<string | null>(null);
   if (shownFace !== cardId) {
     setShownFace(cardId);
     setFace(0);
@@ -985,11 +989,8 @@ function Body({
     // toggle from the printing that arrived, so a finish carried across the step would be this
     // host answering for a press made about a different piece of cardboard.
     setViewedFinish(null);
+    setRefusal(null);
   }
-
-  /** What a write this file makes was refused with, or `null`. Superseded by the next press,
-   *  which is every banner's rule on these pages. */
-  const [refusal, setRefusal] = useState<string | null>(null);
 
   const openerRef = useRef<HTMLElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
