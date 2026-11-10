@@ -107,4 +107,6 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   hold this screen's `fixed` previews — and hidden by the toggle beside the Pool switch, kept per
   device like the layout. Record: [draft-and-packs.md](../../../../docs/reference/draft-and-packs.md).
 - **Every pushed view is filtered** (`pick/pool.ts`' `acceptsView`): a `draft:view` for another seat
-  or an older step is dropped.
+  or an older step is dropped. A guest's sent pick or Winston decision is held beside the view
+  (`DraftSession`'s `sentOn`) until any view of its seat is pushed — never written into the view as
+  `waiting`, which would outscore the host's re-send of the seat and strand the guest (issue #1585).

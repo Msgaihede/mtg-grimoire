@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
-import type { DraftCard, DraftView, WinstonView } from "@/lib/ipc";
+import type { DraftCard, DraftView, LobbyState, WinstonView } from "@/lib/ipc";
 import { useNotifications } from "@/lib/notifications";
 import { useAppStore } from "@/lib/store";
 import { pickOption } from "@/test-dropdown";
@@ -22,6 +22,8 @@ const ipcMock = vi.hoisted(() => ({
   lobbyWinston: vi.fn(),
   lobbyLeave: vi.fn(),
   lobbyRejoin: vi.fn(),
+  lobbyState: vi.fn(),
+  onLobbyState: vi.fn(),
   onDraftView: vi.fn(),
 }));
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -35,6 +37,7 @@ import type { DraftRole } from "../build/BuildPanel";
 import { DraftSession } from "./DraftSession";
 import { INSPECT_DELAY } from "@/features/playtesting/table/Inspect";
 import { keepSideboard, recallSideboard } from "./split";
+import { currentDraft } from "./current";
 
 function card(name: string, over: Partial<DraftCard> = {}): DraftCard {
   return {
@@ -114,12 +117,34 @@ function winston(over: Partial<DraftView> = {}): DraftView {
 
 /** The `draft:view` push, as the suite fires it. */
 let push: (v: DraftView) => void = () => {};
+/** The `lobby:state` push, as the suite fires it. */
+let pushLobby: (s: LobbyState) => void = () => {};
+
+/** A guest's drafting pod, its host on the relay. */
+const SEATED: LobbyState = {
+  role: "guest",
+  kind: "draft",
+  code: "K7QX2M",
+  phase: "drafting",
+  name: "Bea",
+  hostName: "Ada",
+  hostOnline: true,
+  peers: [],
+  label: "",
+  closedReason: null,
+  trade: null,
+};
 
 beforeEach(() => {
   for (const fn of Object.values(ipcMock)) fn.mockReset();
   ipcMock.draftView.mockResolvedValue(null);
   ipcMock.oracleTagsForPrintings.mockResolvedValue([]);
   ipcMock.lobbyRejoin.mockResolvedValue(null);
+  ipcMock.lobbyState.mockResolvedValue(null);
+  ipcMock.onLobbyState.mockImplementation((cb: (s: LobbyState) => void) => {
+    pushLobby = cb;
+    return () => {};
+  });
   ipcMock.onDraftView.mockImplementation((cb: (v: DraftView) => void) => {
     push = cb;
     return () => {};
@@ -357,6 +382,51 @@ describe("DraftSession", () => {
     await dragToPool("Opt");
     expect(ipcMock.lobbyPick).toHaveBeenCalledExactlyOnceWith(["Opt#0.0.0"]);
     expect(await screen.findByText("Waiting for the table…")).toBeInTheDocument();
+  });
+
+  it("gives a guest its pack back when the host re-sends the seat as it stands", async () => {
+    // Issue #1585: the pick went out while the host was off the relay (or was refused), and the
+    // host re-sends the same pick, not waiting. It is taken, and the pack is the guest's again.
+    ipcMock.lobbyPick.mockResolvedValue(undefined);
+    setup(view({ mode: "pod" }), "guest", null);
+    await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
+    expect(await screen.findByText("Waiting for the table…")).toBeInTheDocument();
+    act(() => push(view({ mode: "pod" })));
+    expect(screen.queryByText("Waiting for the table…")).not.toBeInTheDocument();
+    await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
+    expect(ipcMock.lobbyPick).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a guest's view as the host sent it, never marked waiting by the page", async () => {
+    // The kept view is what a remount starts from: a waiting one would turn the re-send away.
+    ipcMock.lobbyPick.mockResolvedValue(undefined);
+    setup(view({ mode: "pod" }), "guest", null);
+    await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
+    expect(await screen.findByText("Waiting for the table…")).toBeInTheDocument();
+    expect(currentDraft.recall()?.view?.waiting).toBe(false);
+  });
+
+  it("gives a guest its pack back when the host refuses the send", async () => {
+    ipcMock.lobbyPick.mockRejectedValue("You are not in a pod.");
+    setup(view({ mode: "pod" }), "guest", null);
+    await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("You are not in a pod.");
+    expect(within(pack()).getByRole("button", { name: "Opt" })).toBeInTheDocument();
+  });
+
+  it("greys a guest's pick while the host is offline, and asks again once it is back", async () => {
+    ipcMock.lobbyState.mockResolvedValue({ ...SEATED, hostOnline: false });
+    setup(view({ mode: "pod" }), "guest", null);
+    expect(
+      await screen.findByText("The host is offline — your pick waits until they are back."),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(ipcMock.lobbyRejoin).toHaveBeenCalledOnce());
+    await userEvent.dblClick(within(pack()).getByRole("button", { name: "Opt" }));
+    expect(ipcMock.lobbyPick).not.toHaveBeenCalled();
+
+    act(() => pushLobby(SEATED));
+    await waitFor(() => expect(ipcMock.lobbyRejoin).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/The host is offline/)).not.toBeInTheDocument();
   });
 
   it("builds the pool into a deck, puts the draft away and opens the editor", async () => {
@@ -727,6 +797,29 @@ describe("DraftSession", () => {
         ),
       );
       expect(screen.getByText("Waiting for Bea")).toBeInTheDocument();
+    });
+
+    it("lets a guest decide again when the host re-sends the same turn", async () => {
+      // Issue #1585: the decision never reached the host, which re-sends the turn unchanged.
+      ipcMock.lobbyWinston.mockResolvedValue(undefined);
+      const seats = [
+        { name: "Ada", bot: false, connected: true, picked: false, poolCount: 0 },
+        { name: "Bea", bot: false, connected: true, picked: false, poolCount: 0 },
+      ];
+      const turn = () => winston({ mode: "pod", podFormat: "winston", seats });
+      setup(turn(), "guest", null);
+      await userEvent.click(screen.getByRole("button", { name: "Decline" }));
+      expect(screen.getByRole("button", { name: "Take pile" })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      act(() => push(turn()));
+      expect(screen.getByRole("button", { name: "Take pile" })).not.toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Take pile" }));
+      expect(ipcMock.lobbyWinston).toHaveBeenNthCalledWith(2, 0, true);
     });
   });
   /**
