@@ -1384,6 +1384,14 @@ of a card the list names once. Two holes let that happen, and both are closed by
   sold only in foil, where the unsaid and the `foil` row play the same copy). Then the sweep runs as
   before, with the plan's claims, over everything else. A cut (`deck_to_collection`) never asked the
   plan, so the two kinds of removal now agree.
+- **The cut releases through the same helper** (issue #1536, 2026-11-10). `deck_to_collection` —
+  the press the editor sends every live step down through — released up to the cut quantity
+  through `release_group_copies`, which clamps only at what the group holds. Where the folder holds
+  fewer copies than the list claims that disagreed with the stepper: a line of four backed by two
+  filed an owned copy on its first step down (3 listed, 1 owned, where the copy cut was one the
+  reader never had), and cutting a Main row took the one copy the Sideboard still names. It now
+  writes `deck_cards` first and then calls `release_displaced_copies(…, quantity)`, reporting the
+  `Released` that helper answers — so the two kinds of removal agree whatever the folder holds.
 - **Not every removal was a cut.** `set_card_quantity` took a live row down or out and moved no
   copy; the editor sends a live cut through `deck_to_collection` when it has the row's id, but the
   card modal's stepper did not hand one. The stepper write releases the displaced copies itself

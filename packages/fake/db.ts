@@ -17547,8 +17547,11 @@ function releaseUnclaimedCopies(db: FakeDb, deckId: number, variant: DeckVariant
  * just took off the **live** list (`displaced` of them), never more and never one the list still
  * claims at that grain afterwards (issue #1494). The stepper's step down calls it, so a card that
  * leaves the deck by `deck_set_card_quantity` sends its cardboard to `Recently removed` exactly as
- * `deck_to_collection` does. Called **after** the `deckCards` write, so the claim it reads is the
- * finished list's; a theory row and a deck with no group move nothing.
+ * `deck_to_collection` does — and since issue #1536 the cut calls it too, so neither press takes
+ * a copy the list still claims when the folder holds fewer than the list names. Called **after**
+ * the `deckCards` write, so the claim it reads is the finished list's; a theory row and a deck
+ * with no group move nothing. Answers {@link releaseGroupCopies}'s `{ moved, landed }`, which the
+ * cut reports.
  */
 function releaseDisplacedCopies(
   db: FakeDb,
@@ -17557,10 +17560,11 @@ function releaseDisplacedCopies(
   cardId: string,
   finish: DeckFinish,
   displaced: number,
-): void {
-  if (variant !== LIVE || displaced <= 0) return;
+): { moved: number; landed: number | null } {
+  const nothing = { moved: 0, landed: null };
+  if (variant !== LIVE || displaced <= 0) return nothing;
   const group = deckGroup(db, deckId);
-  if (group === undefined) return;
+  if (group === undefined) return nothing;
   const key = entryKey(db, cardId, finish);
   const stillClaimed = db.deckCards
     .filter(
@@ -17578,7 +17582,7 @@ function releaseDisplacedCopies(
     )
     .reduce((n, e) => n + e.quantity, 0);
   const take = Math.min(displaced, held - stillClaimed);
-  if (take > 0) releaseGroupCopies(db, deckId, cardId, finish, take);
+  return take > 0 ? releaseGroupCopies(db, deckId, cardId, finish, take) : nothing;
 }
 
 /**
@@ -19867,18 +19871,6 @@ export function writeHandlers(db: FakeDb) {
       if (args.quantity > row.quantity) throw refuse(NOT_THAT_MANY);
       const deck = requireDeck(db, row.deckId);
 
-      // **{@link releaseGroupCopies}, and nothing else** — the crate's one walk over a group's
-      // rows, which this handler used to spell inline while the two pile writes spelled it
-      // nowhere. What the cut has that a cleared pile does not is exactly what follows: the
-      // `deck_cards` write and the `MoveOutcome` it answers.
-      const { moved, landed } = releaseGroupCopies(
-        db,
-        row.deckId,
-        row.cardId,
-        row.finish,
-        args.quantity,
-      );
-
       const wholeRow = args.quantity === row.quantity;
       const held = row.quantity;
       if (wholeRow) {
@@ -19886,6 +19878,19 @@ export function writeHandlers(db: FakeDb) {
       } else {
         row.quantity -= args.quantity;
       }
+      // **{@link releaseDisplacedCopies}, after the write** — the stepper's release, over the
+      // crate's one walk ({@link releaseGroupCopies}). Until issue #1536 this released up to the
+      // cut quantity before the write, clamped only at what the group held: a 4-copy line backed
+      // by 2 filed an owned copy on its first step down, and cutting a Main row took the copy the
+      // Sideboard still names. Read after the write, the claim is the finished list's.
+      const { moved, landed } = releaseDisplacedCopies(
+        db,
+        row.deckId,
+        row.variant,
+        row.cardId,
+        row.finish,
+        args.quantity,
+      );
       // **`deck::set_card_quantity`'s row, verbatim** — this command *replaces* the stepper for a
       // decrease on the live list, and a reader cannot see which one ran, so a deck's history has
       // to read continuously across the change of command. `reason` stays `null`: that key is
