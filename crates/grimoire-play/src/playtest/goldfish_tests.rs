@@ -2,6 +2,14 @@
 //! engine's stack: what used to be the goldfish board's own session, now the one game with the
 //! goldfish across the table and the sandbox on (the owner's decision of 2026-10-17).
 
+use engine::game::create_object;
+use engine::game::effects::change_targets;
+use engine::types::ability::{Effect, QuantityExpr, ResolvedAbility, TargetFilter, TargetRef};
+use engine::types::game_state::{RetargetScope, StackEntry, StackEntryKind};
+use engine::types::identifiers::{CardId, ObjectId};
+use engine::types::zones::Zone;
+use engine::types::PlayerId;
+
 use crate::cards::{CardFacts, FaceFacts};
 use crate::on_engine_stack;
 use crate::view::{CardEffect, EffectKind, GameCard, Lane, ManaByType, Place};
@@ -884,6 +892,117 @@ fn the_same_seed_deals_the_same_hand() {
             .collect::<Vec<_>>()
     };
     assert_eq!(names(&a), names(&b));
+}
+
+/// Issue #1520: "choose new targets for target spell" (Deflecting Swat) asks with each answer
+/// naming its new target — the card, which the board lights up and takes a click on, or the
+/// player — never a row of bare "Retarget spell"s. The goldfish takes no actions, so its spell is
+/// put on the stack by hand, and the retarget is phase's own `ChangeTargets` resolving.
+#[test]
+fn a_new_target_for_a_spell_is_asked_by_name() {
+    let (asked, bears, chosen) = engine(|| {
+        let mut game = kept();
+        let first = put_down(&mut game, "Grizzly Bears");
+        let second = put_down(&mut game, "Grizzly Bears");
+        let state = game.state_for_test();
+        let bolt = create_object(
+            state,
+            CardId(900),
+            PlayerId(1),
+            "Lightning Bolt".into(),
+            Zone::Stack,
+        );
+        let damage = ResolvedAbility::new(
+            Effect::DealDamage {
+                amount: QuantityExpr::Fixed { value: 3 },
+                target: TargetFilter::Any,
+                damage_source: None,
+                excess: None,
+            },
+            vec![TargetRef::Object(ObjectId(first))],
+            bolt,
+            PlayerId(1),
+        );
+        state.stack.push_back(StackEntry {
+            id: bolt,
+            source_id: bolt,
+            controller: PlayerId(1),
+            kind: StackEntryKind::Spell {
+                card_id: CardId(900),
+                ability: Some(Box::new(damage)),
+                casting_variant: Default::default(),
+                actual_mana_spent: 1,
+            },
+        });
+        let swat = create_object(
+            state,
+            CardId(901),
+            PlayerId(0),
+            "Deflecting Swat".into(),
+            Zone::Graveyard,
+        );
+        let retarget = ResolvedAbility::new(
+            Effect::ChangeTargets {
+                target: TargetFilter::Any,
+                scope: RetargetScope::All,
+                forced_to: None,
+            },
+            vec![TargetRef::Object(bolt)],
+            swat,
+            PlayerId(0),
+        );
+        change_targets::resolve(state, &retarget, &mut Vec::new()).expect("phase asks");
+        let asked = game.view();
+        let to_second = asked
+            .prompt
+            .as_ref()
+            .expect("a prompt")
+            .options
+            .iter()
+            .find(|o| o.cards.iter().map(|c| c.id).eq([second]))
+            .expect("the other bear is an answer")
+            .index;
+        let chosen = game.act(A::Choose { index: to_second }).unwrap();
+        (asked, (first, second), chosen)
+    });
+    let (first, second) = bears;
+    assert_eq!(asked.stage, Stage::Prompt);
+    let prompt = asked.prompt.unwrap();
+    assert_eq!(prompt.kind, "RetargetChoice");
+    let options = &prompt.options;
+    assert!(options.iter().all(|o| o.kind == "RetargetSpell"));
+    // The bear the spell already aims at is the answer that changes nothing, which names nothing.
+    assert!(options
+        .iter()
+        .any(|o| o.cards.is_empty() && o.players.is_empty()));
+    assert!(!options
+        .iter()
+        .any(|o| o.cards.iter().any(|c| c.id == first)));
+    let bear = options
+        .iter()
+        .flat_map(|o| &o.cards)
+        .find(|c| c.id == second)
+        .expect("the other bear by its card");
+    assert_eq!(bear.name, "Grizzly Bears");
+    for seat in [YOU, FISH] {
+        assert!(
+            options.iter().any(|o| o.players == vec![seat]),
+            "{seat:?} is a new target"
+        );
+    }
+    // The spell now aims at the bear chosen, whether or not it has resolved since.
+    let still = chosen
+        .view
+        .stack
+        .iter()
+        .find(|s| s.name == "Lightning Bolt");
+    match still {
+        Some(spell) => assert_eq!(spell.targets, vec![second]),
+        None => assert!(chosen
+            .happened
+            .iter()
+            .any(|h| matches!(h, H::Dealt { target_id, .. } if *target_id == second))),
+    }
 }
 
 #[test]

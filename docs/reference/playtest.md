@@ -183,7 +183,11 @@ generically, never matched variant by variant.
   `DiscardChoice`. The page puts the common ones in words and splits any other at its capitals.
 - Each option is one `GameAction`, described by the facts in its JSON data (`option_of`):
   - the cards and players it names, read from a handful of field names: `object_id`, `targets`,
-    `target`, `cards`, `keep` and the like, where a target is `{"Object": id}` or `{"Player": id}`;
+    `target`, `cards`, `keep` and the like, where a target is `{"Object": id}` or `{"Player": id}`.
+    A retarget's `new_targets` (`RetargetSpell`, Deflecting Swat's "choose new targets") is one
+    entry per target of the spell, `null` for each left as it is, so each answer names its new
+    target — a card the board lights up and takes a click on (`pickableCards`), or a player — and
+    the answer that names none is "Keep the targets" (issue #1520);
   - a number (`value`, `index`, `ability_index`, the first of `indices`), which is 0-based;
   - a yes or no (`accept`, `pay`, `top`);
   - a named choice's word (`choice`);
