@@ -56,10 +56,10 @@ use draft_core::pack_source::PackSource;
 use draft_core::pick_pass::required_pick_count;
 use draft_core::session::apply;
 use draft_core::types::{
-    self as dc, DeckAddableCards, DraftAction, DraftCardInstance, DraftConfig, DraftError,
-    DraftKind, DraftPack, DraftSeat, DraftSession, DraftSource, PackDistribution, PassDirection,
-    PodPolicy, SetLayout, SharedStackPileDecision, SharedStackRefusal, SpectatorVisibility,
-    TournamentFormat, MAX_PACK_COUNT, SEALED_PACK_COUNT,
+    self as dc, DeckAddableCards, DraftAction, DraftCardInstance, DraftClockPolicy, DraftConfig,
+    DraftError, DraftFlow, DraftKind, DraftPack, DraftSeat, DraftSelectionPolicy, DraftSession,
+    DraftSource, PackDistribution, PassDirection, PodPolicy, SetLayout, SharedStackPileDecision,
+    SharedStackRefusal, SpectatorVisibility, TournamentFormat, MAX_PACK_COUNT, SEALED_PACK_COUNT,
 };
 use draft_core::view::filter_for_player;
 use engine::database::CardDatabase;
@@ -69,6 +69,7 @@ use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::cards::{database, CardFacts};
+use bots::{PackShape, PickEnhancement};
 
 pub use view::{
     DraftCard, DraftMode, DraftSaved, DraftSeatSetup, DraftSeatView, DraftSetup, DraftStatus,
@@ -253,6 +254,11 @@ impl Draft {
                 PodPolicy::Competitive
             },
             spectator_visibility: SpectatorVisibility::default(),
+            // phase's own defaults: the barrier flow every round deals at once, no burns and no
+            // pick clock — the draft this crate has always run.
+            flow: DraftFlow::default(),
+            selection_policy: DraftSelectionPolicy::default(),
+            clock_policy: DraftClockPolicy::default(),
         };
         let mut session = DraftSession::new(config, seats, "grimoire".into());
         let packs = SetupPacks {
@@ -745,6 +751,8 @@ impl Draft {
             bots::level(self.setup.difficulty),
             self.pool_cards(seat),
             self.db.as_ref(),
+            PickEnhancement::Off,
+            PackShape::current(&self.session),
             &mut rng,
         )
         .into_iter()
