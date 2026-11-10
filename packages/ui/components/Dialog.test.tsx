@@ -140,6 +140,20 @@ describe("Dialog", () => {
     expect(onDismiss).not.toHaveBeenCalled();
   });
 
+  /** Issue #1574: a right-press is a reader reaching for a context menu and a middle-press an
+   *  autoscroll — neither throws the form away. Only the primary button closes. */
+  it("closes on a primary press on the scrim and not on a right or middle one", async () => {
+    const { onClose } = open();
+    const scrim = (await panel()).parentElement!;
+
+    fireEvent.mouseDown(scrim, { button: 2 });
+    fireEvent.mouseDown(scrim, { button: 1 });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.mouseDown(scrim, { button: 0 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   /** The ✕ is the other half of the dismiss, and it is named by the host rather than by the
    *  title — "Close Categories & labels" is not a sentence. */
   it("dismisses on the close control, which carries the host's own label", async () => {
