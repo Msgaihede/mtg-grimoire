@@ -17,6 +17,7 @@ import { statusLine } from "@/lib/motion";
 import { notify } from "@/lib/notifications";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { tileKeyOf } from "@/lib/tileKey";
 import { cn } from "@/lib/utils";
 import { ADD_BUTTON } from "./addButton";
@@ -831,6 +832,11 @@ function Confirm({
   onConfirm: (pile: DeckPile | null) => void;
 }) {
   const confirm = useConfirmFocus(`Move ${tile.name} into this deck`);
+  // **Escape declines** (issue #1542). The question is mounted only while it is asked, so the rung
+  // is too — and it has to be an `"inner"` one: this is the one `useConfirmFocus` site not inside
+  // a `Dialog`, so without it the press fell through to the deck editor's floor and closed the
+  // whole deck with the question still on screen.
+  useDismissOnEscape({ layer: "inner", onDismiss: onCancel });
   const deckName = tile.from?.deckName ?? "another deck";
 
   return (

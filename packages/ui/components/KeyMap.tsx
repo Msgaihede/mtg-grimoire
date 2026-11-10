@@ -392,8 +392,13 @@ export function KeyMap({ children }: { children: ReactNode }) {
   // a dialog, a context menu — is on the capture rung and takes the press first. Enabled on the
   // **flag** rather than mounted with the element, so a panel on its way out through its fade is
   // not still eating Escape.
+  //
+  // **…unless it opened over one** (issue #1542): `F1` works with a dialog up, and this panel is
+  // drawn over it, so `overOpenLayers` puts the rung on the capture stack above the dialog's for
+  // as long as the panel is open — one press closes the panel, the next the dialog.
   useDismissOnEscape({
     layer: "outer",
+    overOpenLayers: true,
     enabled: open,
     onDismiss: () => {
       // The caret goes back to the trigger, which is this app's rule for a layer Escape

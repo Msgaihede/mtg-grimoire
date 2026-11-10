@@ -6891,6 +6891,39 @@ describe("locking a folder", () => {
     });
 
     /**
+     * **Escape cancels it, like every other strip question on the page** (issue #1542). The
+     * question is not a member of the page's `Panel`, so the page's own `"inner"` rung is off while
+     * it is up — and without a rung of its own the press fell through to whatever was under it.
+     */
+    it("puts the question away on Escape and moves nothing", async () => {
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER]);
+      const user = userEvent.setup();
+      const { container } = wrap(<CollectionPage />);
+      await screen.findByText("Lightning Bolt");
+      await findHeading("Trade binder");
+      const card = standHeading("Trade binder");
+
+      const held = await holdCopy(cardSources(container)[0], {
+        pressOn: screen.getByText("Lightning Bolt"),
+      });
+      await held.over(card);
+      await held.drop();
+
+      const question = await screen.findByRole("group", {
+        name: "Move Lightning Bolt into Trade binder",
+      });
+      expect(question).toHaveFocus();
+      await user.keyboard("{Escape}");
+
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("group", { name: "Move Lightning Bolt into Trade binder" }),
+        ).toBeNull(),
+      );
+      expect(collectionSetFolder).not.toHaveBeenCalled();
+    });
+
+    /**
      * **Out of a locked drawer asks too**, and the sentence is the other one: a copy leaving goes
      * back among the ones the app offers, which is the reader's own decision being undone rather
      * than made.

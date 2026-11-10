@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import type { CollectionFolder, CollectionRow, DeckCategory } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 
 const collectionList = vi.hoisted(() => vi.fn());
@@ -679,6 +680,28 @@ describe("CollectionSearchTab", () => {
 
     expect(collectionToDeck).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Move it here" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **Escape declines, and only declines** (issue #1542). The question is not inside a `Dialog`,
+   * so without a rung of its own the press fell to the deck editor's floor and closed the whole
+   * deck with the question still on screen. The floor is stood in by a `"navigation"` rung here.
+   */
+  it("declines on Escape without closing the deck behind it", async () => {
+    const closeDeck = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "navigation", onDismiss: closeDeck }));
+    collectionList.mockResolvedValue({ items: [SPOKEN_FOR], total: 1 });
+    tab();
+    await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
+    expect(await screen.findByRole("group", { name: /Move Lightning Bolt/ })).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: /Move Lightning Bolt/ })).not.toBeInTheDocument(),
+    );
+    expect(closeDeck).not.toHaveBeenCalled();
+    expect(collectionToDeck).not.toHaveBeenCalled();
   });
 
   /**
