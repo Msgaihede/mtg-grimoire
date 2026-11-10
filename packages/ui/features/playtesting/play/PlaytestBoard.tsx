@@ -41,6 +41,7 @@ import { HandFan } from "../table/HandFan";
 import { INSPECT_WIDTH, Inspect, pointerAt } from "../table/Inspect";
 import { LibraryDialog } from "../table/LibraryDialog";
 import { LifePlate } from "../table/LifePlate";
+import { LifeCommitsContext, type LifeCommits } from "../table/lifeCommits";
 import { ManaTableView } from "../table/ManaTable";
 import { gameMenu } from "../table/menus";
 import { OpeningHand } from "../table/OpeningHand";
@@ -358,13 +359,38 @@ export function PlaytestBoard({
   // doing rather than that the opponent is thinking. Held against the view it was pressed on.
   const [ending, setEnding] = useState<PlaytestView | null>(null);
   const passing = (ending !== null && ending === view) || (view?.endingTurn ?? false);
+
+  // **A life change still in its plate's wait goes first** (issue #1593): a plate sends `setLife`
+  // 400 ms after the last press, so `+` then Space would otherwise queue the pass ahead of it,
+  // and the engine could refuse the life at the step the pass lands on. Every plate holds a way
+  // to send its waiting change now (`lifeCommits.ts`); any other action calls them all first.
+  // A set kept for the board's life, not a ref: `act` is handed on while rendering (the game
+  // menu), and it reads the set only when it is called.
+  const [lifeFlushes] = useState(() => new Set<() => void>());
+  const holdLife = useCallback(
+    (flush: () => void) => {
+      lifeFlushes.add(flush);
+      return () => {
+        lifeFlushes.delete(flush);
+      };
+    },
+    [lifeFlushes],
+  );
+  const send = useCallback(
+    (action: PlaytestAction) => {
+      if (action.type !== "setLife") for (const flush of lifeFlushes) flush();
+      onAct(action);
+    },
+    [onAct, lifeFlushes],
+  );
+
   const act = useCallback(
     (action: PlaytestAction) => {
       setPointed(null);
       if (action.type === "endTurn") setEnding(view);
-      onAct(action);
+      send(action);
     },
-    [onAct, view],
+    [send, view],
   );
 
   /** The engine is busy, or the opponent's turn is played back: not even a setting is offered. */
@@ -380,8 +406,12 @@ export function PlaytestBoard({
    *  game waits on somebody else. */
   const locked = frozen || waiting;
   const offer = useMemo<(action: PlaytestAction) => void>(
-    () => (waiting ? () => {} : onAct),
-    [waiting, onAct],
+    () => (waiting ? () => {} : send),
+    [waiting, send],
+  );
+  const lifeCommits = useMemo<LifeCommits>(
+    () => ({ hold: holdLife, working: frozen }),
+    [holdLife, frozen],
   );
   /** The sandbox is on — the setting, whatever the stage: the plates have steppers. */
   const sandboxOn = view?.sandbox ?? false;
@@ -688,643 +718,646 @@ export function PlaytestBoard({
           playerName(view.deciding, opponentCount, "mid"));
 
   return (
-    <div
-      ref={measure}
-      aria-busy={busy}
-      className="relative h-full w-full overflow-hidden bg-bg text-sm text-text"
-      style={{ "--table-x": `${zone.width + 2 * COLUMN_GAP}px` } as CSSProperties}
-      data-testid="playtest-board"
-    >
-      {felt !== null && (
-        <div
-          aria-hidden="true"
-          data-testid="board-felt"
-          className="pointer-events-none absolute inset-0"
-          style={{ background: felt }}
-        />
-      )}
-      {playmat === "commander" && commander?.cardId != null && (
-        <CommanderMat cardId={commander.cardId} name={commander.name} />
-      )}
-
-      {/* The two tables' dashed edges, drawn under everything on them (each opponent area draws
-          its own). */}
-      {!four && (
-        <div
-          aria-hidden="true"
-          className={cn(
-            OPPONENT_TABLE,
-            "pointer-events-none rounded-[22px] border border-dashed border-border opacity-50",
-          )}
-        />
-      )}
+    <LifeCommitsContext.Provider value={lifeCommits}>
       <div
-        aria-hidden="true"
-        className={cn(
-          YOUR_TABLE,
-          "pointer-events-none rounded-[22px] border border-dashed border-border opacity-70",
-        )}
-      />
-
-      {view === null ? (
-        <div className="absolute inset-x-[var(--table-x)] top-[48px] bottom-[112px] flex items-center justify-center text-dim">
-          {error ?? (four ? "Shuffling every deck…" : "Shuffling both decks…")}
-        </div>
-      ) : view.stage === "mulligan" ? (
-        // The whole board below the opponent's band (issue #993), the zone columns and the
-        // reader's plate under a scrim: before the first turn the seven are all there is to read.
-        <div
-          data-testid="playtest-opening-hand"
-          className={cn(
-            "absolute inset-x-0 top-[48px] bottom-0 flex flex-col items-center gap-3 bg-bg/85 px-6 pt-2 pb-4",
-            LAYER.raised,
-          )}
-        >
-          {/* The middle line is not drawn over an opening hand, so a refusal is said here. */}
-          {error !== null && (
-            <p role="status" className="m-0 text-xs text-text">
-              {error}
-            </p>
-          )}
-          <OpeningHand
-            view={{
-              hand: view.you.hand,
-              mulligan: view.mulligan,
-              library: view.you.library,
-              libraryLands: view.you.libraryCards.filter((c) => c.isLand).length,
-            }}
-            onAct={offer}
-            onPoint={pointYou}
-            onUnpoint={unpoint}
+        ref={measure}
+        aria-busy={busy}
+        className="relative h-full w-full overflow-hidden bg-bg text-sm text-text"
+        style={{ "--table-x": `${zone.width + 2 * COLUMN_GAP}px` } as CSSProperties}
+        data-testid="playtest-board"
+      >
+        {felt !== null && (
+          <div
+            aria-hidden="true"
+            data-testid="board-felt"
+            className="pointer-events-none absolute inset-0"
+            style={{ background: felt }}
           />
-        </div>
-      ) : (
-        <>
-          {four ? (
-            <div className={cn(OPPONENT_AREAS, "grid grid-cols-3 gap-2")}>
-              {view.opponents.map((seat, i) => (
-                <OpponentArea
-                  key={seat.player}
-                  seat={seat}
-                  deckName={opponentNames[i] ?? "Deck"}
-                  opponents={view.opponents.length}
-                  lethal={view.commanderDamageLethal}
-                  active={active === seat.player}
-                  won={view.winner === seat.player}
+        )}
+        {playmat === "commander" && commander?.cardId != null && (
+          <CommanderMat cardId={commander.cardId} name={commander.name} />
+        )}
+
+        {/* The two tables' dashed edges, drawn under everything on them (each opponent area draws
+          its own). */}
+        {!four && (
+          <div
+            aria-hidden="true"
+            className={cn(
+              OPPONENT_TABLE,
+              "pointer-events-none rounded-[22px] border border-dashed border-border opacity-50",
+            )}
+          />
+        )}
+        <div
+          aria-hidden="true"
+          className={cn(
+            YOUR_TABLE,
+            "pointer-events-none rounded-[22px] border border-dashed border-border opacity-70",
+          )}
+        />
+
+        {view === null ? (
+          <div className="absolute inset-x-[var(--table-x)] top-[48px] bottom-[112px] flex items-center justify-center text-dim">
+            {error ?? (four ? "Shuffling every deck…" : "Shuffling both decks…")}
+          </div>
+        ) : view.stage === "mulligan" ? (
+          // The whole board below the opponent's band (issue #993), the zone columns and the
+          // reader's plate under a scrim: before the first turn the seven are all there is to read.
+          <div
+            data-testid="playtest-opening-hand"
+            className={cn(
+              "absolute inset-x-0 top-[48px] bottom-0 flex flex-col items-center gap-3 bg-bg/85 px-6 pt-2 pb-4",
+              LAYER.raised,
+            )}
+          >
+            {/* The middle line is not drawn over an opening hand, so a refusal is said here. */}
+            {error !== null && (
+              <p role="status" className="m-0 text-xs text-text">
+                {error}
+              </p>
+            )}
+            <OpeningHand
+              view={{
+                hand: view.you.hand,
+                mulligan: view.mulligan,
+                library: view.you.library,
+                libraryLands: view.you.libraryCards.filter((c) => c.isLand).length,
+              }}
+              onAct={offer}
+              busy={busy}
+              onPoint={pointYou}
+              onUnpoint={unpoint}
+            />
+          </div>
+        ) : (
+          <>
+            {four ? (
+              <div className={cn(OPPONENT_AREAS, "grid grid-cols-3 gap-2")}>
+                {view.opponents.map((seat, i) => (
+                  <OpponentArea
+                    key={seat.player}
+                    seat={seat}
+                    deckName={opponentNames[i] ?? "Deck"}
+                    opponents={view.opponents.length}
+                    lethal={view.commanderDamageLethal}
+                    active={active === seat.player}
+                    won={view.winner === seat.player}
+                    sandbox={edits}
+                    steppers={sandboxOn}
+                    marks={marks?.[seat.player]}
+                    pick={theirPicks[seat.player]}
+                    across={across[i + 1]}
+                    aim={aims.tables[seat.player]}
+                    plateAim={aims.plates[seat.player]}
+                    aimable={aimable.includes(seat.player)}
+                    onAim={() => setPicks((p) => aimAttacker(p, view, seat.player))}
+                    onLife={(life) => act({ type: "setLife", seat: seat.player, life })}
+                    onAct={offer}
+                    onDrop={drop}
+                    onPoint={pointThem[seat.player]}
+                    onPointEmblem={pointLoose}
+                    onUnpoint={unpoint}
+                    onLook={(l) => setLook({ look: l, side: seat.player })}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div data-table="opponent" className={OPPONENT_TABLE}>
+                <Battlefield
+                  label="The opponent's battlefield"
+                  cards={view.opponents[0].battlefield}
+                  emblems={view.opponents[0].emblems}
+                  onPointEmblem={pointLoose}
                   sandbox={edits}
-                  steppers={sandboxOn}
-                  marks={marks?.[seat.player]}
-                  pick={theirPicks[seat.player]}
-                  across={across[i + 1]}
-                  aim={aims.tables[seat.player]}
-                  plateAim={aims.plates[seat.player]}
-                  aimable={aimable.includes(seat.player)}
-                  onAim={() => setPicks((p) => aimAttacker(p, view, seat.player))}
-                  onLife={(life) => act({ type: "setLife", seat: seat.player, life })}
                   onAct={offer}
                   onDrop={drop}
-                  onPoint={pointThem[seat.player]}
-                  onPointEmblem={pointLoose}
+                  onPoint={pointOpponent}
                   onUnpoint={unpoint}
-                  onLook={(l) => setLook({ look: l, side: seat.player })}
+                  flipped
+                  readOnly
+                  dense
+                  marks={marks?.opponent}
+                  pick={theirPick}
+                  across={across[1]}
+                  aim={aims.tables.opponent}
+                  className="h-full w-full"
                 />
-              ))}
-            </div>
-          ) : (
-            <div data-table="opponent" className={OPPONENT_TABLE}>
+              </div>
+            )}
+            <MiddleLine
+              view={view}
+              picks={picks}
+              status={status}
+              failed={error !== null}
+              onStops={frozen ? undefined : (stops) => act({ type: "setStops", stops })}
+              onSandbox={(on) => act({ type: "setSandbox", on })}
+              className="absolute inset-x-[var(--table-x)] top-[calc(50%-46px)] h-7"
+            />
+            <div data-table="you" className={YOUR_TABLE}>
               <Battlefield
-                label="The opponent's battlefield"
-                cards={view.opponents[0].battlefield}
-                emblems={view.opponents[0].emblems}
+                label="Your battlefield"
+                cards={view.you.battlefield}
+                emblems={view.you.emblems}
                 onPointEmblem={pointLoose}
                 sandbox={edits}
                 onAct={offer}
                 onDrop={drop}
-                onPoint={pointOpponent}
+                onPoint={pointYou}
                 onUnpoint={unpoint}
-                flipped
-                readOnly
                 dense
-                marks={marks?.opponent}
-                pick={theirPick}
-                across={across[1]}
-                aim={aims.tables.opponent}
+                readOnly={replaying}
+                marks={marks?.you}
+                pick={yourPick}
+                onActivate={onActivate}
+                across={across[0]}
+                carry={carry}
+                aim={aims.tables.you}
                 className="h-full w-full"
               />
             </div>
-          )}
-          <MiddleLine
-            view={view}
-            picks={picks}
-            status={status}
-            failed={error !== null}
-            onStops={frozen ? undefined : (stops) => act({ type: "setStops", stops })}
-            onSandbox={(on) => act({ type: "setSandbox", on })}
-            className="absolute inset-x-[var(--table-x)] top-[calc(50%-46px)] h-7"
-          />
-          <div data-table="you" className={YOUR_TABLE}>
-            <Battlefield
-              label="Your battlefield"
-              cards={view.you.battlefield}
-              emblems={view.you.emblems}
-              onPointEmblem={pointLoose}
-              sandbox={edits}
-              onAct={offer}
-              onDrop={drop}
-              onPoint={pointYou}
+            {/* The stack, in the right gutter between the two tables' zone columns. */}
+            <StackColumn
+              view={view}
+              prominent={view.stage === "respond" && responding === null}
+              onPoint={pointStack}
               onUnpoint={unpoint}
-              dense
-              readOnly={replaying}
-              marks={marks?.you}
-              pick={yourPick}
-              onActivate={onActivate}
-              across={across[0]}
-              carry={carry}
-              aim={aims.tables.you}
-              className="h-full w-full"
+              className={cn(
+                "absolute top-[calc(50%-32px)] right-1.5 w-[72px] -translate-y-1/2",
+                LAYER.raised,
+              )}
             />
-          </div>
-          {/* The stack, in the right gutter between the two tables' zone columns. */}
-          <StackColumn
-            view={view}
-            prominent={view.stage === "respond" && responding === null}
-            onPoint={pointStack}
-            onUnpoint={unpoint}
-            className={cn(
-              "absolute top-[calc(50%-32px)] right-1.5 w-[72px] -translate-y-1/2",
-              LAYER.raised,
-            )}
-          />
-        </>
-      )}
+          </>
+        )}
 
-      {/* The opponent's band, the top 48 px: the way back and the menu, their hand face down
+        {/* The opponent's band, the top 48 px: the way back and the menu, their hand face down
           hanging from the edge with their plate beside it, and help and the log. A four-player
           table's opponents keep their hands and plates in their own areas below it. */}
-      <div className={cn("absolute top-1.5 left-3 flex items-center gap-2", LAYER.raised)}>
-        <button
-          type="button"
-          aria-label="Game menu"
-          className={cn(CHROME_BUTTON, "size-9 rounded-full")}
-          onClick={menuClick(() =>
-            gameMenu({
-              view:
-                view === null
-                  ? null
-                  : {
-                      tokens: view.tokens,
-                      graveyard: view.you.graveyard,
-                      exile: view.you.exile,
-                      // Not while the engine is busy, as the keys; during a replay `act` shows
-                      // its end first.
-                      canUndo: view.canUndo && !busy,
-                      canRedo: view.canRedo && !busy,
-                      sandbox: view.sandbox,
-                    },
-              playing: playing && !frozen,
-              sandbox: edits,
-              lobby: view?.lobby ?? false,
-              backLabel,
-              playmat,
-              commanderName: commander?.name ?? null,
-              onAct: act,
-              onPlaymat: setPlaymat,
-              onNewGame,
-              onBack,
-              onLook: lookYou,
-            }),
-          )}
-        >
-          <Menu className="size-[18px]" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          aria-label={
-            returnTo === "deck" ? `Back to the ${deckName} deck` : "Back to the playtest setup"
-          }
-          onClick={onBack}
-          className={cn(CHROME_BUTTON, "h-9 gap-1 rounded-full pr-3 pl-2 text-[13px]")}
-        >
-          <ChevronLeft className="size-4" aria-hidden="true" />
-          {returnTo === "deck" ? deckName : "Setup"}
-          <kbd className="ml-1 rounded border border-border px-1 font-mono text-[11px] text-dim">
-            Esc
-          </kbd>
-        </button>
-      </div>
-
-      {!four && (
-        <>
-          <div className="absolute top-0 left-1/2 -translate-x-1/2">
-            <OpponentHand count={handCount} />
-          </div>
-          {/* Right of their hand, and never under the sound, help and log buttons: the box ends
-              160 px from the edge, and a plate wider than it (a long deck name, the sandbox's
-              stepper) shortens its title rather than running under them. */}
-          <div
-            className="absolute top-[5px] right-[160px] flex min-w-0"
-            style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 64}px)` }}
-          >
-            <PlateFrame
-              seat="opponent"
-              active={active === "opponent"}
-              poison={opponent?.poison ?? 0}
-              commanderDamage={opponent?.commanderDamage}
-              lethal={view?.commanderDamageLethal}
-              compact
-              aim={aims.plates.opponent}
-              className="min-w-0"
-            >
-              <LifePlate
-                seat="opponent"
-                title={
-                  deadOn !== null
-                    ? `Dead on your turn ${deadOn}`
-                    : `Opponent · ${opponentNames[0] ?? "Deck"}`
-                }
-                life={opponent?.life ?? 0}
-                highlight={view?.winner === "opponent" || deadOn !== null}
-                readOnly={!sandboxOn}
-                disabled={!edits}
-                onChange={(life) => act({ type: "setLife", seat: "opponent", life })}
-                compact
-              />
-              {/* An attacker waiting to be aimed, that may attack the opponent: their plate is
-                  the target to click. */}
-              {view !== null && aimable.includes("opponent") && (
-                <button
-                  type="button"
-                  onClick={() => setPicks((p) => aimAttacker(p, view, "opponent"))}
-                  className={cn(
-                    "absolute inset-0 rounded-full bg-transparent outline-2 outline-offset-2 outline-accent outline-dashed",
-                    FOCUS,
-                  )}
-                >
-                  <span className="sr-only">Attack the opponent</span>
-                </button>
-              )}
-            </PlateFrame>
-          </div>
-        </>
-      )}
-
-      <div className={cn("absolute top-1.5 right-3 flex gap-2", LAYER.raised)}>
-        <SoundControls />
-        <button
-          type="button"
-          aria-label="How to play"
-          aria-pressed={panel === "help"}
-          onClick={() => setPanel(panel === "help" ? null : "help")}
-          className={cn(
-            CHROME_BUTTON,
-            "h-9 min-w-9 rounded-full px-3 text-[13px]",
-            panel === "help" && "border-accent text-accent",
-          )}
-        >
-          ?
-        </button>
-        <button
-          type="button"
-          aria-pressed={panel === "log"}
-          onClick={() => setPanel(panel === "log" ? null : "log")}
-          className={cn(
-            CHROME_BUTTON,
-            "h-9 rounded-full px-3 text-[13px]",
-            panel === "log" && "border-accent text-accent",
-          )}
-        >
-          Log
-        </button>
-      </div>
-
-      {/* The opponent's columns, the reader's turned round: library and graveyard on the left,
-          exile and the command zone on the right — each centred on their table's height. */}
-      {!four && (
-        <>
-          <div className={cn(OPPONENT_COLUMN, "left-3")}>
-            <OpponentLibrary seat={opponent} size={zone} />
-            <OpponentPile
-              seat={opponent}
-              zone="graveyard"
-              size={zone}
-              onPoint={pointOpponent}
-              onUnpoint={unpoint}
-              onLook={lookOpponent}
-            />
-          </div>
-          <div className={cn(OPPONENT_COLUMN, "right-3 items-end")}>
-            <OpponentPile
-              seat={opponent}
-              zone="exile"
-              size={zone}
-              onPoint={pointOpponent}
-              onUnpoint={unpoint}
-              onLook={lookOpponent}
-              className="items-end"
-            />
-            <OpponentCommand
-              seat={opponent}
-              size={zone}
-              onPoint={pointOpponent}
-              onUnpoint={unpoint}
-              className="items-end"
-            />
-          </div>
-        </>
-      )}
-
-      {/* The reader's columns, the artboard's: command and exile left, graveyard and library
-          right. */}
-      <div className={cn(YOUR_COLUMN, "left-3")}>
-        <CommandZone
-          view={you}
-          sandbox={edits}
-          onAct={offer}
-          onDrop={drop}
-          onPoint={pointYou}
-          onUnpoint={unpoint}
-          size={zone}
-        />
-        <ExileZone
-          view={you}
-          sandbox={edits}
-          onDrop={drop}
-          onPoint={pointYou}
-          onUnpoint={unpoint}
-          onLook={lookYou}
-          size={zone}
-        />
-      </div>
-      <div className={cn(YOUR_COLUMN, "right-3 items-end")}>
-        <GraveyardZone
-          view={you}
-          sandbox={edits}
-          onDrop={drop}
-          onPoint={pointYou}
-          onUnpoint={unpoint}
-          onLook={lookYou}
-          size={zone}
-        />
-        <LibraryZone
-          view={you}
-          sandbox={edits}
-          onAct={offer}
-          onDrop={drop}
-          onLook={lookYou}
-          size={zone}
-        />
-      </div>
-
-      {/* The foot: the reader's hand, their plate beside it, and the stage button. */}
-      {tabled && (
-        <HandFan
-          cards={view.you.hand}
-          sandbox={edits}
-          onAct={offer}
-          onDrop={drop}
-          onPoint={pointYou}
-          onUnpoint={unpoint}
-          pointedId={
-            current?.side === "you" && current.pointed.place === "hand"
-              ? current.pointed.card.id
-              : null
-          }
-        />
-      )}
-      {/* Beside the hand — and at the very edge while a prompt is docked over the hand, so the
-          two never meet. */}
-      <div
-        className="absolute bottom-3"
-        style={{
-          left:
-            tabled && !prompting
-              ? `max(12px, calc(50% - ${handRow(view.you.hand.length).width / 2 + 20 + 236}px))`
-              : "12px",
-        }}
-      >
-        <PlateFrame
-          seat="you"
-          active={active === "you"}
-          poison={you?.poison ?? 0}
-          commanderDamage={you?.commanderDamage}
-          lethal={view?.commanderDamageLethal}
-          aim={aims.plates.you}
-        >
-          <LifePlate
-            seat="you"
-            title={`You · ${deckName}`}
-            life={you?.life ?? 0}
-            cardId={commander?.cardId ?? null}
-            highlight={view?.winner === "you"}
-            readOnly={!sandboxOn}
-            disabled={!edits}
-            onChange={(life) => act({ type: "setLife", seat: "you", life })}
-          />
-        </PlateFrame>
-      </div>
-
-      {view !== null && view.stage !== "mulligan" && view.stage !== "over" && !replaying && (
-        <div className="absolute right-3 bottom-3 flex flex-col items-end gap-2">
-          <ManaTableView mana={view.you.mana} label="Your mana" />
-          <span className="text-xs text-dim">
-            {view.you.manaOpen} mana open · hand {view.you.hand.length}
-          </span>
-          {waiting && !busy ? (
-            <Waiting
-              name={waitingOn}
-              onHandOver={view.deciding === null ? null : (handOver?.(view.deciding) ?? null)}
-            />
-          ) : busy ? (
-            <span
-              role="status"
-              className="inline-flex h-[58px] items-center gap-2.5 rounded-2xl border border-border bg-surface px-6 text-[15px] text-dim"
-            >
-              <LoaderCircle
-                className="size-[18px] animate-spin motion-reduce:animate-none"
-                aria-hidden="true"
-              />
-              {/* The goldfish thinks about nothing: the engine is only playing the game on. */}
-              {passing
-                ? "Passing turn…"
-                : goldfish
-                  ? "Playing on…"
-                  : four
-                    ? "Opponents are thinking…"
-                    : "Opponent is thinking…"}
-            </span>
-          ) : (
-            buttons !== null &&
-            buttons.primary !== null && (
-              <div className="flex items-end gap-2">
-                {buttons.secondary !== null && (
-                  <button
-                    type="button"
-                    aria-disabled={buttons.secondary.disabled === true}
-                    onClick={() =>
-                      buttons.secondary !== null &&
-                      buttons.secondary.disabled !== true &&
-                      act(buttons.secondary.action)
-                    }
-                    className={cn(
-                      "inline-flex h-11 items-center rounded-2xl border border-border bg-surface px-4",
-                      "text-[13px] text-text transition-colors motion-reduce:transition-none hover:border-accent",
-                      PRESS,
-                      FOCUS,
-                      buttons.secondary.disabled === true &&
-                        "cursor-default text-dim hover:border-border active:scale-100",
-                    )}
-                  >
-                    {buttons.secondary.label}
-                  </button>
-                )}
-                <StageButton
-                  label={buttons.primary.label}
-                  onPress={() => buttons.primary !== null && act(buttons.primary.action)}
-                />
-              </div>
-            )
-          )}
-        </div>
-      )}
-
-      {responding !== null && (
-        <RespondPrompt
-          item={responding}
-          view={view!}
-          disabled={locked}
-          onAct={act}
-          onPoint={pointStack}
-          onUnpoint={unpoint}
-          className="absolute top-[52px] left-1/2 w-[min(600px,calc(100%-2*var(--table-x)))] -translate-x-1/2"
-        />
-      )}
-      {prompting && view.prompt!.pick !== null && (
-        <PickPanel
-          key={view.prompt!.pick.cards.map((c) => c.id).join(",")}
-          prompt={{ ...view.prompt!, pick: view.prompt!.pick }}
-          table={[...tableCards(view), ...view.you.hand]}
-          disabled={locked}
-          onAct={act}
-          onPoint={pointCard}
-          onUnpoint={unpoint}
-          opponents={view.opponents.length}
-          className="absolute top-[calc(50%-32px)] left-1/2 max-h-[calc(100%-200px)] w-[min(820px,calc(100%-200px))] -translate-x-1/2 -translate-y-1/2"
-        />
-      )}
-      {prompting && view.prompt!.damage !== null && (
-        <DamagePanel
-          key={`${view.prompt!.damage.attacker.id}:${view.prompt!.damage.blockers.map((b) => b.card.id).join(",")}`}
-          prompt={{ ...view.prompt!, damage: view.prompt!.damage }}
-          table={[...tableCards(view), ...view.you.hand]}
-          disabled={locked}
-          onAct={act}
-          onPoint={pointCard}
-          onUnpoint={unpoint}
-          opponents={view.opponents.length}
-          className="absolute top-[calc(50%-32px)] left-1/2 max-h-[calc(100%-200px)] w-[min(820px,calc(100%-200px))] -translate-x-1/2 -translate-y-1/2"
-        />
-      )}
-      {prompting && view.prompt!.pick === null && view.prompt!.damage === null && (
-        <PromptPanel
-          prompt={view.prompt!}
-          table={[...tableCards(view), ...view.you.hand]}
-          disabled={locked}
-          onAct={act}
-          onPoint={pointCard}
-          onUnpoint={unpoint}
-          opponents={view.opponents.length}
-          className="absolute bottom-2 left-1/2 max-h-[104px] w-[min(640px,calc(100%-560px))] -translate-x-1/2"
-        />
-      )}
-
-      {view !== null && view.stage === "over" && !replaying && (
-        <GameOver
-          winner={view.winner}
-          out={view.you.out}
-          turn={view.turn}
-          backLabel={backLabel}
-          // A lobby's table sat down to this game: a new one is a new lobby's (issue #1419).
-          onNewGame={view.lobby ? undefined : onNewGame}
-          onBack={onBack}
-        />
-      )}
-
-      {notice !== null && (
-        <p
-          role="status"
-          className={cn(
-            "absolute top-[52px] right-3 m-0 max-w-[320px] rounded-xl border border-mana-r/60 bg-surface px-3 py-2 text-xs text-text",
-            LAYER.raised,
-          )}
-        >
-          {notice}
-        </p>
-      )}
-
-      <BoardArrows root={root} arrows={arrows} />
-      <DamagePops root={root} view={view} happened={happened} />
-
-      {/* **Read-only while the opponent's turn is played back**: one sheet over the whole board
-          takes every press, and only the Skip chip above it answers one. */}
-      {replaying && (
-        <>
-          <div
-            aria-hidden="true"
-            data-testid="replay-shield"
-            className={cn("absolute inset-0", LAYER.raised)}
-          />
+        <div className={cn("absolute top-1.5 left-3 flex items-center gap-2", LAYER.raised)}>
           <button
             type="button"
-            onClick={onSkip}
-            aria-keyshortcuts="Space Escape"
-            className={cn(
-              "absolute right-3 bottom-3 inline-flex h-11 items-center gap-2 rounded-full border border-mana-r bg-surface px-4",
-              "text-[13px] text-text transition-colors motion-reduce:transition-none hover:bg-mana-r hover:text-bg",
-              LAYER.raised,
-              PRESS,
-              FOCUS,
+            aria-label="Game menu"
+            className={cn(CHROME_BUTTON, "size-9 rounded-full")}
+            onClick={menuClick(() =>
+              gameMenu({
+                view:
+                  view === null
+                    ? null
+                    : {
+                        tokens: view.tokens,
+                        graveyard: view.you.graveyard,
+                        exile: view.you.exile,
+                        // Not while the engine is busy, as the keys; during a replay `act` shows
+                        // its end first.
+                        canUndo: view.canUndo && !busy,
+                        canRedo: view.canRedo && !busy,
+                        sandbox: view.sandbox,
+                      },
+                playing: playing && !frozen,
+                sandbox: edits,
+                lobby: view?.lobby ?? false,
+                backLabel,
+                playmat,
+                commanderName: commander?.name ?? null,
+                onAct: act,
+                onPlaymat: setPlaymat,
+                onNewGame,
+                onBack,
+                onLook: lookYou,
+              }),
             )}
           >
-            <span className="text-dim">
-              {goldfish ? "Playing on" : four ? "Opponents’ turns" : "Opponent’s turn"}
-            </span>
-            <span className="font-semibold">Skip</span>
-            <SkipForward className="size-4" aria-hidden="true" />
+            <Menu className="size-[18px]" aria-hidden="true" />
           </button>
-        </>
-      )}
+          <button
+            type="button"
+            aria-label={
+              returnTo === "deck" ? `Back to the ${deckName} deck` : "Back to the playtest setup"
+            }
+            onClick={onBack}
+            className={cn(CHROME_BUTTON, "h-9 gap-1 rounded-full pr-3 pl-2 text-[13px]")}
+          >
+            <ChevronLeft className="size-4" aria-hidden="true" />
+            {returnTo === "deck" ? deckName : "Setup"}
+            <kbd className="ml-1 rounded border border-border px-1 font-mono text-[11px] text-dim">
+              Esc
+            </kbd>
+          </button>
+        </div>
 
-      <Inspect
-        pointed={current?.pointed ?? null}
-        width={previewWidth}
-        onResize={setPreviewWidth}
-        overDialog={looking}
-      />
+        {!four && (
+          <>
+            <div className="absolute top-0 left-1/2 -translate-x-1/2">
+              <OpponentHand count={handCount} />
+            </div>
+            {/* Right of their hand, and never under the sound, help and log buttons: the box ends
+              160 px from the edge, and a plate wider than it (a long deck name, the sandbox's
+              stepper) shortens its title rather than running under them. */}
+            <div
+              className="absolute top-[5px] right-[160px] flex min-w-0"
+              style={{ left: `calc(50% + ${opponentHandWidth(handCount) / 2 + 64}px)` }}
+            >
+              <PlateFrame
+                seat="opponent"
+                active={active === "opponent"}
+                poison={opponent?.poison ?? 0}
+                commanderDamage={opponent?.commanderDamage}
+                lethal={view?.commanderDamageLethal}
+                compact
+                aim={aims.plates.opponent}
+                className="min-w-0"
+              >
+                <LifePlate
+                  seat="opponent"
+                  title={
+                    deadOn !== null
+                      ? `Dead on your turn ${deadOn}`
+                      : `Opponent · ${opponentNames[0] ?? "Deck"}`
+                  }
+                  life={opponent?.life ?? 0}
+                  highlight={view?.winner === "opponent" || deadOn !== null}
+                  readOnly={!sandboxOn}
+                  disabled={!edits}
+                  onChange={(life) => act({ type: "setLife", seat: "opponent", life })}
+                  compact
+                />
+                {/* An attacker waiting to be aimed, that may attack the opponent: their plate is
+                  the target to click. */}
+                {view !== null && aimable.includes("opponent") && (
+                  <button
+                    type="button"
+                    onClick={() => setPicks((p) => aimAttacker(p, view, "opponent"))}
+                    className={cn(
+                      "absolute inset-0 rounded-full bg-transparent outline-2 outline-offset-2 outline-accent outline-dashed",
+                      FOCUS,
+                    )}
+                  >
+                    <span className="sr-only">Attack the opponent</span>
+                  </button>
+                )}
+              </PlateFrame>
+            </div>
+          </>
+        )}
 
-      {panel === "help" && (
-        <HelpPanel heading="Playing a game" onClose={() => setPanel(null)}>
-          <PlaytestHelp sandbox={sandboxOn} goldfish={goldfish} lobby={view?.lobby ?? false} />
-        </HelpPanel>
-      )}
-      {panel === "log" && <LogPanel log={log} onClose={() => setPanel(null)} />}
+        <div className={cn("absolute top-1.5 right-3 flex gap-2", LAYER.raised)}>
+          <SoundControls />
+          <button
+            type="button"
+            aria-label="How to play"
+            aria-pressed={panel === "help"}
+            onClick={() => setPanel(panel === "help" ? null : "help")}
+            className={cn(
+              CHROME_BUTTON,
+              "h-9 min-w-9 rounded-full px-3 text-[13px]",
+              panel === "help" && "border-accent text-accent",
+            )}
+          >
+            ?
+          </button>
+          <button
+            type="button"
+            aria-pressed={panel === "log"}
+            onClick={() => setPanel(panel === "log" ? null : "log")}
+            className={cn(
+              CHROME_BUTTON,
+              "h-9 rounded-full px-3 text-[13px]",
+              panel === "log" && "border-accent text-accent",
+            )}
+          >
+            Log
+          </button>
+        </div>
 
-      {looking && (
-        <LibraryDialog
-          look={look.look}
-          view={lookedAt}
-          readOnly={!edits}
-          opponent={look.side !== "you"}
-          owner={playerPossessive(look.side, opponentCount)}
-          onAct={offer}
-          onPoint={look.side === "you" ? pointYou : pointThem[look.side]}
-          onUnpoint={unpoint}
-          onClose={() => {
-            setLook(null);
-            unpoint();
+        {/* The opponent's columns, the reader's turned round: library and graveyard on the left,
+          exile and the command zone on the right — each centred on their table's height. */}
+        {!four && (
+          <>
+            <div className={cn(OPPONENT_COLUMN, "left-3")}>
+              <OpponentLibrary seat={opponent} size={zone} />
+              <OpponentPile
+                seat={opponent}
+                zone="graveyard"
+                size={zone}
+                onPoint={pointOpponent}
+                onUnpoint={unpoint}
+                onLook={lookOpponent}
+              />
+            </div>
+            <div className={cn(OPPONENT_COLUMN, "right-3 items-end")}>
+              <OpponentPile
+                seat={opponent}
+                zone="exile"
+                size={zone}
+                onPoint={pointOpponent}
+                onUnpoint={unpoint}
+                onLook={lookOpponent}
+                className="items-end"
+              />
+              <OpponentCommand
+                seat={opponent}
+                size={zone}
+                onPoint={pointOpponent}
+                onUnpoint={unpoint}
+                className="items-end"
+              />
+            </div>
+          </>
+        )}
+
+        {/* The reader's columns, the artboard's: command and exile left, graveyard and library
+          right. */}
+        <div className={cn(YOUR_COLUMN, "left-3")}>
+          <CommandZone
+            view={you}
+            sandbox={edits}
+            onAct={offer}
+            onDrop={drop}
+            onPoint={pointYou}
+            onUnpoint={unpoint}
+            size={zone}
+          />
+          <ExileZone
+            view={you}
+            sandbox={edits}
+            onDrop={drop}
+            onPoint={pointYou}
+            onUnpoint={unpoint}
+            onLook={lookYou}
+            size={zone}
+          />
+        </div>
+        <div className={cn(YOUR_COLUMN, "right-3 items-end")}>
+          <GraveyardZone
+            view={you}
+            sandbox={edits}
+            onDrop={drop}
+            onPoint={pointYou}
+            onUnpoint={unpoint}
+            onLook={lookYou}
+            size={zone}
+          />
+          <LibraryZone
+            view={you}
+            sandbox={edits}
+            onAct={offer}
+            onDrop={drop}
+            onLook={lookYou}
+            size={zone}
+          />
+        </div>
+
+        {/* The foot: the reader's hand, their plate beside it, and the stage button. */}
+        {tabled && (
+          <HandFan
+            cards={view.you.hand}
+            sandbox={edits}
+            onAct={offer}
+            onDrop={drop}
+            onPoint={pointYou}
+            onUnpoint={unpoint}
+            pointedId={
+              current?.side === "you" && current.pointed.place === "hand"
+                ? current.pointed.card.id
+                : null
+            }
+          />
+        )}
+        {/* Beside the hand — and at the very edge while a prompt is docked over the hand, so the
+          two never meet. */}
+        <div
+          className="absolute bottom-3"
+          style={{
+            left:
+              tabled && !prompting
+                ? `max(12px, calc(50% - ${handRow(view.you.hand.length).width / 2 + 20 + 236}px))`
+                : "12px",
           }}
+        >
+          <PlateFrame
+            seat="you"
+            active={active === "you"}
+            poison={you?.poison ?? 0}
+            commanderDamage={you?.commanderDamage}
+            lethal={view?.commanderDamageLethal}
+            aim={aims.plates.you}
+          >
+            <LifePlate
+              seat="you"
+              title={`You · ${deckName}`}
+              life={you?.life ?? 0}
+              cardId={commander?.cardId ?? null}
+              highlight={view?.winner === "you"}
+              readOnly={!sandboxOn}
+              disabled={!edits}
+              onChange={(life) => act({ type: "setLife", seat: "you", life })}
+            />
+          </PlateFrame>
+        </div>
+
+        {view !== null && view.stage !== "mulligan" && view.stage !== "over" && !replaying && (
+          <div className="absolute right-3 bottom-3 flex flex-col items-end gap-2">
+            <ManaTableView mana={view.you.mana} label="Your mana" />
+            <span className="text-xs text-dim">
+              {view.you.manaOpen} mana open · hand {view.you.hand.length}
+            </span>
+            {waiting && !busy ? (
+              <Waiting
+                name={waitingOn}
+                onHandOver={view.deciding === null ? null : (handOver?.(view.deciding) ?? null)}
+              />
+            ) : busy ? (
+              <span
+                role="status"
+                className="inline-flex h-[58px] items-center gap-2.5 rounded-2xl border border-border bg-surface px-6 text-[15px] text-dim"
+              >
+                <LoaderCircle
+                  className="size-[18px] animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+                {/* The goldfish thinks about nothing: the engine is only playing the game on. */}
+                {passing
+                  ? "Passing turn…"
+                  : goldfish
+                    ? "Playing on…"
+                    : four
+                      ? "Opponents are thinking…"
+                      : "Opponent is thinking…"}
+              </span>
+            ) : (
+              buttons !== null &&
+              buttons.primary !== null && (
+                <div className="flex items-end gap-2">
+                  {buttons.secondary !== null && (
+                    <button
+                      type="button"
+                      aria-disabled={buttons.secondary.disabled === true}
+                      onClick={() =>
+                        buttons.secondary !== null &&
+                        buttons.secondary.disabled !== true &&
+                        act(buttons.secondary.action)
+                      }
+                      className={cn(
+                        "inline-flex h-11 items-center rounded-2xl border border-border bg-surface px-4",
+                        "text-[13px] text-text transition-colors motion-reduce:transition-none hover:border-accent",
+                        PRESS,
+                        FOCUS,
+                        buttons.secondary.disabled === true &&
+                          "cursor-default text-dim hover:border-border active:scale-100",
+                      )}
+                    >
+                      {buttons.secondary.label}
+                    </button>
+                  )}
+                  <StageButton
+                    label={buttons.primary.label}
+                    onPress={() => buttons.primary !== null && act(buttons.primary.action)}
+                  />
+                </div>
+              )
+            )}
+          </div>
+        )}
+
+        {responding !== null && (
+          <RespondPrompt
+            item={responding}
+            view={view!}
+            disabled={locked}
+            onAct={act}
+            onPoint={pointStack}
+            onUnpoint={unpoint}
+            className="absolute top-[52px] left-1/2 w-[min(600px,calc(100%-2*var(--table-x)))] -translate-x-1/2"
+          />
+        )}
+        {prompting && view.prompt!.pick !== null && (
+          <PickPanel
+            key={view.prompt!.pick.cards.map((c) => c.id).join(",")}
+            prompt={{ ...view.prompt!, pick: view.prompt!.pick }}
+            table={[...tableCards(view), ...view.you.hand]}
+            disabled={locked}
+            onAct={act}
+            onPoint={pointCard}
+            onUnpoint={unpoint}
+            opponents={view.opponents.length}
+            className="absolute top-[calc(50%-32px)] left-1/2 max-h-[calc(100%-200px)] w-[min(820px,calc(100%-200px))] -translate-x-1/2 -translate-y-1/2"
+          />
+        )}
+        {prompting && view.prompt!.damage !== null && (
+          <DamagePanel
+            key={`${view.prompt!.damage.attacker.id}:${view.prompt!.damage.blockers.map((b) => b.card.id).join(",")}`}
+            prompt={{ ...view.prompt!, damage: view.prompt!.damage }}
+            table={[...tableCards(view), ...view.you.hand]}
+            disabled={locked}
+            onAct={act}
+            onPoint={pointCard}
+            onUnpoint={unpoint}
+            opponents={view.opponents.length}
+            className="absolute top-[calc(50%-32px)] left-1/2 max-h-[calc(100%-200px)] w-[min(820px,calc(100%-200px))] -translate-x-1/2 -translate-y-1/2"
+          />
+        )}
+        {prompting && view.prompt!.pick === null && view.prompt!.damage === null && (
+          <PromptPanel
+            prompt={view.prompt!}
+            table={[...tableCards(view), ...view.you.hand]}
+            disabled={locked}
+            onAct={act}
+            onPoint={pointCard}
+            onUnpoint={unpoint}
+            opponents={view.opponents.length}
+            className="absolute bottom-2 left-1/2 max-h-[104px] w-[min(640px,calc(100%-560px))] -translate-x-1/2"
+          />
+        )}
+
+        {view !== null && view.stage === "over" && !replaying && (
+          <GameOver
+            winner={view.winner}
+            out={view.you.out}
+            turn={view.turn}
+            backLabel={backLabel}
+            // A lobby's table sat down to this game: a new one is a new lobby's (issue #1419).
+            onNewGame={view.lobby ? undefined : onNewGame}
+            onBack={onBack}
+          />
+        )}
+
+        {notice !== null && (
+          <p
+            role="status"
+            className={cn(
+              "absolute top-[52px] right-3 m-0 max-w-[320px] rounded-xl border border-mana-r/60 bg-surface px-3 py-2 text-xs text-text",
+              LAYER.raised,
+            )}
+          >
+            {notice}
+          </p>
+        )}
+
+        <BoardArrows root={root} arrows={arrows} />
+        <DamagePops root={root} view={view} happened={happened} />
+
+        {/* **Read-only while the opponent's turn is played back**: one sheet over the whole board
+          takes every press, and only the Skip chip above it answers one. */}
+        {replaying && (
+          <>
+            <div
+              aria-hidden="true"
+              data-testid="replay-shield"
+              className={cn("absolute inset-0", LAYER.raised)}
+            />
+            <button
+              type="button"
+              onClick={onSkip}
+              aria-keyshortcuts="Space Escape"
+              className={cn(
+                "absolute right-3 bottom-3 inline-flex h-11 items-center gap-2 rounded-full border border-mana-r bg-surface px-4",
+                "text-[13px] text-text transition-colors motion-reduce:transition-none hover:bg-mana-r hover:text-bg",
+                LAYER.raised,
+                PRESS,
+                FOCUS,
+              )}
+            >
+              <span className="text-dim">
+                {goldfish ? "Playing on" : four ? "Opponents’ turns" : "Opponent’s turn"}
+              </span>
+              <span className="font-semibold">Skip</span>
+              <SkipForward className="size-4" aria-hidden="true" />
+            </button>
+          </>
+        )}
+
+        <Inspect
+          pointed={current?.pointed ?? null}
+          width={previewWidth}
+          onResize={setPreviewWidth}
+          overDialog={looking}
         />
-      )}
-    </div>
+
+        {panel === "help" && (
+          <HelpPanel heading="Playing a game" onClose={() => setPanel(null)}>
+            <PlaytestHelp sandbox={sandboxOn} goldfish={goldfish} lobby={view?.lobby ?? false} />
+          </HelpPanel>
+        )}
+        {panel === "log" && <LogPanel log={log} onClose={() => setPanel(null)} />}
+
+        {looking && (
+          <LibraryDialog
+            look={look.look}
+            view={lookedAt}
+            readOnly={!edits}
+            opponent={look.side !== "you"}
+            owner={playerPossessive(look.side, opponentCount)}
+            onAct={offer}
+            onPoint={look.side === "you" ? pointYou : pointThem[look.side]}
+            onUnpoint={unpoint}
+            onClose={() => {
+              setLook(null);
+              unpoint();
+            }}
+          />
+        )}
+      </div>
+    </LifeCommitsContext.Provider>
   );
 }
 
