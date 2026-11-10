@@ -31,6 +31,7 @@ vi.mock("@/features/draft/navigation", () => ({ openDraftDeck }));
 import { DraftPage } from "./DraftPage";
 import { useAppStore } from "@/lib/store";
 import { currentDraft } from "./pick/current";
+import { keepSideboard, recallSideboard } from "./pick/split";
 
 const SAVED: DraftSaved = {
   label: "Foundations · The Hobbit",
@@ -107,13 +108,13 @@ beforeEach(() => {
   openDraftDeck.mockReset();
 });
 
-function setup() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+function setup(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  const { unmount } = render(
     <QueryClientProvider client={client}>
       <DraftPage />
     </QueryClientProvider>,
   );
+  return { client, unmount };
 }
 
 describe("DraftPage", () => {
@@ -150,6 +151,53 @@ describe("DraftPage", () => {
     expect(ipcMock.draftResume).toHaveBeenCalledOnce();
     expect(await screen.findByRole("heading", { name: "Pack 2 · Pick 5" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Gandalf" })).toBeInTheDocument();
+  });
+
+  /** Issue #1588: a draft under way reopens only when its pick screen was what was left. */
+  describe("coming back with a draft under way", () => {
+    async function resumeThenHub() {
+      ipcMock.draftSaved.mockResolvedValue(SAVED);
+      ipcMock.draftResume.mockResolvedValue(VIEW);
+      ipcMock.draftView.mockResolvedValue(VIEW);
+      const page = setup();
+      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      await userEvent.click(within(progress).getByRole("button", { name: "Resume" }));
+      await screen.findByRole("heading", { name: "Pack 2 · Pick 5" });
+      await userEvent.click(screen.getByRole("button", { name: "Back to Draft & Packs" }));
+      await screen.findByRole("region", { name: "Start new" });
+      return page;
+    }
+
+    it("lands on Open Packs when Open Packs was left", async () => {
+      const { client, unmount } = await resumeThenHub();
+      await userEvent.click(screen.getByRole("button", { name: /^Open Packs/ }));
+      await screen.findByRole("heading", { name: "Open Packs" });
+      unmount();
+      setup(client);
+      expect(await screen.findByRole("heading", { name: "Open Packs" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Pack 2 · Pick 5" })).not.toBeInTheDocument();
+    });
+
+    it("lands on the hub when the hub was left", async () => {
+      const { client, unmount } = await resumeThenHub();
+      unmount();
+      setup(client);
+      expect(await screen.findByRole("region", { name: "Start new" })).toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Pack 2 · Pick 5" })).not.toBeInTheDocument();
+    });
+
+    it("lands on the pick when the pick screen was left", async () => {
+      ipcMock.draftSaved.mockResolvedValue(SAVED);
+      ipcMock.draftResume.mockResolvedValue(VIEW);
+      ipcMock.draftView.mockResolvedValue(VIEW);
+      const { client, unmount } = setup();
+      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      await userEvent.click(within(progress).getByRole("button", { name: "Resume" }));
+      await screen.findByRole("heading", { name: "Pack 2 · Pick 5" });
+      unmount();
+      setup(client);
+      expect(await screen.findByRole("heading", { name: "Pack 2 · Pick 5" })).toBeInTheDocument();
+    });
   });
 
   it("lists an unsaved draft deck and continues building it in the editor", async () => {
@@ -328,6 +376,19 @@ describe("DraftPage", () => {
       await waitFor(() =>
         expect(within(progress).queryByText(SAVED.label)).not.toBeInTheDocument(),
       );
+    });
+
+    /** Issue #1588: a Sealed pool's instance ids repeat, so the split must not outlive its draft. */
+    it("forgets the abandoned draft's sideboard", async () => {
+      keepSideboard(["a#0.1.0", "b#0.2.3"]);
+      ipcMock.draftSaved.mockResolvedValue(SAVED);
+      ipcMock.draftDiscard.mockResolvedValue(undefined);
+      setup();
+      const progress = await screen.findByRole("region", { name: "Draft in progress" });
+      await userEvent.click(within(progress).getByRole("button", { name: "Abandon" }));
+      await userEvent.click(within(progress).getByRole("button", { name: "Abandon this draft?" }));
+      await waitFor(() => expect(ipcMock.draftDiscard).toHaveBeenCalledOnce());
+      await waitFor(() => expect(recallSideboard()).toEqual([]));
     });
 
     it("ends this window's own solo draft by its name when it is the one abandoned", async () => {

@@ -369,6 +369,28 @@ describe("PackOpener", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument());
   });
 
+  /** Issue #1588: a refused Refresh keeps the cached set and the pack opened from it. */
+  it("says a refused Refresh beside the button, leaving the opened pack in place", async () => {
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /Test Set/ }));
+    await screen.findByText(/^Expected value/);
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    expect(screen.getByRole("list", { name: "Opened cards" })).toBeInTheDocument();
+
+    packsBoosterSet.mockRejectedValueOnce("MTGJSON could not be reached.");
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Refresh failed: MTGJSON could not be reached.",
+    );
+    expect(packsBoosterSet).toHaveBeenLastCalledWith("tst", true);
+    expect(screen.getByRole("list", { name: "Opened cards" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+    // A Refresh that goes through clears the sentence.
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
   it("draws MTGJSON's set list, says its refusal and retries", async () => {
     // Queued before the first render's fetch; a `Once` answer outranks setup's default.
     packsBoosterSets.mockClear().mockRejectedValueOnce("MTGJSON could not be reached.");

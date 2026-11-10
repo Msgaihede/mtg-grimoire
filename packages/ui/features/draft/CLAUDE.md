@@ -79,7 +79,9 @@ Record and reasons: [draft-and-packs.md](../../../../docs/reference/draft-and-pa
   Decks view's editor on that deck.
 - **Deck or sideboard is the page's** (`pick/split.ts`, issue #1471): which picks are on the
   sideboard is held by `instanceId`, kept per device in `localStorage`, and never sent to the
-  engine; a pick's list is applied only once the pick is taken. At Build, the deck's cards are
+  engine; a pick's list is applied only once the pick is taken. It starts over on every new deal
+  and on the hub's Abandon (`resetSideboard`, issue #1588) — a Sealed pool's ids repeat across
+  drafts, so never let an empty first pool be the only reset. At Build, the deck's cards are
   filed by `autoCategoryFor` — the add path's own rule, never a second copy of it — and the
   sideboard's go into Pool. `split.ts` makes no IPC call: `test-setup.ts` loads it before any
   suite mocks `@/lib/ipc`.
