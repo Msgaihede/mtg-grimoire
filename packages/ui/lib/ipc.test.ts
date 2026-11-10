@@ -157,7 +157,7 @@ import {
   SCANNER_OPEN_ELSEWHERE,
 } from "@/features/scanner/verdictText";
 import { RATE_MAX, RATE_MIN, RATE_STEP } from "@/features/trade/trade";
-import { IS_VALUES } from "@/features/search/queryLanguage";
+import { COLOR_NAMES, IS_VALUES } from "@/features/search/queryLanguage";
 import {
   AUTO_BRACKET,
   ipc,
@@ -6450,6 +6450,36 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // The parsers are under suspicion too: a pass must mean both lists were found.
     expect(rust.length).toBeGreaterThan(100);
     expect([...IS_VALUES].sort()).toEqual([...rust].sort());
+  });
+
+  /**
+   * **`c:`/`id:`'s colour names are a list at each end too** — `filters::COLOR_NAMES` turns a
+   * name into letters (and `color_value` matches the multicolour spellings before it), while
+   * `queryLanguage.ts`' `COLOR_NAMES` decides which names the box sends at all. They drifted once
+   * (issue #1564): Rust answered `c:red`, the parser left it as free text, and `-c:red` excluded
+   * nothing. A name only the parser knows would be read by Rust letter by letter — `grixis` as G
+   * and R — so both directions are wrong answers, and both are silent.
+   */
+  it("holds the parser's colour names to the crate's COLOR_NAMES", () => {
+    const at = cardFiltersRs.indexOf("const COLOR_NAMES");
+    expect(at, "`const COLOR_NAMES` is not in filters.rs").toBeGreaterThan(-1);
+    const open = cardFiltersRs.indexOf("[", cardFiltersRs.indexOf("=", at));
+    const close = cardFiltersRs.indexOf("];", open);
+    const names = [
+      ...cardFiltersRs
+        .slice(open, close)
+        .replace(/\/\/.*$/gm, "")
+        .matchAll(/\("([^"]+)",\s*"[A-Z]*"\)/g),
+    ].map((m) => m[1]);
+    const fn = cardFiltersRs.indexOf("fn color_value");
+    expect(fn, "`fn color_value` is not in filters.rs").toBeGreaterThan(-1);
+    const multi = /matches!\(value\.as_str\(\),\s*([^)]*)\)/.exec(cardFiltersRs.slice(fn));
+    expect(multi, "color_value's multicolour match is not in filters.rs").not.toBeNull();
+    const multicolour = [...(multi?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    // The parsers are under suspicion too: a pass must mean both lists were found.
+    expect(names.length).toBeGreaterThan(40);
+    expect(multicolour).toContain("multicolor");
+    expect([...COLOR_NAMES].sort()).toEqual([...names, ...multicolour].sort());
   });
 
   it("carries the predicate list on the card filters and on the search request", () => {
