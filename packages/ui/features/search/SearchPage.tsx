@@ -368,7 +368,10 @@ export function SearchPage() {
   // card asked for by name must not be hidden by a tag chip left standing from the last search.
   const pendingText = useAppStore((s) => s.pendingSearchText);
   const clearPendingText = useAppStore((s) => s.clearPendingSearchText);
-  const tags = useTagSelection();
+  // Seeded without the picked chips when the page mounts on a hand-off, as `initialSet` and
+  // `initialText` seed the rest: the first request is built from the first render's terms, so
+  // putting the chips down in render (below) would still have sent the set with them.
+  const tags = useTagSelection({ withoutChips: pendingSet !== null || pendingText !== null });
   const search = useCardSearch({
     initialSet: pendingSet,
     initialSort: pendingSort,
@@ -385,6 +388,13 @@ export function SearchPage() {
   } else if (pendingSet === null && appliedSet !== null) {
     setAppliedSet(null);
   }
+  // The picked tags are put down with the set (issue #1562), for the text hand-off's reason
+  // below: "the cards in this set" is the whole question, and a tag chip left standing from the
+  // last search would narrow the wall — or empty it — while the Set chip claimed the set.
+  // A page already mounted puts them down here; a mount was seeded without them above. Outside
+  // the `appliedSet` guard and terminating on its own: the hand-off is spent at the first
+  // commit, and a cleared selection has no chips.
+  if (pendingSet !== null && tags.selection.chips.length > 0) tags.clearTags();
   useEffect(() => {
     if (pendingSet !== null) clearPendingSet();
   }, [pendingSet, clearPendingSet]);

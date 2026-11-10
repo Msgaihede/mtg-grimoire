@@ -769,6 +769,33 @@ describe("the border and finish chips", () => {
     expect(lastSearchRequest().borders).toBeUndefined();
     expect(lastSearchRequest().printedFinishes).toBeUndefined();
   });
+
+  /**
+   * Issue #1562: the box empties at once, and so must the wall's question. A `setText("")` left
+   * the debounced word for the timer, so a request for `bolt` within the set went out first and
+   * was drawn — often as "No cards match" — until the debounce caught up.
+   */
+  it.each([
+    ["showOnlySet", (r: ReturnType<typeof useCardSearch>) => r.showOnlySet("lea")],
+    ["resetAll", (r: ReturnType<typeof useCardSearch>) => r.resetAll()],
+  ] as const)("%s flushes the typed word past the debounce", async (_, press) => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    // A border as well as the word, so the stale `{ text: "bolt" }` the press used to ask for is
+    // a key not already in the cache — the request it sent is what this looks for.
+    act(() => result.current.toggleBorder("regular"));
+    act(() => result.current.setText("bolt"));
+    await waitFor(() => expect(lastSearchRequest()).toMatchObject({ text: "bolt" }));
+    expect(lastSearchRequest().borders).toEqual(["regular"]);
+    const asked = searchCards.mock.calls.length;
+
+    act(() => press(result.current));
+
+    // Give a lagging debounce every chance to send its stale request before looking.
+    await new Promise((r) => setTimeout(r, DEBOUNCE_MS * 2));
+    const after = searchCards.mock.calls.slice(asked).map(([req]) => req as SearchRequest);
+    for (const req of after) expect(req.text).toBeUndefined();
+  });
 });
 
 /**

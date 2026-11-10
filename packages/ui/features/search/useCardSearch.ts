@@ -1858,7 +1858,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * button cannot clear.
      */
     resetAll: () => {
-      setText("");
+      // Flushed past the debounce, as a chip's press is: a `setText` alone left the old word
+      // driving the wall for 300 ms after the box had emptied (issue #1562).
+      rewrite("");
       setFormat("");
       setColorFilter(NO_COLORS);
       // Cleared although it is not counted above, and the asymmetry is the point: Reset all
@@ -1921,7 +1923,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       // The one view this touches, and only when the press named an order — the Coming soon
       // widget's `imageUpdated` (issue #1214). Every other caller keeps the reader's sort.
       if (order) setSort(order);
-      setText("");
+      // Flushed, `resetAll`'s reason: the typed word must not ask for itself within this set
+      // before the debounce catches up (issue #1562).
+      rewrite("");
       setFormat(ANY_CARD);
       setColorFilter(NO_COLORS);
       setSets([code]);
