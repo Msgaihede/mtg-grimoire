@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, type HTMLAttributes, type JSX, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useReducer,
+  useRef,
+  type HTMLAttributes,
+  type JSX,
+  type ReactNode,
+} from "react";
 import { X } from "lucide-react";
 import {
   animate,
@@ -448,10 +456,10 @@ function Panel({
 }: Omit<DialogProps, "open" | "placeBacked">) {
   const id = useId();
   const panelRef = useRef<HTMLDivElement>(null);
-  const swipe = useSwipeToClose(useDialogHost()?.swipeToClose === true, onClose);
   /** False from the render that starts the fade out — the panel goes inert on it, and a host's
    *  body sees the same answer, which is what `useDeckField` writes on. */
   const present = useIsPresent();
+  const swipe = useSwipeToClose(useDialogHost()?.swipeToClose === true, onClose, present);
 
   // The caret moves into the layer, as it does for every other one in the app: the dialog's own
   // controls are then the next thing Tab reaches, and Escape has something to hand back. **No
@@ -823,10 +831,17 @@ const SWIPE_SLOP_PX = 8;
  *
  * Closes through `onClose`, the scrim's road — a gesture made with the finger the reader is
  * already holding over the page, so there is no caret to hand back.
+ *
+ * **A close the host refuses springs the panel back** (issue #1599). `onClose` is a request, not
+ * a promise: a scan being sent, a trade scan mid-Add and a deck being created all decline it and
+ * stay open. So the let-go past the line asks for a render of its own beside the close, and the
+ * effect after that render settles the drag when the panel is still `present` — a close that went
+ * through has lowered it in the same batch, and its exit fades from where the finger let go.
  */
 function useSwipeToClose(
   enabled: boolean,
   onClose: () => void,
+  present: boolean,
 ): {
   enabled: boolean;
   y: MotionValue<number>;
@@ -852,6 +867,15 @@ function useSwipeToClose(
     if (reduced) y.set(0);
     else void animate(y, 0, { duration: seconds(DURATION.base), ease: EASE.standard });
   };
+
+  /** A let-go past the line asked to close, and the render after it has not been looked at yet. */
+  const closeAsked = useRef(false);
+  const [, askedToClose] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => {
+    if (!closeAsked.current) return;
+    closeAsked.current = false;
+    if (present) settle();
+  });
 
   if (!enabled) return { enabled, y, handlers: {} };
   return {
@@ -899,8 +923,11 @@ function useSwipeToClose(
         const d = drag.current;
         drag.current = null;
         if (d === null || d.id !== e.pointerId || !d.live) return;
-        if (y.get() >= SWIPE_CLOSE_PX || d.v >= SWIPE_FLICK) onClose();
-        else settle();
+        if (y.get() >= SWIPE_CLOSE_PX || d.v >= SWIPE_FLICK) {
+          closeAsked.current = true;
+          askedToClose();
+          onClose();
+        } else settle();
       },
       onPointerCancel: () => {
         if (drag.current?.live === true) settle();
