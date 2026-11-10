@@ -49,7 +49,7 @@ import { SEND_SCAN } from "./submit/submitText";
 import { useMaySendScans } from "./submit/useMaySendScans";
 import { useScanSubmit } from "./submit/useScanSubmit";
 import type { ScannerTrayRow } from "./types";
-import { useCamera, useCameraDevices } from "./useCamera";
+import { cameraPress, useCamera, useCameraDevices } from "./useCamera";
 import { usePointAndShoot } from "./usePointAndShoot";
 import { useScanLoop } from "./useScanLoop";
 import { useScannerElsewhere } from "./useScannerElsewhere";
@@ -185,7 +185,14 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
   // of them, and opening the default on mount only to reopen the stored camera a moment later is
   // two `getUserMedia` calls, a flicker, and on some platforms a second permission prompt. A
   // released window is `undefined` too — its tracks are stopped, and a restore asks again.
-  const camera = useCamera(videoRef, loaded && !parked.released ? prefs.cameraId : undefined);
+  // Bumped to reopen the stored camera when the default is open in its place (`cameraPress`).
+  const [cameraAttempt, setCameraAttempt] = useState(0);
+  const camera = useCamera(
+    videoRef,
+    loaded && !parked.released ? prefs.cameraId : undefined,
+    cameraAttempt,
+  );
+  const openCamera = camera.kind === "live" ? camera.deviceId : prefs.cameraId;
   // Keyed on the camera that opened, because a browser names no camera until one has been
   // granted: the list read before that is `Camera 1`, `Camera 2`, and the one read after it has
   // the real names.
@@ -784,11 +791,13 @@ function LiveScanner({ destination }: { destination: TrayDestination | undefined
               cameras={cameras}
               // The camera that opened; while a switch is starting, the one asked for — so the
               // trigger does not read `Default` for the moment between two cameras.
-              cameraId={camera.kind === "live" ? camera.deviceId : prefs.cameraId}
-              // A press on the camera already chosen changes nothing, and must not restart the
-              // stream.
+              cameraId={openCamera}
+              // A press on the ticked camera changes nothing; on the stored one while the fallback
+              // is open, it reopens it (issue #1554). See `cameraPress`.
               onCamera={(cameraId) => {
-                if (cameraId !== prefs.cameraId) update({ cameraId });
+                const press = cameraPress(cameraId, openCamera, prefs.cameraId);
+                if (press === "store") update({ cameraId });
+                else if (press === "reopen") setCameraAttempt((n) => n + 1);
               }}
               // **The pack opener's bar**: the same dock in one row over the picture's foot, with
               // the HUD's two presses and the way out at its end, gone while idle and back with

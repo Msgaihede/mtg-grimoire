@@ -1174,6 +1174,91 @@ describe("ScannerPage", () => {
     }
   });
 
+  /**
+   * **Issue #1554: the menu's guard compares against the camera that is open.** The menu ticks the
+   * open camera, so a press on the ticked row does nothing, and a press on the stored camera
+   * while the default is open in its place reopens it.
+   */
+  describe("the Camera menu", () => {
+    /** Two cameras listed; `open(id)` is what an `exact` request for `id` does. */
+    function cameras(open: (id: string | null) => Promise<string>) {
+      const getUserMedia = vi.fn(async (c?: MediaStreamConstraints) => {
+        const exact = (
+          (c?.video as MediaTrackConstraints).deviceId as ConstrainDOMStringParameters | undefined
+        )?.exact as string | undefined;
+        const id = await open(exact ?? null);
+        return {
+          getTracks: () => [{ stop: () => {} }],
+          getVideoTracks: () => [{ getSettings: () => ({ deviceId: id }) }],
+        } as unknown as MediaStream;
+      });
+      const enumerateDevices = vi.fn(() =>
+        Promise.resolve([
+          { kind: "videoinput", deviceId: "brio", label: "Brio" },
+          { kind: "videoinput", deviceId: "old", label: "Old cam" },
+        ] as MediaDeviceInfo[]),
+      );
+      Object.defineProperty(navigator, "mediaDevices", {
+        value: { getUserMedia, enumerateDevices },
+        configurable: true,
+      });
+      return getUserMedia;
+    }
+
+    async function pick(name: string) {
+      const user = userEvent.setup();
+      await user.click(await screen.findByRole("button", { name: /^Camera: / }));
+      const group = await screen.findByRole("radiogroup", { name: "Camera" });
+      await user.click(within(group).getByRole("radio", { name: new RegExp(`^${name}`) }));
+    }
+
+    it("reopens the stored camera when the default opened in its place", async () => {
+      // The stored camera is unplugged at the first request, and back by the time it is pressed.
+      let plugged = false;
+      const getUserMedia = cameras((id) => {
+        if (id === "old" && !plugged) {
+          return Promise.reject(new DOMException("gone", "OverconstrainedError"));
+        }
+        return Promise.resolve(id ?? "brio");
+      });
+      storedPrefs({ cameraId: "old" });
+      frames();
+      const restore = shimVideo();
+      try {
+        mount();
+        expect(await screen.findByRole("button", { name: "Camera: Brio" })).toBeInTheDocument();
+        expect(getUserMedia).toHaveBeenCalledTimes(2);
+        plugged = true;
+        await pick("Old cam");
+        expect(await screen.findByRole("button", { name: "Camera: Old cam" })).toBeInTheDocument();
+        expect(getUserMedia).toHaveBeenCalledTimes(3);
+        expect(getUserMedia.mock.calls[2]).toMatchObject([
+          { video: { deviceId: { exact: "old" } } },
+        ]);
+        // Already stored: nothing to write.
+        expect(ipc.setScannerPrefs).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+
+    it("does nothing on a press on the live camera, stored or not", async () => {
+      const getUserMedia = cameras((id) => Promise.resolve(id ?? "brio"));
+      frames();
+      const restore = shimVideo();
+      try {
+        mount();
+        expect(await screen.findByRole("button", { name: "Camera: Brio" })).toBeInTheDocument();
+        await pick("Brio");
+        await act(async () => {});
+        expect(getUserMedia).toHaveBeenCalledTimes(1);
+        expect(ipc.setScannerPrefs).not.toHaveBeenCalled();
+      } finally {
+        restore();
+      }
+    });
+  });
+
   it("stores the tray layout the reader picks", async () => {
     refused();
     const user = userEvent.setup();
