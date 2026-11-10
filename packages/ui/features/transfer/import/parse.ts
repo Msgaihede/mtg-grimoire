@@ -484,6 +484,23 @@ export interface ParsedLine {
    * exists without.
    */
   finish: DeckFinish;
+  /**
+   * Whether the file had a **finish channel** for this line at all — `true` on every row of a CSV
+   * with a `Finish`/`Foil`/`Printing`/`Premium` column, absent everywhere else (issue #1550).
+   *
+   * It is what tells the regular copy the file *said* from a file that said nothing, which
+   * {@link finish}'s `null` cannot: `normal`, `REGULAR` and a blank cell in a finish column
+   * (this app's own CSV writes a blank for the regular copy) are all `null` there, and so is
+   * every line of a plain decklist. A planner's "Default finish" fills only the second kind —
+   * a file that said `normal` must never land as foil because the dropdown says Foil.
+   *
+   * A decklist's `*F*` / `*E*` marker needs no flag: a line that carries one has a non-null
+   * finish, and a line without one is the silence the default is for.
+   *
+   * Optional rather than required so every hand-built `ParsedLine` in the suite and the
+   * workbench is still one, and read through {@link finishFor} rather than directly.
+   */
+  finishStated?: boolean;
   /** The file said this card counts toward nothing — Archidekt's `{noDeck}`, which is this app's
    *  `is_active = 0`. */
   excluded: boolean;
@@ -525,6 +542,22 @@ export interface ParsedLine {
    * workbench is still one.
    */
   binder?: Binder | null;
+}
+
+/**
+ * The finish a planner files a line at: the file's own word when it had a finish channel,
+ * `fallback` (the step's "Default finish") only when it had none (issue #1550).
+ *
+ * `line.finish ?? fallback` was the rule until then, and it read a CSV's explicit `normal` — which
+ * {@link ParsedLine.finish} spells `null` — as silence, so a session-sticky Foil default turned
+ * every regular row of a collection CSV foil.
+ */
+export function finishFor(
+  line: Pick<ParsedLine, "finish" | "finishStated">,
+  fallback: DeckFinish,
+): DeckFinish {
+  if (line.finish !== null) return line.finish;
+  return line.finishStated === true ? null : fallback;
 }
 
 /**
@@ -1013,6 +1046,10 @@ function parseCsvGrid(
       // vocabulary has never heard of lands here.
       categoryName: knownSection === null ? categoryCell : null,
       finish: csvFinish(cell("finish")),
+      // A finish column is a channel on every row, blank cells included — the regular copy
+      // said, not silence (issue #1550). Spread so a file with no such column builds lines
+      // exactly as it did before the flag existed.
+      ...(at.has("finish") ? { finishStated: true } : {}),
       // **Read only beside a pile the row names** (issue #1174), the way `{noDeck}` only ever
       // arrives inside a bracket: a `no` on a row with no `Category` cell says a pile is off
       // without saying which, and the auto-sort's choice is not a pile the file switched off.

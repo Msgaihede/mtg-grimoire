@@ -14,7 +14,7 @@
  * includes `cardId`, so pinning it is what tells two different null-oracle printings apart.
  */
 import type { DeckFinish, ImportResolveRow, WishlistImportItem } from "@/lib/ipc";
-import type { ParsedList } from "../parse";
+import { finishFor, type ParsedList } from "../parse";
 import type { FoldedLine } from "./collection";
 import type { HintMiss, UnmatchedLine } from "./deck";
 
@@ -95,7 +95,9 @@ export function planWishlistImport(
     // A null `oracleId` leaves nothing else to wish with — `WishInput`'s doc requires one
     // identifier or the other — so the printing is pinned even though the line named none.
     const cardId = named || matched.oracleId === null ? matched.cardId : null;
-    const finish = line.finish ?? options.finish;
+    // The file's own finish when it has a finish column, `normal` and blank included — the
+    // default fills only a line with no finish channel at all (issue #1550).
+    const finish = finishFor(line, options.finish);
     const key = `${matched.oracleId ?? ""} ${cardId ?? ""} ${finish ?? ""}`;
     const notes = (line.extra.notes ?? "").trim();
     const seen = pending.get(key);
